@@ -4,7 +4,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name='pyezviz',
+    name='pyezvizapi',
     version="1.0.0.0",
     license='Apache Software License 2.0',
     author='Renier Moorcroft',

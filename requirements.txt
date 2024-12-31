@@ -1,5 +1,5 @@
 pycryptodome==3.21.0
-pandas==2.2.2
+pandas==2.2.3
 requests==2.32.3
 paho-mqtt==2.1.0
 xmltodict==0.13.0

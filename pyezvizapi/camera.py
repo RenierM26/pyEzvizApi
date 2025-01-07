@@ -1,4 +1,5 @@
 """pyezvizapi camera api."""
+
 from __future__ import annotations
 
 import datetime
@@ -43,7 +44,7 @@ class EzvizCamera:
 
         if fetch_nested_value(_alarmlist, ["page", "totalResults"], 0) > 0:
             self._last_alarm = _alarmlist["alarms"][0]
-            return self._motion_trigger()
+            self._motion_trigger()
 
     def _local_ip(self) -> Any:
         """Fix empty ip value for certain cameras."""

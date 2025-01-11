@@ -15,6 +15,7 @@ import requests
 from .api_endpoints import (
     API_ENDPOINT_ALARM_SOUND,
     API_ENDPOINT_ALARMINFO_GET,
+    API_ENDPOINT_CAM_AUTH_CODE,
     API_ENDPOINT_CAM_ENCRYPTKEY,
     API_ENDPOINT_CANCEL_ALARM,
     API_ENDPOINT_CHANGE_DEFENCE_STATUS,
@@ -339,7 +340,6 @@ class EzvizClient:
             data = deep_merge(data, next_data)
 
         return data
-
 
     def get_alarminfo(self, serial: str, limit: int = 1, max_retries: int = 0) -> dict:
         """Get data from alarm info API for camera serial."""
@@ -1368,6 +1368,54 @@ class EzvizClient:
 
         return json_output["encryptkey"]
 
+    def get_cam_auth_code(self, serial: str, max_retries: int = 0) -> Any:
+        """Get Camera auth code. This is the verification code on the camera sticker."""
+
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        try:
+            req = self._session.get(
+                "https://"
+                + self._token["api_url"]
+                + API_ENDPOINT_CAM_AUTH_CODE
+                + serial,
+                params={
+                    "encrptPwd": "",
+                    "msgAuthCode": "",
+                    "senderType": 0,
+                },
+                timeout=self._timeout,
+            )
+
+            req.raise_for_status()
+
+        except requests.HTTPError as err:
+            if err.response.status_code == 401:
+                # session is wrong, need to relogin
+                self.login()
+                return self.get_cam_auth_code(serial, max_retries + 1)
+
+            raise HTTPError from err
+
+        try:
+            json_output = req.json()
+
+        except ValueError as err:
+            raise PyEzvizError(
+                "Impossible to decode response: "
+                + str(err)
+                + "\nResponse was: "
+                + str(req.text)
+            ) from err
+
+        if json_output["meta"]["code"] != 200:
+            raise PyEzvizError(
+                f"Could not get camera verification key: Got {json_output})"
+            )
+
+        return json_output["devAuthCode"]
+
     def create_panoramic(self, serial: str, max_retries: int = 0) -> Any:
         """Create panoramic image."""
 
@@ -2044,9 +2092,7 @@ class EzvizClient:
 
     def get_connection(self) -> Any:
         """Get ezviz connection infos filter."""
-        return self._api_get_pagelist(
-            page_filter="CONNECTION", json_key="CONNECTION"
-        )
+        return self._api_get_pagelist(page_filter="CONNECTION", json_key="CONNECTION")
 
     def _get_status(self) -> Any:
         """Get ezviz status infos filter."""
@@ -2054,9 +2100,7 @@ class EzvizClient:
 
     def get_switch(self) -> Any:
         """Get ezviz switch infos filter."""
-        return self._api_get_pagelist(
-            page_filter="SWITCH", json_key="SWITCH"
-        )
+        return self._api_get_pagelist(page_filter="SWITCH", json_key="SWITCH")
 
     def _get_wifi(self) -> Any:
         """Get ezviz wifi infos filter."""
@@ -2064,9 +2108,7 @@ class EzvizClient:
 
     def _get_nodisturb(self) -> Any:
         """Get ezviz nodisturb infos filter."""
-        return self._api_get_pagelist(
-            page_filter="NODISTURB", json_key="NODISTURB"
-        )
+        return self._api_get_pagelist(page_filter="NODISTURB", json_key="NODISTURB")
 
     def _get_p2p(self) -> Any:
         """Get ezviz P2P infos filter."""

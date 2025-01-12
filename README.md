@@ -4,6 +4,11 @@
 
 Pilot your Ezviz cameras (and light bulbs) with this module.
 
+This library was created for use in Home Assistant but, can also be used directly. (or anywhere you see fit)
+
+### Structure
+Please format with ruff and check typing with mypy.
+
 ### Installing
 
 

@@ -950,15 +950,11 @@ class EzvizClient:
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        device_token_info = self.get_user_id()
-        cookies = {
-            "clientType": "3",
-            "clientVersion": "5.12.1.0517",
-            "userId": device_token_info["userId"],
-            "ASG_DisplayName": "home",
-            "C_SS": self._session.headers["sessionId"],
-            "lang": "en_US",
-        }
+        if enable == 2 and not old_password:
+            raise PyEzvizError("Old password is required when changing password.")
+
+        if new_password and not enable == 2:
+            raise PyEzvizError("New password is only required when changing password.")
 
         try:
             req = self._session.put(
@@ -968,14 +964,13 @@ class EzvizClient:
                 + API_ENDPOINT_VIDEO_ENCRYPT,
                 data={
                     "deviceSerial": serial,
-                    "isEncrypt": enable,
-                    "oldPassword": old_password,
+                    "isEncrypt": enable,  # 1 = enable, 0 = disable, 2 = change password
+                    "oldPassword": old_password,  # required if changing.
                     "password": new_password,
                     "featureCode": FEATURE_CODE,
                     "validateCode": camera_verification_code,
                     "msgType": -1,
                 },
-                cookies=cookies,
                 timeout=self._timeout,
             )
 

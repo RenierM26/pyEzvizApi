@@ -1363,11 +1363,23 @@ class EzvizClient:
 
         return json_output["encryptkey"]
 
-    def get_cam_auth_code(self, serial: str, max_retries: int = 0) -> Any:
+    def get_cam_auth_code(
+        self,
+        serial: str,
+        encrypt_pwd: str | None = None,
+        msg_auth_code: int | None = None,
+        max_retries: int = 0,
+    ) -> Any:
         """Get Camera auth code. This is the verification code on the camera sticker."""
 
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        params: dict[str, int | str | None] = {
+            "encrptPwd": encrypt_pwd,
+            "msgAuthCode": msg_auth_code,
+            "senderType": 0,
+        }
 
         try:
             req = self._session.get(
@@ -1375,11 +1387,7 @@ class EzvizClient:
                 + self._token["api_url"]
                 + API_ENDPOINT_CAM_AUTH_CODE
                 + serial,
-                params={
-                    "encrptPwd": "",
-                    "msgAuthCode": "",
-                    "senderType": 0,
-                },
+                params=params,
                 timeout=self._timeout,
             )
 
@@ -1389,7 +1397,9 @@ class EzvizClient:
             if err.response.status_code == 401:
                 # session is wrong, need to relogin
                 self.login()
-                return self.get_cam_auth_code(serial, max_retries + 1)
+                return self.get_cam_auth_code(
+                    serial, encrypt_pwd, msg_auth_code, max_retries + 1
+                )
 
             raise HTTPError from err
 
@@ -1763,7 +1773,7 @@ class EzvizClient:
         self,
         serial: str,
         enable: int = 1,
-        channelno: int = 1,
+        channelno: str = "1",
         max_retries: int = 0,
     ) -> bool:
         """Set do not disturb on camera with specified serial."""

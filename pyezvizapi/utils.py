@@ -114,7 +114,12 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
     return output_data
 
 
-def deep_merge(dict1, dict2):
+def return_password_hash(password: str) -> str:
+    """Return the password hash."""
+    return md5(str.encode(md5(str.encode(password)).hexdigest())).hexdigest()
+
+
+def deep_merge(dict1: Any, dict2: Any) -> Any:
     """Recursively merges two dictionaries, handling lists as well.
 
     Args:

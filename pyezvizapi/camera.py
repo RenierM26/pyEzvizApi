@@ -124,7 +124,7 @@ class EzvizCamera:
             "local_ip": self._local_ip(),
             "wan_ip": self.fetch_key(["CONNECTION", "netIp"]),
             "mac_address": self.fetch_key(["deviceInfos", "mac"]),
-            "offline_notify": self.fetch_key(["deviceInfos", "offlineNotify"]),
+            "offline_notify": bool(self.fetch_key(["deviceInfos", "offlineNotify"])),
             "last_offline_time": self.fetch_key(["deviceInfos", "offlineTime"]),
             "local_rtsp_port": self.fetch_key(["CONNECTION", "localRtspPort"], "554")
             if self.fetch_key(["CONNECTION", "localRtspPort"], "554") != 0

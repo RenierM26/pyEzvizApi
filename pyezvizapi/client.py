@@ -1305,7 +1305,7 @@ class EzvizClient:
         if not serial:
             return result
 
-        return result[serial]
+        return result.get(serial, {})
 
     def ptz_control(
         self, command: str, serial: str, action: str, speed: int = 5

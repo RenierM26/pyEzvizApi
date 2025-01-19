@@ -115,7 +115,7 @@ class EzvizLightBulb:
             "alarm_light_luminance": self.get_feature_item("brightness")["dataValue"],
         }
 
-    def write_state(self, state) -> bool:
+    def _write_state(self, state) -> bool:
         """Set the light bulb state."""
         item = self.get_feature_item("light_switch")
         return self._client.set_device_feature_by_key(
@@ -124,15 +124,28 @@ class EzvizLightBulb:
             state,
             item["itemKey"]
         )
+    
+    def set_brightness(self, value) -> bool:
+        """
+        Set the light bulb brightness. 
+        The value must be in range 1-100.
+        """
+        return self._client.set_device_feature_by_key(
+            self._serial,
+            self.get_product_id(),
+            value,
+            "brightness"
+        )
         
     def toggle_switch(self) -> bool:
         """Toggle on/off light bulb."""
-        return self.write_state(not bool(item["dataValue"]))
+        return self._write_state(not bool(item["dataValue"]))
 
     def power_on(self) -> bool:
         """Power the light bulb on."""
-        return self.write_state(True)
+        return self._write_state(True)
 
     def power_off(self) -> bool:
         """Power the light bulb off."""
-        return self.write_state(False)
+        return self._write_state(False)
+    

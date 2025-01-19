@@ -116,7 +116,7 @@ class EzvizLightBulb:
         }
 
     def write_state(self, state) -> bool:
-        """Set the light bulb state"""
+        """Set the light bulb state."""
         item = self.get_feature_item("light_switch")
         return self._client.set_device_feature_by_key(
             self._serial,

@@ -307,6 +307,9 @@ class SupportExt(Enum):
     SupportWifiManager = 239
     SupportWifiPortal = 43
     SupportWorkModeList = 502
+    SupportSensitiveUnderDefenceType = 444
+    SupportDefenceTypeFull = 534
+    SupportDetectAreaUnderDefencetype = 504
 
 
 @unique
@@ -332,12 +335,22 @@ class DefenseModeType(Enum):
 
 
 @unique
-class IntelligentDetectionMode(Enum):
-    """Intelligent detection modes."""
+class AlarmDetectHumanCar(Enum):
+    """Detection modes for cameras that support AlarmDetectHumanCar."""
 
-    INTELLI_MODE_HUMAN_SHAPE = 1
-    INTELLI_MODE_PIR = 5
-    INTELLI_MODE_IMAGE_CHANGE = 3
+    DETECTION_MODE_HUMAN_SHAPE = 1
+    DETECTION_MODE_PIR = 5
+    DETECTION_MODE_IMAGE_CHANGE = 3
+
+
+@unique
+class IntelligentDetectionSmartApp(Enum):
+    """Intelligent detection modes for cameras using smart apps."""
+
+    app_human_detect = 1
+    app_video_change = 4
+    app_car_detect = 2
+    app_wave_recognize = 64
 
 
 @unique

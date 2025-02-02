@@ -1,14 +1,16 @@
 """init pyezvizapi."""
+
 from .camera import EzvizCamera
 from .cas import EzvizCAS
 from .client import EzvizClient
 from .constants import (
+    AlarmDetectHumanCar,
     BatteryCameraWorkMode,
     DefenseModeType,
     DeviceCatagories,
     DeviceSwitchType,
     DisplayMode,
-    IntelligentDetectionMode,
+    IntelligentDetectionSmartApp,
     MessageFilterType,
     NightVisionMode,
     SoundMode,
@@ -28,27 +30,28 @@ from .mqtt import MQTTClient
 from .test_cam_rtsp import TestRTSPAuth
 
 __all__ = [
-    "EzvizCamera",
-    "EzvizClient",
-    "PyEzvizError",
-    "InvalidURL",
-    "HTTPError",
-    "InvalidHost",
+    "AlarmDetectHumanCar",
     "AuthTestResultFailed",
+    "BatteryCameraWorkMode",
+    "DefenseModeType",
+    "DeviceCatagories",
+    "DeviceSwitchType",
+    "DisplayMode",
     "EzvizAuthTokenExpired",
     "EzvizAuthVerificationCode",
     "EzvizCAS",
+    "EzvizCamera",
+    "EzvizClient",
     "EzvizLightBulb",
+    "HTTPError",
+    "IntelligentDetectionSmartApp",
+    "InvalidHost",
+    "InvalidURL",
     "MQTTClient",
-    "DefenseModeType",
-    "IntelligentDetectionMode",
-    "BatteryCameraWorkMode",
-    "DisplayMode",
-    "NightVisionMode",
     "MessageFilterType",
-    "DeviceCatagories",
-    "DeviceSwitchType",
-    "SupportExt",
+    "NightVisionMode",
+    "PyEzvizError",
     "SoundMode",
+    "SupportExt",
     "TestRTSPAuth",
 ]

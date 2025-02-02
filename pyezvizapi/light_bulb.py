@@ -1,4 +1,5 @@
-"""pyezviz camera api."""
+"""Ezviz camera api."""
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,7 @@ class EzvizLightBulb:
     """Initialize Ezviz Light Bulb object."""
 
     def __init__(
-            self, client: EzvizClient, serial: str, device_obj: dict | None = None
+        self, client: EzvizClient, serial: str, device_obj: dict | None = None
     ) -> None:
         """Initialize the light bulb object."""
         self._client = client
@@ -30,7 +31,9 @@ class EzvizLightBulb:
         }
         if DeviceSwitchType.ALARM_LIGHT.value not in self._switch:
             # trying to have same interface as the camera's light
-            self._switch[DeviceSwitchType.ALARM_LIGHT.value] = self.get_feature_item("light_switch")["dataValue"]
+            self._switch[DeviceSwitchType.ALARM_LIGHT.value] = self.get_feature_item(
+                "light_switch"
+            )["dataValue"]
 
     def fetch_key(self, keys: list, default_value: Any = None) -> Any:
         """Fetch dictionary key."""
@@ -39,15 +42,15 @@ class EzvizLightBulb:
     def _local_ip(self) -> Any:
         """Fix empty ip value for certain cameras."""
         if (
-                self.fetch_key(["WIFI", "address"])
-                and self._device["WIFI"]["address"] != "0.0.0.0"
+            self.fetch_key(["WIFI", "address"])
+            and self._device["WIFI"]["address"] != "0.0.0.0"
         ):
             return self._device["WIFI"]["address"]
 
         # Seems to return none or 0.0.0.0 on some.
         if (
-                self.fetch_key(["CONNECTION", "localIp"])
-                and self._device["CONNECTION"]["localIp"] != "0.0.0.0"
+            self.fetch_key(["CONNECTION", "localIp"])
+            and self._device["CONNECTION"]["localIp"] != "0.0.0.0"
         ):
             return self._device["CONNECTION"]["localIp"]
 
@@ -59,20 +62,19 @@ class EzvizLightBulb:
             json_output = json.loads(self._device["FEATURE"]["featureJson"])
 
         except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode FEATURE: "
-                + str(err)
-            ) from err
+            raise PyEzvizError("Impossible to decode FEATURE: " + str(err)) from err
 
         return json_output
 
-    def get_feature_item(self, key: str, default_value: Any = { "dataValue" : "" }) -> Any:
-        """Get items fron FEATURE."""
+    def get_feature_item(self, key: str, default_value: Any = None) -> Any:
+        """Get items from FEATURE."""
         items = self._feature_json["featureItemDtos"]
+
         for item in items:
             if item["itemKey"] == key:
                 return item
-        return default_value
+
+        return default_value if default_value else {"dataValue": ""}
 
     def get_product_id(self) -> Any:
         """Get product id."""
@@ -104,42 +106,41 @@ class EzvizLightBulb:
             "optionals": self.fetch_key(["STATUS", "optionals"]),
             "supportExt": self._device["deviceInfos"]["supportExt"],
             "ezDeviceCapability": self.fetch_key(["deviceInfos", "ezDeviceCapability"]),
-
             "featureItems": self._feature_json["featureItemDtos"],
             "productId": self._feature_json["productId"],
-            "color_temperature": self.get_feature_item("color_temperature")["dataValue"],
-
+            "color_temperature": self.get_feature_item("color_temperature")[
+                "dataValue"
+            ],
             "is_on": self.get_feature_item("light_switch")["dataValue"],
             "brightness": self.get_feature_item("brightness")["dataValue"],
             # same as brightness... added in order to keep "same interface" between camera and light bulb objects
             "alarm_light_luminance": self.get_feature_item("brightness")["dataValue"],
         }
 
-    def _write_state(self, state) -> bool:
+    def _write_state(self, state: bool | None = None) -> bool:
         """Set the light bulb state."""
         item = self.get_feature_item("light_switch")
+
         return self._client.set_device_feature_by_key(
             self._serial,
             self.get_product_id(),
-            state,
-            item["itemKey"]
+            state if state else not bool(item["dataValue"]),
+            item["itemKey"],
         )
-    
-    def set_brightness(self, value) -> bool:
-        """
-        Set the light bulb brightness. 
+
+    def set_brightness(self, value: int) -> bool:
+        """Set the light bulb brightness.
+
         The value must be in range 1-100.
+
         """
         return self._client.set_device_feature_by_key(
-            self._serial,
-            self.get_product_id(),
-            value,
-            "brightness"
+            self._serial, self.get_product_id(), value, "brightness"
         )
-        
+
     def toggle_switch(self) -> bool:
         """Toggle on/off light bulb."""
-        return self._write_state(not bool(item["dataValue"]))
+        return self._write_state()
 
     def power_on(self) -> bool:
         """Power the light bulb on."""
@@ -148,4 +149,3 @@ class EzvizLightBulb:
     def power_off(self) -> bool:
         """Power the light bulb off."""
         return self._write_state(False)
-    

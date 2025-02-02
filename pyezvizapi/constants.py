@@ -1,4 +1,5 @@
 """Device switch types relationship."""
+
 from enum import Enum, unique
 
 FEATURE_CODE = "1fc28fa018178a1cd1c091b13b2f9f02"
@@ -305,6 +306,7 @@ class SupportExt(Enum):
     SupportWifiLock = 541
     SupportWifiManager = 239
     SupportWifiPortal = 43
+    SupportWorkModeList = 502
 
 
 @unique
@@ -365,7 +367,7 @@ class BatteryCameraWorkMode(Enum):
     POWER_SAVE = 0
     SUPER_POWER_SAVE = 3
     CUSTOM = 4
-    HYBERNATE = 5  #not sure
+    HYBERNATE = 5  # not sure
     UNKNOWN = -1
 
 

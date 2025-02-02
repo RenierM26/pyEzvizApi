@@ -24,15 +24,18 @@ from .api_endpoints import (
     API_ENDPOINT_DETECTION_SENSIBILITY,
     API_ENDPOINT_DETECTION_SENSIBILITY_GET,
     API_ENDPOINT_DEVCONFIG_BY_KEY,
+    API_ENDPOINT_DEVICE_BASICS,
     API_ENDPOINT_DEVICE_STORAGE_STATUS,
     API_ENDPOINT_DEVICE_SYS_OPERATION,
     API_ENDPOINT_DEVICES,
     API_ENDPOINT_DO_NOT_DISTURB,
     API_ENDPOINT_GROUP_DEFENCE_MODE,
+    API_ENDPOINT_INTELLIGENT_APP,
     API_ENDPOINT_IOT_FEATURE,
     API_ENDPOINT_LOGIN,
     API_ENDPOINT_LOGOUT,
     API_ENDPOINT_OFFLINE_NOTIFY,
+    API_ENDPOINT_OSD,
     API_ENDPOINT_PAGELIST,
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
     API_ENDPOINT_PTZCONTROL,
@@ -660,7 +663,7 @@ class EzvizClient:
             params, safe="}{:"
         )  # not encode curly braces and colon
 
-        full_url = f'https://{self._token["api_url"]}{API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/1/op'
+        full_url = f"https://{self._token['api_url']}{API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/1/op"
 
         # EZVIZ api request needs {}: in the url, but requests lib doesn't allow it
         # so we need to manually prepare it
@@ -721,7 +724,7 @@ class EzvizClient:
 
         payload = json.dumps({"itemKey": key, "productId": product_id, "value": value})
 
-        full_url = f'https://{self._token["api_url"]}{API_ENDPOINT_IOT_FEATURE}{serial.upper()}/0'
+        full_url = f"https://{self._token['api_url']}{API_ENDPOINT_IOT_FEATURE}{serial.upper()}/0"
 
         headers = self._session.headers
         headers.update({"Content-Type": "application/json"})
@@ -1010,7 +1013,7 @@ class EzvizClient:
 
         try:
             req = self._session.post(
-                url=f'https://{self._token["api_url"]}{API_ENDPOINT_DEVICE_SYS_OPERATION}{serial}',
+                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICE_SYS_OPERATION}{serial}",
                 data={
                     "oper": operation,
                     "deviceSerial": serial,
@@ -1071,7 +1074,7 @@ class EzvizClient:
 
         try:
             req = self._session.post(
-                url=f'https://{self._token["api_url"]}{API_ENDPOINT_OFFLINE_NOTIFY}',
+                url=f"https://{self._token['api_url']}{API_ENDPOINT_OFFLINE_NOTIFY}",
                 data={
                     "reqType": req_type,
                     "serial": serial,
@@ -1881,6 +1884,175 @@ class EzvizClient:
 
         if json_output["meta"]["code"] != 200:
             raise PyEzvizError(f"Could not set answer call: Got {json_output})")
+
+        return True
+
+    def manage_intelligent_app(
+        self,
+        serial: str,
+        resource_id: str,
+        app_name: str,
+        action: str = "add",
+        max_retries: int = 0,
+    ) -> bool:
+        """Manage the intelligent app on the camera by adding (add) or removing (remove) it.
+
+        Args:
+            serial (str): The camera serial.
+            resource_id (str): The resource identifier of the camera.
+            app_name (str): The intelligent app name.
+                "app_video_change" = Image change detection,
+                "app_human_detect" = Human shape detection,
+                "app_car_detect" = Vehicle detection,
+                "app_wave_recognize" = Gesture recognition
+            action (str, optional): Add or remove app ("add" or "remove"). Defaults to "add".
+            max_retries (int, optional): Number of retries attempted. Defaults to 0.
+
+        Raises:
+            PyEzvizError: If max retries are exceeded or if the response indicates failure.
+            HTTPError: If an HTTP error occurs (other than a 401, which triggers re-login).
+
+        Returns:
+            bool: True if the operation was successful.
+
+        """
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        url = (
+            f"https://{self._token['api_url']}"
+            f"{API_ENDPOINT_INTELLIGENT_APP}{serial}/{resource_id}/{app_name}"
+        )
+
+        try:
+            # Determine which method to call based on the parameter.
+            action = action.lower()
+            if action == "add":
+                req = self._session.put(url=url, timeout=self._timeout)
+            elif action == "remove":
+                req = self._session.delete(url=url, timeout=self._timeout)
+            else:
+                raise PyEzvizError(f"Invalid action '{action}'. Use 'add' or 'remove'.")
+
+            req.raise_for_status()
+
+        except requests.HTTPError as err:
+            if err.response.status_code == 401:
+                # Session might be invalid; attempt to re-login and retry.
+                self.login()
+                return self.manage_intelligent_app(
+                    serial, resource_id, app_name, action, max_retries + 1
+                )
+            raise HTTPError from err
+
+        try:
+            json_output = req.json()
+        except ValueError as err:
+            raise PyEzvizError("Could not decode response: " + str(err)) from err
+
+        if json_output.get("meta", {}).get("code") != 200:
+            raise PyEzvizError(f"Could not {action} intelligent app: Got {json_output}")
+
+        return True
+
+    def flip_image(
+        self,
+        serial: str,
+        channel: int = 1,
+        max_retries: int = 0,
+    ) -> bool:
+        """Flips the camera image when called.
+
+        Args:
+            serial (str): The camera serial.
+            channel (int, optional): The camera channel number to flip. Defaults to 1.
+            max_retries (int, optional): Number of retries attempted. Defaults to 0.
+
+        Raises:
+            PyEzvizError: If max retries are exceeded or if the response indicates failure.
+            HTTPError: If an HTTP error occurs (other than a 401, which triggers re-login).
+
+        Returns:
+            bool: True if the operation was successful.
+
+        """
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        try:
+            req = self._session.put(
+                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICE_BASICS}{serial}/{channel}/CENTER/mirror",
+                timeout=self._timeout,
+            )
+            req.raise_for_status()
+
+        except requests.HTTPError as err:
+            if err.response.status_code == 401:
+                # Session might be invalid; attempt to re-login and retry.
+                self.login()
+                return self.flip_image(serial, channel, max_retries + 1)
+            raise HTTPError from err
+
+        try:
+            json_output = req.json()
+
+        except ValueError as err:
+            raise PyEzvizError("Could not decode response: " + str(err)) from err
+
+        if json_output.get("meta", {}).get("code") != 200:
+            raise PyEzvizError(f"Could not flip image on camera: Got {json_output}")
+
+        return True
+
+    def set_camera_osd(
+        self,
+        serial: str,
+        text: str = "",
+        channel: int = 1,
+        max_retries: int = 0,
+    ) -> bool:
+        """Set OSD (on screen display) text.
+
+        Args:
+            serial (str): The camera serial.
+            text (str, optional): The osd text to set. The default of "" will clear.
+            channel (int, optional): The cammera channel to set this on. Defaults to 1.
+            max_retries (int, optional): Number of retries attempted. Defaults to 0.
+
+        Raises:
+            PyEzvizError: If max retries are exceeded or if the response indicates failure.
+            HTTPError: If an HTTP error occurs (other than a 401, which triggers re-login).
+
+        Returns:
+            bool: True if the operation was successful.
+
+        """
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        try:
+            req = self._session.put(
+                url=f"https://{self._token['api_url']}{API_ENDPOINT_OSD}{serial}/{channel}/osd",
+                data={"osd": text},
+                timeout=self._timeout,
+            )
+            req.raise_for_status()
+
+        except requests.HTTPError as err:
+            if err.response.status_code == 401:
+                # Session might be invalid; attempt to re-login and retry.
+                self.login()
+                return self.set_camera_osd(serial, text, channel, max_retries + 1)
+            raise HTTPError from err
+
+        try:
+            json_output = req.json()
+
+        except ValueError as err:
+            raise PyEzvizError("Could not decode response: " + str(err)) from err
+
+        if json_output.get("meta", {}).get("code") != 200:
+            raise PyEzvizError(f"Could set osd message on camera: Got {json_output}")
 
         return True
 

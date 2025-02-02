@@ -12,6 +12,7 @@ API_ENDPOINT_USER_ID = "/v3/userdevices/v1/token"
 API_ENDPOINT_GROUP_DEFENCE_MODE = "/v3/userdevices/v1/group/defenceMode"
 API_ENDPOINT_PAGELIST = "/v3/userdevices/v1/resources/pagelist"
 API_ENDPOINT_SWITCH_DEFENCE_MODE = "/v3/userdevices/v1/group/switchDefenceMode"
+API_ENDPOINT_OSD = "/v3/userdevices/v1/devices/"
 
 API_ENDPOINT_PANORAMIC_DEVICES_OPERATION = "/v3/panoramicDevices/operation"
 API_ENDPOINT_UPGRADE_DEVICE = "/v3/upgrades/v1/devices/"
@@ -26,6 +27,10 @@ API_ENDPOINT_SET_LUMINANCE = "/v3/alarms/device/alarmLight/"
 
 API_ENDPOINT_DEVCONFIG_BY_KEY = "/v3/devconfig/v1/keyValue/"
 API_ENDPOINT_CAM_AUTH_CODE = "/v3/devconfig/authcode/query/"
+
+API_ENDPOINT_INTELLIGENT_APP = "/v3/intelligent-app/load/"
+
+API_ENDPOINT_DEVICE_BASICS = "/v3/basics/v1/devices/"
 
 API_ENDPOINT_DETECTION_SENSIBILITY = "/api/device/configAlgorithm"
 API_ENDPOINT_DETECTION_SENSIBILITY_GET = "/api/device/queryAlgorithmConfig"

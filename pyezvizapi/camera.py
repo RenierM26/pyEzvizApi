@@ -164,6 +164,7 @@ class EzvizCamera:
             "Alarm_AdvancedDetect": self.fetch_key(
                 ["STATUS", "optionals", "Alarm_AdvancedDetect", "type"]
             ),
+            "resouceid": self.fetch_key(["resourceInfos", 0, "resourceId"]),
             "wifiInfos": self._device["WIFI"],
             "switches": self._switch,
             "optionals": self.fetch_key(["STATUS", "optionals"]),

@@ -381,6 +381,7 @@ class BatteryCameraWorkMode(Enum):
     SUPER_POWER_SAVE = 3
     CUSTOM = 4
     HYBERNATE = 5  # not sure
+    ALWAYS_ON_VIDEO = 7
     UNKNOWN = -1
 
 

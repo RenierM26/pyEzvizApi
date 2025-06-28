@@ -1,4 +1,4 @@
-pycryptodome==3.21.0
+pycryptodome==3.23.0
 pandas==2.3.0
 requests==2.32.4
 paho-mqtt==2.1.0

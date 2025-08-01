@@ -79,6 +79,7 @@ def main() -> Any:
 
     subparsers_camera.add_parser("status", help="Get the status of the camera")
     subparsers_camera.add_parser("unlock-door", help="Unlock the door lock")
+    subparsers_camera.add_parser("unlock-gate", help="Unlock the gate lock")
     parser_camera_move = subparsers_camera.add_parser("move", help="Move the camera")
     parser_camera_move.add_argument(
         "--direction",
@@ -402,6 +403,15 @@ Movement is still recorded even if do-not-disturb is enabled.",
         elif args.camera_action == "unlock-door":
             try:
                 camera.door_unlock()
+
+            except Exception as exp:  # pylint: disable=broad-except
+                print(exp)
+            finally:
+                client.close_session()
+
+        elif args.camera_action == "unlock-gate":
+            try:
+                camera.gate_unlock()
 
             except Exception as exp:  # pylint: disable=broad-except
                 print(exp)

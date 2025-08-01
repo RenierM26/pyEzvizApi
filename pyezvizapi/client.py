@@ -38,7 +38,7 @@ from .api_endpoints import (
     API_ENDPOINT_OSD,
     API_ENDPOINT_PAGELIST,
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
-    API_ENDPOINT_DOOR_UNLOCK,
+    API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_PTZCONTROL,
     API_ENDPOINT_REFRESH_SESSION_ID,
     API_ENDPOINT_RETURN_PANORAMIC,
@@ -1611,14 +1611,15 @@ class EzvizClient:
 
         return True
 
-    def door_unlock(self, serial: str) -> bool:
+    def remote_unlock(self, serial: str, lock_no: int) -> bool:
+        """Sends a remote command to unlock a specific lock."""
         try:
-            endpoint = API_ENDPOINT_DOOR_UNLOCK.replace("#SERIAL#", serial)
+            endpoint = API_ENDPOINT_REMOTE_UNLOCK.replace("#SERIAL#", serial)
             user_id = self._token["username"]
             payload = json.dumps({
                 "unLockInfo": {
                     "bindCode": f"{FEATURE_CODE}{user_id}",
-                    "lockNo": 2,
+                    "lockNo": lock_no,
                     "streamToken": "",
                     "userName": user_id,
                 }

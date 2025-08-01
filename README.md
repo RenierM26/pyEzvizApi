@@ -247,9 +247,10 @@ pyezvizapi -u em@il -p PASS light --serial D55555 status
 ```
 </details>
 
-## Remote Door Unlock (tested on Ezviz CS-HPD7)
+## Remote door and gate unlock (tested on Ezviz CS-HPD7)
 ```
 pyezvizapi -u em@il -p PASS camera --serial BAXXXXXXX-BAYYYYYYY unlock-door
+pyezvizapi -u em@il -p PASS camera --serial BAXXXXXXX-BAYYYYYYY unlock-gate
 ```
 
 ## Running the tests

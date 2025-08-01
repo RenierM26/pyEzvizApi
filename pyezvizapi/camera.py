@@ -190,7 +190,11 @@ class EzvizCamera:
 
     def door_unlock(self) -> bool:
         """Unlock the door lock."""
-        return self._client.door_unlock(self._serial)
+        return self._client.remote_unlock(self._serial, 2)
+
+    def gate_unlock(self) -> bool:
+        """Unlock the gate lock."""
+        return self._client.remote_unlock(self._serial, 1)
 
     def alarm_notify(self, enable: int) -> bool:
         """Enable/Disable camera notification when movement is detected."""

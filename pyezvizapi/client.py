@@ -38,6 +38,7 @@ from .api_endpoints import (
     API_ENDPOINT_OSD,
     API_ENDPOINT_PAGELIST,
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
+    API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_PTZCONTROL,
     API_ENDPOINT_REFRESH_SESSION_ID,
     API_ENDPOINT_RETURN_PANORAMIC,
@@ -1607,6 +1608,50 @@ class EzvizClient:
             ) from err
 
         _LOGGER.debug("PTZ control coordinates: %s", json_result)
+
+        return True
+
+    def remote_unlock(self, serial: str, lock_no: int) -> bool:
+        """Sends a remote command to unlock a specific lock."""
+        try:
+            endpoint = API_ENDPOINT_REMOTE_UNLOCK.replace("#SERIAL#", serial)
+            user_id = self._token["username"]
+            payload = json.dumps({
+                "unLockInfo": {
+                    "bindCode": f"{FEATURE_CODE}{user_id}",
+                    "lockNo": lock_no,
+                    "streamToken": "",
+                    "userName": user_id,
+                }
+            })
+
+            headers = self._session.headers
+            headers.update({"Content-Type": "application/json"})
+
+            req = self._session.put(
+                url=f"https://{self._token['api_url']}{endpoint}",
+                data=payload,
+                timeout=self._timeout,
+                headers=headers,
+            )
+
+            req.raise_for_status()
+
+        except requests.HTTPError as err:
+            raise HTTPError from err
+
+        try:
+            json_result = req.json()
+
+        except ValueError as err:
+            raise PyEzvizError(
+                "Impossible to decode response: "
+                + str(err)
+                + "\nResponse was: "
+                + str(req.text)
+            ) from err
+
+        _LOGGER.debug("Result: %s", json_result)
 
         return True
 

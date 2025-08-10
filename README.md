@@ -247,6 +247,12 @@ pyezvizapi -u em@il -p PASS light --serial D55555 status
 ```
 </details>
 
+## Remote door and gate unlock (tested on Ezviz CS-HPD7)
+```
+pyezvizapi -u em@il -p PASS camera --serial BAXXXXXXX-BAYYYYYYY unlock-door
+pyezvizapi -u em@il -p PASS camera --serial BAXXXXXXX-BAYYYYYYY unlock-gate
+```
+
 ## Running the tests
 The tox configuration is already included.
 Simply launch:

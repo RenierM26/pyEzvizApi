@@ -188,6 +188,14 @@ class EzvizCamera:
         """Move camera to specified coordinates."""
         return self._client.ptz_control_coordinates(self._serial, x_axis, y_axis)
 
+    def door_unlock(self) -> bool:
+        """Unlock the door lock."""
+        return self._client.remote_unlock(self._serial, 2)
+
+    def gate_unlock(self) -> bool:
+        """Unlock the gate lock."""
+        return self._client.remote_unlock(self._serial, 1)
+
     def alarm_notify(self, enable: int) -> bool:
         """Enable/Disable camera notification when movement is detected."""
         return self._client.set_camera_defence(self._serial, enable)

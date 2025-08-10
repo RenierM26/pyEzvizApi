@@ -24,6 +24,7 @@ API_ENDPOINT_CALLING_NOTIFY = "/v3/calling/"
 API_ENDPOINT_ALARMINFO_GET = "/v3/alarms/v2/advanced"
 API_ENDPOINT_V3_ALARMS = "/v3/alarms/"
 API_ENDPOINT_SET_LUMINANCE = "/v3/alarms/device/alarmLight/"
+API_ENDPOINT_REMOTE_UNLOCK = "/v3/iot-feature/action/#SERIAL#/Video/1/DoorLockMgr/RemoteUnlockReq"
 
 API_ENDPOINT_DEVCONFIG_BY_KEY = "/v3/devconfig/v1/keyValue/"
 API_ENDPOINT_CAM_AUTH_CODE = "/v3/devconfig/authcode/query/"

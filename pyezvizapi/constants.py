@@ -358,6 +358,9 @@ class SupportExt(Enum):
     SupportWifiPortal = 43
     SupportWindowPtzSlider = 802
     SupportWorkModeList = 502
+    SupportSensitiveUnderDefenceType = 444
+    SupportDefenceTypeFull = 534
+    SupportDetectAreaUnderDefencetype = 504
 
 
 @unique

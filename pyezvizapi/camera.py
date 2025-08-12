@@ -158,9 +158,9 @@ class EzvizCamera:
             "NightVision_Model": self.fetch_key(
                 ["STATUS", "optionals", "NightVision_Model"]
             ),
-            "battery_camera_work_mode": BatteryCameraWorkMode(
-                self.fetch_key(["STATUS", "optionals", "batteryCameraWorkMode"], -1)
-            ).name,
+            "battery_camera_work_mode": self.fetch_key(
+                ["STATUS", "optionals", "batteryCameraWorkMode"], -1
+            ),
             "Alarm_AdvancedDetect": self.fetch_key(
                 ["STATUS", "optionals", "Alarm_AdvancedDetect", "type"]
             ),

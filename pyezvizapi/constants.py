@@ -426,14 +426,25 @@ class DisplayMode(Enum):
 class BatteryCameraWorkMode(Enum):
     """Battery camera work modes."""
 
-    PLUGGED_IN = 2
-    HIGH_PERFORMANCE = 1
+    UNKNOWN = -1
     POWER_SAVE = 0
+    HIGH_PERFORMANCE = 1
+    PLUGGED_IN = 2
     SUPER_POWER_SAVE = 3
     CUSTOM = 4
     HYBERNATE = 5  # not sure
-    ALWAYS_ON_VIDEO = 7
+
+
+@unique
+class BatteryCameraNewWorkMode(Enum):
+    """New battery camera work modes."""
+
     UNKNOWN = -1
+    STANDARD = 1
+    PLUGGED_IN = 2
+    SUPER_POWER_SAVE = 3
+    CUSTOM = 4
+    ALWAYS_ON_VIDEO = 7
 
 
 class DeviceCatagories(Enum):

@@ -5,6 +5,7 @@ from .cas import EzvizCAS
 from .client import EzvizClient
 from .constants import (
     AlarmDetectHumanCar,
+    BatteryCameraNewWorkMode,
     BatteryCameraWorkMode,
     DefenseModeType,
     DeviceCatagories,
@@ -32,6 +33,7 @@ from .test_cam_rtsp import TestRTSPAuth
 __all__ = [
     "AlarmDetectHumanCar",
     "AuthTestResultFailed",
+    "BatteryCameraNewWorkMode",
     "BatteryCameraWorkMode",
     "DefenseModeType",
     "DeviceCatagories",

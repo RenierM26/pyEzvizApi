@@ -71,6 +71,7 @@ from .constants import (
     MessageFilterType,
 )
 from .exceptions import (
+    DeviceException,
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
     HTTPError,
@@ -1369,6 +1370,7 @@ class EzvizClient:
         Raises:
             PyEzvizError: If the camera encryption key can't be retrieved.
             EzvizAuthVerificationCode: If the account requires elevation with 2FA code.
+            DeviceException: If the physical device is not reachable.
 
         Returns:
             Any: JSON response, filtered to return encryptkey:
@@ -1421,6 +1423,9 @@ class EzvizClient:
         if json_output["resultCode"] == "20002":
             raise EzvizAuthVerificationCode(f"MFA code required: Got {json_output})")
 
+        if json_output["resultCode"] == 2009:
+            raise DeviceException(f"Device not reachable: Got {json_output})")
+
         if json_output["resultCode"] != "0":
             if json_output["resultCode"] == "-1":
                 _LOGGER.warning(
@@ -1456,6 +1461,7 @@ class EzvizClient:
         Raises:
             PyEzvizError: If the camera auth code cannot be retrieved.
             EzvizAuthVerificationCode: If the operation requires elevation with 2FA.
+            DeviceException: If the physical device is not reachable.
 
         Returns:
             Any: JSON response, filtered to return devAuthCode:
@@ -1511,9 +1517,12 @@ class EzvizClient:
         if json_output["meta"]["code"] == 80000:
             raise EzvizAuthVerificationCode("Operation requires 2FA check")
 
+        if json_output["resultCode"] == 2009:
+            raise DeviceException(f"Device not reachable: Got {json_output}")
+
         if json_output["meta"]["code"] != 200:
             raise PyEzvizError(
-                f"Could not get camera verification key: Got {json_output})"
+                f"Could not get camera verification key: Got {json_output}"
             )
 
         return json_output["devAuthCode"]

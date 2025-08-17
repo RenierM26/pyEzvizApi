@@ -13,6 +13,7 @@ from uuid import uuid4
 import requests
 
 from .api_endpoints import (
+    API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
     API_ENDPOINT_ALARM_SOUND,
     API_ENDPOINT_ALARMINFO_GET,
     API_ENDPOINT_CALLING_NOTIFY,
@@ -31,6 +32,7 @@ from .api_endpoints import (
     API_ENDPOINT_DO_NOT_DISTURB,
     API_ENDPOINT_GROUP_DEFENCE_MODE,
     API_ENDPOINT_INTELLIGENT_APP,
+    API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_IOT_FEATURE,
     API_ENDPOINT_LOGIN,
     API_ENDPOINT_LOGOUT,
@@ -38,9 +40,9 @@ from .api_endpoints import (
     API_ENDPOINT_OSD,
     API_ENDPOINT_PAGELIST,
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
-    API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_PTZCONTROL,
     API_ENDPOINT_REFRESH_SESSION_ID,
+    API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_RETURN_PANORAMIC,
     API_ENDPOINT_SEND_CODE,
     API_ENDPOINT_SERVER_INFO,
@@ -1271,7 +1273,7 @@ class EzvizClient:
                 for item in devices.get("CLOUD", {})
                 if devices["CLOUD"][item].get("deviceSerial") == _serial
             }
-            _res_id = _res_id_list.pop() if len(_res_id_list) else "NONE"
+            _res_id = _res_id_list.pop() if _res_id_list else "NONE"
 
             result[_serial] = {
                 "CLOUD": {_res_id: devices.get("CLOUD", {}).get(_res_id, {})},
@@ -1357,7 +1359,25 @@ class EzvizClient:
     def get_cam_key(
         self, serial: str, smscode: int | None = None, max_retries: int = 0
     ) -> Any:
-        """Get Camera encryption key. The key that is set after the camera is added to the account."""
+        """Get Camera encryption key. The key that is set after the camera is added to the account.
+
+        Args:
+            serial (str): The camera serial number.
+            smscode (int | None): The 2FA code account when rights elevation is required.
+            max_retries (int): The maximum number of retries. Defaults to 0.
+
+        Raises:
+            PyEzvizError: If the camera encryption key can't be retrieved.
+            EzvizAuthVerificationCode: If the account requires elevation with 2FA code.
+
+        Returns:
+            Any: JSON response, filtered to return encryptkey:
+                {
+                    "resultCode": int,     # Result code (0 if successful)
+                    "encryptkey": str,     # Camera encryption key
+                    "resultDes": str       # Status message in chinese
+                }
+        """
 
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
@@ -1421,9 +1441,33 @@ class EzvizClient:
         serial: str,
         encrypt_pwd: str | None = None,
         msg_auth_code: int | None = None,
+        sender_type: int = 0,
         max_retries: int = 0,
     ) -> Any:
-        """Get Camera auth code. This is the verification code on the camera sticker."""
+        """Get Camera auth code. This is the verification code on the camera sticker.
+
+        Args:
+            serial (str): The camera serial number.
+            encrypt_pwd (str | None): This is always none.
+            msg_auth_code (int | None): The 2FA code.
+            sender_type (int): The sender type. Defaults to 0. Needs to be 3 when returning 2FA code.
+            max_retries (int): The maximum number of retries. Defaults to 0.
+
+        Raises:
+            PyEzvizError: If the camera auth code cannot be retrieved.
+            EzvizAuthVerificationCode: If the operation requires elevation with 2FA.
+
+        Returns:
+            Any: JSON response, filtered to return devAuthCode:
+                {
+                    "devAuthCode": str,     # Device authorization code
+                    "meta": {
+                        "code": int,       # Status code (200 if successful)
+                        "message": str,         # Status message in chinese
+                        "moreInfo": null or {"INVALID_PARAMETER": str}
+                    }
+                }
+        """
 
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
@@ -1431,7 +1475,7 @@ class EzvizClient:
         params: dict[str, int | str | None] = {
             "encrptPwd": encrypt_pwd,
             "msgAuthCode": msg_auth_code,
-            "senderType": 0,
+            "senderType": sender_type,
         }
 
         try:
@@ -1464,12 +1508,84 @@ class EzvizClient:
                 + str(req.text)
             ) from err
 
+        if json_output["meta"]["code"] == 80000:
+            raise EzvizAuthVerificationCode("Operation requires 2FA check")
+
         if json_output["meta"]["code"] != 200:
             raise PyEzvizError(
                 f"Could not get camera verification key: Got {json_output})"
             )
 
         return json_output["devAuthCode"]
+
+    def get_2fa_check_code(
+        self,
+        biz_type: str = "DEVICE_AUTH_CODE",
+        username: str | None = None,
+        max_retries: int = 0,
+    ) -> Any:
+        """Initiate 2FA check for sensitive operations. Elevates your session token permission.
+
+        Args:
+            biz_type (str): The operation type. (DEVICE_ENCRYPTION | DEVICE_AUTH_CODE)
+            username (str): The account username.
+            max_retries (int): The maximum number of retries. Defaults to 0.
+
+        Raises:
+            PyEzvizError: If the operation fails.
+
+        Returns:
+            Any: JSON response with the following structure:
+                {
+                    "meta": {
+                        "code": int,       # Status code (200 if successful)
+                        "message": str         # Status message in chinese
+                        "moreInfo": null
+                    },
+                    "contact": {
+                        "type": str,   # 2FA code will be sent to this (EMAIL)
+                        "fuzzyContact": str     # Destination value (e.g., someone@email.local)
+                    }
+                }
+        """
+
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        try:
+            req = self._session.post(
+                url=f"https://{self._token['api_url']}{API_ENDPOINT_2FA_VALIDATE_POST_AUTH}",
+                data={"bizType": biz_type, "from": username},
+                timeout=self._timeout,
+            )
+
+            req.raise_for_status()
+
+        except requests.HTTPError as err:
+            if err.response.status_code == 401:
+                # session is wrong, need to relogin
+                self.login()
+                return self.get_2fa_check_code(biz_type, username, max_retries + 1)
+
+            raise HTTPError from err
+
+        try:
+            json_output = req.json()
+
+        except ValueError as err:
+            raise PyEzvizError(
+                "Impossible to decode response: "
+                + str(err)
+                + "\nResponse was: "
+                + str(req.text)
+            ) from err
+
+        if json_output["meta"]["code"] != 200:
+            raise PyEzvizError(
+                f"Could not request elevated permission: Got {json_output})"
+            )
+
+        return json_output
 
     def create_panoramic(self, serial: str, max_retries: int = 0) -> Any:
         """Create panoramic image."""
@@ -1611,26 +1727,38 @@ class EzvizClient:
 
         return True
 
-    def remote_unlock(self, serial: str, lock_no: int) -> bool:
-        """Sends a remote command to unlock a specific lock."""
-        try:
-            endpoint = API_ENDPOINT_REMOTE_UNLOCK.replace("#SERIAL#", serial)
-            user_id = self._token["username"]
-            payload = json.dumps({
-                "unLockInfo": {
-                    "bindCode": f"{FEATURE_CODE}{user_id}",
-                    "lockNo": lock_no,
-                    "streamToken": "",
-                    "userName": user_id,
-                }
-            })
+    def remote_unlock(self, serial: str, user_id: str, lock_no: int) -> bool:
+        """Sends a remote command to unlock a specific lock.
 
+        Args:
+            serial (str): The camera serial.
+            user_id (str): The user id.
+            lock_no (int): The lock number.
+
+        Raises:
+            PyEzvizError: If max retries are exceeded or if the response indicates failure.
+            HTTPError: If an HTTP error occurs (other than a 401, which triggers re-login).
+
+        Returns:
+            bool: True if the operation was successful.
+
+        """
+        try:
             headers = self._session.headers
             headers.update({"Content-Type": "application/json"})
 
             req = self._session.put(
-                url=f"https://{self._token['api_url']}{endpoint}",
-                data=payload,
+                url=f"https://{self._token['api_url']}{API_ENDPOINT_IOT_ACTION}{serial}{API_ENDPOINT_REMOTE_UNLOCK}",
+                data=json.dumps(
+                    {
+                        "unLockInfo": {
+                            "bindCode": f"{FEATURE_CODE}{user_id}",
+                            "lockNo": lock_no,
+                            "streamToken": "",
+                            "userName": user_id,
+                        }
+                    }
+                ),
                 timeout=self._timeout,
                 headers=headers,
             )

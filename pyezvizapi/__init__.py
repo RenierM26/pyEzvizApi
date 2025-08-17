@@ -19,6 +19,7 @@ from .constants import (
 )
 from .exceptions import (
     AuthTestResultFailed,
+    DeviceException,
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
     HTTPError,
@@ -37,6 +38,7 @@ __all__ = [
     "BatteryCameraWorkMode",
     "DefenseModeType",
     "DeviceCatagories",
+    "DeviceException",
     "DeviceSwitchType",
     "DisplayMode",
     "EzvizAuthTokenExpired",

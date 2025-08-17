@@ -27,3 +27,7 @@ class EzvizAuthTokenExpired(PyEzvizError):
 
 class EzvizAuthVerificationCode(PyEzvizError):
     """Authentication failed because MFA verification code is required."""
+
+
+class DeviceException(PyEzvizError):
+    """The device network is abnormal, please check the device network or try again."""

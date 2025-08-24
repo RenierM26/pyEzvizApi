@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 import hashlib
 import json
@@ -79,6 +80,7 @@ from .exceptions import (
     PyEzvizError,
 )
 from .light_bulb import EzvizLightBulb
+from .mqtt import MQTTClient
 from .utils import convert_to_dict, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ class EzvizClient:
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
+        self.mqtt_client: MQTTClient | None = None
 
     def _login(self, smscode: int | None = None) -> dict[Any, Any]:
         """Login to Ezviz API."""
@@ -2487,6 +2490,19 @@ class EzvizClient:
         _LOGGER.debug("Response: %s", response_json)
 
         return True
+
+    def get_mqtt_client(
+        self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
+    ) -> MQTTClient:
+        """Return a configured MQTTClient using this client's session."""
+        if self.mqtt_client is None:
+            self.mqtt_client = MQTTClient(
+                token=self._token,
+                session=self._session,
+                timeout=self._timeout,
+                on_message_callback=on_message_callback,
+            )
+        return self.mqtt_client
 
     def _get_page_list(self) -> Any:
         """Get ezviz device info broken down in sections."""

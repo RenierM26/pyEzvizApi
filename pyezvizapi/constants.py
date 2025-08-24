@@ -2,7 +2,9 @@
 
 from enum import Enum, unique
 
-FEATURE_CODE = "1fc28fa018178a1cd1c091b13b2f9f02"
+from .utils import generate_unique_code
+
+FEATURE_CODE = generate_unique_code()
 XOR_KEY = b"\x0c\x0eJ^X\x15@Rr"
 DEFAULT_TIMEOUT = 25
 MAX_RETRIES = 3

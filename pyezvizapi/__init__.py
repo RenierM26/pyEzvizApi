@@ -28,7 +28,7 @@ from .exceptions import (
     PyEzvizError,
 )
 from .light_bulb import EzvizLightBulb
-from .mqtt import MQTTClient
+from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
 from .test_cam_rtsp import TestRTSPAuth
 
 __all__ = [
@@ -47,14 +47,17 @@ __all__ = [
     "EzvizCamera",
     "EzvizClient",
     "EzvizLightBulb",
+    "EzvizToken",
     "HTTPError",
     "IntelligentDetectionSmartApp",
     "InvalidHost",
     "InvalidURL",
     "MQTTClient",
     "MessageFilterType",
+    "MqttData",
     "NightVisionMode",
     "PyEzvizError",
+    "ServiceUrls",
     "SoundMode",
     "SupportExt",
     "TestRTSPAuth",

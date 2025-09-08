@@ -53,6 +53,7 @@ from .api_endpoints import (
     API_ENDPOINT_SWITCH_OTHER,
     API_ENDPOINT_SWITCH_SOUND_ALARM,
     API_ENDPOINT_SWITCH_STATUS,
+    API_ENDPOINT_TERMINAL_INFO,
     API_ENDPOINT_UNIFIEDMSG_LIST_GET,
     API_ENDPOINT_UPGRADE_DEVICE,
     API_ENDPOINT_USER_ID,
@@ -1739,61 +1740,67 @@ class EzvizClient:
 
         return True
 
-    def remote_unlock(self, serial: str, user_id: str, lock_no: int) -> bool:
-        """Sends a remote command to unlock a specific lock.
 
-        Args:
-            serial (str): The camera serial.
-            user_id (str): The user id.
-            lock_no (int): The lock number.
-
-        Raises:
-            PyEzvizError: If max retries are exceeded or if the response indicates failure.
-            HTTPError: If an HTTP error occurs (other than a 401, which triggers re-login).
+    def get_latest_terminal_bind(self) -> tuple[str, str]:
+        """
+        Recupera il terminale più recente e costruisce il bindCode.
 
         Returns:
-            bool: True if the operation was successful.
-
+            tuple: (bindCode, terminal_name)
         """
-        try:
-            headers = self._session.headers
-            headers.update({"Content-Type": "application/json"})
+        terminals_url = f"https://{self._token['api_url']}{API_ENDPOINT_TERMINAL_INFO}"
+        headers = {
+            "sessionId": self._token["session_id"],
+            "appId": "ys7",
+            "clientType": "1",
+            "lang": "it_IT",
+            "User-Agent": "EZVIZ/6.10.0 (iPhone; iOS 18.6.2; Scale/3.00)",
+        }
+        resp = self._session.get(terminals_url, headers=headers)
+        resp.raise_for_status()
+        terminals = resp.json().get("terminals", [])
 
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_IOT_ACTION}{serial}{API_ENDPOINT_REMOTE_UNLOCK}",
-                data=json.dumps(
-                    {
-                        "unLockInfo": {
-                            "bindCode": f"{FEATURE_CODE}{user_id}",
-                            "lockNo": lock_no,
-                            "streamToken": "",
-                            "userName": user_id,
-                        }
-                    }
-                ),
-                timeout=self._timeout,
-                headers=headers,
-            )
+        if not terminals:
+            raise RuntimeError("Nessun terminale trovato per l'utente.")
 
-            req.raise_for_status()
+        # Prende il terminale più recente
+        terminal = sorted(terminals, key=lambda t: t.get("lastModifytime", ""), reverse=True)[0]
+        bind_code = f"{terminal['sign']}{terminal['userId']}"
+        terminal_name = terminal.get("name", "user")
 
-        except requests.HTTPError as err:
-            raise HTTPError from err
+        print(f"[get_latest_terminal_bind] terminal: {terminal_name}, bindCode: {bind_code}")
+        return bind_code, terminal_name
 
-        try:
-            json_result = req.json()
 
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
+    def remote_unlock(self, serial: str, lock_no: int) -> dict:
+        bind_code, terminal_name = self.get_latest_terminal_bind()
 
-        _LOGGER.debug("Result: %s", json_result)
+        payload = {
+            "value": {
+                "unLockInfo": {
+                    "bindCode": bind_code,
+                    "streamToken": "",
+                    "lockNo": lock_no,
+                    "userName": terminal_name
+                }
+            }
+        }
+        url = f"https://{self._token['api_url']}{API_ENDPOINT_IOT_ACTION}{serial}{API_ENDPOINT_REMOTE_UNLOCK}"
+        headers = {
+            "sessionId": self._token["session_id"],
+            "appId": "ys7",
+            "clientType": "1",
+            "lang": "it_IT",
+            "User-Agent": "EZVIZ/6.10.0 (iPhone; iOS 18.6.2; Scale/3.00)",
+            "Content-Type": "application/json"
+        }
 
-        return True
+        print(f"→ PUT {url} | lockNo={lock_no} bindCode={bind_code}")
+        r = self._session.put(url, headers=headers, json=payload)
+        r.raise_for_status()
+        print("  → risposta unlock:", r.text)
+        return r.json()
+
 
     def login(self, sms_code: int | None = None) -> dict[Any, Any]:
         """Get or refresh ezviz login token."""

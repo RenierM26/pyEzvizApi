@@ -260,8 +260,12 @@ class EzvizClient:
 
         if json_result["meta"]["code"] == 1100:
             self._token["api_url"] = json_result["loginArea"]["apiDomain"]
-            _LOGGER.warning("Region incorrect!")
-            _LOGGER.warning("Your region url: %s", self._token["api_url"])
+            _LOGGER.warning(
+                "region_incorrect: serial=%s code=%s msg=%s",
+                "unknown",
+                1100,
+                self._token["api_url"],
+            )
             return self.login()
 
         if json_result["meta"]["code"] == 1012:
@@ -367,6 +371,24 @@ class EzvizClient:
         """Return True if meta.code equals 200."""
         return EzvizClient._meta_code(payload) == 200
 
+    @staticmethod
+    def _response_code(payload: dict) -> int | str | None:
+        """Return a best-effort code from a response for logging.
+
+        Prefers modern ``meta.code`` if present; falls back to legacy
+        ``resultCode`` or a top-level ``status`` field when available.
+        Returns None if no code-like field is found.
+        """
+        # Prefer modern meta.code
+        mc = EzvizClient._meta_code(payload)
+        if mc is not None:
+            return mc
+        if "resultCode" in payload:
+            return payload.get("resultCode")
+        if "status" in payload:
+            return payload.get("status")
+        return None
+
     def _ensure_ok(self, payload: dict, message: str) -> None:
         """Raise PyEzvizError with context if response is not OK.
 
@@ -434,6 +456,7 @@ class EzvizClient:
         attempts: int,
         should_retry: Callable[[dict], bool],
         log: str,
+        serial: str | None = None,
     ) -> dict:
         """Run a JSON-producing callable with retry policy.
 
@@ -451,7 +474,14 @@ class EzvizClient:
             if not should_retry(payload):
                 return payload
             if attempt < total:
-                _LOGGER.warning("%s retry %s/%s: %s", log, attempt + 1, total, payload)
+                # Prefer modern meta.code; fall back to legacy resultCode
+                code = self._response_code(payload)
+                _LOGGER.warning(
+                    "http_retry: serial=%s code=%s msg=%s",
+                    serial or "unknown",
+                    code,
+                    log,
+                )
         raise PyEzvizError(f"{log}: exceeded retries")
 
     def send_mfa_code(self) -> bool:
@@ -518,9 +548,10 @@ class EzvizClient:
             # session is wrong, need to relogin and retry
             self.login()
             _LOGGER.warning(
-                "Could not get pagelist, relogging (max retries: %s), got: %s",
-                str(max_retries),
-                json_output,
+                "http_retry: serial=%s code=%s msg=%s",
+                "unknown",
+                self._meta_code(json_output),
+                "pagelist_relogin",
             )
             return self._api_get_pagelist(
                 page_filter, json_key, group_id, limit, offset, max_retries + 1
@@ -560,7 +591,8 @@ class EzvizClient:
             ),
             attempts=max_retries,
             should_retry=lambda p: self._meta_code(p) == 500,
-            log="Retry getting alarm info (server busy)",
+            log="alarm_info_server_busy",
+            serial=serial,
         )
         if self._meta_code(json_output) != 200:
             raise PyEzvizError(f"Could not get data from alarm api: Got {json_output})")
@@ -666,7 +698,8 @@ class EzvizClient:
             ),
             attempts=max_retries,
             should_retry=lambda p: self._meta_code(p) == 504,
-            log=f"Arm/disarm for camera {serial} timed out",
+            log="arm_disarm_timeout",
+            serial=serial,
         )
         if self._meta_code(json_output) != 200:
             raise PyEzvizError(f"Could not arm or disarm Camera {serial}: Got {json_output})")
@@ -789,7 +822,8 @@ class EzvizClient:
             ),
             attempts=max_retries,
             should_retry=lambda p: str(p.get("resultCode")) == "-1",
-            log=f"Can't get storage status from device {serial}",
+            log="storage_status_unreachable",
+            serial=serial,
         )
         if str(json_output.get("resultCode")) != "0":
             raise PyEzvizError(
@@ -879,7 +913,8 @@ class EzvizClient:
             ),
             attempts=max_retries,
             should_retry=lambda p: str(p.get("resultCode")) == "-1",
-            log=f"Unable to reboot camera {serial}, unreachable",
+            log="reboot_unreachable",
+            serial=serial,
         )
         if str(json_output.get("resultCode")) not in ("0", 0):
             raise PyEzvizError(f"Could not reboot device {json_output})")
@@ -980,14 +1015,24 @@ class EzvizClient:
                             self, device, dict(rec.raw)
                         ).status()
                     except (PyEzvizError, KeyError, TypeError, ValueError) as err:  # pragma: no cover - defensive
-                        _LOGGER.warning("Failed to load light bulb %s: %s", device, err)
+                        _LOGGER.warning(
+                            "load_device_failed: serial=%s code=%s msg=%s",
+                            device,
+                            "load_error",
+                            str(err),
+                        )
                 else:
                     try:
                         # Create camera object
                         cam = EzvizCamera(self, device, dict(rec.raw))
                         self._cameras[device] = cam.status(refresh=refresh)
                     except (PyEzvizError, KeyError, TypeError, ValueError) as err:  # pragma: no cover - defensive
-                        _LOGGER.warning("Failed to load camera %s: %s", device, err)
+                        _LOGGER.warning(
+                            "load_device_failed: serial=%s code=%s msg=%s",
+                            device,
+                            "load_error",
+                            str(err),
+                        )
 
         return {**self._cameras, **self._light_bulbs}
 
@@ -1096,7 +1141,12 @@ class EzvizClient:
             retry_401=False,
         )
 
-        _LOGGER.debug("PTZ Control: %s", json_output)
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._meta_code(json_output),
+            "ptz_control",
+        )
 
         return True
 
@@ -1150,10 +1200,10 @@ class EzvizClient:
                 return json_output.get("encryptkey")
             if code == "-1" and attempt < attempts:
                 _LOGGER.warning(
-                    "Camera %s encryption key not found, retrying %s/%s",
+                    "http_retry: serial=%s code=%s msg=%s",
                     serial,
-                    attempt + 1,
-                    attempts,
+                    code,
+                    "cam_key_not_found",
                 )
                 continue
             raise PyEzvizError(
@@ -1315,7 +1365,8 @@ class EzvizClient:
             ),
             attempts=max_retries,
             should_retry=lambda p: str(p.get("resultCode")) == "-1",
-            log=f"Camera {serial} busy or unreachable",
+            log="panoramic_busy_or_unreachable",
+            serial=serial,
         )
         if str(json_output.get("resultCode")) != "0":
             raise PyEzvizError(f"Could retrieve panoramic photo: Got {json_output})")
@@ -1346,7 +1397,12 @@ class EzvizClient:
             retry_401=False,
         )
 
-        _LOGGER.debug("PTZ control coordinates: %s", json_result)
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._meta_code(json_result),
+            "ptz_control_coordinates",
+        )
 
         return True
 
@@ -1381,7 +1437,12 @@ class EzvizClient:
             retry_401=True,
             max_retries=0,
         )
-        _LOGGER.debug("Result: %s", json_result)
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._response_code(json_result),
+            "remote_unlock",
+        )
         return True
 
     def login(self, sms_code: int | None = None) -> dict[Any, Any]:
@@ -1458,7 +1519,12 @@ class EzvizClient:
 
         except requests.HTTPError as err:
             if err.response.status_code == 401:
-                _LOGGER.warning("Token is no longer valid. Already logged out?")
+                _LOGGER.warning(
+                    "http_warning: serial=%s code=%s msg=%s",
+                    "unknown",
+                    401,
+                    "logout_already_invalid",
+                )
                 return True
             raise HTTPError from err
 
@@ -1510,7 +1576,8 @@ class EzvizClient:
             ),
             attempts=max_retries,
             should_retry=lambda p: str(p.get("resultCode")) == "-1",
-            log=f"Camara {serial} offline or unreachable",
+            log="defence_schedule_offline_or_unreachable",
+            serial=serial,
         )
         if str(json_output.get("resultCode")) not in ("0", 0):
             raise PyEzvizError(f"Could not set the schedule: Got {json_output})")
@@ -1856,7 +1923,12 @@ class EzvizClient:
             max_retries=max_retries,
         )
         self._ensure_ok(response_json, "Could not set alarm sound")
-        _LOGGER.debug("Response: %s", response_json)
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._meta_code(response_json),
+            "alarm_sound",
+        )
         return True
 
     def get_mqtt_client(

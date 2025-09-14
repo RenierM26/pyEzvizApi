@@ -97,10 +97,10 @@ EXT_FIELD_NAMES: Final[tuple[str, ...]] = (
     "status_flag",
     "file_id",
     "is_encrypted",
-    "encrypted_pwd_hash",
+    "picChecksum",
     "unknown_flag",
     "unused5",
-    "alarm_log_id",
+    "msgId",
     "image",
     "device_name",
     "unused6",
@@ -221,6 +221,8 @@ class MQTTClient:
 
         Raises:
           PyEzvizError: If required Ezviz credentials are missing or registration/start fails.
+          InvalidURL: If a push API endpoint is invalid or unreachable.
+          HTTPError: If a push API request returns a non-success status.
         """
         self._register_ezviz_push()
         self._start_ezviz_push()
@@ -258,8 +260,9 @@ class MQTTClient:
         self, client: mqtt.Client, userdata: Any, mid: int, granted_qos: tuple[int, ...]
     ) -> None:
         """Handle subscription acknowledgement from the broker."""
-        _LOGGER.info("Subscribed: mid=%s qos=%s", mid, granted_qos)
-        _LOGGER.info("Subscribed to EZVIZ MQTT topic: %s", self._topic)
+        _LOGGER.debug(
+            "MQTT subscribed: topic=%s mid=%s qos=%s", self._topic, mid, granted_qos
+        )
 
     def _on_connect(
         self, client: mqtt.Client, userdata: Any, flags: dict, rc: int
@@ -277,14 +280,17 @@ class MQTTClient:
         session_present = (
             flags.get("session present") if isinstance(flags, dict) else None
         )
-        _LOGGER.info(
-            "Connected to EZVIZ broker rc=%s session_present=%s", rc, session_present
-        )
+        _LOGGER.debug("MQTT connected: rc=%s session_present=%s", rc, session_present)
         if rc == 0 and not session_present:
             client.subscribe(self._topic, qos=2)
         if rc != 0:
             # Let paho handle reconnects (reconnect_delay_set configured)
-            _LOGGER.error("MQTT connection failed, return code: %s", rc)
+            _LOGGER.error(
+                "MQTT connect failed: serial=%s code=%s msg=%s",
+                "unknown",
+                rc,
+                "connect_failed",
+            )
 
     def _on_disconnect(self, client: mqtt.Client, userdata: Any, rc: int) -> None:
         """Called when the MQTT client disconnects from the broker.
@@ -296,7 +302,12 @@ class MQTTClient:
             userdata (Any): The user data passed to the client (not used).
             rc (int): Disconnect result code. 0 indicates a clean disconnect.
         """
-        _LOGGER.warning("Disconnected from EZVIZ MQTT broker (rc=%s)", rc)
+        _LOGGER.debug(
+            "MQTT disconnected: serial=%s code=%s msg=%s",
+            "unknown",
+            rc,
+            "disconnected",
+        )
 
     def _on_message(
         self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage
@@ -314,15 +325,30 @@ class MQTTClient:
         try:
             decoded = self.decode_mqtt_message(msg.payload)
         except PyEzvizError as err:
-            _LOGGER.warning("Failed to decode MQTT message: %s", err)
+            _LOGGER.warning("MQTT_decode_error: msg=%s", str(err))
             return
 
-        device_serial = decoded.get("ext", {}).get("device_serial")
+        ext: dict[str, Any] = (
+            decoded.get("ext", {}) if isinstance(decoded.get("ext"), dict) else {}
+        )
+        device_serial = ext.get("device_serial")
+        alert_code = ext.get("alert_type_code")
+        msg_id = ext.get("msgId")
+
         if device_serial:
             self._cache_message(device_serial, decoded)
-            _LOGGER.debug("Stored message for device_serial %s", device_serial)
+            _LOGGER.debug(
+                "mqtt_msg: serial=%s alert_code=%s msg_id=%s",
+                device_serial,
+                alert_code,
+                msg_id,
+            )
         else:
-            _LOGGER.warning("Received message with no device_serial: %s", decoded)
+            _LOGGER.warning(
+                "MQTT_message_missing_serial: alert_code=%s msg_id=%s",
+                alert_code,
+                msg_id,
+            )
 
         if self._on_message_callback:
             try:
@@ -438,7 +464,9 @@ class MQTTClient:
             )
 
         self._mqtt_data["ticket"] = json_output["ticket"]
-        _LOGGER.info("EZVIZ MQTT ticket acquired")
+        _LOGGER.debug(
+            "MQTT ticket acquired: client_id=%s", self._mqtt_data["mqtt_clientid"]
+        )
 
     def _stop_ezviz_push(self) -> None:
         """Stop push notifications for this client via the Ezviz API.

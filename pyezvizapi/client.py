@@ -7,7 +7,7 @@ from datetime import datetime
 import hashlib
 import json
 import logging
-from typing import Any
+from typing import Any, ClassVar, TypedDict, cast
 import urllib.parse
 from uuid import uuid4
 
@@ -80,14 +80,94 @@ from .exceptions import (
     PyEzvizError,
 )
 from .light_bulb import EzvizLightBulb
+from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .utils import convert_to_dict, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
 
 
+class ClientToken(TypedDict, total=False):
+    """Typed shape for the Ezviz client token."""
+
+    session_id: str | None
+    rf_session_id: str | None
+    username: str | None
+    api_url: str
+    service_urls: dict[str, Any]
+
+
+class MetaDict(TypedDict, total=False):
+    """Shape of the common 'meta' object used by the Ezviz API."""
+
+    code: int
+    message: str
+    moreInfo: Any
+
+
+class ApiOkResponse(TypedDict, total=False):
+    """Container for API responses that include a top-level 'meta'."""
+
+    meta: MetaDict
+
+
+class ResultCodeResponse(TypedDict, total=False):
+    """Legacy-style API response using 'resultCode'."""
+
+    resultCode: str | int
+
+
+class StorageStatusResponse(ResultCodeResponse, total=False):
+    """Response for storage status queries."""
+
+    storageStatus: Any
+
+
+class CamKeyResponse(ResultCodeResponse, total=False):
+    """Response for camera encryption key retrieval."""
+
+    encryptkey: str
+    resultDes: str
+
+
+class SystemInfoResponse(TypedDict, total=False):
+    """System info response including configuration details."""
+
+    systemConfigInfo: dict[str, Any]
+
+
+class PagelistPageInfo(TypedDict, total=False):
+    """Pagination info with 'hasNext' flag."""
+
+    hasNext: bool
+
+
+class PagelistResponse(ApiOkResponse, total=False):
+    """Pagelist response wrapper; other keys are dynamic per filter."""
+
+    page: PagelistPageInfo
+    # other keys are dynamic; callers select via json_key
+
+
+class UserIdResponse(ApiOkResponse, total=False):
+    """User ID response holding device token info used by restricted APIs."""
+
+    deviceTokenInfo: Any
+
+
 class EzvizClient:
     """Initialize api client object."""
+
+    # Supported categories for load_devices gating
+    SUPPORTED_CATEGORIES: ClassVar[list[str]] = [
+        DeviceCatagories.COMMON_DEVICE_CATEGORY.value,
+        DeviceCatagories.CAMERA_DEVICE_CATEGORY.value,
+        DeviceCatagories.BATTERY_CAMERA_DEVICE_CATEGORY.value,
+        DeviceCatagories.DOORBELL_DEVICE_CATEGORY.value,
+        DeviceCatagories.BASE_STATION_DEVICE_CATEGORY.value,
+        DeviceCatagories.CAT_EYE_CATEGORY.value,
+        DeviceCatagories.LIGHTING.value,
+    ]
 
     def __init__(
         self,
@@ -104,13 +184,17 @@ class EzvizClient:
         )  # Ezviz API sends md5 of password
         self._session = requests.session()
         self._session.headers.update(REQUEST_HEADER)
-        self._session.headers["sessionId"] = token["session_id"] if token else None
-        self._token = token or {
-            "session_id": None,
-            "rf_session_id": None,
-            "username": None,
-            "api_url": url,
-        }
+        if token and token.get("session_id"):
+            self._session.headers["sessionId"] = str(token["session_id"])  # ensure str
+        self._token: ClientToken = cast(
+            ClientToken,
+            token or {
+                "session_id": None,
+                "rf_session_id": None,
+                "username": None,
+                "api_url": url,
+            },
+        )
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
@@ -118,7 +202,6 @@ class EzvizClient:
 
     def _login(self, smscode: int | None = None) -> dict[Any, Any]:
         """Login to Ezviz API."""
-
         # Region code to url.
         if len(self._token["api_url"].split(".")) == 1:
             self._token["api_url"] = "apii" + self._token["api_url"] + ".ezvizlife.com"
@@ -173,12 +256,16 @@ class EzvizClient:
 
             self._token["service_urls"] = self.get_service_urls()
 
-            return self._token
+            return cast(dict[Any, Any], self._token)
 
         if json_result["meta"]["code"] == 1100:
             self._token["api_url"] = json_result["loginArea"]["apiDomain"]
-            _LOGGER.warning("Region incorrect!")
-            _LOGGER.warning("Your region url: %s", self._token["api_url"])
+            _LOGGER.warning(
+                "region_incorrect: serial=%s code=%s msg=%s",
+                "unknown",
+                1100,
+                self._token["api_url"],
+            )
             return self.login()
 
         if json_result["meta"]["code"] == 1012:
@@ -201,75 +288,230 @@ class EzvizClient:
 
         raise PyEzvizError(f"Login error: {json_result['meta']}")
 
-    def send_mfa_code(self) -> bool:
-        """Send verification code."""
+    # ---- Internal HTTP helpers -------------------------------------------------
+
+    def _http_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None = None,
+        data: dict | str | None = None,
+        json_body: dict | None = None,
+        retry_401: bool = True,
+        max_retries: int = 0,
+    ) -> requests.Response:
+        """Perform an HTTP request with optional 401 retry via re-login.
+
+        Centralizes the common 401→login→retry pattern without altering
+        individual endpoint behavior. Returns the Response for the caller to
+        parse and validate according to its API contract.
+        """
         try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_SEND_CODE}",
-                data={
-                    "from": self.account,
-                    "bizType": "TERMINAL_BIND",
-                },
+            req = self._session.request(
+                method=method,
+                url=url,
+                params=params,
+                data=data,
+                json=json_body,
                 timeout=self._timeout,
             )
-
             req.raise_for_status()
-
         except requests.HTTPError as err:
+            if retry_401 and err.response is not None and err.response.status_code == 401:
+                if max_retries >= MAX_RETRIES:
+                    raise HTTPError from err
+                # Re-login and retry once
+                self.login()
+                return self._http_request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    json_body=json_body,
+                    retry_401=retry_401,
+                    max_retries=max_retries + 1,
+                )
             raise HTTPError from err
+        else:
+            return req
 
+    @staticmethod
+    def _parse_json(resp: requests.Response) -> dict:
+        """Parse JSON or raise a friendly error."""
         try:
-            json_output = req.json()
-
+            return cast(dict, resp.json())
         except ValueError as err:
             raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
+                "Impossible to decode response: " + str(err) + "\nResponse was: " + str(resp.text)
             ) from err
 
-        if json_output["meta"]["code"] != 200:
+    @staticmethod
+    def _is_ok(payload: dict) -> bool:
+        """Return True if payload indicates success for both API styles."""
+        meta = payload.get("meta")
+        if isinstance(meta, dict) and meta.get("code") == 200:
+            return True
+        rc = payload.get("resultCode")
+        return rc in (0, "0")
+
+    @staticmethod
+    def _meta_code(payload: dict) -> int | None:
+        """Safely extract meta.code as an int, or None if missing/invalid."""
+        code = (payload.get("meta") or {}).get("code")
+        if isinstance(code, (int, str)):
+            try:
+                return int(code)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    @staticmethod
+    def _meta_ok(payload: dict) -> bool:
+        """Return True if meta.code equals 200."""
+        return EzvizClient._meta_code(payload) == 200
+
+    @staticmethod
+    def _response_code(payload: dict) -> int | str | None:
+        """Return a best-effort code from a response for logging.
+
+        Prefers modern ``meta.code`` if present; falls back to legacy
+        ``resultCode`` or a top-level ``status`` field when available.
+        Returns None if no code-like field is found.
+        """
+        # Prefer modern meta.code
+        mc = EzvizClient._meta_code(payload)
+        if mc is not None:
+            return mc
+        if "resultCode" in payload:
+            return payload.get("resultCode")
+        if "status" in payload:
+            return payload.get("status")
+        return None
+
+    def _ensure_ok(self, payload: dict, message: str) -> None:
+        """Raise PyEzvizError with context if response is not OK.
+
+        Accepts both API styles: new (meta.code == 200) and legacy (resultCode == 0).
+        """
+        if not self._is_ok(payload):
+            raise PyEzvizError(f"{message}: Got {payload})")
+
+    def _send_prepared(
+        self,
+        prepared: requests.PreparedRequest,
+        *,
+        retry_401: bool = True,
+        max_retries: int = 0,
+    ) -> requests.Response:
+        """Send a prepared request with optional 401 retry.
+
+        Useful for endpoints requiring special URL encoding or manual preparation.
+        """
+        try:
+            req = self._session.send(request=prepared, timeout=self._timeout)
+            req.raise_for_status()
+        except requests.HTTPError as err:
+            if retry_401 and err.response is not None and err.response.status_code == 401:
+                if max_retries >= MAX_RETRIES:
+                    raise HTTPError from err
+                self.login()
+                return self._send_prepared(prepared, retry_401=retry_401, max_retries=max_retries + 1)
+            raise HTTPError from err
+        return req
+
+    # ---- Small helpers --------------------------------------------------------------
+
+    def _url(self, path: str) -> str:
+        """Build a full API URL for the given path."""
+        return f"https://{self._token['api_url']}{path}"
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        data: dict | str | None = None,
+        json_body: dict | None = None,
+        retry_401: bool = True,
+        max_retries: int = 0,
+    ) -> dict:
+        """Perform request and parse JSON in one step."""
+        resp = self._http_request(
+            method,
+            self._url(path),
+            params=params,
+            data=data,
+            json_body=json_body,
+            retry_401=retry_401,
+            max_retries=max_retries,
+        )
+        return self._parse_json(resp)
+
+    def _retry_json(
+        self,
+        producer: Callable[[], dict],
+        *,
+        attempts: int,
+        should_retry: Callable[[dict], bool],
+        log: str,
+        serial: str | None = None,
+    ) -> dict:
+        """Run a JSON-producing callable with retry policy.
+
+        Calls ``producer`` up to ``attempts + 1`` times. After each call, the
+        result is passed to ``should_retry``; if it returns True and attempts
+        remain, a retry is performed and a concise warning is logged. If it
+        returns False, the payload is returned to the caller.
+
+        Raises:
+            PyEzvizError: If retries are exhausted without a successful payload.
+        """
+        total = max(0, attempts)
+        for attempt in range(total + 1):
+            payload = producer()
+            if not should_retry(payload):
+                return payload
+            if attempt < total:
+                # Prefer modern meta.code; fall back to legacy resultCode
+                code = self._response_code(payload)
+                _LOGGER.warning(
+                    "http_retry: serial=%s code=%s msg=%s",
+                    serial or "unknown",
+                    code,
+                    log,
+                )
+        raise PyEzvizError(f"{log}: exceeded retries")
+
+    def send_mfa_code(self) -> bool:
+        """Send verification code."""
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_SEND_CODE,
+            data={"from": self.account, "bizType": "TERMINAL_BIND"},
+            retry_401=False,
+        )
+
+        if not self._meta_ok(json_output):
             raise PyEzvizError(f"Could not request MFA code: Got {json_output})")
 
         return True
 
     def get_service_urls(self) -> Any:
         """Get Ezviz service urls."""
-
         if not self._token["session_id"]:
             raise PyEzvizError("No Login token present!")
 
         try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_SERVER_INFO}",
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.ConnectionError as err:
+            json_output = self._request_json("GET", API_ENDPOINT_SERVER_INFO)
+        except requests.ConnectionError as err:  # pragma: no cover - keep behavior
             raise InvalidURL("A Invalid URL or Proxy error occurred") from err
-
-        except requests.HTTPError as err:
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
+        if not self._meta_ok(json_output):
             raise PyEzvizError(f"Error getting Service URLs: {json_output}")
 
-        service_urls = json_output["systemConfigInfo"]
-        service_urls["sysConf"] = service_urls["sysConf"].split("|")
-
+        service_urls = json_output.get("systemConfigInfo", {})
+        service_urls["sysConf"] = str(service_urls.get("sysConf", "")).split("|")
         return service_urls
 
     def _api_get_pagelist(
@@ -282,7 +524,6 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> Any:
         """Get data from pagelist API."""
-
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
@@ -296,43 +537,21 @@ class EzvizClient:
             "filter": page_filter,
         }
 
-        try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_PAGELIST}",
-                params=params,
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self._api_get_pagelist(
-                    page_filter, json_key, group_id, limit, offset, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            # session is wrong, need to relogin
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_PAGELIST,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        if self._meta_code(json_output) != 200:
+            # session is wrong, need to relogin and retry
             self.login()
             _LOGGER.warning(
-                "Could not get pagelist, relogging (max retries: %s), got: %s",
-                str(max_retries),
-                json_output,
+                "http_retry: serial=%s code=%s msg=%s",
+                "unknown",
+                self._meta_code(json_output),
+                "pagelist_relogin",
             )
             return self._api_get_pagelist(
                 page_filter, json_key, group_id, limit, offset, max_retries + 1
@@ -355,9 +574,6 @@ class EzvizClient:
 
     def get_alarminfo(self, serial: str, limit: int = 1, max_retries: int = 0) -> dict:
         """Get data from alarm info API for camera serial."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
         params: dict[str, int | str] = {
             "deviceSerials": serial,
             "queryType": -1,
@@ -365,44 +581,21 @@ class EzvizClient:
             "stype": -1,
         }
 
-        try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_ALARMINFO_GET}",
+        json_output = self._retry_json(
+            lambda: self._request_json(
+                "GET",
+                API_ENDPOINT_ALARMINFO_GET,
                 params=params,
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_alarminfo(serial, limit, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output: dict = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            if json_output["meta"]["code"] == 500:
-                _LOGGER.debug(
-                    "Retry getting alarm info, server returned busy: %s",
-                    json_output,
-                )
-                return self.get_alarminfo(serial, limit, max_retries + 1)
-
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: self._meta_code(p) == 500,
+            log="alarm_info_server_busy",
+            serial=serial,
+        )
+        if self._meta_code(json_output) != 200:
             raise PyEzvizError(f"Could not get data from alarm api: Got {json_output})")
-
         return json_output
 
     def get_device_messages_list(
@@ -420,7 +613,7 @@ class EzvizClient:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
         params: dict[str, int | str | None] = {
-            "serials:": serials,
+            "serials": serials,
             "stype": s_type,
             "limit": limit,
             "date": date,
@@ -428,41 +621,14 @@ class EzvizClient:
             "tags": tags,
         }
 
-        try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_UNIFIEDMSG_LIST_GET}",
-                params=params,
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_device_messages_list(
-                    serials, s_type, limit, date, end_time, tags, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output: dict = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(
-                f"Could not get unified message list: Got {json_output})"
-            )
-
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_UNIFIEDMSG_LIST_GET,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get unified message list")
         return json_output
 
     def switch_status(
@@ -476,40 +642,15 @@ class EzvizClient:
         """Camera features are represented as switches. Switch them on or off."""
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{serial}/{channel_no}/{enable}/{status_type}{API_ENDPOINT_SWITCH_STATUS}",
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.switch_status(serial, status_type, enable, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set the switch: Got {json_output})")
-
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}/{channel_no}/{enable}/{status_type}{API_ENDPOINT_SWITCH_STATUS}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set the switch")
         if self._cameras.get(serial):
             self._cameras[serial]["switches"][status_type] = bool(enable)
-
         return True
 
     def switch_status_other(
@@ -527,43 +668,14 @@ class EzvizClient:
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_SWITCH_OTHER}",
-                timeout=self._timeout,
-                params={
-                    "channelNo": channel_number,
-                    "enable": enable,
-                    "switchType": status_type,
-                },
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.switch_status_other(
-                    serial, status_type, enable, channel_number, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set the switch: Got {json_output})")
-
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_SWITCH_OTHER}",
+            params={"channelNo": channel_number, "enable": enable, "switchType": status_type},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set the switch")
         return True
 
     def set_camera_defence(
@@ -576,56 +688,21 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> bool:
         """Enable/Disable motion detection on camera."""
-
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{serial}/{channel_no}{API_ENDPOINT_CHANGE_DEFENCE_STATUS}",
-                timeout=self._timeout,
-                data={
-                    "type": arm_type,
-                    "status": enable,
-                    "actor": actor,
-                },
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.set_camera_defence(serial, enable, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            if json_output["meta"]["code"] == 504:
-                _LOGGER.warning(
-                    "Arm or disarm for camera %s timed out. Retrying %s of %s",
-                    serial,
-                    max_retries,
-                    MAX_RETRIES,
-                )
-                return self.set_camera_defence(serial, enable, max_retries + 1)
-
-            raise PyEzvizError(
-                f"Could not arm or disarm Camera {serial}: Got {json_output})"
-            )
-
+        json_output = self._retry_json(
+            lambda: self._request_json(
+                "PUT",
+                f"{API_ENDPOINT_DEVICES}{serial}/{channel_no}{API_ENDPOINT_CHANGE_DEFENCE_STATUS}",
+                data={"type": arm_type, "status": enable, "actor": actor},
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: self._meta_code(p) == 504,
+            log="arm_disarm_timeout",
+            serial=serial,
+        )
+        if self._meta_code(json_output) != 200:
+            raise PyEzvizError(f"Could not arm or disarm Camera {serial}: Got {json_output})")
         return True
 
     def set_battery_camera_work_mode(self, serial: str, value: int) -> bool:
@@ -679,36 +756,9 @@ class EzvizClient:
         ).prepare()
         req_prep.url = full_url + "?" + params_str
 
-        try:
-            req = self._session.send(
-                request=req_prep,
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.set_device_config_by_key(
-                    serial, value, key, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
+        req = self._send_prepared(req_prep, retry_401=True, max_retries=max_retries)
+        json_output = self._parse_json(req)
+        if not self._meta_ok(json_output):
             raise PyEzvizError(f"Could not set config key '${key}': Got {json_output})")
 
         return True
@@ -740,205 +790,69 @@ class EzvizClient:
             method="PUT", url=full_url, headers=headers, data=payload
         ).prepare()
 
-        try:
-            req = self._session.send(
-                request=req_prep,
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.set_device_feature_by_key(
-                    serial, product_id, value, key, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
+        req = self._send_prepared(req_prep, retry_401=True, max_retries=max_retries)
+        json_output = self._parse_json(req)
+        if not self._meta_ok(json_output):
             raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(
-                f"Could not set iot-feature key '${key}': Got {json_output})"
+                f"Could not set iot-feature key '{key}': Got {json_output})"
             )
 
         return True
 
     def upgrade_device(self, serial: str, max_retries: int = 0) -> bool:
         """Upgrade device firmware."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_UPGRADE_DEVICE}{serial}/0/upgrade",
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.upgrade_device(serial, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(
-                f"Could not initiate firmware upgrade: Got {json_output})"
-            )
-
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_UPGRADE_DEVICE}{serial}/0/upgrade",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not initiate firmware upgrade")
         return True
 
     def get_storage_status(self, serial: str, max_retries: int = 0) -> Any:
         """Get device storage status."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICE_STORAGE_STATUS}",
+        json_output = self._retry_json(
+            lambda: self._request_json(
+                "POST",
+                API_ENDPOINT_DEVICE_STORAGE_STATUS,
                 data={"subSerial": serial},
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_storage_status(serial, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
-                _LOGGER.warning(
-                    "Can't get storage status from device %s, retrying %s of %s",
-                    serial,
-                    max_retries,
-                    MAX_RETRIES,
-                )
-                return self.get_storage_status(serial, max_retries + 1)
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: str(p.get("resultCode")) == "-1",
+            log="storage_status_unreachable",
+            serial=serial,
+        )
+        if str(json_output.get("resultCode")) != "0":
             raise PyEzvizError(
                 f"Could not get device storage status: Got {json_output})"
             )
-
-        return json_output["storageStatus"]
+        return json_output.get("storageStatus")
 
     def sound_alarm(self, serial: str, enable: int = 1, max_retries: int = 0) -> bool:
         """Sound alarm on a device."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{serial}/0{API_ENDPOINT_SWITCH_SOUND_ALARM}",
-                data={
-                    "enable": enable,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.sound_alarm(serial, enable, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set the alarm sound: Got {json_output})")
-
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}/0{API_ENDPOINT_SWITCH_SOUND_ALARM}",
+            data={"enable": enable},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set the alarm sound")
         return True
 
     def get_user_id(self, max_retries: int = 0) -> Any:
         """Get Ezviz userid, used by restricted api endpoints."""
-
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_USER_ID}",
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_user_id(max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could get user id, Got: {json_output})")
-
-        return json_output["deviceTokenInfo"]
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_USER_ID,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get user id")
+        return json_output.get("deviceTokenInfo")
 
     def set_video_enc(
         self,
@@ -959,51 +873,22 @@ class EzvizClient:
         if new_password and not enable == 2:
             raise PyEzvizError("New password is only required when changing password.")
 
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{API_ENDPOINT_VIDEO_ENCRYPT}",
-                data={
-                    "deviceSerial": serial,
-                    "isEncrypt": enable,  # 1 = enable, 0 = disable, 2 = change password
-                    "oldPassword": old_password,  # required if changing.
-                    "password": new_password,
-                    "featureCode": FEATURE_CODE,
-                    "validateCode": camera_verification_code,
-                    "msgType": -1,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.set_video_enc(
-                    serial,
-                    enable,
-                    camera_verification_code,
-                    new_password,
-                    old_password,
-                    max_retries + 1,
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set video encryption: Got {json_output})")
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{API_ENDPOINT_VIDEO_ENCRYPT}",
+            data={
+                "deviceSerial": serial,
+                "isEncrypt": enable,
+                "oldPassword": old_password,
+                "password": new_password,
+                "featureCode": FEATURE_CODE,
+                "validateCode": camera_verification_code,
+                "msgType": -1,
+            },
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set video encryption")
 
         return True
 
@@ -1018,54 +903,21 @@ class EzvizClient:
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICE_SYS_OPERATION}{serial}",
-                data={
-                    "oper": operation,
-                    "deviceSerial": serial,
-                    "delay": delay,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.reboot_camera(
-                    serial,
-                    delay,
-                    operation,
-                    max_retries + 1,
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
-                _LOGGER.warning(
-                    "Unable to reboot camera, camera %s is unreachable, retrying %s of %s",
-                    serial,
-                    max_retries,
-                    MAX_RETRIES,
-                )
-                return self.reboot_camera(serial, delay, operation, max_retries + 1)
+        json_output = self._retry_json(
+            lambda: self._request_json(
+                "POST",
+                f"{API_ENDPOINT_DEVICE_SYS_OPERATION}{serial}",
+                data={"oper": operation, "deviceSerial": serial, "delay": delay},
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: str(p.get("resultCode")) == "-1",
+            log="reboot_unreachable",
+            serial=serial,
+        )
+        if str(json_output.get("resultCode")) not in ("0", 0):
             raise PyEzvizError(f"Could not reboot device {json_output})")
-
         return True
 
     def set_offline_notification(
@@ -1079,100 +931,43 @@ class EzvizClient:
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_OFFLINE_NOTIFY}",
-                data={
-                    "reqType": req_type,
-                    "serial": serial,
-                    "status": enable,
-                },
-                timeout=self._timeout,
+        attempts = max(0, max_retries)
+        for attempt in range(attempts + 1):
+            json_output = self._request_json(
+                "POST",
+                API_ENDPOINT_OFFLINE_NOTIFY,
+                data={"reqType": req_type, "serial": serial, "status": enable},
+                retry_401=True,
+                max_retries=0,
             )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.set_offline_notification(
-                    serial,
-                    enable,
-                    req_type,
-                    max_retries + 1,
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
+            result = str(json_output.get("resultCode"))
+            if result == "0":
+                return True
+            if result == "-1" and attempt < attempts:
                 _LOGGER.warning(
-                    "Unable to set offline notification, camera %s is unreachable, retrying %s of %s",
+                    "Unable to set offline notification, camera %s is unreachable, retrying %s/%s",
                     serial,
-                    max_retries,
-                    MAX_RETRIES,
+                    attempt + 1,
+                    attempts,
                 )
-                return self.set_offline_notification(
-                    serial, enable, req_type, max_retries + 1
-                )
+                continue
             raise PyEzvizError(f"Could not set offline notification {json_output})")
-
-        return True
+        raise PyEzvizError("Could not set offline notification: exceeded retries")
 
     def get_group_defence_mode(self, max_retries: int = 0) -> Any:
         """Get group arm status. The alarm arm/disarm concept on 1st page of app."""
-
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_GROUP_DEFENCE_MODE}",
-                params={
-                    "groupId": -1,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_group_defence_mode(max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(
-                f"Could not get group defence status: Got {json_output})"
-            )
-
-        return json_output["mode"]
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_GROUP_DEFENCE_MODE,
+            params={"groupId": -1},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get group defence status")
+        return json_output.get("mode")
 
     # Not tested
     def cancel_alarm_device(self, serial: str, max_retries: int = 0) -> bool:
@@ -1180,92 +975,85 @@ class EzvizClient:
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_CANCEL_ALARM}",
-                data={"subSerial": serial},
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.sound_alarm(serial, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not cancel alarm siren: Got {json_output})")
-
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_CANCEL_ALARM,
+            data={"subSerial": serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not cancel alarm siren")
         return True
 
-    def load_devices(self) -> dict[Any, Any]:
-        """Load and return all cameras and light bulb objects."""
+    def load_devices(self, refresh: bool = True) -> dict[Any, Any]:
+        """Build status maps for cameras and light bulbs.
 
-        devices = self.get_device_infos()
-        supported_categories = [
-            DeviceCatagories.COMMON_DEVICE_CATEGORY.value,
-            DeviceCatagories.CAMERA_DEVICE_CATEGORY.value,
-            DeviceCatagories.BATTERY_CAMERA_DEVICE_CATEGORY.value,
-            DeviceCatagories.DOORBELL_DEVICE_CATEGORY.value,
-            DeviceCatagories.BASE_STATION_DEVICE_CATEGORY.value,
-            DeviceCatagories.CAT_EYE_CATEGORY.value,
-            DeviceCatagories.LIGHTING.value,
-        ]
+        refresh: if True, camera.status() may perform network fetches (e.g. alarms).
+        Returns a combined mapping of serial -> status dict for both cameras and bulbs.
+        """
+        # Reset caches to reflect the current device roster
+        self._cameras.clear()
+        self._light_bulbs.clear()
 
-        for device, data in devices.items():
-            if data["deviceInfos"]["deviceCategory"] in supported_categories:
+        # Build lightweight records for clean gating/selection
+        records = cast(dict[str, EzvizDeviceRecord], self.get_device_records(None))
+        supported_categories = self.SUPPORTED_CATEGORIES
+
+        for device, rec in records.items():
+            if rec.device_category in supported_categories:
                 # Add support for connected HikVision cameras
                 if (
-                    data["deviceInfos"]["deviceCategory"]
-                    == DeviceCatagories.COMMON_DEVICE_CATEGORY.value
-                    and not data["deviceInfos"]["hik"]
+                    rec.device_category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value
+                    and not (rec.raw.get("deviceInfos") or {}).get("hik")
                 ):
                     continue
 
-                if (
-                    data["deviceInfos"]["deviceCategory"]
-                    == DeviceCatagories.LIGHTING.value
-                ):
-                    # Create a light bulb object
-                    self._light_bulbs[device] = EzvizLightBulb(
-                        self, device, data
-                    ).status()
+                if rec.device_category == DeviceCatagories.LIGHTING.value:
+                    try:
+                        # Create a light bulb object
+                        self._light_bulbs[device] = EzvizLightBulb(
+                            self, device, dict(rec.raw)
+                        ).status()
+                    except (PyEzvizError, KeyError, TypeError, ValueError) as err:  # pragma: no cover - defensive
+                        _LOGGER.warning(
+                            "load_device_failed: serial=%s code=%s msg=%s",
+                            device,
+                            "load_error",
+                            str(err),
+                        )
                 else:
-                    # Create camera object
-                    self._cameras[device] = EzvizCamera(self, device, data).status()
+                    try:
+                        # Create camera object
+                        cam = EzvizCamera(self, device, dict(rec.raw))
+                        self._cameras[device] = cam.status(refresh=refresh)
+                    except (PyEzvizError, KeyError, TypeError, ValueError) as err:  # pragma: no cover - defensive
+                        _LOGGER.warning(
+                            "load_device_failed: serial=%s code=%s msg=%s",
+                            device,
+                            "load_error",
+                            str(err),
+                        )
 
         return {**self._cameras, **self._light_bulbs}
 
-    def load_cameras(self) -> dict[Any, Any]:
-        """Load and return all cameras objects."""
+    def load_cameras(self, refresh: bool = True) -> dict[Any, Any]:
+        """Load and return all camera status mappings.
 
-        self.load_devices()
+        refresh: pass-through to load_devices() to control network fetches.
+        """
+        self.load_devices(refresh=refresh)
         return self._cameras
 
-    def load_light_bulbs(self) -> dict[Any, Any]:
-        """Load light bulbs."""
+    def load_light_bulbs(self, refresh: bool = True) -> dict[Any, Any]:
+        """Load and return all light bulb status mappings.
 
-        self.load_devices()
+        refresh: pass-through to load_devices().
+        """
+        self.load_devices(refresh=refresh)
         return self._light_bulbs
 
     def get_device_infos(self, serial: str | None = None) -> dict[Any, Any]:
         """Load all devices and build dict per device serial."""
-
         devices = self._get_page_list()
         result: dict[str, Any] = {}
         _res_id = "NONE"
@@ -1315,7 +1103,20 @@ class EzvizClient:
         if not serial:
             return result
 
-        return result.get(serial, {})
+        return cast(dict[Any, Any], result.get(serial, {}))
+
+    def get_device_records(
+        self, serial: str | None = None
+    ) -> dict[str, EzvizDeviceRecord] | EzvizDeviceRecord | dict[Any, Any]:
+        """Return devices as EzvizDeviceRecord mapping (or single record).
+
+        Falls back to raw when a specific serial is requested but not found.
+        """
+        devices = self.get_device_infos()
+        records = build_device_records_map(devices)
+        if serial is None:
+            return records
+        return records.get(serial) or devices.get(serial, {})
 
     def ptz_control(
         self, command: str, serial: str, action: str, speed: int = 5
@@ -1326,37 +1127,26 @@ class EzvizClient:
         if action is None:
             raise PyEzvizError("Trying to call ptzControl without action")
 
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_PTZCONTROL}",
-                data={
-                    "command": command,
-                    "action": action,
-                    "channelNo": 1,
-                    "speed": speed,
-                    "uuid": str(uuid4()),
-                    "serial": serial,
-                },
-                timeout=self._timeout,
-            )
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_PTZCONTROL}",
+            data={
+                "command": command,
+                "action": action,
+                "channelNo": 1,
+                "speed": speed,
+                "uuid": str(uuid4()),
+                "serial": serial,
+            },
+            retry_401=False,
+        )
 
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        _LOGGER.debug("PTZ Control: %s", json_output)
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._meta_code(json_output),
+            "ptz_control",
+        )
 
         return True
 
@@ -1383,13 +1173,11 @@ class EzvizClient:
                     "resultDes": str       # Status message in chinese
                 }
         """
-
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_CAM_ENCRYPTKEY}",
+        attempts = max(0, max_retries)
+        for attempt in range(attempts + 1):
+            json_output = self._request_json(
+                "POST",
+                API_ENDPOINT_CAM_ENCRYPTKEY,
                 data={
                     "checkcode": smscode,
                     "serial": serial,
@@ -1399,50 +1187,30 @@ class EzvizClient:
                     "featureCode": FEATURE_CODE,
                     "sessionId": self._token["session_id"],
                 },
-                timeout=self._timeout,
+                retry_401=True,
+                max_retries=0,
             )
 
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_cam_key(serial, smscode, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] == "20002":
-            raise EzvizAuthVerificationCode(f"MFA code required: Got {json_output})")
-
-        if json_output["resultCode"] == 2009:
-            raise DeviceException(f"Device not reachable: Got {json_output})")
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
+            code = str(json_output.get("resultCode"))
+            if code == "20002":
+                raise EzvizAuthVerificationCode(f"MFA code required: Got {json_output})")
+            if code == "2009":
+                raise DeviceException(f"Device not reachable: Got {json_output})")
+            if code == "0":
+                return json_output.get("encryptkey")
+            if code == "-1" and attempt < attempts:
                 _LOGGER.warning(
-                    "Camera %s encryption key not found, retrying %s of %s",
+                    "http_retry: serial=%s code=%s msg=%s",
                     serial,
-                    max_retries,
-                    MAX_RETRIES,
+                    code,
+                    "cam_key_not_found",
                 )
-                return self.get_cam_key(serial, smscode, max_retries + 1)
+                continue
             raise PyEzvizError(
                 f"Could not get camera encryption key: Got {json_output})"
             )
 
-        return json_output["encryptkey"]
+        raise PyEzvizError("Could not get camera encryption key: exceeded retries")
 
     def get_cam_auth_code(
         self,
@@ -1477,7 +1245,6 @@ class EzvizClient:
                     }
                 }
         """
-
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
@@ -1487,43 +1254,21 @@ class EzvizClient:
             "senderType": sender_type,
         }
 
-        try:
-            req = self._session.get(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_CAM_AUTH_CODE}{serial}",
-                params=params,
-                timeout=self._timeout,
-            )
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_CAM_AUTH_CODE}{serial}",
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
 
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_cam_auth_code(
-                    serial, encrypt_pwd, msg_auth_code, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] == 80000:
+        if self._meta_code(json_output) == 80000:
             raise EzvizAuthVerificationCode("Operation requires 2FA check")
 
-        if json_output["meta"]["code"] == 2009:
+        if self._meta_code(json_output) == 2009:
             raise DeviceException(f"Device not reachable: Got {json_output}")
 
-        if json_output["meta"]["code"] != 200:
+        if not self._meta_ok(json_output):
             raise PyEzvizError(
                 f"Could not get camera verification key: Got {json_output}"
             )
@@ -1560,39 +1305,18 @@ class EzvizClient:
                     }
                 }
         """
-
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_2FA_VALIDATE_POST_AUTH}",
-                data={"bizType": biz_type, "from": username},
-                timeout=self._timeout,
-            )
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
+            data={"bizType": biz_type, "from": username},
+            retry_401=True,
+            max_retries=max_retries,
+        )
 
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.get_2fa_check_code(biz_type, username, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
+        if not self._meta_ok(json_output):
             raise PyEzvizError(
                 f"Could not request elevated permission: Got {json_output})"
             )
@@ -1601,97 +1325,51 @@ class EzvizClient:
 
     def create_panoramic(self, serial: str, max_retries: int = 0) -> Any:
         """Create panoramic image."""
-
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_CREATE_PANORAMIC}",
+        attempts = max(0, max_retries)
+        for attempt in range(attempts + 1):
+            json_output = self._request_json(
+                "POST",
+                API_ENDPOINT_CREATE_PANORAMIC,
                 data={"deviceSerial": serial},
-                timeout=self._timeout,
+                retry_401=True,
+                max_retries=0,
             )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.create_panoramic(serial, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
+            result = str(json_output.get("resultCode"))
+            if result == "0":
+                return json_output
+            if result == "-1" and attempt < attempts:
                 _LOGGER.warning(
-                    "Create panoramic failed on device %s retrying %s",
+                    "Create panoramic failed on device %s retrying %s/%s",
                     serial,
-                    max_retries,
+                    attempt + 1,
+                    attempts,
                 )
-                return self.create_panoramic(serial, max_retries + 1)
+                continue
             raise PyEzvizError(
                 f"Could not send command to create panoramic photo: Got {json_output})"
             )
-
-        return json_output
+        raise PyEzvizError("Could not send command to create panoramic photo: exceeded retries")
 
     def return_panoramic(self, serial: str, max_retries: int = 0) -> Any:
         """Return panoramic image url list."""
-
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_RETURN_PANORAMIC}",
+        json_output = self._retry_json(
+            lambda: self._request_json(
+                "POST",
+                API_ENDPOINT_RETURN_PANORAMIC,
                 data={"deviceSerial": serial},
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.return_panoramic(serial, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
-                _LOGGER.warning(
-                    "Camera %s busy or unreachable, retrying %s of %s",
-                    serial,
-                    max_retries,
-                    MAX_RETRIES,
-                )
-                return self.return_panoramic(serial, max_retries + 1)
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: str(p.get("resultCode")) == "-1",
+            log="panoramic_busy_or_unreachable",
+            serial=serial,
+        )
+        if str(json_output.get("resultCode")) != "0":
             raise PyEzvizError(f"Could retrieve panoramic photo: Got {json_output})")
-
         return json_output
 
     def ptz_control_coordinates(
@@ -1708,34 +1386,23 @@ class EzvizClient:
                 f"Invalid Y coordinate: {y_axis}: Should be between 0 and 1 inclusive"
             )
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_PANORAMIC_DEVICES_OPERATION}",
-                data={
-                    "x": f"{x_axis:.6f}",
-                    "y": f"{y_axis:.6f}",
-                    "deviceSerial": serial,
-                },
-                timeout=self._timeout,
-            )
+        json_result = self._request_json(
+            "POST",
+            API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
+            data={
+                "x": f"{x_axis:.6f}",
+                "y": f"{y_axis:.6f}",
+                "deviceSerial": serial,
+            },
+            retry_401=False,
+        )
 
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            raise HTTPError from err
-
-        try:
-            json_result = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        _LOGGER.debug("PTZ control coordinates: %s", json_result)
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._meta_code(json_result),
+            "ptz_control_coordinates",
+        )
 
         return True
 
@@ -1755,44 +1422,27 @@ class EzvizClient:
             bool: True if the operation was successful.
 
         """
-        try:
-            headers = self._session.headers
-            headers.update({"Content-Type": "application/json"})
-
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_IOT_ACTION}{serial}{API_ENDPOINT_REMOTE_UNLOCK}",
-                data=json.dumps(
-                    {
-                        "unLockInfo": {
-                            "bindCode": f"{FEATURE_CODE}{user_id}",
-                            "lockNo": lock_no,
-                            "streamToken": "",
-                            "userName": user_id,
-                        }
-                    }
-                ),
-                timeout=self._timeout,
-                headers=headers,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            raise HTTPError from err
-
-        try:
-            json_result = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        _LOGGER.debug("Result: %s", json_result)
-
+        payload = {
+            "unLockInfo": {
+                "bindCode": f"{FEATURE_CODE}{user_id}",
+                "lockNo": lock_no,
+                "streamToken": "",
+                "userName": user_id,
+            }
+        }
+        json_result = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_IOT_ACTION}{serial}{API_ENDPOINT_REMOTE_UNLOCK}",
+            json_body=payload,
+            retry_401=True,
+            max_retries=0,
+        )
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._response_code(json_result),
+            "remote_unlock",
+        )
         return True
 
     def login(self, sms_code: int | None = None) -> dict[Any, Any]:
@@ -1835,7 +1485,7 @@ class EzvizClient:
                 if not self._token.get("service_urls"):
                     self._token["service_urls"] = self.get_service_urls()
 
-                return self._token
+                return cast(dict[Any, Any], self._token)
 
             if json_result["meta"]["code"] == 403:
                 if self.account and self.password:
@@ -1869,7 +1519,12 @@ class EzvizClient:
 
         except requests.HTTPError as err:
             if err.response.status_code == 401:
-                _LOGGER.warning("Token is no longer valid. Already logged out?")
+                _LOGGER.warning(
+                    "http_warning: serial=%s code=%s msg=%s",
+                    "unknown",
+                    401,
+                    "logout_already_invalid",
+                )
                 return True
             raise HTTPError from err
 
@@ -1890,7 +1545,7 @@ class EzvizClient:
 
     def set_camera_defence_old(self, serial: str, enable: int) -> bool:
         """Enable/Disable motion detection on camera."""
-        cas_client = EzvizCAS(self._token)
+        cas_client = EzvizCAS(cast(dict[str, Any], self._token))
         cas_client.set_camera_defence_state(serial, enable)
 
         return True
@@ -1911,91 +1566,33 @@ class EzvizClient:
             + schedule
             + "]}]}"
         )
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_SET_DEFENCE_SCHEDULE}",
-                data={
-                    "devTimingPlan": schedulestring,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.api_set_defence_schedule(
-                    serial, schedule, enable, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["resultCode"] != "0":
-            if json_output["resultCode"] == "-1":
-                _LOGGER.warning(
-                    "Camara %s offline or unreachable, retrying %s of %s",
-                    serial,
-                    max_retries,
-                    MAX_RETRIES,
-                )
-                return self.api_set_defence_schedule(
-                    serial, schedule, enable, max_retries + 1
-                )
+        json_output = self._retry_json(
+            lambda: self._request_json(
+                "POST",
+                API_ENDPOINT_SET_DEFENCE_SCHEDULE,
+                data={"devTimingPlan": schedulestring},
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: str(p.get("resultCode")) == "-1",
+            log="defence_schedule_offline_or_unreachable",
+            serial=serial,
+        )
+        if str(json_output.get("resultCode")) not in ("0", 0):
             raise PyEzvizError(f"Could not set the schedule: Got {json_output})")
-
         return True
 
     def api_set_defence_mode(self, mode: DefenseModeType, max_retries: int = 0) -> bool:
         """Set defence mode for all devices. The alarm panel from main page is used."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_SWITCH_DEFENCE_MODE}",
-                data={
-                    "groupId": -1,
-                    "mode": mode,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to relogin
-                self.login()
-                return self.api_set_defence_mode(mode, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set defence mode: Got {json_output})")
-
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_SWITCH_DEFENCE_MODE,
+            data={"groupId": -1, "mode": mode},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set defence mode")
         return True
 
     def do_not_disturb(
@@ -2006,34 +1603,14 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> bool:
         """Set do not disturb on camera with specified serial."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_V3_ALARMS}{serial}/{channelno}{API_ENDPOINT_DO_NOT_DISTURB}",
-                data={"enable": enable},
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to re-log-in
-                self.login()
-                return self.do_not_disturb(serial, enable, channelno, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response:" + str(err)) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set do not disturb: Got {json_output})")
-
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_V3_ALARMS}{serial}/{channelno}{API_ENDPOINT_DO_NOT_DISTURB}",
+            data={"enable": enable},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set do not disturb")
         return True
 
     def set_answer_call(
@@ -2043,32 +1620,14 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> bool:
         """Set answer call on camera with specified serial."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_CALLING_NOTIFY}{serial}{API_ENDPOINT_DO_NOT_DISTURB}",
-                data={"deviceSerial": serial, "switchStatus": enable},
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to re-log-in
-                self.login()
-                return self.set_answer_call(serial, enable, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response:" + str(err)) from err
-
-        if json_output["meta"]["code"] != 200:
-            raise PyEzvizError(f"Could not set answer call: Got {json_output})")
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_CALLING_NOTIFY}{serial}{API_ENDPOINT_DO_NOT_DISTURB}",
+            data={"deviceSerial": serial, "switchStatus": enable},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set answer call")
 
         return True
 
@@ -2103,40 +1662,18 @@ class EzvizClient:
         """
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+        url_path = f"{API_ENDPOINT_INTELLIGENT_APP}{serial}/{resource_id}/{app_name}"
+        # Determine which method to call based on the parameter.
+        action = action.lower()
+        if action == "add":
+            method = "PUT"
+        elif action == "remove":
+            method = "DELETE"
+        else:
+            raise PyEzvizError(f"Invalid action '{action}'. Use 'add' or 'remove'.")
 
-        url = (
-            f"https://{self._token['api_url']}"
-            f"{API_ENDPOINT_INTELLIGENT_APP}{serial}/{resource_id}/{app_name}"
-        )
-
-        try:
-            # Determine which method to call based on the parameter.
-            action = action.lower()
-            if action == "add":
-                req = self._session.put(url=url, timeout=self._timeout)
-            elif action == "remove":
-                req = self._session.delete(url=url, timeout=self._timeout)
-            else:
-                raise PyEzvizError(f"Invalid action '{action}'. Use 'add' or 'remove'.")
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # Session might be invalid; attempt to re-login and retry.
-                self.login()
-                return self.manage_intelligent_app(
-                    serial, resource_id, app_name, action, max_retries + 1
-                )
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response: " + str(err)) from err
-
-        if json_output.get("meta", {}).get("code") != 200:
-            raise PyEzvizError(f"Could not {action} intelligent app: Got {json_output}")
+        json_output = self._request_json(method, url_path, retry_401=True, max_retries=max_retries)
+        self._ensure_ok(json_output, f"Could not {action} intelligent app")
 
         return True
 
@@ -2161,31 +1698,13 @@ class EzvizClient:
             bool: True if the operation was successful.
 
         """
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICE_BASICS}{serial}/{channel}/CENTER/mirror",
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # Session might be invalid; attempt to re-login and retry.
-                self.login()
-                return self.flip_image(serial, channel, max_retries + 1)
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response: " + str(err)) from err
-
-        if json_output.get("meta", {}).get("code") != 200:
-            raise PyEzvizError(f"Could not flip image on camera: Got {json_output}")
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICE_BASICS}{serial}/{channel}/CENTER/mirror",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not flip image on camera")
 
         return True
 
@@ -2212,32 +1731,14 @@ class EzvizClient:
             bool: True if the operation was successful.
 
         """
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_OSD}{serial}/{channel}/osd",
-                data={"osd": text},
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # Session might be invalid; attempt to re-login and retry.
-                self.login()
-                return self.set_camera_osd(serial, text, channel, max_retries + 1)
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response: " + str(err)) from err
-
-        if json_output.get("meta", {}).get("code") != 200:
-            raise PyEzvizError(f"Could set osd message on camera: Got {json_output}")
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_OSD}{serial}/{channel}/osd",
+            data={"osd": text},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could set osd message on camera")
 
         return True
 
@@ -2257,35 +1758,14 @@ class EzvizClient:
                 "Range of luminance is 1-100, got " + str(luminance) + "."
             )
 
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_SET_LUMINANCE}{serial}/{channelno}",
-                data={
-                    "luminance": luminance,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to re-log-in
-                self.login()
-                return self.set_floodlight_brightness(
-                    serial, luminance, channelno, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            response_json = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response:" + str(err)) from err
-
-        if response_json["meta"]["code"] != 200:
-            raise PyEzvizError(f"Unable to set brightness, got: {response_json}")
+        response_json = self._request_json(
+            "POST",
+            f"{API_ENDPOINT_SET_LUMINANCE}{serial}/{channelno}",
+            data={"luminance": luminance},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(response_json, "Unable to set brightness")
 
         return True
 
@@ -2297,7 +1777,6 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> bool | str:
         """Facade that changes the brightness to light bulbs or cameras' light."""
-
         device = self._light_bulbs.get(serial)
         if device:
             # the device is a light bulb
@@ -2316,7 +1795,6 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> bool:
         """Facade that turns on/off light bulbs or cameras' light."""
-
         device = self._light_bulbs.get(serial)
         if device:
             # the device is a light bulb
@@ -2395,54 +1873,27 @@ class EzvizClient:
         self, serial: str, type_value: str = "0", max_retries: int = 0
     ) -> Any:
         """Get detection sensibility notifications."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-        try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY_GET}",
-                data={
-                    "subSerial": serial,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to re-log-in.
-                self.login()
-                return self.get_detection_sensibility(
-                    serial, type_value, max_retries + 1
-                )
-
-            raise HTTPError from err
-
-        try:
-            response_json = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response:" + str(err)) from err
-
-        if response_json["resultCode"] != "0":
-            if response_json["resultCode"] == "-1":
-                _LOGGER.warning(
-                    "Camera %s is offline or unreachable, retrying %s of %s",
-                    serial,
-                    max_retries,
-                    MAX_RETRIES,
-                )
-                return self.get_detection_sensibility(
-                    serial, type_value, max_retries + 1
-                )
+        response_json = self._retry_json(
+            lambda: self._request_json(
+                "POST",
+                API_ENDPOINT_DETECTION_SENSIBILITY_GET,
+                data={"subSerial": serial},
+                retry_401=True,
+                max_retries=0,
+            ),
+            attempts=max_retries,
+            should_retry=lambda p: str(p.get("resultCode")) == "-1",
+            log=f"Camera {serial} is offline or unreachable",
+        )
+        if str(response_json.get("resultCode")) != "0":
             raise PyEzvizError(
                 f"Unable to get detection sensibility. Got: {response_json}"
             )
 
-        if response_json["algorithmConfig"]["algorithmList"]:
+        if response_json.get("algorithmConfig", {}).get("algorithmList"):
             for idx in response_json["algorithmConfig"]["algorithmList"]:
-                if idx["type"] == type_value:
-                    return idx["value"]
+                if idx.get("type") == type_value:
+                    return idx.get("value")
 
         return None
 
@@ -2459,36 +1910,25 @@ class EzvizClient:
                 "Invalid sound_type, should be 0,1,2: " + str(sound_type)
             )
 
-        try:
-            req = self._session.put(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SOUND}",
-                data={
-                    "enable": enable,
-                    "soundType": sound_type,
-                    "voiceId": "0",
-                    "deviceSerial": serial,
-                },
-                timeout=self._timeout,
-            )
-
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                # session is wrong, need to re-log-in
-                self.login()
-                return self.alarm_sound(serial, sound_type, enable, max_retries + 1)
-
-            raise HTTPError from err
-
-        try:
-            response_json = req.json()
-
-        except ValueError as err:
-            raise PyEzvizError("Could not decode response:" + str(err)) from err
-
-        _LOGGER.debug("Response: %s", response_json)
-
+        response_json = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SOUND}",
+            data={
+                "enable": enable,
+                "soundType": sound_type,
+                "voiceId": "0",
+                "deviceSerial": serial,
+            },
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(response_json, "Could not set alarm sound")
+        _LOGGER.debug(
+            "http_debug: serial=%s code=%s msg=%s",
+            serial,
+            self._meta_code(response_json),
+            "alarm_sound",
+        )
         return True
 
     def get_mqtt_client(
@@ -2497,7 +1937,7 @@ class EzvizClient:
         """Return a configured MQTTClient using this client's session."""
         if self.mqtt_client is None:
             self.mqtt_client = MQTTClient(
-                token=self._token,
+                token=cast(dict[Any, Any], self._token),
                 session=self._session,
                 timeout=self._timeout,
                 on_message_callback=on_message_callback,

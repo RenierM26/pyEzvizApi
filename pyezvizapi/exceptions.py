@@ -1,33 +1,33 @@
-"""PyEzviz Exceptions."""
+"""Custom exceptions raised by the Ezviz Cloud API wrapper."""
 
 
 class PyEzvizError(Exception):
-    """Ezviz api exception."""
+    """Base exception for all Ezviz API related errors."""
 
 
 class InvalidURL(PyEzvizError):
-    """Invalid url exception."""
+    """Raised when a request fails due to an invalid URL or proxy settings."""
 
 
 class HTTPError(PyEzvizError):
-    """Invalid host exception."""
+    """Raised when a non-success HTTP status code is returned by the API."""
 
 
 class InvalidHost(PyEzvizError):
-    """Invalid host exception."""
+    """Raised when a hostname/IP is invalid or a TCP connection fails."""
 
 
 class AuthTestResultFailed(PyEzvizError):
-    """Authentication failed."""
+    """Raised by RTSP auth test helpers if credentials are invalid."""
 
 
 class EzvizAuthTokenExpired(PyEzvizError):
-    """Authentication failed because token is invalid or expired."""
+    """Raised when a stored session token is no longer valid (expired/revoked)."""
 
 
 class EzvizAuthVerificationCode(PyEzvizError):
-    """Authentication failed because MFA verification code is required."""
+    """Raised when a login or action requires an MFA (verification) code."""
 
 
 class DeviceException(PyEzvizError):
-    """The device network is abnormal, please check the device network or try again."""
+    """Raised when the physical device reports network or operational issues."""

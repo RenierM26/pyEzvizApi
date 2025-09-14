@@ -1,46 +1,50 @@
 """pyezvizapi CAS API Functions."""
 
+from __future__ import annotations
+
 from io import BytesIO
 from itertools import cycle
+import logging
 import random
 import socket
 import ssl
+from typing import Any, cast
 
 from Crypto.Cipher import AES
 import xmltodict
 
 from .constants import FEATURE_CODE, XOR_KEY
-from .exceptions import InvalidHost
+from .exceptions import InvalidHost, PyEzvizError
+
+_LOGGER = logging.getLogger(__name__)
 
 
-def xor_enc_dec(msg, xor_key=XOR_KEY):
-    """Xor encodes camera serial."""
+def xor_enc_dec(msg: bytes, xor_key: bytes = XOR_KEY) -> bytes:
+    """XOR encode/decode bytes with the given key."""
     with BytesIO(msg) as stream:
-        xor_msg = bytes(a ^ b for a, b in zip(stream.read(), cycle(xor_key)))
-    return xor_msg
+        return bytes(a ^ b for a, b in zip(stream.read(), cycle(xor_key)))
 
 
 class EzvizCAS:
     """Ezviz CAS server client."""
 
-    def __init__(self, token) -> None:
+    def __init__(self, token: dict[str, Any] | None) -> None:
         """Initialize the client object."""
         self._session = None
-        self._token = token or {
+        self._token: dict[str, Any] = token or {
             "session_id": None,
             "rf_session_id": None,
             "username": None,
             "api_url": "apiieu.ezvizlife.com",
         }
-        self._service_urls = token["service_urls"]
+        if not token or "service_urls" not in token:
+            raise PyEzvizError("Missing service_urls in token; call EzvizClient.login() first")
+        self._service_urls: dict[str, Any] = token["service_urls"]
 
-    def cas_get_encryption(self, devserial):
-        """Fetch encryption code from ezviz cas server."""
-
+    def cas_get_encryption(self, devserial: str) -> dict[str, Any]:
+        """Fetch encryption code from EZVIZ CAS server."""
         # Random hex 64 characters long.
-        rand_hex = random.randrange(10**80)
-        rand_hex = "%064x" % rand_hex
-        rand_hex = rand_hex[:64]
+        rand_hex_str = f"{random.randrange(10**80):064x}"[:64]
 
         payload = (
             f"\x9e\xba\xac\xe9\x01\x00\x00\x00\x00\x00"
@@ -55,18 +59,17 @@ class EzvizCAS:
             f"\n\t<ClientType>0</ClientType>\n</Request>\n"
         ).encode("latin1")
 
-        payload_end_padding = rand_hex.encode("latin1")
+        payload_end_padding = rand_hex_str.encode("latin1")
 
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-
         context.set_ciphers(
             "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
         )
 
         # Create a TCP/IP socket
-        my_socket = socket.create_connection(
-            (self._service_urls["sysConf"][15], self._service_urls["sysConf"][16])
-        )
+        host = cast(str, self._service_urls["sysConf"][15])
+        port = cast(int, self._service_urls["sysConf"][16])
+        my_socket = socket.create_connection((host, port))
         my_socket = context.wrap_socket(
             my_socket, server_hostname=self._service_urls["sysConf"][15]
         )
@@ -74,29 +77,22 @@ class EzvizCAS:
         # Get CAS Encryption Key
         try:
             my_socket.send(payload + payload_end_padding)
-            response = my_socket.recv(1024)
-            print(f"Get Encryption Key: {response}")
-
+            response_bytes = my_socket.recv(1024)
+            _LOGGER.debug("Get Encryption Key: %r", response_bytes)
         except (socket.gaierror, ConnectionRefusedError) as err:
             raise InvalidHost("Invalid IP or Hostname") from err
-
         finally:
             my_socket.close()
 
         # Trim header, tail and convert xml to dict.
-        response = response[32::]
-        response = response[:-32:]
-        response = xmltodict.parse(response)
+        body = response_bytes[32:-32]
+        doc = xmltodict.parse(body)
+        return cast(dict[str, Any], doc)
 
-        return response
-
-    def set_camera_defence_state(self, serial, enable=1):
+    def set_camera_defence_state(self, serial: str, enable: int = 1) -> bool:
         """Enable alarm notifications."""
-
         # Random hex 64 characters long.
-        rand_hex = random.randrange(10**80)
-        rand_hex = "%064x" % rand_hex
-        rand_hex = rand_hex[:64]
+        rand_hex_str = f"{random.randrange(10**80):064x}"[:64]
 
         payload = (
             f"\x9e\xba\xac\xe9\x01\x00\x00\x00\x00\x00"
@@ -114,7 +110,7 @@ class EzvizCAS:
             f"\x00\x00\x00\xb0\x00\x00\x00\x00"
         ).encode("latin1")
 
-        payload_end_padding = rand_hex.encode("latin1")
+        payload_end_padding = rand_hex_str.encode("latin1")
 
         # xor camera serial
         xor_cam_serial = xor_enc_dec(serial.encode("latin1"))
@@ -130,15 +126,14 @@ class EzvizCAS:
         ).encode("latin1")
 
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-
         context.set_ciphers(
             "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
         )
 
         # Create a TCP/IP socket
-        my_socket = socket.create_connection(
-            (self._service_urls["sysConf"][15], self._service_urls["sysConf"][16])
-        )
+        host = cast(str, self._service_urls["sysConf"][15])
+        port = cast(int, self._service_urls["sysConf"][16])
+        my_socket = socket.create_connection((host, port))
         my_socket = context.wrap_socket(
             my_socket, server_hostname=self._service_urls["sysConf"][15]
         )
@@ -156,13 +151,11 @@ class EzvizCAS:
         cipher = AES.new(aes_key, AES.MODE_CBC, iv_value)
 
         try:
-            defence_msg_string = cipher.encrypt(defence_msg_string)
-            my_socket.send(payload + defence_msg_string + payload_end_padding)
-            print(f"Set camera response: {my_socket.recv()}")
-
+            enc_bytes = cipher.encrypt(defence_msg_string)
+            my_socket.send(payload + enc_bytes + payload_end_padding)
+            _LOGGER.debug("Set camera response: %r", my_socket.recv())
         except (socket.gaierror, ConnectionRefusedError) as err:
             raise InvalidHost("Invalid IP or Hostname") from err
-
         finally:
             my_socket.close()
 

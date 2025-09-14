@@ -3,112 +3,332 @@
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Any
+import logging
+import re
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
+from .models import EzvizDeviceRecord
 from .utils import fetch_nested_value, string_to_list
 
 if TYPE_CHECKING:
     from .client import EzvizClient
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
+class CameraStatus(TypedDict, total=False):
+    """Typed mapping for Ezviz camera status payload."""
+
+    serial: str
+    name: str | None
+    version: str | None
+    upgrade_available: bool
+    status: int | None
+    device_category: str | None
+    device_sub_category: str | None
+    upgrade_percent: Any
+    upgrade_in_progress: bool
+    latest_firmware_info: Any
+    alarm_notify: bool
+    alarm_schedules_enabled: bool
+    alarm_sound_mod: str
+    encrypted: bool
+    encrypted_pwd_hash: Any
+    local_ip: str
+    wan_ip: Any
+    mac_address: Any
+    offline_notify: bool
+    last_offline_time: Any
+    local_rtsp_port: str
+    supported_channels: Any
+    battery_level: Any
+    PIR_Status: Any
+    Motion_Trigger: bool
+    Seconds_Last_Trigger: Any
+    last_alarm_time: Any
+    last_alarm_pic: str
+    last_alarm_type_code: str
+    last_alarm_type_name: str
+    cam_timezone: Any
+    push_notify_alarm: bool
+    push_notify_call: bool
+    alarm_light_luminance: Any
+    Alarm_DetectHumanCar: Any
+    diskCapacity: Any
+    NightVision_Model: Any
+    battery_camera_work_mode: Any
+    Alarm_AdvancedDetect: Any
+    resouceid: Any
+    supportExt: Any
+    # Note: Top-level pagelist keys like 'WIFI', 'SWITCH', 'STATUS', etc. are
+    # merged into the returned dict dynamically in status() to allow consumers
+    # to access new data without library changes. We intentionally avoid adding
+    # parallel curated aliases like 'wifiInfos', 'switches', or 'optionals'.
+
+
 class EzvizCamera:
-    """Initialize Ezviz camera object."""
+    """Representation of an Ezviz camera device.
+
+    Wraps the Ezviz pagelist/device mapping and surfaces a stable API
+    to query status and perform common actions (PTZ, switches, alarm
+    settings, etc.). Designed for use in Home Assistant and scripts.
+    """
 
     def __init__(
-        self, client: EzvizClient, serial: str, device_obj: dict | None = None
+        self,
+        client: EzvizClient,
+        serial: str,
+        device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:
-        """Initialize the camera object."""
+        """Initialize the camera object.
+
+        Raises:
+            InvalidURL: If the API endpoint/connection is invalid when fetching device info.
+            HTTPError: If the API returns a non-success HTTP status while fetching device info.
+            PyEzvizError: On Ezviz API contract errors or decoding failures.
+        """
         self._client = client
         self._serial = serial
         self._alarmmotiontrigger: dict[str, Any] = {
             "alarm_trigger_active": False,
             "timepassed": None,
         }
-        self._device = (
-            device_obj if device_obj else self._client.get_device_infos(self._serial)
-        )
-        self._last_alarm: dict[str, Any] = {}
-        self._switch: dict[int, bool] = {
-            switch["type"]: switch["enable"] for switch in self._device["SWITCH"]
-        }
+        self._record: EzvizDeviceRecord | None = None
 
-    def fetch_key(self, keys: list, default_value: Any = None) -> Any:
+        if device_obj is None:
+            self._device = self._client.get_device_infos(self._serial)
+        elif isinstance(device_obj, EzvizDeviceRecord):
+            # Accept either a typed record or the original dict
+            self._record = device_obj
+            self._device = dict(device_obj.raw)
+        else:
+            self._device = device_obj or {}
+        self._last_alarm: dict[str, Any] = {}
+        self._switch: dict[int, bool] = {}
+        if self._record and getattr(self._record, "switches", None):
+            self._switch = {int(k): bool(v) for k, v in self._record.switches.items()}
+        else:
+            switches = self._device.get("SWITCH") or []
+            if isinstance(switches, list):
+                for item in switches:
+                    if not isinstance(item, dict):
+                        continue
+                    t = item.get("type")
+                    en = item.get("enable")
+                    if isinstance(t, int) and isinstance(en, (bool, int)):
+                        self._switch[t] = bool(en)
+
+    def fetch_key(self, keys: list[Any], default_value: Any = None) -> Any:
         """Fetch dictionary key."""
         return fetch_nested_value(self._device, keys, default_value)
 
     def _alarm_list(self) -> None:
-        """Get last alarm info for this camera's self._serial."""
+        """Get last alarm info for this camera's self._serial.
+
+        Raises:
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+            PyEzvizError: On Ezviz API contract errors or decoding failures.
+        """
         _alarmlist = self._client.get_alarminfo(self._serial)
 
-        if fetch_nested_value(_alarmlist, ["page", "totalResults"], 0) > 0:
-            self._last_alarm = _alarmlist["alarms"][0]
+        total = fetch_nested_value(_alarmlist, ["page", "totalResults"], 0)
+        if total and total > 0:
+            self._last_alarm = _alarmlist.get("alarms", [{}])[0]
+            _LOGGER.debug(
+                "Fetched last alarm for %s: %s", self._serial, self._last_alarm
+            )
             self._motion_trigger()
+        else:
+            _LOGGER.debug("No alarms found for %s", self._serial)
 
-    def _local_ip(self) -> Any:
+    def _local_ip(self) -> str:
         """Fix empty ip value for certain cameras."""
-        if (
-            self.fetch_key(["WIFI", "address"])
-            and self._device["WIFI"]["address"] != "0.0.0.0"
-        ):
-            return self._device["WIFI"]["address"]
+        wifi = (self._record.wifi if self._record else self._device.get("WIFI")) or {}
+        addr = wifi.get("address")
+        if isinstance(addr, str) and addr != "0.0.0.0":
+            return addr
 
         # Seems to return none or 0.0.0.0 on some.
-        if (
-            self.fetch_key(["CONNECTION", "localIp"])
-            and self._device["CONNECTION"]["localIp"] != "0.0.0.0"
-        ):
-            return self._device["CONNECTION"]["localIp"]
+        conn = (
+            self._record.connection if self._record else self._device.get("CONNECTION")
+        ) or {}
+        local_ip = conn.get("localIp")
+        if isinstance(local_ip, str) and local_ip != "0.0.0.0":
+            return local_ip
 
         return "0.0.0.0"
 
     def _motion_trigger(self) -> None:
-        """Create motion sensor based on last alarm time."""
-        if not self._last_alarm.get("alarmStartTimeStr"):
-            return
+        """Create motion sensor based on last alarm time.
 
-        _today_date = datetime.date.today()
-        _now = datetime.datetime.now().replace(microsecond=0)
+        Prefer numeric epoch fields if available to avoid parsing localized strings.
+        """
+        # Use timezone-aware datetimes based on camera or local timezone.
+        tzinfo = self._get_tzinfo()
+        now = datetime.datetime.now(tz=tzinfo).replace(microsecond=0)
 
-        _last_alarm_time = datetime.datetime.strptime(
-            self._last_alarm["alarmStartTimeStr"].replace("Today", str(_today_date)),
-            "%Y-%m-%d %H:%M:%S",
+        # Prefer epoch fields if available
+        epoch = self._last_alarm.get("alarmStartTime") or self._last_alarm.get(
+            "alarmTime"
         )
+        last_alarm_dt: datetime.datetime | None = None
+        if epoch is not None:
+            try:
+                # Accept int/float/str; auto-detect ms vs s
+                if isinstance(epoch, str):
+                    epoch = float(epoch)
+                ts = float(epoch)
+                if ts > 1e11:  # very likely milliseconds
+                    ts = ts / 1000.0
+                last_alarm_dt = datetime.datetime.fromtimestamp(ts, tz=tzinfo)
+            except (
+                TypeError,
+                ValueError,
+                OSError,
+            ):  # fall back to string parsing below
+                last_alarm_dt = None
 
-        # returns a timedelta object
-        timepassed = _now - _last_alarm_time
+        if last_alarm_dt is None:
+            # Fall back to string parsing
+            raw = str(
+                self._last_alarm.get("alarmStartTimeStr")
+                or self._last_alarm.get("alarmTimeStr")
+                or ""
+            )
+            if not raw:
+                return
+            if "Today" in raw:
+                raw = raw.replace("Today", str(now.date()))
+            try:
+                last_alarm_dt = datetime.datetime.strptime(
+                    raw, "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=tzinfo)
+            except ValueError:  # Unrecognized format; give up gracefully
+                _LOGGER.debug(
+                    "Unrecognized alarm time format for %s: %s", self._serial, raw
+                )
+                self._alarmmotiontrigger = {
+                    "alarm_trigger_active": False,
+                    "timepassed": None,
+                }
+                return
+
+        timepassed = now - last_alarm_dt
+        seconds = max(0.0, timepassed.total_seconds()) if timepassed else None
 
         self._alarmmotiontrigger = {
             "alarm_trigger_active": bool(timepassed < datetime.timedelta(seconds=60)),
-            "timepassed": timepassed.total_seconds(),
+            "timepassed": seconds,
         }
+
+    def _get_tzinfo(self) -> datetime.tzinfo:
+        """Return tzinfo from camera setting if recognizable, else local tzinfo.
+
+        Attempts to parse common formats like 'UTC+02:00', 'GMT+8', '+0530', or IANA names.
+        Falls back to local timezone.
+        """
+        tz_val = self.fetch_key(["STATUS", "optionals", "timeZone"])
+        # IANA zone name
+        if isinstance(tz_val, str) and "/" in tz_val:
+            try:
+                return ZoneInfo(tz_val)
+            except ZoneInfoNotFoundError:
+                pass
+        # Offset formats
+        offset_minutes: int | None = None
+        if isinstance(tz_val, int):
+            # Heuristic: treat small absolute values as hours, large as minutes/seconds
+            if -14 <= tz_val <= 14:
+                offset_minutes = tz_val * 60
+            elif -24 * 60 <= tz_val <= 24 * 60:
+                offset_minutes = tz_val
+            elif -24 * 3600 <= tz_val <= 24 * 3600:
+                offset_minutes = int(tz_val / 60)
+        elif isinstance(tz_val, str):
+            s = tz_val.strip().upper().replace("UTC", "").replace("GMT", "")
+            # Normalize formats like '+02:00', '+0200', '+2'
+            m = re.match(r"^([+-]?)(\d{1,2})(?::?(\d{2}))?$", s)
+            if m:
+                sign = -1 if m.group(1) == "-" else 1
+                hours = int(m.group(2))
+                minutes = int(m.group(3)) if m.group(3) else 0
+                offset_minutes = sign * (hours * 60 + minutes)
+        if offset_minutes is not None:
+            return datetime.timezone(datetime.timedelta(minutes=offset_minutes))
+        # Fallback to local timezone
+        return datetime.datetime.now().astimezone().tzinfo or datetime.UTC
 
     def _is_alarm_schedules_enabled(self) -> bool:
         """Check if alarm schedules enabled."""
-        _alarm_schedules = [
-            item for item in self._device["TIME_PLAN"] if item.get("type") == 2
-        ]
+        plans = self.fetch_key(["TIME_PLAN"], []) or []
+        sched = next(
+            (
+                item
+                for item in plans
+                if isinstance(item, dict) and item.get("type") == 2
+            ),
+            None,
+        )
+        return bool(sched and sched.get("enable"))
 
-        if _alarm_schedules:
-            return bool(_alarm_schedules[0].get("enable"))
+    def status(self, refresh: bool = True) -> CameraStatus:
+        """Return the status of the camera.
 
-        return False
+        refresh: if True, updates alarm info via network before composing status.
 
-    def status(self) -> dict[Any, Any]:
-        """Return the status of the camera."""
-        self._alarm_list()
+        Raises:
+            InvalidURL: If the API endpoint/connection is invalid while refreshing.
+            HTTPError: If the API returns a non-success HTTP status while refreshing.
+            PyEzvizError: On Ezviz API contract errors or decoding failures.
+        """
+        if refresh:
+            self._alarm_list()
 
-        return {
+        name = (
+            self._record.name
+            if self._record
+            else self.fetch_key(["deviceInfos", "name"])
+        )
+        version = (
+            self._record.version
+            if self._record
+            else self.fetch_key(["deviceInfos", "version"])
+        )
+        dev_status = (
+            self._record.status
+            if self._record
+            else self.fetch_key(["deviceInfos", "status"])
+        )
+        device_category = (
+            self._record.device_category
+            if self._record
+            else self.fetch_key(["deviceInfos", "deviceCategory"])
+        )
+        device_sub_category = (
+            self._record.device_sub_category
+            if self._record
+            else self.fetch_key(["deviceInfos", "deviceSubCategory"])
+        )
+        conn = (
+            self._record.connection if self._record else self._device.get("CONNECTION")
+        ) or {}
+        wan_ip = conn.get("netIp") or self.fetch_key(["CONNECTION", "netIp"])
+
+        data: dict[str, Any] = {
             "serial": self._serial,
-            "name": self.fetch_key(["deviceInfos", "name"]),
-            "version": self.fetch_key(["deviceInfos", "version"]),
+            "name": name,
+            "version": version,
             "upgrade_available": bool(
                 self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3
             ),
-            "status": self.fetch_key(["deviceInfos", "status"]),
-            "device_category": self.fetch_key(["deviceInfos", "deviceCategory"]),
-            "device_sub_category": self.fetch_key(["deviceInfos", "deviceSubCategory"]),
+            "status": dev_status,
+            "device_category": device_category,
+            "device_sub_category": device_sub_category,
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
             "upgrade_in_progress": bool(
                 self.fetch_key(["STATUS", "upgradeStatus"]) == 0
@@ -122,13 +342,23 @@ class EzvizCamera:
             "encrypted": bool(self.fetch_key(["STATUS", "isEncrypt"])),
             "encrypted_pwd_hash": self.fetch_key(["STATUS", "encryptPwd"]),
             "local_ip": self._local_ip(),
-            "wan_ip": self.fetch_key(["CONNECTION", "netIp"]),
+            "wan_ip": wan_ip,
+            "supportExt": (
+                self._record.support_ext
+                if self._record
+                else self.fetch_key(
+                    ["deviceInfos", "supportExt"]
+                )  # convenience top-level
+            ),
             "mac_address": self.fetch_key(["deviceInfos", "mac"]),
             "offline_notify": bool(self.fetch_key(["deviceInfos", "offlineNotify"])),
             "last_offline_time": self.fetch_key(["deviceInfos", "offlineTime"]),
-            "local_rtsp_port": self.fetch_key(["CONNECTION", "localRtspPort"], "554")
-            if self.fetch_key(["CONNECTION", "localRtspPort"], "554") != 0
-            else "554",
+            "local_rtsp_port": (
+                "554"
+                if (port := self.fetch_key(["CONNECTION", "localRtspPort"], "554"))
+                in (0, "0", None)
+                else str(port)
+            ),
             "supported_channels": self.fetch_key(["deviceInfos", "channelNumber"]),
             "battery_level": self.fetch_key(["STATUS", "optionals", "powerRemaining"]),
             "PIR_Status": self.fetch_key(["STATUS", "pirStatus"]),
@@ -165,106 +395,246 @@ class EzvizCamera:
                 ["STATUS", "optionals", "Alarm_AdvancedDetect", "type"]
             ),
             "resouceid": self.fetch_key(["resourceInfos", 0, "resourceId"]),
-            "wifiInfos": self._device["WIFI"],
-            "switches": self._switch,
-            "optionals": self.fetch_key(["STATUS", "optionals"]),
-            "supportExt": self._device["deviceInfos"]["supportExt"],
-            "ezDeviceCapability": self.fetch_key(["deviceInfos", "ezDeviceCapability"]),
         }
 
-    def move(self, direction: str, speed: int = 5) -> bool:
-        """Move camera."""
-        if direction not in ["right", "left", "down", "up"]:
-            raise PyEzvizError(f"Invalid direction: {direction} ")
+        # Include all top-level keys from the pagelist/device mapping to allow
+        # consumers to access new fields without library updates. We do not
+        # overwrite curated keys above if there is a name collision.
+        source_map = dict(self._record.raw) if self._record else dict(self._device)
+        for key, value in source_map.items():
+            if key not in data:
+                data[key] = value
 
+        return cast(CameraStatus, data)
+
+    # essential_status() was removed in favor of including all top-level
+    # pagelist keys directly in status().
+
+    def move(
+        self, direction: Literal["right", "left", "down", "up"], speed: int = 5
+    ) -> bool:
+        """Move camera in a given direction.
+
+        direction: one of "right", "left", "down", "up".
+        speed: movement speed, expected range 1..10 (inclusive).
+
+        Raises:
+            PyEzvizError: On invalid parameters or API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        if speed < 1 or speed > 10:
+            raise PyEzvizError(f"Invalid speed: {speed}. Expected 1..10")
+
+        dir_up = direction.upper()
+        _LOGGER.debug("PTZ %s at speed %s for %s", dir_up, speed, self._serial)
         # launch the start command
-        self._client.ptz_control(str(direction).upper(), self._serial, "START", speed)
+        self._client.ptz_control(dir_up, self._serial, "START", speed)
         # launch the stop command
-        self._client.ptz_control(str(direction).upper(), self._serial, "STOP", speed)
+        self._client.ptz_control(dir_up, self._serial, "STOP", speed)
 
         return True
 
+    # Public helper to refresh alarms without calling status()
+    def refresh_alarms(self) -> None:
+        """Refresh last alarm information from the API."""
+        self._alarm_list()
+
     def move_coordinates(self, x_axis: float, y_axis: float) -> bool:
-        """Move camera to specified coordinates."""
+        """Move camera to specified coordinates.
+
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug(
+            "PTZ move to coordinates x=%s y=%s for %s", x_axis, y_axis, self._serial
+        )
         return self._client.ptz_control_coordinates(self._serial, x_axis, y_axis)
 
     def door_unlock(self) -> bool:
-        """Unlock the door lock."""
-        return self._client.remote_unlock(self._serial, self._client._token.get("username"), 2)
+        """Unlock the door lock.
+
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug("Remote door unlock for %s", self._serial)
+        user = str(getattr(self._client, "_token", {}).get("username", ""))
+        return self._client.remote_unlock(self._serial, user, 2)
 
     def gate_unlock(self) -> bool:
-        """Unlock the gate lock."""
-        return self._client.remote_unlock(self._serial, self._client._token.get("username"), 1)
+        """Unlock the gate lock.
 
-    def alarm_notify(self, enable: int) -> bool:
-        """Enable/Disable camera notification when movement is detected."""
-        return self._client.set_camera_defence(self._serial, enable)
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug("Remote gate unlock for %s", self._serial)
+        user = str(getattr(self._client, "_token", {}).get("username", ""))
+        return self._client.remote_unlock(self._serial, user, 1)
+
+    def alarm_notify(self, enable: bool) -> bool:
+        """Enable/Disable camera notification when movement is detected.
+
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug("Set alarm notify=%s for %s", enable, self._serial)
+        return self._client.set_camera_defence(self._serial, int(enable))
 
     def alarm_sound(self, sound_type: int) -> bool:
-        """Enable/Disable camera sound when movement is detected."""
+        """Enable/Disable camera sound when movement is detected.
+
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
         # we force enable = 1 , to make sound...
+        _LOGGER.debug("Trigger alarm sound type=%s for %s", sound_type, self._serial)
         return self._client.alarm_sound(self._serial, sound_type, 1)
 
-    def do_not_disturb(self, enable: int) -> bool:
+    def do_not_disturb(self, enable: bool) -> bool:
         """Enable/Disable do not disturb.
 
         if motion triggers are normally sent to your device as a
         notification, then enabling this feature stops these notification being sent.
         The alarm event is still recorded in the EzViz app as normal.
-        """
-        return self._client.do_not_disturb(self._serial, enable)
 
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug("Set do_not_disturb=%s for %s", enable, self._serial)
+        return self._client.do_not_disturb(self._serial, int(enable))
+
+    def alarm_detection_sensitivity(
+        self, sensitivity: int, type_value: int = 0
+    ) -> bool:
+        """Set motion detection sensitivity.
+
+        sensitivity: device-specific integer scale.
+        type_value: optional type selector for devices supporting multiple types.
+
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug(
+            "Set detection sensitivity=%s type=%s for %s",
+            sensitivity,
+            type_value,
+            self._serial,
+        )
+        return bool(
+            self._client.detection_sensibility(self._serial, sensitivity, type_value)
+        )
+
+    # Backwards-compatible alias (deprecated)
     def alarm_detection_sensibility(
         self, sensibility: int, type_value: int = 0
-    ) -> bool | str:
-        """Enable/Disable camera sound when movement is detected."""
-        # we force enable = 1 , to make sound...
-        return self._client.detection_sensibility(self._serial, sensibility, type_value)
+    ) -> bool:
+        """Deprecated: use alarm_detection_sensitivity()."""
+        return self.alarm_detection_sensitivity(sensibility, type_value)
 
-    def switch_device_audio(self, enable: int = 0) -> bool:
-        """Switch audio status on a device."""
-        return self._client.switch_status(
-            self._serial, DeviceSwitchType.SOUND.value, enable
-        )
+    # Generic switch helper
+    def set_switch(self, switch: DeviceSwitchType, enable: bool = False) -> bool:
+        """Set a device switch to enabled/disabled.
 
-    def switch_device_state_led(self, enable: int = 0) -> bool:
-        """Switch led status on a device."""
-        return self._client.switch_status(
-            self._serial, DeviceSwitchType.LIGHT.value, enable
-        )
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
+        _LOGGER.debug("Set switch %s=%s for %s", switch.name, enable, self._serial)
+        return self._client.switch_status(self._serial, switch.value, int(enable))
 
-    def switch_device_ir_led(self, enable: int = 0) -> bool:
-        """Switch ir status on a device."""
-        return self._client.switch_status(
-            self._serial, DeviceSwitchType.INFRARED_LIGHT.value, enable
-        )
+    def switch_device_audio(self, enable: bool = False) -> bool:
+        """Switch audio status on a device.
 
-    def switch_privacy_mode(self, enable: int = 0) -> bool:
-        """Switch privacy mode on a device."""
-        return self._client.switch_status(
-            self._serial, DeviceSwitchType.PRIVACY.value, enable
-        )
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        return self.set_switch(DeviceSwitchType.SOUND, enable)
 
-    def switch_sleep_mode(self, enable: int = 0) -> bool:
-        """Switch sleep mode on a device."""
-        return self._client.switch_status(
-            self._serial, DeviceSwitchType.SLEEP.value, enable
-        )
+    def switch_device_state_led(self, enable: bool = False) -> bool:
+        """Switch led status on a device.
 
-    def switch_follow_move(self, enable: int = 0) -> bool:
-        """Switch follow move."""
-        return self._client.switch_status(
-            self._serial, DeviceSwitchType.MOBILE_TRACKING.value, enable
-        )
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        return self.set_switch(DeviceSwitchType.LIGHT, enable)
 
-    def switch_sound_alarm(self, enable: int = 0) -> bool:
-        """Sound alarm on a device."""
-        return self._client.sound_alarm(self._serial, enable)
+    def switch_device_ir_led(self, enable: bool = False) -> bool:
+        """Switch ir status on a device.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        return self.set_switch(DeviceSwitchType.INFRARED_LIGHT, enable)
+
+    def switch_privacy_mode(self, enable: bool = False) -> bool:
+        """Switch privacy mode on a device.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        return self.set_switch(DeviceSwitchType.PRIVACY, enable)
+
+    def switch_sleep_mode(self, enable: bool = False) -> bool:
+        """Switch sleep mode on a device.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        return self.set_switch(DeviceSwitchType.SLEEP, enable)
+
+    def switch_follow_move(self, enable: bool = False) -> bool:
+        """Switch follow move.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        return self.set_switch(DeviceSwitchType.MOBILE_TRACKING, enable)
+
+    def switch_sound_alarm(self, enable: int | bool = False) -> bool:
+        """Sound alarm on a device.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        _LOGGER.debug("Set sound alarm enable=%s for %s", enable, self._serial)
+        return self._client.sound_alarm(self._serial, int(enable))
 
     def change_defence_schedule(self, schedule: str, enable: int = 0) -> bool:
-        """Change defence schedule. Requires json formatted schedules."""
+        """Change defence schedule. Requires json formatted schedules.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        _LOGGER.debug(
+            "Change defence schedule enable=%s for %s payload_len=%s",
+            enable,
+            self._serial,
+            len(schedule) if isinstance(schedule, str) else None,
+        )
         return self._client.api_set_defence_schedule(self._serial, schedule, enable)
 
     def set_battery_camera_work_mode(self, work_mode: BatteryCameraWorkMode) -> bool:
-        """Change work mode for battery powered camera device."""
+        """Change work mode for battery powered camera device.
+
+        Raises:
+            PyEzvizError, InvalidURL, HTTPError
+        """
+        _LOGGER.debug(
+            "Set battery camera work mode=%s for %s", work_mode.name, self._serial
+        )
         return self._client.set_battery_camera_work_mode(self._serial, work_mode.value)

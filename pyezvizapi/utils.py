@@ -83,7 +83,6 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
         bytes: Decrypted image data
 
     """
-
     if len(input_data) < 48:
         raise PyEzvizError("Invalid image data")
 

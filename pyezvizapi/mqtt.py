@@ -325,7 +325,7 @@ class MQTTClient:
         try:
             decoded = self.decode_mqtt_message(msg.payload)
         except PyEzvizError as err:
-            _LOGGER.warning("MQTT_decode_error: msg=%s", str(err))
+            _LOGGER.warning("MQTT decode error: msg=%s", str(err))
             return
 
         ext: dict[str, Any] = (
@@ -338,14 +338,14 @@ class MQTTClient:
         if device_serial:
             self._cache_message(device_serial, decoded)
             _LOGGER.debug(
-                "mqtt_msg: serial=%s alert_code=%s msg_id=%s",
+                "MQTT msg: serial=%s alert_code=%s msg_id=%s",
                 device_serial,
                 alert_code,
                 msg_id,
             )
         else:
-            _LOGGER.warning(
-                "MQTT_message_missing_serial: alert_code=%s msg_id=%s",
+            _LOGGER.debug(
+                "MQTT message missing serial: alert_code=%s msg_id=%s",
                 alert_code,
                 msg_id,
             )

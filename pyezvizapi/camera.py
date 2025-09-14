@@ -64,6 +64,9 @@ class CameraStatus(TypedDict, total=False):
     Alarm_AdvancedDetect: Any
     resouceid: Any
     supportExt: Any
+    # Backwards-compatibility aliases used by integration layers
+    optionals: Any
+    switches: dict[int, bool]
     # Note: Top-level pagelist keys like 'WIFI', 'SWITCH', 'STATUS', etc. are
     # merged into the returned dict dynamically in status() to allow consumers
     # to access new data without library changes. We intentionally avoid adding
@@ -350,6 +353,9 @@ class EzvizCamera:
                     ["deviceInfos", "supportExt"]
                 )  # convenience top-level
             ),
+            # Backwards-compatibility aliases
+            "optionals": self.fetch_key(["STATUS", "optionals"]),
+            "switches": self._switch,
             "mac_address": self.fetch_key(["deviceInfos", "mac"]),
             "offline_notify": bool(self.fetch_key(["deviceInfos", "offlineNotify"])),
             "last_offline_time": self.fetch_key(["deviceInfos", "offlineTime"]),

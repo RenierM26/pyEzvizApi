@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name='pyezvizapi',
-    version="1.0.1.7",
+    version="1.0.1.8",
     license='Apache Software License 2.0',
     author='Renier Moorcroft',
     author_email='RenierM26@users.github.com',

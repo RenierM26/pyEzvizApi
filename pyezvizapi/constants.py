@@ -464,3 +464,4 @@ class DeviceCatagories(Enum):
     BASE_STATION_DEVICE_CATEGORY = "XVR"
     CAT_EYE_CATEGORY = "CatEye"
     LIGHTING = "lighting"
+    W2H_BASE_STATION_DEVICE_CATEGORY = "IGateWay" # @emeric699 Adding support for W2H Base Station

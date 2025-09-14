@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Stopped.")
 
     if args.save_token and args.token_file:
-        _save_token_file(args.token_file, client._token)  # noqa: SLF001
+        _save_token_file(args.token_file, cast(dict[str, Any], client._token))  # noqa: SLF001
 
     return 0
 

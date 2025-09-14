@@ -43,7 +43,6 @@ class EzvizCAS:
 
     def cas_get_encryption(self, devserial: str) -> dict[str, Any]:
         """Fetch encryption code from EZVIZ CAS server."""
-
         # Random hex 64 characters long.
         rand_hex_str = f"{random.randrange(10**80):064x}"[:64]
 
@@ -92,7 +91,6 @@ class EzvizCAS:
 
     def set_camera_defence_state(self, serial: str, enable: int = 1) -> bool:
         """Enable alarm notifications."""
-
         # Random hex 64 characters long.
         rand_hex_str = f"{random.randrange(10**80):064x}"[:64]
 

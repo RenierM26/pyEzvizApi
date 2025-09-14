@@ -594,7 +594,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     finally:
         if args.save_token and args.token_file:
-            _save_token_file(args.token_file, client._token)  # noqa: SLF001
+            _save_token_file(args.token_file, cast(dict[str, Any], client._token))  # noqa: SLF001
         client.close_session()
 
 

@@ -97,10 +97,10 @@ EXT_FIELD_NAMES: Final[tuple[str, ...]] = (
     "status_flag",
     "file_id",
     "is_encrypted",
-    "encrypted_pwd_hash",
+    "picChecksum",
     "unknown_flag",
     "unused5",
-    "alarm_log_id",
+    "msgId",
     "image",
     "device_name",
     "unused6",
@@ -221,6 +221,8 @@ class MQTTClient:
 
         Raises:
           PyEzvizError: If required Ezviz credentials are missing or registration/start fails.
+          InvalidURL: If a push API endpoint is invalid or unreachable.
+          HTTPError: If a push API request returns a non-success status.
         """
         self._register_ezviz_push()
         self._start_ezviz_push()

@@ -1,4 +1,11 @@
-"""init pyezvizapi."""
+"""Top-level package for the Ezviz Cloud API helpers.
+
+This package provides a small, typed API surface around Ezviz cloud
+endpoints tailored for Home Assistant and light scripting. The
+submodules contain focused functionality (client, camera/light models,
+MQTT push, CAS, utilities) and this package exports the most useful
+symbols for convenient imports.
+"""
 
 from .camera import EzvizCamera
 from .cas import EzvizCAS

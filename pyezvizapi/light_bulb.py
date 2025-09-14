@@ -1,4 +1,9 @@
-"""Ezviz camera api."""
+"""Ezviz light bulb API.
+
+Light-bulb specific helpers to read device status and control
+features exposed via the Ezviz cloud API (on/off, brightness,
+color temperature, etc.).
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,13 @@ from .models import EzvizDeviceRecord
 
 
 class EzvizLightBulb:
-    """Initialize Ezviz Light Bulb object."""
+    """Representation of an Ezviz light bulb.
+
+    Provides a thin, typed wrapper over the pagelist/device payload
+    for a light bulb, plus convenience methods to toggle and set
+    brightness. This class mirrors the camera interface where
+    possible to keep integration code simple.
+    """
 
     def __init__(
         self,
@@ -23,7 +34,13 @@ class EzvizLightBulb:
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:
-        """Initialize the light bulb object."""
+        """Initialize the light bulb object.
+
+        Raises:
+            InvalidURL: If the API endpoint/connection is invalid when fetching device info.
+            HTTPError: If the API returns a non-success HTTP status while fetching device info.
+            PyEzvizError: On Ezviz API contract errors or decoding failures.
+        """
         self._client = client
         self._serial = serial
         if device_obj is None:
@@ -50,11 +67,14 @@ class EzvizLightBulb:
             )["dataValue"]
 
     def fetch_key(self, keys: list[Any], default_value: Any = None) -> Any:
-        """Fetch dictionary key."""
+        """Fetch a nested key from the device payload.
+
+        Uses the same semantics as the camera helper.
+        """
         return fetch_nested_value(self._device, keys, default_value)
 
     def _local_ip(self) -> str:
-        """Fix empty ip value for certain cameras."""
+        """Best-effort local IP address for devices that report 0.0.0.0."""
         wifi = self._device.get("WIFI") or {}
         addr = wifi.get("address")
         if isinstance(addr, str) and addr != "0.0.0.0":
@@ -69,7 +89,11 @@ class EzvizLightBulb:
         return "0.0.0.0"
 
     def get_feature_json(self) -> Any:
-        """Parse the FEATURE json."""
+        """Parse the FEATURE JSON string into a Python structure.
+
+        Raises:
+            PyEzvizError: If the FEATURE JSON cannot be decoded.
+        """
         try:
             json_output = json.loads(self._device["FEATURE"]["featureJson"])
 
@@ -79,7 +103,7 @@ class EzvizLightBulb:
         return json_output
 
     def get_feature_item(self, key: str, default_value: Any = None) -> Any:
-        """Get items from FEATURE."""
+        """Return a feature item by key from the parsed FEATURE structure."""
         items = self._feature_json["featureItemDtos"]
 
         for item in items:
@@ -89,11 +113,11 @@ class EzvizLightBulb:
         return default_value if default_value else {"dataValue": ""}
 
     def get_product_id(self) -> Any:
-        """Get product id."""
+        """Return the product ID from the FEATURE metadata."""
         return self._feature_json["productId"]
 
     def status(self) -> dict[Any, Any]:
-        """Return the status of the light bulb."""
+        """Return a status dictionary mirroring the camera status shape where possible."""
         return {
             "serial": self._serial,
             "name": self.fetch_key(["deviceInfos", "name"]),
@@ -130,7 +154,16 @@ class EzvizLightBulb:
         }
 
     def _write_state(self, state: bool | None = None) -> bool:
-        """Set the light bulb state."""
+        """Set the light bulb state.
+
+        If ``state`` is None, the current state will be toggled.
+        Returns True on success.
+
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
+        """
         item = self.get_feature_item("light_switch")
 
         return self._client.set_device_feature_by_key(
@@ -143,15 +176,19 @@ class EzvizLightBulb:
     def set_brightness(self, value: int) -> bool:
         """Set the light bulb brightness.
 
-        The value must be in range 1-100.
+        The value must be in range 1–100. Returns True on success.
 
+        Raises:
+            PyEzvizError: On API failures.
+            InvalidURL: If the API endpoint/connection is invalid.
+            HTTPError: If the API returns a non-success HTTP status.
         """
         return self._client.set_device_feature_by_key(
             self._serial, self.get_product_id(), value, "brightness"
         )
 
     def toggle_switch(self) -> bool:
-        """Toggle on/off light bulb."""
+        """Toggle the light bulb on/off."""
         return self._write_state()
 
     def power_on(self) -> bool:

@@ -27,5 +27,5 @@ setuptools.setup(
     entry_points={
     'console_scripts': ['pyezvizapi = pyezvizapi.__main__:main']
     },
-    python_requires = '>=3.6'
+    python_requires = '>=3.11'
 )

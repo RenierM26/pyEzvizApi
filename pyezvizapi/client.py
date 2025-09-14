@@ -557,7 +557,8 @@ class EzvizClient:
                 page_filter, json_key, group_id, limit, offset, max_retries + 1
             )
 
-        next_page = json_output["page"].get("hasNext", False)
+        page_info = json_output.get("page") or {}
+        next_page = bool(page_info.get("hasNext", False))
 
         data = json_output[json_key] if json_key else json_output
 
@@ -990,10 +991,11 @@ class EzvizClient:
 
         refresh: if True, camera.status() may perform network fetches (e.g. alarms).
         Returns a combined mapping of serial -> status dict for both cameras and bulbs.
+
+        Note: We update in place and do not remove keys for devices that may
+        have disappeared. Users who intentionally remove a device can restart
+        the integration to flush stale entries.
         """
-        # Reset caches to reflect the current device roster
-        self._cameras.clear()
-        self._light_bulbs.clear()
 
         # Build lightweight records for clean gating/selection
         records = cast(dict[str, EzvizDeviceRecord], self.get_device_records(None))
@@ -1033,7 +1035,6 @@ class EzvizClient:
                             "load_error",
                             str(err),
                         )
-
         return {**self._cameras, **self._light_bulbs}
 
     def load_cameras(self, refresh: bool = True) -> dict[Any, Any]:
@@ -1058,7 +1059,7 @@ class EzvizClient:
         result: dict[str, Any] = {}
         _res_id = "NONE"
 
-        for device in devices["deviceInfos"]:
+        for device in devices.get("deviceInfos", []) or []:
             _serial = device["deviceSerial"]
             _res_id_list = {
                 item
@@ -1088,16 +1089,20 @@ class EzvizClient:
                 },
                 "resourceInfos": [
                     item
-                    for item in devices.get("resourceInfos")
-                    if item.get("deviceSerial") == _serial
+                    for item in (devices.get("resourceInfos") or [])
+                    if isinstance(item, dict) and item.get("deviceSerial") == _serial
                 ],  # Could be more than one
                 "WIFI": devices.get("WIFI", {}).get(_serial, {}),
                 "deviceInfos": device,
             }
             # Nested keys are still encoded as JSON strings
-            result[_serial]["deviceInfos"]["supportExt"] = json.loads(
-                result[_serial]["deviceInfos"]["supportExt"]
-            )
+            try:
+                support_ext = result[_serial].get("deviceInfos", {}).get("supportExt")
+                if isinstance(support_ext, str) and support_ext:
+                    result[_serial]["deviceInfos"]["supportExt"] = json.loads(support_ext)
+            except (TypeError, ValueError):
+                # Leave as-is if not valid JSON
+                pass
             convert_to_dict(result[_serial]["STATUS"].get("optionals"))
 
         if not serial:

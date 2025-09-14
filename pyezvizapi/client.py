@@ -167,6 +167,7 @@ class EzvizClient:
         DeviceCatagories.BASE_STATION_DEVICE_CATEGORY.value,
         DeviceCatagories.CAT_EYE_CATEGORY.value,
         DeviceCatagories.LIGHTING.value,
+        DeviceCatagories.W2H_BASE_STATION_DEVICE_CATEGORY.value, # @emeric699 Adding support for W2H Base Station
     ]
 
     def __init__(

@@ -11,48 +11,60 @@ from .utils import fetch_nested_value
 
 if TYPE_CHECKING:
     from .client import EzvizClient
+from .models import EzvizDeviceRecord
 
 
 class EzvizLightBulb:
     """Initialize Ezviz Light Bulb object."""
 
     def __init__(
-        self, client: EzvizClient, serial: str, device_obj: dict | None = None
+        self,
+        client: EzvizClient,
+        serial: str,
+        device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:
         """Initialize the light bulb object."""
         self._client = client
         self._serial = serial
-        self._device = (
-            device_obj if device_obj else self._client.get_device_infos(self._serial)
-        )
+        if device_obj is None:
+            self._device = self._client.get_device_infos(self._serial)
+        elif isinstance(device_obj, EzvizDeviceRecord):
+            self._device = dict(device_obj.raw)
+        else:
+            self._device = device_obj
         self._feature_json = self.get_feature_json()
-        self._switch: dict[int, bool] = {
-            switch["type"]: switch["enable"] for switch in self._device["SWITCH"]
-        }
+        switches = self._device.get("SWITCH") or []
+        self._switch: dict[int, bool] = {}
+        if isinstance(switches, list):
+            for switch in switches:
+                if not isinstance(switch, dict):
+                    continue
+                t = switch.get("type")
+                en = switch.get("enable")
+                if isinstance(t, int) and isinstance(en, (bool, int)):
+                    self._switch[t] = bool(en)
         if DeviceSwitchType.ALARM_LIGHT.value not in self._switch:
             # trying to have same interface as the camera's light
             self._switch[DeviceSwitchType.ALARM_LIGHT.value] = self.get_feature_item(
                 "light_switch"
             )["dataValue"]
 
-    def fetch_key(self, keys: list, default_value: Any = None) -> Any:
+    def fetch_key(self, keys: list[Any], default_value: Any = None) -> Any:
         """Fetch dictionary key."""
         return fetch_nested_value(self._device, keys, default_value)
 
-    def _local_ip(self) -> Any:
+    def _local_ip(self) -> str:
         """Fix empty ip value for certain cameras."""
-        if (
-            self.fetch_key(["WIFI", "address"])
-            and self._device["WIFI"]["address"] != "0.0.0.0"
-        ):
-            return self._device["WIFI"]["address"]
+        wifi = self._device.get("WIFI") or {}
+        addr = wifi.get("address")
+        if isinstance(addr, str) and addr != "0.0.0.0":
+            return addr
 
         # Seems to return none or 0.0.0.0 on some.
-        if (
-            self.fetch_key(["CONNECTION", "localIp"])
-            and self._device["CONNECTION"]["localIp"] != "0.0.0.0"
-        ):
-            return self._device["CONNECTION"]["localIp"]
+        conn = self._device.get("CONNECTION") or {}
+        local_ip = conn.get("localIp")
+        if isinstance(local_ip, str) and local_ip != "0.0.0.0":
+            return local_ip
 
         return "0.0.0.0"
 

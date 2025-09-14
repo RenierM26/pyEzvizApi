@@ -28,6 +28,7 @@ from .exceptions import (
     PyEzvizError,
 )
 from .light_bulb import EzvizLightBulb
+from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
 from .test_cam_rtsp import TestRTSPAuth
 
@@ -46,6 +47,7 @@ __all__ = [
     "EzvizCAS",
     "EzvizCamera",
     "EzvizClient",
+    "EzvizDeviceRecord",
     "EzvizLightBulb",
     "EzvizToken",
     "HTTPError",
@@ -61,4 +63,5 @@ __all__ = [
     "SoundMode",
     "SupportExt",
     "TestRTSPAuth",
+    "build_device_records_map",
 ]

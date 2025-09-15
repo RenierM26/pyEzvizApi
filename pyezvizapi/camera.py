@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import datetime
 import logging
-import re
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
 from .models import EzvizDeviceRecord
-from .utils import fetch_nested_value, string_to_list
+from .utils import (
+    compute_motion_from_alarm,
+    fetch_nested_value,
+    parse_timezone_value,
+    string_to_list,
+)
 
 if TYPE_CHECKING:
     from .client import EzvizClient
@@ -172,110 +175,10 @@ class EzvizCamera:
 
         Prefer numeric epoch fields if available to avoid parsing localized strings.
         """
-        # Use timezone-aware datetimes. Compute both camera-local and UTC "now".
         tzinfo = self._get_tzinfo()
-        now_local = datetime.datetime.now(tz=tzinfo).replace(microsecond=0)
-        now_utc = datetime.datetime.now(tz=datetime.UTC).replace(microsecond=0)
-
-        # Prefer epoch fields if available
-        epoch = self._last_alarm.get("alarmStartTime") or self._last_alarm.get(
-            "alarmTime"
+        active, seconds_out, last_alarm_str = compute_motion_from_alarm(
+            self._last_alarm, tzinfo
         )
-        last_alarm_dt: datetime.datetime | None = None
-        # Capture string time if present so we can cross-check epoch skew
-        raw_time_str = str(
-            self._last_alarm.get("alarmStartTimeStr")
-            or self._last_alarm.get("alarmTimeStr")
-            or ""
-        )
-        if epoch is not None:
-            try:
-                # Accept int/float/str; auto-detect ms vs s
-                if isinstance(epoch, str):
-                    epoch = float(epoch)
-                ts = float(epoch)
-                if ts > 1e11:  # very likely milliseconds
-                    ts = ts / 1000.0
-                # Convert epoch to UTC for robust delta; derive display time in camera tz
-                event_utc = datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)
-                last_alarm_dt = event_utc.astimezone(tzinfo)
-                # Some devices appear to report epoch as local time rather than UTC.
-                # If the provided string timestamp exists and differs significantly
-                # from the epoch-based time, reinterpret the epoch as local time.
-                if raw_time_str:
-                    raw_norm = raw_time_str
-                    if "Today" in raw_norm:
-                        raw_norm = raw_norm.replace("Today", str(now_local.date()))
-                    try:
-                        dt_str_local = datetime.datetime.strptime(
-                            raw_norm, "%Y-%m-%d %H:%M:%S"
-                        ).replace(tzinfo=tzinfo)
-                        diff = abs(
-                            (
-                                event_utc
-                                - dt_str_local.astimezone(datetime.UTC)
-                            ).total_seconds()
-                        )
-                        if diff > 120:
-                            # Reinterpret the epoch as local clock time in camera tz
-                            naive_utc = datetime.datetime.fromtimestamp(ts, tz=datetime.UTC).replace(tzinfo=None)
-                            event_local_reint = naive_utc.replace(tzinfo=tzinfo)
-                            event_utc = event_local_reint.astimezone(datetime.UTC)
-                            last_alarm_dt = event_local_reint
-                    except ValueError:
-                        pass
-            except (
-                TypeError,
-                ValueError,
-                OSError,
-            ):  # fall back to string parsing below
-                last_alarm_dt = None
-
-        last_alarm_str: str | None = None
-        if last_alarm_dt is None:
-            # Fall back to string parsing
-            raw = raw_time_str
-            if not raw:
-                return
-            if "Today" in raw:
-                raw = raw.replace("Today", str(now_local.date()))
-            try:
-                last_alarm_dt = datetime.datetime.strptime(
-                    raw, "%Y-%m-%d %H:%M:%S"
-                ).replace(tzinfo=tzinfo)
-                last_alarm_str = last_alarm_dt.strftime("%Y-%m-%d %H:%M:%S")
-            except ValueError:  # Unrecognized format; give up gracefully
-                _LOGGER.debug(
-                    "Unrecognized alarm time format for %s: %s", self._serial, raw
-                )
-                self._alarmmotiontrigger = {
-                    "alarm_trigger_active": False,
-                    "timepassed": None,
-                    "last_alarm_time_str": raw or None,
-                }
-                return
-        else:
-            # We selected epoch path; format a human-readable local string
-            last_alarm_str = last_alarm_dt.astimezone(tzinfo).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-
-        # Compute elapsed seconds since the last alarm. If the timestamp is
-        # somehow in the future (timezone mismatch or clock skew), do not
-        # report a motion trigger; clamp the exposed seconds to 0.0.
-        # Use UTC delta when epoch was provided; otherwise compute in camera tz.
-        if epoch is not None and last_alarm_dt is not None:
-            event_utc_for_delta = last_alarm_dt.astimezone(datetime.UTC)
-            delta = now_utc - event_utc_for_delta
-        else:
-            delta = now_local - last_alarm_dt
-        seconds = float(delta.total_seconds())
-        if seconds < 0:
-            active = False
-            seconds_out = 0.0
-        else:
-            active = seconds < 60.0
-            seconds_out = seconds
 
         self._alarmmotiontrigger = {
             "alarm_trigger_active": active,
@@ -284,41 +187,9 @@ class EzvizCamera:
         }
 
     def _get_tzinfo(self) -> datetime.tzinfo:
-        """Return tzinfo from camera setting if recognizable, else local tzinfo.
-
-        Attempts to parse common formats like 'UTC+02:00', 'GMT+8', '+0530', or IANA names.
-        Falls back to local timezone.
-        """
+        """Return tzinfo from camera setting if recognizable, else local tzinfo."""
         tz_val = self.fetch_key(["STATUS", "optionals", "timeZone"])
-        # IANA zone name
-        if isinstance(tz_val, str) and "/" in tz_val:
-            try:
-                return ZoneInfo(tz_val)
-            except ZoneInfoNotFoundError:
-                pass
-        # Offset formats
-        offset_minutes: int | None = None
-        if isinstance(tz_val, int):
-            # Heuristic: treat small absolute values as hours, large as minutes/seconds
-            if -14 <= tz_val <= 14:
-                offset_minutes = tz_val * 60
-            elif -24 * 60 <= tz_val <= 24 * 60:
-                offset_minutes = tz_val
-            elif -24 * 3600 <= tz_val <= 24 * 3600:
-                offset_minutes = int(tz_val / 60)
-        elif isinstance(tz_val, str):
-            s = tz_val.strip().upper().replace("UTC", "").replace("GMT", "")
-            # Normalize formats like '+02:00', '+0200', '+2'
-            m = re.match(r"^([+-]?)(\d{1,2})(?::?(\d{2}))?$", s)
-            if m:
-                sign = -1 if m.group(1) == "-" else 1
-                hours = int(m.group(2))
-                minutes = int(m.group(3)) if m.group(3) else 0
-                offset_minutes = sign * (hours * 60 + minutes)
-        if offset_minutes is not None:
-            return datetime.timezone(datetime.timedelta(minutes=offset_minutes))
-        # Fallback to local timezone
-        return datetime.datetime.now().astimezone().tzinfo or datetime.UTC
+        return parse_timezone_value(tz_val)
 
     def _is_alarm_schedules_enabled(self) -> bool:
         """Check if alarm schedules enabled."""

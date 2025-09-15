@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import datetime
 import logging
-import re
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
 from .models import EzvizDeviceRecord
-from .utils import compute_motion_from_alarm, fetch_nested_value, string_to_list
+from .utils import (
+    compute_motion_from_alarm,
+    fetch_nested_value,
+    parse_timezone_value,
+    string_to_list,
+)
 
 if TYPE_CHECKING:
     from .client import EzvizClient
@@ -184,41 +187,9 @@ class EzvizCamera:
         }
 
     def _get_tzinfo(self) -> datetime.tzinfo:
-        """Return tzinfo from camera setting if recognizable, else local tzinfo.
-
-        Attempts to parse common formats like 'UTC+02:00', 'GMT+8', '+0530', or IANA names.
-        Falls back to local timezone.
-        """
+        """Return tzinfo from camera setting if recognizable, else local tzinfo."""
         tz_val = self.fetch_key(["STATUS", "optionals", "timeZone"])
-        # IANA zone name
-        if isinstance(tz_val, str) and "/" in tz_val:
-            try:
-                return ZoneInfo(tz_val)
-            except ZoneInfoNotFoundError:
-                pass
-        # Offset formats
-        offset_minutes: int | None = None
-        if isinstance(tz_val, int):
-            # Heuristic: treat small absolute values as hours, large as minutes/seconds
-            if -14 <= tz_val <= 14:
-                offset_minutes = tz_val * 60
-            elif -24 * 60 <= tz_val <= 24 * 60:
-                offset_minutes = tz_val
-            elif -24 * 3600 <= tz_val <= 24 * 3600:
-                offset_minutes = int(tz_val / 60)
-        elif isinstance(tz_val, str):
-            s = tz_val.strip().upper().replace("UTC", "").replace("GMT", "")
-            # Normalize formats like '+02:00', '+0200', '+2'
-            m = re.match(r"^([+-]?)(\d{1,2})(?::?(\d{2}))?$", s)
-            if m:
-                sign = -1 if m.group(1) == "-" else 1
-                hours = int(m.group(2))
-                minutes = int(m.group(3)) if m.group(3) else 0
-                offset_minutes = sign * (hours * 60 + minutes)
-        if offset_minutes is not None:
-            return datetime.timezone(datetime.timedelta(minutes=offset_minutes))
-        # Fallback to local timezone
-        return datetime.datetime.now().astimezone().tzinfo or datetime.UTC
+        return parse_timezone_value(tz_val)
 
     def _is_alarm_schedules_enabled(self) -> bool:
         """Check if alarm schedules enabled."""

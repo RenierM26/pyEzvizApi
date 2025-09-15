@@ -6,8 +6,10 @@ import datetime
 from hashlib import md5
 import json
 import logging
+import re as _re
 from typing import Any
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from Crypto.Cipher import AES
 
@@ -302,3 +304,43 @@ def compute_motion_from_alarm(
         return False, 0.0, alarm_str
 
     return seconds < window_seconds, seconds, alarm_str
+
+
+def parse_timezone_value(tz_val: Any) -> datetime.tzinfo:
+    """Parse EZVIZ timeZone value into a tzinfo.
+
+    Supports:
+      - IANA names like 'Europe/Paris'
+      - Offsets like 'UTC+02:00', 'GMT-5', '+0530', or integers (hours/minutes/seconds)
+    Falls back to the local system timezone, or UTC if unavailable.
+    """
+    # IANA zone name
+    if isinstance(tz_val, str) and "/" in tz_val:
+        try:
+            return ZoneInfo(tz_val)
+        except ZoneInfoNotFoundError:
+            pass
+
+    # Numeric offsets
+    offset_minutes: int | None = None
+    if isinstance(tz_val, int):
+        if -14 <= tz_val <= 14:
+            offset_minutes = tz_val * 60
+        elif -24 * 60 <= tz_val <= 24 * 60:
+            offset_minutes = tz_val
+        elif -24 * 3600 <= tz_val <= 24 * 3600:
+            offset_minutes = int(tz_val / 60)
+    elif isinstance(tz_val, str):
+        s = tz_val.strip().upper().replace("UTC", "").replace("GMT", "")
+        m = _re.match(r"^([+-]?)(\d{1,2})(?::?(\d{2}))?$", s)
+        if m:
+            sign = -1 if m.group(1) == "-" else 1
+            hours = int(m.group(2))
+            minutes = int(m.group(3)) if m.group(3) else 0
+            offset_minutes = sign * (hours * 60 + minutes)
+
+    if offset_minutes is not None:
+        return datetime.timezone(datetime.timedelta(minutes=offset_minutes))
+
+    # Fallbacks
+    return datetime.datetime.now().astimezone().tzinfo or datetime.UTC

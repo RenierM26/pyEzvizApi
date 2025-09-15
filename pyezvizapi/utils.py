@@ -197,6 +197,7 @@ def generate_unique_code() -> str:
 # Time helpers for alarm/motion handling
 # ---------------------------------------------------------------------------
 
+
 def normalize_alarm_time(
     last_alarm: dict[str, Any], tzinfo: datetime.tzinfo
 ) -> tuple[datetime.datetime | None, datetime.datetime | None, str | None]:
@@ -241,14 +242,15 @@ def normalize_alarm_time(
                         raw_norm, "%Y-%m-%d %H:%M:%S"
                     ).replace(tzinfo=tzinfo)
                     diff = abs(
-                        (event_utc - dt_str_local.astimezone(datetime.UTC)).total_seconds()
+                        (
+                            event_utc - dt_str_local.astimezone(datetime.UTC)
+                        ).total_seconds()
                     )
                     if diff > 120:
                         # Reinterpret epoch as local clock time in camera tz
-                        naive_utc = (
-                            datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)
-                            .replace(tzinfo=None)
-                        )
+                        naive_utc = datetime.datetime.fromtimestamp(
+                            ts, tz=datetime.UTC
+                        ).replace(tzinfo=None)
                         event_local_reint = naive_utc.replace(tzinfo=tzinfo)
                         alarm_dt_local = event_local_reint
                         alarm_dt_utc = event_local_reint.astimezone(datetime.UTC)
@@ -266,9 +268,9 @@ def normalize_alarm_time(
     if raw_time_str:
         raw = raw_time_str.replace("Today", str(now_local.date()))
         try:
-            alarm_dt_local = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=tzinfo
-            )
+            alarm_dt_local = datetime.datetime.strptime(
+                raw, "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=tzinfo)
             alarm_dt_utc = alarm_dt_local.astimezone(datetime.UTC)
             alarm_str = alarm_dt_local.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:

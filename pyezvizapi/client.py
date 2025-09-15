@@ -167,7 +167,7 @@ class EzvizClient:
         DeviceCatagories.BASE_STATION_DEVICE_CATEGORY.value,
         DeviceCatagories.CAT_EYE_CATEGORY.value,
         DeviceCatagories.LIGHTING.value,
-        DeviceCatagories.W2H_BASE_STATION_DEVICE_CATEGORY.value, # @emeric699 Adding support for W2H Base Station
+        DeviceCatagories.W2H_BASE_STATION_DEVICE_CATEGORY.value,
     ]
 
     def __init__(
@@ -189,7 +189,8 @@ class EzvizClient:
             self._session.headers["sessionId"] = str(token["session_id"])  # ensure str
         self._token: ClientToken = cast(
             ClientToken,
-            token or {
+            token
+            or {
                 "session_id": None,
                 "rf_session_id": None,
                 "username": None,
@@ -262,7 +263,7 @@ class EzvizClient:
         if json_result["meta"]["code"] == 1100:
             self._token["api_url"] = json_result["loginArea"]["apiDomain"]
             _LOGGER.warning(
-                "region_incorrect: serial=%s code=%s msg=%s",
+                "Region_incorrect: serial=%s code=%s msg=%s",
                 "unknown",
                 1100,
                 self._token["api_url"],
@@ -319,7 +320,11 @@ class EzvizClient:
             )
             req.raise_for_status()
         except requests.HTTPError as err:
-            if retry_401 and err.response is not None and err.response.status_code == 401:
+            if (
+                retry_401
+                and err.response is not None
+                and err.response.status_code == 401
+            ):
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 # Re-login and retry once
@@ -344,7 +349,10 @@ class EzvizClient:
             return cast(dict, resp.json())
         except ValueError as err:
             raise PyEzvizError(
-                "Impossible to decode response: " + str(err) + "\nResponse was: " + str(resp.text)
+                "Impossible to decode response: "
+                + str(err)
+                + "\nResponse was: "
+                + str(resp.text)
             ) from err
 
     @staticmethod
@@ -413,11 +421,17 @@ class EzvizClient:
             req = self._session.send(request=prepared, timeout=self._timeout)
             req.raise_for_status()
         except requests.HTTPError as err:
-            if retry_401 and err.response is not None and err.response.status_code == 401:
+            if (
+                retry_401
+                and err.response is not None
+                and err.response.status_code == 401
+            ):
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 self.login()
-                return self._send_prepared(prepared, retry_401=retry_401, max_retries=max_retries + 1)
+                return self._send_prepared(
+                    prepared, retry_401=retry_401, max_retries=max_retries + 1
+                )
             raise HTTPError from err
         return req
 
@@ -478,7 +492,7 @@ class EzvizClient:
                 # Prefer modern meta.code; fall back to legacy resultCode
                 code = self._response_code(payload)
                 _LOGGER.warning(
-                    "http_retry: serial=%s code=%s msg=%s",
+                    "Http_retry: serial=%s code=%s msg=%s",
                     serial or "unknown",
                     code,
                     log,
@@ -549,7 +563,7 @@ class EzvizClient:
             # session is wrong, need to relogin and retry
             self.login()
             _LOGGER.warning(
-                "http_retry: serial=%s code=%s msg=%s",
+                "Http_retry: serial=%s code=%s msg=%s",
                 "unknown",
                 self._meta_code(json_output),
                 "pagelist_relogin",
@@ -673,7 +687,11 @@ class EzvizClient:
         json_output = self._request_json(
             "PUT",
             f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_SWITCH_OTHER}",
-            params={"channelNo": channel_number, "enable": enable, "switchType": status_type},
+            params={
+                "channelNo": channel_number,
+                "enable": enable,
+                "switchType": status_type,
+            },
             retry_401=True,
             max_retries=max_retries,
         )
@@ -704,7 +722,9 @@ class EzvizClient:
             serial=serial,
         )
         if self._meta_code(json_output) != 200:
-            raise PyEzvizError(f"Could not arm or disarm Camera {serial}: Got {json_output})")
+            raise PyEzvizError(
+                f"Could not arm or disarm Camera {serial}: Got {json_output})"
+            )
         return True
 
     def set_battery_camera_work_mode(self, serial: str, value: int) -> bool:
@@ -1017,9 +1037,14 @@ class EzvizClient:
                         self._light_bulbs[device] = EzvizLightBulb(
                             self, device, dict(rec.raw)
                         ).status()
-                    except (PyEzvizError, KeyError, TypeError, ValueError) as err:  # pragma: no cover - defensive
+                    except (
+                        PyEzvizError,
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                    ) as err:  # pragma: no cover - defensive
                         _LOGGER.warning(
-                            "load_device_failed: serial=%s code=%s msg=%s",
+                            "Load_device_failed: serial=%s code=%s msg=%s",
                             device,
                             "load_error",
                             str(err),
@@ -1029,9 +1054,14 @@ class EzvizClient:
                         # Create camera object
                         cam = EzvizCamera(self, device, dict(rec.raw))
                         self._cameras[device] = cam.status(refresh=refresh)
-                    except (PyEzvizError, KeyError, TypeError, ValueError) as err:  # pragma: no cover - defensive
+                    except (
+                        PyEzvizError,
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                    ) as err:  # pragma: no cover - defensive
                         _LOGGER.warning(
-                            "load_device_failed: serial=%s code=%s msg=%s",
+                            "Load_device_failed: serial=%s code=%s msg=%s",
                             device,
                             "load_error",
                             str(err),
@@ -1100,7 +1130,9 @@ class EzvizClient:
             try:
                 support_ext = result[_serial].get("deviceInfos", {}).get("supportExt")
                 if isinstance(support_ext, str) and support_ext:
-                    result[_serial]["deviceInfos"]["supportExt"] = json.loads(support_ext)
+                    result[_serial]["deviceInfos"]["supportExt"] = json.loads(
+                        support_ext
+                    )
             except (TypeError, ValueError):
                 # Leave as-is if not valid JSON
                 pass
@@ -1199,14 +1231,16 @@ class EzvizClient:
 
             code = str(json_output.get("resultCode"))
             if code == "20002":
-                raise EzvizAuthVerificationCode(f"MFA code required: Got {json_output})")
+                raise EzvizAuthVerificationCode(
+                    f"MFA code required: Got {json_output})"
+                )
             if code == "2009":
                 raise DeviceException(f"Device not reachable: Got {json_output})")
             if code == "0":
                 return json_output.get("encryptkey")
             if code == "-1" and attempt < attempts:
                 _LOGGER.warning(
-                    "http_retry: serial=%s code=%s msg=%s",
+                    "Http_retry: serial=%s code=%s msg=%s",
                     serial,
                     code,
                     "cam_key_not_found",
@@ -1357,7 +1391,9 @@ class EzvizClient:
             raise PyEzvizError(
                 f"Could not send command to create panoramic photo: Got {json_output})"
             )
-        raise PyEzvizError("Could not send command to create panoramic photo: exceeded retries")
+        raise PyEzvizError(
+            "Could not send command to create panoramic photo: exceeded retries"
+        )
 
     def return_panoramic(self, serial: str, max_retries: int = 0) -> Any:
         """Return panoramic image url list."""
@@ -1526,7 +1562,7 @@ class EzvizClient:
         except requests.HTTPError as err:
             if err.response.status_code == 401:
                 _LOGGER.warning(
-                    "http_warning: serial=%s code=%s msg=%s",
+                    "Http_warning: serial=%s code=%s msg=%s",
                     "unknown",
                     401,
                     "logout_already_invalid",
@@ -1678,7 +1714,9 @@ class EzvizClient:
         else:
             raise PyEzvizError(f"Invalid action '{action}'. Use 'add' or 'remove'.")
 
-        json_output = self._request_json(method, url_path, retry_401=True, max_retries=max_retries)
+        json_output = self._request_json(
+            method, url_path, retry_401=True, max_retries=max_retries
+        )
         self._ensure_ok(json_output, f"Could not {action} intelligent app")
 
         return True

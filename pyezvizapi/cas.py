@@ -38,7 +38,9 @@ class EzvizCAS:
             "api_url": "apiieu.ezvizlife.com",
         }
         if not token or "service_urls" not in token:
-            raise PyEzvizError("Missing service_urls in token; call EzvizClient.login() first")
+            raise PyEzvizError(
+                "Missing service_urls in token; call EzvizClient.login() first"
+            )
         self._service_urls: dict[str, Any] = token["service_urls"]
 
     def cas_get_encryption(self, devserial: str) -> dict[str, Any]:
@@ -53,7 +55,7 @@ class EzvizCAS:
             f"\x01"  # Check or order?
             f"\x00\x00\x00\x00\x00\x00\x02\t\x00\x00\x00\x00"
             f'<?xml version="1.0" encoding="utf-8"?>\n<Request>\n\t'
-            f'<ClientID>{self._token["session_id"]}</ClientID>'
+            f"<ClientID>{self._token['session_id']}</ClientID>"
             f"\n\t<Sign>{FEATURE_CODE}</Sign>\n\t"
             f"<DevSerial>{devserial}</DevSerial>"
             f"\n\t<ClientType>0</ClientType>\n</Request>\n"

@@ -22,6 +22,7 @@ def genmsg_describe(url: str, seq: int, user_agent: str, auth_seq: str) -> str:
 
 class RTSPDetails(TypedDict):
     """Typed structure for RTSP test parameters."""
+
     bufLen: int
     defaultServerIp: str
     defaultServerPort: int
@@ -37,7 +38,11 @@ class TestRTSPAuth:
     _rtsp_details: RTSPDetails
 
     def __init__(
-        self, ip_addr: str, username: str | None = None, password: str | None = None, test_uri: str = ""
+        self,
+        ip_addr: str,
+        username: str | None = None,
+        password: str | None = None,
+        test_uri: str = "",
     ) -> None:
         """Initialize RTSP credential test."""
         self._rtsp_details = RTSPDetails(
@@ -50,7 +55,9 @@ class TestRTSPAuth:
             defaultPassword=password,
         )
 
-    def generate_auth_string(self, realm: bytes, method: str, uri: str, nonce: bytes) -> str:
+    def generate_auth_string(
+        self, realm: bytes, method: str, uri: str, nonce: bytes
+    ) -> str:
         """Generate the HTTP Digest Authorization header value."""
         m_1 = hashlib.md5(
             f"{self._rtsp_details['defaultUsername']}:{realm.decode()}:{self._rtsp_details['defaultPassword']}".encode()
@@ -60,12 +67,12 @@ class TestRTSPAuth:
 
         return (
             "Digest "
-            f"username=\"{self._rtsp_details['defaultUsername']}\", "
-            f"realm=\"{realm.decode()}\", "
+            f'username="{self._rtsp_details["defaultUsername"]}", '
+            f'realm="{realm.decode()}", '
             'algorithm="MD5", '
-            f"nonce=\"{nonce.decode()}\", "
-            f"uri=\"{uri}\", "
-            f"response=\"{response}\""
+            f'nonce="{nonce.decode()}", '
+            f'uri="{uri}", '
+            f'response="{response}"'
         )
 
     def main(self) -> None:
@@ -74,7 +81,10 @@ class TestRTSPAuth:
 
         try:
             session.connect(
-                (self._rtsp_details["defaultServerIp"], self._rtsp_details["defaultServerPort"])
+                (
+                    self._rtsp_details["defaultServerIp"],
+                    self._rtsp_details["defaultServerPort"],
+                )
             )
         except TimeoutError as err:
             raise AuthTestResultFailed("Invalid ip or camera hibernating") from err
@@ -83,15 +93,23 @@ class TestRTSPAuth:
 
         seq: int = 1
 
-        url: str = "rtsp://" + self._rtsp_details["defaultServerIp"] + self._rtsp_details["defaultTestUri"]
+        url: str = (
+            "rtsp://"
+            + self._rtsp_details["defaultServerIp"]
+            + self._rtsp_details["defaultTestUri"]
+        )
 
         # Basic Authorization header
         auth_b64: bytes = base64.b64encode(
-            f"{self._rtsp_details['defaultUsername']}:{self._rtsp_details['defaultPassword']}".encode("ascii")
+            f"{self._rtsp_details['defaultUsername']}:{self._rtsp_details['defaultPassword']}".encode(
+                "ascii"
+            )
         )
         auth_seq: str = "Basic " + auth_b64.decode()
 
-        describe = genmsg_describe(url, seq, self._rtsp_details["defaultUserAgent"], auth_seq)
+        describe = genmsg_describe(
+            url, seq, self._rtsp_details["defaultUserAgent"], auth_seq
+        )
         print(describe)
         session.send(describe.encode())
         msg1: bytes = session.recv(self._rtsp_details["bufLen"])
@@ -115,9 +133,13 @@ class TestRTSPAuth:
             end = decoded.find('"', begin + 1)
             nonce: bytes = msg1[begin + 1 : end]
 
-            auth_seq = self.generate_auth_string(realm, "DESCRIBE", self._rtsp_details["defaultTestUri"], nonce)
+            auth_seq = self.generate_auth_string(
+                realm, "DESCRIBE", self._rtsp_details["defaultTestUri"], nonce
+            )
 
-            describe = genmsg_describe(url, seq, self._rtsp_details["defaultUserAgent"], auth_seq)
+            describe = genmsg_describe(
+                url, seq, self._rtsp_details["defaultUserAgent"], auth_seq
+            )
             print(describe)
             session.send(describe.encode())
             msg1 = session.recv(self._rtsp_details["bufLen"])
@@ -132,4 +154,6 @@ class TestRTSPAuth:
                 raise AuthTestResultFailed("Credentials not valid!!")
 
         print("Basic Auth test passed. Credentials Valid!")
+
+
 # ruff: noqa: T201

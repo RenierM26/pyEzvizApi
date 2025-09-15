@@ -26,7 +26,9 @@ _LOGGER = logging.getLogger(__name__)
 def _setup_logging(debug: bool) -> None:
     """Configure root logger for CLI usage."""
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(level=level, stream=sys.stderr, format="%(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=level, stream=sys.stderr, format="%(levelname)s: %(message)s"
+    )
     if debug:
         # Verbose requests logging in debug mode
         requests_log = logging.getLogger("requests.packages.urllib3")
@@ -94,7 +96,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default="status",
         help="Light bulbs action to perform",
-        choices=["status"]
+        choices=["status"],
     )
     parser_device_lights.add_argument(
         "--refresh",
@@ -125,7 +127,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     subparsers_camera = parser_camera.add_subparsers(dest="camera_action")
 
-    parser_camera_status = subparsers_camera.add_parser("status", help="Get the status of the camera")
+    parser_camera_status = subparsers_camera.add_parser(
+        "status", help="Get the status of the camera"
+    )
     parser_camera_status.add_argument(
         "--refresh",
         action=argparse.BooleanOptionalAction,
@@ -229,14 +233,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     parser_camera_select = subparsers_camera.add_parser(
-        "select", help="Change the value of a multi-value option (for on/off value, see 'switch' command)"
+        "select",
+        help="Change the value of a multi-value option (for on/off value, see 'switch' command)",
     )
 
     parser_camera_select.add_argument(
         "--battery_work_mode",
         required=False,
         help="Change the work mode for battery powered camera",
-        choices=[mode.name for mode in BatteryCameraWorkMode if mode is not BatteryCameraWorkMode.UNKNOWN],
+        choices=[
+            mode.name
+            for mode in BatteryCameraWorkMode
+            if mode is not BatteryCameraWorkMode.UNKNOWN
+        ],
     )
 
     # Dump full pagelist for exploration
@@ -244,7 +253,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # Dump device infos mapping (optionally for a single serial)
     parser_device_infos = subparsers.add_parser(
-        "device_infos", help="Output device infos (raw JSON), optionally filtered by serial"
+        "device_infos",
+        help="Output device infos (raw JSON), optionally filtered by serial",
     )
     parser_device_infos.add_argument(
         "--serial", required=False, help="Optional serial to filter a single device"
@@ -418,7 +428,11 @@ def _handle_pagelist(client: EzvizClient) -> int:
 
 def _handle_device_infos(args: argparse.Namespace, client: EzvizClient) -> int:
     """Output device infos mapping (raw JSON), optionally filtered by serial."""
-    data = client.get_device_infos(args.serial) if args.serial else client.get_device_infos()
+    data = (
+        client.get_device_infos(args.serial)
+        if args.serial
+        else client.get_device_infos()
+    )
     _write_json(data)
     return 0
 
@@ -535,7 +549,10 @@ def _load_token_file(path: str | None) -> dict[str, Any] | None:
         return None
     try:
         return cast(dict[str, Any], json.loads(p.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):  # pragma: no cover - tolerate malformed file
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):  # pragma: no cover - tolerate malformed file
         _LOGGER.warning("Failed to read token file: %s", p)
         return None
 

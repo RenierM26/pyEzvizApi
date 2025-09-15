@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from hashlib import md5
 import json
 import logging
@@ -188,3 +189,116 @@ def generate_unique_code() -> str:
     mac_int = uuid.getnode()
     mac_str = ":".join(f"{(mac_int >> i) & 0xFF:02x}" for i in range(40, -1, -8))
     return md5(mac_str.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Time helpers for alarm/motion handling
+# ---------------------------------------------------------------------------
+
+def normalize_alarm_time(
+    last_alarm: dict[str, Any], tzinfo: datetime.tzinfo
+) -> tuple[datetime.datetime | None, datetime.datetime | None, str | None]:
+    """Normalize EZVIZ alarm timestamps.
+
+    Returns a tuple of:
+      - alarm_dt_local: datetime in the camera's timezone (for display)
+      - alarm_dt_utc: datetime in UTC (for robust delta calculation)
+      - alarm_time_str: formatted 'YYYY-MM-DD HH:MM:SS' string in camera tz
+
+    Behavior:
+      - Prefer epoch fields (alarmStartTime/alarmTime). Interpret as UTC by default.
+      - If a string time exists and differs from the epoch by >120 seconds,
+        reinterpret the epoch as if reported in camera local time.
+      - If no epoch, fall back to parsing the string time in the camera tz.
+    """
+    # Prefer epoch
+    epoch = last_alarm.get("alarmStartTime") or last_alarm.get("alarmTime")
+    raw_time_str = str(
+        last_alarm.get("alarmStartTimeStr") or last_alarm.get("alarmTimeStr") or ""
+    )
+
+    alarm_dt_local: datetime.datetime | None = None
+    alarm_dt_utc: datetime.datetime | None = None
+    alarm_str: str | None = None
+
+    now_local = datetime.datetime.now(tz=tzinfo)
+
+    if epoch is not None:
+        try:
+            ts = float(epoch if not isinstance(epoch, str) else float(epoch))
+            if ts > 1e11:  # milliseconds
+                ts /= 1000.0
+            event_utc = datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)
+            alarm_dt_local = event_utc.astimezone(tzinfo)
+            alarm_dt_utc = event_utc
+
+            if raw_time_str:
+                raw_norm = raw_time_str.replace("Today", str(now_local.date()))
+                try:
+                    dt_str_local = datetime.datetime.strptime(
+                        raw_norm, "%Y-%m-%d %H:%M:%S"
+                    ).replace(tzinfo=tzinfo)
+                    diff = abs(
+                        (event_utc - dt_str_local.astimezone(datetime.UTC)).total_seconds()
+                    )
+                    if diff > 120:
+                        # Reinterpret epoch as local clock time in camera tz
+                        naive_utc = (
+                            datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)
+                            .replace(tzinfo=None)
+                        )
+                        event_local_reint = naive_utc.replace(tzinfo=tzinfo)
+                        alarm_dt_local = event_local_reint
+                        alarm_dt_utc = event_local_reint.astimezone(datetime.UTC)
+                except ValueError:
+                    pass
+
+            if alarm_dt_local is not None:
+                alarm_str = alarm_dt_local.strftime("%Y-%m-%d %H:%M:%S")
+                return alarm_dt_local, alarm_dt_utc, alarm_str
+            # If conversion failed unexpectedly, fall through to string parsing
+        except (TypeError, ValueError, OSError):
+            alarm_dt_local = None
+
+    # Fallback to string parsing
+    if raw_time_str:
+        raw = raw_time_str.replace("Today", str(now_local.date()))
+        try:
+            alarm_dt_local = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=tzinfo
+            )
+            alarm_dt_utc = alarm_dt_local.astimezone(datetime.UTC)
+            alarm_str = alarm_dt_local.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+
+    return alarm_dt_local, alarm_dt_utc, alarm_str
+
+
+def compute_motion_from_alarm(
+    last_alarm: dict[str, Any], tzinfo: datetime.tzinfo, window_seconds: float = 60.0
+) -> tuple[bool, float, str | None]:
+    """Compute motion state and seconds-since from an alarm payload.
+
+    Returns (active, seconds_since, last_alarm_time_str).
+    - Uses UTC for delta when epoch-derived UTC is available.
+    - Falls back to camera local tz deltas when only string times are present.
+    - Clamps negative deltas to 0.0 and deactivates motion.
+    """
+    alarm_dt_local, alarm_dt_utc, alarm_str = normalize_alarm_time(last_alarm, tzinfo)
+    if alarm_dt_local is None:
+        return False, 0.0, None
+
+    now_local = datetime.datetime.now(tz=tzinfo).replace(microsecond=0)
+    now_utc = datetime.datetime.now(tz=datetime.UTC).replace(microsecond=0)
+
+    if alarm_dt_utc is not None:
+        delta = now_utc - alarm_dt_utc
+    else:
+        delta = now_local - alarm_dt_local
+
+    seconds = float(delta.total_seconds())
+    if seconds < 0:
+        return False, 0.0, alarm_str
+
+    return seconds < window_seconds, seconds, alarm_str

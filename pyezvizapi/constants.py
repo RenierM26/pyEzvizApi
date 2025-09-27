@@ -233,6 +233,7 @@ class SupportExt(Enum):
     SupportMultiChannelFlip = 732
     SupportMultiChannelSharedService = 720
     SupportMultiChannelType = 719
+    SupportAdvancedDetectType = 793
     SupportMultiScreen = 17
     SupportMultiSubsys = 255
     SupportMultilensPlay = 665

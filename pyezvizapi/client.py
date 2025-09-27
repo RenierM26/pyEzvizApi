@@ -732,9 +732,48 @@ class EzvizClient:
         return self.set_device_config_by_key(serial, value, key="batteryCameraWorkMode")
 
     def set_detection_mode(self, serial: str, value: int) -> bool:
-        """Set detection mode."""
+        """Set detection mode.
+
+        Deprecated in favour of set_alarm_detect_human_car() but kept for
+        backwards compatibility with older callers inside the integration.
+        """
+        return self.set_alarm_detect_human_car(serial, value)
+
+    def set_alarm_detect_human_car(self, serial: str, value: int) -> bool:
+        """Update Alarm_DetectHumanCar type on the device."""
         return self.set_device_config_by_key(
             serial, value=f'{{"type":{value}}}', key="Alarm_DetectHumanCar"
+        )
+
+    def set_alarm_advanced_detect(self, serial: str, value: int) -> bool:
+        """Update Alarm_AdvancedDetect type on the device."""
+        return self.set_device_config_by_key(
+            serial, value=f'{{"type":{value}}}', key="Alarm_AdvancedDetect"
+        )
+
+    def set_algorithm_param(
+        self,
+        serial: str,
+        subtype: str | int,
+        value: int,
+        channel: int = 1,
+    ) -> bool:
+        """Update a single AlgorithmInfo subtype value via devconfig."""
+
+        payload = {
+            "AlgorithmInfo": [
+                {
+                    "SubType": str(subtype),
+                    "Value": str(value),
+                    "channel": channel,
+                }
+            ]
+        }
+
+        return self.set_device_config_by_key(
+            serial,
+            value=json.dumps(payload, separators=(",", ":")),
+            key="AlgorithmInfo",
         )
 
     def set_night_vision_mode(

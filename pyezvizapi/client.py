@@ -1760,6 +1760,51 @@ class EzvizClient:
 
         return True
 
+    def _resolve_resource_id(self, serial: str, resource_id: str | None) -> str:
+        """Resolve the intelligent app resource id for a given camera."""
+
+        if resource_id:
+            return resource_id
+
+        camera = self._cameras.get(serial)
+        if not camera:
+            raise PyEzvizError(
+                f"Unknown camera serial {serial}. Call load_devices/load_cameras first"
+            )
+
+        resource_infos = camera.get("resourceInfos") or []
+        for item in resource_infos:
+            if isinstance(item, dict) and item.get("resourceId"):
+                return cast(str, item["resourceId"])
+
+        legacy = camera.get("resouceid") or camera.get("resource_id")
+        if isinstance(legacy, str) and legacy:
+            return legacy
+
+        raise PyEzvizError(
+            "Unable to determine resourceId for intelligent app operation"
+        )
+
+    def set_intelligent_app_state(
+        self,
+        serial: str,
+        app_name: str,
+        enabled: bool,
+        resource_id: str | None = None,
+        max_retries: int = 0,
+    ) -> bool:
+        """Enable or disable an intelligent detection app on a camera."""
+
+        resolved_id = self._resolve_resource_id(serial, resource_id)
+        action = "add" if enabled else "remove"
+        return self.manage_intelligent_app(
+            serial,
+            resolved_id,
+            app_name,
+            action=action,
+            max_retries=max_retries,
+        )
+
     def flip_image(
         self,
         serial: str,

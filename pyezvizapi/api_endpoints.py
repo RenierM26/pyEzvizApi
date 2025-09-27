@@ -37,6 +37,7 @@ API_ENDPOINT_DEVICE_BASICS = "/v3/basics/v1/devices/"
 
 API_ENDPOINT_DETECTION_SENSIBILITY = "/api/device/configAlgorithm"
 API_ENDPOINT_DETECTION_SENSIBILITY_GET = "/api/device/queryAlgorithmConfig"
+API_ENDPOINT_SENSITIVITY = "/v3/devconfig/v1/sensitivity/"
 API_ENDPOINT_SET_DEFENCE_SCHEDULE = "/api/device/defence/plan2"
 API_ENDPOINT_CAM_ENCRYPTKEY = "/api/device/query/encryptkey"
 API_ENDPOINT_OFFLINE_NOTIFY = "/api/device/notify/switch"

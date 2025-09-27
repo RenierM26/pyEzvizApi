@@ -46,6 +46,7 @@ from .api_endpoints import (
     API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_RETURN_PANORAMIC,
     API_ENDPOINT_SEND_CODE,
+    API_ENDPOINT_SENSITIVITY,
     API_ENDPOINT_SERVER_INFO,
     API_ENDPOINT_SET_DEFENCE_SCHEDULE,
     API_ENDPOINT_SET_LUMINANCE,
@@ -1994,6 +1995,37 @@ class EzvizClient:
             raise PyEzvizError(
                 f"Unable to set detection sensibility. Got: {response_json}"
             )
+
+        return True
+
+    def set_detection_sensitivity(
+        self,
+        serial: str,
+        channel: int,
+        sensitivity_type: int,
+        value: int,
+        max_retries: int = 0,
+    ) -> bool:
+        """Set detection sensitivity via v3 devconfig endpoint."""
+
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        if sensitivity_type == 0 and not 1 <= value <= 6:
+            raise PyEzvizError("Detection sensitivity must be within 1..6")
+        if sensitivity_type != 0 and not 1 <= value <= 100:
+            raise PyEzvizError("Detection sensitivity must be within 1..100")
+
+        url_path = (
+            f"{API_ENDPOINT_SENSITIVITY}{serial}/{channel}/{sensitivity_type}/{value}"
+        )
+        json_output = self._request_json(
+            "PUT",
+            url_path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set detection sensitivity")
 
         return True
 

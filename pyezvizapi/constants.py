@@ -84,11 +84,14 @@ class DeviceSwitchType(Enum):
     TAMPER_ALARM = 306
     DETECTION_TYPE = 451
     OUTLET_RECOVER = 600
+    WIDE_DYNAMIC_RANGE = 604
     CHIME_INDICATOR_LIGHT = 611
+    DISTORTION_CORRECTION = 617
     TRACKING = 650
     CRUISE_TRACKING = 651
     PARTIAL_IMAGE_OPTIMIZE = 700
     FEATURE_TRACKING = 701
+    LOGO_WATERMARK = 702
 
 
 @unique
@@ -173,6 +176,7 @@ class SupportExt(Enum):
     SupportDisk = 4
     SupportDiskBlackList = 367
     SupportDistributionNetworkBetweenDevice = 420
+    SupportDistortionCorrection = 490
     SupportDisturbMode = 217
     SupportDisturbNewMode = 292
     SupportDoorCallPlayBack = 545
@@ -221,6 +225,7 @@ class SupportExt(Enum):
     SupportLightRelate = 297
     SupportLocalConnect = 507
     SupportLocalLockGate = 662
+    SupportLogoWatermark = 632
     SupportLockConfigWay = 679
     SupportMessage = 6
     SupportMicroVolumnSet = 77
@@ -329,6 +334,7 @@ class SupportExt(Enum):
     SupportSleep = 62
     SupportSmartBodyDetect = 244
     SupportSmartNightVision = 274
+    SupportWideDynamicRange = 273
     SupportSoundLightAlarm = 214
     SupportSsl = 25
     SupportStopRecordVideo = 219

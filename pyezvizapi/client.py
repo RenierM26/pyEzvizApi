@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 import hashlib
 import json
 import logging
 from typing import Any, ClassVar, TypedDict, cast
-import urllib.parse
 from uuid import uuid4
 
 import requests
@@ -28,6 +27,7 @@ from .api_endpoints import (
     API_ENDPOINT_DEVCONFIG_BY_KEY,
     API_ENDPOINT_DEVICE_BASICS,
     API_ENDPOINT_DEVICE_STORAGE_STATUS,
+    API_ENDPOINT_DEVICE_SWITCH_STATUS_LEGACY,
     API_ENDPOINT_DEVICE_SYS_OPERATION,
     API_ENDPOINT_DEVICES,
     API_ENDPOINT_DO_NOT_DISTURB,
@@ -648,26 +648,103 @@ class EzvizClient:
         self._ensure_ok(json_output, "Could not get unified message list")
         return json_output
 
+    def set_switch_v3(
+        self,
+        serial: str,
+        switch_type: int,
+        enable: bool | int,
+        channel: int = 0,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update a device switch via the v3 endpoint."""
+
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        enable_flag = 1 if bool(enable) else 0
+        path = (
+            f"{API_ENDPOINT_DEVICES}{serial}/{channel}/{enable_flag}/"
+            f"{switch_type}{API_ENDPOINT_SWITCH_STATUS}"
+        )
+        payload = self._request_json(
+            "PUT",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(payload, "Could not set the switch")
+        return payload
+
+    def set_switch_legacy(
+        self,
+        serial: str,
+        switch_type: int,
+        enable: bool | int,
+        channel: int = 0,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fallback legacy switch endpoint used by older firmware."""
+
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        payload = self._request_json(
+            "POST",
+            API_ENDPOINT_DEVICE_SWITCH_STATUS_LEGACY,
+            data={
+                "serial": serial,
+                "enable": "1" if bool(enable) else "0",
+                "type": str(switch_type),
+                "channel": str(channel),
+            },
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(payload, "Could not set the switch (legacy)")
+        return payload
+
+    def set_switch(
+        self,
+        serial: str,
+        switch_type: int,
+        enable: bool | int,
+        channel: int = 0,
+        max_retries: int = 0,
+    ) -> dict:
+        """Try the v3 switch endpoint, falling back to the legacy API if needed."""
+
+        try:
+            return self.set_switch_v3(
+                serial, switch_type, enable, channel, max_retries=max_retries
+            )
+        except PyEzvizError as first_error:
+            try:
+                return self.set_switch_legacy(
+                    serial, switch_type, enable, channel, max_retries=max_retries
+                )
+            except PyEzvizError:
+                raise first_error from None
+
     def switch_status(
         self,
         serial: str,
         status_type: int,
-        enable: int,
+        enable: bool | int,
         channel_no: int = 0,
         max_retries: int = 0,
     ) -> bool:
         """Camera features are represented as switches. Switch them on or off."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-        json_output = self._request_json(
-            "PUT",
-            f"{API_ENDPOINT_DEVICES}{serial}/{channel_no}/{enable}/{status_type}{API_ENDPOINT_SWITCH_STATUS}",
-            retry_401=True,
+
+        target_state = bool(enable)
+        self.set_switch(
+            serial,
+            status_type,
+            target_state,
+            channel=channel_no,
             max_retries=max_retries,
         )
-        self._ensure_ok(json_output, "Could not set the switch")
         if self._cameras.get(serial):
-            self._cameras[serial]["switches"][status_type] = bool(enable)
+            self._cameras[serial]["switches"][status_type] = target_state
         return True
 
     def switch_status_other(
@@ -793,6 +870,45 @@ class EzvizClient:
             serial, value=f'{{"mode":{mode}}}', key="display_mode"
         )
 
+    def set_dev_config_kv(
+        self,
+        serial: str,
+        channel: int,
+        key: str,
+        value: Mapping[str, Any] | str | bytes | float | bool,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update a device configuration key/value pair via devconfig."""
+
+        if max_retries > MAX_RETRIES:
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
+
+        if isinstance(value, Mapping):
+            value_payload = json.dumps(value, separators=(",", ":"))
+        elif isinstance(value, bytes):
+            value_payload = value.decode()
+        elif isinstance(value, bool):
+            value_payload = "1" if value else "0"
+        elif isinstance(value, (int, float)):
+            value_payload = str(value)
+        else:
+            value_payload = str(value)
+
+        data = {
+            "key": key,
+            "value": value_payload,
+        }
+
+        payload = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/{channel}/op",
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(payload, "Could not set devconfig key")
+        return payload
+
     def set_device_config_by_key(
         self,
         serial: str,
@@ -801,28 +917,14 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> bool:
         """Change value on device by setting key."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        params = {"key": key, "value": value}
-        params_str = urllib.parse.urlencode(
-            params, safe="}{:"
-        )  # not encode curly braces and colon
-
-        full_url = f"https://{self._token['api_url']}{API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/1/op"
-
-        # EZVIZ api request needs {}: in the url, but requests lib doesn't allow it
-        # so we need to manually prepare it
-        req_prep = requests.Request(
-            method="PUT", url=full_url, headers=self._session.headers
-        ).prepare()
-        req_prep.url = full_url + "?" + params_str
-
-        req = self._send_prepared(req_prep, retry_401=True, max_retries=max_retries)
-        json_output = self._parse_json(req)
-        if not self._meta_ok(json_output):
-            raise PyEzvizError(f"Could not set config key '${key}': Got {json_output})")
-
+        self.set_dev_config_kv(
+            serial,
+            1,
+            key,
+            value,
+            max_retries=max_retries,
+        )
         return True
 
     def set_device_feature_by_key(

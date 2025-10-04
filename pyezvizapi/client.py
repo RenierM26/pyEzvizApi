@@ -40,6 +40,7 @@ from .api_endpoints import (
     API_ENDPOINT_DEVICE_STORAGE_STATUS,
     API_ENDPOINT_DEVICE_SWITCH_STATUS_LEGACY,
     API_ENDPOINT_DEVICE_SYS_OPERATION,
+    API_ENDPOINT_DEVICE_UPDATE_NAME,
     API_ENDPOINT_DEVICES,
     API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC,
     API_ENDPOINT_DEVICES_AUTHENTICATE,
@@ -1300,6 +1301,57 @@ class EzvizClient:
             error_message="Could not fetch tracking status",
         )
 
+    def get_port_security(
+        self,
+        serial: str,
+        *,
+        resource_identifier: str = "Video",
+        local_index: str = "1",
+        domain_id: str = "NetworkSecurityProtection",
+        action_id: str = "PortSecurity",
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch port security configuration via the IoT feature API."""
+
+        return self._iot_request(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            max_retries=max_retries,
+            error_message="Could not fetch port security status",
+        )
+
+    def set_port_security(
+        self,
+        serial: str,
+        value: Mapping[str, Any] | dict[str, Any],
+        *,
+        resource_identifier: str = "Video",
+        local_index: str = "1",
+        domain_id: str = "NetworkSecurityProtection",
+        action_id: str = "PortSecurity",
+        max_retries: int = 0,
+    ) -> dict:
+        """Update port security configuration via the IoT feature API."""
+
+        payload = {"value": value}
+        return self._iot_request(
+            "PUT",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            payload=payload,
+            max_retries=max_retries,
+            error_message="Could not set port security status",
+        )
+
     def set_iot_action(
         self,
         serial: str,
@@ -1351,6 +1403,33 @@ class EzvizClient:
             max_retries=max_retries,
             error_message="Could not set IoT feature value",
         )
+
+    def update_device_name(
+        self,
+        serial: str,
+        name: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Rename a device via the legacy updateName endpoint."""
+
+        if not name:
+            raise PyEzvizError("Device name must not be empty")
+
+        data = {
+            "deviceSerialNo": serial,
+            "deviceName": name,
+        }
+
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_DEVICE_UPDATE_NAME,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not update device name")
+        return json_output
 
     def upgrade_device(self, serial: str, max_retries: int = 0) -> bool:
         """Upgrade device firmware."""
@@ -2781,7 +2860,9 @@ class EzvizClient:
     ) -> dict:
         """Update a configuration key for an A1S detector."""
 
-        path = f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/{detector_serial}"
+        path = (
+            f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/{detector_serial}"
+        )
         json_output = self._request_json(
             "POST",
             path,
@@ -3124,9 +3205,7 @@ class EzvizClient:
     ) -> dict:
         """Request additional awake time for a battery-powered device."""
 
-        path = (
-            f"{API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY}{serial}/{channel}/{sleep_type}/sleep"
-        )
+        path = f"{API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY}{serial}/{channel}/{sleep_type}/sleep"
         json_output = self._request_json(
             "PUT",
             path,
@@ -3319,7 +3398,9 @@ class EzvizClient:
         )
         json_output = self._parse_json(resp)
         if not self._meta_ok(json_output):
-            raise PyEzvizError(f"Could not get device encrypt key list: Got {json_output})")
+            raise PyEzvizError(
+                f"Could not get device encrypt key list: Got {json_output})"
+            )
         return json_output
 
     def get_p2p_info(
@@ -3722,9 +3803,8 @@ class EzvizClient:
         self,
         serial: str,
         sound_type: int,
-        *,
         enable: int = 1,
-        voice_id: int = 0,
+        voice_id: int | None = None,
         max_retries: int = 0,
     ) -> bool:
         """Enable alarm sound by API."""
@@ -3736,13 +3816,15 @@ class EzvizClient:
                 "Invalid sound_type, should be 0,1,2: " + str(sound_type)
             )
 
+        voice_id_value = 0 if voice_id is None else voice_id
+
         response_json = self._request_json(
             "PUT",
             f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SOUND}",
             data={
                 "enable": enable,
                 "soundType": sound_type,
-                "voiceId": voice_id,
+                "voiceId": voice_id_value,
                 "deviceSerial": serial,
             },
             retry_401=True,

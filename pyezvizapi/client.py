@@ -32,9 +32,13 @@ from .api_endpoints import (
     API_ENDPOINT_CREATE_PANORAMIC,
     API_ENDPOINT_DETECTION_SENSIBILITY,
     API_ENDPOINT_DETECTION_SENSIBILITY_GET,
+    API_ENDPOINT_DEVCONFIG_BASE,
     API_ENDPOINT_DEVCONFIG_BY_KEY,
     API_ENDPOINT_DEVCONFIG_MOTOR,
     API_ENDPOINT_DEVCONFIG_OP,
+    API_ENDPOINT_DEVCONFIG_SECURITY_ACTIVATE,
+    API_ENDPOINT_DEVCONFIG_SECURITY_CHALLENGE,
+    API_ENDPOINT_DEVICE_ACCESSORY_LINK,
     API_ENDPOINT_DEVICE_BASICS,
     API_ENDPOINT_DEVICE_EMAIL_ALERT,
     API_ENDPOINT_DEVICE_STORAGE_STATUS,
@@ -45,14 +49,18 @@ from .api_endpoints import (
     API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC,
     API_ENDPOINT_DEVICES_AUTHENTICATE,
     API_ENDPOINT_DEVICES_ENCRYPTKEY_BATCH,
+    API_ENDPOINT_DEVICES_LOC,
     API_ENDPOINT_DEVICES_P2P_INFO,
     API_ENDPOINT_DEVICES_SET_SWITCH_ENABLE,
     API_ENDPOINT_DO_NOT_DISTURB,
+    API_ENDPOINT_DOORLOCK_USERS,
     API_ENDPOINT_FEEDBACK,
     API_ENDPOINT_GROUP_DEFENCE_MODE,
     API_ENDPOINT_INTELLIGENT_APP,
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_IOT_FEATURE,
+    API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG,
+    API_ENDPOINT_IOT_VIRTUAL_BIND,
     API_ENDPOINT_LOGIN,
     API_ENDPOINT_LOGOUT,
     API_ENDPOINT_MANAGED_DEVICE_BASE,
@@ -62,8 +70,10 @@ from .api_endpoints import (
     API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
     API_ENDPOINT_PTZCONTROL,
     API_ENDPOINT_REFRESH_SESSION_ID,
+    API_ENDPOINT_REMOTE_UNBIND_PROGRESS,
     API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_RETURN_PANORAMIC,
+    API_ENDPOINT_SCD_APP_DEVICE_ADD,
     API_ENDPOINT_SDCARD_BLACK_LEVEL,
     API_ENDPOINT_SEND_CODE,
     API_ENDPOINT_SENSITIVITY,
@@ -90,7 +100,9 @@ from .api_endpoints import (
     API_ENDPOINT_USERDEVICES_P2P_INFO,
     API_ENDPOINT_USERDEVICES_SEARCH,
     API_ENDPOINT_USERDEVICES_STATUS,
+    API_ENDPOINT_USERDEVICES_TOKEN,
     API_ENDPOINT_USERDEVICES_V2,
+    API_ENDPOINT_USERS_LBS_SUB_DOMAIN,
     API_ENDPOINT_V3_ALARMS,
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
@@ -391,6 +403,26 @@ class EzvizClient:
             ) from err
 
     @staticmethod
+    def _normalize_json_payload(payload: Any) -> Any:
+        """Return a payload suitable for json= usage, decoding strings when needed."""
+
+        if isinstance(payload, (Mapping, list)):
+            return payload
+        if isinstance(payload, tuple):
+            return list(payload)
+        if isinstance(payload, (bytes, bytearray)):
+            try:
+                return json.loads(payload.decode())
+            except (UnicodeDecodeError, json.JSONDecodeError) as err:
+                raise PyEzvizError("Invalid JSON payload provided") from err
+        if isinstance(payload, str):
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError as err:
+                raise PyEzvizError("Invalid JSON payload provided") from err
+        raise PyEzvizError("Unsupported payload type for JSON body")
+
+    @staticmethod
     def _is_ok(payload: dict) -> bool:
         """Return True if payload indicates success for both API styles."""
         meta = payload.get("meta")
@@ -564,6 +596,18 @@ class EzvizClient:
         service_urls["sysConf"] = str(service_urls.get("sysConf", "")).split("|")
         return service_urls
 
+    def lbs_domain(self, max_retries: int = 0) -> dict:
+        """Retrieve the LBS sub-domain information."""
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_USERS_LBS_SUB_DOMAIN,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get LBS domain")
+        return json_output
+
     def _api_get_pagelist(
         self,
         page_filter: str,
@@ -687,6 +731,7 @@ class EzvizClient:
         serial: str,
         validate_code: str,
         *,
+        add_type: str | None = None,
         max_retries: int = 0,
     ) -> dict:
         """Add a new device to the current account."""
@@ -695,6 +740,8 @@ class EzvizClient:
             "deviceSerial": serial,
             "validateCode": validate_code,
         }
+        if add_type is not None:
+            data["addType"] = add_type
         json_output = self._request_json(
             "POST",
             API_ENDPOINT_USERDEVICES_V2,
@@ -703,6 +750,196 @@ class EzvizClient:
             max_retries=max_retries,
         )
         self._ensure_ok(json_output, "Could not add device")
+        return json_output
+
+    def add_hik_activate(
+        self,
+        serial: str,
+        payload: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Activate a Hikvision device using the security endpoint."""
+
+        body = self._normalize_json_payload(payload)
+        json_output = self._request_json(
+            "POST",
+            f"{API_ENDPOINT_DEVCONFIG_SECURITY_ACTIVATE}{serial}",
+            json_body=body,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not activate Hik device")
+        return json_output
+
+    def add_hik_challenge(
+        self,
+        serial: str,
+        payload: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Request a Hikvision security challenge."""
+
+        body = self._normalize_json_payload(payload)
+        json_output = self._request_json(
+            "POST",
+            f"{API_ENDPOINT_DEVCONFIG_SECURITY_CHALLENGE}{serial}",
+            json_body=body,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not request Hik challenge")
+        return json_output
+
+    def add_local_device(
+        self,
+        payload: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Add a device discovered on the local network."""
+
+        body = self._normalize_json_payload(payload)
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_DEVICES_LOC,
+            json_body=body,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not add local device")
+        return json_output
+
+    def save_hik_dev_code(
+        self,
+        payload: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Submit a Hikvision device code via the SCD endpoint."""
+
+        body = self._normalize_json_payload(payload)
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_SCD_APP_DEVICE_ADD,
+            json_body=body,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not save Hik device code")
+        return json_output
+
+    def bind_virtual_device(
+        self,
+        product_id: str,
+        version: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Bind a virtual IoT device using product identifier and version."""
+
+        params = {"productId": product_id, "version": version}
+        json_output = self._request_json(
+            "PUT",
+            API_ENDPOINT_IOT_VIRTUAL_BIND,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not bind virtual device")
+        return json_output
+
+    def dev_config_search(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Trigger a network search on the device."""
+
+        path = f"{API_ENDPOINT_DEVCONFIG_BASE}/{serial}/{channel}/netWork"
+        json_output = self._request_json(
+            "POST",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not start network search")
+        return json_output
+
+    def dev_config_send_config_command(
+        self,
+        serial: str,
+        channel: int,
+        target_serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Send a network configuration command to a target device."""
+
+        path = f"{API_ENDPOINT_DEVCONFIG_BASE}/{serial}/{channel}/netWork/command"
+        json_output = self._request_json(
+            "POST",
+            path,
+            params={"targetDeviceSerial": target_serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not send network command")
+        return json_output
+
+    def dev_config_wifi_list(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve Wi-Fi network list detected by the device."""
+
+        path = f"{API_ENDPOINT_DEVCONFIG_BASE}/{serial}/{channel}/netWork"
+        json_output = self._request_json(
+            "GET",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get Wi-Fi list")
+        return json_output
+
+    def device_between_error(
+        self,
+        serial: str,
+        channel: int,
+        target_serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve error details for a network configuration attempt."""
+
+        path = f"{API_ENDPOINT_DEVCONFIG_BASE}/{serial}/{channel}/netWork/result"
+        json_output = self._request_json(
+            "GET",
+            path,
+            params={"targetDeviceSerial": target_serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get network error info")
+        return json_output
+
+    def dev_token(self, max_retries: int = 0) -> dict:
+        """Request a device token for provisioning flows."""
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_USERDEVICES_TOKEN,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get device token")
         return json_output
 
     def set_switch_v3(
@@ -1352,6 +1589,60 @@ class EzvizClient:
             error_message="Could not set port security status",
         )
 
+    def get_device_feature_value(
+        self,
+        serial: str,
+        resource_identifier: str,
+        domain_identifier: str,
+        prop_identifier: str,
+        *,
+        local_index: str | int = "1",
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve a device feature value via the IoT feature API."""
+
+        local_idx = str(local_index)
+        return self._iot_request(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_idx,
+            domain_identifier,
+            prop_identifier,
+            max_retries=max_retries,
+            error_message="Could not fetch device feature value",
+        )
+
+    def set_image_flip_iot(
+        self,
+        serial: str,
+        *,
+        enabled: bool | None = None,
+        payload: Any | None = None,
+        local_index: str = "1",
+        max_retries: int = 0,
+    ) -> dict:
+        """Set image flip configuration using the IoT feature endpoint."""
+
+        if payload is None:
+            if enabled is None:
+                raise PyEzvizError("Either 'enabled' or 'payload' must be provided")
+            payload = {"value": {"enabled": bool(enabled)}}
+        body = self._normalize_json_payload(payload)
+        return self._iot_request(
+            "PUT",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            "Video",
+            local_index,
+            "VideoAdjustment",
+            "ImageFlip",
+            payload=body,
+            max_retries=max_retries,
+            error_message="Could not set image flip",
+        )
+
     def set_iot_action(
         self,
         serial: str,
@@ -1843,6 +2134,27 @@ class EzvizClient:
             return records
         return records.get(serial) or devices.get(serial, {})
 
+    def get_accessory(
+        self,
+        serial: str,
+        local_index: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve accessory information linked to a device."""
+
+        path = (
+            f"{API_ENDPOINT_DEVICE_ACCESSORY_LINK}{serial}/{local_index}/1/linked/info"
+        )
+        json_output = self._request_json(
+            "GET",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get accessory info")
+        return json_output
+
     def get_dev_config(
         self,
         serial: str,
@@ -2175,6 +2487,23 @@ class EzvizClient:
 
         return True
 
+    def get_door_lock_users(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve users associated with a door lock device."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_DOORLOCK_USERS}{serial}/users",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get door lock users")
+        return json_output
+
     def remote_unlock(self, serial: str, user_id: str, lock_no: int) -> bool:
         """Sends a remote command to unlock a specific lock.
 
@@ -2213,6 +2542,23 @@ class EzvizClient:
             "remote_unlock",
         )
         return True
+
+    def get_remote_unbind_progress(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Check progress of a remote unbind request."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_REMOTE_UNBIND_PROGRESS}{serial}/progress",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get unbind progress")
+        return json_output
 
     def login(self, sms_code: int | None = None) -> dict[Any, Any]:
         """Get or refresh ezviz login token."""
@@ -2538,6 +2884,26 @@ class EzvizClient:
             action=action,
             max_retries=max_retries,
         )
+
+    def device_mirror(
+        self,
+        serial: str,
+        channel: int,
+        command: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Send a mirror command using the basics API."""
+
+        path = f"{API_ENDPOINT_DEVICE_BASICS}{serial}/{channel}/{command}/mirror"
+        json_output = self._request_json(
+            "PUT",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set mirror state")
+        return json_output
 
     def flip_image(
         self,
@@ -2910,6 +3276,26 @@ class EzvizClient:
             max_retries=max_retries,
         )
         self._ensure_ok(json_output, "Could not get radio signals")
+        return json_output
+
+    def get_voice_config(
+        self,
+        product_id: str,
+        version: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch voice configuration metadata for a product."""
+
+        params = {"productId": product_id, "version": version}
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE_PRODUCT_VOICE_CONFIG,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get voice config")
         return json_output
 
     # soundtype: 0 = normal, 1 = intensive, 2 = disabled ... don't ask me why...

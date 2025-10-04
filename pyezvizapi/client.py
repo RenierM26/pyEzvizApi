@@ -8,14 +8,22 @@ import hashlib
 import json
 import logging
 from typing import Any, ClassVar, TypedDict, cast
+from urllib.parse import urlencode
 from uuid import uuid4
 
 import requests
 
 from .api_endpoints import (
     API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
+    API_ENDPOINT_ALARM_DEVICE_CHIME,
+    API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_CHANNEL,
+    API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_DEVICE,
+    API_ENDPOINT_ALARM_SET_CHANNEL_WHISTLE,
+    API_ENDPOINT_ALARM_SET_DEVICE_WHISTLE,
     API_ENDPOINT_ALARM_SOUND,
+    API_ENDPOINT_ALARM_STOP_WHISTLE,
     API_ENDPOINT_ALARMINFO_GET,
+    API_ENDPOINT_AUTOUPGRADE_SWITCH,
     API_ENDPOINT_CALLING_NOTIFY,
     API_ENDPOINT_CAM_AUTH_CODE,
     API_ENDPOINT_CAM_ENCRYPTKEY,
@@ -25,18 +33,28 @@ from .api_endpoints import (
     API_ENDPOINT_DETECTION_SENSIBILITY,
     API_ENDPOINT_DETECTION_SENSIBILITY_GET,
     API_ENDPOINT_DEVCONFIG_BY_KEY,
+    API_ENDPOINT_DEVCONFIG_MOTOR,
+    API_ENDPOINT_DEVCONFIG_OP,
     API_ENDPOINT_DEVICE_BASICS,
+    API_ENDPOINT_DEVICE_EMAIL_ALERT,
     API_ENDPOINT_DEVICE_STORAGE_STATUS,
     API_ENDPOINT_DEVICE_SWITCH_STATUS_LEGACY,
     API_ENDPOINT_DEVICE_SYS_OPERATION,
     API_ENDPOINT_DEVICES,
+    API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC,
+    API_ENDPOINT_DEVICES_AUTHENTICATE,
+    API_ENDPOINT_DEVICES_ENCRYPTKEY_BATCH,
+    API_ENDPOINT_DEVICES_P2P_INFO,
+    API_ENDPOINT_DEVICES_SET_SWITCH_ENABLE,
     API_ENDPOINT_DO_NOT_DISTURB,
+    API_ENDPOINT_FEEDBACK,
     API_ENDPOINT_GROUP_DEFENCE_MODE,
     API_ENDPOINT_INTELLIGENT_APP,
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_IOT_FEATURE,
     API_ENDPOINT_LOGIN,
     API_ENDPOINT_LOGOUT,
+    API_ENDPOINT_MANAGED_DEVICE_BASE,
     API_ENDPOINT_OFFLINE_NOTIFY,
     API_ENDPOINT_OSD,
     API_ENDPOINT_PAGELIST,
@@ -45,18 +63,33 @@ from .api_endpoints import (
     API_ENDPOINT_REFRESH_SESSION_ID,
     API_ENDPOINT_REMOTE_UNLOCK,
     API_ENDPOINT_RETURN_PANORAMIC,
+    API_ENDPOINT_SDCARD_BLACK_LEVEL,
     API_ENDPOINT_SEND_CODE,
     API_ENDPOINT_SENSITIVITY,
     API_ENDPOINT_SERVER_INFO,
     API_ENDPOINT_SET_DEFENCE_SCHEDULE,
     API_ENDPOINT_SET_LUMINANCE,
+    API_ENDPOINT_SHARE_ACCEPT,
+    API_ENDPOINT_SHARE_QUIT,
+    API_ENDPOINT_SMARTHOME_OUTLET_LOG,
+    API_ENDPOINT_SPECIAL_BIZS_A1S,
+    API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY,
+    API_ENDPOINT_SPECIAL_BIZS_VOICES,
+    API_ENDPOINT_STREAMING_RECORDS,
     API_ENDPOINT_SWITCH_DEFENCE_MODE,
     API_ENDPOINT_SWITCH_OTHER,
     API_ENDPOINT_SWITCH_SOUND_ALARM,
     API_ENDPOINT_SWITCH_STATUS,
+    API_ENDPOINT_TIME_PLAN_INFOS,
     API_ENDPOINT_UNIFIEDMSG_LIST_GET,
     API_ENDPOINT_UPGRADE_DEVICE,
+    API_ENDPOINT_UPGRADE_RULE,
     API_ENDPOINT_USER_ID,
+    API_ENDPOINT_USERDEVICES_KMS,
+    API_ENDPOINT_USERDEVICES_P2P_INFO,
+    API_ENDPOINT_USERDEVICES_SEARCH,
+    API_ENDPOINT_USERDEVICES_STATUS,
+    API_ENDPOINT_USERDEVICES_V2,
     API_ENDPOINT_V3_ALARMS,
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
@@ -648,6 +681,29 @@ class EzvizClient:
         self._ensure_ok(json_output, "Could not get unified message list")
         return json_output
 
+    def add_device(
+        self,
+        serial: str,
+        validate_code: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Add a new device to the current account."""
+
+        data = {
+            "deviceSerial": serial,
+            "validateCode": validate_code,
+        }
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_USERDEVICES_V2,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not add device")
+        return json_output
+
     def set_switch_v3(
         self,
         serial: str,
@@ -746,6 +802,32 @@ class EzvizClient:
         if self._cameras.get(serial):
             self._cameras[serial]["switches"][status_type] = target_state
         return True
+
+    def device_switch(
+        self,
+        serial: str,
+        channel: int,
+        enable: int,
+        switch_type: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Direct wrapper for /v3/devices/{serial}/switch endpoint."""
+
+        params = {
+            "channelNo": channel,
+            "enable": enable,
+            "switchType": switch_type,
+        }
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_SWITCH_OTHER}",
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not toggle device switch")
+        return json_output
 
     def switch_status_other(
         self,
@@ -909,6 +991,31 @@ class EzvizClient:
         self._ensure_ok(payload, "Could not set devconfig key")
         return payload
 
+    def set_common_key_value(
+        self,
+        serial: str,
+        channel: int,
+        key: str,
+        value: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update a devconfig key/value pair using query parameters."""
+
+        params = {
+            "key": key,
+            "value": value if isinstance(value, str) else str(value),
+        }
+        payload = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/{channel}/op",
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(payload, "Could not set common key value")
+        return payload
+
     def set_device_config_by_key(
         self,
         serial: str,
@@ -926,6 +1033,89 @@ class EzvizClient:
             max_retries=max_retries,
         )
         return True
+
+    def set_device_key_value(
+        self,
+        serial: str,
+        channel: int,
+        key: str,
+        value: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Alias for the query-based key/value setter."""
+
+        return self.set_common_key_value(
+            serial,
+            channel,
+            key,
+            value,
+            max_retries=max_retries,
+        )
+
+    def audition_request(
+        self,
+        serial: str,
+        channel: int,
+        request: str,
+        payload: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Send an audition request via /v3/devconfig/op."""
+
+        data = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "request": request,
+            "data": payload,
+        }
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_DEVCONFIG_OP,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not send audition request")
+        return json_output
+
+    def baby_control(
+        self,
+        serial: str,
+        channel: int,
+        local_index: int,
+        command: str,
+        action: str,
+        speed: int,
+        uuid: str,
+        control: str,
+        hardware_code: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Send the baby monitor motor control request."""
+
+        data = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "localIndex": local_index,
+            "command": command,
+            "action": action,
+            "speed": speed,
+            "uuid": uuid,
+            "control": control,
+            "hardwareCode": hardware_code,
+        }
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_DEVCONFIG_MOTOR,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not control baby motor")
+        return json_output
 
     def set_device_feature_by_key(
         self,
@@ -947,8 +1137,10 @@ class EzvizClient:
 
         full_url = f"https://{self._token['api_url']}{API_ENDPOINT_IOT_FEATURE}{serial.upper()}/0"
 
-        headers = self._session.headers
-        headers.update({"Content-Type": "application/json"})
+        headers = {
+            **self._session.headers,
+            "Content-Type": "application/json",
+        }
 
         req_prep = requests.Request(
             method="PUT", url=full_url, headers=headers, data=payload
@@ -962,6 +1154,203 @@ class EzvizClient:
             )
 
         return True
+
+    def _iot_request(
+        self,
+        method: str,
+        endpoint: str,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        *,
+        payload: Any = None,
+        max_retries: int = 0,
+        error_message: str,
+    ) -> dict:
+        """Helper to perform IoT feature/action requests with JSON payload support."""
+
+        path = (
+            f"{endpoint}{serial.upper()}/{resource_identifier}/"
+            f"{local_index}/{domain_id}/{action_id}"
+        )
+
+        headers = dict(self._session.headers)
+        data: str | bytes | bytearray | None = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            if isinstance(payload, (bytes, bytearray, str)):
+                data = payload
+            else:
+                data = json.dumps(payload, separators=(",", ":"))
+
+        req = requests.Request(
+            method=method,
+            url=self._url(path),
+            headers=headers,
+            data=data,
+        ).prepare()
+
+        resp = self._send_prepared(
+            req,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        json_output = self._parse_json(resp)
+        if not self._meta_ok(json_output):
+            raise PyEzvizError(f"{error_message}: Got {json_output})")
+        return json_output
+
+    def get_low_battery_keep_alive(
+        self,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch low-battery keep-alive status exposed under the IoT feature API."""
+
+        return self._iot_request(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            max_retries=max_retries,
+            error_message="Could not fetch low battery keep-alive status",
+        )
+
+    def get_object_removal_status(
+        self,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        *,
+        payload: Any | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch object-removal (left-behind) status for supported devices."""
+
+        return self._iot_request(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            payload=payload,
+            max_retries=max_retries,
+            error_message="Could not fetch object removal status",
+        )
+
+    def get_remote_control_path_list(
+        self,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Return the remote control patrol path list for auto-tracking models."""
+
+        return self._iot_request(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            max_retries=max_retries,
+            error_message="Could not fetch remote control path list",
+        )
+
+    def get_tracking_status(
+        self,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Obtain the current subject-tracking status from the IoT feature API."""
+
+        return self._iot_request(
+            "GET",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            max_retries=max_retries,
+            error_message="Could not fetch tracking status",
+        )
+
+    def set_iot_action(
+        self,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        value: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Trigger an IoT action (setAction/putAction in the mobile API)."""
+
+        return self._iot_request(
+            "PUT",
+            API_ENDPOINT_IOT_ACTION,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            payload=value,
+            max_retries=max_retries,
+            error_message="Could not execute IoT action",
+        )
+
+    def set_iot_feature(
+        self,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        value: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update an IoT feature value via the feature endpoint."""
+
+        return self._iot_request(
+            "PUT",
+            API_ENDPOINT_IOT_FEATURE,
+            serial,
+            resource_identifier,
+            local_index,
+            domain_id,
+            action_id,
+            payload=value,
+            max_retries=max_retries,
+            error_message="Could not set IoT feature value",
+        )
 
     def upgrade_device(self, serial: str, max_retries: int = 0) -> bool:
         """Upgrade device firmware."""
@@ -1056,6 +1445,32 @@ class EzvizClient:
 
         return True
 
+    def device_authenticate(
+        self,
+        serial: str,
+        *,
+        need_check_code: bool,
+        check_code: str | None,
+        sender_type: int,
+        max_retries: int = 0,
+    ) -> dict:
+        """Authenticate a device, optionally requiring check code."""
+
+        data = {
+            "needCheckCode": str(bool(need_check_code)).lower(),
+            "checkCode": check_code or "",
+            "senderType": sender_type,
+        }
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES_AUTHENTICATE}{serial}",
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not authenticate device")
+        return json_output
+
     def reboot_camera(
         self,
         serial: str,
@@ -1117,6 +1532,57 @@ class EzvizClient:
                 continue
             raise PyEzvizError(f"Could not set offline notification {json_output})")
         raise PyEzvizError("Could not set offline notification: exceeded retries")
+
+    def device_email_alert_state(
+        self,
+        serials: list[str] | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Get email alert state for one or more devices."""
+
+        if isinstance(serials, (list, tuple, set)):
+            serial_param = ",".join(sorted({str(s) for s in serials}))
+        else:
+            serial_param = str(serials)
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_DEVICE_EMAIL_ALERT,
+            params={"devices": serial_param},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get device email alert state")
+        return json_output
+
+    def save_device_email_alert_state(
+        self,
+        enable: bool,
+        serials: list[str] | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update email alert state for the provided devices."""
+
+        if isinstance(serials, (list, tuple, set)):
+            serial_param = ",".join(sorted({str(s) for s in serials}))
+        else:
+            serial_param = str(serials)
+
+        data = {
+            "enable": str(bool(enable)).lower(),
+            "devices": serial_param,
+        }
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_DEVICE_EMAIL_ALERT,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not save device email alert state")
+        return json_output
 
     def get_group_defence_mode(self, max_retries: int = 0) -> Any:
         """Get group arm status. The alarm arm/disarm concept on 1st page of app."""
@@ -1298,6 +1764,27 @@ class EzvizClient:
             return records
         return records.get(serial) or devices.get(serial, {})
 
+    def get_dev_config(
+        self,
+        serial: str,
+        channel: int,
+        key: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve a devconfig value by key."""
+
+        params = {"key": key}
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_DEVCONFIG_BY_KEY}{serial}/{channel}/op",
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get devconfig value")
+        return json_output
+
     def ptz_control(
         self, command: str, serial: str, action: str, speed: int = 5
     ) -> Any:
@@ -1329,6 +1816,25 @@ class EzvizClient:
         )
 
         return True
+
+    def capture_picture(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Trigger a snapshot capture on the device."""
+
+        path = f"/v3/devconfig/v1/{serial}/{channel}/capture"
+        json_output = self._request_json(
+            "PUT",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not capture picture")
+        return json_output
 
     def get_cam_key(
         self, serial: str, smscode: int | None = None, max_retries: int = 0
@@ -1767,17 +2273,63 @@ class EzvizClient:
             raise PyEzvizError(f"Could not set the schedule: Got {json_output})")
         return True
 
-    def api_set_defence_mode(self, mode: DefenseModeType, max_retries: int = 0) -> bool:
+    def api_set_defence_mode(
+        self,
+        mode: DefenseModeType | int,
+        *,
+        visual_alarm: int | None = None,
+        sound_mode: int | None = None,
+        max_retries: int = 0,
+    ) -> bool:
         """Set defence mode for all devices. The alarm panel from main page is used."""
+        data: dict[str, Any] = {
+            "groupId": -1,
+            "mode": int(mode.value if isinstance(mode, DefenseModeType) else mode),
+        }
+        if visual_alarm is not None:
+            data["visualAlarm"] = visual_alarm
+        if sound_mode is not None:
+            data["soundMode"] = sound_mode
+
         json_output = self._request_json(
             "POST",
             API_ENDPOINT_SWITCH_DEFENCE_MODE,
-            data={"groupId": -1, "mode": mode},
+            data=data,
             retry_401=True,
             max_retries=max_retries,
         )
         self._ensure_ok(json_output, "Could not set defence mode")
         return True
+
+    def switch_defence_mode(
+        self,
+        group_id: int,
+        mode: int,
+        *,
+        visual_alarm: int | None = None,
+        sound_mode: int | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Set defence mode for a specific group with optional sound/visual flags."""
+
+        data: dict[str, Any] = {
+            "groupId": group_id,
+            "mode": mode,
+        }
+        if visual_alarm is not None:
+            data["visualAlarm"] = visual_alarm
+        if sound_mode is not None:
+            data["soundMode"] = sound_mode
+
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_SWITCH_DEFENCE_MODE,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not switch defence mode")
+        return json_output
 
     def do_not_disturb(
         self,
@@ -2100,6 +2652,42 @@ class EzvizClient:
 
         return True
 
+    def get_motion_detect_sensitivity(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Get motion detection sensitivity via v1 devconfig endpoint."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_SENSITIVITY}{serial}/{channel}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get motion detect sensitivity")
+        return json_output
+
+    def get_motion_detect_sensitivity_dp1s(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Get motion detection sensitivity for DP1S devices."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_DEVICES}{serial}/{channel}/sensitivity",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get DP1S motion sensitivity")
+        return json_output
+
     def set_detection_sensitivity(
         self,
         serial: str,
@@ -2159,9 +2747,985 @@ class EzvizClient:
 
         return None
 
+    def get_detector_setting_info(
+        self,
+        device_serial: str,
+        detector_serial: str,
+        key: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch a specific configuration key for an A1S detector."""
+
+        path = (
+            f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/"
+            f"{detector_serial}/{key}"
+        )
+        json_output = self._request_json(
+            "GET",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get detector setting info")
+        return json_output
+
+    def set_detector_setting_info(
+        self,
+        device_serial: str,
+        detector_serial: str,
+        key: str,
+        value: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update a configuration key for an A1S detector."""
+
+        path = f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/{detector_serial}"
+        json_output = self._request_json(
+            "POST",
+            path,
+            params={"key": key},
+            data={"value": value},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set detector setting info")
+        return json_output
+
+    def get_detector_info(
+        self,
+        detector_serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve status/details for an A1S detector."""
+
+        path = f"{API_ENDPOINT_SPECIAL_BIZS_A1S}detector/{detector_serial}"
+        json_output = self._request_json(
+            "GET",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get detector info")
+        return json_output
+
+    def get_radio_signals(
+        self,
+        device_serial: str,
+        child_device_serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Return radio signal metrics for a detector connected to a device."""
+
+        path = f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/radioSignal"
+        json_output = self._request_json(
+            "GET",
+            path,
+            params={"childDevSerial": child_device_serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get radio signals")
+        return json_output
+
     # soundtype: 0 = normal, 1 = intensive, 2 = disabled ... don't ask me why...
+    def get_voice_info(
+        self,
+        serial: str,
+        *,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve uploaded custom voice prompts for a device."""
+
+        params: dict[str, Any] = {"deviceSerial": serial}
+        if local_index is not None:
+            params["localIndex"] = local_index
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_SPECIAL_BIZS_VOICES,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get voice list")
+        return json_output
+
+    def add_voice_info(
+        self,
+        serial: str,
+        voice_name: str,
+        voice_url: str,
+        *,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Upload metadata for a new custom voice prompt."""
+
+        data: dict[str, Any] = {
+            "deviceSerial": serial,
+            "voiceName": voice_name,
+            "voiceUrl": voice_url,
+        }
+        if local_index is not None:
+            data["localIndex"] = local_index
+
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_SPECIAL_BIZS_VOICES,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not add voice info")
+        return json_output
+
+    def add_shared_voice_info(
+        self,
+        serial: str,
+        voice_name: str,
+        voice_url: str,
+        local_index: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Upload a shared voice with explicit local index, mirroring the mobile API."""
+
+        return self.add_voice_info(
+            serial,
+            voice_name,
+            voice_url,
+            local_index=local_index,
+            max_retries=max_retries,
+        )
+
+    def set_voice_info(
+        self,
+        serial: str,
+        voice_id: int,
+        voice_name: str,
+        *,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update metadata for an existing voice prompt."""
+
+        data: dict[str, Any] = {
+            "deviceSerial": serial,
+            "voiceId": voice_id,
+            "voiceName": voice_name,
+        }
+        if local_index is not None:
+            data["localIndex"] = local_index
+
+        json_output = self._request_json(
+            "PUT",
+            API_ENDPOINT_SPECIAL_BIZS_VOICES,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not update voice info")
+        return json_output
+
+    def set_shared_voice_info(
+        self,
+        serial: str,
+        voice_id: int,
+        voice_name: str,
+        local_index: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Alias for updating shared voices that ensures local index is supplied."""
+
+        return self.set_voice_info(
+            serial,
+            voice_id,
+            voice_name,
+            local_index=local_index,
+            max_retries=max_retries,
+        )
+
+    def delete_voice_info(
+        self,
+        serial: str,
+        voice_id: int,
+        *,
+        voice_url: str | None = None,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Remove a voice prompt from a device."""
+
+        params: dict[str, Any] = {
+            "deviceSerial": serial,
+            "voiceId": voice_id,
+        }
+        if voice_url is not None:
+            params["voiceUrl"] = voice_url
+        if local_index is not None:
+            params["localIndex"] = local_index
+
+        json_output = self._request_json(
+            "DELETE",
+            API_ENDPOINT_SPECIAL_BIZS_VOICES,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not delete voice info")
+        return json_output
+
+    def delete_shared_voice_info(
+        self,
+        serial: str,
+        voice_id: int,
+        voice_url: str,
+        local_index: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Alias for deleting shared voices with required parameters."""
+
+        return self.delete_voice_info(
+            serial,
+            voice_id,
+            voice_url=voice_url,
+            local_index=local_index,
+            max_retries=max_retries,
+        )
+
+    def get_whistle_status_by_channel(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Return whistle configuration per channel for a device."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_CHANNEL}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get whistle status by channel")
+        return json_output
+
+    def get_whistle_status_by_device(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Return whistle configuration at the device level."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_GET_WHISTLE_STATUS_BY_DEVICE}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get whistle status by device")
+        return json_output
+
+    def set_channel_whistle(
+        self,
+        serial: str,
+        channel_whistles: list[Mapping[str, Any]] | list[dict[str, Any]],
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Configure whistle behaviour for individual channels."""
+
+        if not channel_whistles:
+            raise PyEzvizError("channel_whistles must contain at least one entry")
+
+        entries: list[dict[str, Any]] = []
+        required_fields = {"channel", "status", "duration", "volume"}
+        for item in channel_whistles:
+            entry = dict(item)
+            entry.setdefault("deviceSerial", serial)
+            missing = [field for field in required_fields if field not in entry]
+            if missing:
+                raise PyEzvizError(
+                    "channel_whistles entries must include " + ", ".join(missing)
+                )
+            entries.append(entry)
+
+        payload = {"channelWhistleList": entries}
+
+        json_output = self._request_json(
+            "POST",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SET_CHANNEL_WHISTLE}",
+            json_body=payload,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set channel whistle")
+        return json_output
+
+    def set_device_whistle(
+        self,
+        serial: str,
+        *,
+        status: int,
+        duration: int,
+        volume: int,
+        max_retries: int = 0,
+    ) -> dict:
+        """Configure whistle behaviour at the device level."""
+
+        params = {
+            "status": status,
+            "duration": duration,
+            "volume": volume,
+        }
+
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SET_DEVICE_WHISTLE}",
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set device whistle")
+        return json_output
+
+    def stop_whistle(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Stop any ongoing whistle sound."""
+
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_STOP_WHISTLE}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not stop whistle")
+        return json_output
+
+    def delay_battery_device_sleep(
+        self,
+        serial: str,
+        channel: int,
+        sleep_type: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Request additional awake time for a battery-powered device."""
+
+        path = (
+            f"{API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY}{serial}/{channel}/{sleep_type}/sleep"
+        )
+        json_output = self._request_json(
+            "PUT",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not delay battery device sleep")
+        return json_output
+
+    def get_device_chime_info(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch chime configuration for a specific channel."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_ALARM_DEVICE_CHIME}{serial}/{channel}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get chime info")
+        return json_output
+
+    def set_device_chime_info(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        sound_type: int,
+        duration: int,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update chime type and duration for a channel."""
+
+        data = {
+            "type": sound_type,
+            "duration": duration,
+        }
+
+        json_output = self._request_json(
+            "POST",
+            f"{API_ENDPOINT_ALARM_DEVICE_CHIME}{serial}/{channel}",
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set chime info")
+        return json_output
+
+    def set_switch_enable_req(
+        self,
+        serial: str,
+        channel: int,
+        enable: int,
+        switch_type: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Call the legacy setSwitchEnableReq endpoint."""
+
+        params = {
+            "enable": enable,
+            "type": switch_type,
+        }
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}/{channel}{API_ENDPOINT_DEVICES_SET_SWITCH_ENABLE}",
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set switch enable request")
+        return json_output
+
+    def get_managed_device_info(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Return metadata for a managed device (e.g. base station)."""
+
+        path = f"{API_ENDPOINT_MANAGED_DEVICE_BASE}{serial}/base"
+        json_output = self._request_json(
+            "GET",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get managed device info")
+        return json_output
+
+    def get_managed_device_ipcs(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """List IPC sub-devices that belong to a managed device."""
+
+        path = f"{API_ENDPOINT_MANAGED_DEVICE_BASE}{serial}/ipcs"
+        json_output = self._request_json(
+            "GET",
+            path,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get managed IPC list")
+        return json_output
+
+    def get_devices_status(
+        self,
+        serials: list[str] | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch online/offline status for one or more devices."""
+
+        if isinstance(serials, (list, tuple, set)):
+            serial_param = ",".join(sorted({str(s) for s in serials}))
+        else:
+            serial_param = str(serials)
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_USERDEVICES_STATUS,
+            params={"deviceSerials": serial_param},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get device status")
+        return json_output
+
+    def get_device_secret_key_info(
+        self,
+        serials: list[str] | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve KMS secret key metadata for devices."""
+
+        if isinstance(serials, (list, tuple, set)):
+            serial_param = ",".join(sorted({str(s) for s in serials}))
+        else:
+            serial_param = str(serials)
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_USERDEVICES_KMS,
+            params={"deviceSerials": serial_param},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get device secret key info")
+        return json_output
+
+    def get_device_list_encrypt_key(
+        self,
+        area_id: int,
+        form_data: Mapping[str, Any] | bytes | bytearray | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Batch query encrypt keys for devices, matching the mobile client's risk API."""
+
+        headers = {
+            **self._session.headers,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "areaId": str(area_id),
+        }
+        if isinstance(form_data, (bytes, bytearray, str)):
+            body = form_data
+        else:
+            body = urlencode(form_data, doseq=True)
+        req = requests.Request(
+            method="POST",
+            url=self._url(API_ENDPOINT_DEVICES_ENCRYPTKEY_BATCH),
+            headers=headers,
+            data=body,
+        ).prepare()
+
+        resp = self._send_prepared(
+            req,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        json_output = self._parse_json(resp)
+        if not self._meta_ok(json_output):
+            raise PyEzvizError(f"Could not get device encrypt key list: Got {json_output})")
+        return json_output
+
+    def get_p2p_info(
+        self,
+        serials: list[str] | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve P2P info via the device-scoped endpoint."""
+
+        if isinstance(serials, (list, tuple, set)):
+            serial_param = ",".join(sorted({str(s) for s in serials}))
+        else:
+            serial_param = str(serials)
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_DEVICES_P2P_INFO,
+            params={"deviceSerials": serial_param},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get P2P info")
+        return json_output
+
+    def get_p2p_server_info(
+        self,
+        serials: list[str] | str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve P2P server info via the userdevices endpoint."""
+
+        if isinstance(serials, (list, tuple, set)):
+            serial_param = ",".join(sorted({str(s) for s in serials}))
+        else:
+            serial_param = str(serials)
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_USERDEVICES_P2P_INFO,
+            params={"deviceSerials": serial_param},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get P2P server info")
+        return json_output
+
+    def check_device_upgrade_rule(
+        self,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Check firmware upgrade eligibility rules."""
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_UPGRADE_RULE,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get upgrade rules")
+        return json_output
+
+    def get_autoupgrade_switch(
+        self,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Return the current auto-upgrade switch settings."""
+
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_AUTOUPGRADE_SWITCH,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get auto-upgrade switch")
+        return json_output
+
+    def set_autoupgrade_switch(
+        self,
+        auto_upgrade: int,
+        time_type: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update the auto-upgrade switch configuration."""
+
+        data = {
+            "autoUpgrade": auto_upgrade,
+            "timeType": time_type,
+        }
+
+        json_output = self._request_json(
+            "PUT",
+            API_ENDPOINT_AUTOUPGRADE_SWITCH,
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set auto-upgrade switch")
+        return json_output
+
+    def get_black_level_list(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Retrieve SD-card black level data for a device."""
+
+        json_output = self._request_json(
+            "GET",
+            f"{API_ENDPOINT_SDCARD_BLACK_LEVEL}{serial}",
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get black level list")
+        return json_output
+
+    def get_time_plan_infos(
+        self,
+        serial: str,
+        channel: int,
+        timing_plan_type: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch timing plan information for a device/channel."""
+
+        params = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "timingPlanType": timing_plan_type,
+        }
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_TIME_PLAN_INFOS,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get time plan infos")
+        return json_output
+
+    def set_time_plan_infos(
+        self,
+        serial: str,
+        channel: int,
+        timing_plan_type: int,
+        enable: int,
+        timer_defence_qos: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Update timing plan configuration."""
+
+        params: dict[str, Any] = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "timingPlanType": timing_plan_type,
+            "enable": enable,
+        }
+        if not isinstance(timer_defence_qos, str):
+            params["timerDefenceQos"] = json.dumps(timer_defence_qos)
+        else:
+            params["timerDefenceQos"] = timer_defence_qos
+
+        json_output = self._request_json(
+            "PUT",
+            API_ENDPOINT_TIME_PLAN_INFOS,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set time plan infos")
+        return json_output
+
+    def search_records(
+        self,
+        serial: str,
+        channel: int,
+        channel_serial: str,
+        start_time: str,
+        stop_time: str,
+        *,
+        size: int = 20,
+        max_retries: int = 0,
+    ) -> dict:
+        """Search recorded video clips for a device."""
+
+        params = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "channelSerial": channel_serial,
+            "startTime": start_time,
+            "stopTime": stop_time,
+            "size": size,
+        }
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_STREAMING_RECORDS,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not search records")
+        return json_output
+
+    def search_device(
+        self,
+        serial: str,
+        *,
+        user_ssid: str | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Find device information by serial."""
+
+        headers = dict(self._session.headers)
+        if user_ssid is not None:
+            headers["userSsid"] = user_ssid
+
+        params = {"deviceSerial": serial}
+        req = requests.Request(
+            method="GET",
+            url=self._url(API_ENDPOINT_USERDEVICES_SEARCH),
+            headers=headers,
+            params=params,
+        ).prepare()
+
+        resp = self._send_prepared(
+            req,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        json_output = self._parse_json(resp)
+        if not self._meta_ok(json_output):
+            raise PyEzvizError(f"Could not search device: Got {json_output})")
+        return json_output
+
+    def get_socket_log_info(
+        self,
+        serial: str,
+        start: str,
+        end: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Fetch smart outlet switch logs within a time range."""
+
+        path = API_ENDPOINT_SMARTHOME_OUTLET_LOG.format(**{"from": start, "to": end})
+        json_output = self._request_json(
+            "GET",
+            path,
+            params={"deviceSerial": serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get socket log info")
+        return json_output
+
+    def linked_cameras(
+        self,
+        serial: str,
+        detector_serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """List cameras linked to a detector device."""
+
+        params = {
+            "deviceSerial": serial,
+            "detectorDeviceSerial": detector_serial,
+        }
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get linked cameras")
+        return json_output
+
+    def set_microscope(
+        self,
+        serial: str,
+        multiple: float,
+        x: int,
+        y: int,
+        index: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Configure microscope lens parameters."""
+
+        data = {
+            "multiple": multiple,
+            "x": x,
+            "y": y,
+            "index": index,
+        }
+        json_output = self._request_json(
+            "PUT",
+            f"{API_ENDPOINT_DEVICES}{serial}/microscope",
+            data=data,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not set microscope")
+        return json_output
+
+    def share_accept(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Accept a device share invitation."""
+
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_SHARE_ACCEPT,
+            data={"deviceSerial": serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not accept share")
+        return json_output
+
+    def share_quit(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Leave a shared device."""
+
+        json_output = self._request_json(
+            "DELETE",
+            API_ENDPOINT_SHARE_QUIT,
+            params={"deviceSerial": serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not quit share")
+        return json_output
+
+    def send_feedback(
+        self,
+        *,
+        email: str,
+        account: str,
+        score: int,
+        feedback: str,
+        pic_url: str | None = None,
+        max_retries: int = 0,
+    ) -> dict:
+        """Submit feedback to Ezviz support."""
+
+        params: dict[str, Any] = {
+            "email": email,
+            "account": account,
+            "score": score,
+            "feedback": feedback,
+        }
+        if pic_url is not None:
+            params["picUrl"] = pic_url
+
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_FEEDBACK,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not send feedback")
+        return json_output
+
+    def upload_device_log(
+        self,
+        serial: str,
+        *,
+        max_retries: int = 0,
+    ) -> dict:
+        """Trigger device log upload to Ezviz cloud."""
+
+        json_output = self._request_json(
+            "POST",
+            "/v3/devconfig/dump/app/trigger",
+            data={"deviceSerial": serial},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not upload device log")
+        return json_output
+
     def alarm_sound(
-        self, serial: str, sound_type: int, enable: int = 1, max_retries: int = 0
+        self,
+        serial: str,
+        sound_type: int,
+        *,
+        enable: int = 1,
+        voice_id: int = 0,
+        max_retries: int = 0,
     ) -> bool:
         """Enable alarm sound by API."""
         if max_retries > MAX_RETRIES:
@@ -2178,7 +3742,7 @@ class EzvizClient:
             data={
                 "enable": enable,
                 "soundType": sound_type,
-                "voiceId": "0",
+                "voiceId": voice_id,
                 "deviceSerial": serial,
             },
             retry_401=True,

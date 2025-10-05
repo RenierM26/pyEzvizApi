@@ -18,6 +18,32 @@ from .exceptions import PyEzvizError
 _LOGGER = logging.getLogger(__name__)
 
 
+def coerce_int(value: Any) -> int | None:
+    """Best-effort coercion to int for mixed payloads."""
+
+    if isinstance(value, bool):
+        return int(value)
+
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def decode_json(value: Any) -> Any:
+    """Decode a JSON string when possible, otherwise return the original value."""
+
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return value
+
+
 def convert_to_dict(data: Any) -> Any:
     """Recursively convert a string representation of a dictionary to a dictionary."""
     if isinstance(data, dict):

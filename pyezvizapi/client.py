@@ -126,6 +126,7 @@ from .exceptions import (
     InvalidURL,
     PyEzvizError,
 )
+from .feature import optionals_mapping
 from .light_bulb import EzvizLightBulb
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
@@ -1695,6 +1696,47 @@ class EzvizClient:
             error_message="Could not set IoT feature value",
         )
 
+    def set_lens_defog_mode(
+        self,
+        serial: str,
+        value: int,
+        *,
+        local_index: str = "1",
+        max_retries: int = 0,
+    ) -> tuple[bool, str]:
+        """Update the lens defog configuration using canonical option index.
+
+        Args:
+            serial: Device serial number.
+            value: Select option index (0=auto, 1=on, 2=off).
+            local_index: Channel index for multi-channel devices.
+            max_retries: Number of retries for transient failures.
+
+        Returns:
+            A tuple of (enabled flag, defog mode string) reflecting the
+            configuration that was sent to the device.
+        """
+
+        if value == 1:
+            enabled, mode = True, "open"
+        elif value == 2:
+            enabled, mode = False, "auto"
+        else:
+            enabled, mode = True, "auto"
+
+        payload = {"value": {"enabled": enabled, "defogMode": mode}}
+        self.set_iot_feature(
+            serial,
+            resource_identifier="Video",
+            local_index=local_index,
+            domain_id="LensCleaning",
+            action_id="DefogCfg",
+            value=payload,
+            max_retries=max_retries,
+        )
+
+        return enabled, mode
+
     def update_device_name(
         self,
         serial: str,
@@ -2936,33 +2978,109 @@ class EzvizClient:
 
         return True
 
+    def _resolve_osd_text(
+        self,
+        serial: str,
+        *,
+        name: str | None = None,
+        camera_data: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Return the preferred OSD label for a camera."""
+
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+
+        candidates: list[Mapping[str, Any]] = []
+
+        if isinstance(camera_data, Mapping):
+            candidates.append(camera_data)
+
+        cached = self._cameras.get(serial)
+        if isinstance(cached, Mapping):
+            candidates.append(cached)
+
+        for data in candidates:
+            direct = data.get("name")
+            if isinstance(direct, str) and direct.strip():
+                return direct.strip()
+
+            device_info = data.get("deviceInfos")
+            if isinstance(device_info, Mapping):
+                alt = device_info.get("name")
+                if isinstance(alt, str) and alt.strip():
+                    return alt.strip()
+
+            optionals = optionals_mapping(data)
+            osd_entries = optionals.get("OSD")
+            if isinstance(osd_entries, Mapping):
+                osd_entries = [osd_entries]
+            if isinstance(osd_entries, list):
+                for entry in osd_entries:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    text = entry.get("name")
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()
+
+        return serial
+
     def set_camera_osd(
         self,
         serial: str,
-        text: str = "",
+        text: str | None = None,
+        *,
+        enabled: bool | None = None,
+        name: str | None = None,
+        camera_data: Mapping[str, Any] | None = None,
         channel: int = 1,
         max_retries: int = 0,
     ) -> bool:
-        """Set OSD (on screen display) text.
+        """Set or clear the on-screen display text for a camera.
 
         Args:
-            serial (str): The camera serial.
-            text (str, optional): The osd text to set. The default of "" will clear.
-            channel (int, optional): The cammera channel to set this on. Defaults to 1.
-            max_retries (int, optional): Number of retries attempted. Defaults to 0.
-
-        Raises:
-            PyEzvizError: If max retries are exceeded or if the response indicates failure.
-            HTTPError: If an HTTP error occurs (other than a 401, which triggers re-login).
+            serial: Camera serial number that should receive the update.
+            text: Explicit OSD label to apply. If provided it takes precedence over
+                all other inputs and `enabled` is ignored.
+            enabled: Convenience flag used when `text` is omitted. When set to
+                `True`, the client derives a label automatically (optionally using
+                `name`/`camera_data`). When `False`, the overlay is cleared.
+            name: Optional friendly name to favour when building the automatic
+                overlay text.
+            camera_data: Optional camera payload (matching coordinator data) that
+                can be inspected for existing OSD labels and names.
+            channel: Camera channel identifier (defaults to the primary channel).
+            max_retries: Number of retry attempts for transient API failures.
 
         Returns:
-            bool: True if the operation was successful.
-
+            bool: ``True`` when the request is accepted by the Ezviz backend.
         """
+
+        if text is not None:
+            resolved = text
+        elif enabled is False:
+            resolved = ""
+        else:
+            if camera_data is None:
+                camera_data = self._cameras.get(serial)
+            if camera_data is None:
+                raise PyEzvizError(
+                    "Camera data unavailable; call load_devices() before setting the OSD"
+                )
+
+            resolved = (
+                self._resolve_osd_text(
+                    serial,
+                    name=name,
+                    camera_data=camera_data,
+                )
+                if enabled
+                else ""
+            )
+
         json_output = self._request_json(
             "PUT",
             f"{API_ENDPOINT_OSD}{serial}/{channel}/osd",
-            data={"osd": text},
+            data={"osd": resolved},
             retry_401=True,
             max_retries=max_retries,
         )

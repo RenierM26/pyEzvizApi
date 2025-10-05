@@ -34,6 +34,22 @@ from .exceptions import (
     InvalidURL,
     PyEzvizError,
 )
+from .feature import (
+    day_night_mode_value,
+    day_night_sensitivity_value,
+    device_icr_dss_config,
+    display_mode_value,
+    has_osd_overlay,
+    lens_defog_config,
+    lens_defog_value,
+    night_vision_config,
+    night_vision_duration_value,
+    night_vision_luminance_value,
+    night_vision_mode_value,
+    night_vision_payload,
+    optionals_mapping,
+    resolve_channel,
+)
 from .light_bulb import EzvizLightBulb
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
@@ -71,4 +87,18 @@ __all__ = [
     "SupportExt",
     "TestRTSPAuth",
     "build_device_records_map",
+    "day_night_mode_value",
+    "day_night_sensitivity_value",
+    "device_icr_dss_config",
+    "display_mode_value",
+    "has_osd_overlay",
+    "lens_defog_config",
+    "lens_defog_value",
+    "night_vision_config",
+    "night_vision_duration_value",
+    "night_vision_luminance_value",
+    "night_vision_mode_value",
+    "night_vision_payload",
+    "optionals_mapping",
+    "resolve_channel",
 ]

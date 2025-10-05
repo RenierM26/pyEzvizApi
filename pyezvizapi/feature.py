@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from typing import Any, cast
 
 from .utils import coerce_int, decode_json
@@ -76,6 +76,197 @@ def optionals_mapping(camera_data: Mapping[str, Any]) -> dict[str, Any]:
             optionals = decode_json(status.get("optionals"))
 
     return dict(optionals) if isinstance(optionals, Mapping) else {}
+
+
+def optionals_dict(camera_data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return convenience wrapper for optionals mapping."""
+
+    return optionals_mapping(camera_data)
+
+
+def iter_algorithm_entries(camera_data: Mapping[str, Any]) -> Iterator[dict[str, Any]]:
+    """Yield entries from the AlgorithmInfo optionals list."""
+
+    entries = optionals_dict(camera_data).get("AlgorithmInfo")
+    if not isinstance(entries, Iterable):
+        return
+    for entry in entries:
+        if isinstance(entry, Mapping):
+            yield dict(entry)
+
+
+def iter_channel_algorithm_entries(
+    camera_data: Mapping[str, Any], channel: int
+) -> Iterator[dict[str, Any]]:
+    """Yield AlgorithmInfo entries filtered by channel."""
+
+    for entry in iter_algorithm_entries(camera_data):
+        entry_channel = coerce_int(entry.get("channel")) or 1
+        if entry_channel == channel:
+            yield entry
+
+
+def get_algorithm_value(
+    camera_data: Mapping[str, Any], subtype: str, channel: int
+) -> int | None:
+    """Return AlgorithmInfo value for provided subtype/channel."""
+
+    for entry in iter_channel_algorithm_entries(camera_data, channel):
+        if entry.get("SubType") != subtype:
+            continue
+        return coerce_int(entry.get("Value"))
+    return None
+
+
+def has_algorithm_subtype(
+    camera_data: Mapping[str, Any], subtype: str, channel: int = 1
+) -> bool:
+    """Return True when AlgorithmInfo contains subtype for channel."""
+
+    return get_algorithm_value(camera_data, subtype, channel) is not None
+
+
+def support_ext_value(camera_data: Mapping[str, Any], ext_key: str) -> str | None:
+    """Fetch a supportExt entry as a string when present."""
+
+    raw = camera_data.get("supportExt")
+    if not isinstance(raw, Mapping):
+        device_infos = camera_data.get("deviceInfos")
+        if isinstance(device_infos, Mapping):
+            raw = device_infos.get("supportExt")
+
+    if not isinstance(raw, Mapping):
+        return None
+
+    value = raw.get(ext_key)
+    return str(value) if value is not None else None
+
+
+def _normalize_port_list(value: Any) -> list[dict[str, Any]] | None:
+    """Decode a list of port-security entries."""
+
+    value = decode_json(value)
+    if not isinstance(value, Iterable):
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for entry in value:
+        entry = decode_json(entry)
+        if not isinstance(entry, Mapping):
+            return None
+        port = coerce_int(entry.get("portNo"))
+        if port is None:
+            continue
+        normalized.append({"portNo": port, "enabled": bool(entry.get("enabled"))})
+
+    return normalized
+
+
+def normalize_port_security(payload: Any) -> dict[str, Any]:
+    """Normalize IoT port-security payloads."""
+
+    seen: set[int] = set()
+
+    def _walk(obj: Any, hint: bool | None = None) -> dict[str, Any] | None:
+        obj = decode_json(obj)
+        if obj is None:
+            return None
+
+        if isinstance(obj, Mapping):
+            obj_id = id(obj)
+            if obj_id in seen:
+                return None
+            seen.add(obj_id)
+
+            enabled_local = obj.get("enabled")
+            if isinstance(enabled_local, bool):
+                hint = enabled_local
+
+            ports = _normalize_port_list(obj.get("portSecurityList"))
+            if ports is not None:
+                return {
+                    "portSecurityList": ports,
+                    "enabled": bool(enabled_local)
+                    if isinstance(enabled_local, bool)
+                    else bool(hint)
+                    if isinstance(hint, bool)
+                    else True,
+                }
+
+            for key in (
+                "PortSecurity",
+                "value",
+                "data",
+                "NetworkSecurityProtection",
+            ):
+                if key in obj:
+                    candidate = _walk(obj[key], hint)
+                    if candidate:
+                        if "enabled" not in candidate and isinstance(hint, bool):
+                            candidate["enabled"] = hint
+                        return candidate
+
+            for value in obj.values():
+                candidate = _walk(value, hint)
+                if candidate:
+                    if "enabled" not in candidate and isinstance(hint, bool):
+                        candidate["enabled"] = hint
+                    return candidate
+
+        elif isinstance(obj, Iterable):
+            for item in obj:
+                candidate = _walk(item, hint)
+                if candidate:
+                    return candidate
+
+        return None
+
+    normalized = _walk(payload)
+    if isinstance(normalized, dict):
+        normalized.setdefault("enabled", True)
+        return normalized
+    return {}
+
+
+def port_security_config(camera_data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the normalized port-security mapping for a camera payload."""
+
+    direct = camera_data.get("NetworkSecurityProtection")
+    normalized = normalize_port_security(direct)
+    if normalized:
+        return normalized
+
+    feature = camera_data.get("FEATURE_INFO")
+    if isinstance(feature, Mapping):
+        normalized = normalize_port_security(feature)
+        if normalized:
+            return normalized
+
+    return {}
+
+
+def port_security_has_port(camera_data: Mapping[str, Any], port: int) -> bool:
+    """Return True if the normalized config contains the port."""
+
+    ports = port_security_config(camera_data).get("portSecurityList")
+    if not isinstance(ports, Iterable):
+        return False
+    return any(
+        isinstance(entry, Mapping) and coerce_int(entry.get("portNo")) == port
+        for entry in ports
+    )
+
+
+def port_security_port_enabled(camera_data: Mapping[str, Any], port: int) -> bool:
+    """Return True if the specific port is enabled."""
+
+    ports = port_security_config(camera_data).get("portSecurityList")
+    if not isinstance(ports, Iterable):
+        return False
+    for entry in ports:
+        if isinstance(entry, Mapping) and coerce_int(entry.get("portNo")) == port:
+            return bool(entry.get("enabled"))
+    return False
 
 
 def display_mode_value(camera_data: Mapping[str, Any]) -> int:

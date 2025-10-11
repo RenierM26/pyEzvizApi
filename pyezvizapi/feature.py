@@ -27,20 +27,18 @@ def _feature_video_section(camera_data: Mapping[str, Any]) -> dict[str, Any]:
 def supplement_light_params(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     """Return SupplementLightMgr parameters if present."""
 
-    feature = camera_data.get("FEATURE_INFO")
-    if not isinstance(feature, Mapping):
+    video = _feature_video_section(camera_data)
+    if not video:
         return {}
 
-    for group in feature.values():
-        if not isinstance(group, Mapping):
-            continue
-        manager = group.get("SupplementLightMgr")
-        if not isinstance(manager, Mapping):
-            continue
-        params = manager.get("ImageSupplementLightModeSwitchParams")
-        if isinstance(params, Mapping):
-            return dict(params)
-    return {}
+    manager: Any = video.get("SupplementLightMgr")
+    manager = decode_json(manager)
+    if not isinstance(manager, Mapping):
+        return {}
+
+    params: Any = manager.get("ImageSupplementLightModeSwitchParams")
+    params = decode_json(params)
+    return dict(params) if isinstance(params, Mapping) else {}
 
 
 def supplement_light_enabled(camera_data: Mapping[str, Any]) -> bool:

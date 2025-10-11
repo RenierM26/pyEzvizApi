@@ -57,6 +57,9 @@ from .feature import (
     port_security_has_port,
     port_security_port_enabled,
     resolve_channel,
+    supplement_light_available,
+    supplement_light_enabled,
+    supplement_light_params,
     support_ext_value,
 )
 from .light_bulb import EzvizLightBulb
@@ -118,5 +121,8 @@ __all__ = [
     "port_security_has_port",
     "port_security_port_enabled",
     "resolve_channel",
+    "supplement_light_available",
+    "supplement_light_enabled",
+    "supplement_light_params",
     "support_ext_value",
 ]

@@ -1615,6 +1615,35 @@ class EzvizClient:
             error_message="Could not fetch device feature value",
         )
 
+    def set_intelligent_fill_light(
+        self,
+        serial: str,
+        *,
+        enabled: bool,
+        local_index: str = "1",
+        max_retries: int = 0,
+    ) -> dict:
+        """Toggle the intelligent fill light mode via the IoT feature API."""
+
+        payload = {
+            "value": {
+                "enabled": bool(enabled),
+                "supplementLightSwitchMode": "eventIntelligence"
+                if enabled
+                else "irLight",
+            }
+        }
+        body = self._normalize_json_payload(payload)
+        return self.set_iot_feature(
+            serial,
+            resource_identifier="Video",
+            local_index=local_index,
+            domain_id="SupplementLightMgr",
+            action_id="ImageSupplementLightModeSwitchParams",
+            value=body,
+            max_retries=max_retries,
+        )
+
     def set_image_flip_iot(
         self,
         serial: str,
@@ -2074,6 +2103,7 @@ class EzvizClient:
                         # Create camera object
                         cam = EzvizCamera(self, device, dict(rec.raw))
                         self._cameras[device] = cam.status(refresh=refresh)
+
                     except (
                         PyEzvizError,
                         KeyError,

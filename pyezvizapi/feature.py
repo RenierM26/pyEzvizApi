@@ -24,6 +24,48 @@ def _feature_video_section(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def supplement_light_params(camera_data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return SupplementLightMgr parameters if present."""
+
+    video = _feature_video_section(camera_data)
+    if not video:
+        return {}
+
+    manager: Any = video.get("SupplementLightMgr")
+    manager = decode_json(manager)
+    if not isinstance(manager, Mapping):
+        return {}
+
+    params: Any = manager.get("ImageSupplementLightModeSwitchParams")
+    params = decode_json(params)
+    return dict(params) if isinstance(params, Mapping) else {}
+
+
+def supplement_light_enabled(camera_data: Mapping[str, Any]) -> bool:
+    """Return True when intelligent fill light is enabled."""
+
+    params = supplement_light_params(camera_data)
+    if not params:
+        return False
+
+    enabled = params.get("enabled")
+    if isinstance(enabled, bool):
+        return enabled
+    if isinstance(enabled, str):
+        lowered = enabled.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return bool(enabled)
+
+
+def supplement_light_available(camera_data: Mapping[str, Any]) -> bool:
+    """Return True when intelligent fill light parameters are present."""
+
+    return bool(supplement_light_params(camera_data))
+
+
 def lens_defog_config(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     """Return the LensCleaning defog configuration if present."""
 

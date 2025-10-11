@@ -293,20 +293,18 @@ def blc_current_value(camera_data: Mapping[str, Any]) -> int:
     inverse_mode = optionals.get("inverse_mode")
     inverse_mode = decode_json(inverse_mode)
 
-    # Expected shape: {"mode": 1, "enable": 0|1, "position": 0..5}
+    # Expected: {"mode": int, "enable": 0|1, "position": 0..5}
     if isinstance(inverse_mode, Mapping):
-        mode = inverse_mode.get("mode")
         enable = inverse_mode.get("enable", 0)
         position = inverse_mode.get("position", 0)
-
         if (
-            isinstance(mode, int)
-            and isinstance(enable, int)
+            isinstance(enable, int)
+            and enable == 1
             and isinstance(position, int)
+            and position in (1, 2, 3, 4, 5)
         ):
-            if mode == 1 and enable == 1 and position in (1, 2, 3, 4, 5):
-                return position
-            return 0
+            return position
+        return 0
 
     # Fallbacks if backend ever returns a bare int (position) instead of the object
     if isinstance(inverse_mode, int) and inverse_mode in (0, 1, 2, 3, 4, 5):

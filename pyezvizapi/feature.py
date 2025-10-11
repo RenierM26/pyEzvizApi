@@ -287,6 +287,33 @@ def display_mode_value(camera_data: Mapping[str, Any]) -> int:
     return 1
 
 
+def blc_current_value(camera_data: Mapping[str, Any]) -> int:
+    """Return BLC position (0..5) from camera data. 0 = Off."""
+    optionals = optionals_mapping(camera_data)
+    inverse_mode = optionals.get("inverse_mode")
+    inverse_mode = decode_json(inverse_mode)
+
+    # Expected: {"mode": int, "enable": 0|1, "position": 0..5}
+    if isinstance(inverse_mode, Mapping):
+        enable = inverse_mode.get("enable", 0)
+        position = inverse_mode.get("position", 0)
+        if (
+            isinstance(enable, int)
+            and enable == 1
+            and isinstance(position, int)
+            and position in (1, 2, 3, 4, 5)
+        ):
+            return position
+        return 0
+
+    # Fallbacks if backend ever returns a bare int (position) instead of the object
+    if isinstance(inverse_mode, int) and inverse_mode in (0, 1, 2, 3, 4, 5):
+        return inverse_mode
+
+    # Default to Off
+    return 0
+
+
 def device_icr_dss_config(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     """Decode and return the device_ICR_DSS configuration."""
 

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+select = ["E","F","I","UP","B","SIM","PL","RUF"]
+ignore = ["E501"]                 # HA allows long lines for URLs, etc.
+src = ["pyezvizapi"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+strict_optional = true
+warn_unused_ignores = true
+files = ["pyezvizapi"]
+
+[tool.coverage.run]
+source = ["pyezvizapi"]

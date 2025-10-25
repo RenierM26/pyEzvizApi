@@ -5,22 +5,18 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from typing import Any, cast
 
-from .utils import coerce_int, decode_json
+from .utils import WILDCARD_STEP, coerce_int, decode_json, first_nested
 
 
 def _feature_video_section(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     """Return the nested Video feature section from feature info payload."""
 
-    feature = camera_data.get("FEATURE_INFO")
-    if not isinstance(feature, Mapping):
-        return {}
-
-    for group in feature.values():
-        if isinstance(group, Mapping):
-            video = group.get("Video")
-            if isinstance(video, MutableMapping):
-                return cast(dict[str, Any], video)
-
+    video = first_nested(
+        camera_data,
+        ("FEATURE_INFO", WILDCARD_STEP, "Video"),
+    )
+    if isinstance(video, MutableMapping):
+        return cast(dict[str, Any], video)
     return {}
 
 

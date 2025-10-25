@@ -24,7 +24,6 @@ known-third-party = ["homeassistant", "aiohttp", "voluptuous", "yarl", "pandas",
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 combine-as-imports = true
 force-sort-within-sections = true
-required-imports = ["from __future__ import annotations"]
 
 # Pylint-like thresholds (only if you prefer global relaxation instead of per-file ignores)
 [tool.ruff.lint.pylint]

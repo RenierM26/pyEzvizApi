@@ -1,11 +1,11 @@
+from pathlib import Path
 import setuptools
 
-with open("README.md", "r") as fh:
-    long_description = fh.read()
+long_description = Path("README.md").read_text(encoding="utf-8")
 
 setuptools.setup(
     name='pyezvizapi',
-    version="1.0.3.6",
+    version="1.0.3.7",
     license='Apache Software License 2.0',
     author='Renier Moorcroft',
     author_email='RenierM26@users.github.com',

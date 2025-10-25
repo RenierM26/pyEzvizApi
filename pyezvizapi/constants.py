@@ -13,6 +13,7 @@ FEATURE_CODE = generate_unique_code()
 XOR_KEY = b"\x0c\x0eJ^X\x15@Rr"
 DEFAULT_TIMEOUT = 25
 MAX_RETRIES = 3
+HIK_ENCRYPTION_HEADER = b"hikencodepicture"
 REQUEST_HEADER = {
     "featureCode": FEATURE_CODE,
     "clientType": "3",

@@ -247,7 +247,7 @@ class MQTTClient:
                 # Stop background thread and disconnect
                 self.mqtt_client.loop_stop()
                 self.mqtt_client.disconnect()
-            except Exception as err:  # noqa: BLE001
+            except (OSError, ValueError, RuntimeError) as err:
                 _LOGGER.debug("MQTT disconnect failed: %s", err)
         # Always attempt to stop push on server side
         self._stop_ezviz_push()

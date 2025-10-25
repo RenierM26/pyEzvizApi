@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 import datetime
 from hashlib import md5
 import json
@@ -13,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from Crypto.Cipher import AES
 
+from .constants import HIK_ENCRYPTION_HEADER
 from .exceptions import PyEzvizError
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +76,49 @@ def string_to_list(data: Any, separator: str = ",") -> Any:
     return data
 
 
+PathComponent = str | int
+WILDCARD_STEP = "*"
+_MISSING = object()
+
+
+def iter_nested(data: Any, path: Iterable[PathComponent]) -> Iterator[Any]:
+    """Yield values reachable by following a dotted path with optional wildcards."""
+
+    current: list[Any] = [data]
+
+    for step in path:
+        next_level: list[Any] = []
+        for candidate in current:
+            if step == WILDCARD_STEP:
+                if isinstance(candidate, dict):
+                    next_level.extend(candidate.values())
+                elif isinstance(candidate, (list, tuple)):
+                    next_level.extend(candidate)
+                continue
+
+            if isinstance(candidate, dict) and step in candidate:
+                next_level.append(candidate[step])
+                continue
+
+            if isinstance(candidate, (list, tuple)) and isinstance(step, int):
+                if -len(candidate) <= step < len(candidate):
+                    next_level.append(candidate[step])
+
+        current = next_level
+        if not current:
+            break
+
+    yield from current
+
+
+def first_nested(
+    data: Any, path: Iterable[PathComponent], default: Any = None
+) -> Any:
+    """Return the first value produced by iter_nested or ``default``."""
+
+    return next(iter_nested(data, path), default)
+
+
 def fetch_nested_value(data: Any, keys: list, default_value: Any = None) -> Any:
     """Fetch the value corresponding to the given nested keys in a dictionary.
 
@@ -88,14 +133,8 @@ def fetch_nested_value(data: Any, keys: list, default_value: Any = None) -> Any:
         The value corresponding to the nested keys or the default value.
 
     """
-    try:
-        for key in keys:
-            data = data[key]
-
-    except (KeyError, TypeError):
-        return default_value
-
-    return data
+    value = first_nested(data, keys, _MISSING)
+    return default_value if value is _MISSING else value
 
 
 def decrypt_image(input_data: bytes, password: str) -> bytes:
@@ -116,8 +155,10 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
         raise PyEzvizError("Invalid image data")
 
     # check header
-    if input_data[:16] != b"hikencodepicture":
-        _LOGGER.debug("Image header doesn't contain 'hikencodepicture'")
+    header_len = len(HIK_ENCRYPTION_HEADER)
+
+    if input_data[:header_len] != HIK_ENCRYPTION_HEADER:
+        _LOGGER.debug("Image header doesn't contain %s", HIK_ENCRYPTION_HEADER)
         return input_data
 
     file_hash = input_data[16:48]
@@ -132,7 +173,7 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
     next_chunk = b""
     output_data = b""
     finished = False
-    i = 48  # offset hikencodepicture + hash
+    i = 48  # offset HIK header + hash
     chunk_size = 1024 * AES.block_size
     while not finished:
         chunk, next_chunk = next_chunk, cipher.decrypt(input_data[i : i + chunk_size])

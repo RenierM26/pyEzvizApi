@@ -4398,6 +4398,16 @@ class EzvizClient:
             json_key=None,
         )
 
+    def get_page_list(self) -> Any:
+        """Return the full pagelist payload without filtering."""
+
+        return self._get_page_list()
+
+    def export_token(self) -> dict[str, Any]:
+        """Return a shallow copy of the current authentication token."""
+
+        return dict(self._token)
+
     def get_device(self) -> Any:
         """Get ezviz devices filter."""
         return self._api_get_pagelist(page_filter="CLOUD", json_key="deviceInfos")

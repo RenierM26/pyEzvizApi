@@ -421,7 +421,7 @@ def _handle_devices_light(args: argparse.Namespace, client: EzvizClient) -> int:
 
 def _handle_pagelist(client: EzvizClient) -> int:
     """Output full pagelist (raw JSON) for exploration in editors like Notepad++."""
-    data = client._get_page_list()  # noqa: SLF001
+    data = client.get_page_list()
     _write_json(data)
     return 0
 
@@ -611,7 +611,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     finally:
         if args.save_token and args.token_file:
-            _save_token_file(args.token_file, cast(dict[str, Any], client._token))  # noqa: SLF001
+            _save_token_file(args.token_file, client.export_token())
         client.close_session()
 
 

@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import setuptools
 
 long_description = Path("README.md").read_text(encoding="utf-8")

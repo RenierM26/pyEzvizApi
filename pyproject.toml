@@ -41,5 +41,8 @@ warn_no_return = true
 no_implicit_optional = true
 check_untyped_defs = true
 
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "types-requests"]
+
 [tool.coverage.run]
 source = ["pyezvizapi"]

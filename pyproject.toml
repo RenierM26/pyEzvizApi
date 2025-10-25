@@ -4,16 +4,50 @@ requires = ["setuptools", "wheel"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-select = ["E","F","I","UP","B","SIM","PL","RUF"]
-ignore = ["E501"]                 # HA allows long lines for URLs, etc.
 src = ["pyezvizapi"]
+
+[tool.ruff.lint]
+select = ["E","F","I","UP","B","SIM","PL","RUF"]   # keep import rules (I)
+ignore = ["E501"]                                   # long URLs ok
+# If you want to enforce private-member access warnings, uncomment:
+# select = ["E","F","I","UP","B","SIM","PL","RUF","SLF"]
+
+# Per-file tuning
+[tool.ruff.lint.per-file-ignores]
+# CLI files are naturally branchy/return-heavy; quiet those here:
+"pyezvizapi/__main__.py" = ["PLR0911","PLR0912","PLR0915"]
+# Re-export noise in __init__ (if applicable):
+"pyezvizapi/__init__.py" = ["F401"]
+
+# Import sorting to match HA expectations
+[tool.ruff.lint.isort]
+known-first-party = ["pyezvizapi"]
+known-third-party = ["homeassistant", "aiohttp", "voluptuous", "yarl", "pandas", "xmltodict", "Crypto"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+combine-as-imports = true
+force-sort-within-sections = true
+# If you want this in library code, keep it; otherwise you can remove it:
+required-imports = ["from __future__ import annotations"]
+
+# Pylint-like thresholds (only if you prefer global relaxation instead of per-file ignores)
+[tool.ruff.lint.pylint]
+# Uncomment only if you want to relax globally:
+# max-returns = 20
+# max-branches = 30
+# max-statements = 400
+# Allow “magic values” for ints so PLR2004 is less noisy:
+allow-magic-value-types = ["int"]
 
 [tool.mypy]
 python_version = "3.12"
+files = ["pyezvizapi"]
 ignore_missing_imports = true
 strict_optional = true
 warn_unused_ignores = true
-files = ["pyezvizapi"]
+warn_redundant_casts = true
+warn_no_return = true
+no_implicit_optional = true
+check_untyped_defs = true
 
 [tool.coverage.run]
 source = ["pyezvizapi"]

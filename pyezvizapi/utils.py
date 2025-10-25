@@ -63,14 +63,13 @@ def convert_to_dict(data: Any) -> Any:
 
 def string_to_list(data: Any, separator: str = ",") -> Any:
     """Convert a string representation of a list to a list."""
-    if isinstance(data, str):
-        if separator in data:
-            try:
-                # Attempt to convert the string into a list
-                return data.split(separator)
+    if isinstance(data, str) and separator in data:
+        try:
+            # Attempt to convert the string into a list
+            return data.split(separator)
 
-            except AttributeError:
-                return data
+        except AttributeError:
+            return data
 
     return data
 
@@ -78,6 +77,7 @@ def string_to_list(data: Any, separator: str = ",") -> Any:
 PathComponent = str | int
 WILDCARD_STEP = "*"
 _MISSING = object()
+MILLISECONDS_THRESHOLD = 1e11
 
 
 def iter_nested(data: Any, path: Iterable[PathComponent]) -> Iterator[Any]:
@@ -99,9 +99,12 @@ def iter_nested(data: Any, path: Iterable[PathComponent]) -> Iterator[Any]:
                 next_level.append(candidate[step])
                 continue
 
-            if isinstance(candidate, (list, tuple)) and isinstance(step, int):
-                if -len(candidate) <= step < len(candidate):
-                    next_level.append(candidate[step])
+            if (
+                isinstance(candidate, (list, tuple))
+                and isinstance(step, int)
+                and -len(candidate) <= step < len(candidate)
+            ):
+                next_level.append(candidate[step])
 
         current = next_level
         if not current:
@@ -271,7 +274,7 @@ def normalize_alarm_time(
     if epoch is not None:
         try:
             ts = float(epoch if not isinstance(epoch, str) else float(epoch))
-            if ts > 1e11:  # milliseconds
+            if ts > MILLISECONDS_THRESHOLD:  # milliseconds
                 ts /= 1000.0
             event_utc = datetime.datetime.fromtimestamp(ts, tz=datetime.UTC)
             alarm_dt_local = event_utc.astimezone(tzinfo)
@@ -338,10 +341,11 @@ def compute_motion_from_alarm(
     now_local = datetime.datetime.now(tz=tzinfo).replace(microsecond=0)
     now_utc = datetime.datetime.now(tz=datetime.UTC).replace(microsecond=0)
 
-    if alarm_dt_utc is not None:
-        delta = now_utc - alarm_dt_utc
-    else:
-        delta = now_local - alarm_dt_local
+    delta = (
+        now_utc - alarm_dt_utc
+        if alarm_dt_utc is not None
+        else now_local - alarm_dt_local
+    )
 
     seconds = float(delta.total_seconds())
     if seconds < 0:

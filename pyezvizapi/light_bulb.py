@@ -176,7 +176,7 @@ class EzvizLightBulb:
     def set_brightness(self, value: int) -> bool:
         """Set the light bulb brightness.
 
-        The value must be in range 1–100. Returns True on success.
+        The value must be in range 1-100. Returns True on success.
 
         Raises:
             PyEzvizError: On API failures.

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import socket
 from typing import TypedDict
 
 from .exceptions import AuthTestResultFailed, InvalidHost
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def genmsg_describe(url: str, seq: int, user_agent: str, auth_seq: str) -> str:
@@ -110,15 +113,14 @@ class TestRTSPAuth:
         describe = genmsg_describe(
             url, seq, self._rtsp_details["defaultUserAgent"], auth_seq
         )
-        print(describe)
+        _LOGGER.debug("RTSP DESCRIBE (basic):\n%s", describe)
         session.send(describe.encode())
         msg1: bytes = session.recv(self._rtsp_details["bufLen"])
         seq += 1
 
         decoded = msg1.decode()
         if "200 OK" in decoded:
-            print(f"Basic auth result: {decoded}")
-            print("Basic Auth test passed. Credentials Valid!")
+            _LOGGER.info("Basic auth result: %s", decoded)
             return
 
         if "Unauthorized" in decoded:
@@ -140,20 +142,16 @@ class TestRTSPAuth:
             describe = genmsg_describe(
                 url, seq, self._rtsp_details["defaultUserAgent"], auth_seq
             )
-            print(describe)
+            _LOGGER.debug("RTSP DESCRIBE (digest):\n%s", describe)
             session.send(describe.encode())
             msg1 = session.recv(self._rtsp_details["bufLen"])
             decoded = msg1.decode()
-            print(f"Digest auth result: {decoded}")
+            _LOGGER.info("Digest auth result: %s", decoded)
 
             if "200 OK" in decoded:
-                print("Digest Auth test Passed. Credentials Valid!")
                 return
 
             if "401 Unauthorized" in decoded:
                 raise AuthTestResultFailed("Credentials not valid!!")
 
-        print("Basic Auth test passed. Credentials Valid!")
-
-
-# ruff: noqa: T201
+        _LOGGER.info("Basic Auth test passed. Credentials Valid!")

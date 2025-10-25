@@ -9,7 +9,6 @@ import json
 import logging
 import re as _re
 from typing import Any
-import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from Crypto.Cipher import AES
@@ -234,30 +233,6 @@ def deep_merge(dict1: Any, dict2: Any) -> Any:
             merged[key] = dict2[key]
 
     return merged
-
-
-def generate_unique_code() -> str:
-    """Generate a deterministic, platform-agnostic unique code for the current host.
-
-    This function retrieves the host's MAC address using Python's standard
-    `uuid.getnode()` (works on Windows, Linux, macOS), converts it to a
-    canonical string representation, and then hashes it using MD5 to produce
-    a fixed-length hexadecimal string.
-
-    Returns:
-        str: A 32-character hexadecimal string uniquely representing
-        the host's MAC address. For example:
-        'a94e6756hghjgfghg49e0f310d9e44a'.
-
-    Notes:
-        - The output is deterministic: the same machine returns the same code.
-        - If the MAC address changes (e.g., different network adapter),
-          the output will change.
-        - MD5 is used here only for ID generation, not for security.
-    """
-    mac_int = uuid.getnode()
-    mac_str = ":".join(f"{(mac_int >> i) & 0xFF:02x}" for i in range(40, -1, -8))
-    return md5(mac_str.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------

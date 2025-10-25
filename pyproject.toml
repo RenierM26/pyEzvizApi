@@ -11,7 +11,9 @@ dependencies = [
   "requests",
   "aiohttp",
   "xmltodict",
-  "pycryptodome"
+  "pycryptodome",
+  "paho-mqtt",
+  "pandas"
 ]
 
 [tool.ruff]

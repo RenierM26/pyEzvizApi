@@ -7,6 +7,12 @@ description = "EZVIZ API client for Home Assistant and CLI"
 readme = "README.md"
 requires-python = ">=3.12"
 dynamic = ["version"]
+dependencies = [
+  "requests",
+  "aiohttp",
+  "xmltodict",
+  "pycryptodome"
+]
 
 [tool.ruff]
 line-length = 100

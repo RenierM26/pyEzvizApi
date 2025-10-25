@@ -83,7 +83,7 @@ class MqttData(TypedDict):
 # Payload decoding helpers
 # ---------------------------------------------------------------------------
 
-# Field names in the comma‑separated ``ext`` payload from EZVIZ.
+# Field names in the comma-separated ``ext`` payload from EZVIZ.
 EXT_FIELD_NAMES: Final[tuple[str, ...]] = (
     "channel_type",
     "time",

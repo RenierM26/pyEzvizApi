@@ -20,13 +20,14 @@ from .client import EzvizClient
 from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+_LOGGER = logging.getLogger(__name__)
 
 LOG_FILE = Path("mqtt_messages.jsonl")  # JSON Lines format
 
 
 def message_handler(msg: dict[str, Any]) -> None:
     """Handle new MQTT messages by printing and saving them to a file."""
-    print("📩 New MQTT message:", msg)
+    _LOGGER.info("📩 New MQTT message: %s", msg)
     with LOG_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
@@ -40,7 +41,7 @@ def _load_token_file(path: str | None) -> dict[str, Any] | None:
     try:
         return cast(dict[str, Any], json.loads(p.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
-        logging.getLogger(__name__).warning("Failed to read token file: %s", p)
+        _LOGGER.warning("Failed to read token file: %s", p)
         return None
 
 
@@ -50,9 +51,9 @@ def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
     p = Path(path)
     try:
         p.write_text(json.dumps(token, indent=2), encoding="utf-8")
-        logging.getLogger(__name__).info("Saved token to %s", p)
+        _LOGGER.info("Saved token to %s", p)
     except OSError:
-        logging.getLogger(__name__).warning("Failed to save token file: %s", p)
+        _LOGGER.warning("Failed to save token file: %s", p)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # If no token and missing username/password, prompt interactively
     if not token and (not username or not password):
-        print("No token found. Please enter Ezviz credentials.")
+        _LOGGER.info("No token found. Please enter Ezviz credentials")
         if not username:
             username = input("Username: ")
         if not password:
@@ -107,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
                 code_int = None
             client.login(sms_code=code_int)
         except PyEzvizError as exp:
-            print(f"Login failed: {exp}")
+            _LOGGER.error("Login failed: %s", exp)
             return 1
 
     # Start MQTT client
@@ -115,14 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     mqtt_client.connect()
 
     try:
-        print("Listening for MQTT messages... (Ctrl+C to quit)")
+        _LOGGER.info("Listening for MQTT messages... (Ctrl+C to quit)")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nStopping...")
+        _LOGGER.info("Stopping listener (keyboard interrupt)")
     finally:
         mqtt_client.stop()
-        print("Stopped.")
+        _LOGGER.info("Listener stopped")
 
     if args.save_token and args.token_file:
         _save_token_file(args.token_file, client.export_token())
@@ -132,4 +133,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-# ruff: noqa: T201

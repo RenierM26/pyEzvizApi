@@ -1,6 +1,21 @@
 [build-system]
 requires = ["setuptools", "wheel"]
 
+[project]
+name = "pyezvizapi"
+description = "EZVIZ API client for Home Assistant and CLI"
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["version"]
+dependencies = [
+  "requests",
+  "aiohttp",
+  "xmltodict",
+  "pycryptodome",
+  "paho-mqtt",
+  "pandas"
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -40,6 +55,9 @@ warn_redundant_casts = true
 warn_no_return = true
 no_implicit_optional = true
 check_untyped_defs = true
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "types-requests"]
 
 [tool.coverage.run]
 source = ["pyezvizapi"]

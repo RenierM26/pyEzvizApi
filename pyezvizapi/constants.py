@@ -6,10 +6,19 @@ the Ezviz API to descriptive names.
 """
 
 from enum import Enum, unique
+from hashlib import md5
+import uuid
 
-from .utils import generate_unique_code
 
-FEATURE_CODE = generate_unique_code()
+def _generate_unique_code() -> str:
+    """Generate a deterministic unique code for this host."""
+
+    mac_int = uuid.getnode()
+    mac_str = ":".join(f"{(mac_int >> i) & 0xFF:02x}" for i in range(40, -1, -8))
+    return md5(mac_str.encode("utf-8")).hexdigest()
+
+
+FEATURE_CODE = _generate_unique_code()
 XOR_KEY = b"\x0c\x0eJ^X\x15@Rr"
 DEFAULT_TIMEOUT = 25
 MAX_RETRIES = 3

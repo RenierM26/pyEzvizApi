@@ -7,10 +7,8 @@ target-version = "py312"
 src = ["pyezvizapi"]
 
 [tool.ruff.lint]
-select = ["E","F","I","UP","B","SIM","PL","RUF"]   # keep import rules (I)
-ignore = ["E501"]                                   # long URLs ok
-# If you want to enforce private-member access warnings, uncomment:
-# select = ["E","F","I","UP","B","SIM","PL","RUF","SLF"]
+select = ["E","F","I","UP","B","SIM","PL","RUF","SLF"]
+ignore = ["E501"] # long URLs ok
 
 # Per-file tuning
 [tool.ruff.lint.per-file-ignores]
@@ -26,17 +24,12 @@ known-third-party = ["homeassistant", "aiohttp", "voluptuous", "yarl", "pandas",
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 combine-as-imports = true
 force-sort-within-sections = true
-# If you want this in library code, keep it; otherwise you can remove it:
 required-imports = ["from __future__ import annotations"]
 
 # Pylint-like thresholds (only if you prefer global relaxation instead of per-file ignores)
 [tool.ruff.lint.pylint]
-# Uncomment only if you want to relax globally:
-# max-returns = 20
-# max-branches = 30
-# max-statements = 400
-# Allow “magic values” for ints so PLR2004 is less noisy:
-allow-magic-value-types = ["int"]
+allow-magic-value-types = ["int", "str"]
+max-args = 10
 
 [tool.mypy]
 python_version = "3.12"

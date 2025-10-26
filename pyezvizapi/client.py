@@ -510,6 +510,13 @@ class EzvizClient:
         Accepts both API styles: new (meta.code == 200) and legacy (resultCode == 0).
         """
         if not self._is_ok(payload):
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "API error detected (%s): code=%s payload=%s",
+                    message,
+                    self._response_code(payload),
+                    json.dumps(payload, ensure_ascii=False),
+                )
             raise PyEzvizError(f"{message}: Got {payload})")
 
     def _send_prepared(

@@ -357,6 +357,15 @@ class EzvizClient:
         individual endpoint behavior. Returns the Response for the caller to
         parse and validate according to its API contract.
         """
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "HTTP %s %s params=%s data=%s json=%s",
+                method,
+                url,
+                self._summarize_payload(params),
+                self._summarize_payload(data),
+                self._summarize_payload(json_body),
+            )
         try:
             req = self._session.request(
                 method=method,
@@ -388,6 +397,17 @@ class EzvizClient:
                 )
             raise HTTPError from err
         else:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                content_length = req.headers.get("Content-Length")
+                if content_length is None:
+                    content_length = str(len(req.content))
+                _LOGGER.debug(
+                    "HTTP %s %s -> %s (%s bytes)",
+                    method,
+                    url,
+                    req.status_code,
+                    content_length,
+                )
             return req
 
     @staticmethod
@@ -466,6 +486,24 @@ class EzvizClient:
             return payload.get("status")
         return None
 
+    @staticmethod
+    def _summarize_payload(payload: Any) -> str:
+        """Return a compact description of payload content for debug logs."""
+
+        if payload is None:
+            return "-"
+        if isinstance(payload, Mapping):
+            keys = ", ".join(sorted(str(key) for key in payload))
+            return f"dict[{keys}]"
+        if isinstance(payload, (list, tuple, set)):
+            return f"{type(payload).__name__}(len={len(payload)})"
+        if isinstance(payload, (bytes, bytearray)):
+            return f"bytes(len={len(payload)})"
+        if isinstance(payload, str):
+            trimmed = payload[:32] + "…" if len(payload) > 32 else payload
+            return f"str(len={len(payload)}, preview={trimmed!r})"
+        return f"{type(payload).__name__}"
+
     def _ensure_ok(self, payload: dict, message: str) -> None:
         """Raise PyEzvizError with context if response is not OK.
 
@@ -530,7 +568,17 @@ class EzvizClient:
             retry_401=retry_401,
             max_retries=max_retries,
         )
-        return self._parse_json(resp)
+        payload = self._parse_json(resp)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "JSON %s %s -> status=%s meta=%s keys=%s",
+                method,
+                path,
+                resp.status_code,
+                self._response_code(payload),
+                ", ".join(sorted(payload.keys())),
+            )
+        return payload
 
     def _retry_json(
         self,

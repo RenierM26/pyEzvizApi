@@ -9,7 +9,6 @@ requires-python = ">=3.12"
 dynamic = ["version"]
 dependencies = [
   "requests",
-  "aiohttp",
   "xmltodict",
   "pycryptodome",
   "paho-mqtt",

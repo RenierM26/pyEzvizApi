@@ -122,6 +122,25 @@ def optionals_dict(camera_data: Mapping[str, Any]) -> dict[str, Any]:
     return optionals_mapping(camera_data)
 
 
+def custom_voice_volume_config(camera_data: Mapping[str, Any]) -> dict[str, int] | None:
+    """Return current CustomVoice volume configuration."""
+
+    optionals = optionals_mapping(camera_data)
+    config = optionals.get("CustomVoice_Volume")
+    config = decode_json(config)
+    if not isinstance(config, Mapping):
+        return None
+
+    volume = coerce_int(config.get("volume"))
+    mic = coerce_int(config.get("microphone_volume"))
+    result: dict[str, int] = {}
+    if isinstance(volume, int):
+        result["volume"] = volume
+    if isinstance(mic, int):
+        result["microphone_volume"] = mic
+    return result or None
+
+
 def iter_algorithm_entries(camera_data: Mapping[str, Any]) -> Iterator[dict[str, Any]]:
     """Yield entries from the AlgorithmInfo optionals list."""
 

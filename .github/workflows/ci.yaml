@@ -25,5 +25,11 @@ jobs:
       - name: mypy
         run: mypy .
 
-      - name: pytest
-        run: pytest -q
+      - name: pytest (only if tests exist)
+        shell: bash
+        run: |
+          if compgen -G "tests/test_*.py" > /dev/null; then
+            pytest -q
+          else
+            echo "No tests found under tests/, skipping pytest."
+          fi

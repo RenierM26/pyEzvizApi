@@ -59,5 +59,13 @@ check_untyped_defs = true
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest", "types-requests"]
 
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
 [tool.coverage.run]
 source = ["pyezvizapi"]

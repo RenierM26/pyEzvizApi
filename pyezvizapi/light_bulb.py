@@ -169,7 +169,7 @@ class EzvizLightBulb:
         return self._client.set_device_feature_by_key(
             self._serial,
             self.get_product_id(),
-            state if state else not bool(item["dataValue"]),
+            state if state is not None else not bool(item["dataValue"]),
             item["itemKey"],
         )
 

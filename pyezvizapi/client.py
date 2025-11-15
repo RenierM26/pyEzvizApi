@@ -131,6 +131,7 @@ from .feature import optionals_mapping
 from .light_bulb import EzvizLightBulb
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
+from .smart_plug import EzvizSmartPlug
 from .utils import convert_to_dict, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
@@ -219,6 +220,7 @@ class EzvizClient:
         DeviceCatagories.BASE_STATION_DEVICE_CATEGORY.value,
         DeviceCatagories.CAT_EYE_CATEGORY.value,
         DeviceCatagories.LIGHTING.value,
+        DeviceCatagories.SOCKET.value,
         DeviceCatagories.W2H_BASE_STATION_DEVICE_CATEGORY.value,
     ]
 
@@ -252,6 +254,7 @@ class EzvizClient:
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
+        self._smart_plugs: dict[str, Any] = {}
         self.mqtt_client: MQTTClient | None = None
         self._debug_request_counters: dict[str, int] = {}
 
@@ -2237,6 +2240,24 @@ class EzvizClient:
                             "load_error",
                             str(err),
                         )
+                elif rec.device_category == DeviceCatagories.SOCKET.value:
+                    try:
+                        # Create a smart plug object
+                        self._smart_plugs[device] = EzvizSmartPlug(
+                            self, device, dict(rec.raw)
+                        ).status()
+                    except (
+                            PyEzvizError,
+                            KeyError,
+                            TypeError,
+                            ValueError,
+                    ) as err:
+                        _LOGGER.warning(
+                            "Load_device_failed: serial=%s code=%s msg=%s",
+                            device,
+                            "load_error",
+                            str(err),
+                        )
                 else:
                     try:
                         # Create camera object
@@ -2258,7 +2279,7 @@ class EzvizClient:
                             "load_error",
                             str(err),
                         )
-        return {**self._cameras, **self._light_bulbs}
+        return {**self._cameras, **self._light_bulbs, **self._smart_plugs}
 
     def _prefetch_latest_camera_alarms(
         self, serials: Iterable[str], *, chunk_size: int = 20
@@ -2368,6 +2389,14 @@ class EzvizClient:
         """
         self.load_devices(refresh=refresh)
         return self._light_bulbs
+
+    def load_smart_plugs(self, refresh: bool = True) -> dict[Any, Any]:
+        """Load and return all smart plugs status mappings.
+
+        refresh: pass-through to load_devices().
+        """
+        self.load_devices(refresh=refresh)
+        return self._smart_plugs
 
     def get_device_infos(self, serial: str | None = None) -> dict[Any, Any]:
         """Load all devices and build dict per device serial."""

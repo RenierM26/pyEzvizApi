@@ -493,4 +493,5 @@ class DeviceCatagories(Enum):
     BASE_STATION_DEVICE_CATEGORY = "XVR"
     CAT_EYE_CATEGORY = "CatEye"
     LIGHTING = "lighting"
+    SOCKET = "Socket"
     W2H_BASE_STATION_DEVICE_CATEGORY = "IGateWay"

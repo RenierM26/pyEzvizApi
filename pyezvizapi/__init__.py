@@ -65,6 +65,7 @@ from .feature import (
 from .light_bulb import EzvizLightBulb
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
+from .smart_plug import EzvizSmartPlug
 from .test_cam_rtsp import TestRTSPAuth
 
 __all__ = [
@@ -84,6 +85,7 @@ __all__ = [
     "EzvizClient",
     "EzvizDeviceRecord",
     "EzvizLightBulb",
+    "EzvizSmartPlug",
     "EzvizToken",
     "HTTPError",
     "IntelligentDetectionSmartApp",

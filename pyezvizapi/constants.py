@@ -496,3 +496,4 @@ class DeviceCatagories(Enum):
     LIGHTING = "lighting"
     SOCKET = "Socket"
     W2H_BASE_STATION_DEVICE_CATEGORY = "IGateWay"
+    DETECTOR_DEVICE_CATEGORY = "Detector"

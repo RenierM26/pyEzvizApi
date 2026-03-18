@@ -10,6 +10,7 @@ symbols for convenient imports.
 from .camera import EzvizCamera
 from .cas import EzvizCAS
 from .client import EzvizClient
+from .detector import EzvizDetector
 from .constants import (
     AlarmDetectHumanCar,
     BatteryCameraNewWorkMode,
@@ -83,6 +84,7 @@ __all__ = [
     "EzvizCAS",
     "EzvizCamera",
     "EzvizClient",
+    "EzvizDetector",
     "EzvizDeviceRecord",
     "EzvizLightBulb",
     "EzvizSmartPlug",

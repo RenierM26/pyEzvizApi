@@ -76,6 +76,10 @@ jobs:
       - name: mypy (auto-install any missing stubs)
         run: mypy --install-types --non-interactive .
 
+      - name: Pyright
+        if: matrix.python-version == '3.12'
+        run: pyright pyezvizapi
+
       - name: pytest with coverage (skip gracefully if no tests yet)
         shell: bash
         run: |

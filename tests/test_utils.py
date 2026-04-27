@@ -13,6 +13,7 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.utils import (
     coerce_int,
     compute_motion_from_alarm,
+    convert_to_dict,
     decode_json,
     decrypt_image,
     deep_merge,
@@ -210,3 +211,11 @@ def test_decrypt_image_rejects_invalid_password_and_malformed_payloads() -> None
 
     with pytest.raises(PyEzvizError, match="Invalid image data after trimming preamble"):
         decrypt_image((b"x" * 40) + encrypted[:20], "ABCDEF")
+
+
+def test_convert_to_dict_decodes_json_string_values_in_place() -> None:
+    payload = {"nested": '{"enabled": true}', "invalid": "not-json", "plain": 1}
+
+    assert convert_to_dict(payload) is payload
+    assert payload == {"nested": {"enabled": True}, "invalid": "not-json", "plain": 1}
+    assert convert_to_dict(["not", "a", "dict"]) == ["not", "a", "dict"]

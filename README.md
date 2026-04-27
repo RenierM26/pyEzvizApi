@@ -250,7 +250,9 @@ Contributions are welcome — the API surface is large and there are many improv
 
 ## Versioning
 
-We follow SemVer when publishing the library. See repository tags for released versions.
+We follow SemVer when publishing the library. See `CHANGELOG.md` and repository tags for released versions.
+
+Release tags should match the package version in `pyproject.toml` using the form `v<version>` (for example, `v1.0.4.5`). The PyPI publish workflow validates this before uploading distributions.
 
 ## License
 

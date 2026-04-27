@@ -7,7 +7,7 @@ import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.constants import FEATURE_CODE, UnifiedMessageSubtype
+from pyezvizapi.constants import FEATURE_CODE, DeviceSwitchType, UnifiedMessageSubtype
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 
@@ -1673,3 +1673,177 @@ def test_set_camera_osd_requires_camera_data_when_deriving() -> None:
 
     with pytest.raises(PyEzvizError, match="Camera data unavailable"):
         client.set_camera_osd("CAM123", enabled=True)
+
+
+def test_set_floodlight_brightness_builds_request(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_floodlight_brightness("CAM123", luminance=75, channelno=2, max_retries=1) is True
+    assert captured["method"] == "POST"
+    assert captured["path"].endswith("CAM123/2")
+    assert captured["data"] == {"luminance": 75}
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 1
+
+
+def test_set_floodlight_brightness_validates_range_and_retries() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Range of luminance"):
+        client.set_floodlight_brightness("CAM123", luminance=0)
+
+    with pytest.raises(PyEzvizError, match="Range of luminance"):
+        client.set_floodlight_brightness("CAM123", luminance=100)
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.set_floodlight_brightness("CAM123", max_retries=99)
+
+
+def test_set_brightness_routes_light_bulbs_to_iot_feature(monkeypatch) -> None:
+    client = _client()
+    client._light_bulbs["LIGHT123"] = {"productId": "prod-light"}
+    calls: list[dict[str, Any]] = []
+
+    def fake_set_device_feature_by_key(
+        serial: str,
+        product_id: str,
+        value: Any,
+        key: str,
+        max_retries: int = 0,
+    ) -> bool:
+        calls.append(
+            {
+                "serial": serial,
+                "product_id": product_id,
+                "value": value,
+                "key": key,
+                "max_retries": max_retries,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(client, "set_device_feature_by_key", fake_set_device_feature_by_key)
+
+    assert client.set_brightness("LIGHT123", luminance=42, max_retries=2) is True
+    assert calls == [
+        {
+            "serial": "LIGHT123",
+            "product_id": "prod-light",
+            "value": 42,
+            "key": "brightness",
+            "max_retries": 2,
+        }
+    ]
+
+
+def test_set_brightness_routes_unknown_serial_to_floodlight(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_set_floodlight_brightness(
+        serial: str,
+        luminance: int = 50,
+        channelno: int = 1,
+        max_retries: int = 0,
+    ) -> bool:
+        calls.append(
+            {
+                "serial": serial,
+                "luminance": luminance,
+                "channelno": channelno,
+                "max_retries": max_retries,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(client, "set_floodlight_brightness", fake_set_floodlight_brightness)
+
+    assert client.set_brightness("CAM123", luminance=55, channelno=3, max_retries=1) is True
+    assert calls == [
+        {
+            "serial": "CAM123",
+            "luminance": 55,
+            "channelno": 3,
+            "max_retries": 1,
+        }
+    ]
+
+
+def test_switch_light_status_routes_light_bulbs_to_iot_feature(monkeypatch) -> None:
+    client = _client()
+    client._light_bulbs["LIGHT123"] = {"productId": "prod-light"}
+    calls: list[dict[str, Any]] = []
+
+    def fake_set_device_feature_by_key(
+        serial: str,
+        product_id: str,
+        value: Any,
+        key: str,
+        max_retries: int = 0,
+    ) -> bool:
+        calls.append(
+            {
+                "serial": serial,
+                "product_id": product_id,
+                "value": value,
+                "key": key,
+                "max_retries": max_retries,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(client, "set_device_feature_by_key", fake_set_device_feature_by_key)
+
+    assert client.switch_light_status("LIGHT123", enable=1, max_retries=2) is True
+    assert calls == [
+        {
+            "serial": "LIGHT123",
+            "product_id": "prod-light",
+            "value": True,
+            "key": "light_switch",
+            "max_retries": 2,
+        }
+    ]
+
+
+def test_switch_light_status_routes_cameras_to_alarm_light_switch(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_switch_status(
+        serial: str,
+        status_type: int,
+        enable: bool | int,
+        channel_no: int = 0,
+        max_retries: int = 0,
+    ) -> bool:
+        calls.append(
+            {
+                "serial": serial,
+                "status_type": status_type,
+                "enable": enable,
+                "channel_no": channel_no,
+                "max_retries": max_retries,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(client, "switch_status", fake_switch_status)
+
+    assert client.switch_light_status("CAM123", enable=0, channel_no=2, max_retries=1) is True
+    assert calls == [
+        {
+            "serial": "CAM123",
+            "status_type": DeviceSwitchType.ALARM_LIGHT.value,
+            "enable": 0,
+            "channel_no": 2,
+            "max_retries": 1,
+        }
+    ]

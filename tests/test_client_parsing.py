@@ -364,3 +364,110 @@ def test_prefetch_latest_camera_alarms_tolerates_api_errors() -> None:
     client.get_device_messages_list = fake_messages  # type: ignore[assignment]
 
     assert client._prefetch_latest_camera_alarms(["CAM1"]) == {}
+
+
+def test_load_devices_passes_prefetched_latest_alarm_to_camera_status(monkeypatch) -> None:
+    client = _client_with_fixture(monkeypatch)
+    prefetch_calls: list[list[str]] = []
+
+    def fake_prefetch(serials: list[str]) -> dict[str, dict[str, Any]]:
+        prefetch_calls.append(list(serials))
+        return {"CAM123": {"deviceSerial": "CAM123", "msgId": "alarm-1"}}
+
+    class FakeCamera:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(
+            self,
+            *,
+            refresh: bool = True,
+            latest_alarm: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            return {
+                "kind": "camera",
+                "serial": self.serial,
+                "refresh": refresh,
+                "latest_alarm": latest_alarm,
+            }
+
+    class FakeLightBulb:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "light", "serial": self.serial}
+
+    class FakeSmartPlug:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "plug", "serial": self.serial}
+
+    monkeypatch.setattr(client, "_prefetch_latest_camera_alarms", fake_prefetch)
+    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
+    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+
+    loaded = client.load_devices(refresh=True)
+
+    assert prefetch_calls == [["CAM123"]]
+    assert loaded["CAM123"] == {
+        "kind": "camera",
+        "serial": "CAM123",
+        "refresh": True,
+        "latest_alarm": {"deviceSerial": "CAM123", "msgId": "alarm-1"},
+    }
+
+
+def test_load_devices_skips_alarm_prefetch_when_refresh_false(monkeypatch) -> None:
+    client = _client_with_fixture(monkeypatch)
+
+    def unexpected_prefetch(_serials: list[str]) -> dict[str, dict[str, Any]]:
+        raise AssertionError("prefetch should not run when refresh is false")
+
+    class FakeCamera:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(
+            self,
+            *,
+            refresh: bool = True,
+            latest_alarm: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            return {
+                "kind": "camera",
+                "serial": self.serial,
+                "refresh": refresh,
+                "latest_alarm": latest_alarm,
+            }
+
+    class FakeLightBulb:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "light", "serial": self.serial}
+
+    class FakeSmartPlug:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "plug", "serial": self.serial}
+
+    monkeypatch.setattr(client, "_prefetch_latest_camera_alarms", unexpected_prefetch)
+    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
+    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+
+    loaded = client.load_devices(refresh=False)
+
+    assert loaded["CAM123"] == {
+        "kind": "camera",
+        "serial": "CAM123",
+        "refresh": False,
+        "latest_alarm": None,
+    }

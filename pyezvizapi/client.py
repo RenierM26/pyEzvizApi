@@ -2197,7 +2197,10 @@ class EzvizClient:
             """Return True if record should be treated as a camera."""
             if rec.device_category not in supported_categories:
                 return False
-            if rec.device_category == DeviceCatagories.LIGHTING.value:
+            if rec.device_category in (
+                DeviceCatagories.LIGHTING.value,
+                DeviceCatagories.SOCKET.value,
+            ):
                 return False
             return not (
                 rec.device_category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value

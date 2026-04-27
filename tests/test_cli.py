@@ -389,3 +389,168 @@ def test_devices_status_json_preserves_payload_without_table_enrichment(
         }
     }
     assert "switch_flags" not in payload["CAM123"]
+
+
+def test_devices_light_status_table_forwards_refresh(monkeypatch, tmp_path, capsys) -> None:
+    class LightDevicesClient(_FakeClient):
+        def load_light_bulbs(self, *, refresh: bool = True) -> dict[str, dict[str, Any]]:
+            self.refresh = refresh
+            return {
+                "LIGHT123": {
+                    "name": "Porch Light",
+                    "status": 1,
+                    "device_category": "lighting",
+                    "device_sub_category": "bulb",
+                    "local_ip": "192.0.2.50",
+                    "productId": "prod-light",
+                    "is_on": True,
+                    "brightness": 66,
+                    "color_temperature": 4200,
+                }
+            }
+
+    LightDevicesClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", LightDevicesClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "devices_light",
+                "status",
+                "--no-refresh",
+            ]
+        )
+        == 0
+    )
+
+    client = cast(LightDevicesClient, LightDevicesClient.instances[0])
+    assert client.refresh is False
+    output = capsys.readouterr().out
+    assert "LIGHT123" in output
+    assert "Porch Light" in output
+    assert "lighting" in output
+    assert "192.0.2.50" in output
+    assert "prod-light" in output
+    assert "66" in output
+    assert "4200" in output
+
+
+def test_devices_light_status_json_preserves_payload(monkeypatch, tmp_path, capsys) -> None:
+    class LightDevicesClient(_FakeClient):
+        def load_light_bulbs(self, *, refresh: bool = True) -> dict[str, dict[str, Any]]:
+            self.refresh = refresh
+            return {"LIGHT123": {"name": "Porch Light", "is_on": True}}
+
+    LightDevicesClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", LightDevicesClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "devices_light",
+                "status",
+            ]
+        )
+        == 0
+    )
+
+    client = cast(LightDevicesClient, LightDevicesClient.instances[0])
+    assert client.refresh is True
+    assert json.loads(capsys.readouterr().out) == {
+        "LIGHT123": {"name": "Porch Light", "is_on": True}
+    }
+
+
+def test_light_status_outputs_json(monkeypatch, tmp_path, capsys) -> None:
+    class FakeLightBulb:
+        instances: ClassVar[list[FakeLightBulb]] = []
+
+        def __init__(self, client: _FakeClient, serial: str) -> None:
+            self.client = client
+            self.serial = serial
+            self.toggled = False
+            self.__class__.instances.append(self)
+
+        def status(self) -> dict[str, Any]:
+            return {"serial": self.serial, "name": "Porch Light", "is_on": True}
+
+        def toggle_switch(self) -> None:
+            self.toggled = True
+
+    _install_fake_client(monkeypatch)
+    FakeLightBulb.instances = []
+    monkeypatch.setattr(cli_module, "EzvizLightBulb", FakeLightBulb)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "light",
+                "--serial",
+                "LIGHT123",
+                "status",
+            ]
+        )
+        == 0
+    )
+
+    light = FakeLightBulb.instances[0]
+    assert light.serial == "LIGHT123"
+    assert json.loads(capsys.readouterr().out) == {
+        "serial": "LIGHT123",
+        "name": "Porch Light",
+        "is_on": True,
+    }
+
+
+def test_light_toggle_invokes_light_wrapper(monkeypatch, tmp_path) -> None:
+    class FakeLightBulb:
+        instances: ClassVar[list[FakeLightBulb]] = []
+
+        def __init__(self, client: _FakeClient, serial: str) -> None:
+            self.client = client
+            self.serial = serial
+            self.toggled = False
+            self.__class__.instances.append(self)
+
+        def status(self) -> dict[str, Any]:
+            return {}
+
+        def toggle_switch(self) -> None:
+            self.toggled = True
+
+    _install_fake_client(monkeypatch)
+    FakeLightBulb.instances = []
+    monkeypatch.setattr(cli_module, "EzvizLightBulb", FakeLightBulb)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "light",
+                "--serial",
+                "LIGHT123",
+                "toggle",
+            ]
+        )
+        == 0
+    )
+
+    light = FakeLightBulb.instances[0]
+    assert light.serial == "LIGHT123"
+    assert light.toggled is True

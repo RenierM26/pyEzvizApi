@@ -2364,3 +2364,97 @@ def test_accessory_and_dev_config_read_helpers_raise_contextual_errors(monkeypat
 
     with pytest.raises(PyEzvizError, match="Could not get devconfig value"):
         client.get_dev_config("CAM123", 3, "NightVision_Model")
+
+
+def test_managed_device_and_status_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_managed_device_info("BASE123", max_retries=1)["meta"]["code"] == 200
+    assert client.get_managed_device_ipcs("BASE123", max_retries=2)["meta"]["code"] == 200
+    assert client.get_devices_status(["CAM2", "CAM1", "CAM1"], max_retries=3)["meta"]["code"] == 200
+    assert client.get_device_secret_key_info("CAM1", max_retries=4)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("BASE123/base")
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["path"].endswith("BASE123/ipcs")
+    assert calls[1]["max_retries"] == 2
+    assert calls[2]["method"] == "GET"
+    assert calls[2]["params"] == {"deviceSerials": "CAM1,CAM2"}
+    assert calls[2]["max_retries"] == 3
+    assert calls[3]["method"] == "GET"
+    assert calls[3]["params"] == {"deviceSerials": "CAM1"}
+    assert calls[3]["max_retries"] == 4
+    assert all(call["retry_401"] is True for call in calls)
+
+
+def test_p2p_and_upgrade_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_p2p_info(["CAM2", "CAM1"])["meta"]["code"] == 200
+    assert client.get_p2p_server_info(["CAM2", "CAM1"])["meta"]["code"] == 200
+    assert client.check_device_upgrade_rule(max_retries=1)["meta"]["code"] == 200
+    assert client.get_autoupgrade_switch(max_retries=2)["meta"]["code"] == 200
+    assert client.set_autoupgrade_switch(1, 2, max_retries=3)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["params"] == {"deviceSerials": "CAM1,CAM2"}
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["params"] == {"deviceSerials": "CAM1,CAM2"}
+    assert calls[2]["method"] == "GET"
+    assert calls[2]["max_retries"] == 1
+    assert calls[3]["method"] == "GET"
+    assert calls[3]["max_retries"] == 2
+    assert calls[4]["method"] == "PUT"
+    assert calls[4]["data"] == {"autoUpgrade": 1, "timeType": 2}
+    assert calls[4]["max_retries"] == 3
+
+
+def test_device_encrypt_key_list_builds_prepared_form_request(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        captured.update({"req": req, **kwargs})
+        return _response(text='{"meta": {"code": 200}, "keys": []}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    assert client.get_device_list_encrypt_key(7, {"serial": ["CAM1", "CAM2"]}, max_retries=1) == {
+        "meta": {"code": 200},
+        "keys": [],
+    }
+    req = captured["req"]
+    assert req.method == "POST"
+    assert req.headers["Content-Type"] == "application/x-www-form-urlencoded"
+    assert req.headers["areaId"] == "7"
+    assert req.body == "serial=CAM1&serial=CAM2"
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 1
+
+
+def test_device_encrypt_key_list_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        return _response(text='{"meta": {"code": 500}, "message": "failed"}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    with pytest.raises(PyEzvizError, match="Could not get device encrypt key list"):
+        client.get_device_list_encrypt_key(7, "serial=CAM1")

@@ -18,6 +18,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added CI coverage reporting, coverage XML artifacts, and a conservative 85% coverage floor.
 - Added CI `pip check` validation for both editable development installs and built-wheel smoke-test installs.
 - Added release workflow wheel smoke testing with `pip check` and CLI help checks before PyPI publishing.
+- Added a manual release-check workflow for dry-run package builds, optional tag/version verification, wheel smoke testing, and artifact upload before publishing.
 - Documented the development validation workflow, artifact cleanup commands, and offline-test policy in the README.
 - Added contributor, support, security, PR checklist, and issue-template documentation for safer reports and easier maintenance.
 - Added editor and Git line-ending defaults, plus Ruff cache ignores, to reduce generated-artifact and formatting drift.

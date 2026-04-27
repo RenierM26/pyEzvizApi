@@ -157,3 +157,21 @@ def test_camera_status_prefers_typed_record_core_fields_and_switches() -> None:
     assert status["supportExt"] == {"SupportExt": "1"}
     assert status["switches"] == {7: True, 21: False}
     assert cast(dict[str, Any], status)["CUSTOM_TOP_LEVEL"] == {"kept": True}
+
+
+def test_camera_fetch_key_and_refresh_alarms_delegate(monkeypatch) -> None:
+    camera = EzvizCamera(cast(EzvizClient, object()), "CAM123", _camera_payload())
+    calls = 0
+
+    def fake_alarm_list(prefetched: dict[str, object] | None = None) -> None:
+        nonlocal calls
+        assert prefetched is None
+        calls += 1
+
+    monkeypatch.setattr(camera, "_alarm_list", fake_alarm_list)
+
+    assert camera.fetch_key(["deviceInfos", "name"]) == "Front Door"
+    assert camera.fetch_key(["missing"], default_value="fallback") == "fallback"
+    camera.refresh_alarms()
+
+    assert calls == 1

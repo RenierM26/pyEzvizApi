@@ -557,3 +557,219 @@ def test_audition_and_baby_control_build_request_payloads(monkeypatch) -> None:
         "control": "pan",
         "hardwareCode": "HW1",
     }
+
+
+def test_iot_request_builds_prepared_request_with_json_payload(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        captured.update({"req": req, **kwargs})
+        return _response(text='{"meta": {"code": 200}, "ok": true}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    payload = client.set_iot_feature(
+        "cam123",
+        "Video",
+        "1",
+        "Domain",
+        "Action",
+        {"value": {"enabled": True}},
+        max_retries=2,
+    )
+
+    req = captured["req"]
+    assert payload == {"meta": {"code": 200}, "ok": True}
+    assert req.method == "PUT"
+    assert req.url == "https://apiieu.ezvizlife.com/v3/iot-feature/feature/CAM123/Video/1/Domain/Action"
+    assert req.headers["Content-Type"] == "application/json"
+    assert req.body == '{"value":{"enabled":true}}'
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 2
+
+
+def test_iot_get_helpers_build_expected_feature_paths(monkeypatch) -> None:
+    client = _client()
+    urls: list[str] = []
+    bodies: list[str | bytes | None] = []
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        urls.append(req.url or "")
+        bodies.append(req.body)
+        return _response(text='{"meta": {"code": 200}}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    assert client.get_low_battery_keep_alive("cam123", "Battery", "0", "Power", "KeepAlive")["meta"]["code"] == 200
+    assert client.get_object_removal_status("cam123", "Video", "1", "Object", "Removal", payload={"q": 1})["meta"]["code"] == 200
+    assert client.get_remote_control_path_list("cam123", "PTZ", "1", "Cruise", "PathList")["meta"]["code"] == 200
+    assert client.get_tracking_status("cam123", "Video", "1", "Track", "Status")["meta"]["code"] == 200
+    assert client.get_port_security("cam123")["meta"]["code"] == 200
+    assert client.get_device_feature_value("cam123", "Video", "Domain", "Prop", local_index=3)["meta"]["code"] == 200
+
+    assert urls[0].endswith("/v3/iot-feature/feature/CAM123/Battery/0/Power/KeepAlive")
+    assert urls[1].endswith("/v3/iot-feature/feature/CAM123/Video/1/Object/Removal")
+    assert bodies[1] == '{"q":1}'
+    assert urls[2].endswith("/v3/iot-feature/feature/CAM123/PTZ/1/Cruise/PathList")
+    assert urls[3].endswith("/v3/iot-feature/feature/CAM123/Video/1/Track/Status")
+    assert urls[4].endswith("/v3/iot-feature/feature/CAM123/Video/1/NetworkSecurityProtection/PortSecurity")
+    assert urls[5].endswith("/v3/iot-feature/feature/CAM123/Video/3/Domain/Prop")
+    assert bodies[0] is None
+
+
+def test_iot_action_and_port_security_wrappers_build_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_iot_request(
+        method: str,
+        endpoint: str,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "method": method,
+                "endpoint": endpoint,
+                "serial": serial,
+                "resource_identifier": resource_identifier,
+                "local_index": local_index,
+                "domain_id": domain_id,
+                "action_id": action_id,
+                **kwargs,
+            }
+        )
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_iot_request", fake_iot_request)
+
+    assert client.set_port_security("CAM123", {"https": True}, max_retries=1)["meta"]["code"] == 200
+    assert client.set_iot_action("CAM123", "PTZ", "1", "Move", "Start", {"speed": 3})["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["resource_identifier"] == "Video"
+    assert calls[0]["domain_id"] == "NetworkSecurityProtection"
+    assert calls[0]["action_id"] == "PortSecurity"
+    assert calls[0]["payload"] == {"value": {"https": True}}
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["resource_identifier"] == "PTZ"
+    assert calls[1]["payload"] == {"speed": 3}
+
+
+def test_iot_feature_user_helpers_normalize_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_iot_request(
+        method: str,
+        endpoint: str,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "method": method,
+                "resource_identifier": resource_identifier,
+                "local_index": local_index,
+                "domain_id": domain_id,
+                "action_id": action_id,
+                **kwargs,
+            }
+        )
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_iot_request", fake_iot_request)
+
+    assert client.set_intelligent_fill_light("CAM123", enabled=True, local_index="2")["meta"]["code"] == 200
+    assert client.set_intelligent_fill_light("CAM123", enabled=False)["meta"]["code"] == 200
+    assert client.set_image_flip_iot("CAM123", enabled=True)["meta"]["code"] == 200
+    assert client.set_image_flip_iot("CAM123", payload='{"value":{"enabled":false}}')["meta"]["code"] == 200
+
+    assert calls[0]["domain_id"] == "SupplementLightMgr"
+    assert calls[0]["action_id"] == "ImageSupplementLightModeSwitchParams"
+    assert calls[0]["payload"] == {
+        "value": {"enabled": True, "supplementLightSwitchMode": "eventIntelligence"}
+    }
+    assert calls[0]["local_index"] == "2"
+    assert calls[1]["payload"] == {
+        "value": {"enabled": False, "supplementLightSwitchMode": "irLight"}
+    }
+    assert calls[2]["domain_id"] == "VideoAdjustment"
+    assert calls[2]["action_id"] == "ImageFlip"
+    assert calls[2]["payload"] == {"value": {"enabled": True}}
+    assert calls[3]["payload"] == {"value": {"enabled": False}}
+
+
+def test_set_image_flip_iot_requires_enabled_or_payload() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Either 'enabled' or 'payload' must be provided"):
+        client.set_image_flip_iot("CAM123")
+
+
+def test_set_lens_defog_mode_maps_options(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_set_iot_feature(
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        value: Any,
+        *,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "serial": serial,
+                "resource_identifier": resource_identifier,
+                "local_index": local_index,
+                "domain_id": domain_id,
+                "action_id": action_id,
+                "value": value,
+                "max_retries": max_retries,
+            }
+        )
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "set_iot_feature", fake_set_iot_feature)
+
+    assert client.set_lens_defog_mode("CAM123", 1, local_index="2", max_retries=1) == (True, "open")
+    assert client.set_lens_defog_mode("CAM123", 2) == (False, "auto")
+    assert client.set_lens_defog_mode("CAM123", 0) == (True, "auto")
+
+    assert calls[0] == {
+        "serial": "CAM123",
+        "resource_identifier": "Video",
+        "local_index": "2",
+        "domain_id": "LensCleaning",
+        "action_id": "DefogCfg",
+        "value": {"value": {"enabled": True, "defogMode": "open"}},
+        "max_retries": 1,
+    }
+    assert calls[1]["value"] == {"value": {"enabled": False, "defogMode": "auto"}}
+    assert calls[2]["value"] == {"value": {"enabled": True, "defogMode": "auto"}}
+
+
+def test_iot_request_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        return _response(text='{"meta": {"code": 500}, "message": "bad"}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    with pytest.raises(PyEzvizError, match="Could not set IoT feature value"):
+        client.set_iot_feature("CAM123", "Video", "1", "Domain", "Action", {"value": 1})

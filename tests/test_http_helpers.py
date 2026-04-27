@@ -1985,3 +1985,73 @@ def test_defence_mode_helpers_raise_contextual_errors(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not switch defence mode"):
         client.switch_defence_mode(5, 1)
+
+
+def test_door_lock_and_remote_lock_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_door_lock_users("LOCK123", max_retries=1)["meta"]["code"] == 200
+    assert client.remote_unlock(
+        "LOCK123",
+        "user-1",
+        7,
+        resource_id="DoorLock",
+        local_index=2,
+        stream_token="stream-1",
+        lock_type="fingerprint",
+    ) is True
+    assert client.remote_lock("LOCK123", "user-1", 7) is True
+    assert client.get_remote_unbind_progress("LOCK123", max_retries=2)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("LOCK123/users")
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["path"].endswith("LOCK123/DoorLock/2/DoorLockMgr/RemoteUnlockReq")
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": f"{FEATURE_CODE}user-1",
+            "lockNo": 7,
+            "streamToken": "stream-1",
+            "userName": "user-1",
+            "type": "fingerprint",
+        }
+    }
+    assert calls[1]["retry_401"] is True
+    assert calls[1]["max_retries"] == 0
+    assert calls[2]["method"] == "PUT"
+    assert calls[2]["path"].endswith("LOCK123/Video/1/DoorLockMgr/RemoteLockReq")
+    assert calls[2]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": f"{FEATURE_CODE}user-1",
+            "lockNo": 7,
+            "streamToken": "",
+            "userName": "user-1",
+        }
+    }
+    assert calls[3]["method"] == "GET"
+    assert calls[3]["path"].endswith("LOCK123/progress")
+    assert calls[3]["max_retries"] == 2
+
+
+def test_door_lock_helpers_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get door lock users"):
+        client.get_door_lock_users("LOCK123")
+
+    with pytest.raises(PyEzvizError, match="Could not get unbind progress"):
+        client.get_remote_unbind_progress("LOCK123")

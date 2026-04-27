@@ -62,14 +62,21 @@ jobs:
       - name: mypy (auto-install any missing stubs)
         run: mypy --install-types --non-interactive .
 
-      - name: pytest (skip gracefully if no tests yet)
+      - name: pytest with coverage (skip gracefully if no tests yet)
         shell: bash
         run: |
           if compgen -G "tests/test_*.py" > /dev/null; then
-            pytest -q
+            pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml
           else
             echo "No tests found under tests/, skipping pytest."
           fi
+
+      - name: Upload coverage XML
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml
 
       - name: Build package
         run: python -m build

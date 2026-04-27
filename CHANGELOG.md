@@ -6,6 +6,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+## v1.0.4.6 - 2026-04-27
+
 ### Added
 
 - Modern package build checks in CI, including wheel install, CLI smoke tests, and supported Python version matrix coverage.

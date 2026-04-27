@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.__main__ import _format_cell, _write_table
@@ -167,3 +167,122 @@ def test_main_prompts_for_mfa_code_and_retries_login(monkeypatch, tmp_path) -> N
     client = MfaClient.instances[0]
     assert client.login_calls == [None, 123456]
     assert client.closed is True
+
+
+def test_unifiedmsg_json_outputs_messages(monkeypatch, tmp_path, capsys) -> None:
+    class UnifiedClient(_FakeClient):
+        def get_device_messages_list(
+            self,
+            *,
+            serials: str | None = None,
+            limit: int = 20,
+            date: str | None = None,
+            end_time: str = "",
+        ) -> dict[str, Any]:
+            self.request = {
+                "serials": serials,
+                "limit": limit,
+                "date": date,
+                "end_time": end_time,
+            }
+            return {
+                "message": [
+                    {
+                        "deviceSerial": "CAM123",
+                        "timeStr": "2026-04-27 08:00:00",
+                        "subType": "motion",
+                        "title": "Motion detected",
+                    }
+                ]
+            }
+
+    UnifiedClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", UnifiedClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "unifiedmsg",
+                "--serials",
+                "CAM123",
+                "--limit",
+                "5",
+                "--date",
+                "20260427",
+                "--end-time",
+                "cursor-1",
+            ]
+        )
+        == 0
+    )
+
+    client = cast(UnifiedClient, UnifiedClient.instances[0])
+    assert client.request == {
+        "serials": "CAM123",
+        "limit": 5,
+        "date": "20260427",
+        "end_time": "cursor-1",
+    }
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "deviceSerial": "CAM123",
+            "timeStr": "2026-04-27 08:00:00",
+            "subType": "motion",
+            "title": "Motion detected",
+        }
+    ]
+
+
+def test_unifiedmsg_urls_only_extracts_media_urls(monkeypatch, tmp_path, capsys) -> None:
+    class UnifiedClient(_FakeClient):
+        def get_device_messages_list(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "messages": [
+                    {"deviceSerial": "CAM1", "pic": "https://example.test/pic.jpg"},
+                    {
+                        "deviceSerial": "CAM2",
+                        "defaultPic": "https://example.test/default.jpg",
+                    },
+                    {
+                        "deviceSerial": "CAM3",
+                        "ext": {
+                            "pics": "https://example.test/first.jpg;https://example.test/second.jpg"
+                        },
+                    },
+                    {"deviceSerial": "CAM4"},
+                    "not-a-message",
+                ]
+            }
+
+    UnifiedClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", UnifiedClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert cli_module.main(["--token-file", str(token_file), "unifiedmsg", "--urls-only"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "CAM1: https://example.test/pic.jpg",
+        "CAM2: https://example.test/default.jpg",
+        "CAM3: https://example.test/first.jpg",
+    ]
+
+
+def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, capsys) -> None:
+    class UnifiedClient(_FakeClient):
+        def get_device_messages_list(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"messages": []}
+
+    UnifiedClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", UnifiedClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert cli_module.main(["--token-file", str(token_file), "unifiedmsg"]) == 0
+
+    assert capsys.readouterr().out == "No unified messages returned.\n"

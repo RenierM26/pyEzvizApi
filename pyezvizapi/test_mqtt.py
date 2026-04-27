@@ -70,7 +70,7 @@ def _enable_raw_logging(mqtt_client: MQTTClient) -> None:
             original_on_message(client, userdata, msg)
 
     paho_client.on_message = _raw_logging_wrapper
-    mqtt_client._raw_logging_enabled = True  # type: ignore[attr-defined]  # noqa: SLF001
+    mqtt_client._raw_logging_enabled = True  # type: ignore[attr-defined]
 
 
 def _load_token_file(path: str | None) -> dict[str, Any] | None:

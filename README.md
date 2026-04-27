@@ -160,13 +160,13 @@ For quick experimentation, a small helper script is included which can use a sav
 
 ```bash
 # With a previously saved token file
-python config/custom_components/ezviz_cloud/pyezvizapi/test_mqtt.py --token-file ezviz_token.json
+python examples/mqtt_listener.py --token-file ezviz_token.json
 
 # Interactive login, then save token for next time
-python config/custom_components/ezviz_cloud/pyezvizapi/test_mqtt.py --save-token
+python examples/mqtt_listener.py --save-token
 
 # Explicit credentials (not recommended for shared terminals)
-python config/custom_components/ezviz_cloud/pyezvizapi/test_mqtt.py -u USER -p PASS --save-token
+python examples/mqtt_listener.py -u USER -p PASS --save-token
 ```
 
 ### pagelist
@@ -201,7 +201,7 @@ pyezvizapi camera --serial BAXXXXXXX-BAYYYYYYY unlock-gate
 Validate RTSP credentials by issuing a DESCRIBE request. Falls back from Basic to Digest auth automatically.
 
 ```bash
-python -c "from config.custom_components.ezviz_cloud.pyezvizapi.test_cam_rtsp import TestRTSPAuth as T; T('<IP>', '<USER>', '<PASS>', '/Streaming/Channels/101').main()"
+python examples/rtsp_auth_test.py <IP> <USER> <PASS> --uri /Streaming/Channels/101
 ```
 
 On success, the script prints a confirmation. On failure it raises one of:
@@ -215,19 +215,21 @@ Please format with Ruff and check typing with mypy.
 
 ```bash
 ruff check .
-mypy config/custom_components/ezviz_cloud/pyezvizapi
+mypy .
 ```
 
 Run style fixes where possible:
 
 ```bash
-ruff check --fix config/custom_components/ezviz_cloud/pyezvizapi
+ruff check --fix .
 ```
 
-Run tests with tox:
+Run tests and packaging checks:
 
 ```bash
-tox
+pytest
+python -m build
+twine check dist/*
 ```
 
 ## Side Notes

@@ -5,7 +5,7 @@ client, and a large collection of enums that map integers/strings from
 the Ezviz API to descriptive names.
 """
 
-from enum import Enum, unique
+from enum import Enum, StrEnum, unique
 from hashlib import md5
 import uuid
 
@@ -57,7 +57,7 @@ class MessageFilterType(Enum):
 
 
 @unique
-class UnifiedMessageSubtype(str, Enum):
+class UnifiedMessageSubtype(StrEnum):
     """High-level subtype bundles supported by the Ezviz mobile app."""
 
     # Equivalent to the "All alarm" chip in the official app UI.

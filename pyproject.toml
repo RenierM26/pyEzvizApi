@@ -1,12 +1,17 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyezvizapi"
+version = "1.0.4.5"
 description = "EZVIZ API client for Home Assistant and CLI"
 readme = "README.md"
 requires-python = ">=3.12"
-dynamic = ["version"]
+license = "Apache-2.0"
+authors = [
+  { name = "Renier Moorcroft", email = "RenierM26@users.github.com" }
+]
 dependencies = [
   "requests",
   "xmltodict",
@@ -14,6 +19,20 @@ dependencies = [
   "paho-mqtt",
   "pandas"
 ]
+
+[project.urls]
+Homepage = "https://github.com/RenierM26/pyEzvizApi/"
+Repository = "https://github.com/RenierM26/pyEzvizApi/"
+Issues = "https://github.com/RenierM26/pyEzvizApi/issues"
+
+[project.scripts]
+pyezvizapi = "pyezvizapi.__main__:main"
+
+[project.optional-dependencies]
+dev = ["build", "ruff", "mypy", "pytest", "twine", "types-requests"]
+
+[tool.setuptools.packages.find]
+include = ["pyezvizapi*"]
 
 [tool.ruff]
 line-length = 100
@@ -30,6 +49,8 @@ ignore = ["E501"] # long URLs ok
 "pyezvizapi/__main__.py" = ["PLR0911","PLR0912","PLR0915"]
 # Re-export noise in __init__ (if applicable):
 "pyezvizapi/__init__.py" = ["F401"]
+# Compatibility helper modules may intentionally expose legacy names.
+"pyezvizapi/test_*.py" = ["SLF001"]
 
 # Import sorting to match HA expectations
 [tool.ruff.lint.isort]
@@ -54,9 +75,6 @@ warn_redundant_casts = true
 warn_no_return = true
 no_implicit_optional = true
 check_untyped_defs = true
-
-[project.optional-dependencies]
-dev = ["ruff", "mypy", "pytest", "types-requests"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

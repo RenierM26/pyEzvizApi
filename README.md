@@ -248,6 +248,8 @@ For advanced troubleshooting or new feature research, MITM proxy tools like mitm
 
 Contributions are welcome — the API surface is large and there are many improvements possible.
 
+For changes that affect Home Assistant integrations, see `docs/home-assistant-contract.md` before renaming methods, changing status keys, or altering auth/MQTT behavior.
+
 ## Versioning
 
 We follow SemVer when publishing the library. See `CHANGELOG.md` and repository tags for released versions.

@@ -16,8 +16,7 @@ dependencies = [
   "requests",
   "xmltodict",
   "pycryptodome",
-  "paho-mqtt",
-  "pandas"
+  "paho-mqtt"
 ]
 
 [project.urls]
@@ -55,7 +54,7 @@ ignore = ["E501"] # long URLs ok
 # Import sorting to match HA expectations
 [tool.ruff.lint.isort]
 known-first-party = ["pyezvizapi"]
-known-third-party = ["homeassistant", "aiohttp", "voluptuous", "yarl", "pandas", "xmltodict", "Crypto"]
+known-third-party = ["homeassistant", "aiohttp", "voluptuous", "yarl", "xmltodict", "Crypto"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 combine-as-imports = true
 force-sort-within-sections = true

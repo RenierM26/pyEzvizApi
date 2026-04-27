@@ -2669,3 +2669,125 @@ def test_lower_tail_helpers_raise_contextual_errors(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not upload device log"):
         client.upload_device_log("CAM123")
+
+
+def test_lbs_domain_and_alarm_sound_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.lbs_domain(max_retries=1)["meta"]["code"] == 200
+    assert client.alarm_sound("CAM123", sound_type=2, enable=0, voice_id=9, max_retries=2) is True
+    assert client.alarm_sound("CAM456", sound_type=1) is True
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["path"].endswith("CAM123/alarm/sound")
+    assert calls[1]["data"] == {
+        "enable": 0,
+        "soundType": 2,
+        "voiceId": 9,
+        "deviceSerial": "CAM123",
+    }
+    assert calls[1]["retry_401"] is True
+    assert calls[1]["max_retries"] == 2
+    assert calls[2]["data"] == {
+        "enable": 1,
+        "soundType": 1,
+        "voiceId": 0,
+        "deviceSerial": "CAM456",
+    }
+
+
+def test_alarm_sound_validates_and_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Invalid sound_type"):
+        client.alarm_sound("CAM123", sound_type=9)
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.alarm_sound("CAM123", sound_type=1, max_retries=99)
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not set alarm sound"):
+        client.alarm_sound("CAM123", sound_type=1)
+
+    with pytest.raises(PyEzvizError, match="Could not get LBS domain"):
+        client.lbs_domain()
+
+
+def test_page_list_facades_use_expected_filters(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_api_get_pagelist(
+        page_filter: str,
+        json_key: str | None = None,
+        group_id: int = -1,
+        limit: int = 30,
+        offset: int = 0,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "page_filter": page_filter,
+                "json_key": json_key,
+                "group_id": group_id,
+                "limit": limit,
+                "offset": offset,
+                "max_retries": max_retries,
+            }
+        )
+        return {"filter": page_filter, "json_key": json_key}
+
+    monkeypatch.setattr(client, "_api_get_pagelist", fake_api_get_pagelist)
+
+    assert client.get_device() == {"filter": "CLOUD", "json_key": "deviceInfos"}
+    assert client.get_connection() == {"filter": "CONNECTION", "json_key": "CONNECTION"}
+    assert client.get_switch() == {"filter": "SWITCH", "json_key": "SWITCH"}
+    assert client.get_page_list()["json_key"] is None
+
+    assert calls[0]["page_filter"] == "CLOUD"
+    assert calls[0]["json_key"] == "deviceInfos"
+    assert calls[1]["page_filter"] == "CONNECTION"
+    assert calls[1]["json_key"] == "CONNECTION"
+    assert calls[2]["page_filter"] == "SWITCH"
+    assert calls[2]["json_key"] == "SWITCH"
+    assert "CLOUD" in calls[3]["page_filter"]
+    assert "SWITCH" in calls[3]["page_filter"]
+    assert calls[3]["json_key"] is None
+
+
+def test_get_mqtt_client_reuses_cached_instance(monkeypatch) -> None:
+    client = _client()
+    created: list[dict[str, Any]] = []
+
+    class FakeMQTTClient:
+        def __init__(self, **kwargs: Any) -> None:
+            created.append(kwargs)
+
+    monkeypatch.setattr("pyezvizapi.client.MQTTClient", FakeMQTTClient)
+
+    def callback(payload: dict[str, Any]) -> None:
+        return None
+
+    first = client.get_mqtt_client(callback)
+    second = client.get_mqtt_client()
+
+    assert first is second
+    assert len(created) == 1
+    assert created[0]["token"] == client._token
+    assert created[0]["session"] is client._session
+    assert created[0]["timeout"] == 1
+    assert created[0]["on_message_callback"] is callback

@@ -2577,3 +2577,95 @@ def test_search_device_raises_contextual_error(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not search device"):
         client.search_device("CAM123")
+
+
+def test_lower_tail_helpers_build_request_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_socket_log_info("PLUG123", "2026-04-27", "2026-04-28", max_retries=1)["meta"]["code"] == 200
+    assert client.linked_cameras("A1S123", "DET456", max_retries=2)["meta"]["code"] == 200
+    assert client.set_microscope("CAM123", 2.5, 10, 20, 1, max_retries=3)["meta"]["code"] == 200
+    assert client.share_accept("CAM123", max_retries=4)["meta"]["code"] == 200
+    assert client.share_quit("CAM123", max_retries=5)["meta"]["code"] == 200
+    assert client.send_feedback(
+        email="user@example.test",
+        account="account-1",
+        score=5,
+        feedback="works",
+        pic_url="https://image.example/pic.jpg",
+        max_retries=6,
+    )["meta"]["code"] == 200
+    assert client.upload_device_log("CAM123", max_retries=7)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert "2026-04-27" in calls[0]["path"]
+    assert "2026-04-28" in calls[0]["path"]
+    assert calls[0]["params"] == {"deviceSerial": "PLUG123"}
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["params"] == {
+        "deviceSerial": "A1S123",
+        "detectorDeviceSerial": "DET456",
+    }
+    assert calls[1]["max_retries"] == 2
+    assert calls[2]["method"] == "PUT"
+    assert calls[2]["path"].endswith("CAM123/microscope")
+    assert calls[2]["data"] == {"multiple": 2.5, "x": 10, "y": 20, "index": 1}
+    assert calls[2]["max_retries"] == 3
+    assert calls[3]["method"] == "POST"
+    assert calls[3]["data"] == {"deviceSerial": "CAM123"}
+    assert calls[3]["max_retries"] == 4
+    assert calls[4]["method"] == "DELETE"
+    assert calls[4]["params"] == {"deviceSerial": "CAM123"}
+    assert calls[4]["max_retries"] == 5
+    assert calls[5]["method"] == "POST"
+    assert calls[5]["params"] == {
+        "email": "user@example.test",
+        "account": "account-1",
+        "score": 5,
+        "feedback": "works",
+        "picUrl": "https://image.example/pic.jpg",
+    }
+    assert calls[5]["max_retries"] == 6
+    assert calls[6]["method"] == "POST"
+    assert calls[6]["path"] == "/v3/devconfig/dump/app/trigger"
+    assert calls[6]["data"] == {"deviceSerial": "CAM123"}
+    assert calls[6]["max_retries"] == 7
+    assert all(call["retry_401"] is True for call in calls)
+
+
+def test_lower_tail_helpers_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get socket log info"):
+        client.get_socket_log_info("PLUG123", "start", "end")
+
+    with pytest.raises(PyEzvizError, match="Could not get linked cameras"):
+        client.linked_cameras("A1S123", "DET456")
+
+    with pytest.raises(PyEzvizError, match="Could not set microscope"):
+        client.set_microscope("CAM123", 2.5, 10, 20, 1)
+
+    with pytest.raises(PyEzvizError, match="Could not accept share"):
+        client.share_accept("CAM123")
+
+    with pytest.raises(PyEzvizError, match="Could not quit share"):
+        client.share_quit("CAM123")
+
+    with pytest.raises(PyEzvizError, match="Could not send feedback"):
+        client.send_feedback(email="user@example.test", account="account", score=1, feedback="nope")
+
+    with pytest.raises(PyEzvizError, match="Could not upload device log"):
+        client.upload_device_log("CAM123")

@@ -1066,3 +1066,228 @@ def test_set_video_enc_raises_contextual_api_error(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not set video encryption"):
         client.set_video_enc("CAM123")
+
+
+def test_voice_info_helpers_build_request_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_voice_config("prod-1", "v1", max_retries=1)["meta"]["code"] == 200
+    assert client.get_voice_info("CAM123", local_index="2")["meta"]["code"] == 200
+    assert client.add_voice_info("CAM123", "hello", "https://voice.example/1", local_index="2")["meta"]["code"] == 200
+    assert client.set_voice_info("CAM123", 5, "hello2", local_index="2")["meta"]["code"] == 200
+    assert client.delete_voice_info(
+        "CAM123",
+        5,
+        voice_url="https://voice.example/1",
+        local_index="2",
+    )["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["params"] == {"productId": "prod-1", "version": "v1"}
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["params"] == {"deviceSerial": "CAM123", "localIndex": "2"}
+    assert calls[2]["method"] == "POST"
+    assert calls[2]["data"] == {
+        "deviceSerial": "CAM123",
+        "voiceName": "hello",
+        "voiceUrl": "https://voice.example/1",
+        "localIndex": "2",
+    }
+    assert calls[3]["method"] == "PUT"
+    assert calls[3]["data"] == {
+        "deviceSerial": "CAM123",
+        "voiceId": 5,
+        "voiceName": "hello2",
+        "localIndex": "2",
+    }
+    assert calls[4]["method"] == "DELETE"
+    assert calls[4]["params"] == {
+        "deviceSerial": "CAM123",
+        "voiceId": 5,
+        "voiceUrl": "https://voice.example/1",
+        "localIndex": "2",
+    }
+
+
+def test_shared_voice_aliases_forward_local_index(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_add_voice_info(
+        serial: str,
+        voice_name: str,
+        voice_url: str,
+        *,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "op": "add",
+                "serial": serial,
+                "voice_name": voice_name,
+                "voice_url": voice_url,
+                "local_index": local_index,
+                "max_retries": max_retries,
+            }
+        )
+        return {"meta": {"code": 200}}
+
+    def fake_set_voice_info(
+        serial: str,
+        voice_id: int,
+        voice_name: str,
+        *,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "op": "set",
+                "serial": serial,
+                "voice_id": voice_id,
+                "voice_name": voice_name,
+                "local_index": local_index,
+                "max_retries": max_retries,
+            }
+        )
+        return {"meta": {"code": 200}}
+
+    def fake_delete_voice_info(
+        serial: str,
+        voice_id: int,
+        *,
+        voice_url: str | None = None,
+        local_index: str | None = None,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "op": "delete",
+                "serial": serial,
+                "voice_id": voice_id,
+                "voice_url": voice_url,
+                "local_index": local_index,
+                "max_retries": max_retries,
+            }
+        )
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "add_voice_info", fake_add_voice_info)
+    monkeypatch.setattr(client, "set_voice_info", fake_set_voice_info)
+    monkeypatch.setattr(client, "delete_voice_info", fake_delete_voice_info)
+
+    assert client.add_shared_voice_info("CAM123", "hello", "url", "3", max_retries=1)["meta"]["code"] == 200
+    assert client.set_shared_voice_info("CAM123", 7, "hello2", "3", max_retries=2)["meta"]["code"] == 200
+    assert client.delete_shared_voice_info("CAM123", 7, "url", "3", max_retries=3)["meta"]["code"] == 200
+
+    assert calls == [
+        {
+            "op": "add",
+            "serial": "CAM123",
+            "voice_name": "hello",
+            "voice_url": "url",
+            "local_index": "3",
+            "max_retries": 1,
+        },
+        {
+            "op": "set",
+            "serial": "CAM123",
+            "voice_id": 7,
+            "voice_name": "hello2",
+            "local_index": "3",
+            "max_retries": 2,
+        },
+        {
+            "op": "delete",
+            "serial": "CAM123",
+            "voice_id": 7,
+            "voice_url": "url",
+            "local_index": "3",
+            "max_retries": 3,
+        },
+    ]
+
+
+def test_whistle_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_whistle_status_by_channel("CAM123")["meta"]["code"] == 200
+    assert client.get_whistle_status_by_device("CAM123")["meta"]["code"] == 200
+    assert client.set_channel_whistle(
+        "CAM123",
+        [{"channel": 1, "status": 1, "duration": 10, "volume": 50}],
+        max_retries=1,
+    )["meta"]["code"] == 200
+    assert client.set_device_whistle("CAM123", status=1, duration=10, volume=50)["meta"]["code"] == 200
+    assert client.stop_whistle("CAM123")["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[1]["method"] == "GET"
+    assert calls[2]["method"] == "POST"
+    assert calls[2]["json_body"] == {
+        "channelWhistleList": [
+            {
+                "channel": 1,
+                "status": 1,
+                "duration": 10,
+                "volume": 50,
+                "deviceSerial": "CAM123",
+            }
+        ]
+    }
+    assert calls[2]["max_retries"] == 1
+    assert calls[3]["method"] == "PUT"
+    assert calls[3]["params"] == {"status": 1, "duration": 10, "volume": 50}
+    assert calls[4]["method"] == "PUT"
+
+
+def test_channel_whistle_validates_entries() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="must contain at least one"):
+        client.set_channel_whistle("CAM123", [])
+
+    with pytest.raises(PyEzvizError, match="entries must include"):
+        client.set_channel_whistle("CAM123", [{"channel": 1, "status": 1}])
+
+
+def test_chime_sleep_and_switch_enable_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.delay_battery_device_sleep("CAM123", 1, 2, max_retries=1)["meta"]["code"] == 200
+    assert client.get_device_chime_info("CAM123", 1)["meta"]["code"] == 200
+    assert client.set_device_chime_info("CAM123", 1, sound_type=2, duration=30)["meta"]["code"] == 200
+    assert client.set_switch_enable_req("CAM123", 1, 0, 7)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/1/2/sleep")
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["path"].endswith("CAM123/1")
+    assert calls[2]["method"] == "POST"
+    assert calls[2]["data"] == {"type": 2, "duration": 30}
+    assert calls[3]["method"] == "PUT"
+    assert calls[3]["params"] == {"enable": 0, "type": 7}

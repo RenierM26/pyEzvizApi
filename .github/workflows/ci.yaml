@@ -65,6 +65,14 @@ jobs:
       - name: Ruff
         run: ruff check .
 
+      - name: Codespell
+        if: matrix.python-version == '3.12'
+        run: codespell pyezvizapi tests README.md pyproject.toml .github
+
+      - name: Audit Python dependencies
+        if: matrix.python-version == '3.12'
+        run: pip-audit --progress-spinner off
+
       - name: mypy (auto-install any missing stubs)
         run: mypy --install-types --non-interactive .
 

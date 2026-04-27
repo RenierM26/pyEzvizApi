@@ -45,7 +45,7 @@ Issues = "https://github.com/RenierM26/pyEzvizApi/issues"
 pyezvizapi = "pyezvizapi.__main__:main"
 
 [project.optional-dependencies]
-dev = ["build", "ruff", "mypy", "pytest", "pytest-cov", "twine", "types-requests"]
+dev = ["build", "codespell", "mypy", "pip-audit", "pytest", "pytest-cov", "ruff", "twine", "types-requests"]
 
 [tool.setuptools.packages.find]
 include = ["pyezvizapi*"]
@@ -109,6 +109,10 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.codespell]
+ignore-words-list = "adss,aliase,anull,enull,hass,hassio,hybernate"
+skip = "*.egg-info,build,dist"
 
 [tool.coverage.run]
 source = ["pyezvizapi"]

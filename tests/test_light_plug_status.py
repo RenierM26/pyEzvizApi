@@ -165,3 +165,67 @@ def test_smart_plug_status_accepts_typed_device_record() -> None:
     assert status["serial"] == "PLUG456"
     assert status["name"] == "Heater Plug"
     assert status["is_on"] is True
+
+
+class _FakeControlClient:
+    def __init__(self) -> None:
+        self.feature_calls: list[tuple[str, str, object, str]] = []
+        self.switch_calls: list[tuple[str, int, int]] = []
+
+    def set_device_feature_by_key(
+        self,
+        serial: str,
+        product_id: str,
+        value: object,
+        item_key: str,
+    ) -> bool:
+        self.feature_calls.append((serial, product_id, value, item_key))
+        return True
+
+    def set_switch(self, serial: str, switch_type: int, state: int) -> None:
+        self.switch_calls.append((serial, switch_type, state))
+
+
+def test_light_control_methods_write_feature_values() -> None:
+    client = _FakeControlClient()
+    light = EzvizLightBulb(cast(EzvizClient, client), "LIGHT123", _light_payload())
+
+    assert light.set_brightness(42) is True
+    assert light.power_on() is True
+    assert light.power_off() is True
+    assert light.toggle_switch() is True
+
+    assert client.feature_calls == [
+        ("LIGHT123", "prod-light", 42, "brightness"),
+        ("LIGHT123", "prod-light", True, "light_switch"),
+        ("LIGHT123", "prod-light", False, "light_switch"),
+        ("LIGHT123", "prod-light", False, "light_switch"),
+    ]
+
+
+def test_light_toggle_inverts_false_feature_value() -> None:
+    payload = _light_payload()
+    payload["FEATURE"]["featureJson"] = (
+        '{"productId": "prod-light", "featureItemDtos": ['
+        '{"itemKey": "light_switch", "dataValue": false}'
+        "]}"
+    )
+    client = _FakeControlClient()
+    light = EzvizLightBulb(cast(EzvizClient, client), "LIGHT123", payload)
+
+    assert light.toggle_switch() is True
+
+    assert client.feature_calls == [("LIGHT123", "prod-light", True, "light_switch")]
+
+
+def test_smart_plug_power_methods_write_plug_switch() -> None:
+    client = _FakeControlClient()
+    plug = EzvizSmartPlug(cast(EzvizClient, client), "PLUG123", _plug_payload())
+
+    assert plug.power_on() is True
+    assert plug.power_off() is True
+
+    assert client.switch_calls == [
+        ("PLUG123", DeviceSwitchType.PLUG.value, 1),
+        ("PLUG123", DeviceSwitchType.PLUG.value, 0),
+    ]

@@ -71,6 +71,7 @@ ignore = ["E501"] # long URLs ok
 "tests/test_mqtt.py" = ["SLF001"]
 "tests/test_pagelist.py" = ["SLF001"]
 "tests/test_http_helpers.py" = ["SLF001"]
+"tests/test_mqtt_demo.py" = ["SLF001"]
 "tests/test_auth.py" = ["SLF001"]
 "tests/test_client_parsing.py" = ["SLF001"]
 "tests/test_alarm_parsing.py" = ["SLF001"]

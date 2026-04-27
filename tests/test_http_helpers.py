@@ -7,7 +7,12 @@ import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.constants import FEATURE_CODE, DeviceSwitchType, UnifiedMessageSubtype
+from pyezvizapi.constants import (
+    FEATURE_CODE,
+    DefenseModeType,
+    DeviceSwitchType,
+    UnifiedMessageSubtype,
+)
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 
@@ -1887,3 +1892,96 @@ def test_do_not_disturb_and_answer_call_raise_contextual_errors(monkeypatch) -> 
 
     with pytest.raises(PyEzvizError, match="Could not set answer call"):
         client.set_answer_call("CAM123")
+
+
+def test_api_set_defence_schedule_retries_and_builds_payload(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [{"resultCode": "-1"}, {"resultCode": "0"}]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.api_set_defence_schedule(
+        "CAM123",
+        '{"start":"08:00","stop":"17:00"}',
+        enable=1,
+        max_retries=1,
+    ) is True
+    assert len(calls) == 2
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {
+        "devTimingPlan": '{"CN":0,"EL":1,"SS":"CAM123","WP":[{"start":"08:00","stop":"17:00"}]}]}'
+    }
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 0
+
+
+def test_api_set_defence_schedule_validates_and_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.api_set_defence_schedule("CAM123", "{}", 1, max_retries=99)
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"resultCode": "500", "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not set the schedule"):
+        client.api_set_defence_schedule("CAM123", "{}", 1)
+
+
+def test_defence_mode_helpers_build_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "ok": True}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.api_set_defence_mode(DefenseModeType.HOME_MODE, visual_alarm=1, sound_mode=2, max_retries=1) is True
+    assert client.api_set_defence_mode(3) is True
+    assert client.switch_defence_mode(5, 2, visual_alarm=0, sound_mode=1, max_retries=2) == {
+        "meta": {"code": 200},
+        "ok": True,
+    }
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {
+        "groupId": -1,
+        "mode": int(DefenseModeType.HOME_MODE.value),
+        "visualAlarm": 1,
+        "soundMode": 2,
+    }
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["data"] == {"groupId": -1, "mode": 3}
+    assert calls[2]["method"] == "POST"
+    assert calls[2]["data"] == {
+        "groupId": 5,
+        "mode": 2,
+        "visualAlarm": 0,
+        "soundMode": 1,
+    }
+    assert calls[2]["max_retries"] == 2
+
+
+def test_defence_mode_helpers_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not set defence mode"):
+        client.api_set_defence_mode(1)
+
+    with pytest.raises(PyEzvizError, match="Could not switch defence mode"):
+        client.switch_defence_mode(5, 1)

@@ -13,7 +13,12 @@ from pyezvizapi.constants import (
     DeviceSwitchType,
     UnifiedMessageSubtype,
 )
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
+from pyezvizapi.exceptions import (
+    DeviceException,
+    EzvizAuthVerificationCode,
+    HTTPError,
+    PyEzvizError,
+)
 
 
 def _client() -> EzvizClient:
@@ -2165,3 +2170,158 @@ def test_ptz_control_coordinates_formats_payload_and_validates(monkeypatch) -> N
 
     with pytest.raises(PyEzvizError, match="Invalid Y coordinate"):
         client.ptz_control_coordinates("CAM123", 0.5, 1.1)
+
+
+def test_capture_picture_builds_request(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.capture_picture("CAM123", 2, max_retries=1)["meta"]["code"] == 200
+    assert captured["method"] == "PUT"
+    assert captured["path"].endswith("CAM123/2/capture")
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 1
+
+
+def test_get_cam_key_retries_and_returns_encrypt_key(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [
+        {"resultCode": "-1"},
+        {"resultCode": "0", "encryptkey": "ENC123"},
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_cam_key("CAM123", smscode=123456, max_retries=1) == "ENC123"
+    assert len(calls) == 2
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {
+        "checkcode": 123456,
+        "serial": "CAM123",
+        "clientNo": "web_site",
+        "clientType": 3,
+        "netType": "WIFI",
+        "featureCode": FEATURE_CODE,
+        "sessionId": "session",
+    }
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 0
+
+
+def test_get_cam_key_maps_special_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"resultCode": "20002"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(EzvizAuthVerificationCode, match="MFA code required"):
+        client.get_cam_key("CAM123")
+
+    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"resultCode": "2009"})
+
+    with pytest.raises(DeviceException, match="Device not reachable"):
+        client.get_cam_key("CAM123")
+
+    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"resultCode": "500"})
+
+    with pytest.raises(PyEzvizError, match="Could not get camera encryption key"):
+        client.get_cam_key("CAM123")
+
+
+def test_get_cam_auth_code_builds_request_and_returns_code(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "devAuthCode": "AUTH123"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_cam_auth_code(
+        "CAM123",
+        encrypt_pwd="enc",
+        msg_auth_code=123456,
+        sender_type=3,
+        max_retries=1,
+    ) == "AUTH123"
+    assert captured["method"] == "GET"
+    assert captured["path"].endswith("CAM123")
+    assert captured["params"] == {
+        "encrptPwd": "enc",
+        "msgAuthCode": 123456,
+        "senderType": 3,
+    }
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 1
+
+
+def test_get_cam_auth_code_maps_special_errors(monkeypatch) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.get_cam_auth_code("CAM123", max_retries=99)
+
+    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"meta": {"code": 80000}})
+    with pytest.raises(EzvizAuthVerificationCode, match="Operation requires 2FA"):
+        client.get_cam_auth_code("CAM123")
+
+    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"meta": {"code": 2009}})
+    with pytest.raises(DeviceException, match="Device not reachable"):
+        client.get_cam_auth_code("CAM123")
+
+    monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: {"meta": {"code": 500}})
+    with pytest.raises(PyEzvizError, match="Could not get camera verification key"):
+        client.get_cam_auth_code("CAM123")
+
+
+def test_get_2fa_check_code_builds_request(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "contact": {"type": "EMAIL"}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_2fa_check_code(
+        biz_type="DEVICE_ENCRYPTION",
+        username="user@example.test",
+        max_retries=2,
+    ) == {"meta": {"code": 200}, "contact": {"type": "EMAIL"}}
+    assert captured["method"] == "POST"
+    assert captured["data"] == {
+        "bizType": "DEVICE_ENCRYPTION",
+        "from": "user@example.test",
+    }
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 2
+
+
+def test_get_2fa_check_code_validates_and_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.get_2fa_check_code(max_retries=99)
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not request elevated permission"):
+        client.get_2fa_check_code()

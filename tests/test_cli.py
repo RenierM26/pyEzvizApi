@@ -6,7 +6,7 @@ from typing import Any, ClassVar, cast
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.__main__ import _format_cell, _write_table
-from pyezvizapi.exceptions import EzvizAuthVerificationCode
+from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
 
 
 def test_cli_imports_without_pandas_installed() -> None:
@@ -807,3 +807,101 @@ def test_camera_alarm_and_select_commands_dispatch(monkeypatch, tmp_path) -> Non
     method_name, args = fake_camera.instances[-1].calls[0]
     assert method_name == "set_battery_camera_work_mode"
     assert args[0].name == "POWER_SAVE"
+
+
+def test_pagelist_outputs_raw_json(monkeypatch, tmp_path, capsys) -> None:
+    class MiscClient(_FakeClient):
+        def get_page_list(self) -> dict[str, Any]:
+            return {"deviceInfos": [{"deviceSerial": "CAM123"}]}
+
+    MiscClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", MiscClient)
+
+    assert cli_module.main(["--token-file", _token_file(tmp_path), "pagelist"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == {
+        "deviceInfos": [{"deviceSerial": "CAM123"}]
+    }
+    assert MiscClient.instances[0].closed is True
+
+
+def test_device_infos_outputs_all_or_filtered_serial(monkeypatch, tmp_path, capsys) -> None:
+    class MiscClient(_FakeClient):
+        def get_device_infos(self, serial: str | None = None) -> dict[str, Any]:
+            self.requested_serial = serial
+            if serial:
+                return {"deviceInfos": {"deviceSerial": serial}}
+            return {"CAM123": {"deviceInfos": {"name": "Front"}}}
+
+    MiscClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", MiscClient)
+
+    assert cli_module.main(["--token-file", _token_file(tmp_path), "device_infos"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "CAM123": {"deviceInfos": {"name": "Front"}}
+    }
+    assert cast(MiscClient, MiscClient.instances[-1]).requested_serial is None
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "device_infos",
+                "--serial",
+                "CAM456",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "deviceInfos": {"deviceSerial": "CAM456"}
+    }
+    assert cast(MiscClient, MiscClient.instances[-1]).requested_serial == "CAM456"
+
+
+def test_home_defence_mode_dispatches_selected_mode(monkeypatch, tmp_path, capsys) -> None:
+    class MiscClient(_FakeClient):
+        def api_set_defence_mode(self, mode: int) -> dict[str, Any]:
+            self.mode = mode
+            return {"mode": mode, "result": "ok"}
+
+    MiscClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", MiscClient)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "home_defence_mode",
+                "--mode",
+                "HOME_MODE",
+            ]
+        )
+        == 0
+    )
+
+    client = cast(MiscClient, MiscClient.instances[0])
+    assert isinstance(client.mode, int)
+    assert json.loads(capsys.readouterr().out) == {"mode": client.mode, "result": "ok"}
+
+
+def test_home_defence_mode_without_mode_returns_not_implemented(monkeypatch, tmp_path) -> None:
+    _install_fake_client(monkeypatch)
+
+    assert cli_module.main(["--token-file", _token_file(tmp_path), "home_defence_mode"]) == 2
+
+
+def test_pyezviz_error_returns_cli_error(monkeypatch, tmp_path, caplog) -> None:
+    class ErrorClient(_FakeClient):
+        def get_page_list(self) -> dict[str, Any]:
+            raise PyEzvizError("cloud exploded")
+
+    ErrorClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", ErrorClient)
+
+    assert cli_module.main(["--token-file", _token_file(tmp_path), "pagelist"]) == 1
+
+    assert "cloud exploded" in caplog.text
+    assert ErrorClient.instances[0].closed is True

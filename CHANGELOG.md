@@ -18,6 +18,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added CI coverage reporting, coverage XML artifacts, and a conservative 85% coverage floor.
 - Added CI `pip check` validation for both editable development installs and built-wheel smoke-test installs.
 - Documented the development validation workflow, artifact cleanup commands, and offline-test policy in the README.
+- Added contributor, support, security, PR checklist, and issue-template documentation for safer reports and easier maintenance.
 - Added Home Assistant integration contract documentation for stable APIs, status payloads, auth exceptions, MQTT behavior, and release coordination.
 - Limited alarm prefetching to camera devices so smart-plug/socket serials are not queried as camera alarm targets.
 - Added PyPI keywords and Trove classifiers for supported Python versions, typed-package status, Home Assistant/EZVIZ discovery, and CLI/library usage.

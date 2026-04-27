@@ -66,7 +66,7 @@ jobs:
         shell: bash
         run: |
           if compgen -G "tests/test_*.py" > /dev/null; then
-            pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml
+            pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
           else
             echo "No tests found under tests/, skipping pytest."
           fi

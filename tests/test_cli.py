@@ -286,3 +286,106 @@ def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, c
     assert cli_module.main(["--token-file", str(token_file), "unifiedmsg"]) == 0
 
     assert capsys.readouterr().out == "No unified messages returned.\n"
+
+
+def test_devices_status_table_expands_switch_flags(monkeypatch, tmp_path, capsys) -> None:
+    class DevicesClient(_FakeClient):
+        def load_cameras(self, *, refresh: bool = True) -> dict[str, dict[str, Any]]:
+            self.refresh = refresh
+            return {
+                "CAM123": {
+                    "name": "Front Door",
+                    "status": 1,
+                    "device_category": "camera",
+                    "device_sub_category": "doorbell",
+                    "local_ip": "192.0.2.10",
+                    "local_rtsp_port": "554",
+                    "battery_level": 87,
+                    "alarm_schedules_enabled": True,
+                    "alarm_notify": False,
+                    "Motion_Trigger": True,
+                    "SWITCH": [
+                        {"type": 21, "enable": 1},
+                        {"type": 7, "enable": 0},
+                        {"type": 22, "enable": True},
+                        {"type": 10, "enable": False},
+                        {"type": 3, "enable": 1},
+                        {"type": "ignored", "enable": 1},
+                    ],
+                }
+            }
+
+    DevicesClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", DevicesClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "devices",
+                "status",
+                "--no-refresh",
+            ]
+        )
+        == 0
+    )
+
+    client = cast(DevicesClient, DevicesClient.instances[0])
+    assert client.refresh is False
+    output = capsys.readouterr().out
+    assert "serial" in output
+    assert "CAM123" in output
+    assert "Front Door" in output
+    assert "doorbell" in output
+    assert "192.0.2.10" in output
+    assert "554" in output
+    assert "87" in output
+    # Legacy-friendly switch columns should be present in table output.
+    assert "True" in output
+    assert "False" in output
+
+
+def test_devices_status_json_preserves_payload_without_table_enrichment(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    class DevicesClient(_FakeClient):
+        def load_cameras(self, *, refresh: bool = True) -> dict[str, dict[str, Any]]:
+            self.refresh = refresh
+            return {
+                "CAM123": {
+                    "name": "Front Door",
+                    "SWITCH": [{"type": 21, "enable": 1}],
+                }
+            }
+
+    DevicesClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", DevicesClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "devices",
+                "status",
+            ]
+        )
+        == 0
+    )
+
+    client = cast(DevicesClient, DevicesClient.instances[0])
+    assert client.refresh is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "CAM123": {
+            "name": "Front Door",
+            "SWITCH": [{"type": 21, "enable": 1}],
+        }
+    }
+    assert "switch_flags" not in payload["CAM123"]

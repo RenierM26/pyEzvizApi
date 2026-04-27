@@ -211,11 +211,22 @@ On success, the script prints a confirmation. On failure it raises one of:
 
 ## Development
 
-Please format with Ruff and check typing with mypy.
+Install the project with development dependencies:
+
+```bash
+python -m pip install -U pip wheel
+python -m pip install -e .[dev]
+```
+
+Run the same local validation used by CI:
 
 ```bash
 ruff check .
-mypy .
+mypy --install-types --non-interactive .
+pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+python -m build
+twine check dist/*
+python -m pip check
 ```
 
 Run style fixes where possible:
@@ -224,13 +235,17 @@ Run style fixes where possible:
 ruff check --fix .
 ```
 
-Run tests and packaging checks:
+Before committing, remove generated artifacts so they do not leak into PRs:
 
 ```bash
-pytest
-python -m build
-twine check dist/*
+rm -rf dist build *.egg-info .coverage coverage.xml .pytest_cache .mypy_cache .ruff_cache
+find . -type d -name __pycache__ -prune -exec rm -rf {} +
 ```
+
+Tests should be offline by default. Do not add tests that require EZVIZ credentials,
+real cameras, cloud calls, or live network access. Prefer small fixtures and fakes for
+request builders, status parsing, MQTT payload handling, and Home Assistant integration
+contracts.
 
 ## Side Notes
 

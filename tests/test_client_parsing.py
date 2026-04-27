@@ -278,3 +278,89 @@ def test_load_devices_keeps_previous_light_status_when_new_status_fails(monkeypa
 
     assert loaded["LIGHT123"] == {"kind": "light", "serial": "LIGHT123", "stale": True}
     assert "Load_device_failed: serial=LIGHT123" in caplog.text
+
+
+def test_prefetch_latest_camera_alarms_returns_empty_without_serials() -> None:
+    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+
+    assert client._prefetch_latest_camera_alarms([]) == {}
+
+
+def test_prefetch_latest_camera_alarms_uses_global_fetch_before_filtered_chunks() -> None:
+    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+    calls: list[dict[str, Any]] = []
+
+    def fake_messages(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        if kwargs["serials"] is None:
+            return {
+                "messages": [
+                    {"deviceSerial": "CAM1", "msgId": "global-cam1"},
+                    {"deviceSerial": "OTHER", "msgId": "ignored"},
+                ],
+                "hasNext": False,
+            }
+        if kwargs["serials"] == "CAM2":
+            return {
+                "message": [{"deviceSerial": "CAM2", "msgId": "filtered-cam2"}],
+                "hasNext": False,
+            }
+        if kwargs["serials"] == "CAM3":
+            return {"message": [], "hasNext": False}
+        raise AssertionError(f"unexpected serial filter: {kwargs['serials']}")
+
+    client.get_device_messages_list = fake_messages  # type: ignore[assignment]
+
+    latest = client._prefetch_latest_camera_alarms(["CAM1", "CAM2", "CAM3"], chunk_size=2)
+
+    assert latest == {
+        "CAM1": {"deviceSerial": "CAM1", "msgId": "global-cam1"},
+        "CAM2": {"deviceSerial": "CAM2", "msgId": "filtered-cam2"},
+    }
+    assert calls == [
+        {"serials": None, "limit": 50, "date": "", "end_time": "", "max_retries": 1},
+        {
+            "serials": "CAM2",
+            "limit": 20,
+            "date": "",
+            "end_time": "",
+            "max_retries": 1,
+        },
+        {
+            "serials": "CAM3",
+            "limit": 20,
+            "date": "",
+            "end_time": "",
+            "max_retries": 1,
+        },
+    ]
+
+
+def test_prefetch_latest_camera_alarms_follows_global_pages_until_matched() -> None:
+    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+    calls = 0
+
+    def fake_messages(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"messages": [{"deviceSerial": "OTHER"}], "hasNext": True}
+        return {"messages": [{"deviceSerial": "CAM1", "msgId": "second-page"}], "hasNext": False}
+
+    client.get_device_messages_list = fake_messages  # type: ignore[assignment]
+
+    assert client._prefetch_latest_camera_alarms(["CAM1"]) == {
+        "CAM1": {"deviceSerial": "CAM1", "msgId": "second-page"}
+    }
+    assert calls == 2
+
+
+def test_prefetch_latest_camera_alarms_tolerates_api_errors() -> None:
+    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+
+    def fake_messages(**_kwargs: Any) -> dict[str, Any]:
+        raise client_module.PyEzvizError("temporary alarm failure")
+
+    client.get_device_messages_list = fake_messages  # type: ignore[assignment]
+
+    assert client._prefetch_latest_camera_alarms(["CAM1"]) == {}

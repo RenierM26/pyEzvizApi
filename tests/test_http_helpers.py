@@ -404,3 +404,156 @@ def test_switch_status_updates_cached_camera_switch_state(monkeypatch) -> None:
 
     assert client.switch_status("CAM123", 7, True, channel_no=2) is True
     assert client._cameras["CAM123"]["switches"][7] is True
+
+
+def test_set_camera_defence_retries_transient_timeout(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses = [
+        {"meta": {"code": 504}},
+        {"meta": {"code": 200}},
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_camera_defence(
+        "CAM123",
+        1,
+        channel_no=2,
+        arm_type="Local",
+        actor="A",
+        max_retries=1,
+    ) is True
+
+    assert len(calls) == 2
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/2/changeDefenceStatusReq")
+    assert calls[0]["data"] == {"type": "Local", "status": 1, "actor": "A"}
+    assert calls[0]["max_retries"] == 0
+    assert calls[1]["data"] == {"type": "Local", "status": 1, "actor": "A"}
+
+
+def test_set_camera_defence_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not arm or disarm Camera CAM123"):
+        client.set_camera_defence("CAM123", 0)
+
+
+def test_devconfig_key_helpers_normalize_values_and_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "path": path}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_dev_config_kv("CAM123", 1, "Mapping", {"b": 2})["meta"]["code"] == 200
+    assert client.set_dev_config_kv("CAM123", 1, "Bytes", b"raw")["meta"]["code"] == 200
+    assert client.set_dev_config_kv("CAM123", 1, "Bool", True)["meta"]["code"] == 200
+    assert client.set_dev_config_kv("CAM123", 1, "Float", 1.5)["meta"]["code"] == 200
+    assert client.set_common_key_value("CAM123", 2, "Common", "value")["meta"]["code"] == 200
+    assert client.set_device_key_value("CAM123", 3, "Alias", "value2")["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/1/op")
+    assert calls[0]["data"] == {"key": "Mapping", "value": '{"b":2}'}
+    assert calls[1]["data"] == {"key": "Bytes", "value": "raw"}
+    assert calls[2]["data"] == {"key": "Bool", "value": "1"}
+    assert calls[3]["data"] == {"key": "Float", "value": "1.5"}
+    assert calls[4]["params"] == {"key": "Common", "value": "value"}
+    assert calls[5]["params"] == {"key": "Alias", "value": "value2"}
+
+
+def test_high_level_device_config_wrappers_forward_expected_values(monkeypatch) -> None:
+    client = _client()
+    calls: list[tuple[str, object, str]] = []
+
+    def fake_set_device_config_by_key(
+        serial: str,
+        value: object,
+        key: str,
+        max_retries: int = 0,
+    ) -> bool:
+        calls.append((serial, value, key))
+        return True
+
+    monkeypatch.setattr(client, "set_device_config_by_key", fake_set_device_config_by_key)
+
+    assert client.set_battery_camera_work_mode("CAM123", 1) is True
+    assert client.set_detection_mode("CAM123", 2) is True
+    assert client.set_alarm_detect_human_car("CAM123", 3) is True
+    assert client.set_alarm_advanced_detect("CAM123", 4) is True
+    assert client.set_algorithm_param("CAM123", 99, 7, channel=2) is True
+    assert client.set_night_vision_mode("CAM123", 1, luminance=55) is True
+    assert client.set_display_mode("CAM123", 8) is True
+
+    assert calls == [
+        ("CAM123", 1, "batteryCameraWorkMode"),
+        ("CAM123", '{"type":2}', "Alarm_DetectHumanCar"),
+        ("CAM123", '{"type":3}', "Alarm_DetectHumanCar"),
+        ("CAM123", '{"type":4}', "Alarm_AdvancedDetect"),
+        (
+            "CAM123",
+            '{"AlgorithmInfo":[{"SubType":"99","Value":"7","channel":2}]}',
+            "AlgorithmInfo",
+        ),
+        ("CAM123", '{"graphicType":1,"luminance":55}', "NightVision_Model"),
+        ("CAM123", '{"mode":8}', "display_mode"),
+    ]
+
+
+def test_audition_and_baby_control_build_request_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.audition_request("CAM123", 1, "play", "payload", max_retries=1)["meta"]["code"] == 200
+    assert client.baby_control(
+        "CAM123",
+        1,
+        2,
+        "move",
+        "START",
+        5,
+        "uuid-1",
+        "pan",
+        "HW1",
+    )["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 1,
+        "request": "play",
+        "data": "payload",
+    }
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["data"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 1,
+        "localIndex": 2,
+        "command": "move",
+        "action": "START",
+        "speed": 5,
+        "uuid": "uuid-1",
+        "control": "pan",
+        "hardwareCode": "HW1",
+    }

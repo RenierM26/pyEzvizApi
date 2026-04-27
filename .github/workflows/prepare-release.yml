@@ -98,4 +98,4 @@ jobs:
             - move current `Unreleased` changelog entries into a dated `v${{ inputs.version }}` release section
             - leave a fresh empty `Unreleased` section for future changes
 
-            After this PR is reviewed and merged, run the Manual Release workflow with version `${{ inputs.version }}`.
+            After this PR is reviewed and merged, run the Upload Python Package workflow manually with version `${{ inputs.version }}`.

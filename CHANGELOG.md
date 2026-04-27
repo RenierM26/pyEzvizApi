@@ -6,6 +6,22 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Added
+
+- Added manual release dispatch to the trusted PyPI publish workflow so releases can be published by running a workflow with the requested version.
+- Added `codespell`, `pip-audit`, and Pyright checks to CI for extra spelling, dependency vulnerability, and static typing coverage.
+
+### Changed
+
+- Reworked device wrapper construction through a dedicated factory to remove client/device module import cycles while preserving existing wrapper behavior.
+- Lazy-load top-level `pyezvizapi` package exports to reduce eager import graph pressure while keeping convenient imports such as `from pyezvizapi import EzvizClient`.
+- Tightened `EzvizClient` JSON payload typing with a shared `JsonDict` alias and fixed Pyright-reported optional-token and MQTT-client typing issues.
+- Updated release automation so the prepare step opens a changelog PR and the publish step validates, builds, smoke-tests, uploads to PyPI, and creates the GitHub release.
+
+### Removed
+
+- Removed the superseded manual-release workflow in favor of the trusted PyPI publish workflow dispatch path.
+
 ## v1.0.4.6 - 2026-04-27
 
 ### Added
@@ -42,8 +58,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 Before publishing a release:
 
-1. Move relevant entries from `Unreleased` to a dated version section.
-2. Bump `project.version` in `pyproject.toml`.
+1. Bump `project.version` in `pyproject.toml`.
+2. Move relevant entries from `Unreleased` to a dated version section by running **Prepare Release** with the bare version and merging the generated changelog PR.
 3. Ensure CI is green on `main`.
-4. Create a GitHub release whose tag matches `v<pyproject version>`.
-5. Confirm the PyPI publish workflow completes successfully.
+4. Run **Upload Python Package** manually with the same bare version.
+5. Confirm the workflow publishes to PyPI and creates the matching GitHub release/tag.

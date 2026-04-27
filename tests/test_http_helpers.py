@@ -1356,3 +1356,135 @@ def test_detector_helpers_raise_contextual_errors(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not get radio signals"):
         client.get_radio_signals("A1S123", "DET456")
+
+
+class _JsonResponse:
+    def __init__(self, payload: dict[str, Any] | None = None, *, json_error: Exception | None = None) -> None:
+        self._payload = payload or {}
+        self._json_error = json_error
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        if self._json_error is not None:
+            raise self._json_error
+        return self._payload
+
+
+def test_motion_detection_sensitivity_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_motion_detect_sensitivity("CAM123", 1, max_retries=1)["meta"]["code"] == 200
+    assert client.get_motion_detect_sensitivity_dp1s("CAM123", 2, max_retries=2)["meta"]["code"] == 200
+    assert client.set_detection_sensitivity("CAM123", 3, 0, 6, max_retries=3) is True
+    assert client.set_detection_sensitivity("CAM123", 3, 4, 80) is True
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("CAM123/1")
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["path"].endswith("CAM123/2/sensitivity")
+    assert calls[1]["max_retries"] == 2
+    assert calls[2]["method"] == "PUT"
+    assert calls[2]["path"].endswith("CAM123/3/0/6")
+    assert calls[2]["max_retries"] == 3
+    assert calls[3]["method"] == "PUT"
+    assert calls[3]["path"].endswith("CAM123/3/4/80")
+    assert all(call["retry_401"] is True for call in calls)
+
+
+def test_set_detection_sensitivity_validates_ranges() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match=r"within 1\.\.6"):
+        client.set_detection_sensitivity("CAM123", 1, 0, 7)
+
+    with pytest.raises(PyEzvizError, match=r"within 1\.\.100"):
+        client.set_detection_sensitivity("CAM123", 1, 3, 101)
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.set_detection_sensitivity("CAM123", 1, 0, 3, max_retries=99)
+
+
+def test_get_detection_sensibility_retries_and_selects_algorithm(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [
+        {"resultCode": "-1"},
+        {
+            "resultCode": "0",
+            "algorithmConfig": {
+                "algorithmList": [
+                    {"type": "1", "value": 22},
+                    {"type": "3", "value": 44},
+                ]
+            },
+        },
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_detection_sensibility("CAM123", type_value="3", max_retries=1) == 44
+    assert len(calls) == 2
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {"subSerial": "CAM123"}
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 0
+
+
+def test_get_detection_sensibility_returns_none_for_missing_type(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"resultCode": "0", "algorithmConfig": {"algorithmList": []}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_detection_sensibility("CAM123", type_value="7") is None
+
+
+def test_detection_sensibility_legacy_posts_payload(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_post(**kwargs: Any) -> _JsonResponse:
+        captured.update(kwargs)
+        return _JsonResponse({"resultCode": "0"})
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+
+    assert client.detection_sensibility("CAM123", sensibility=5, type_value=0) is True
+    assert captured["data"] == {
+        "subSerial": "CAM123",
+        "type": 0,
+        "channelNo": 1,
+        "value": 5,
+    }
+    assert captured["timeout"] == 1
+
+
+def test_detection_sensibility_legacy_validates_and_wraps_errors(monkeypatch) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Unproper sensibility"):
+        client.detection_sensibility("CAM123", sensibility=8, type_value=0)
+
+    def fake_post(**kwargs: Any) -> _JsonResponse:
+        return _JsonResponse(json_error=ValueError("not json"))
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+
+    with pytest.raises(PyEzvizError, match="Could not decode response"):
+        client.detection_sensibility("CAM123", sensibility=3, type_value=0)

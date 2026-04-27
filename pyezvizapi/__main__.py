@@ -12,8 +12,6 @@ from pathlib import Path
 import sys
 from typing import Any, cast
 
-import pandas as pd
-
 from .camera import EzvizCamera
 from .client import EzvizClient
 from .constants import BatteryCameraWorkMode, DefenseModeType, DeviceSwitchType
@@ -313,9 +311,35 @@ def _write_json(obj: Any) -> None:
     sys.stdout.write(json.dumps(obj, indent=2) + "\n")
 
 
-def _write_df(df: pd.DataFrame) -> None:
-    """Write a DataFrame to stdout as a formatted table."""
-    sys.stdout.write(df.to_string() + "\n")
+def _format_cell(value: Any) -> str:
+    """Return a compact printable representation for table cells."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def _write_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
+    """Write rows to stdout as a simple fixed-width table."""
+    if not rows:
+        sys.stdout.write("No rows returned.\n")
+        return
+
+    widths = {column: len(column) for column in columns}
+    formatted_rows: list[dict[str, str]] = []
+    for row in rows:
+        formatted = {column: _format_cell(row.get(column)) for column in columns}
+        formatted_rows.append(formatted)
+        for column, value in formatted.items():
+            widths[column] = max(widths[column], len(value))
+
+    header = "  ".join(column.ljust(widths[column]) for column in columns)
+    separator = "  ".join("-" * widths[column] for column in columns)
+    sys.stdout.write(header + "\n")
+    sys.stdout.write(separator + "\n")
+    for row in formatted_rows:
+        sys.stdout.write("  ".join(row[column].ljust(widths[column]) for column in columns) + "\n")
 
 
 def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
@@ -330,19 +354,6 @@ def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
             _write_json(data)
         else:
             # Enrich with common switch flags when available
-            def _flag_from_switch(sw: Any, code: int) -> bool | None:
-                # Accept list[{type, enable}] or dict-like {type: enable}
-                if isinstance(sw, list):
-                    for item in sw:
-                        if isinstance(item, dict) and item.get("type") == code:
-                            val = item.get("enable")
-                            return bool(val) if isinstance(val, (bool, int)) else None
-                    return None
-                if isinstance(sw, dict):
-                    val = sw.get(code) if code in sw else sw.get(str(code))
-                    return bool(val) if isinstance(val, (bool, int)) else None
-                return None
-
             for payload in data.values():
                 sw = payload.get("SWITCH")
                 if sw is None:
@@ -387,28 +398,30 @@ def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
                 payload["ir_led"] = flags.get("infrared_light")
                 payload["state_led"] = flags.get("light")
 
-            df = pd.DataFrame.from_dict(
-                data=data,
-                orient="index",
-                columns=[
-                    "name",
-                    "status",
-                    "device_category",
-                    "device_sub_category",
-                    "sleep",
-                    "privacy",
-                    "audio",
-                    "ir_led",
-                    "state_led",
-                    "local_ip",
-                    "local_rtsp_port",
-                    "battery_level",
-                    "alarm_schedules_enabled",
-                    "alarm_notify",
-                    "Motion_Trigger",
-                ],
-            )
-            _write_df(df)
+            columns = [
+                "serial",
+                "name",
+                "status",
+                "device_category",
+                "device_sub_category",
+                "sleep",
+                "privacy",
+                "audio",
+                "ir_led",
+                "state_led",
+                "local_ip",
+                "local_rtsp_port",
+                "battery_level",
+                "alarm_schedules_enabled",
+                "alarm_notify",
+                "Motion_Trigger",
+            ]
+            rows = [
+                {"serial": serial, **payload}
+                for serial, payload in data.items()
+                if isinstance(payload, dict)
+            ]
+            _write_table(rows, columns)
         return 0
 
     if args.device_action == "switch":
@@ -430,22 +443,24 @@ def _handle_devices_light(args: argparse.Namespace, client: EzvizClient) -> int:
         if args.json:
             _write_json(data)
         else:
-            df = pd.DataFrame.from_dict(
-                data=data,
-                orient="index",
-                columns=[
-                    "name",
-                    "status",
-                    "device_category",
-                    "device_sub_category",
-                    "local_ip",
-                    "productId",
-                    "is_on",
-                    "brightness",
-                    "color_temperature",
-                ],
-            )
-            _write_df(df)
+            columns = [
+                "serial",
+                "name",
+                "status",
+                "device_category",
+                "device_sub_category",
+                "local_ip",
+                "productId",
+                "is_on",
+                "brightness",
+                "color_temperature",
+            ]
+            rows = [
+                {"serial": serial, **payload}
+                for serial, payload in data.items()
+                if isinstance(payload, dict)
+            ]
+            _write_table(rows, columns)
         return 0
     return 2
 
@@ -525,8 +540,10 @@ def _handle_unifiedmsg(args: argparse.Namespace, client: EzvizClient) -> int:
         )
 
     if rows:
-        df = pd.DataFrame(rows)
-        _write_df(df)
+        _write_table(
+            rows,
+            ["deviceSerial", "time", "subType", "alarmType", "title", "url", "msgId"],
+        )
     else:
         sys.stdout.write("No unified messages returned.\n")
     return 0

@@ -34,7 +34,7 @@ After installation, a `pyezvizapi` command is available on your PATH.
 If you are running from a clone of this repository or using the helper scripts directly, ensure these packages are available:
 
 ```bash
-pip install requests paho-mqtt pycryptodome pandas
+pip install requests paho-mqtt pycryptodome
 ```
 
 ## Quick Start

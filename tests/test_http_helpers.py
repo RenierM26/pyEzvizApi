@@ -7,7 +7,7 @@ import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.constants import UnifiedMessageSubtype
+from pyezvizapi.constants import FEATURE_CODE, UnifiedMessageSubtype
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 
@@ -968,3 +968,101 @@ def test_group_defence_and_cancel_alarm_helpers(monkeypatch) -> None:
     assert calls[1]["method"] == "POST"
     assert calls[1]["data"] == {"subSerial": "ALARM123"}
     assert calls[1]["max_retries"] == 2
+
+
+def test_get_user_id_returns_device_token_info(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "deviceTokenInfo": {"userId": "user-1"}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_user_id(max_retries=2) == {"userId": "user-1"}
+    assert captured["method"] == "GET"
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 2
+
+
+def test_set_video_enc_builds_default_payload(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_video_enc(
+        "CAM123",
+        enable=1,
+        camera_verification_code="ABCDEF",
+        max_retries=1,
+    ) is True
+    assert captured["method"] == "PUT"
+    assert captured["data"] == {
+        "deviceSerial": "CAM123",
+        "isEncrypt": 1,
+        "oldPassword": None,
+        "password": None,
+        "featureCode": FEATURE_CODE,
+        "validateCode": "ABCDEF",
+        "msgType": -1,
+    }
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 1
+
+
+def test_set_video_enc_builds_password_change_payload(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_video_enc(
+        "CAM123",
+        enable=2,
+        old_password="old-pass",
+        new_password="new-pass",
+    ) is True
+    assert captured["data"] == {
+        "deviceSerial": "CAM123",
+        "isEncrypt": 2,
+        "oldPassword": "old-pass",
+        "password": "new-pass",
+        "featureCode": FEATURE_CODE,
+        "validateCode": None,
+        "msgType": -1,
+    }
+
+
+def test_set_video_enc_validates_password_arguments() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Old password is required"):
+        client.set_video_enc("CAM123", enable=2, new_password="new-pass")
+
+    with pytest.raises(PyEzvizError, match="New password is only required"):
+        client.set_video_enc("CAM123", enable=1, new_password="new-pass")
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.set_video_enc("CAM123", max_retries=99)
+
+
+def test_set_video_enc_raises_contextual_api_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not set video encryption"):
+        client.set_video_enc("CAM123")

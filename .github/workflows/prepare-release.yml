@@ -74,8 +74,12 @@ jobs:
               raise SystemExit("The Unreleased section is empty; nothing to prepare.")
 
           version_heading = f"## v{requested} - {release_date}"
-          if version_heading in text or f"## {requested} - {release_date}" in text:
-              raise SystemExit(f"A release section for {requested} on {release_date} already exists.")
+          existing_version_heading = re.search(rf"^## v?{re.escape(requested)}(?:\s+-\s+.*)?$", text, re.MULTILINE)
+          if existing_version_heading:
+              raise SystemExit(
+                  f"A release section for version {requested} already exists: "
+                  f"{existing_version_heading.group(0)!r}."
+              )
 
           replacement = f"## Unreleased\n\n{version_heading}\n\n{unreleased_body}\n\n"
           path.write_text(text[:start] + replacement + text[next_start:])

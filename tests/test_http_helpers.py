@@ -1847,3 +1847,43 @@ def test_switch_light_status_routes_cameras_to_alarm_light_switch(monkeypatch) -
             "max_retries": 1,
         }
     ]
+
+
+def test_do_not_disturb_and_answer_call_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.do_not_disturb("CAM123", enable=0, channelno=2, max_retries=1) is True
+    assert client.set_answer_call("CAM123", enable=1, max_retries=2) is True
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/2/nodisturb")
+    assert calls[0]["data"] == {"enable": 0}
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["path"].endswith("CAM123/nodisturb")
+    assert calls[1]["data"] == {"deviceSerial": "CAM123", "switchStatus": 1}
+    assert calls[1]["retry_401"] is True
+    assert calls[1]["max_retries"] == 2
+
+
+def test_do_not_disturb_and_answer_call_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not set do not disturb"):
+        client.do_not_disturb("CAM123")
+
+    with pytest.raises(PyEzvizError, match="Could not set answer call"):
+        client.set_answer_call("CAM123")

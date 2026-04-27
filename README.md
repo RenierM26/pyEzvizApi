@@ -263,7 +263,11 @@ For advanced troubleshooting or new feature research, MITM proxy tools like mitm
 
 Contributions are welcome — the API surface is large and there are many improvements possible.
 
-For changes that affect Home Assistant integrations, see `docs/home-assistant-contract.md` before renaming methods, changing status keys, or altering auth/MQTT behavior.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development setup, local validation, offline-test expectations, and cleanup guidance before opening a PR.
+
+For changes that affect Home Assistant integrations, see [`docs/home-assistant-contract.md`](docs/home-assistant-contract.md) before renaming methods, changing status keys, or altering auth/MQTT behavior.
+
+For vulnerability reports or security-sensitive behavior, see [`SECURITY.md`](SECURITY.md). Please do not post credentials, MFA codes, tokens, or private camera URLs in public issues.
 
 ## Versioning
 

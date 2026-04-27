@@ -200,3 +200,102 @@ def test_get_device_messages_list_raises_contextual_api_error(monkeypatch) -> No
 
     with pytest.raises(PyEzvizError, match="Could not get unified message list"):
         client.get_device_messages_list(date="20260427")
+
+
+def test_add_device_builds_request_payload(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "result": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.add_device("CAM123", "ABCDEF", add_type="qr", max_retries=2) == {
+        "meta": {"code": 200},
+        "result": "ok",
+    }
+    assert captured["method"] == "POST"
+    assert captured["data"] == {
+        "deviceSerial": "CAM123",
+        "validateCode": "ABCDEF",
+        "addType": "qr",
+    }
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 2
+
+
+def test_hik_and_local_add_helpers_normalize_json_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "path": path}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.add_hik_activate("CAM123", '{"key": "value"}') == {
+        "meta": {"code": 200},
+        "path": calls[0]["path"],
+    }
+    assert client.add_hik_challenge("CAM123", {"challenge": True}, max_retries=1) == {
+        "meta": {"code": 200},
+        "path": calls[1]["path"],
+    }
+    assert client.add_local_device(("a", "b")) == {
+        "meta": {"code": 200},
+        "path": calls[2]["path"],
+    }
+    assert client.save_hik_dev_code(b'{"code": "123456"}') == {
+        "meta": {"code": 200},
+        "path": calls[3]["path"],
+    }
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["path"].endswith("CAM123")
+    assert calls[0]["json_body"] == {"key": "value"}
+    assert calls[1]["path"].endswith("CAM123")
+    assert calls[1]["json_body"] == {"challenge": True}
+    assert calls[1]["max_retries"] == 1
+    assert calls[2]["json_body"] == ["a", "b"]
+    assert calls[3]["json_body"] == {"code": "123456"}
+    assert all(call["retry_401"] is True for call in calls)
+
+
+def test_bind_virtual_device_builds_put_params(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "bound": True}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.bind_virtual_device("product-1", "v2") == {
+        "meta": {"code": 200},
+        "bound": True,
+    }
+    assert captured["method"] == "PUT"
+    assert captured["params"] == {"productId": "product-1", "version": "v2"}
+    assert captured["retry_401"] is True
+
+
+def test_add_helpers_raise_contextual_api_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "nope"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not add device"):
+        client.add_device("CAM123", "ABCDEF")
+
+    with pytest.raises(PyEzvizError, match="Could not activate Hik device"):
+        client.add_hik_activate("CAM123", {"key": "value"})
+
+    with pytest.raises(PyEzvizError, match="Could not add local device"):
+        client.add_local_device({"local": True})

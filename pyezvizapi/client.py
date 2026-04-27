@@ -667,7 +667,7 @@ class EzvizClient:
 
     def get_service_urls(self) -> Any:
         """Get Ezviz service urls."""
-        if not self._token["session_id"]:
+        if not self._token.get("session_id"):
             raise PyEzvizError("No Login token present!")
 
         try:
@@ -2620,7 +2620,7 @@ class EzvizClient:
                     "clientType": 3,
                     "netType": "WIFI",
                     "featureCode": FEATURE_CODE,
-                    "sessionId": self._token["session_id"],
+                    "sessionId": self._token.get("session_id"),
                 },
                 retry_401=True,
                 max_retries=0,
@@ -2979,12 +2979,14 @@ class EzvizClient:
 
     def login(self, sms_code: int | None = None) -> JsonDict:
         """Get or refresh ezviz login token."""
-        if self._token["session_id"] and self._token["rf_session_id"]:
+        session_id = self._token.get("session_id")
+        refresh_session_id = self._token.get("rf_session_id")
+        if session_id and refresh_session_id:
             try:
                 req = self._session.put(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
                     data={
-                        "refreshSessionId": self._token["rf_session_id"],
+                        "refreshSessionId": refresh_session_id,
                         "featureCode": FEATURE_CODE,
                     },
                     timeout=self._timeout,

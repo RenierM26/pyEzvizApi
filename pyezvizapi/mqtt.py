@@ -547,19 +547,20 @@ class MQTTClient:
         if callback_api_version is not None:
             client_kwargs["callback_api_version"] = callback_api_version.VERSION1
 
-        self.mqtt_client = mqtt.Client(**client_kwargs)
+        mqtt_client = mqtt.Client(**client_kwargs)
+        self.mqtt_client = mqtt_client
 
         # Bind callbacks
-        self.mqtt_client.on_connect = self._on_connect
-        self.mqtt_client.on_disconnect = self._on_disconnect
-        self.mqtt_client.on_subscribe = self._on_subscribe
-        self.mqtt_client.on_message = self._on_message
+        mqtt_client.on_connect = self._on_connect
+        mqtt_client.on_disconnect = self._on_disconnect
+        mqtt_client.on_subscribe = self._on_subscribe
+        mqtt_client.on_message = self._on_message
 
         # Auth (do not log these!)
-        self.mqtt_client.username_pw_set(MQTT_APP_KEY, APP_SECRET)
+        mqtt_client.username_pw_set(MQTT_APP_KEY, APP_SECRET)
 
         # Backoff for reconnects handled by paho
-        self.mqtt_client.reconnect_delay_set(min_delay=5, max_delay=10)
+        mqtt_client.reconnect_delay_set(min_delay=5, max_delay=10)
 
         _LOGGER.debug("Configured MQTT client for broker %s", broker)
 

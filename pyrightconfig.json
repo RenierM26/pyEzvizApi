@@ -1,0 +1,13 @@
+{
+  "include": ["pyezvizapi"],
+  "exclude": [
+    "**/__pycache__",
+    "build",
+    "dist"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportUnsupportedDunderAll": "none"
+}

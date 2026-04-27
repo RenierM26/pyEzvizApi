@@ -229,3 +229,30 @@ def test_smart_plug_power_methods_write_plug_switch() -> None:
         ("PLUG123", DeviceSwitchType.PLUG.value, 1),
         ("PLUG123", DeviceSwitchType.PLUG.value, 0),
     ]
+
+
+def test_light_helper_methods_fetch_features_and_defaults() -> None:
+    light = EzvizLightBulb(cast(EzvizClient, object()), "LIGHT123", _light_payload())
+
+    assert light.fetch_key(["deviceInfos", "name"]) == "Porch Light"
+    assert light.fetch_key(["missing"], default_value="fallback") == "fallback"
+    assert light.get_feature_json()["productId"] == "prod-light"
+    assert light.get_product_id() == "prod-light"
+    assert light.get_feature_item("brightness") == {"itemKey": "brightness", "dataValue": 66}
+    assert light.get_feature_item("missing") == {"dataValue": ""}
+    assert light.get_feature_item("missing", {"dataValue": 12}) == {"dataValue": 12}
+
+
+def test_smart_plug_fetch_key_and_power_methods() -> None:
+    client = _FakeControlClient()
+    plug = EzvizSmartPlug(cast(EzvizClient, client), "PLUG123", _plug_payload())
+
+    assert plug.fetch_key(["deviceInfos", "name"]) == "Heater Plug"
+    assert plug.fetch_key(["missing"], default_value="fallback") == "fallback"
+    assert plug.power_on() is True
+    assert plug.power_off() is True
+
+    assert client.switch_calls == [
+        ("PLUG123", DeviceSwitchType.PLUG.value, 1),
+        ("PLUG123", DeviceSwitchType.PLUG.value, 0),
+    ]

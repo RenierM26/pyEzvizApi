@@ -143,9 +143,9 @@ def test_load_devices_routes_supported_categories(monkeypatch) -> None:
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
-    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
-    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=False)
 
@@ -192,9 +192,9 @@ def test_load_light_bulbs_returns_only_light_statuses(monkeypatch) -> None:
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
-    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
-    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizSmartPlug", FakeSmartPlug)
 
     lights = client.load_light_bulbs(refresh=False)
 
@@ -234,9 +234,9 @@ def test_load_smart_plugs_returns_only_plug_statuses(monkeypatch) -> None:
                 "name": self.device_obj["deviceInfos"]["name"],
             }
 
-    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
-    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizSmartPlug", FakeSmartPlug)
 
     plugs = client.load_smart_plugs(refresh=False)
 
@@ -271,9 +271,9 @@ def test_load_devices_keeps_previous_light_status_when_new_status_fails(monkeypa
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
-    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
-    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", BrokenLightBulb)
-    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizLightBulb", BrokenLightBulb)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=False)
 
@@ -407,9 +407,9 @@ def test_load_devices_passes_prefetched_latest_alarm_to_camera_status(monkeypatc
             return {"kind": "plug", "serial": self.serial}
 
     monkeypatch.setattr(client, "_prefetch_latest_camera_alarms", fake_prefetch)
-    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
-    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=True)
 
@@ -460,9 +460,9 @@ def test_load_devices_skips_alarm_prefetch_when_refresh_false(monkeypatch) -> No
             return {"kind": "plug", "serial": self.serial}
 
     monkeypatch.setattr(client, "_prefetch_latest_camera_alarms", unexpected_prefetch)
-    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
-    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.device_factory.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=False)
 

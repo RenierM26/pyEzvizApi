@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
 import hashlib
-from importlib import import_module
 import json
 import logging
 from typing import Any, ClassVar, NotRequired, TypedDict, cast
@@ -14,6 +13,7 @@ from uuid import uuid4
 
 import requests
 
+from . import device_factory
 from .api_endpoints import (
     API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
     API_ENDPOINT_ALARM_DEVICE_CHIME,
@@ -2246,14 +2246,9 @@ class EzvizClient:
 
                 if rec.device_category == DeviceCatagories.LIGHTING.value:
                     try:
-                        ezviz_light_bulb = cast(
-                            Any, import_module("pyezvizapi.light_bulb")
-                        ).EzvizLightBulb
-
-                        # Create a light bulb object
-                        self._light_bulbs[device] = ezviz_light_bulb(
+                        self._light_bulbs[device] = device_factory.light_bulb_status(
                             self, device, dict(rec.raw)
-                        ).status()
+                        )
                     except (
                         PyEzvizError,
                         KeyError,
@@ -2268,14 +2263,9 @@ class EzvizClient:
                         )
                 elif rec.device_category == DeviceCatagories.SOCKET.value:
                     try:
-                        ezviz_smart_plug = cast(
-                            Any, import_module("pyezvizapi.smart_plug")
-                        ).EzvizSmartPlug
-
-                        # Create a smart plug object
-                        self._smart_plugs[device] = ezviz_smart_plug(
+                        self._smart_plugs[device] = device_factory.smart_plug_status(
                             self, device, dict(rec.raw)
-                        ).status()
+                        )
                     except (
                             PyEzvizError,
                             KeyError,
@@ -2290,13 +2280,10 @@ class EzvizClient:
                         )
                 else:
                     try:
-                        ezviz_camera = cast(
-                            Any, import_module("pyezvizapi.camera")
-                        ).EzvizCamera
-
-                        # Create camera object
-                        cam = ezviz_camera(self, device, dict(rec.raw))
-                        self._cameras[device] = cam.status(
+                        self._cameras[device] = device_factory.camera_status(
+                            self,
+                            device,
+                            dict(rec.raw),
                             refresh=refresh,
                             latest_alarm=latest_alarms.get(device),
                         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
@@ -15,10 +15,6 @@ from .utils import (
     parse_timezone_value,
     string_to_list,
 )
-
-if TYPE_CHECKING:
-    from .client import EzvizClient
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,7 +87,7 @@ class EzvizCamera:
 
     def __init__(
         self,
-        client: EzvizClient,
+        client: Any,
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:

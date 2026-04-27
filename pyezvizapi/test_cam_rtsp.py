@@ -12,6 +12,8 @@ from .exceptions import AuthTestResultFailed, InvalidHost
 
 _LOGGER = logging.getLogger(__name__)
 
+__test__ = False
+
 
 def genmsg_describe(url: str, seq: int, user_agent: str, auth_seq: str) -> str:
     """Generate RTSP DESCRIBE request message."""
@@ -37,6 +39,8 @@ class RTSPDetails(TypedDict):
 
 class TestRTSPAuth:
     """Test RTSP credentials against an RTSP server."""
+
+    __test__ = False
 
     _rtsp_details: RTSPDetails
 

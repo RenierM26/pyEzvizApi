@@ -2325,3 +2325,42 @@ def test_get_2fa_check_code_validates_and_raises_contextual_error(monkeypatch) -
 
     with pytest.raises(PyEzvizError, match="Could not request elevated permission"):
         client.get_2fa_check_code()
+
+
+def test_accessory_and_dev_config_read_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "path": path}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_accessory("CAM123", "2", max_retries=1)["meta"]["code"] == 200
+    assert client.get_dev_config("CAM123", 3, "NightVision_Model", max_retries=2)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("CAM123/2/1/linked/info")
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["path"].endswith("CAM123/3/op")
+    assert calls[1]["params"] == {"key": "NightVision_Model"}
+    assert calls[1]["retry_401"] is True
+    assert calls[1]["max_retries"] == 2
+
+
+def test_accessory_and_dev_config_read_helpers_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get accessory info"):
+        client.get_accessory("CAM123", "2")
+
+    with pytest.raises(PyEzvizError, match="Could not get devconfig value"):
+        client.get_dev_config("CAM123", 3, "NightVision_Model")

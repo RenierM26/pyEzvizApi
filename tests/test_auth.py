@@ -227,3 +227,68 @@ def test_send_mfa_code_success_and_failure(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not request MFA code"):
         client.send_mfa_code()
+
+
+def test_logout_deletes_session_and_closes_local_session(monkeypatch) -> None:
+    client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
+    captured: dict[str, Any] = {}
+    closed = False
+
+    def fake_delete(**kwargs: Any) -> requests.Response:
+        captured.update(kwargs)
+        return _response({"meta": {"code": 200}})
+
+    def fake_close_session() -> None:
+        nonlocal closed
+        closed = True
+
+    monkeypatch.setattr(client._session, "delete", fake_delete)
+    monkeypatch.setattr(client, "close_session", fake_close_session)
+
+    assert client.logout() is True
+    assert captured["url"] == "https://apiieu.ezvizlife.com/v3/users/logout/v2"
+    assert captured["timeout"] == 25
+    assert closed is True
+
+
+def test_logout_returns_false_for_non_ok_meta_and_still_closes(monkeypatch) -> None:
+    client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
+    closed = False
+
+    def fake_delete(**kwargs: Any) -> requests.Response:
+        return _response({"meta": {"code": 500}})
+
+    def fake_close_session() -> None:
+        nonlocal closed
+        closed = True
+
+    monkeypatch.setattr(client._session, "delete", fake_delete)
+    monkeypatch.setattr(client, "close_session", fake_close_session)
+
+    assert client.logout() is False
+    assert closed is True
+
+
+def test_logout_treats_401_as_already_invalid(monkeypatch) -> None:
+    client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
+
+    def fake_delete(**kwargs: Any) -> requests.Response:
+        return _response({"meta": {"code": 401}}, status_code=401)
+
+    monkeypatch.setattr(client._session, "delete", fake_delete)
+    monkeypatch.setattr(client, "close_session", lambda: pytest.fail("401 logout should not close again"))
+
+    assert client.logout() is True
+
+
+def test_logout_wraps_invalid_json(monkeypatch) -> None:
+    client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
+    resp = requests.Response()
+    resp.status_code = 200
+    resp._content = b"not-json"
+    resp.url = "https://api.example.test/logout"
+
+    monkeypatch.setattr(client._session, "delete", lambda **kwargs: resp)
+
+    with pytest.raises(PyEzvizError, match="Impossible to decode response"):
+        client.logout()

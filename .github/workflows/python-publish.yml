@@ -42,6 +42,16 @@ jobs:
           python -m build
           twine check dist/*
 
+      - name: Smoke-test built wheel and CLI
+        shell: bash
+        run: |
+          python -m venv /tmp/pyezvizapi-release-smoke
+          /tmp/pyezvizapi-release-smoke/bin/python -m pip install -U pip
+          /tmp/pyezvizapi-release-smoke/bin/python -m pip install dist/*.whl
+          /tmp/pyezvizapi-release-smoke/bin/python -m pip check
+          /tmp/pyezvizapi-release-smoke/bin/python -m pyezvizapi --help
+          /tmp/pyezvizapi-release-smoke/bin/pyezvizapi --help
+
       - name: Upload distributions
         uses: actions/upload-artifact@v7
         with:

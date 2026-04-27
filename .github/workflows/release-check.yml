@@ -1,0 +1,74 @@
+name: Release Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: "Optional release tag to verify against pyproject.toml, e.g. v1.0.4.5"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify optional release tag matches package version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+
+          release_tag = os.environ.get("RELEASE_TAG", "").strip()
+          if not release_tag:
+              print("No release tag supplied; skipping tag/version check.")
+              raise SystemExit(0)
+
+          with open("pyproject.toml", "rb") as file:
+              version = tomllib.load(file)["project"]["version"]
+          expected = f"v{version}"
+          if release_tag != expected:
+              raise SystemExit(
+                  f"Release tag {release_tag!r} does not match pyproject version {version!r}; "
+                  f"expected {expected!r}."
+              )
+          print(f"Release tag {release_tag!r} matches package version {version!r}.")
+          PY
+
+      - name: Build release distributions
+        run: |
+          python -m pip install -U pip build twine
+          python -m build
+          twine check dist/*
+
+      - name: Smoke-test built wheel and CLI
+        shell: bash
+        run: |
+          python -m venv /tmp/pyezvizapi-release-check
+          /tmp/pyezvizapi-release-check/bin/python -m pip install -U pip
+          /tmp/pyezvizapi-release-check/bin/python -m pip install dist/*.whl
+          /tmp/pyezvizapi-release-check/bin/python -m pip check
+          /tmp/pyezvizapi-release-check/bin/python -m pyezvizapi --help
+          /tmp/pyezvizapi-release-check/bin/pyezvizapi --help
+
+      - name: Upload checked distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-check-dists
+          path: dist/

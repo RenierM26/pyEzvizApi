@@ -773,3 +773,198 @@ def test_iot_request_raises_contextual_error(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not set IoT feature value"):
         client.set_iot_feature("CAM123", "Video", "1", "Domain", "Action", {"value": 1})
+
+
+def test_update_device_name_and_upgrade_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.update_device_name("CAM123", "Front Door", max_retries=1)["meta"]["code"] == 200
+    assert client.upgrade_device("CAM123", max_retries=2) is True
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {"deviceSerialNo": "CAM123", "deviceName": "Front Door"}
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["path"].endswith("CAM123/0/upgrade")
+    assert calls[1]["max_retries"] == 2
+
+
+def test_update_device_name_rejects_empty_name() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Device name must not be empty"):
+        client.update_device_name("CAM123", "")
+
+
+def test_get_storage_status_retries_unreachable_response(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [
+        {"resultCode": "-1"},
+        {"resultCode": "0", "storageStatus": {"hdd": "ok"}},
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_storage_status("CAM123", max_retries=1) == {"hdd": "ok"}
+    assert len(calls) == 2
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {"subSerial": "CAM123"}
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 0
+
+
+def test_get_storage_status_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"resultCode": "500", "message": "bad disk"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get device storage status"):
+        client.get_storage_status("CAM123")
+
+
+def test_sound_alarm_and_device_authenticate_build_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.sound_alarm("CAM123", enable=0, max_retries=1) is True
+    assert client.device_authenticate(
+        "CAM123",
+        need_check_code=True,
+        check_code="ABCDEF",
+        sender_type=2,
+    )["meta"]["code"] == 200
+    assert client.device_authenticate(
+        "CAM456",
+        need_check_code=False,
+        check_code=None,
+        sender_type=1,
+    )["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/0/sendAlarm")
+    assert calls[0]["data"] == {"enable": 0}
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["path"].endswith("CAM123")
+    assert calls[1]["data"] == {
+        "needCheckCode": "true",
+        "checkCode": "ABCDEF",
+        "senderType": 2,
+    }
+    assert calls[2]["data"] == {
+        "needCheckCode": "false",
+        "checkCode": "",
+        "senderType": 1,
+    }
+
+
+def test_reboot_camera_retries_unreachable_response(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [
+        {"resultCode": "-1"},
+        {"resultCode": "0"},
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.reboot_camera("CAM123", delay=5, operation=2, max_retries=1) is True
+    assert len(calls) == 2
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["path"].endswith("CAM123")
+    assert calls[0]["data"] == {"oper": 2, "deviceSerial": "CAM123", "delay": 5}
+    assert calls[0]["max_retries"] == 0
+
+
+def test_offline_notification_retries_and_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [{"resultCode": "-1"}, {"resultCode": "0"}]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_offline_notification("CAM123", enable=0, req_type=2, max_retries=1) is True
+    assert len(calls) == 2
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {"reqType": 2, "serial": "CAM123", "status": 0}
+    assert calls[0]["max_retries"] == 0
+
+    def fake_failure(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"resultCode": "500"}
+
+    monkeypatch.setattr(client, "_request_json", fake_failure)
+
+    with pytest.raises(PyEzvizError, match="Could not set offline notification"):
+        client.set_offline_notification("CAM123")
+
+
+def test_email_alert_helpers_normalize_serials(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.device_email_alert_state(["CAM2", "CAM1", "CAM1"])["meta"]["code"] == 200
+    assert client.save_device_email_alert_state(False, ["CAM2", "CAM1"])["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["params"] == {"devices": "CAM1,CAM2"}
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["data"] == {"enable": "false", "devices": "CAM1,CAM2"}
+
+
+def test_group_defence_and_cancel_alarm_helpers(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if method == "GET":
+            return {"meta": {"code": 200}, "mode": "home"}
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_group_defence_mode(max_retries=1) == "home"
+    assert client.cancel_alarm_device("ALARM123", max_retries=2) is True
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["params"] == {"groupId": -1}
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["data"] == {"subSerial": "ALARM123"}
+    assert calls[1]["max_retries"] == 2

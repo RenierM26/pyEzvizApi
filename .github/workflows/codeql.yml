@@ -1,0 +1,47 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+    paths:
+      - "pyezvizapi/**"
+      - "examples/**"
+      - "pyproject.toml"
+      - ".github/workflows/codeql.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "pyezvizapi/**"
+      - "examples/**"
+      - "pyproject.toml"
+      - ".github/workflows/codeql.yml"
+  schedule:
+    - cron: "24 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: Analyze Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"

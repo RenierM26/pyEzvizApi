@@ -141,6 +141,7 @@ jobs:
             dist/*
             --repo "${GITHUB_REPOSITORY}"
             --title "v${RELEASE_VERSION}"
+            --target "${GITHUB_SHA}"
             --generate-notes
           )
           if [[ "${PRERELEASE}" == "true" ]]; then

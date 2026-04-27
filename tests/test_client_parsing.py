@@ -160,3 +160,121 @@ def test_load_devices_routes_supported_categories(monkeypatch) -> None:
         "PLUG123": {"kind": "plug", "serial": "PLUG123"},
     }
     assert "COMMON123" not in loaded
+
+
+def test_load_light_bulbs_returns_only_light_statuses(monkeypatch) -> None:
+    client = _client_with_fixture(monkeypatch)
+
+    class FakeCamera:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
+            return {"kind": "camera", "serial": self.serial, "refresh": refresh}
+
+    class FakeLightBulb:
+        def __init__(self, _client: EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+            self.device_obj = device_obj
+
+        def status(self) -> dict[str, Any]:
+            return {
+                "kind": "light",
+                "serial": self.serial,
+                "name": self.device_obj["deviceInfos"]["name"],
+            }
+
+    class FakeSmartPlug:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "plug", "serial": self.serial}
+
+    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
+    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+
+    lights = client.load_light_bulbs(refresh=False)
+
+    assert lights == {
+        "LIGHT123": {"kind": "light", "serial": "LIGHT123", "name": "Porch Light"}
+    }
+    assert client._cameras == {"CAM123": {"kind": "camera", "serial": "CAM123", "refresh": False}}
+    assert client._smart_plugs == {"PLUG123": {"kind": "plug", "serial": "PLUG123"}}
+
+
+def test_load_smart_plugs_returns_only_plug_statuses(monkeypatch) -> None:
+    client = _client_with_fixture(monkeypatch)
+
+    class FakeCamera:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
+            return {"kind": "camera", "serial": self.serial, "refresh": refresh}
+
+    class FakeLightBulb:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "light", "serial": self.serial}
+
+    class FakeSmartPlug:
+        def __init__(self, _client: EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+            self.device_obj = device_obj
+
+        def status(self) -> dict[str, Any]:
+            return {
+                "kind": "plug",
+                "serial": self.serial,
+                "name": self.device_obj["deviceInfos"]["name"],
+            }
+
+    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
+    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+
+    plugs = client.load_smart_plugs(refresh=False)
+
+    assert plugs == {
+        "PLUG123": {"kind": "plug", "serial": "PLUG123", "name": "Heater Plug"}
+    }
+    assert client._light_bulbs == {"LIGHT123": {"kind": "light", "serial": "LIGHT123"}}
+
+
+def test_load_devices_keeps_previous_light_status_when_new_status_fails(monkeypatch, caplog) -> None:
+    client = _client_with_fixture(monkeypatch)
+    client._light_bulbs["LIGHT123"] = {"kind": "light", "serial": "LIGHT123", "stale": True}
+
+    class FakeCamera:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
+            return {"kind": "camera", "serial": self.serial}
+
+    class BrokenLightBulb:
+        def __init__(self, _client: EzvizClient, _serial: str, _device_obj: dict[str, Any]) -> None:
+            pass
+
+        def status(self) -> dict[str, Any]:
+            raise ValueError("bad feature json")
+
+    class FakeSmartPlug:
+        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+            self.serial = serial
+
+        def status(self) -> dict[str, Any]:
+            return {"kind": "plug", "serial": self.serial}
+
+    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
+    monkeypatch.setattr(client_module, "EzvizLightBulb", BrokenLightBulb)
+    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+
+    loaded = client.load_devices(refresh=False)
+
+    assert loaded["LIGHT123"] == {"kind": "light", "serial": "LIGHT123", "stale": True}
+    assert "Load_device_failed: serial=LIGHT123" in caplog.text

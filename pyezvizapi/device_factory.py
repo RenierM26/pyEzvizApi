@@ -10,7 +10,7 @@ from .smart_plug import EzvizSmartPlug
 
 
 def camera_status(
-    client: Any,
+    client: object,
     serial: str,
     device_obj: dict[str, Any],
     *,
@@ -29,7 +29,7 @@ def camera_status(
 
 
 def light_bulb_status(
-    client: Any,
+    client: object,
     serial: str,
     device_obj: dict[str, Any],
 ) -> dict[str, Any]:
@@ -39,7 +39,7 @@ def light_bulb_status(
 
 
 def smart_plug_status(
-    client: Any,
+    client: object,
     serial: str,
     device_obj: dict[str, Any],
 ) -> dict[str, Any]:

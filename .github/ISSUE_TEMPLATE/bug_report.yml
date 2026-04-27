@@ -1,0 +1,93 @@
+name: Bug report
+description: Report a problem with pyEzvizApi, the CLI, MQTT, or integration-facing behavior
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please avoid posting passwords, tokens, verification codes, or raw private camera URLs.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect instead?
+      placeholder: Describe the issue clearly.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Home Assistant integration usage
+        - CLI
+        - MQTT / push messages
+        - Camera status / controls
+        - Light bulb / smart plug
+        - Authentication / MFA / token refresh
+        - Packaging / installation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: pyEzvizApi version or commit
+      placeholder: "1.0.4.5 or commit SHA"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "Python 3.12.x / 3.13.x"
+    validations:
+      required: true
+
+  - type: input
+    id: region
+    attributes:
+      label: EZVIZ API region / endpoint
+      description: If known. Do not include credentials.
+      placeholder: "apiieu.ezvizlife.com"
+
+  - type: textarea
+    id: device
+    attributes:
+      label: Device context
+      description: Device category/model/firmware if relevant. Redact serials if needed.
+      placeholder: "Camera/light/plug model, firmware, integration context..."
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest command/snippet or Home Assistant action that reproduces the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      description: Paste relevant logs with secrets redacted.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I have removed credentials, tokens, verification codes, and private camera URLs from this report.
+          required: true
+        - label: I have checked whether the issue reproduces with the latest main branch or latest release.
+          required: false

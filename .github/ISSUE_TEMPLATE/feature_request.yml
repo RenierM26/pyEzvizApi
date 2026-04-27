@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest an improvement or new EZVIZ capability
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please avoid posting credentials, tokens, verification codes, or private camera URLs.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should pyEzvizApi support or improve?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Home Assistant integration usage
+        - CLI
+        - MQTT / push messages
+        - Camera status / controls
+        - Light bulb / smart plug
+        - Authentication / MFA / token refresh
+        - Packaging / CI / docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: payload
+    attributes:
+      label: Known payloads or API behavior
+      description: If you have raw EZVIZ payloads or app-observed behavior, paste a redacted sample.
+      render: json
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Integration compatibility notes
+      description: Would this affect Home Assistant core EZVIZ or ha-ezviz custom integration behavior?
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I have removed credentials, tokens, verification codes, and private camera URLs from this request.
+          required: true

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Home Assistant integration contract
+    url: https://github.com/RenierM26/pyEzvizApi/blob/main/docs/home-assistant-contract.md
+    about: Review integration-facing compatibility expectations before proposing breaking changes.

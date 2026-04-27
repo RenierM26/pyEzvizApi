@@ -54,6 +54,7 @@ ignore = ["E501"] # long URLs ok
 # Compatibility helper modules may intentionally expose legacy names.
 "pyezvizapi/test_*.py" = ["SLF001"]
 "tests/test_mqtt.py" = ["SLF001"]
+"tests/test_pagelist.py" = ["SLF001"]
 
 # Import sorting to match HA expectations
 [tool.ruff.lint.isort]

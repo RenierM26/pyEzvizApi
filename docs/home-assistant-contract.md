@@ -147,10 +147,15 @@ For behavior used by Home Assistant integrations:
 
 When publishing a `pyezvizapi` release intended for Home Assistant consumption:
 
-1. Confirm CI is green on `main`.
+1. Confirm CI is green on `main`, including Ruff, codespell, dependency audit,
+   mypy, Pyright, tests, package build, metadata checks, and wheel smoke tests.
 2. Confirm `CHANGELOG.md` summarizes integration-facing changes.
-3. Publish to PyPI from a tag matching `v<pyproject version>`.
-4. Smoke-test installation in a clean environment.
-5. Update `requirements` pins in the custom integration first when appropriate.
-6. For Home Assistant core, open/update the dependency bump PR with a concise
+3. Run **Prepare Release** with the bare version and merge the generated
+   changelog PR.
+4. Run **Upload Python Package** manually with the same bare version so the
+   trusted publish workflow validates, builds, smoke-tests, uploads to PyPI, and
+   creates the matching GitHub release/tag.
+5. Smoke-test installation in a clean environment.
+6. Update `requirements` pins in the custom integration first when appropriate.
+7. For Home Assistant core, open/update the dependency bump PR with a concise
    list of integration-facing changes and relevant test coverage.

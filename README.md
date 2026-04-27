@@ -222,7 +222,10 @@ Run the same local validation used by CI:
 
 ```bash
 ruff check .
+codespell pyezvizapi tests README.md pyproject.toml .github
+pip-audit --progress-spinner off
 mypy --install-types --non-interactive .
+pyright pyezvizapi
 pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
 python -m build
 twine check dist/*
@@ -275,7 +278,13 @@ For vulnerability reports or security-sensitive behavior, see [`SECURITY.md`](SE
 
 We follow SemVer when publishing the library. See `CHANGELOG.md` and repository tags for released versions.
 
-Release tags should match the package version in `pyproject.toml` using the form `v<version>` (for example, `v1.0.4.5`). The PyPI publish workflow validates this before uploading distributions.
+Release tags should match the package version in `pyproject.toml` using the form `v<version>` (for example, `v1.0.4.7`). The PyPI publish workflow validates this before uploading distributions.
+
+Recommended release flow:
+
+1. Bump `project.version` in `pyproject.toml` and update `CHANGELOG.md` under `Unreleased` during normal PR work.
+2. Run **Prepare Release** with the bare version, then review and merge the generated changelog PR.
+3. Run **Upload Python Package** manually with the same bare version. That workflow validates the version, builds and smoke-tests the wheel/CLI, publishes to PyPI, then creates the matching GitHub release/tag.
 
 ## License
 

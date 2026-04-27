@@ -12,8 +12,10 @@ from cli_fakes import (
 )
 
 import pyezvizapi.__main__ as cli_module
-from pyezvizapi.__main__ import _format_cell, _write_table
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
+
+_format_cell = cli_module._format_cell  # noqa: SLF001
+_write_table = cli_module._write_table  # noqa: SLF001
 
 
 def test_cli_imports_without_pandas_installed() -> None:

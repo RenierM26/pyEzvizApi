@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
 import hashlib
+from importlib import import_module
 import json
 import logging
 from typing import Any, ClassVar, NotRequired, TypedDict, cast
@@ -107,7 +108,6 @@ from .api_endpoints import (
     API_ENDPOINT_V3_ALARMS,
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
-from .camera import EzvizCamera
 from .cas import EzvizCAS
 from .constants import (
     DEFAULT_TIMEOUT,
@@ -128,10 +128,8 @@ from .exceptions import (
     PyEzvizError,
 )
 from .feature import optionals_mapping
-from .light_bulb import EzvizLightBulb
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
-from .smart_plug import EzvizSmartPlug
 from .utils import convert_to_dict, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
@@ -371,8 +369,8 @@ class EzvizClient:
                 method,
                 url,
                 self._summarize_payload(params),
-                self._summarize_payload(data),
-                self._summarize_payload(json_body),
+                self._summarize_payload(data, include_preview=False),
+                self._summarize_payload(json_body, include_preview=False),
             )
         try:
             req = self._session.request(
@@ -495,19 +493,33 @@ class EzvizClient:
         return None
 
     @staticmethod
-    def _summarize_payload(payload: Any) -> str:
-        """Return a compact description of payload content for debug logs."""
+    def _summarize_payload(  # noqa: PLR0911
+        payload: Any, *, include_preview: bool = True
+    ) -> str:
+        """Return a compact, credential-safe payload description for debug logs."""
 
         if payload is None:
             return "-"
         if isinstance(payload, Mapping):
-            keys = ", ".join(sorted(str(key) for key in payload))
+            sensitive_keys = {
+                "password",
+                "oldPassword",
+                "newPassword",
+                "token",
+                "sessionId",
+            }
+            keys = ", ".join(
+                "<redacted>" if str(key) in sensitive_keys else str(key)
+                for key in sorted(payload)
+            )
             return f"dict[{keys}]"
         if isinstance(payload, (list, tuple, set)):
             return f"{type(payload).__name__}(len={len(payload)})"
         if isinstance(payload, (bytes, bytearray)):
             return f"bytes(len={len(payload)})"
         if isinstance(payload, str):
+            if not include_preview:
+                return f"str(len={len(payload)})"
             trimmed = payload[:32] + "…" if len(payload) > 32 else payload
             return f"str(len={len(payload)}, preview={trimmed!r})"
         return f"{type(payload).__name__}"
@@ -2227,8 +2239,12 @@ class EzvizClient:
 
                 if rec.device_category == DeviceCatagories.LIGHTING.value:
                     try:
+                        ezviz_light_bulb = cast(
+                            Any, import_module("pyezvizapi.light_bulb")
+                        ).EzvizLightBulb
+
                         # Create a light bulb object
-                        self._light_bulbs[device] = EzvizLightBulb(
+                        self._light_bulbs[device] = ezviz_light_bulb(
                             self, device, dict(rec.raw)
                         ).status()
                     except (
@@ -2245,8 +2261,12 @@ class EzvizClient:
                         )
                 elif rec.device_category == DeviceCatagories.SOCKET.value:
                     try:
+                        ezviz_smart_plug = cast(
+                            Any, import_module("pyezvizapi.smart_plug")
+                        ).EzvizSmartPlug
+
                         # Create a smart plug object
-                        self._smart_plugs[device] = EzvizSmartPlug(
+                        self._smart_plugs[device] = ezviz_smart_plug(
                             self, device, dict(rec.raw)
                         ).status()
                     except (
@@ -2263,8 +2283,12 @@ class EzvizClient:
                         )
                 else:
                     try:
+                        ezviz_camera = cast(
+                            Any, import_module("pyezvizapi.camera")
+                        ).EzvizCamera
+
                         # Create camera object
-                        cam = EzvizCamera(self, device, dict(rec.raw))
+                        cam = ezviz_camera(self, device, dict(rec.raw))
                         self._cameras[device] = cam.status(
                             refresh=refresh,
                             latest_alarm=latest_alarms.get(device),
@@ -2405,7 +2429,6 @@ class EzvizClient:
         """Load all devices and build dict per device serial."""
         devices = self._get_page_list()
         result: dict[str, Any] = {}
-        _res_id = "NONE"
 
         for device in devices.get("deviceInfos", []) or []:
             _serial = device["deviceSerial"]

@@ -72,6 +72,7 @@ ignore = ["E501"] # long URLs ok
 "tests/test_pagelist.py" = ["SLF001"]
 "tests/test_http_helpers.py" = ["SLF001"]
 "tests/test_auth.py" = ["SLF001"]
+"tests/test_alarm_parsing.py" = ["SLF001"]
 
 # Import sorting to match HA expectations
 [tool.ruff.lint.isort]

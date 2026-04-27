@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 import pyezvizapi.client as client_module
-from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import DeviceCatagories
 
 
@@ -79,8 +78,10 @@ def _page_list_fixture() -> dict[str, Any]:
     }
 
 
-def _client_with_fixture(monkeypatch) -> EzvizClient:
-    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+def _client_with_fixture(monkeypatch) -> client_module.EzvizClient:
+    client = client_module.EzvizClient(
+        token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"}
+    )
     monkeypatch.setattr(client, "_get_page_list", _page_list_fixture)
     return client
 
@@ -115,7 +116,7 @@ def test_load_devices_routes_supported_categories(monkeypatch) -> None:
     client = _client_with_fixture(monkeypatch)
 
     class FakeCamera:
-        def __init__(self, _client: EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
             self.serial = serial
             self.device_obj = device_obj
 
@@ -129,22 +130,22 @@ def test_load_devices_routes_supported_categories(monkeypatch) -> None:
             }
 
     class FakeLightBulb:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "light", "serial": self.serial}
 
     class FakeSmartPlug:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
-    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
-    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=False)
 
@@ -166,14 +167,14 @@ def test_load_light_bulbs_returns_only_light_statuses(monkeypatch) -> None:
     client = _client_with_fixture(monkeypatch)
 
     class FakeCamera:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
             return {"kind": "camera", "serial": self.serial, "refresh": refresh}
 
     class FakeLightBulb:
-        def __init__(self, _client: EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
             self.serial = serial
             self.device_obj = device_obj
 
@@ -185,15 +186,15 @@ def test_load_light_bulbs_returns_only_light_statuses(monkeypatch) -> None:
             }
 
     class FakeSmartPlug:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
-    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
-    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
 
     lights = client.load_light_bulbs(refresh=False)
 
@@ -208,21 +209,21 @@ def test_load_smart_plugs_returns_only_plug_statuses(monkeypatch) -> None:
     client = _client_with_fixture(monkeypatch)
 
     class FakeCamera:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
             return {"kind": "camera", "serial": self.serial, "refresh": refresh}
 
     class FakeLightBulb:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "light", "serial": self.serial}
 
     class FakeSmartPlug:
-        def __init__(self, _client: EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, device_obj: dict[str, Any]) -> None:
             self.serial = serial
             self.device_obj = device_obj
 
@@ -233,9 +234,9 @@ def test_load_smart_plugs_returns_only_plug_statuses(monkeypatch) -> None:
                 "name": self.device_obj["deviceInfos"]["name"],
             }
 
-    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
-    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
 
     plugs = client.load_smart_plugs(refresh=False)
 
@@ -250,29 +251,29 @@ def test_load_devices_keeps_previous_light_status_when_new_status_fails(monkeypa
     client._light_bulbs["LIGHT123"] = {"kind": "light", "serial": "LIGHT123", "stale": True}
 
     class FakeCamera:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self, *, refresh: bool = True, latest_alarm: dict[str, Any] | None = None) -> dict[str, Any]:
             return {"kind": "camera", "serial": self.serial}
 
     class BrokenLightBulb:
-        def __init__(self, _client: EzvizClient, _serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, _serial: str, _device_obj: dict[str, Any]) -> None:
             pass
 
         def status(self) -> dict[str, Any]:
             raise ValueError("bad feature json")
 
     class FakeSmartPlug:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
-    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
-    monkeypatch.setattr(client_module, "EzvizLightBulb", BrokenLightBulb)
-    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", BrokenLightBulb)
+    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=False)
 
@@ -281,13 +282,13 @@ def test_load_devices_keeps_previous_light_status_when_new_status_fails(monkeypa
 
 
 def test_prefetch_latest_camera_alarms_returns_empty_without_serials() -> None:
-    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+    client = client_module.EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
 
     assert client._prefetch_latest_camera_alarms([]) == {}
 
 
 def test_prefetch_latest_camera_alarms_uses_global_fetch_before_filtered_chunks() -> None:
-    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+    client = client_module.EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
     calls: list[dict[str, Any]] = []
 
     def fake_messages(**kwargs: Any) -> dict[str, Any]:
@@ -337,7 +338,7 @@ def test_prefetch_latest_camera_alarms_uses_global_fetch_before_filtered_chunks(
 
 
 def test_prefetch_latest_camera_alarms_follows_global_pages_until_matched() -> None:
-    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+    client = client_module.EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
     calls = 0
 
     def fake_messages(**_kwargs: Any) -> dict[str, Any]:
@@ -356,7 +357,7 @@ def test_prefetch_latest_camera_alarms_follows_global_pages_until_matched() -> N
 
 
 def test_prefetch_latest_camera_alarms_tolerates_api_errors() -> None:
-    client = EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
+    client = client_module.EzvizClient(token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"})
 
     def fake_messages(**_kwargs: Any) -> dict[str, Any]:
         raise client_module.PyEzvizError("temporary alarm failure")
@@ -375,7 +376,7 @@ def test_load_devices_passes_prefetched_latest_alarm_to_camera_status(monkeypatc
         return {"CAM123": {"deviceSerial": "CAM123", "msgId": "alarm-1"}}
 
     class FakeCamera:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(
@@ -392,23 +393,23 @@ def test_load_devices_passes_prefetched_latest_alarm_to_camera_status(monkeypatc
             }
 
     class FakeLightBulb:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "light", "serial": self.serial}
 
     class FakeSmartPlug:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
     monkeypatch.setattr(client, "_prefetch_latest_camera_alarms", fake_prefetch)
-    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
-    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=True)
 
@@ -428,7 +429,7 @@ def test_load_devices_skips_alarm_prefetch_when_refresh_false(monkeypatch) -> No
         raise AssertionError("prefetch should not run when refresh is false")
 
     class FakeCamera:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(
@@ -445,23 +446,23 @@ def test_load_devices_skips_alarm_prefetch_when_refresh_false(monkeypatch) -> No
             }
 
     class FakeLightBulb:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "light", "serial": self.serial}
 
     class FakeSmartPlug:
-        def __init__(self, _client: EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
+        def __init__(self, _client: client_module.EzvizClient, serial: str, _device_obj: dict[str, Any]) -> None:
             self.serial = serial
 
         def status(self) -> dict[str, Any]:
             return {"kind": "plug", "serial": self.serial}
 
     monkeypatch.setattr(client, "_prefetch_latest_camera_alarms", unexpected_prefetch)
-    monkeypatch.setattr(client_module, "EzvizCamera", FakeCamera)
-    monkeypatch.setattr(client_module, "EzvizLightBulb", FakeLightBulb)
-    monkeypatch.setattr(client_module, "EzvizSmartPlug", FakeSmartPlug)
+    monkeypatch.setattr("pyezvizapi.camera.EzvizCamera", FakeCamera)
+    monkeypatch.setattr("pyezvizapi.light_bulb.EzvizLightBulb", FakeLightBulb)
+    monkeypatch.setattr("pyezvizapi.smart_plug.EzvizSmartPlug", FakeSmartPlug)
 
     loaded = client.load_devices(refresh=False)
 

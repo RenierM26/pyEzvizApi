@@ -363,6 +363,8 @@ def normalize_alarm_time(
                         alarm_dt_local = event_local_reint
                         alarm_dt_utc = event_local_reint.astimezone(datetime.UTC)
                 except ValueError:
+                    # Some firmware returns malformed timestamp strings; keep the
+                    # epoch-derived value and allow the normal fallback path.
                     pass
 
             if alarm_dt_local is not None:
@@ -382,6 +384,8 @@ def normalize_alarm_time(
             alarm_dt_utc = alarm_dt_local.astimezone(datetime.UTC)
             alarm_str = alarm_dt_local.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
+            # Leave the default empty result when neither epoch nor string parsing
+            # can interpret the camera-provided alarm timestamp.
             pass
 
     return alarm_dt_local, alarm_dt_utc, alarm_str

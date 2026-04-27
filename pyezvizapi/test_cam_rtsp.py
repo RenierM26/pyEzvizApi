@@ -117,7 +117,7 @@ class TestRTSPAuth:
         describe = genmsg_describe(
             url, seq, self._rtsp_details["defaultUserAgent"], auth_seq
         )
-        _LOGGER.debug("RTSP DESCRIBE (basic):\n%s", describe)
+        _LOGGER.debug("RTSP DESCRIBE (basic) request prepared for %s", url)
         session.send(describe.encode())
         msg1: bytes = session.recv(self._rtsp_details["bufLen"])
         seq += 1
@@ -146,7 +146,7 @@ class TestRTSPAuth:
             describe = genmsg_describe(
                 url, seq, self._rtsp_details["defaultUserAgent"], auth_seq
             )
-            _LOGGER.debug("RTSP DESCRIBE (digest):\n%s", describe)
+            _LOGGER.debug("RTSP DESCRIBE (digest) request prepared for %s", url)
             session.send(describe.encode())
             msg1 = session.recv(self._rtsp_details["bufLen"])
             decoded = msg1.decode()

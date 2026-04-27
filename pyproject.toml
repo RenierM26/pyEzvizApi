@@ -33,6 +33,9 @@ dev = ["build", "ruff", "mypy", "pytest", "twine", "types-requests"]
 [tool.setuptools.packages.find]
 include = ["pyezvizapi*"]
 
+[tool.setuptools.package-data]
+pyezvizapi = ["py.typed"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

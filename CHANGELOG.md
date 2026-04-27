@@ -13,6 +13,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Changed
 
+- Widened camera key/auth verification-code argument typing to accept string codes from Home Assistant forms without forcing callers to cast.
 - Reworked device wrapper construction through a dedicated factory to remove client/device module import cycles while preserving existing wrapper behavior.
 - Lazy-load top-level `pyezvizapi` package exports to reduce eager import graph pressure while keeping convenient imports such as `from pyezvizapi import EzvizClient`.
 - Tightened `EzvizClient` JSON payload typing with a shared `JsonDict` alias and fixed Pyright-reported optional-token and MQTT-client typing issues.

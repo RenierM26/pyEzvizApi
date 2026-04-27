@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.constants import UnifiedMessageSubtype
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 
@@ -121,3 +123,80 @@ def test_request_json_uses_url_and_parses_payload(monkeypatch) -> None:
     assert captured["method"] == "POST"
     assert captured["url"] == "https://apiieu.ezvizlife.com/api/path"
     assert captured["json_body"] == {"x": 1}
+
+
+def test_get_device_messages_list_builds_normalized_request_params(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "messages": []}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    payload = client.get_device_messages_list(
+        serials="CAM123,CAM456",
+        s_type=[UnifiedMessageSubtype.ALL_ALARMS, 2701, ""],
+        limit=99,
+        date=dt.date(2026, 4, 27),
+        end_time=12345,
+        max_retries=2,
+    )
+
+    assert payload == {"meta": {"code": 200}, "messages": []}
+    assert captured["method"] == "GET"
+    assert captured["params"] == {
+        "serials": "CAM123,CAM456",
+        "stype": "92,2701",
+        "limit": 50,
+        "date": "20260427",
+        "endTime": "12345",
+    }
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 2
+
+
+def test_get_device_messages_list_keeps_empty_end_time_and_defaults(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "messages": []}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    client.get_device_messages_list(
+        serials=None,
+        s_type=[],
+        limit="not-an-int",  # type: ignore[arg-type]
+        date="20260427",
+        end_time=None,
+    )
+
+    assert captured["params"] == {
+        "stype": "92",
+        "limit": 20,
+        "date": "20260427",
+        "endTime": "",
+    }
+
+
+def test_get_device_messages_list_rejects_too_many_retries() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.get_device_messages_list(max_retries=99)
+
+
+def test_get_device_messages_list_raises_contextual_api_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "backend unhappy"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get unified message list"):
+        client.get_device_messages_list(date="20260427")

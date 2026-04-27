@@ -2458,3 +2458,122 @@ def test_device_encrypt_key_list_raises_contextual_error(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not get device encrypt key list"):
         client.get_device_list_encrypt_key(7, "serial=CAM1")
+
+
+def test_black_level_time_plan_and_record_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_black_level_list("CAM123", max_retries=1)["meta"]["code"] == 200
+    assert client.get_time_plan_infos("CAM123", 2, 3, max_retries=2)["meta"]["code"] == 200
+    assert client.set_time_plan_infos(
+        "CAM123",
+        2,
+        3,
+        1,
+        [{"start": "08:00", "stop": "17:00"}],
+        max_retries=3,
+    )["meta"]["code"] == 200
+    assert client.set_time_plan_infos("CAM123", 2, 3, 0, "[]")["meta"]["code"] == 200
+    assert client.search_records(
+        "CAM123",
+        2,
+        "CHAN123",
+        "2026-04-27T08:00:00Z",
+        "2026-04-27T09:00:00Z",
+        size=50,
+        max_retries=4,
+    )["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("CAM123")
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "GET"
+    assert calls[1]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "timingPlanType": 3,
+    }
+    assert calls[1]["max_retries"] == 2
+    assert calls[2]["method"] == "PUT"
+    assert calls[2]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "timingPlanType": 3,
+        "enable": 1,
+        "timerDefenceQos": '[{"start": "08:00", "stop": "17:00"}]',
+    }
+    assert calls[2]["max_retries"] == 3
+    assert calls[3]["params"]["timerDefenceQos"] == "[]"
+    assert calls[4]["method"] == "GET"
+    assert calls[4]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "channelSerial": "CHAN123",
+        "startTime": "2026-04-27T08:00:00Z",
+        "stopTime": "2026-04-27T09:00:00Z",
+        "size": 50,
+    }
+    assert calls[4]["max_retries"] == 4
+    assert all(call["retry_401"] is True for call in calls)
+
+
+def test_time_plan_and_record_helpers_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get black level list"):
+        client.get_black_level_list("CAM123")
+
+    with pytest.raises(PyEzvizError, match="Could not get time plan infos"):
+        client.get_time_plan_infos("CAM123", 2, 3)
+
+    with pytest.raises(PyEzvizError, match="Could not set time plan infos"):
+        client.set_time_plan_infos("CAM123", 2, 3, 1, [])
+
+    with pytest.raises(PyEzvizError, match="Could not search records"):
+        client.search_records("CAM123", 2, "CHAN123", "start", "stop")
+
+
+def test_search_device_builds_prepared_request(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        captured.update({"req": req, **kwargs})
+        return _response(text='{"meta": {"code": 200}, "device": {"serial": "CAM123"}}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    assert client.search_device("CAM123", user_ssid="ssid-1", max_retries=2) == {
+        "meta": {"code": 200},
+        "device": {"serial": "CAM123"},
+    }
+    req = captured["req"]
+    assert req.method == "GET"
+    assert "deviceSerial=CAM123" in (req.url or "")
+    assert req.headers["userSsid"] == "ssid-1"
+    assert captured["retry_401"] is True
+    assert captured["max_retries"] == 2
+
+
+def test_search_device_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_send_prepared(req: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        return _response(text='{"meta": {"code": 500}, "message": "failed"}')
+
+    monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
+
+    with pytest.raises(PyEzvizError, match="Could not search device"):
+        client.search_device("CAM123")

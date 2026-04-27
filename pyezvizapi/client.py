@@ -369,8 +369,8 @@ class EzvizClient:
                 method,
                 url,
                 self._summarize_payload(params),
-                self._summarize_payload(data, include_preview=False),
-                self._summarize_payload(json_body, include_preview=False),
+                self._body_debug_summary(data),
+                self._body_debug_summary(json_body),
             )
         try:
             req = self._session.request(
@@ -493,9 +493,7 @@ class EzvizClient:
         return None
 
     @staticmethod
-    def _summarize_payload(  # noqa: PLR0911
-        payload: Any, *, include_preview: bool = True
-    ) -> str:
+    def _summarize_payload(payload: Any) -> str:
         """Return a compact, credential-safe payload description for debug logs."""
 
         if payload is None:
@@ -509,8 +507,8 @@ class EzvizClient:
                 "sessionId",
             }
             keys = ", ".join(
-                "<redacted>" if str(key) in sensitive_keys else str(key)
-                for key in sorted(payload)
+                "<redacted>" if key in sensitive_keys else key
+                for key in sorted(str(key) for key in payload)
             )
             return f"dict[{keys}]"
         if isinstance(payload, (list, tuple, set)):
@@ -518,11 +516,20 @@ class EzvizClient:
         if isinstance(payload, (bytes, bytearray)):
             return f"bytes(len={len(payload)})"
         if isinstance(payload, str):
-            if not include_preview:
-                return f"str(len={len(payload)})"
             trimmed = payload[:32] + "…" if len(payload) > 32 else payload
             return f"str(len={len(payload)}, preview={trimmed!r})"
         return f"{type(payload).__name__}"
+
+    @staticmethod
+    def _body_debug_summary(payload: Any) -> str:
+        """Return a request-body summary without inspecting sensitive contents."""
+
+        if payload is None:
+            return "-"
+        try:
+            return f"{type(payload).__name__}(len={len(payload)})"
+        except TypeError:
+            return type(payload).__name__
 
     def _ensure_ok(self, payload: dict, message: str) -> None:
         """Raise PyEzvizError with context if response is not OK.

@@ -265,6 +265,8 @@ Contributions are welcome — the API surface is large and there are many improv
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development setup, local validation, offline-test expectations, and cleanup guidance before opening a PR.
 
+For questions, bug reports, and feature requests, see [`SUPPORT.md`](SUPPORT.md) for what to include and what not to post publicly.
+
 For changes that affect Home Assistant integrations, see [`docs/home-assistant-contract.md`](docs/home-assistant-contract.md) before renaming methods, changing status keys, or altering auth/MQTT behavior.
 
 For vulnerability reports or security-sensitive behavior, see [`SECURITY.md`](SECURITY.md). Please do not post credentials, MFA codes, tokens, or private camera URLs in public issues.

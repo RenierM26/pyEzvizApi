@@ -1,0 +1,97 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to prepare, matching pyproject.toml, e.g. 1.0.4.5"
+        required: true
+        type: string
+      release-date:
+        description: "Release date in YYYY-MM-DD format; defaults to today in UTC"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Move Unreleased changelog entries into release section
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_DATE: ${{ inputs.release-date }}
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          requested = os.environ["RELEASE_VERSION"].strip()
+          if requested.startswith("v"):
+              raise SystemExit("Use the bare version input, e.g. 1.0.4.5, not v1.0.4.5.")
+
+          release_date = os.environ.get("RELEASE_DATE", "").strip()
+          if not release_date:
+              release_date = dt.datetime.now(dt.UTC).date().isoformat()
+          elif not re.fullmatch(r"\d{4}-\d{2}-\d{2}", release_date):
+              raise SystemExit("release-date must use YYYY-MM-DD format.")
+
+          with open("pyproject.toml", "rb") as file:
+              version = tomllib.load(file)["project"]["version"]
+          if requested != version:
+              raise SystemExit(
+                  f"Requested release version {requested!r} does not match pyproject version {version!r}."
+              )
+
+          path = Path("CHANGELOG.md")
+          text = path.read_text()
+          marker = "## Unreleased"
+          if marker not in text:
+              raise SystemExit("CHANGELOG.md does not contain an '## Unreleased' section.")
+
+          start = text.index(marker)
+          next_match = re.search(r"\n## ", text[start + len(marker):])
+          if next_match is None:
+              raise SystemExit("Could not find the section after '## Unreleased'.")
+          next_start = start + len(marker) + next_match.start() + 1
+
+          unreleased_body = text[start + len(marker):next_start].strip()
+          if not unreleased_body:
+              raise SystemExit("The Unreleased section is empty; nothing to prepare.")
+
+          version_heading = f"## v{requested} - {release_date}"
+          if version_heading in text or f"## {requested} - {release_date}" in text:
+              raise SystemExit(f"A release section for {requested} on {release_date} already exists.")
+
+          replacement = f"## Unreleased\n\n{version_heading}\n\n{unreleased_body}\n\n"
+          path.write_text(text[:start] + replacement + text[next_start:])
+          print(f"Prepared CHANGELOG.md for v{requested} - {release_date}.")
+          PY
+
+      - name: Create release preparation PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          branch: release/prepare-v${{ inputs.version }}
+          delete-branch: true
+          title: "Prepare release v${{ inputs.version }}"
+          commit-message: "Prepare release v${{ inputs.version }}"
+          body: |
+            ## Summary
+            - move current `Unreleased` changelog entries into a dated `v${{ inputs.version }}` release section
+            - leave a fresh empty `Unreleased` section for future changes
+
+            After this PR is reviewed and merged, run the Manual Release workflow with version `${{ inputs.version }}`.

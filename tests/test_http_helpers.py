@@ -299,3 +299,108 @@ def test_add_helpers_raise_contextual_api_errors(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not add local device"):
         client.add_local_device({"local": True})
+
+
+def test_dev_config_network_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "path": path}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.dev_config_search("CAM123", 1, max_retries=1)["meta"]["code"] == 200
+    assert client.dev_config_send_config_command("CAM123", 1, "TARGET456")["meta"]["code"] == 200
+    assert client.dev_config_wifi_list("CAM123", 1)["meta"]["code"] == 200
+    assert client.device_between_error("CAM123", 1, "TARGET456")["meta"]["code"] == 200
+    assert client.dev_token()["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["path"].endswith("/CAM123/1/netWork")
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["path"].endswith("/CAM123/1/netWork/command")
+    assert calls[1]["params"] == {"targetDeviceSerial": "TARGET456"}
+    assert calls[2]["method"] == "GET"
+    assert calls[2]["path"].endswith("/CAM123/1/netWork")
+    assert calls[3]["method"] == "GET"
+    assert calls[3]["path"].endswith("/CAM123/1/netWork/result")
+    assert calls[3]["params"] == {"targetDeviceSerial": "TARGET456"}
+    assert calls[4]["method"] == "GET"
+    assert all(call["retry_401"] is True for call in calls)
+
+
+def test_switch_request_helpers_build_modern_and_legacy_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "path": path}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_switch_v3("CAM123", 7, True, channel=2, max_retries=1)["meta"]["code"] == 200
+    assert client.set_switch_legacy("CAM123", 7, False, channel=2)["meta"]["code"] == 200
+    assert client.device_switch("CAM123", 3, 1, 29)["meta"]["code"] == 200
+    assert client.switch_status_other("CAM123", 29, 1, channel_number=3) is True
+
+    assert calls[0]["method"] == "PUT"
+    assert "/CAM123/2/1/7" in calls[0]["path"]
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["data"] == {
+        "serial": "CAM123",
+        "enable": "0",
+        "type": "7",
+        "channel": "2",
+    }
+    assert calls[2]["method"] == "PUT"
+    assert calls[2]["params"] == {"channelNo": 3, "enable": 1, "switchType": 29}
+    assert calls[3]["method"] == "PUT"
+    assert calls[3]["params"] == {"channelNo": 3, "enable": 1, "switchType": 29}
+
+
+def test_set_switch_falls_back_to_legacy_and_preserves_first_error(monkeypatch) -> None:
+    client = _client()
+    calls: list[tuple[str, int]] = []
+
+    def fake_v3(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+        calls.append(("v3", channel))
+        raise PyEzvizError("modern failed")
+
+    def fake_legacy(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+        calls.append(("legacy", channel))
+        return {"meta": {"code": 200}, "legacy": True}
+
+    monkeypatch.setattr(client, "set_switch_v3", fake_v3)
+    monkeypatch.setattr(client, "set_switch_legacy", fake_legacy)
+
+    assert client.set_switch("CAM123", 7, True, channel=4) == {
+        "meta": {"code": 200},
+        "legacy": True,
+    }
+    assert calls == [("v3", 4), ("legacy", 4)]
+
+    def failing_legacy(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+        raise PyEzvizError("legacy failed")
+
+    monkeypatch.setattr(client, "set_switch_legacy", failing_legacy)
+
+    with pytest.raises(PyEzvizError, match="modern failed"):
+        client.set_switch("CAM123", 7, True)
+
+
+def test_switch_status_updates_cached_camera_switch_state(monkeypatch) -> None:
+    client = _client()
+    client._cameras["CAM123"] = {"switches": {7: False}}
+
+    def fake_set_switch(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "set_switch", fake_set_switch)
+
+    assert client.switch_status("CAM123", 7, True, channel_no=2) is True
+    assert client._cameras["CAM123"]["switches"][7] is True

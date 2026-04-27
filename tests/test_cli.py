@@ -554,3 +554,256 @@ def test_light_toggle_invokes_light_wrapper(monkeypatch, tmp_path) -> None:
     light = FakeLightBulb.instances[0]
     assert light.serial == "LIGHT123"
     assert light.toggled is True
+
+
+class _FakeCamera:
+    instances: ClassVar[list[_FakeCamera]] = []
+
+    def __init__(self, client: _FakeClient, serial: str) -> None:
+        self.client = client
+        self.serial = serial
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.__class__.instances.append(self)
+
+    def status(self, *, refresh: bool = True) -> dict[str, Any]:
+        self.calls.append(("status", (refresh,)))
+        return {"serial": self.serial, "name": "Front Door", "refresh": refresh}
+
+    def move(self, direction: str, speed: int) -> None:
+        self.calls.append(("move", (direction, speed)))
+
+    def move_coordinates(self, x: float, y: float) -> None:
+        self.calls.append(("move_coordinates", (x, y)))
+
+    def door_unlock(self) -> None:
+        self.calls.append(("door_unlock", ()))
+
+    def gate_unlock(self) -> None:
+        self.calls.append(("gate_unlock", ()))
+
+    def switch_device_ir_led(self, enable: int) -> None:
+        self.calls.append(("switch_device_ir_led", (enable,)))
+
+    def switch_device_state_led(self, enable: int) -> None:
+        self.calls.append(("switch_device_state_led", (enable,)))
+
+    def switch_device_audio(self, enable: int) -> None:
+        self.calls.append(("switch_device_audio", (enable,)))
+
+    def switch_privacy_mode(self, enable: int) -> None:
+        self.calls.append(("switch_privacy_mode", (enable,)))
+
+    def switch_sleep_mode(self, enable: int) -> None:
+        self.calls.append(("switch_sleep_mode", (enable,)))
+
+    def switch_follow_move(self, enable: int) -> None:
+        self.calls.append(("switch_follow_move", (enable,)))
+
+    def switch_sound_alarm(self, enable: int) -> None:
+        self.calls.append(("switch_sound_alarm", (enable,)))
+
+    def alarm_sound(self, sound_type: int) -> None:
+        self.calls.append(("alarm_sound", (sound_type,)))
+
+    def alarm_notify(self, enable: int) -> None:
+        self.calls.append(("alarm_notify", (enable,)))
+
+    def alarm_detection_sensibility(self, sensibility: int) -> None:
+        self.calls.append(("alarm_detection_sensibility", (sensibility,)))
+
+    def do_not_disturb(self, enable: int) -> None:
+        self.calls.append(("do_not_disturb", (enable,)))
+
+    def change_defence_schedule(self, schedule: str) -> None:
+        self.calls.append(("change_defence_schedule", (schedule,)))
+
+    def set_battery_camera_work_mode(self, mode: Any) -> None:
+        self.calls.append(("set_battery_camera_work_mode", (mode,)))
+
+
+def _install_fake_camera(monkeypatch) -> type[_FakeCamera]:
+    _install_fake_client(monkeypatch)
+    _FakeCamera.instances = []
+    monkeypatch.setattr(cli_module, "EzvizCamera", _FakeCamera)
+    return _FakeCamera
+
+
+def _token_file(tmp_path) -> str:
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+    return str(token_file)
+
+
+def test_camera_status_outputs_json_and_forwards_refresh(monkeypatch, tmp_path, capsys) -> None:
+    fake_camera = _install_fake_camera(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "camera",
+                "--serial",
+                "CAM123",
+                "status",
+                "--no-refresh",
+            ]
+        )
+        == 0
+    )
+
+    camera = fake_camera.instances[0]
+    assert camera.serial == "CAM123"
+    assert camera.calls == [("status", (False,))]
+    assert json.loads(capsys.readouterr().out) == {
+        "serial": "CAM123",
+        "name": "Front Door",
+        "refresh": False,
+    }
+
+
+def test_camera_move_and_coordinate_commands_dispatch(monkeypatch, tmp_path) -> None:
+    fake_camera = _install_fake_camera(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "camera",
+                "--serial",
+                "CAM123",
+                "move",
+                "--direction",
+                "left",
+                "--speed",
+                "7",
+            ]
+        )
+        == 0
+    )
+    assert fake_camera.instances[-1].calls == [("move", ("left", 7))]
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "camera",
+                "--serial",
+                "CAM123",
+                "move_coords",
+                "--x",
+                "0.25",
+                "--y",
+                "0.75",
+            ]
+        )
+        == 0
+    )
+    assert fake_camera.instances[-1].calls == [("move_coordinates", (0.25, 0.75))]
+
+
+def test_camera_lock_and_switch_commands_dispatch(monkeypatch, tmp_path, capsys) -> None:
+    fake_camera = _install_fake_camera(monkeypatch)
+
+    assert (
+        cli_module.main(
+            ["--token-file", _token_file(tmp_path), "camera", "--serial", "CAM123", "unlock-door"]
+        )
+        == 0
+    )
+    assert fake_camera.instances[-1].calls == [("door_unlock", ())]
+
+    assert (
+        cli_module.main(
+            ["--token-file", _token_file(tmp_path), "camera", "--serial", "CAM123", "unlock-gate"]
+        )
+        == 0
+    )
+    assert fake_camera.instances[-1].calls == [("gate_unlock", ())]
+
+    switch_cases = [
+        ("ir", "switch_device_ir_led", 0),
+        ("state", "switch_device_state_led", 1),
+        ("audio", "switch_device_audio", 1),
+        ("privacy", "switch_privacy_mode", 1),
+        ("sleep", "switch_sleep_mode", 1),
+        ("follow_move", "switch_follow_move", 1),
+        ("sound_alarm", "switch_sound_alarm", 2),
+    ]
+    for switch_name, method_name, expected_enable in switch_cases:
+        assert (
+            cli_module.main(
+                [
+                    "--token-file",
+                    _token_file(tmp_path),
+                    "camera",
+                    "--serial",
+                    "CAM123",
+                    "switch",
+                    "--switch",
+                    switch_name,
+                    "--enable",
+                    "1" if switch_name != "ir" else "0",
+                ]
+            )
+            == 0
+        )
+        assert fake_camera.instances[-1].calls == [(method_name, (expected_enable,))]
+
+    assert "1" in capsys.readouterr().out
+
+
+def test_camera_alarm_and_select_commands_dispatch(monkeypatch, tmp_path) -> None:
+    fake_camera = _install_fake_camera(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "camera",
+                "--serial",
+                "CAM123",
+                "alarm",
+                "--sound",
+                "1",
+                "--notify",
+                "0",
+                "--sensibility",
+                "42",
+                "--do_not_disturb",
+                "1",
+                "--schedule",
+                '{"enabled": true}',
+            ]
+        )
+        == 0
+    )
+    assert fake_camera.instances[-1].calls == [
+        ("alarm_sound", (1,)),
+        ("alarm_notify", (0,)),
+        ("alarm_detection_sensibility", (42,)),
+        ("do_not_disturb", (1,)),
+        ("change_defence_schedule", ('{"enabled": true}',)),
+    ]
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "camera",
+                "--serial",
+                "CAM123",
+                "select",
+                "--battery_work_mode",
+                "POWER_SAVE",
+            ]
+        )
+        == 0
+    )
+    method_name, args = fake_camera.instances[-1].calls[0]
+    assert method_name == "set_battery_camera_work_mode"
+    assert args[0].name == "POWER_SAVE"

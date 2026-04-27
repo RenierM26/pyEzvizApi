@@ -37,6 +37,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/RenierM26/pyEzvizApi/"
 Repository = "https://github.com/RenierM26/pyEzvizApi/"
+Documentation = "https://github.com/RenierM26/pyEzvizApi/tree/main/docs"
+Changelog = "https://github.com/RenierM26/pyEzvizApi/blob/main/CHANGELOG.md"
 Issues = "https://github.com/RenierM26/pyEzvizApi/issues"
 
 [project.scripts]

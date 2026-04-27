@@ -43,7 +43,7 @@ Issues = "https://github.com/RenierM26/pyEzvizApi/issues"
 pyezvizapi = "pyezvizapi.__main__:main"
 
 [project.optional-dependencies]
-dev = ["build", "ruff", "mypy", "pytest", "twine", "types-requests"]
+dev = ["build", "ruff", "mypy", "pytest", "pytest-cov", "twine", "types-requests"]
 
 [tool.setuptools.packages.find]
 include = ["pyezvizapi*"]
@@ -110,3 +110,12 @@ python_functions = ["test_*"]
 
 [tool.coverage.run]
 source = ["pyezvizapi"]
+
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.",
+]

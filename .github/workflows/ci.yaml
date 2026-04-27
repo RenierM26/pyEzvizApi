@@ -56,6 +56,9 @@ jobs:
       - name: Install project + dev deps
         run: pip install -e .[dev]
 
+      - name: Check installed dependency consistency
+        run: python -m pip check
+
       - name: Ruff
         run: ruff check .
 
@@ -90,5 +93,6 @@ jobs:
           python -m venv /tmp/pyezvizapi-wheel-smoke
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pip install -U pip
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pip install dist/*.whl
+          /tmp/pyezvizapi-wheel-smoke/bin/python -m pip check
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pyezvizapi --help
           /tmp/pyezvizapi-wheel-smoke/bin/pyezvizapi --help

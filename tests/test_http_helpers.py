@@ -2055,3 +2055,113 @@ def test_door_lock_helpers_raise_contextual_errors(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Could not get unbind progress"):
         client.get_remote_unbind_progress("LOCK123")
+
+
+def test_ptz_control_builds_request_payload(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.ptz_control("LEFT", "CAM123", "START", speed=4) is True
+    assert captured["method"] == "PUT"
+    assert captured["path"].endswith("CAM123/ptzControl")
+    assert captured["data"]["command"] == "LEFT"
+    assert captured["data"]["action"] == "START"
+    assert captured["data"]["channelNo"] == 1
+    assert captured["data"]["speed"] == 4
+    assert captured["data"]["serial"] == "CAM123"
+    assert isinstance(captured["data"]["uuid"], str)
+    assert captured["retry_401"] is False
+
+
+def test_ptz_control_requires_command_and_action() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="without command"):
+        client.ptz_control(None, "CAM123", "START")  # type: ignore[arg-type]
+
+    with pytest.raises(PyEzvizError, match="without action"):
+        client.ptz_control("LEFT", "CAM123", None)  # type: ignore[arg-type]
+
+
+def test_panoramic_helpers_retry_and_build_payloads(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = [
+        {"resultCode": "-1"},
+        {"resultCode": "0", "panoramic": "created"},
+        {"resultCode": "-1"},
+        {"resultCode": "0", "urls": ["https://image.example/pano.jpg"]},
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.create_panoramic("CAM123", max_retries=1) == {
+        "resultCode": "0",
+        "panoramic": "created",
+    }
+    assert client.return_panoramic("CAM123", max_retries=1) == {
+        "resultCode": "0",
+        "urls": ["https://image.example/pano.jpg"],
+    }
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["data"] == {"deviceSerial": "CAM123"}
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 0
+    assert calls[2]["method"] == "POST"
+    assert calls[2]["data"] == {"deviceSerial": "CAM123"}
+    assert calls[2]["max_retries"] == 0
+
+
+def test_panoramic_helpers_validate_and_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.create_panoramic("CAM123", max_retries=99)
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"resultCode": "500"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="create panoramic photo"):
+        client.create_panoramic("CAM123")
+
+    with pytest.raises(PyEzvizError, match="retrieve panoramic photo"):
+        client.return_panoramic("CAM123")
+
+
+def test_ptz_control_coordinates_formats_payload_and_validates(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.ptz_control_coordinates("CAM123", 0.25, 0.75) is True
+    assert captured["method"] == "POST"
+    assert captured["data"] == {
+        "x": "0.250000",
+        "y": "0.750000",
+        "deviceSerial": "CAM123",
+    }
+    assert captured["retry_401"] is False
+
+    with pytest.raises(PyEzvizError, match="Invalid X coordinate"):
+        client.ptz_control_coordinates("CAM123", 1.1, 0.5)
+
+    with pytest.raises(PyEzvizError, match="Invalid Y coordinate"):
+        client.ptz_control_coordinates("CAM123", 0.5, 1.1)

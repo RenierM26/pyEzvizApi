@@ -2586,13 +2586,13 @@ class EzvizClient:
         return json_output
 
     def get_cam_key(
-        self, serial: str, smscode: int | None = None, max_retries: int = 0
+        self, serial: str, smscode: str | int | None = None, max_retries: int = 0
     ) -> Any:
         """Get Camera encryption key. The key that is set after the camera is added to the account.
 
         Args:
             serial (str): The camera serial number.
-            smscode (int | None): The 2FA code account when rights elevation is required.
+            smscode (str | int | None): The 2FA code account when rights elevation is required.
             max_retries (int): The maximum number of retries. Defaults to 0.
 
         Raises:
@@ -2653,7 +2653,7 @@ class EzvizClient:
         self,
         serial: str,
         encrypt_pwd: str | None = None,
-        msg_auth_code: int | None = None,
+        msg_auth_code: str | int | None = None,
         sender_type: int = 0,
         max_retries: int = 0,
     ) -> Any:
@@ -2662,7 +2662,7 @@ class EzvizClient:
         Args:
             serial (str): The camera serial number.
             encrypt_pwd (str | None): This is always none.
-            msg_auth_code (int | None): The 2FA code.
+            msg_auth_code (str | int | None): The 2FA code.
             sender_type (int): The sender type. Defaults to 0. Needs to be 3 when returning 2FA code.
             max_retries (int): The maximum number of retries. Defaults to 0.
 

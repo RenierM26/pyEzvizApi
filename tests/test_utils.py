@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
+from pyezvizapi import utils
 from pyezvizapi.utils import (
     coerce_int,
+    compute_motion_from_alarm,
     decode_json,
     deep_merge,
     fetch_nested_value,
     first_nested,
     iter_nested,
+    normalize_alarm_time,
     parse_timezone_value,
     return_password_hash,
     string_to_list,
@@ -77,3 +81,86 @@ def test_parse_timezone_value_supports_offsets() -> None:
 
     tz = parse_timezone_value(120)
     assert tz.utcoffset(None) == dt.timedelta(hours=2)
+
+
+def test_normalize_alarm_time_handles_epoch_milliseconds_and_string_fallback() -> None:
+    tz = dt.timezone(dt.timedelta(hours=2))
+    local_dt, utc_dt, alarm_str = normalize_alarm_time(
+        {"alarmStartTime": 1714212000000},
+        tz,
+    )
+
+    assert local_dt == dt.datetime(2024, 4, 27, 12, 0, tzinfo=tz)
+    assert utc_dt == dt.datetime(2024, 4, 27, 10, 0, tzinfo=dt.UTC)
+    assert alarm_str == "2024-04-27 12:00:00"
+
+    local_dt, utc_dt, alarm_str = normalize_alarm_time(
+        {"alarmStartTimeStr": "2024-04-27 13:30:00"},
+        tz,
+    )
+
+    assert local_dt == dt.datetime(2024, 4, 27, 13, 30, tzinfo=tz)
+    assert utc_dt == dt.datetime(2024, 4, 27, 11, 30, tzinfo=dt.UTC)
+    assert alarm_str == "2024-04-27 13:30:00"
+
+
+def test_normalize_alarm_time_reinterprets_local_clock_epoch_when_string_differs() -> None:
+    tz = dt.timezone(dt.timedelta(hours=2))
+    local_dt, utc_dt, alarm_str = normalize_alarm_time(
+        {
+            "alarmStartTime": 1714212000,
+            "alarmStartTimeStr": "2024-04-27 10:00:00",
+        },
+        tz,
+    )
+
+    assert local_dt == dt.datetime(2024, 4, 27, 10, 0, tzinfo=tz)
+    assert utc_dt == dt.datetime(2024, 4, 27, 8, 0, tzinfo=dt.UTC)
+    assert alarm_str == "2024-04-27 10:00:00"
+
+
+def test_compute_motion_from_alarm_handles_recent_old_and_future_events(monkeypatch) -> None:
+    tz = dt.UTC
+
+    class FixedDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz: dt.tzinfo | None = None) -> Any:
+            base = dt.datetime(2024, 4, 27, 10, 0, tzinfo=dt.UTC)
+            return base.astimezone(tz) if tz is not None else base.replace(tzinfo=None)
+
+    monkeypatch.setattr(utils.datetime, "datetime", FixedDateTime)
+
+    active, seconds, alarm_str = compute_motion_from_alarm(
+        {"alarmStartTime": 1714211990},
+        tz,
+        window_seconds=60,
+    )
+    assert active is True
+    assert seconds == float(10)
+    assert alarm_str == "2024-04-27 09:59:50"
+
+    active, seconds, alarm_str = compute_motion_from_alarm(
+        {"alarmStartTime": 1714211900},
+        tz,
+        window_seconds=60,
+    )
+    assert active is False
+    assert seconds == float(100)
+    assert alarm_str == "2024-04-27 09:58:20"
+
+    active, seconds, alarm_str = compute_motion_from_alarm(
+        {"alarmStartTime": 1714212010},
+        tz,
+        window_seconds=60,
+    )
+    assert active is False
+    assert seconds == 0.0
+    assert alarm_str == "2024-04-27 10:00:10"
+
+
+def test_parse_timezone_value_supports_iana_invalid_and_second_offsets() -> None:
+    johannesburg = parse_timezone_value("Africa/Johannesburg")
+    assert johannesburg.utcoffset(dt.datetime(2024, 4, 27)) == dt.timedelta(hours=2)
+    assert parse_timezone_value("+0530").utcoffset(None) == dt.timedelta(hours=5, minutes=30)
+    assert parse_timezone_value(7200).utcoffset(None) == dt.timedelta(hours=2)
+    assert parse_timezone_value("Not/AZone").utcoffset(None) is not None

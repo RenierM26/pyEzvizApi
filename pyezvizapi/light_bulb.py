@@ -8,15 +8,13 @@ color temperature, etc.).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from .client_protocol import EzvizClientProtocol
 from .constants import DeviceSwitchType
 from .exceptions import PyEzvizError
-from .utils import fetch_nested_value
-
-if TYPE_CHECKING:
-    from .client import EzvizClient
 from .models import EzvizDeviceRecord
+from .utils import fetch_nested_value
 
 
 class EzvizLightBulb:
@@ -30,7 +28,7 @@ class EzvizLightBulb:
 
     def __init__(
         self,
-        client: EzvizClient,
+        client: EzvizClientProtocol,
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:

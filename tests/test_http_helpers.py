@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import requests
@@ -2791,3 +2791,94 @@ def test_get_mqtt_client_reuses_cached_instance(monkeypatch) -> None:
     assert created[0]["session"] is client._session
     assert created[0]["timeout"] == 1
     assert created[0]["on_message_callback"] is callback
+
+
+def test_get_alarminfo_builds_request_and_retries_server_busy(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    responses = [
+        {"meta": {"code": 500}, "message": "busy"},
+        {"meta": {"code": 200}, "alarms": []},
+    ]
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return responses.pop(0)
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_alarminfo("CAM123", limit=5, max_retries=1) == {
+        "meta": {"code": 200},
+        "alarms": [],
+    }
+    assert len(calls) == 2
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["params"] == {
+        "deviceSerials": "CAM123",
+        "queryType": -1,
+        "limit": 5,
+        "stype": -1,
+    }
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 0
+
+
+def test_get_alarminfo_raises_contextual_error(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 401}, "message": "denied"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get data from alarm api"):
+        client.get_alarminfo("CAM123")
+
+
+def test_get_device_records_returns_map_single_record_and_raw_fallback(monkeypatch) -> None:
+    client = _client()
+    device_infos = {
+        "CAM123": {
+            "deviceInfos": {
+                "deviceSerial": "CAM123",
+                "name": "Front door",
+                "deviceCategory": "camera",
+                "version": "1.0",
+                "status": 1,
+            },
+            "STATUS": {"globalStatus": 1, "optionals": {}},
+            "SWITCH": [{"type": 1, "enable": 1}],
+        },
+        "ODD123": {"unexpected": "shape"},
+    }
+
+    monkeypatch.setattr(client, "get_device_infos", lambda: device_infos)
+
+    records = cast(dict[str, Any], client.get_device_records())
+    assert records["CAM123"].serial == "CAM123"
+    assert records["CAM123"].name == "Front door"
+    assert records["CAM123"].switches == {1: True}
+
+    cam_record = cast(Any, client.get_device_records("CAM123"))
+    assert cam_record.serial == "CAM123"
+    assert cam_record.name == "Front door"
+    assert client.get_device_records("MISSING") == {}
+
+
+def test_set_camera_defence_old_delegates_to_cas(monkeypatch) -> None:
+    client = _client()
+    created: list[dict[str, Any]] = []
+    calls: list[tuple[str, int]] = []
+
+    class FakeCAS:
+        def __init__(self, token: dict[str, Any]) -> None:
+            created.append(token)
+
+        def set_camera_defence_state(self, serial: str, enable: int) -> None:
+            calls.append((serial, enable))
+
+    monkeypatch.setattr("pyezvizapi.client.EzvizCAS", FakeCAS)
+
+    assert client.set_camera_defence_old("CAM123", 1) is True
+    assert created == [client._token]
+    assert calls == [("CAM123", 1)]

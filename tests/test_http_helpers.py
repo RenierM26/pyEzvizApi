@@ -1488,3 +1488,188 @@ def test_detection_sensibility_legacy_validates_and_wraps_errors(monkeypatch) ->
 
     with pytest.raises(PyEzvizError, match="Could not decode response"):
         client.detection_sensibility("CAM123", sensibility=3, type_value=0)
+
+
+def test_manage_intelligent_app_builds_add_and_remove_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.manage_intelligent_app(
+        "CAM123",
+        "res-1",
+        "app_human_detect",
+        action="add",
+        max_retries=1,
+    ) is True
+    assert client.manage_intelligent_app(
+        "CAM123",
+        "res-1",
+        "app_human_detect",
+        action="REMOVE",
+        max_retries=2,
+    ) is True
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/res-1/app_human_detect")
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "DELETE"
+    assert calls[1]["path"].endswith("CAM123/res-1/app_human_detect")
+    assert calls[1]["max_retries"] == 2
+
+
+def test_manage_intelligent_app_validates_action_and_retries() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Invalid action"):
+        client.manage_intelligent_app("CAM123", "res-1", "app_human_detect", action="toggle")
+
+    with pytest.raises(PyEzvizError, match="Max retries exceeded"):
+        client.manage_intelligent_app("CAM123", "res-1", "app_human_detect", max_retries=99)
+
+
+def test_set_intelligent_app_state_resolves_resource_ids(monkeypatch) -> None:
+    client = _client()
+    client._cameras["CAM123"] = {"resourceInfos": [{"resourceId": "res-auto"}]}
+    calls: list[dict[str, Any]] = []
+
+    def fake_manage_intelligent_app(
+        serial: str,
+        resource_id: str,
+        app_name: str,
+        action: str = "add",
+        max_retries: int = 0,
+    ) -> bool:
+        calls.append(
+            {
+                "serial": serial,
+                "resource_id": resource_id,
+                "app_name": app_name,
+                "action": action,
+                "max_retries": max_retries,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(client, "manage_intelligent_app", fake_manage_intelligent_app)
+
+    assert client.set_intelligent_app_state("CAM123", "app_car_detect", True, max_retries=1) is True
+    assert client.set_intelligent_app_state(
+        "CAM123",
+        "app_car_detect",
+        False,
+        resource_id="res-explicit",
+        max_retries=2,
+    ) is True
+
+    assert calls == [
+        {
+            "serial": "CAM123",
+            "resource_id": "res-auto",
+            "app_name": "app_car_detect",
+            "action": "add",
+            "max_retries": 1,
+        },
+        {
+            "serial": "CAM123",
+            "resource_id": "res-explicit",
+            "app_name": "app_car_detect",
+            "action": "remove",
+            "max_retries": 2,
+        },
+    ]
+
+
+def test_resolve_resource_id_uses_legacy_fields_and_errors() -> None:
+    client = _client()
+
+    assert client._resolve_resource_id("CAM123", "given") == "given"
+
+    client._cameras["CAM123"] = {"resouceid": "legacy-typo"}
+    assert client._resolve_resource_id("CAM123", None) == "legacy-typo"
+
+    client._cameras["CAM123"] = {"resource_id": "legacy-resource"}
+    assert client._resolve_resource_id("CAM123", None) == "legacy-resource"
+
+    with pytest.raises(PyEzvizError, match="Unknown camera serial"):
+        client._resolve_resource_id("UNKNOWN", None)
+
+    client._cameras["EMPTY"] = {"name": "No Resource"}
+    with pytest.raises(PyEzvizError, match="Unable to determine resourceId"):
+        client._resolve_resource_id("EMPTY", None)
+
+
+def test_mirror_helpers_build_requests(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.device_mirror("CAM123", 2, "LEFT", max_retries=1)["meta"]["code"] == 200
+    assert client.flip_image("CAM123", channel=3, max_retries=2) is True
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/2/LEFT/mirror")
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["path"].endswith("CAM123/3/CENTER/mirror")
+    assert calls[1]["max_retries"] == 2
+
+
+def test_resolve_osd_text_prefers_name_then_payload_sources() -> None:
+    client = _client()
+
+    assert client._resolve_osd_text("CAM123", name="  Friendly  ") == "Friendly"
+    assert client._resolve_osd_text("CAM123", camera_data={"name": "Direct"}) == "Direct"
+    assert client._resolve_osd_text(
+        "CAM123",
+        camera_data={"deviceInfos": {"name": "Device Info"}},
+    ) == "Device Info"
+    assert client._resolve_osd_text(
+        "CAM123",
+        camera_data={"optionals": {"OSD": [{"name": "OSD Name"}]}},
+    ) == "OSD Name"
+    assert client._resolve_osd_text("CAM123", camera_data={}) == "CAM123"
+
+
+def test_set_camera_osd_builds_request_from_text_and_enabled(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.set_camera_osd("CAM123", text="Explicit", channel=2, max_retries=1) is True
+    assert client.set_camera_osd("CAM123", enabled=False) is True
+    assert client.set_camera_osd(
+        "CAM123",
+        enabled=True,
+        camera_data={"deviceInfos": {"name": "Front Door"}},
+    ) is True
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"].endswith("CAM123/2/osd")
+    assert calls[0]["data"] == {"osd": "Explicit"}
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["data"] == {"osd": ""}
+    assert calls[2]["data"] == {"osd": "Front Door"}
+
+
+def test_set_camera_osd_requires_camera_data_when_deriving() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="Camera data unavailable"):
+        client.set_camera_osd("CAM123", enabled=True)

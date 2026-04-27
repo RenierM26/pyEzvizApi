@@ -6,6 +6,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+## v1.0.4.7 - 2026-04-27
+
 ### Added
 
 - Added manual release dispatch to the trusted PyPI publish workflow so releases can be published by running a workflow with the requested version.

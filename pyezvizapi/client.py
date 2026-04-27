@@ -4738,7 +4738,7 @@ class EzvizClient:
         return self._api_get_pagelist(
             page_filter="CLOUD, TIME_PLAN, CONNECTION, SWITCH,"
             "STATUS, WIFI, NODISTURB, KMS,"
-            "P2P, TIME_PLAN, CHANNEL, VTM, DETECTOR,"
+            "P2P, CHANNEL, VTM, DETECTOR,"
             "FEATURE, CUSTOM_TAG, UPGRADE, VIDEO_QUALITY,"
             "QOS, PRODUCTS_INFO, SIM_CARD, MULTI_UPGRADE_EXT,"
             "FEATURE_INFO",

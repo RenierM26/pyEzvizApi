@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import datetime as dt
+from hashlib import md5
 from typing import Any
 
+from Crypto.Cipher import AES
+import pytest
+
 from pyezvizapi import utils
+from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
+from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.utils import (
     coerce_int,
     compute_motion_from_alarm,
     decode_json,
+    decrypt_image,
     deep_merge,
     fetch_nested_value,
     first_nested,
@@ -164,3 +171,42 @@ def test_parse_timezone_value_supports_iana_invalid_and_second_offsets() -> None
     assert parse_timezone_value("+0530").utcoffset(None) == dt.timedelta(hours=5, minutes=30)
     assert parse_timezone_value(7200).utcoffset(None) == dt.timedelta(hours=2)
     assert parse_timezone_value("Not/AZone").utcoffset(None) is not None
+
+
+def _encrypted_image_block(password: str, plaintext: bytes) -> bytes:
+    password_hash = md5(str.encode(md5(str.encode(password)).hexdigest())).hexdigest()
+    key = str.encode(password.ljust(16, "\u0000")[:16])
+    iv_code = bytes([48, 49, 50, 51, 52, 53, 54, 55, 0, 0, 0, 0, 0, 0, 0, 0])
+    padding = AES.block_size - (len(plaintext) % AES.block_size)
+    ciphertext = AES.new(key, AES.MODE_CBC, iv_code).encrypt(
+        plaintext + bytes([padding]) * padding
+    )
+    return HIK_ENCRYPTION_HEADER + password_hash.encode() + ciphertext
+
+
+def test_decrypt_image_returns_plain_data_without_encryption_header() -> None:
+    image_data = b"plain-jpeg-bytes-that-are-long-enough" * 3
+
+    assert decrypt_image(image_data, "ABCDEF") == image_data
+
+
+def test_decrypt_image_handles_valid_preamble_and_concatenated_blocks() -> None:
+    first = _encrypted_image_block("ABCDEF", b"first-image")
+    second = _encrypted_image_block("ABCDEF", b"second-image")
+
+    expected = b"first-imagesecond-image"
+
+    assert decrypt_image(b"preamble" + first + second, "ABCDEF") == expected
+
+
+def test_decrypt_image_rejects_invalid_password_and_malformed_payloads() -> None:
+    encrypted = _encrypted_image_block("ABCDEF", b"secret-image")
+
+    with pytest.raises(PyEzvizError, match="Invalid password"):
+        decrypt_image(encrypted, "WRONG")
+
+    with pytest.raises(PyEzvizError, match="Invalid image data"):
+        decrypt_image(b"short", "ABCDEF")
+
+    with pytest.raises(PyEzvizError, match="Invalid image data after trimming preamble"):
+        decrypt_image((b"x" * 40) + encrypted[:20], "ABCDEF")

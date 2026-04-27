@@ -1291,3 +1291,68 @@ def test_chime_sleep_and_switch_enable_helpers_build_requests(monkeypatch) -> No
     assert calls[2]["data"] == {"type": 2, "duration": 30}
     assert calls[3]["method"] == "PUT"
     assert calls[3]["params"] == {"enable": 0, "type": 7}
+
+
+def test_detector_helpers_build_request_paths(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}, "path": path}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_detector_setting_info(
+        "A1S123",
+        "DET456",
+        "sensitivity",
+        max_retries=1,
+    )["meta"]["code"] == 200
+    assert client.set_detector_setting_info(
+        "A1S123",
+        "DET456",
+        "sensitivity",
+        3,
+        max_retries=2,
+    )["meta"]["code"] == 200
+    assert client.get_detector_info("DET456", max_retries=3)["meta"]["code"] == 200
+    assert client.get_radio_signals("A1S123", "DET456", max_retries=4)["meta"]["code"] == 200
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("A1S123/detector/DET456/sensitivity")
+    assert calls[0]["retry_401"] is True
+    assert calls[0]["max_retries"] == 1
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["path"].endswith("A1S123/detector/DET456")
+    assert calls[1]["params"] == {"key": "sensitivity"}
+    assert calls[1]["data"] == {"value": 3}
+    assert calls[1]["max_retries"] == 2
+    assert calls[2]["method"] == "GET"
+    assert calls[2]["path"].endswith("detector/DET456")
+    assert calls[2]["max_retries"] == 3
+    assert calls[3]["method"] == "GET"
+    assert calls[3]["path"].endswith("A1S123/radioSignal")
+    assert calls[3]["params"] == {"childDevSerial": "DET456"}
+    assert calls[3]["max_retries"] == 4
+
+
+def test_detector_helpers_raise_contextual_errors(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {"meta": {"code": 500}, "message": "failed"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    with pytest.raises(PyEzvizError, match="Could not get detector setting info"):
+        client.get_detector_setting_info("A1S123", "DET456", "sensitivity")
+
+    with pytest.raises(PyEzvizError, match="Could not set detector setting info"):
+        client.set_detector_setting_info("A1S123", "DET456", "sensitivity", 3)
+
+    with pytest.raises(PyEzvizError, match="Could not get detector info"):
+        client.get_detector_info("DET456")
+
+    with pytest.raises(PyEzvizError, match="Could not get radio signals"):
+        client.get_radio_signals("A1S123", "DET456")

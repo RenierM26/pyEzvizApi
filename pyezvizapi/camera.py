@@ -6,7 +6,6 @@ import datetime
 import logging
 from typing import Any, Literal, TypedDict, cast
 
-from .client_protocol import EzvizClientProtocol
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
 from .models import EzvizDeviceRecord
@@ -88,7 +87,7 @@ class EzvizCamera:
 
     def __init__(
         self,
-        client: EzvizClientProtocol,
+        client: Any,
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:

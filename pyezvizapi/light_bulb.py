@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .client_protocol import EzvizClientProtocol
 from .constants import DeviceSwitchType
 from .exceptions import PyEzvizError
 from .models import EzvizDeviceRecord
@@ -28,7 +27,7 @@ class EzvizLightBulb:
 
     def __init__(
         self,
-        client: EzvizClientProtocol,
+        client: Any,
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:

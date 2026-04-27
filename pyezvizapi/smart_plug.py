@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .client_protocol import EzvizClientProtocol
 from .constants import DeviceSwitchType
 from .models import EzvizDeviceRecord
 from .utils import fetch_nested_value
@@ -24,7 +23,7 @@ class EzvizSmartPlug:
 
     def __init__(
             self,
-            client: EzvizClientProtocol,
+            client: Any,
             serial: str,
             device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:

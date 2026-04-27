@@ -6,6 +6,7 @@ on:
     types: [ opened, synchronize, reopened, ready_for_review ]
     paths:
       - "pyezvizapi/**"
+      - "examples/**"
       - "pyproject.toml"
       - ".ruff.toml"
       - "pytest.ini"
@@ -47,10 +48,7 @@ jobs:
         run: python -m pip install -U pip wheel
 
       - name: Install project + dev deps
-        run: |
-          # If you added an extra called "dev" (recommended), this installs:
-          # ruff, mypy, pytest, types-requests (and your runtime deps)
-          pip install -e .[dev]
+        run: pip install -e .[dev]
 
       - name: Ruff
         run: ruff check .
@@ -66,3 +64,18 @@ jobs:
           else
             echo "No tests found under tests/, skipping pytest."
           fi
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package metadata
+        run: twine check dist/*
+
+      - name: Smoke-test built wheel and CLI
+        shell: bash
+        run: |
+          python -m venv /tmp/pyezvizapi-wheel-smoke
+          /tmp/pyezvizapi-wheel-smoke/bin/python -m pip install -U pip
+          /tmp/pyezvizapi-wheel-smoke/bin/python -m pip install dist/*.whl
+          /tmp/pyezvizapi-wheel-smoke/bin/python -m pyezvizapi --help
+          /tmp/pyezvizapi-wheel-smoke/bin/pyezvizapi --help

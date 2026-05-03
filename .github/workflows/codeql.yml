@@ -8,6 +8,7 @@ on:
       - "pyezvizapi/**"
       - "examples/**"
       - "pyproject.toml"
+      - "tests/**"
       - ".github/workflows/codeql.yml"
   push:
     branches: [ main ]

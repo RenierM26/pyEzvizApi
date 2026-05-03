@@ -10,6 +10,7 @@ on:
       - "pyproject.toml"
       - ".ruff.toml"
       - "pytest.ini"
+      - "tests/**"
       - ".github/workflows/**"
       - "!**/*.md"
       - "!docs/**"
@@ -67,7 +68,7 @@ jobs:
 
       - name: Codespell
         if: matrix.python-version == '3.12'
-        run: codespell pyezvizapi tests README.md pyproject.toml .github
+        run: codespell pyezvizapi tests README.md pyproject.toml .github --skip tests/fixtures/page_list_response.json
 
       - name: Audit Python dependencies
         if: matrix.python-version == '3.12'

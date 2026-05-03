@@ -100,7 +100,7 @@ def load_config(path: Path) -> MonitorConfig:
         stale_issue_days=int(raw.get("stale_issue_days", MonitorConfig.stale_issue_days)),
         ignored_stale_labels=tuple(label.lower() for label in ignored_stale_labels),
         uncommented_bug_labels=tuple(label.lower() for label in uncommented_bug_labels),
-        require_pr_labels=bool(raw.get("require_pr_labels", MonitorConfig.require_pr_labels)),
+        require_pr_labels=config_bool(raw, "require_pr_labels", MonitorConfig.require_pr_labels),
         problem_workflow_conclusions=tuple(problem_workflow_conclusions),
         digest_min_severity=str(raw.get("digest_min_severity", MonitorConfig.digest_min_severity)),
         digest_max_items=int(raw.get("digest_max_items", MonitorConfig.digest_max_items)),
@@ -125,6 +125,13 @@ def config_string_list(raw: dict[str, Any], key: str, default: tuple[str, ...]) 
     if not value or not all(isinstance(item, str) and item for item in value):
         raise RuntimeError(f"repo-watch config `{key}` must contain one or more strings.")
     return tuple(value)
+
+
+def config_bool(raw: dict[str, Any], key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise RuntimeError(f"repo-watch config `{key}` must be a boolean.")
+    return value
 
 
 def parse_timestamp(value: str) -> datetime:

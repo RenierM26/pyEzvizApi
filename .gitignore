@@ -123,6 +123,9 @@ venv.bak/
 # Ruff
 .ruff_cache/
 
+# Repository monitor local output
+.repo-watch/
+
 # mypy
 .mypy_cache/
 .dmypy.json

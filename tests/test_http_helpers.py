@@ -2178,6 +2178,38 @@ def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
     }
 
 
+def test_remote_unlock_can_use_latest_terminal_without_name_filter(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if path.endswith("/v3/terminals"):
+            return _fixture("terminal_info_response.json")
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert (
+        client.remote_unlock(
+            "LOCK123",
+            "legacy-user",
+            2,
+            terminal_filter_name=None,
+        )
+        is True
+    )
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": "99998888777766665555444433332222fake-user-id-003",
+            "lockNo": 2,
+            "streamToken": "",
+            "userName": "newer phone",
+        }
+    }
+
+
 def test_remote_unlock_falls_back_when_terminal_lookup_request_fails(monkeypatch) -> None:
     client = _client()
     calls: list[dict[str, Any]] = []

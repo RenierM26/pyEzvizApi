@@ -2942,7 +2942,7 @@ class EzvizClient:
         stream_token: str | None = None,
         lock_type: str | None = None,
         bind_code: str | None = None,
-        terminal_name: str | None = None,
+        terminal_filter_name: str | None = "Hassio",
         use_terminal_bind: bool = True,
     ) -> bool:
         """Sends a remote command to unlock a specific lock.
@@ -2961,7 +2961,10 @@ class EzvizClient:
             bind_code (str, optional): Explicit bind code. When omitted, the latest
                 terminal bind code is used if available, otherwise the legacy
                 ``FEATURE_CODE + user_id`` bind code is used.
-            terminal_name (str, optional): User name associated with ``bind_code``.
+            terminal_filter_name (str, optional): Terminal name to prefer when
+                resolving an implicit bind code. Defaults to ``"Hassio"`` to match
+                the library login terminal. Pass ``None`` to use the newest valid
+                terminal regardless of name.
             use_terminal_bind (bool): Whether to try terminal-derived bind codes
                 before falling back to the legacy bind code.
 
@@ -2976,10 +2979,12 @@ class EzvizClient:
         route_resource = resource_id or "Video"
         route_index = str(local_index if local_index is not None else 1)
         effective_bind_code = bind_code
-        effective_user_name = terminal_name or user_id
+        effective_user_name = user_id
         if effective_bind_code is None and use_terminal_bind:
             try:
-                effective_bind_code, effective_user_name = self.get_latest_terminal_bind()
+                effective_bind_code, effective_user_name = self.get_latest_terminal_bind(
+                    terminal_name=terminal_filter_name
+                )
             except (requests.RequestException, HTTPError, PyEzvizError) as err:
                 _LOGGER.debug(
                     "Terminal bind unavailable for %s, using legacy bind code: %s",

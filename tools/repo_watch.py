@@ -85,20 +85,23 @@ def load_config(path: Path) -> MonitorConfig:
         return MonitorConfig()
 
     raw = json.loads(path.read_text(encoding="utf-8"))
+    ignored_stale_labels = config_string_list(
+        raw, "ignored_stale_labels", MonitorConfig.ignored_stale_labels
+    )
+    uncommented_bug_labels = config_string_list(
+        raw, "uncommented_bug_labels", MonitorConfig.uncommented_bug_labels
+    )
+    problem_workflow_conclusions = config_string_list(
+        raw,
+        "problem_workflow_conclusions",
+        MonitorConfig.problem_workflow_conclusions,
+    )
     config = MonitorConfig(
         stale_issue_days=int(raw.get("stale_issue_days", MonitorConfig.stale_issue_days)),
-        ignored_stale_labels=tuple(
-            label.lower()
-            for label in raw.get("ignored_stale_labels", MonitorConfig.ignored_stale_labels)
-        ),
-        uncommented_bug_labels=tuple(
-            label.lower()
-            for label in raw.get("uncommented_bug_labels", MonitorConfig.uncommented_bug_labels)
-        ),
+        ignored_stale_labels=tuple(label.lower() for label in ignored_stale_labels),
+        uncommented_bug_labels=tuple(label.lower() for label in uncommented_bug_labels),
         require_pr_labels=bool(raw.get("require_pr_labels", MonitorConfig.require_pr_labels)),
-        problem_workflow_conclusions=tuple(
-            raw.get("problem_workflow_conclusions", MonitorConfig.problem_workflow_conclusions)
-        ),
+        problem_workflow_conclusions=tuple(problem_workflow_conclusions),
         digest_min_severity=str(raw.get("digest_min_severity", MonitorConfig.digest_min_severity)),
         digest_max_items=int(raw.get("digest_max_items", MonitorConfig.digest_max_items)),
     )
@@ -113,6 +116,15 @@ def load_config(path: Path) -> MonitorConfig:
         raise RuntimeError("repo-watch config `digest_max_items` must be at least 1.")
 
     return config
+
+
+def config_string_list(raw: dict[str, Any], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = raw.get(key, default)
+    if not isinstance(value, list | tuple):
+        raise RuntimeError(f"repo-watch config `{key}` must be a list of strings.")
+    if not value or not all(isinstance(item, str) and item for item in value):
+        raise RuntimeError(f"repo-watch config `{key}` must contain one or more strings.")
+    return tuple(value)
 
 
 def parse_timestamp(value: str) -> datetime:

@@ -1,0 +1,14 @@
+{
+  "stale_issue_days": 90,
+  "ignored_stale_labels": ["pinned", "security"],
+  "uncommented_bug_labels": ["bug"],
+  "require_pr_labels": true,
+  "problem_workflow_conclusions": [
+    "failure",
+    "timed_out",
+    "cancelled",
+    "action_required"
+  ],
+  "digest_min_severity": "medium",
+  "digest_max_items": 10
+}

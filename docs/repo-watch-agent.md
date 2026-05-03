@@ -10,7 +10,10 @@ It is a trust-building layer for maintainer attention.
 ## Run Locally
 
 ```bash
-python tools/repo_watch.py --repo RenierM26/pyEzvizApi --output .repo-watch
+python tools/repo_watch.py \
+  --repo RenierM26/pyEzvizApi \
+  --config config/repo-watch.json \
+  --output .repo-watch
 ```
 
 For higher rate limits, set `GITHUB_TOKEN` first. The token only needs read
@@ -19,9 +22,35 @@ access for this version.
 Outputs:
 
 - `.repo-watch/state/latest.json` stores the sampled GitHub state.
+- `.repo-watch/state/config.json` stores the effective monitor policy.
 - `.repo-watch/records/RenierM26__pyEzvizApi/*.json` stores durable finding
   records.
 - `.repo-watch/dashboard.md` stores the human-readable dashboard.
+- `.repo-watch/openclaw-digest.md` stores a compact digest for OpenClaw.
+- `.repo-watch/openclaw-digest.json` stores the same digest in structured form.
+
+## Configuration
+
+The monitor policy lives in `config/repo-watch.json`:
+
+```json
+{
+  "stale_issue_days": 90,
+  "ignored_stale_labels": ["pinned", "security"],
+  "uncommented_bug_labels": ["bug"],
+  "require_pr_labels": true,
+  "problem_workflow_conclusions": [
+    "failure",
+    "timed_out",
+    "cancelled",
+    "action_required"
+  ],
+  "digest_min_severity": "medium",
+  "digest_max_items": 10
+}
+```
+
+Use this file to tune noise without editing Python code.
 
 ## What It Watches
 
@@ -39,6 +68,9 @@ The action vocabulary is deliberately narrow:
 
 `.github/workflows/repo-watch.yml` runs the monitor on a schedule and uploads the
 generated dashboard/records as an artifact.
+
+The workflow adds the compact OpenClaw digest first in the job summary, followed
+by the full dashboard.
 
 The workflow uses read-only permissions:
 

@@ -6,6 +6,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Changed
+
+- Updated remote unlock to prefer terminal-derived bind codes from the EZVIZ terminals API while preserving legacy bind-code fallback behavior.
+
 ## v1.0.4.7 - 2026-04-27
 
 ### Added

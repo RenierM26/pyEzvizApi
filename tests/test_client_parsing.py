@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pyezvizapi.client as client_module
 from pyezvizapi.constants import DeviceCatagories
+
+FULL_PAGE_LIST_FIXTURE = Path(__file__).parent / "fixtures" / "page_list_response.json"
+
+
+def _full_page_list_fixture() -> dict[str, Any]:
+    return json.loads(FULL_PAGE_LIST_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _page_list_fixture() -> dict[str, Any]:
@@ -110,6 +118,101 @@ def test_get_device_infos_can_filter_to_one_serial(monkeypatch) -> None:
 
     assert camera["deviceInfos"]["name"] == "Front Camera"
     assert client.get_device_infos("MISSING") == {}
+
+
+def test_full_pagelist_fixture_builds_device_infos(monkeypatch) -> None:
+    page_list = _full_page_list_fixture()
+    client = client_module.EzvizClient(
+        token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"}
+    )
+    monkeypatch.setattr(client, "_get_page_list", lambda: page_list)
+
+    devices = client.get_device_infos()
+
+    expected_sections = {
+        "CHANNEL",
+        "CLOUD",
+        "CONNECTION",
+        "FEATURE_INFO",
+        "KMS",
+        "P2P",
+        "STATUS",
+        "SWITCH",
+        "VTM",
+        "WIFI",
+        "deviceInfos",
+        "resourceInfos",
+    }
+    assert expected_sections.issubset(page_list)
+    expected_serials = {
+        device["deviceSerial"] for device in page_list["deviceInfos"]
+    }
+    assert set(devices) == expected_serials
+    assert devices
+    for serial, payload in devices.items():
+        assert payload["deviceInfos"]["deviceSerial"] == serial
+        assert isinstance(payload["resourceInfos"], list)
+
+
+def test_full_pagelist_fixture_load_devices_routes_supported_categories(
+    monkeypatch,
+) -> None:
+    page_list = _full_page_list_fixture()
+    client = client_module.EzvizClient(
+        token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"}
+    )
+    monkeypatch.setattr(client, "_get_page_list", lambda: page_list)
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_camera_status(
+        _client: client_module.EzvizClient,
+        serial: str,
+        _device_obj: dict[str, Any],
+        *,
+        refresh: bool,
+        latest_alarm: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        calls.append(("camera", serial))
+        return {
+            "kind": "camera",
+            "serial": serial,
+            "refresh": refresh,
+            "latest_alarm": latest_alarm,
+        }
+
+    def fake_light_bulb_status(
+        _client: client_module.EzvizClient,
+        serial: str,
+        _device_obj: dict[str, Any],
+    ) -> dict[str, Any]:
+        calls.append(("light", serial))
+        return {"kind": "light", "serial": serial}
+
+    def fake_smart_plug_status(
+        _client: client_module.EzvizClient,
+        serial: str,
+        _device_obj: dict[str, Any],
+    ) -> dict[str, Any]:
+        calls.append(("plug", serial))
+        return {"kind": "plug", "serial": serial}
+
+    monkeypatch.setattr(
+        "pyezvizapi.device_factory.camera_status", fake_camera_status
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.device_factory.light_bulb_status", fake_light_bulb_status
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.device_factory.smart_plug_status", fake_smart_plug_status
+    )
+
+    loaded = client.load_devices(refresh=False)
+
+    fixture_serials = {device["deviceSerial"] for device in page_list["deviceInfos"]}
+    assert loaded
+    assert set(loaded).issubset(fixture_serials)
+    assert set(loaded) == {serial for _, serial in calls}
 
 
 def test_load_devices_routes_supported_categories(monkeypatch) -> None:

@@ -7,6 +7,7 @@ API_ENDPOINT_LOGIN = "/v3/users/login/v5"
 API_ENDPOINT_LOGOUT = "/v3/users/logout/v2"
 API_ENDPOINT_REFRESH_SESSION_ID = "/v3/apigateway/login"
 API_ENDPOINT_SERVER_INFO = "/v3/configurations/system/info"
+API_ENDPOINT_TERMINAL_INFO = "/v3/terminals"
 
 API_ENDPOINT_USER_ID = "/v3/userdevices/v1/token"
 API_ENDPOINT_GROUP_DEFENCE_MODE = "/v3/userdevices/v1/group/defenceMode"

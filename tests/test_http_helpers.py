@@ -2011,6 +2011,7 @@ def test_door_lock_and_remote_lock_helpers_build_requests(monkeypatch) -> None:
         local_index=2,
         stream_token="stream-1",
         lock_type="fingerprint",
+        use_terminal_bind=False,
     ) is True
     assert client.remote_lock("LOCK123", "user-1", 7) is True
     assert client.get_remote_unbind_progress("LOCK123", max_retries=2)["meta"]["code"] == 200
@@ -2045,6 +2046,75 @@ def test_door_lock_and_remote_lock_helpers_build_requests(monkeypatch) -> None:
     assert calls[3]["method"] == "GET"
     assert calls[3]["path"].endswith("LOCK123/progress")
     assert calls[3]["max_retries"] == 2
+
+
+def test_terminal_helpers_parse_latest_bind(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return {
+            "meta": {"code": 200},
+            "terminals": [
+                {
+                    "name": "older phone",
+                    "sign": "old-sign-",
+                    "userId": "old-user",
+                    "lastModifytime": "2025-01-01T00:00:00Z",
+                },
+                {
+                    "name": "latest phone",
+                    "sign": "new-sign-",
+                    "userId": "new-user",
+                    "lastModifytime": "2025-01-02T00:00:00Z",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == ("new-sign-new-user", "latest phone")
+    assert captured["method"] == "GET"
+    assert captured["path"].endswith("/v3/terminals")
+    assert captured["params"] == {"limit": 20, "offset": 0}
+    assert captured["retry_401"] is True
+
+
+def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if path.endswith("/v3/terminals"):
+            return {
+                "meta": {"code": 200},
+                "terminals": [
+                    {
+                        "name": "phone",
+                        "sign": "terminal-sign-",
+                        "userId": "terminal-user",
+                        "lastModifytime": "2025-01-02T00:00:00Z",
+                    }
+                ],
+            }
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.remote_unlock("LOCK123", "legacy-user", 2) is True
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("/v3/terminals")
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": "terminal-sign-terminal-user",
+            "lockNo": 2,
+            "streamToken": "",
+            "userName": "phone",
+        }
+    }
 
 
 def test_door_lock_helpers_raise_contextual_errors(monkeypatch) -> None:

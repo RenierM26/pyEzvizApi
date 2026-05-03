@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -26,6 +28,11 @@ def _client() -> EzvizClient:
         token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"},
         timeout=1,
     )
+
+
+def _fixture(name: str) -> dict[str, Any]:
+    path = Path(__file__).with_name("fixtures") / name
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def _response(*, status_code: int = 200, text: str = '{"meta": {"code": 200}}') -> requests.Response:
@@ -2054,27 +2061,14 @@ def test_terminal_helpers_parse_latest_bind(monkeypatch) -> None:
 
     def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         captured.update({"method": method, "path": path, **kwargs})
-        return {
-            "meta": {"code": 200},
-            "terminals": [
-                {
-                    "name": "Hassio",
-                    "sign": "old-sign-",
-                    "userId": "old-user",
-                    "lastModifytime": "2025-01-01T00:00:00Z",
-                },
-                {
-                    "name": "Hassio",
-                    "sign": "new-sign-",
-                    "userId": "new-user",
-                    "lastModifytime": "2025-01-02T00:00:00Z",
-                },
-            ],
-        }
+        return _fixture("terminal_info_response.json")
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_latest_terminal_bind() == ("new-sign-new-user", "Hassio")
+    assert client.get_latest_terminal_bind() == (
+        "aaaabbbbccccddddeeeeffff00001111fake-user-id-002",
+        "Hassio",
+    )
     assert captured["method"] == "GET"
     assert captured["path"].endswith("/v3/terminals")
     assert captured["params"] == {"limit": 20, "offset": 0}
@@ -2085,29 +2079,16 @@ def test_terminal_helpers_prefer_hassio_terminal(monkeypatch) -> None:
     client = _client()
 
     def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "meta": {"code": 200},
-            "terminals": [
-                {
-                    "name": "Hassio",
-                    "sign": "hassio-sign-",
-                    "userId": "hassio-user",
-                    "lastModifytime": "2025-01-01T00:00:00Z",
-                },
-                {
-                    "name": "newer phone",
-                    "sign": "phone-sign-",
-                    "userId": "phone-user",
-                    "lastModifytime": "2025-01-02T00:00:00Z",
-                },
-            ],
-        }
+        return _fixture("terminal_info_response.json")
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_latest_terminal_bind() == ("hassio-sign-hassio-user", "Hassio")
+    assert client.get_latest_terminal_bind() == (
+        "aaaabbbbccccddddeeeeffff00001111fake-user-id-002",
+        "Hassio",
+    )
     assert client.get_latest_terminal_bind(terminal_name=None) == (
-        "phone-sign-phone-user",
+        "99998888777766665555444433332222fake-user-id-003",
         "newer phone",
     )
 
@@ -2116,21 +2097,20 @@ def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch
     client = _client()
 
     def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "meta": {"code": 200},
-            "terminals": [
-                {
-                    "name": "Hassio",
-                    "sign": "valid-sign-",
-                    "userId": "valid-user",
-                    "lastModifytime": "2025-01-01T00:00:00Z",
-                },
-                {
-                    "name": "invalid latest phone",
-                    "lastModifytime": "2025-01-02T00:00:00Z",
-                },
-            ],
-        }
+        payload = _fixture("terminal_info_response.json")
+        payload["terminals"] = [
+            {
+                "name": "Hassio",
+                "sign": "valid-sign-",
+                "userId": "valid-user",
+                "lastModifytime": "2025-01-01T00:00:00Z",
+            },
+            {
+                "name": "Hassio",
+                "lastModifytime": "2025-01-02T00:00:00Z",
+            },
+        ]
+        return payload
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
@@ -2141,23 +2121,22 @@ def test_terminal_helpers_ignore_empty_bind_fields(monkeypatch) -> None:
     client = _client()
 
     def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "meta": {"code": 200},
-            "terminals": [
-                {
-                    "name": "Hassio",
-                    "sign": " valid-sign- ",
-                    "userId": " valid-user ",
-                    "lastModifytime": "2025-01-01T00:00:00Z",
-                },
-                {
-                    "name": "empty latest phone",
-                    "sign": "",
-                    "userId": " ",
-                    "lastModifytime": "2025-01-02T00:00:00Z",
-                },
-            ],
-        }
+        payload = _fixture("terminal_info_response.json")
+        payload["terminals"] = [
+            {
+                "name": "Hassio",
+                "sign": " valid-sign- ",
+                "userId": " valid-user ",
+                "lastModifytime": "2025-01-01T00:00:00Z",
+            },
+            {
+                "name": "Hassio",
+                "sign": "",
+                "userId": " ",
+                "lastModifytime": "2025-01-02T00:00:00Z",
+            },
+        ]
+        return payload
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
@@ -2171,17 +2150,16 @@ def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
     def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         calls.append({"method": method, "path": path, **kwargs})
         if path.endswith("/v3/terminals"):
-            return {
-                "meta": {"code": 200},
-                "terminals": [
-                    {
-                        "name": "Hassio",
-                        "sign": "terminal-sign-",
-                        "userId": "terminal-user",
-                        "lastModifytime": "2025-01-02T00:00:00Z",
-                    }
-                ],
-            }
+            payload = _fixture("terminal_info_response.json")
+            payload["terminals"] = [
+                {
+                    "name": "Hassio",
+                    "sign": "terminal-sign-",
+                    "userId": "terminal-user",
+                    "lastModifytime": "2025-01-02T00:00:00Z",
+                }
+            ]
+            return payload
         return {"meta": {"code": 200}}
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)

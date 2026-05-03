@@ -147,14 +147,16 @@ def classify_pulls(
     pulls: list[dict[str, Any]], workflow_runs: list[dict[str, Any]]
 ) -> list[Finding]:
     findings: list[Finding] = []
-    latest_runs_by_head: dict[str, dict[str, Any]] = {}
+    latest_runs_by_head_workflow: dict[tuple[str, str], dict[str, Any]] = {}
     for run in workflow_runs:
         head_sha = run.get("head_sha")
         if not head_sha:
             continue
-        current = latest_runs_by_head.get(head_sha)
+        workflow_name = run.get("name") or str(run["id"])
+        key = (head_sha, workflow_name)
+        current = latest_runs_by_head_workflow.get(key)
         if current is None or parse_timestamp(run["updated_at"]) > parse_timestamp(current["updated_at"]):
-            latest_runs_by_head[head_sha] = run
+            latest_runs_by_head_workflow[key] = run
 
     for pull in pulls:
         labels = {label["name"].lower() for label in pull.get("labels", [])}
@@ -162,21 +164,27 @@ def classify_pulls(
         severity = "info"
         action = "keep_open"
         head_sha = pull.get("head", {}).get("sha")
-        latest_run = latest_runs_by_head.get(head_sha) if head_sha else None
+        latest_runs = [
+            run for (sha, _workflow), run in latest_runs_by_head_workflow.items() if sha == head_sha
+        ]
+        failing_runs = [
+            run
+            for run in latest_runs
+            if run.get("conclusion") in {"failure", "timed_out", "cancelled", "action_required"}
+        ]
 
         if pull.get("draft"):
             evidence.append("PR is currently marked as draft.")
             action = "keep_open"
 
-        if latest_run and latest_run.get("conclusion") in {
-            "failure",
-            "timed_out",
-            "cancelled",
-            "action_required",
-        }:
+        if failing_runs:
             evidence.append(
-                f"Latest observed workflow run `{latest_run.get('name', 'unknown')}` "
-                f"for this head SHA concluded with `{latest_run['conclusion']}`."
+                "Latest observed workflow runs for this head SHA did not all pass: "
+                + ", ".join(
+                    f"`{run.get('name', 'unknown')}` concluded with `{run['conclusion']}`"
+                    for run in sorted(failing_runs, key=lambda item: item.get("name") or "")
+                )
+                + "."
             )
             severity = "high"
             action = "ci_failure_summary"

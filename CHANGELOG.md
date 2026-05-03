@@ -6,6 +6,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+## v1.0.4.8 - 2026-05-03
+
 ### Added
 
 - Added cloud stream bootstrap helpers for VTM pagelist metadata, VTDU token retrieval, VTM/VTDU packet framing, `ysproto` URL handling, limited stream protobuf parsing, RTP payload extraction, and transport detection.

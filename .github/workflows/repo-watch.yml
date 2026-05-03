@@ -26,10 +26,17 @@ jobs:
       - name: Run repository monitor
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python tools/repo_watch.py --repo RenierM26/pyEzvizApi --output .repo-watch
+        run: >
+          python tools/repo_watch.py
+          --repo RenierM26/pyEzvizApi
+          --config config/repo-watch.json
+          --output .repo-watch
 
-      - name: Add dashboard to job summary
-        run: cat .repo-watch/dashboard.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Add digest to job summary
+        run: |
+          cat .repo-watch/openclaw-digest.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n---\n\n' >> "$GITHUB_STEP_SUMMARY"
+          cat .repo-watch/dashboard.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload monitor artifact
         uses: actions/upload-artifact@v4

@@ -24,7 +24,23 @@ from urllib.request import Request, urlopen
 GITHUB_API = "https://api.github.com"
 DEFAULT_REPO = "RenierM26/pyEzvizApi"
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
-PROBLEM_CONCLUSIONS = {"failure", "timed_out", "cancelled", "action_required"}
+DEFAULT_CONFIG_PATH = Path("config/repo-watch.json")
+
+
+@dataclass(frozen=True)
+class MonitorConfig:
+    stale_issue_days: int = 90
+    ignored_stale_labels: tuple[str, ...] = ("pinned", "security")
+    uncommented_bug_labels: tuple[str, ...] = ("bug",)
+    require_pr_labels: bool = True
+    problem_workflow_conclusions: tuple[str, ...] = (
+        "failure",
+        "timed_out",
+        "cancelled",
+        "action_required",
+    )
+    digest_min_severity: str = "medium"
+    digest_max_items: int = 10
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,41 @@ class GitHubClient:
             raise RuntimeError(f"GitHub API request failed: {exc.code} {url}: {detail}") from exc
         except URLError as exc:
             raise RuntimeError(f"GitHub API request failed: {url}: {exc}") from exc
+
+
+def load_config(path: Path) -> MonitorConfig:
+    if not path.exists():
+        return MonitorConfig()
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    config = MonitorConfig(
+        stale_issue_days=int(raw.get("stale_issue_days", MonitorConfig.stale_issue_days)),
+        ignored_stale_labels=tuple(
+            label.lower()
+            for label in raw.get("ignored_stale_labels", MonitorConfig.ignored_stale_labels)
+        ),
+        uncommented_bug_labels=tuple(
+            label.lower()
+            for label in raw.get("uncommented_bug_labels", MonitorConfig.uncommented_bug_labels)
+        ),
+        require_pr_labels=bool(raw.get("require_pr_labels", MonitorConfig.require_pr_labels)),
+        problem_workflow_conclusions=tuple(
+            raw.get("problem_workflow_conclusions", MonitorConfig.problem_workflow_conclusions)
+        ),
+        digest_min_severity=str(raw.get("digest_min_severity", MonitorConfig.digest_min_severity)),
+        digest_max_items=int(raw.get("digest_max_items", MonitorConfig.digest_max_items)),
+    )
+
+    if config.stale_issue_days < 1:
+        raise RuntimeError("repo-watch config `stale_issue_days` must be at least 1.")
+    if config.digest_min_severity not in SEVERITY_ORDER:
+        raise RuntimeError(
+            "repo-watch config `digest_min_severity` must be one of: " + ", ".join(SEVERITY_ORDER)
+        )
+    if config.digest_max_items < 1:
+        raise RuntimeError("repo-watch config `digest_max_items` must be at least 1.")
+
+    return config
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -117,9 +168,11 @@ def fetch_repo_state(client: GitHubClient, repo: str, limit: int) -> dict[str, A
     }
 
 
-def classify_issues(issues: list[dict[str, Any]], now: datetime) -> list[Finding]:
+def classify_issues(
+    issues: list[dict[str, Any]], now: datetime, config: MonitorConfig
+) -> list[Finding]:
     findings: list[Finding] = []
-    stale_after = now - timedelta(days=90)
+    stale_after = now - timedelta(days=config.stale_issue_days)
 
     for issue in issues:
         labels = {label["name"].lower() for label in issue.get("labels", [])}
@@ -128,12 +181,12 @@ def classify_issues(issues: list[dict[str, Any]], now: datetime) -> list[Finding
         severity = "info"
         action = "keep_open"
 
-        if "bug" in labels and issue.get("comments", 0) == 0:
+        if labels.intersection(config.uncommented_bug_labels) and issue.get("comments", 0) == 0:
             severity = "medium"
             action = "needs_human"
             evidence.append("Open bug report has no comments yet.")
 
-        if updated_at < stale_after and not labels.intersection({"pinned", "security"}):
+        if updated_at < stale_after and not labels.intersection(config.ignored_stale_labels):
             severity = "low" if severity == "info" else severity
             action = "needs_human" if action == "keep_open" else action
             evidence.append(f"No activity since {updated_at.date().isoformat()}.")
@@ -157,7 +210,9 @@ def classify_issues(issues: list[dict[str, Any]], now: datetime) -> list[Finding
 
 
 def classify_pulls(
-    pulls: list[dict[str, Any]], workflow_runs_by_head: dict[str, list[dict[str, Any]]]
+    pulls: list[dict[str, Any]],
+    workflow_runs_by_head: dict[str, list[dict[str, Any]]],
+    config: MonitorConfig,
 ) -> list[Finding]:
     findings: list[Finding] = []
 
@@ -177,7 +232,9 @@ def classify_pulls(
                 latest_runs_by_workflow[workflow_id] = run
         latest_runs = list(latest_runs_by_workflow.values())
         failing_runs = [
-            run for run in latest_runs if run.get("conclusion") in PROBLEM_CONCLUSIONS
+            run
+            for run in latest_runs
+            if run.get("conclusion") in config.problem_workflow_conclusions
         ]
 
         if pull.get("draft"):
@@ -196,7 +253,7 @@ def classify_pulls(
             severity = "high"
             action = "ci_failure_summary"
 
-        if not labels and not pull.get("draft"):
+        if config.require_pr_labels and not labels and not pull.get("draft"):
             evidence.append("PR has no labels.")
             severity = "low" if severity == "info" else severity
             action = "needs_human" if action == "keep_open" else action
@@ -219,11 +276,13 @@ def classify_pulls(
     return findings
 
 
-def summarize_workflows(workflow_runs: list[dict[str, Any]]) -> list[Finding]:
+def summarize_workflows(
+    workflow_runs: list[dict[str, Any]], config: MonitorConfig
+) -> list[Finding]:
     findings: list[Finding] = []
     for run in workflow_runs:
         conclusion = run.get("conclusion")
-        if conclusion not in {"failure", "timed_out", "cancelled", "action_required"}:
+        if conclusion not in config.problem_workflow_conclusions:
             continue
 
         findings.append(
@@ -276,7 +335,11 @@ def write_records(
 
 
 def render_dashboard(
-    repo: str, generated_at: str, findings: list[Finding], state: dict[str, Any]
+    repo: str,
+    generated_at: str,
+    findings: list[Finding],
+    state: dict[str, Any],
+    config: MonitorConfig,
 ) -> str:
     repo_info = state["repo"]
     issue_count = len(state["issues"])
@@ -284,7 +347,7 @@ def render_dashboard(
     failed_runs = [
         run
         for run in state["workflow_runs"]
-        if run.get("conclusion") in {"failure", "timed_out", "cancelled", "action_required"}
+        if run.get("conclusion") in config.problem_workflow_conclusions
     ]
 
     lines = [
@@ -330,26 +393,135 @@ def render_dashboard(
     return "\n".join(lines) + "\n"
 
 
-def run(repo: str, output: Path, limit: int) -> int:
+def severity_counts(findings: list[Finding]) -> dict[str, int]:
+    return {
+        severity: sum(1 for finding in findings if finding.severity == severity)
+        for severity in SEVERITY_ORDER
+    }
+
+
+def attention_findings(findings: list[Finding], config: MonitorConfig) -> list[Finding]:
+    threshold = SEVERITY_ORDER[config.digest_min_severity]
+    attention = [finding for finding in findings if SEVERITY_ORDER[finding.severity] <= threshold]
+    return sorted(attention, key=lambda item: SEVERITY_ORDER[item.severity])[
+        : config.digest_max_items
+    ]
+
+
+def render_openclaw_digest(
+    repo: str,
+    generated_at: str,
+    findings: list[Finding],
+    state: dict[str, Any],
+    config: MonitorConfig,
+) -> str:
+    counts = severity_counts(findings)
+    attention = attention_findings(findings, config)
+    repo_url = state["repo"]["html_url"]
+
+    lines = [
+        f"# OpenClaw Repository Digest: {repo}",
+        "",
+        f"- Generated: `{generated_at}`",
+        f"- Repository: [{repo}]({repo_url})",
+        f"- Open issues sampled: `{len(state['issues'])}`",
+        f"- Open PRs sampled: `{len(state['pulls'])}`",
+        "- Findings: " + ", ".join(f"`{severity}: {count}`" for severity, count in counts.items()),
+        "",
+        "## Attention",
+        "",
+    ]
+
+    if not attention:
+        lines.append(f"No findings at `{config.digest_min_severity}` severity or higher.")
+    else:
+        for finding in attention:
+            first_evidence = finding.evidence[0] if finding.evidence else "No evidence recorded."
+            lines.extend(
+                [
+                    f"- **{finding.severity.upper()}** {finding.kind} {finding.item}: "
+                    f"[{finding.title}]({finding.url})",
+                    f"  - Action: `{finding.action}`",
+                    f"  - Evidence: {first_evidence}",
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Next",
+            "",
+            "- Use this digest for OpenClaw notifications.",
+            "- Inspect `.repo-watch/dashboard.md` for the full finding list.",
+            "- The monitor is still read-only.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def write_digest_json(
+    path: Path,
+    repo: str,
+    generated_at: str,
+    findings: list[Finding],
+    state: dict[str, Any],
+    config: MonitorConfig,
+) -> None:
+    attention = attention_findings(findings, config)
+    write_json(
+        path,
+        {
+            "repo": repo,
+            "repo_url": state["repo"]["html_url"],
+            "generated_at": generated_at,
+            "sampled": {
+                "open_issues": len(state["issues"]),
+                "open_pulls": len(state["pulls"]),
+            },
+            "counts": severity_counts(findings),
+            "digest_min_severity": config.digest_min_severity,
+            "attention": [
+                {
+                    "kind": finding.kind,
+                    "item": finding.item,
+                    "title": finding.title,
+                    "url": finding.url,
+                    "severity": finding.severity,
+                    "action": finding.action,
+                    "evidence": finding.evidence,
+                }
+                for finding in attention
+            ],
+        },
+    )
+
+
+def run(repo: str, output: Path, limit: int, config_path: Path) -> int:
     generated_at = utc_now().isoformat(timespec="seconds")
+    config = load_config(config_path)
     token = os.environ.get("GITHUB_TOKEN")
     client = GitHubClient(token=token)
     state = fetch_repo_state(client, repo, limit)
 
     findings = [
-        *classify_issues(state["issues"], utc_now()),
-        *classify_pulls(state["pulls"], state["workflow_runs_by_head"]),
-        *summarize_workflows(state["workflow_runs"]),
+        *classify_issues(state["issues"], utc_now(), config),
+        *classify_pulls(state["pulls"], state["workflow_runs_by_head"], config),
+        *summarize_workflows(state["workflow_runs"], config),
     ]
 
+    write_json(output / "state" / "config.json", config.__dict__)
     write_json(output / "state" / "latest.json", state)
     write_records(output, repo, generated_at, findings, state)
-    dashboard = render_dashboard(repo, generated_at, findings, state)
+    dashboard = render_dashboard(repo, generated_at, findings, state, config)
     dashboard_path = output / "dashboard.md"
     dashboard_path.parent.mkdir(parents=True, exist_ok=True)
     dashboard_path.write_text(dashboard, encoding="utf-8")
+    digest = render_openclaw_digest(repo, generated_at, findings, state, config)
+    digest_path = output / "openclaw-digest.md"
+    digest_path.write_text(digest, encoding="utf-8")
+    write_digest_json(output / "openclaw-digest.json", repo, generated_at, findings, state, config)
 
-    print(f"Wrote {dashboard_path} with {len(findings)} findings.")
+    print(f"Wrote {dashboard_path} and {digest_path} with {len(findings)} findings.")
     return 0
 
 
@@ -358,10 +530,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=DEFAULT_REPO, help="Repository in owner/name form.")
     parser.add_argument("--output", default=".repo-watch", type=Path, help="Output directory.")
     parser.add_argument("--limit", default=50, type=int, help="Maximum issues/PRs/runs to sample.")
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG_PATH,
+        type=Path,
+        help="Path to the repository watch JSON config.",
+    )
     args = parser.parse_args(argv)
 
     try:
-        return run(args.repo, args.output, args.limit)
+        return run(args.repo, args.output, args.limit, args.config)
     except RuntimeError as exc:
         print(f"repo-watch: {exc}", file=sys.stderr)
         return 1

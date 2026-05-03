@@ -147,11 +147,14 @@ def classify_pulls(
     pulls: list[dict[str, Any]], workflow_runs: list[dict[str, Any]]
 ) -> list[Finding]:
     findings: list[Finding] = []
-    failed_heads = {
-        run["head_sha"]
-        for run in workflow_runs
-        if run.get("conclusion") in {"failure", "timed_out", "cancelled", "action_required"}
-    }
+    latest_runs_by_head: dict[str, dict[str, Any]] = {}
+    for run in workflow_runs:
+        head_sha = run.get("head_sha")
+        if not head_sha:
+            continue
+        current = latest_runs_by_head.get(head_sha)
+        if current is None or parse_timestamp(run["updated_at"]) > parse_timestamp(current["updated_at"]):
+            latest_runs_by_head[head_sha] = run
 
     for pull in pulls:
         labels = {label["name"].lower() for label in pull.get("labels", [])}
@@ -159,13 +162,22 @@ def classify_pulls(
         severity = "info"
         action = "keep_open"
         head_sha = pull.get("head", {}).get("sha")
+        latest_run = latest_runs_by_head.get(head_sha) if head_sha else None
 
         if pull.get("draft"):
             evidence.append("PR is currently marked as draft.")
             action = "keep_open"
 
-        if head_sha in failed_heads:
-            evidence.append("Latest observed workflow run for this head SHA did not pass.")
+        if latest_run and latest_run.get("conclusion") in {
+            "failure",
+            "timed_out",
+            "cancelled",
+            "action_required",
+        }:
+            evidence.append(
+                f"Latest observed workflow run `{latest_run.get('name', 'unknown')}` "
+                f"for this head SHA concluded with `{latest_run['conclusion']}`."
+            )
             severity = "high"
             action = "ci_failure_summary"
 

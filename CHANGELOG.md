@@ -6,9 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Added
+
+- Added cloud stream bootstrap helpers for VTM pagelist metadata, VTDU token retrieval, VTM/VTDU packet framing, `ysproto` URL handling, limited stream protobuf parsing, RTP payload extraction, and transport detection.
+- Added sanitized full pagelist fixture coverage for `get_device_infos()` and `load_devices(refresh=False)` so the parser is tested against a realistic cloud response without live EZVIZ credentials.
+
 ### Changed
 
 - Updated remote unlock to prefer terminal-derived bind codes from the EZVIZ terminals API while preserving legacy bind-code fallback behavior.
+- Updated CI, CodeQL, and Dependency Review pull-request path filters so tests-only changes trigger the required checks, and excluded the captured pagelist fixture from Codespell because it preserves upstream cloud/device strings verbatim.
+
+### Fixed
+
+- Fixed `set_floodlight_brightness()` to accept `luminance=100`, matching the documented 1-100 range and allowing Home Assistant brightness sliders to reach full brightness/color night-vision mode.
 
 ## v1.0.4.7 - 2026-04-27
 

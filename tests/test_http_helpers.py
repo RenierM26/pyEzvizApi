@@ -2081,6 +2081,31 @@ def test_terminal_helpers_parse_latest_bind(monkeypatch) -> None:
     assert captured["retry_401"] is True
 
 
+def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "meta": {"code": 200},
+            "terminals": [
+                {
+                    "name": "valid older phone",
+                    "sign": "valid-sign-",
+                    "userId": "valid-user",
+                    "lastModifytime": "2025-01-01T00:00:00Z",
+                },
+                {
+                    "name": "invalid latest phone",
+                    "lastModifytime": "2025-01-02T00:00:00Z",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "valid older phone")
+
+
 def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
     client = _client()
     calls: list[dict[str, Any]] = []
@@ -2113,6 +2138,32 @@ def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
             "lockNo": 2,
             "streamToken": "",
             "userName": "phone",
+        }
+    }
+
+
+def test_remote_unlock_falls_back_when_terminal_lookup_request_fails(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if path.endswith("/v3/terminals"):
+            raise requests.Timeout("timed out")
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.remote_unlock("LOCK123", "legacy-user", 2) is True
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("/v3/terminals")
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": f"{FEATURE_CODE}legacy-user",
+            "lockNo": 2,
+            "streamToken": "",
+            "userName": "legacy-user",
         }
     }
 

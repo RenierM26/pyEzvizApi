@@ -2898,9 +2898,13 @@ class EzvizClient:
         if not isinstance(terminals, list) or not terminals:
             raise PyEzvizError("No terminal information found")
 
-        terminal_items = [item for item in terminals if isinstance(item, Mapping)]
+        terminal_items = [
+            item
+            for item in terminals
+            if isinstance(item, Mapping) and item.get("sign") is not None and item.get("userId") is not None
+        ]
         if not terminal_items:
-            raise PyEzvizError("No usable terminal information found")
+            raise PyEzvizError("No terminal bind information found")
 
         terminal = max(
             terminal_items,
@@ -2908,11 +2912,8 @@ class EzvizClient:
                 item.get("lastModifytime") or item.get("lastModifyTime") or ""
             ),
         )
-        sign = terminal.get("sign")
-        terminal_user_id = terminal.get("userId")
-        if sign is None or terminal_user_id is None:
-            raise PyEzvizError("Latest terminal is missing bind information")
-
+        sign = terminal["sign"]
+        terminal_user_id = terminal["userId"]
         user_name = terminal.get("name") or terminal.get("terminalName") or terminal_user_id
         return f"{sign}{terminal_user_id}", str(user_name)
 
@@ -2965,7 +2966,7 @@ class EzvizClient:
         if effective_bind_code is None and use_terminal_bind:
             try:
                 effective_bind_code, effective_user_name = self.get_latest_terminal_bind()
-            except (HTTPError, PyEzvizError) as err:
+            except (requests.RequestException, HTTPError, PyEzvizError) as err:
                 _LOGGER.debug(
                     "Terminal bind unavailable for %s, using legacy bind code: %s",
                     serial,

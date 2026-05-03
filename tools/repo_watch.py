@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 GITHUB_API = "https://api.github.com"
 DEFAULT_REPO = "RenierM26/pyEzvizApi"
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
+PROBLEM_CONCLUSIONS = {"failure", "timed_out", "cancelled", "action_required"}
 
 
 @dataclass(frozen=True)
@@ -92,15 +93,27 @@ def fetch_repo_state(client: GitHubClient, repo: str, limit: int) -> dict[str, A
         f"{owner_repo}/pulls",
         {"state": "open", "per_page": limit, "sort": "updated", "direction": "desc"},
     )
-    runs = client.get(
+    recent_runs = client.get(
         f"{owner_repo}/actions/runs",
         {"per_page": limit, "status": "completed"},
     )
+    workflow_runs_by_head: dict[str, list[dict[str, Any]]] = {}
+    for pull in pulls:
+        head_sha = pull.get("head", {}).get("sha")
+        if not head_sha:
+            continue
+        runs = client.get(
+            f"{owner_repo}/actions/runs",
+            {"head_sha": head_sha, "per_page": limit, "status": "completed"},
+        )
+        workflow_runs_by_head[head_sha] = runs.get("workflow_runs", [])
+
     return {
         "repo": repo_info,
         "issues": [item for item in issues if "pull_request" not in item],
         "pulls": pulls,
-        "workflow_runs": runs.get("workflow_runs", []),
+        "workflow_runs": recent_runs.get("workflow_runs", []),
+        "workflow_runs_by_head": workflow_runs_by_head,
     }
 
 
@@ -144,19 +157,9 @@ def classify_issues(issues: list[dict[str, Any]], now: datetime) -> list[Finding
 
 
 def classify_pulls(
-    pulls: list[dict[str, Any]], workflow_runs: list[dict[str, Any]]
+    pulls: list[dict[str, Any]], workflow_runs_by_head: dict[str, list[dict[str, Any]]]
 ) -> list[Finding]:
     findings: list[Finding] = []
-    latest_runs_by_head_workflow: dict[tuple[str, str], dict[str, Any]] = {}
-    for run in workflow_runs:
-        head_sha = run.get("head_sha")
-        if not head_sha:
-            continue
-        workflow_name = run.get("name") or str(run["id"])
-        key = (head_sha, workflow_name)
-        current = latest_runs_by_head_workflow.get(key)
-        if current is None or parse_timestamp(run["updated_at"]) > parse_timestamp(current["updated_at"]):
-            latest_runs_by_head_workflow[key] = run
 
     for pull in pulls:
         labels = {label["name"].lower() for label in pull.get("labels", [])}
@@ -164,13 +167,17 @@ def classify_pulls(
         severity = "info"
         action = "keep_open"
         head_sha = pull.get("head", {}).get("sha")
-        latest_runs = [
-            run for (sha, _workflow), run in latest_runs_by_head_workflow.items() if sha == head_sha
-        ]
+        latest_runs_by_workflow: dict[str, dict[str, Any]] = {}
+        for run in workflow_runs_by_head.get(head_sha, []) if head_sha else []:
+            workflow_id = str(run.get("workflow_id") or run["id"])
+            current = latest_runs_by_workflow.get(workflow_id)
+            if current is None or parse_timestamp(run["updated_at"]) > parse_timestamp(
+                current["updated_at"]
+            ):
+                latest_runs_by_workflow[workflow_id] = run
+        latest_runs = list(latest_runs_by_workflow.values())
         failing_runs = [
-            run
-            for run in latest_runs
-            if run.get("conclusion") in {"failure", "timed_out", "cancelled", "action_required"}
+            run for run in latest_runs if run.get("conclusion") in PROBLEM_CONCLUSIONS
         ]
 
         if pull.get("draft"):
@@ -331,7 +338,7 @@ def run(repo: str, output: Path, limit: int) -> int:
 
     findings = [
         *classify_issues(state["issues"], utc_now()),
-        *classify_pulls(state["pulls"], state["workflow_runs"]),
+        *classify_pulls(state["pulls"], state["workflow_runs_by_head"]),
         *summarize_workflows(state["workflow_runs"]),
     ]
 

@@ -16,6 +16,12 @@ if TYPE_CHECKING:
     from .camera import EzvizCamera
     from .cas import EzvizCAS
     from .client import EzvizClient
+    from .cloud_stream import (
+        VtduTokenResponse,
+        get_cloud_stream_info,
+        get_vtdu_token_v2,
+        get_vtm_page_list,
+    )
     from .constants import (
         AlarmDetectHumanCar,
         BatteryCameraNewWorkMode,
@@ -72,6 +78,23 @@ if TYPE_CHECKING:
     from .models import EzvizDeviceRecord, build_device_records_map
     from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
     from .smart_plug import EzvizSmartPlug
+    from .stream import (
+        StreamInfoResponse,
+        StreamTransport,
+        VtmChannel,
+        VtmMessageCode,
+        VtmPacket,
+        build_stream_info_request,
+        build_stream_keepalive_request,
+        build_vtm_url,
+        decode_vtm_header,
+        decode_vtm_packet,
+        detect_transport,
+        encode_vtm_packet,
+        parse_stream_info_response,
+        parse_vtm_url,
+        rtp_payload,
+    )
     from .test_cam_rtsp import TestRTSPAuth
 
 _EXPORTS = {
@@ -104,14 +127,30 @@ _EXPORTS = {
     "PyEzvizError": "exceptions",
     "ServiceUrls": "mqtt",
     "SoundMode": "constants",
+    "StreamInfoResponse": "stream",
+    "StreamTransport": "stream",
     "SupportExt": "constants",
     "TestRTSPAuth": "test_cam_rtsp",
+    "VtduTokenResponse": "cloud_stream",
+    "VtmChannel": "stream",
+    "VtmMessageCode": "stream",
+    "VtmPacket": "stream",
     "build_device_records_map": "models",
+    "build_stream_info_request": "stream",
+    "build_stream_keepalive_request": "stream",
+    "build_vtm_url": "stream",
     "day_night_mode_value": "feature",
     "day_night_sensitivity_value": "feature",
+    "decode_vtm_header": "stream",
+    "decode_vtm_packet": "stream",
     "device_icr_dss_config": "feature",
+    "detect_transport": "stream",
     "display_mode_value": "feature",
+    "encode_vtm_packet": "stream",
     "get_algorithm_value": "feature",
+    "get_cloud_stream_info": "cloud_stream",
+    "get_vtdu_token_v2": "cloud_stream",
+    "get_vtm_page_list": "cloud_stream",
     "has_algorithm_subtype": "feature",
     "has_osd_overlay": "feature",
     "iter_algorithm_entries": "feature",
@@ -125,10 +164,13 @@ _EXPORTS = {
     "night_vision_payload": "feature",
     "normalize_port_security": "feature",
     "optionals_mapping": "feature",
+    "parse_stream_info_response": "stream",
+    "parse_vtm_url": "stream",
     "port_security_config": "feature",
     "port_security_has_port": "feature",
     "port_security_port_enabled": "feature",
     "resolve_channel": "feature",
+    "rtp_payload": "stream",
     "supplement_light_available": "feature",
     "supplement_light_enabled": "feature",
     "supplement_light_params": "feature",

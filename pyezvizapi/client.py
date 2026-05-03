@@ -2885,6 +2885,7 @@ class EzvizClient:
         *,
         limit: int = 20,
         offset: int = 0,
+        terminal_name: str | None = "Hassio",
         max_retries: int = 0,
     ) -> tuple[str, str]:
         """Return the latest terminal bind code and terminal user name."""
@@ -2907,6 +2908,17 @@ class EzvizClient:
         ]
         if not terminal_items:
             raise PyEzvizError("No terminal bind information found")
+
+        if terminal_name:
+            expected_name = terminal_name.casefold()
+            terminal_items = [
+                item
+                for item in terminal_items
+                if str(item.get("name") or item.get("terminalName") or "").casefold()
+                == expected_name
+            ]
+            if not terminal_items:
+                raise PyEzvizError(f"No terminal bind information found for {terminal_name}")
 
         terminal = max(
             terminal_items,

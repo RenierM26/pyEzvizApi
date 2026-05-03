@@ -2058,13 +2058,13 @@ def test_terminal_helpers_parse_latest_bind(monkeypatch) -> None:
             "meta": {"code": 200},
             "terminals": [
                 {
-                    "name": "older phone",
+                    "name": "Hassio",
                     "sign": "old-sign-",
                     "userId": "old-user",
                     "lastModifytime": "2025-01-01T00:00:00Z",
                 },
                 {
-                    "name": "latest phone",
+                    "name": "Hassio",
                     "sign": "new-sign-",
                     "userId": "new-user",
                     "lastModifytime": "2025-01-02T00:00:00Z",
@@ -2074,11 +2074,42 @@ def test_terminal_helpers_parse_latest_bind(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_latest_terminal_bind() == ("new-sign-new-user", "latest phone")
+    assert client.get_latest_terminal_bind() == ("new-sign-new-user", "Hassio")
     assert captured["method"] == "GET"
     assert captured["path"].endswith("/v3/terminals")
     assert captured["params"] == {"limit": 20, "offset": 0}
     assert captured["retry_401"] is True
+
+
+def test_terminal_helpers_prefer_hassio_terminal(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "meta": {"code": 200},
+            "terminals": [
+                {
+                    "name": "Hassio",
+                    "sign": "hassio-sign-",
+                    "userId": "hassio-user",
+                    "lastModifytime": "2025-01-01T00:00:00Z",
+                },
+                {
+                    "name": "newer phone",
+                    "sign": "phone-sign-",
+                    "userId": "phone-user",
+                    "lastModifytime": "2025-01-02T00:00:00Z",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == ("hassio-sign-hassio-user", "Hassio")
+    assert client.get_latest_terminal_bind(terminal_name=None) == (
+        "phone-sign-phone-user",
+        "newer phone",
+    )
 
 
 def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch) -> None:
@@ -2089,7 +2120,7 @@ def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch
             "meta": {"code": 200},
             "terminals": [
                 {
-                    "name": "valid older phone",
+                    "name": "Hassio",
                     "sign": "valid-sign-",
                     "userId": "valid-user",
                     "lastModifytime": "2025-01-01T00:00:00Z",
@@ -2103,7 +2134,7 @@ def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "valid older phone")
+    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "Hassio")
 
 
 def test_terminal_helpers_ignore_empty_bind_fields(monkeypatch) -> None:
@@ -2114,7 +2145,7 @@ def test_terminal_helpers_ignore_empty_bind_fields(monkeypatch) -> None:
             "meta": {"code": 200},
             "terminals": [
                 {
-                    "name": "valid phone",
+                    "name": "Hassio",
                     "sign": " valid-sign- ",
                     "userId": " valid-user ",
                     "lastModifytime": "2025-01-01T00:00:00Z",
@@ -2130,7 +2161,7 @@ def test_terminal_helpers_ignore_empty_bind_fields(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "valid phone")
+    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "Hassio")
 
 
 def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
@@ -2144,7 +2175,7 @@ def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
                 "meta": {"code": 200},
                 "terminals": [
                     {
-                        "name": "phone",
+                        "name": "Hassio",
                         "sign": "terminal-sign-",
                         "userId": "terminal-user",
                         "lastModifytime": "2025-01-02T00:00:00Z",
@@ -2164,7 +2195,7 @@ def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
             "bindCode": "terminal-sign-terminal-user",
             "lockNo": 2,
             "streamToken": "",
-            "userName": "phone",
+            "userName": "Hassio",
         }
     }
 

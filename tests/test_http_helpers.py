@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -26,6 +28,11 @@ def _client() -> EzvizClient:
         token={"session_id": "session", "api_url": "apiieu.ezvizlife.com"},
         timeout=1,
     )
+
+
+def _fixture(name: str) -> dict[str, Any]:
+    path = Path(__file__).with_name("fixtures") / name
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def _response(*, status_code: int = 200, text: str = '{"meta": {"code": 200}}') -> requests.Response:
@@ -2011,6 +2018,7 @@ def test_door_lock_and_remote_lock_helpers_build_requests(monkeypatch) -> None:
         local_index=2,
         stream_token="stream-1",
         lock_type="fingerprint",
+        use_terminal_bind=False,
     ) is True
     assert client.remote_lock("LOCK123", "user-1", 7) is True
     assert client.get_remote_unbind_progress("LOCK123", max_retries=2)["meta"]["code"] == 200
@@ -2045,6 +2053,187 @@ def test_door_lock_and_remote_lock_helpers_build_requests(monkeypatch) -> None:
     assert calls[3]["method"] == "GET"
     assert calls[3]["path"].endswith("LOCK123/progress")
     assert calls[3]["max_retries"] == 2
+
+
+def test_terminal_helpers_parse_latest_bind(monkeypatch) -> None:
+    client = _client()
+    captured: dict[str, Any] = {}
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"method": method, "path": path, **kwargs})
+        return _fixture("terminal_info_response.json")
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == (
+        "aaaabbbbccccddddeeeeffff00001111fake-user-id-002",
+        "Hassio",
+    )
+    assert captured["method"] == "GET"
+    assert captured["path"].endswith("/v3/terminals")
+    assert captured["params"] == {"limit": 20, "offset": 0}
+    assert captured["retry_401"] is True
+
+
+def test_terminal_helpers_prefer_hassio_terminal(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return _fixture("terminal_info_response.json")
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == (
+        "aaaabbbbccccddddeeeeffff00001111fake-user-id-002",
+        "Hassio",
+    )
+    assert client.get_latest_terminal_bind(terminal_name=None) == (
+        "99998888777766665555444433332222fake-user-id-003",
+        "newer phone",
+    )
+
+
+def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        payload = _fixture("terminal_info_response.json")
+        payload["terminals"] = [
+            {
+                "name": "Hassio",
+                "sign": "valid-sign-",
+                "userId": "valid-user",
+                "lastModifytime": "2025-01-01T00:00:00Z",
+            },
+            {
+                "name": "Hassio",
+                "lastModifytime": "2025-01-02T00:00:00Z",
+            },
+        ]
+        return payload
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "Hassio")
+
+
+def test_terminal_helpers_ignore_empty_bind_fields(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        payload = _fixture("terminal_info_response.json")
+        payload["terminals"] = [
+            {
+                "name": "Hassio",
+                "sign": " valid-sign- ",
+                "userId": " valid-user ",
+                "lastModifytime": "2025-01-01T00:00:00Z",
+            },
+            {
+                "name": "Hassio",
+                "sign": "",
+                "userId": " ",
+                "lastModifytime": "2025-01-02T00:00:00Z",
+            },
+        ]
+        return payload
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "Hassio")
+
+
+def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if path.endswith("/v3/terminals"):
+            payload = _fixture("terminal_info_response.json")
+            payload["terminals"] = [
+                {
+                    "name": "Hassio",
+                    "sign": "terminal-sign-",
+                    "userId": "terminal-user",
+                    "lastModifytime": "2025-01-02T00:00:00Z",
+                }
+            ]
+            return payload
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.remote_unlock("LOCK123", "legacy-user", 2) is True
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("/v3/terminals")
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": "terminal-sign-terminal-user",
+            "lockNo": 2,
+            "streamToken": "",
+            "userName": "Hassio",
+        }
+    }
+
+
+def test_remote_unlock_can_use_latest_terminal_without_name_filter(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if path.endswith("/v3/terminals"):
+            return _fixture("terminal_info_response.json")
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert (
+        client.remote_unlock(
+            "LOCK123",
+            "legacy-user",
+            2,
+            terminal_filter_name=None,
+        )
+        is True
+    )
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": "99998888777766665555444433332222fake-user-id-003",
+            "lockNo": 2,
+            "streamToken": "",
+            "userName": "newer phone",
+        }
+    }
+
+
+def test_remote_unlock_falls_back_when_terminal_lookup_request_fails(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if path.endswith("/v3/terminals"):
+            raise requests.Timeout("timed out")
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.remote_unlock("LOCK123", "legacy-user", 2) is True
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"].endswith("/v3/terminals")
+    assert calls[1]["method"] == "PUT"
+    assert calls[1]["json_body"] == {
+        "unLockInfo": {
+            "bindCode": f"{FEATURE_CODE}legacy-user",
+            "lockNo": 2,
+            "streamToken": "",
+            "userName": "legacy-user",
+        }
+    }
 
 
 def test_door_lock_helpers_raise_contextual_errors(monkeypatch) -> None:

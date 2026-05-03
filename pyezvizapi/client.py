@@ -93,6 +93,7 @@ from .api_endpoints import (
     API_ENDPOINT_SWITCH_OTHER,
     API_ENDPOINT_SWITCH_SOUND_ALARM,
     API_ENDPOINT_SWITCH_STATUS,
+    API_ENDPOINT_TERMINAL_INFO,
     API_ENDPOINT_TIME_PLAN_INFOS,
     API_ENDPOINT_UNIFIEDMSG_LIST_GET,
     API_ENDPOINT_UPGRADE_DEVICE,
@@ -2862,6 +2863,74 @@ class EzvizClient:
         self._ensure_ok(json_output, "Could not get door lock users")
         return json_output
 
+    def get_terminals(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Retrieve account terminal information."""
+
+        return self._request_json(
+            "GET",
+            API_ENDPOINT_TERMINAL_INFO,
+            params={"limit": limit, "offset": offset},
+            retry_401=True,
+            max_retries=max_retries,
+        )
+
+    def get_latest_terminal_bind(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        terminal_name: str | None = "Hassio",
+        max_retries: int = 0,
+    ) -> tuple[str, str]:
+        """Return the latest terminal bind code and terminal user name."""
+
+        json_output = self.get_terminals(
+            limit=limit,
+            offset=offset,
+            max_retries=max_retries,
+        )
+        terminals = json_output.get("terminals")
+        if not isinstance(terminals, list) or not terminals:
+            raise PyEzvizError("No terminal information found")
+
+        terminal_items = [
+            item
+            for item in terminals
+            if isinstance(item, Mapping)
+            and str(item.get("sign") or "").strip()
+            and str(item.get("userId") or "").strip()
+        ]
+        if not terminal_items:
+            raise PyEzvizError("No terminal bind information found")
+
+        if terminal_name:
+            expected_name = terminal_name.casefold()
+            terminal_items = [
+                item
+                for item in terminal_items
+                if str(item.get("name") or item.get("terminalName") or "").casefold()
+                == expected_name
+            ]
+            if not terminal_items:
+                raise PyEzvizError(f"No terminal bind information found for {terminal_name}")
+
+        terminal = max(
+            terminal_items,
+            key=lambda item: str(
+                item.get("lastModifytime") or item.get("lastModifyTime") or ""
+            ),
+        )
+        sign = str(terminal["sign"]).strip()
+        terminal_user_id = str(terminal["userId"]).strip()
+        user_name = terminal.get("name") or terminal.get("terminalName") or terminal_user_id
+        return f"{sign}{terminal_user_id}", str(user_name)
+
     def remote_unlock(
         self,
         serial: str,
@@ -2872,6 +2941,9 @@ class EzvizClient:
         local_index: str | int | None = None,
         stream_token: str | None = None,
         lock_type: str | None = None,
+        bind_code: str | None = None,
+        terminal_filter_name: str | None = "Hassio",
+        use_terminal_bind: bool = True,
     ) -> bool:
         """Sends a remote command to unlock a specific lock.
 
@@ -2886,6 +2958,15 @@ class EzvizClient:
             stream_token (str, optional): Stream token associated with the lock if
                 provided by the API. Defaults to empty string when omitted.
             lock_type (str, optional): Optional lock type hint used by some devices.
+            bind_code (str, optional): Explicit bind code. When omitted, the latest
+                terminal bind code is used if available, otherwise the legacy
+                ``FEATURE_CODE + user_id`` bind code is used.
+            terminal_filter_name (str, optional): Terminal name to prefer when
+                resolving an implicit bind code. Defaults to ``"Hassio"`` to match
+                the library login terminal. Pass ``None`` to use the newest valid
+                terminal regardless of name.
+            use_terminal_bind (bool): Whether to try terminal-derived bind codes
+                before falling back to the legacy bind code.
 
         Raises:
             PyEzvizError: If max retries are exceeded or if the response indicates failure.
@@ -2897,11 +2978,28 @@ class EzvizClient:
         """
         route_resource = resource_id or "Video"
         route_index = str(local_index if local_index is not None else 1)
+        effective_bind_code = bind_code
+        effective_user_name = user_id
+        if effective_bind_code is None and use_terminal_bind:
+            try:
+                effective_bind_code, effective_user_name = self.get_latest_terminal_bind(
+                    terminal_name=terminal_filter_name
+                )
+            except (requests.RequestException, HTTPError, PyEzvizError) as err:
+                _LOGGER.debug(
+                    "Terminal bind unavailable for %s, using legacy bind code: %s",
+                    serial,
+                    err,
+                )
+
+        if effective_bind_code is None:
+            effective_bind_code = f"{FEATURE_CODE}{user_id}"
+
         un_lock_info: dict[str, Any] = {
-            "bindCode": f"{FEATURE_CODE}{user_id}",
+            "bindCode": effective_bind_code,
             "lockNo": lock_no,
             "streamToken": stream_token or "",
-            "userName": user_id,
+            "userName": effective_user_name,
         }
         if lock_type:
             un_lock_info["type"] = lock_type

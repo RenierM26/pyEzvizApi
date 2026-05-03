@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "code": 200,
+    "message": "success",
+    "moreInfo": null
+  },
+  "page": {
+    "limit": 20,
+    "offset": 0,
+    "total": 4,
+    "hasNext": false
+  },
+  "terminals": [
+    {
+      "appId": "ys7",
+      "clientType": 1,
+      "clientVersion": "6.10.0",
+      "deviceId": "fictional-device-hassio-older",
+      "deviceName": "Home Assistant older session",
+      "lastModifytime": "2025-01-01T00:00:00Z",
+      "name": "Hassio",
+      "osVersion": "Linux",
+      "sign": "11112222333344445555666677778888",
+      "terminalId": "fictional-terminal-hassio-older",
+      "terminalType": "HASSIO",
+      "userId": "fake-user-id-001"
+    },
+    {
+      "appId": "ys7",
+      "clientType": 1,
+      "clientVersion": "6.10.0",
+      "deviceId": "fictional-device-hassio-latest",
+      "deviceName": "Home Assistant latest session",
+      "lastModifytime": "2025-01-02T00:00:00Z",
+      "name": "Hassio",
+      "osVersion": "Linux",
+      "sign": "aaaabbbbccccddddeeeeffff00001111",
+      "terminalId": "fictional-terminal-hassio-latest",
+      "terminalType": "HASSIO",
+      "userId": "fake-user-id-002"
+    },
+    {
+      "appId": "ys7",
+      "clientType": 3,
+      "clientVersion": "6.12.0",
+      "deviceId": "fictional-device-phone-latest",
+      "deviceName": "User phone latest session",
+      "lastModifytime": "2025-01-03T00:00:00Z",
+      "name": "newer phone",
+      "osVersion": "iOS 18.0",
+      "sign": "99998888777766665555444433332222",
+      "terminalId": "fictional-terminal-phone-latest",
+      "terminalType": "IOS",
+      "userId": "fake-user-id-003"
+    },
+    {
+      "appId": "ys7",
+      "clientType": 1,
+      "clientVersion": "6.10.0",
+      "deviceId": "fictional-device-missing-bind",
+      "deviceName": "Terminal without bind fields",
+      "lastModifytime": "2025-01-04T00:00:00Z",
+      "name": "Hassio",
+      "osVersion": "Linux",
+      "terminalId": "fictional-terminal-missing-bind",
+      "terminalType": "HASSIO"
+    }
+  ]
+}

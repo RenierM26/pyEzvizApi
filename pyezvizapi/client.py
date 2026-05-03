@@ -3574,7 +3574,7 @@ class EzvizClient:
         if max_retries > MAX_RETRIES:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        if luminance not in range(1, 100):
+        if luminance not in range(1, 101):
             raise PyEzvizError(
                 "Range of luminance is 1-100, got " + str(luminance) + "."
             )

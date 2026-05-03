@@ -1717,7 +1717,7 @@ def test_set_floodlight_brightness_validates_range_and_retries() -> None:
         client.set_floodlight_brightness("CAM123", luminance=0)
 
     with pytest.raises(PyEzvizError, match="Range of luminance"):
-        client.set_floodlight_brightness("CAM123", luminance=100)
+        client.set_floodlight_brightness("CAM123", luminance=101)
 
     with pytest.raises(PyEzvizError, match="Max retries exceeded"):
         client.set_floodlight_brightness("CAM123", max_retries=99)

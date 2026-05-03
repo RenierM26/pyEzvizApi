@@ -2106,6 +2106,33 @@ def test_terminal_helpers_ignore_latest_terminal_without_bind_fields(monkeypatch
     assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "valid older phone")
 
 
+def test_terminal_helpers_ignore_empty_bind_fields(monkeypatch) -> None:
+    client = _client()
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "meta": {"code": 200},
+            "terminals": [
+                {
+                    "name": "valid phone",
+                    "sign": " valid-sign- ",
+                    "userId": " valid-user ",
+                    "lastModifytime": "2025-01-01T00:00:00Z",
+                },
+                {
+                    "name": "empty latest phone",
+                    "sign": "",
+                    "userId": " ",
+                    "lastModifytime": "2025-01-02T00:00:00Z",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_latest_terminal_bind() == ("valid-sign-valid-user", "valid phone")
+
+
 def test_remote_unlock_uses_terminal_bind_when_available(monkeypatch) -> None:
     client = _client()
     calls: list[dict[str, Any]] = []

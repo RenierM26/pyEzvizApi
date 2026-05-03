@@ -2901,7 +2901,9 @@ class EzvizClient:
         terminal_items = [
             item
             for item in terminals
-            if isinstance(item, Mapping) and item.get("sign") is not None and item.get("userId") is not None
+            if isinstance(item, Mapping)
+            and str(item.get("sign") or "").strip()
+            and str(item.get("userId") or "").strip()
         ]
         if not terminal_items:
             raise PyEzvizError("No terminal bind information found")
@@ -2912,8 +2914,8 @@ class EzvizClient:
                 item.get("lastModifytime") or item.get("lastModifyTime") or ""
             ),
         )
-        sign = terminal["sign"]
-        terminal_user_id = terminal["userId"]
+        sign = str(terminal["sign"]).strip()
+        terminal_user_id = str(terminal["userId"]).strip()
         user_name = terminal.get("name") or terminal.get("terminalName") or terminal_user_id
         return f"{sign}{terminal_user_id}", str(user_name)
 

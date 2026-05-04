@@ -39,7 +39,7 @@ jobs:
           cat .repo-watch/dashboard.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload monitor artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: repo-watch
           path: .repo-watch

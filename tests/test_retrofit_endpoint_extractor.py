@@ -38,8 +38,39 @@ def test_known_paths_match_exact_and_composed_fragments(tmp_path: Path) -> None:
 
     assert extractor.is_implemented("/v3/streaming/vtm/{deviceSerial}/{channelNo}", known_paths)
     assert extractor.is_implemented("/v3/devices/{deviceSerial}/ptzControl", known_paths)
-    assert extractor.is_implemented("/v3/devices/encryptedInfo/risk", known_paths)
     assert not extractor.is_implemented("/v3/devices/{deviceSerial}/unknown", known_paths)
+
+
+def test_known_paths_match_composed_python_endpoint_expressions(tmp_path: Path) -> None:
+    extractor = load_extractor()
+    api_endpoints = tmp_path / "api_endpoints.py"
+    api_endpoints.write_text(
+        "\n".join(
+            [
+                'API_ENDPOINT_DEVICES = "/v3/devices/"',
+                'API_ENDPOINT_PTZCONTROL = "/ptzControl"',
+                'API_ENDPOINT_VIDEO_ENCRYPT = "encryptedInfo/risk"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    client = tmp_path / "client.py"
+    client.write_text(
+        "\n".join(
+            [
+                "def routes(serial):",
+                '    literal = f"{API_ENDPOINT_DEVICES}{API_ENDPOINT_VIDEO_ENCRYPT}"',
+                '    dynamic = f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_PTZCONTROL}"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    known_paths = extractor.load_known_paths(api_endpoints)
+
+    assert extractor.is_implemented("/v3/devices/encryptedInfo/risk", known_paths)
+    assert extractor.is_implemented("/v3/devices/{deviceSerial}/ptzControl", known_paths)
+    assert not extractor.is_implemented("/v3/devices/ptzControl", known_paths)
 
 
 def test_markdown_reports_composed_coverage(tmp_path: Path) -> None:

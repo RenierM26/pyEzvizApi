@@ -246,7 +246,7 @@ Run the same local validation used by CI:
 ruff check .
 codespell pyezvizapi tests README.md pyproject.toml .github
 pip-audit --progress-spinner off
-mypy --install-types --non-interinteractive .
+mypy --install-types --non-interactive .
 pyright pyezvizapi
 pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
 python -m build

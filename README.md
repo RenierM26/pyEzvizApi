@@ -119,10 +119,10 @@ pyezvizapi stream dump --serial ABC123 --channel 1 --format raw | \
   ffmpeg -f mpeg -i pipe:0 -c copy -f mpegts stream.ts
 
 # Serve a local MPEG-TS URL for Home Assistant/FFmpeg clients
-pyezvizapi stream proxy --serial ABC123 --channel 1 --listen-host 0.0.0.0 --listen-port 8558
+pyezvizapi stream proxy --serial ABC123 --channel 1 --listen-port 8558
 ```
 
-The dump command captures one minute by default. Use `--duration 30s`, `--duration 2min`, or `--duration 0` for unlimited capture; `--max-packets` can still be used as an additional stop limit. MPEG-TS output requires FFmpeg and remuxes the camera payload with codec copy only; it does not transcode video or audio. The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg.
+The dump command captures one minute by default. Use `--duration 30s`, `--duration 2min`, or `--duration 0` for unlimited capture; `--max-packets` can still be used as an additional stop limit. MPEG-TS output requires FFmpeg and remuxes the camera payload with codec copy only; it does not transcode video or audio. The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg. Keep the proxy bound to loopback unless you put it behind an authenticated reverse proxy or otherwise restrict access; the stream URL is not authenticated by `pyezvizapi`.
 
 ### camera
 
@@ -246,7 +246,7 @@ Run the same local validation used by CI:
 ruff check .
 codespell pyezvizapi tests README.md pyproject.toml .github
 pip-audit --progress-spinner off
-mypy --install-types --non-interactive .
+mypy --install-types --non-interinteractive .
 pyright pyezvizapi
 pytest --cov=pyezvizapi --cov-report=term-missing --cov-report=xml --cov-fail-under=85
 python -m build

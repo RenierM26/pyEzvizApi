@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -39,7 +39,7 @@ jobs:
           cat .repo-watch/dashboard.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload monitor artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: repo-watch
           path: .repo-watch

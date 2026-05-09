@@ -44,42 +44,83 @@ def static_path_parts(path: str) -> tuple[str, ...]:
     return tuple(part for part in PATH_PARAM.split(normalize_path(path)) if part)
 
 
-def is_composed_from_fragments(path: str, fragments: frozenset[str]) -> bool:
-    normalized = normalize_path(path)
-    reachable: set[tuple[int, int]] = {(0, 0)}
-    for index in range(len(normalized) + 1):
-        counts = [count for position, count in reachable if position == index]
-        if not counts:
+def _path_expr_key(node: ast.AST, constants: dict[str, str]) -> tuple[str, bool] | None:
+    expression_path = None
+    uses_endpoint = False
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        expression_path = node.value
+    elif isinstance(node, ast.Name) and node.id.startswith("API_ENDPOINT_"):
+        expression_path = constants.get(node.id)
+        uses_endpoint = expression_path is not None
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _path_expr_key(node.left, constants)
+        right = _path_expr_key(node.right, constants)
+        if left is not None and right is not None:
+            expression_path = f"{left[0]}{right[0]}"
+            uses_endpoint = left[1] or right[1]
+    elif isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                resolved = _path_expr_key(value.value, constants)
+                if resolved is None:
+                    parts.append("{}")
+                else:
+                    parts.append(resolved[0])
+                    uses_endpoint = uses_endpoint or resolved[1]
+            else:
+                return None
+        expression_path = "".join(parts)
+    if expression_path is None:
+        return None
+    return expression_path, uses_endpoint
+
+
+def _load_expression_paths(root: Path, constants: dict[str, str]) -> set[str]:
+    paths: set[str] = set()
+    for py_file in root.glob("*.py"):
+        if py_file.name == "api_endpoints.py":
             continue
-        for fragment in fragments:
-            candidates = [fragment]
-            if index > 0 and fragment.startswith("/"):
-                candidates.append(fragment[1:])
-            for candidate in candidates:
-                if candidate and normalized.startswith(candidate, index):
-                    reachable.add((index + len(candidate), max(counts) + 1))
-    return any(position == len(normalized) and count > 1 for position, count in reachable)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            resolved = _path_expr_key(node, constants)
+            if resolved is not None:
+                expression_path, uses_endpoint = resolved
+                if uses_endpoint and "/" in expression_path:
+                    paths.add(path_key(expression_path))
+    return paths
 
 
 def load_known_paths(path: Path | None) -> KnownApiPaths:
     if path is None or not path.exists():
         return KnownApiPaths(frozenset(), frozenset())
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    constants: dict[str, str] = {}
     exact: set[str] = set()
     fragments: set[str] = set()
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
-        if not any(isinstance(target, ast.Name) and target.id.startswith("API_ENDPOINT_") for target in node.targets):
+        targets = [
+            target.id
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id.startswith("API_ENDPOINT_")
+        ]
+        if not targets:
             continue
         try:
             value = ast.literal_eval(node.value)
         except (ValueError, SyntaxError):
             continue
         if isinstance(value, str):
+            for target in targets:
+                constants[target] = value
             normalized = normalize_path(value)
             exact.add(path_key(normalized))
             fragments.add(normalized)
+    exact.update(_load_expression_paths(path.parent, constants))
     return KnownApiPaths(frozenset(exact), frozenset(fragments))
 
 
@@ -87,9 +128,7 @@ def is_implemented(path: str, known_paths: KnownApiPaths) -> bool:
     if path_key(path) in known_paths.exact:
         return True
     parts = static_path_parts(path)
-    if len(parts) > 1 and all(part in known_paths.fragments for part in parts):
-        return True
-    return is_composed_from_fragments(path, known_paths.fragments)
+    return len(parts) > 1 and all(part in known_paths.fragments for part in parts)
 
 
 def extract_params(signature: str) -> tuple[str, ...]:

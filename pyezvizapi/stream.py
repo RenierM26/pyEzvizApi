@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import IntEnum
 from ipaddress import IPv6Address, ip_address
 import socket
@@ -66,6 +66,26 @@ class VtmPacket:
             VtmChannel.ENCRYPTED_MESSAGE,
             VtmChannel.ENCRYPTED_STREAM,
         )
+
+
+@dataclass(frozen=True)
+class VtmTraceEvent:
+    """Sanitized VTM/VTDU packet summary for live stream tracing."""
+
+    index: int
+    channel: int
+    channel_name: str | None
+    length: int
+    sequence: int
+    message_code: int
+    message_name: str | None
+    encrypted: bool
+    transport: str
+
+    def as_dict(self) -> dict[str, int | str | bool | None]:
+        """Return a JSON-serializable trace event."""
+
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -294,6 +314,45 @@ class VtmStreamClient:
         for packet in self.iter_packets(max_packets=max_packets):
             yield packet.body
 
+    def trace_packets(
+        self,
+        *,
+        max_packets: int = 20,
+        vtm_stream_key: str | None = None,
+    ) -> list[VtmTraceEvent]:
+        """Return sanitized packet summaries from the VTM connection.
+
+        The trace opens the connection, sends ``StreamInfoReq``, records packet
+        metadata only, parses ``StreamInfoRsp`` when seen, and auto-responds to
+        keepalive requests so the server continues sending packets. Packet
+        bodies are intentionally not included because they may contain tokens,
+        keys, or encrypted media.
+        """
+
+        if max_packets < 1:
+            raise PyEzvizError("VTM trace must request at least one packet")
+
+        self.connect()
+        request = build_stream_info_request(
+            self.stream_url,
+            vtm_stream_key=vtm_stream_key,
+            client_version=self.client_version,
+        )
+        self.send_packet(request)
+
+        events: list[VtmTraceEvent] = []
+        for index in range(max_packets):
+            packet = self.read_packet()
+            events.append(summarize_vtm_packet(packet, index=index))
+            if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
+                self.stream_info = parse_stream_info_response(packet.body)
+            elif packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
+                self.send_packet(
+                    packet.body,
+                    message_code=VtmMessageCode.KEEPALIVE_RSP,
+                )
+        return events
+
     def _require_socket(self) -> Any:
         sock = self._socket
         if sock is None:
@@ -371,6 +430,26 @@ def decode_vtm_packet(packet: bytes) -> VtmPacket:
         sequence=header.sequence,
         message_code=header.message_code,
         body=body,
+    )
+
+
+def summarize_vtm_packet(packet: VtmPacket, *, index: int = 0) -> VtmTraceEvent:
+    """Build a body-free packet summary for debugging live VTM streams."""
+
+    transport = StreamTransport.UNKNOWN
+    if packet.channel == VtmChannel.STREAM:
+        transport = detect_transport(packet.body)
+
+    return VtmTraceEvent(
+        index=index,
+        channel=packet.channel,
+        channel_name=_enum_name(VtmChannel, packet.channel),
+        length=packet.length,
+        sequence=packet.sequence,
+        message_code=packet.message_code,
+        message_name=_enum_name(VtmMessageCode, packet.message_code),
+        encrypted=packet.encrypted,
+        transport=transport.name,
     )
 
 
@@ -645,6 +724,13 @@ def rtp_payload(data: bytes) -> bytes:
 
 def _proto_key(field: int, wire_type: int) -> bytes:
     return _encode_varint((field << 3) | wire_type)
+
+
+def _enum_name(enum_type: type[IntEnum], value: int) -> str | None:
+    try:
+        return enum_type(value).name
+    except ValueError:
+        return None
 
 
 def _format_url_host(host: str) -> str:

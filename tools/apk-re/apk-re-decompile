@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: tools/apk-re/apk-re-decompile <apk-path> [output-name-or-dir]" >&2
+  exit 2
+fi
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+apk="$1"
+output="${2:-}"
+image="${APK_RE_IMAGE:-pyezviz-apk-re:local}"
+host_repo_root="${APK_RE_HOST_REPO_ROOT:-}"
+
+if [[ -z "$host_repo_root" ]]; then
+  host_workspace="/srv/openclaw/workspace"
+  if command -v docker >/dev/null 2>&1; then
+    detected_workspace="$(
+      docker inspect openclaw \
+        --format '{{range .Mounts}}{{if eq .Destination "/home/node/.openclaw/workspace"}}{{.Source}}{{end}}{{end}}' \
+        2>/dev/null || true
+    )"
+    if [[ -n "$detected_workspace" ]]; then
+      host_workspace="$detected_workspace"
+    fi
+  fi
+  case "$repo_root" in
+    /home/node/.openclaw/workspace/*)
+      host_repo_root="$host_workspace/${repo_root#/home/node/.openclaw/workspace/}"
+      ;;
+    /home/node/.openclaw/workspace)
+      host_repo_root="$host_workspace"
+      ;;
+    *)
+      host_repo_root="$repo_root"
+      ;;
+  esac
+fi
+
+if [[ "$apk" != /* ]]; then
+  apk="$PWD/$apk"
+fi
+if [[ ! -f "$apk" ]]; then
+  echo "APK not found: $apk" >&2
+  exit 1
+fi
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  "$repo_root/tools/apk-re/apk-re-build"
+fi
+
+apk_real="$(realpath "$apk")"
+case "$apk_real" in
+  "$repo_root"/*) container_apk="/work/${apk_real#"$repo_root/"}" ;;
+  *)
+    echo "APK must live inside this repo/worktree so Docker can see it: $repo_root" >&2
+    echo "Put it under discovery/apk/in/ and rerun." >&2
+    exit 1
+    ;;
+esac
+
+if [[ -n "$output" ]]; then
+  if [[ "$output" = /* ]]; then
+    output_real="$(realpath -m "$output")"
+    case "$output_real" in
+      "$repo_root"/*) container_out="/work/${output_real#"$repo_root/"}" ;;
+      "$repo_root") container_out="/work" ;;
+      *)
+        echo "Absolute output directory must live inside this repo/worktree: $repo_root" >&2
+        exit 1
+        ;;
+    esac
+  else
+    container_out="/work/discovery/apk/out/$output"
+  fi
+else
+  container_out=""
+fi
+
+if [[ -n "$container_out" ]]; then
+  exec docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -v "$host_repo_root:/work" \
+    -w /work \
+    --security-opt no-new-privileges \
+    "$image" decompile-apk "$container_apk" "$container_out"
+else
+  exec docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -v "$host_repo_root:/work" \
+    -w /work \
+    --security-opt no-new-privileges \
+    "$image" decompile-apk "$container_apk"
+fi

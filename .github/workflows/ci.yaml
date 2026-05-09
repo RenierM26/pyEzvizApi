@@ -11,6 +11,8 @@ on:
       - ".ruff.toml"
       - "pytest.ini"
       - "tests/**"
+      - "tools/apk-re/**"
+      - "discovery/apk/**"
       - ".github/workflows/**"
       - "!**/*.md"
       - "!docs/**"
@@ -69,6 +71,18 @@ jobs:
       - name: Codespell
         if: matrix.python-version == '3.12'
         run: codespell pyezvizapi tests README.md pyproject.toml .github --skip tests/fixtures/page_list_response.json
+
+      - name: APK RE script syntax
+        if: matrix.python-version == '3.12'
+        shell: bash
+        run: |
+          bash -n \
+            tools/apk-re/apk-re-build \
+            tools/apk-re/apk-re-decompile \
+            tools/apk-re/apk-re-shell \
+            tools/apk-re/bin/decompile-apk \
+            tools/apk-re/bin/inspect-so
+          python -m py_compile tools/apk-re/bin/extract-retrofit-endpoints
 
       - name: Audit Python dependencies
         if: matrix.python-version == '3.12'

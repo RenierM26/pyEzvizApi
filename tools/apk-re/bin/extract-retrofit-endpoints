@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Extract Retrofit endpoint annotations from JADX Java output."""
+
+from __future__ import annotations
+
+import argparse
+import ast
+from dataclasses import dataclass
+from pathlib import Path
+import re
+
+
+HTTP_ANNOTATION = re.compile(r"@(GET|POST|PUT|DELETE|PATCH|HEAD)\((?:\"([^\"]*)\")?\)")
+METHOD_DECL = re.compile(r"\s*(?:[\w<>, ?.\[\]]+\s+)+(\w+)\((.*)\);")
+PARAM_ANNOTATION = re.compile(r"@(Field|Query|Path|Header|Body|Url|Part)\((?:\"([^\"]*)\")?\)")
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    source: str
+    http_method: str
+    path: str
+    java_method: str
+    params: tuple[str, ...]
+
+
+def normalize_path(path: str) -> str:
+    if not path:
+        return "<dynamic-url>"
+    return path if path.startswith("/") else f"/{path}"
+
+
+def load_known_paths(path: Path | None) -> set[str]:
+    if path is None or not path.exists():
+        return set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    constants: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id.startswith("API_ENDPOINT_") for target in node.targets):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(value, str):
+            constants.add(normalize_path(value))
+    return constants
+
+
+def extract_params(signature: str) -> tuple[str, ...]:
+    params: list[str] = []
+    for match in PARAM_ANNOTATION.finditer(signature):
+        kind, name = match.groups()
+        params.append(kind if name is None else f"{kind}:{name}")
+    return tuple(params)
+
+
+def extract_from_file(path: Path, root: Path) -> list[Endpoint]:
+    endpoints: list[Endpoint] = []
+    pending: tuple[str, str] | None = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        http_match = HTTP_ANNOTATION.search(line)
+        if http_match:
+            pending = (http_match.group(1), normalize_path(http_match.group(2) or ""))
+            continue
+        if pending is None:
+            continue
+        method_match = METHOD_DECL.search(line)
+        if not method_match:
+            continue
+        http_method, endpoint_path = pending
+        endpoints.append(
+            Endpoint(
+                source=str(path.relative_to(root)),
+                http_method=http_method,
+                path=endpoint_path,
+                java_method=method_match.group(1),
+                params=extract_params(method_match.group(2)),
+            )
+        )
+        pending = None
+    return endpoints
+
+
+def markdown(endpoints: list[Endpoint], known_paths: set[str]) -> str:
+    rows = [
+        "# Retrofit Endpoint Inventory",
+        "",
+        f"- Extracted endpoints: {len(endpoints)}",
+        f"- Exact paths already present in pyezvizapi: {sum(1 for item in endpoints if item.path in known_paths)}",
+        "",
+        "| Implemented | Method | Path | Java method | Params | Source |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in sorted(endpoints, key=lambda endpoint: (endpoint.path, endpoint.http_method, endpoint.source)):
+        implemented = "yes" if item.path in known_paths else "no"
+        params = ", ".join(item.params)
+        rows.append(
+            f"| {implemented} | {item.http_method} | `{item.path}` | `{item.java_method}` | `{params}` | `{item.source}` |"
+        )
+    return "\n".join(rows) + "\n"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("jadx_sources", type=Path, help="Path to JADX sources directory")
+    parser.add_argument("--known-api", type=Path, help="Optional pyezvizapi/api_endpoints.py path")
+    parser.add_argument("--output", type=Path, help="Write markdown report to this path")
+    args = parser.parse_args()
+
+    root = args.jadx_sources.resolve()
+    endpoints: list[Endpoint] = []
+    for java_file in root.rglob("*.java"):
+        endpoints.extend(extract_from_file(java_file, root))
+
+    report = markdown(endpoints, load_known_paths(args.known_api))
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report, encoding="utf-8")
+    else:
+        print(report, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

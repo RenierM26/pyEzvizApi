@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: decompile-apk <apk-path> [output-dir]
+
+Creates a repeatable APK reverse-engineering bundle:
+  apktool/       resources + smali
+  jadx/          Java/Kotlin decompile output
+  unpacked/      raw APK unzip
+  libs/          extracted .so files + readelf/nm/strings summaries
+  reports/       APK metadata and native library index
+USAGE
+}
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then usage; exit 2; fi
+
+apk="$1"
+out="${2:-/work/discovery/apk/out/$(basename "${apk%.*}")-$(date -u +%Y%m%dT%H%M%SZ)}"
+
+if [[ ! -f "$apk" ]]; then
+  echo "APK not found: $apk" >&2
+  exit 1
+fi
+
+mkdir -p "$out"/{apktool,jadx,unpacked,libs,reports}
+
+abs_apk="$(realpath "$apk")"
+{
+  echo "# APK reverse engineering report"
+  echo
+  echo "- APK: $abs_apk"
+  echo "- Generated UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "- SHA256: $(sha256sum "$abs_apk" | awk '{print $1}')"
+  echo "- Size bytes: $(stat -c '%s' "$abs_apk")"
+  echo
+  echo "## File"
+  file "$abs_apk" | sed 's/^/- /'
+  echo
+  echo "## APK badging"
+  aapt dump badging "$abs_apk" 2>&1 | sed 's/^/    /' || true
+  echo
+  echo "## APK signing certificates"
+  apksigner verify --print-certs "$abs_apk" 2>&1 | sed 's/^/    /' || true
+} > "$out/reports/apk-summary.md"
+
+unzip -q -o "$abs_apk" -d "$out/unpacked"
+
+# apktool can be noisy on framework/resource edge cases. Keep going so JADX/native extraction still succeed.
+apktool d -f -o "$out/apktool" "$abs_apk" > "$out/reports/apktool.log" 2>&1 || {
+  echo "apktool failed; see reports/apktool.log" >&2
+}
+
+jadx -d "$out/jadx" "$abs_apk" > "$out/reports/jadx.log" 2>&1 || {
+  echo "jadx failed; see reports/jadx.log" >&2
+}
+
+if find "$out/unpacked/lib" -type f -name '*.so' >/dev/null 2>&1; then
+  cp -a "$out/unpacked/lib/." "$out/libs/"
+fi
+
+native_index="$out/reports/native-libraries.md"
+{
+  echo "# Native libraries"
+  echo
+  if ! find "$out/libs" -type f -name '*.so' | grep -q .; then
+    echo "No embedded .so files found."
+    exit 0
+  fi
+  find "$out/libs" -type f -name '*.so' | sort | while read -r so; do
+    rel="${so#"$out/"}"
+    safe="$(echo "$rel" | tr '/ ' '__')"
+    echo "## $rel"
+    echo
+    echo "- SHA256: $(sha256sum "$so" | awk '{print $1}')"
+    echo "- File: $(file -b "$so")"
+    echo
+    echo "### ELF header"
+    echo '```text'
+    readelf -h "$so" 2>&1 || true
+    echo '```'
+    echo
+    readelf -d "$so" > "$out/reports/${safe}.dynamic.txt" 2>&1 || true
+    readelf -Ws "$so" > "$out/reports/${safe}.symbols.txt" 2>&1 || true
+    nm -D --defined-only "$so" > "$out/reports/${safe}.nm-defined.txt" 2>&1 || true
+    strings -a -n 6 "$so" > "$out/reports/${safe}.strings.txt" 2>&1 || true
+    echo "Generated side reports:"
+    echo "- reports/${safe}.dynamic.txt"
+    echo "- reports/${safe}.symbols.txt"
+    echo "- reports/${safe}.nm-defined.txt"
+    echo "- reports/${safe}.strings.txt"
+    echo
+  done
+} > "$native_index"
+
+cat <<DONE
+Decompile complete:
+  $out
+
+Start here:
+  $out/reports/apk-summary.md
+  $out/reports/native-libraries.md
+
+Useful searches:
+  rg -n "sign|token|nonce|encrypt|decrypt|lapp|api/" "$out/jadx" "$out/apktool"
+  inspect-so "$out/libs/<abi>/<library>.so"
+DONE

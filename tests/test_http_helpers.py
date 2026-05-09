@@ -2438,7 +2438,7 @@ def test_download_alarm_image_returns_plain_image_without_key_lookup(monkeypatch
 
 def test_download_alarm_image_fetches_key_and_decrypts_encrypted_payload(monkeypatch) -> None:
     client = _client()
-    encrypted_payload = HIK_ENCRYPTION_HEADER + b"x" * 64
+    encrypted_payload = b"x" * 300 + HIK_ENCRYPTION_HEADER + b"x" * 64
     decrypted_payload = b"decrypted-jpeg"
     calls: dict[str, Any] = {}
 

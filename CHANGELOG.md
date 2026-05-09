@@ -6,18 +6,32 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
-## v1.0.4.8 - 2026-05-03
-
 ### Added
 
 - Added cloud stream bootstrap helpers for VTM pagelist metadata, VTDU token retrieval, VTM/VTDU packet framing, `ysproto` URL handling, limited stream protobuf parsing, RTP payload extraction, and transport detection.
 - Added VTM server public-key extraction plus native VTDU protobuf helpers for `GetVtduInfo`, `StartStream`, `PeerStream`, and `StopStream` stream-control messages.
+- Added a sanitized VTM trace harness and CLI command for live stream diagnostics without exposing packet bodies, tokens, or keys.
+- Added alarm image download/decrypt helper support for EZVIZ/Hik encrypted snapshot payloads.
+
+### Changed
+
+- Updated CI, CodeQL, and Dependency Review pull-request path filters so tests-only changes trigger the required checks, and excluded the captured pagelist fixture from Codespell because it preserves upstream cloud/device strings verbatim.
+
+### Fixed
+
+- Fixed VTM tracing to parse delayed `StreamInfoRsp` packets after earlier control packets so redirects are still followed.
+- Fixed encrypted alarm image detection to search the full payload for the encryption marker before deciding whether to decrypt.
+- Fixed VTDU token lookup when EZVIZ service URLs return a null `authAddr` by deriving the auth host from `api_url`.
+
+## v1.0.4.8 - 2026-05-03
+
+### Added
+
 - Added sanitized full pagelist fixture coverage for `get_device_infos()` and `load_devices(refresh=False)` so the parser is tested against a realistic cloud response without live EZVIZ credentials.
 
 ### Changed
 
 - Updated remote unlock to prefer terminal-derived bind codes from the EZVIZ terminals API while preserving legacy bind-code fallback behavior.
-- Updated CI, CodeQL, and Dependency Review pull-request path filters so tests-only changes trigger the required checks, and excluded the captured pagelist fixture from Codespell because it preserves upstream cloud/device strings verbatim.
 
 ### Fixed
 

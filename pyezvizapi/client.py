@@ -2678,7 +2678,7 @@ class EzvizClient:
         if (
             not decrypt
             or not image_data
-            or HIK_ENCRYPTION_HEADER not in image_data[:256]
+            or HIK_ENCRYPTION_HEADER not in image_data
         ):
             return image_data
 

@@ -687,6 +687,81 @@ def test_vtm_stream_client_trace_follows_redirect_response() -> None:
     ]
 
 
+def test_vtm_stream_client_trace_follows_redirect_after_keepalive() -> None:
+    redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
+    redirect_key = "redirect-key"
+    redirect_body = (
+        b"\x08\xb6\x29"
+        + b"\x2a"
+        + bytes([len(redirect_key)])
+        + redirect_key.encode()
+        + b"\x3a"
+        + bytes([len(redirect_url)])
+        + redirect_url.encode()
+    )
+    success_body = b"\x08\x00\x22\x07ssn-123"
+    sockets = [
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    build_stream_keepalive_request("ssn-123"),
+                    message_code=VtmMessageCode.KEEPALIVE_REQ,
+                    sequence=6,
+                ),
+                encode_vtm_packet(
+                    redirect_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=7,
+                ),
+            ]
+        ),
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    success_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=8,
+                ),
+            ]
+        ),
+    ]
+    calls: list[tuple[str, int]] = []
+
+    def socket_factory(
+        address: tuple[str, int],
+        _timeout: float | None,
+    ) -> FakeVtmSocket:
+        calls.append(address)
+        return sockets[len(calls) - 1]
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=socket_factory,
+    ) as stream:
+        events = stream.trace_packets(max_packets=3)
+
+    first_packets = _decode_sent_packets(sockets[0].sent)
+    second_packets = _decode_sent_packets(sockets[1].sent)
+
+    assert calls == [
+        ("vtm.example.test", 8554),
+        ("redirect.example.test", 6000),
+    ]
+    assert sockets[0].closed
+    assert stream.stream_url == redirect_url
+    assert stream.stream_info is not None
+    assert stream.stream_info.result == 0
+    assert first_packets[-1].message_code == VtmMessageCode.KEEPALIVE_RSP
+    assert second_packets[0].message_code == VtmMessageCode.STREAMINFO_REQ
+    assert redirect_url.encode() in second_packets[0].body
+    assert redirect_key.encode() in second_packets[0].body
+    assert [event.message_code for event in events] == [
+        VtmMessageCode.KEEPALIVE_REQ,
+        VtmMessageCode.STREAMINFO_RSP,
+        VtmMessageCode.STREAMINFO_RSP,
+    ]
+
+
 def test_vtm_trace_rejects_empty_packet_count() -> None:
     stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
 

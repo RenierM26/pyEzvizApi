@@ -360,39 +360,36 @@ class VtmStreamClient:
             )
             self.send_packet(request)
 
-            packet = self.read_packet()
-            events.append(summarize_vtm_packet(packet, index=len(events)))
-            if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
-                self.stream_info = parse_stream_info_response(packet.body)
-                redirect_url = self.stream_info.streamurl
-                redirect_key = self.stream_info.vtmstreamkey
-                if (
-                    self.stream_info.result
-                    and redirect_url
-                    and redirect_key
-                    and redirect_count < max_redirects
-                    and len(events) < max_packets
-                ):
-                    self.close()
-                    self.stream_url = redirect_url
-                    vtm_stream_key = redirect_key
-                    redirect_count += 1
-                    continue
-            elif packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
-                self.send_packet(
-                    packet.body,
-                    message_code=VtmMessageCode.KEEPALIVE_RSP,
-                )
-            break
+            redirected = False
+            while len(events) < max_packets:
+                packet = self.read_packet()
+                events.append(summarize_vtm_packet(packet, index=len(events)))
 
-        while len(events) < max_packets:
-            packet = self.read_packet()
-            events.append(summarize_vtm_packet(packet, index=len(events)))
-            if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
-                self.send_packet(
-                    packet.body,
-                    message_code=VtmMessageCode.KEEPALIVE_RSP,
-                )
+                if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
+                    self.stream_info = parse_stream_info_response(packet.body)
+                    redirect_url = self.stream_info.streamurl
+                    redirect_key = self.stream_info.vtmstreamkey
+                    if (
+                        self.stream_info.result
+                        and redirect_url
+                        and redirect_key
+                        and redirect_count < max_redirects
+                        and len(events) < max_packets
+                    ):
+                        self.close()
+                        self.stream_url = redirect_url
+                        vtm_stream_key = redirect_key
+                        redirect_count += 1
+                        redirected = True
+                        break
+                elif packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
+                    self.send_packet(
+                        packet.body,
+                        message_code=VtmMessageCode.KEEPALIVE_RSP,
+                    )
+
+            if not redirected:
+                break
         return events
 
     def _require_socket(self) -> Any:

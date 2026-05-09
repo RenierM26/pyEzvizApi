@@ -11,6 +11,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added cloud stream bootstrap helpers for VTM pagelist metadata, VTDU token retrieval, VTM/VTDU packet framing, `ysproto` URL handling, limited stream protobuf parsing, RTP payload extraction, and transport detection.
 - Added VTM server public-key extraction plus native VTDU protobuf helpers for `GetVtduInfo`, `StartStream`, `PeerStream`, and `StopStream` stream-control messages.
 - Added a sanitized VTM trace harness and CLI command for live stream diagnostics without exposing packet bodies, tokens, or keys.
+- Added experimental VTM stream dump/proxy CLI commands and README usage for writing VLC-friendly one-minute MPEG-TS captures by default, raw payload dumps on request, or serving a local FFmpeg-remuxed MPEG-TS URL.
 - Added alarm image download/decrypt helper support for EZVIZ/Hik encrypted snapshot payloads.
 
 ### Changed

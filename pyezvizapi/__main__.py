@@ -6,11 +6,18 @@ Small utility CLI for testing and scripting Ezviz operations.
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 from pathlib import Path
+import subprocess
 import sys
-from typing import Any, cast
+from threading import Thread
+import time
+from typing import Any, BinaryIO, cast
+from urllib.parse import urlparse
 
 from .camera import EzvizCamera
 from .client import EzvizClient
@@ -20,6 +27,77 @@ from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 from .light_bulb import EzvizLightBulb
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StreamProxyConfig:
+    """Configuration for the experimental HTTP stream proxy."""
+
+    serial: str
+    channel: int | None
+    client_type: int
+    token_index: int
+    refresh_vtm: bool
+    timeout: float | None
+    path: str
+    ffmpeg_path: str
+    allow_encrypted: bool
+    max_packets: int | None
+
+
+class StreamProxyHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server that does not block CLI shutdown on active streams."""
+
+    daemon_threads = True
+    block_on_close = False
+
+
+def _parse_duration_seconds(value: str) -> float | None:
+    """Parse a CLI duration value into seconds."""
+
+    text = value.strip().lower()
+    if text in {"0", "none", "unlimited"}:
+        return None
+
+    multipliers = {
+        "s": 1.0,
+        "sec": 1.0,
+        "secs": 1.0,
+        "second": 1.0,
+        "seconds": 1.0,
+        "m": 60.0,
+        "min": 60.0,
+        "mins": 60.0,
+        "minute": 60.0,
+        "minutes": 60.0,
+        "h": 3600.0,
+        "hr": 3600.0,
+        "hrs": 3600.0,
+        "hour": 3600.0,
+        "hours": 3600.0,
+    }
+
+    multiplier = 1.0
+    for suffix, suffix_multiplier in sorted(
+        multipliers.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        if text.endswith(suffix):
+            number = text[: -len(suffix)].strip()
+            multiplier = suffix_multiplier
+            break
+    else:
+        number = text
+
+    try:
+        duration = float(number) * multiplier
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"invalid duration: {value}") from err
+
+    if duration <= 0:
+        raise argparse.ArgumentTypeError("duration must be positive, or 0 for unlimited")
+    return duration
 
 
 def _setup_logging(debug: bool) -> None:
@@ -340,6 +418,142 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print one JSON object per trace event instead of a JSON array",
     )
+    parser_stream_dump = subparsers_stream.add_parser(
+        "dump",
+        help="Dump VTM stream payload bytes for FFmpeg/proxy experiments",
+    )
+    parser_stream_dump.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_stream_dump.add_argument(
+        "--channel",
+        type=int,
+        default=None,
+        help="Camera channel/local index (default: first matching VTM resource)",
+    )
+    parser_stream_dump.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Stop after this many stream packets (default: run until interrupted)",
+    )
+    parser_stream_dump.add_argument(
+        "--duration",
+        type=_parse_duration_seconds,
+        default=60.0,
+        help=(
+            "Stop after this capture duration; accepts seconds or units like "
+            "30s/1m/2min (default: 1m, use 0 for unlimited)"
+        ),
+    )
+    parser_stream_dump.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_dump.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type used in the ysproto URL (default: 9)",
+    )
+    parser_stream_dump.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index to use from /vtdutoken2 (default: 0)",
+    )
+    parser_stream_dump.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing via /v3/streaming/vtm",
+    )
+    parser_stream_dump.add_argument(
+        "--output",
+        default="-",
+        help="Output file for stream bytes, or '-' for stdout (default: -)",
+    )
+    parser_stream_dump.add_argument(
+        "--format",
+        choices=("mpegts", "raw"),
+        default="mpegts",
+        help="Output container format: mpegts is VLC-friendly and remuxes with codec copy; raw writes VTM payloads unchanged (default: mpegts)",
+    )
+    parser_stream_dump.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_stream_dump.add_argument(
+        "--allow-encrypted",
+        action="store_true",
+        help="Write encrypted stream payloads instead of failing on first encrypted packet",
+    )
+    parser_stream_proxy = subparsers_stream.add_parser(
+        "proxy",
+        help="Serve a local HTTP MPEG-TS stream for FFmpeg/Home Assistant",
+    )
+    parser_stream_proxy.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_stream_proxy.add_argument(
+        "--channel",
+        type=int,
+        default=None,
+        help="Camera channel/local index (default: first matching VTM resource)",
+    )
+    parser_stream_proxy.add_argument(
+        "--listen-host",
+        default="127.0.0.1",
+        help="Host/IP to bind the proxy to (default: 127.0.0.1)",
+    )
+    parser_stream_proxy.add_argument(
+        "--listen-port",
+        type=int,
+        default=8558,
+        help="TCP port to bind the proxy to (default: 8558)",
+    )
+    parser_stream_proxy.add_argument(
+        "--path",
+        default=None,
+        help="HTTP path to serve (default: /<serial>.ts)",
+    )
+    parser_stream_proxy.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_proxy.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type used in the ysproto URL (default: 9)",
+    )
+    parser_stream_proxy.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index to use from /vtdutoken2 (default: 0)",
+    )
+    parser_stream_proxy.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing via /v3/streaming/vtm",
+    )
+    parser_stream_proxy.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_stream_proxy.add_argument(
+        "--allow-encrypted",
+        action="store_true",
+        help="Forward encrypted stream payloads instead of failing on first encrypted packet",
+    )
+    parser_stream_proxy.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Stop each HTTP stream after this many packets (default: unlimited)",
+    )
 
     return parser.parse_args(argv)
 
@@ -633,12 +847,261 @@ def _handle_mqtt(_: argparse.Namespace, client: EzvizClient) -> int:
     return 0
 
 
+def _write_stream_payloads(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    flush_each: bool = False,
+    monotonic: Any = time.monotonic,
+) -> None:
+    """Write VTM stream packet bodies to a binary file-like object."""
+
+    deadline = None
+    if duration_seconds is not None:
+        deadline = monotonic() + duration_seconds
+
+    for packet in stream.iter_packets(max_packets=max_packets):
+        if deadline is not None and monotonic() >= deadline:
+            break
+        if packet.encrypted and not allow_encrypted:
+            raise PyEzvizError(
+                "Received encrypted VTM stream packet; "
+                "media decryption is not implemented"
+            )
+        output.write(packet.body)
+        if flush_each:
+            output.flush()
+    output.flush()
+
+
+def _remux_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+) -> None:
+    """Remux VTM MPEG-PS payloads to MPEG-TS and write them to output."""
+
+    process = _open_mpegts_remux_process(ffmpeg_path)
+    _copy_stream_payloads_to_mpegts(
+        stream,
+        output,
+        process=process,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        allow_encrypted=allow_encrypted,
+    )
+
+
+def _open_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
+    """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS stdout."""
+
+    try:
+        return subprocess.Popen(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "mpeg",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+
+
+def _copy_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+) -> None:
+    """Copy stream payloads through an already-started FFmpeg remuxer."""
+
+    stdin = process.stdin
+    stdout = process.stdout
+    if stdin is None or stdout is None:
+        raise PyEzvizError("Could not open FFmpeg pipes")
+
+    writer_errors: list[Exception] = []
+
+    def _write_input() -> None:
+        try:
+            _write_stream_payloads(
+                stream,
+                cast(BinaryIO, stdin),
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                allow_encrypted=allow_encrypted,
+                flush_each=True,
+            )
+        except (BrokenPipeError, ConnectionResetError):
+            _LOGGER.debug("FFmpeg closed its input pipe")
+        except Exception as err:  # pragma: no cover - defensive thread handoff
+            writer_errors.append(err)
+        finally:
+            with suppress(OSError):
+                stdin.close()
+
+    writer = Thread(target=_write_input, daemon=True)
+    writer.start()
+    try:
+        while True:
+            chunk = stdout.read(65536)
+            if not chunk:
+                break
+            output.write(chunk)
+            output.flush()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        writer.join(timeout=2)
+        try:
+            return_code = process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait()
+
+    if writer_errors:
+        raise writer_errors[0]
+    if return_code not in (0, -15):
+        raise PyEzvizError(f"FFmpeg exited with status {return_code}")
+
+
+def _default_stream_proxy_path(serial: str) -> str:
+    """Return the default HTTP path for a camera stream."""
+
+    return f"/{serial}.ts"
+
+
+def _normalize_stream_proxy_path(path: str | None, serial: str) -> str:
+    """Normalize a user-supplied proxy path."""
+
+    if not path:
+        return _default_stream_proxy_path(serial)
+    return path if path.startswith("/") else f"/{path}"
+
+
+def _handle_stream_proxy_get(
+    handler: BaseHTTPRequestHandler,
+    config: StreamProxyConfig,
+    client: EzvizClient,
+) -> None:
+    """Handle one experimental VTM-to-MPEG-TS HTTP proxy request."""
+
+    if urlparse(handler.path).path != config.path:
+        handler.send_error(404, "Stream not found")
+        return
+
+    response_started = False
+    try:
+        with open_cloud_stream(
+            client,
+            config.serial,
+            channel=config.channel,
+            client_type=config.client_type,
+            token_index=config.token_index,
+            refresh_vtm=config.refresh_vtm,
+            timeout=config.timeout,
+        ) as stream:
+            stream.start()
+            process = _open_mpegts_remux_process(config.ffmpeg_path)
+            handler.send_response(200)
+            response_started = True
+            handler.send_header("Content-Type", "video/MP2T")
+            handler.send_header("Cache-Control", "no-store")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            _copy_stream_payloads_to_mpegts(
+                stream,
+                cast(BinaryIO, handler.wfile),
+                process=process,
+                max_packets=config.max_packets,
+                allow_encrypted=config.allow_encrypted,
+            )
+    except (BrokenPipeError, ConnectionResetError):
+        _LOGGER.debug("Stream proxy client disconnected")
+    except PyEzvizError as err:
+        _LOGGER.error("%s", err)
+        if response_started:
+            if not handler.wfile.closed:
+                handler.close_connection = True
+        else:
+            handler.send_error(502, str(err))
+
+
+def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
+    """Serve the experimental VTM-to-MPEG-TS HTTP proxy until interrupted."""
+
+    config = StreamProxyConfig(
+        serial=args.serial,
+        channel=args.channel,
+        client_type=args.client_type,
+        token_index=args.token_index,
+        refresh_vtm=not args.no_refresh_vtm,
+        timeout=args.timeout,
+        path=_normalize_stream_proxy_path(args.path, args.serial),
+        ffmpeg_path=args.ffmpeg_path,
+        allow_encrypted=args.allow_encrypted,
+        max_packets=args.max_packets,
+    )
+
+    class StreamProxyHandler(BaseHTTPRequestHandler):
+        server_version = "pyezvizapi-stream-proxy/0"
+
+        def do_GET(self) -> None:
+            _handle_stream_proxy_get(self, config, client)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            _LOGGER.info("stream proxy: " + format, *args)
+
+    try:
+        server = StreamProxyHTTPServer(
+            (args.listen_host, args.listen_port),
+            StreamProxyHandler,
+        )
+    except OSError as err:
+        raise PyEzvizError(
+            f"Could not bind stream proxy to {args.listen_host}:{args.listen_port}: {err}"
+        ) from err
+    url = f"http://{args.listen_host}:{args.listen_port}{config.path}"
+    _LOGGER.info("Serving VTM stream proxy at %s", url)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
 def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
     """Handle experimental stream helpers."""
 
-    if args.stream_action != "trace":
+    if args.stream_action not in {"trace", "dump", "proxy"}:
         _LOGGER.error("Action not implemented, try running with -h switch for help")
         return 2
+
+    if args.stream_action == "proxy":
+        _serve_stream_proxy(args, client)
+        return 0
 
     with open_cloud_stream(
         client,
@@ -649,6 +1112,47 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
         refresh_vtm=not args.no_refresh_vtm,
         timeout=args.timeout,
     ) as stream:
+        if args.stream_action == "dump":
+            stream.start()
+            if args.output == "-":
+                if args.format == "raw":
+                    _write_stream_payloads(
+                        stream,
+                        sys.stdout.buffer,
+                        max_packets=args.max_packets,
+                        duration_seconds=args.duration,
+                        allow_encrypted=args.allow_encrypted,
+                    )
+                else:
+                    _remux_stream_payloads_to_mpegts(
+                        stream,
+                        sys.stdout.buffer,
+                        ffmpeg_path=args.ffmpeg_path,
+                        max_packets=args.max_packets,
+                        duration_seconds=args.duration,
+                        allow_encrypted=args.allow_encrypted,
+                    )
+            else:
+                with Path(args.output).open("wb") as output:
+                    if args.format == "raw":
+                        _write_stream_payloads(
+                            stream,
+                            output,
+                            max_packets=args.max_packets,
+                            duration_seconds=args.duration,
+                            allow_encrypted=args.allow_encrypted,
+                        )
+                    else:
+                        _remux_stream_payloads_to_mpegts(
+                            stream,
+                            output,
+                            ffmpeg_path=args.ffmpeg_path,
+                            max_packets=args.max_packets,
+                            duration_seconds=args.duration,
+                            allow_encrypted=args.allow_encrypted,
+                        )
+            return 0
+
         events = [
             event.as_dict()
             for event in stream.trace_packets(max_packets=args.max_packets)

@@ -1,6 +1,7 @@
 # Ezviz PyPi
 
 ![Upload Python Package](https://github.com/RenierM26/pyEzvizApi/workflows/Upload%20Python%20Package/badge.svg)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-renierm-yellow?logo=buymeacoffee)](https://www.buymeacoffee.com/renierm)
 
 ## Overview
 
@@ -101,6 +102,27 @@ name | status | device_category | device_sub_category | sleep | privacy | audio 
 ```
 
 The CLI also computes a `switch_flags` map for each device (all switch states by name, e.g. `privacy`, `sleep`, `sound`, `infrared_light`, `light`, etc.).
+
+### stream
+
+Experimental VTM cloud stream helpers. Packet tracing prints sanitized metadata only. Dumping writes VLC-friendly MPEG-TS by default using FFmpeg `-c copy` remuxing only, with `--format raw` available for unchanged VTM payloads. Encrypted packets fail unless `--allow-encrypted` is set.
+
+```bash
+# Inspect stream packet metadata without printing media bytes
+pyezvizapi stream trace --serial ABC123 --channel 1 --max-packets 20 --json-lines
+
+# Dump a VLC-playable MPEG-TS capture to a file
+pyezvizapi stream dump --serial ABC123 --channel 1 --duration 1m --output stream.ts
+
+# Pipe raw MPEG-PS payloads directly into FFmpeg and remux to MPEG-TS
+pyezvizapi stream dump --serial ABC123 --channel 1 --format raw | \
+  ffmpeg -f mpeg -i pipe:0 -c copy -f mpegts stream.ts
+
+# Serve a local MPEG-TS URL for Home Assistant/FFmpeg clients
+pyezvizapi stream proxy --serial ABC123 --channel 1 --listen-port 8558
+```
+
+The dump command captures one minute by default. Use `--duration 30s`, `--duration 2min`, or `--duration 0` for unlimited capture; `--max-packets` can still be used as an additional stop limit. MPEG-TS output requires FFmpeg and remuxes the camera payload with codec copy only; it does not transcode video or audio. The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg. Keep the proxy bound to loopback unless you put it behind an authenticated reverse proxy or otherwise restrict access; the stream URL is not authenticated by `pyezvizapi`.
 
 ### camera
 

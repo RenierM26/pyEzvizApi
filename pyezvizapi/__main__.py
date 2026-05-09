@@ -881,8 +881,22 @@ def _remux_stream_payloads_to_mpegts(
 ) -> None:
     """Remux VTM MPEG-PS payloads to MPEG-TS and write them to output."""
 
+    process = _open_mpegts_remux_process(ffmpeg_path)
+    _copy_stream_payloads_to_mpegts(
+        stream,
+        output,
+        process=process,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        allow_encrypted=allow_encrypted,
+    )
+
+
+def _open_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
+    """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS stdout."""
+
     try:
-        process = subprocess.Popen(
+        return subprocess.Popen(
             [
                 ffmpeg_path,
                 "-hide_banner",
@@ -904,6 +918,19 @@ def _remux_stream_payloads_to_mpegts(
         )
     except OSError as err:
         raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+
+
+def _copy_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+) -> None:
+    """Copy stream payloads through an already-started FFmpeg remuxer."""
+
     stdin = process.stdin
     stdout = process.stdout
     if stdin is None or stdout is None:
@@ -968,6 +995,54 @@ def _normalize_stream_proxy_path(path: str | None, serial: str) -> str:
     return path if path.startswith("/") else f"/{path}"
 
 
+def _handle_stream_proxy_get(
+    handler: BaseHTTPRequestHandler,
+    config: StreamProxyConfig,
+    client: EzvizClient,
+) -> None:
+    """Handle one experimental VTM-to-MPEG-TS HTTP proxy request."""
+
+    if urlparse(handler.path).path != config.path:
+        handler.send_error(404, "Stream not found")
+        return
+
+    response_started = False
+    try:
+        with open_cloud_stream(
+            client,
+            config.serial,
+            channel=config.channel,
+            client_type=config.client_type,
+            token_index=config.token_index,
+            refresh_vtm=config.refresh_vtm,
+            timeout=config.timeout,
+        ) as stream:
+            stream.start()
+            process = _open_mpegts_remux_process(config.ffmpeg_path)
+            handler.send_response(200)
+            response_started = True
+            handler.send_header("Content-Type", "video/MP2T")
+            handler.send_header("Cache-Control", "no-store")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            _copy_stream_payloads_to_mpegts(
+                stream,
+                cast(BinaryIO, handler.wfile),
+                process=process,
+                max_packets=config.max_packets,
+                allow_encrypted=config.allow_encrypted,
+            )
+    except (BrokenPipeError, ConnectionResetError):
+        _LOGGER.debug("Stream proxy client disconnected")
+    except PyEzvizError as err:
+        _LOGGER.error("%s", err)
+        if response_started:
+            if not handler.wfile.closed:
+                handler.close_connection = True
+        else:
+            handler.send_error(502, str(err))
+
+
 def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
     """Serve the experimental VTM-to-MPEG-TS HTTP proxy until interrupted."""
 
@@ -988,39 +1063,7 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
         server_version = "pyezvizapi-stream-proxy/0"
 
         def do_GET(self) -> None:
-            if urlparse(self.path).path != config.path:
-                self.send_error(404, "Stream not found")
-                return
-
-            try:
-                with open_cloud_stream(
-                    client,
-                    config.serial,
-                    channel=config.channel,
-                    client_type=config.client_type,
-                    token_index=config.token_index,
-                    refresh_vtm=config.refresh_vtm,
-                    timeout=config.timeout,
-                ) as stream:
-                    stream.start()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "video/MP2T")
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                    _remux_stream_payloads_to_mpegts(
-                        stream,
-                        cast(BinaryIO, self.wfile),
-                        ffmpeg_path=config.ffmpeg_path,
-                        max_packets=config.max_packets,
-                        allow_encrypted=config.allow_encrypted,
-                    )
-            except (BrokenPipeError, ConnectionResetError):
-                _LOGGER.debug("Stream proxy client disconnected")
-            except PyEzvizError as err:
-                _LOGGER.error("%s", err)
-                if not self.wfile.closed:
-                    self.close_connection = True
+            _handle_stream_proxy_get(self, config, client)
 
         def log_message(self, format: str, *args: Any) -> None:
             _LOGGER.info("stream proxy: " + format, *args)

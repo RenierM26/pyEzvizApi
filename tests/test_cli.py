@@ -735,6 +735,65 @@ def test_stream_proxy_path_defaults_to_serial() -> None:
     assert cli_module._normalize_stream_proxy_path("camera.ts", "CAM123") == "/camera.ts"  # noqa: SLF001
 
 
+def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) -> None:
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        wfile = io.BytesIO()
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.responses: list[int] = []
+            self.errors: list[tuple[int, str]] = []
+
+        def send_response(self, code: int) -> None:
+            self.responses.append(code)
+
+        def send_header(self, _key: str, _value: str) -> None:
+            return None
+
+        def end_headers(self) -> None:
+            return None
+
+        def send_error(self, code: int, message: str) -> None:
+            self.errors.append((code, message))
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=None,
+        path="/CAM123.ts",
+        ffmpeg_path="/does/not/exist/ffmpeg",
+        allow_encrypted=False,
+        max_packets=None,
+    )
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
+    monkeypatch.setattr(
+        cli_module,
+        "_open_mpegts_remux_process",
+        lambda _path: (_ for _ in ()).throw(PyEzvizError("Could not launch FFmpeg")),
+    )
+
+    handler = FakeHandler()
+    cli_module._handle_stream_proxy_get(cast(Any, handler), config, cast(Any, object()))  # noqa: SLF001
+
+    assert handler.responses == []
+    assert handler.errors == [(502, "Could not launch FFmpeg")]
+
+
 def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, capsys) -> None:
     class UnifiedClient(_FakeClient):
         def get_device_messages_list(self, **_kwargs: Any) -> dict[str, Any]:

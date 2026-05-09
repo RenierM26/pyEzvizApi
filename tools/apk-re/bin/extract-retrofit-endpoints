@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-HTTP_ANNOTATION = re.compile(r"@(GET|POST|PUT|DELETE|PATCH|HEAD)X((?:\"([^\"]*)\")?\)")
+HTTP_ANNOTATION = re.compile(r"@(GET|POST|PUT|DELETE|PATCH|HEAD)\((?:\"([^\"]*)\")?\)")
 METHOD_DECL = re.compile(r"\s*(?:[\w<>, ?.\[\]]+\s+)+(\w+)\((.*)\);")
 PARAM_ANNOTATION = re.compile(r"@(Field|Query|Path|Header|Body|Url|Part)\((?:\"([^\"]*)\")?\)")
 PATH_PARAM = re.compile(r"\{[^}/]+\}")

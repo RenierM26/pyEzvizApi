@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-HTTP_ANNOTATION = re.compile(r"@(GET|POST|PUT|DELETE|PATCH|HEAD)\((?:\"([^\"]*)\")?\)")
+HTTP_ANNOTATION = re.compile(r"@(GET|POST|PUT|DELETE|PATCH|HEAD)X((?:\"([^\"]*)\")?\)")
 METHOD_DECL = re.compile(r"\s*(?:[\w<>, ?.\[\]]+\s+)+(\w+)\((.*)\);")
 PARAM_ANNOTATION = re.compile(r"@(Field|Query|Path|Header|Body|Url|Part)\((?:\"([^\"]*)\")?\)")
 PATH_PARAM = re.compile(r"\{[^}/]+\}")
@@ -24,6 +24,12 @@ class Endpoint:
     params: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class KnownApiPaths:
+    exact: frozenset[str]
+    fragments: frozenset[str]
+
+
 def normalize_path(path: str) -> str:
     if not path:
         return "<dynamic-url>"
@@ -34,11 +40,16 @@ def path_key(path: str) -> str:
     return PATH_PARAM.sub("{}", normalize_path(path))
 
 
-def load_known_paths(path: Path | None) -> set[str]:
+def static_path_parts(path: str) -> tuple[str, ...]:
+    return tuple(part for part in PATH_PARAM.split(normalize_path(path)) if part)
+
+
+def load_known_paths(path: Path | None) -> KnownApiPaths:
     if path is None or not path.exists():
-        return set()
+        return KnownApiPaths(frozenset(), frozenset())
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    constants: set[str] = set()
+    exact: set[str] = set()
+    fragments: set[str] = set()
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
@@ -49,8 +60,17 @@ def load_known_paths(path: Path | None) -> set[str]:
         except (ValueError, SyntaxError):
             continue
         if isinstance(value, str):
-            constants.add(path_key(value))
-    return constants
+            normalized = normalize_path(value)
+            exact.add(path_key(normalized))
+            fragments.add(normalized)
+    return KnownApiPaths(frozenset(exact), frozenset(fragments))
+
+
+def is_implemented(path: str, known_paths: KnownApiPaths) -> bool:
+    if path_key(path) in known_paths.exact:
+        return True
+    parts = static_path_parts(path)
+    return len(parts) > 1 and all(part in known_paths.fragments for part in parts)
 
 
 def extract_params(signature: str) -> tuple[str, ...]:
@@ -88,18 +108,18 @@ def extract_from_file(path: Path, root: Path) -> list[Endpoint]:
     return endpoints
 
 
-def markdown(endpoints: list[Endpoint], known_paths: set[str]) -> str:
+def markdown(endpoints: list[Endpoint], known_paths: KnownApiPaths) -> str:
     rows = [
         "# Retrofit Endpoint Inventory",
         "",
         f"- Extracted endpoints: {len(endpoints)}",
-        f"- Exact paths already present in pyezvizapi: {sum(1 for item in endpoints if path_key(item.path) in known_paths)}",
+        f"- Paths detected in pyezvizapi: {sum(1 for item in endpoints if is_implemented(item.path, known_paths))}",
         "",
         "| Implemented | Method | Path | Java method | Params | Source |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for item in sorted(endpoints, key=lambda endpoint: (endpoint.path, endpoint.http_method, endpoint.source)):
-        implemented = "yes" if path_key(item.path) in known_paths else "no"
+        implemented = "yes" if is_implemented(item.path, known_paths) else "no"
         params = ", ".join(item.params)
         rows.append(
             f"| {implemented} | {item.http_method} | `{item.path}` | `{item.java_method}` | `{params}` | `{item.source}` |"

@@ -133,3 +133,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# APK reverse engineering lab artifacts
+/discovery/apk/in/*
+!/discovery/apk/in/.gitkeep
+/discovery/apk/out/*
+!/discovery/apk/out/.gitkeep
+/discovery/apk/work/*
+!/discovery/apk/work/.gitkeep

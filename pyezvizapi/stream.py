@@ -80,6 +80,38 @@ class StreamInfoResponse:
     aesmd5: str | None = None
     udptransinfo: str | None = None
     peerpbkey: str | None = None
+    pdslist: tuple[bytes, ...] = ()
+    srvipv6_addr: str | None = None
+
+
+@dataclass(frozen=True)
+class VtduInfoResponse:
+    """Decoded fields from a GetVtduInfoRsp protobuf body."""
+
+    result: int | None = None
+    host: str | None = None
+    port: int | None = None
+    streamkey: str | None = None
+    peerhost: str | None = None
+    peerport: int | None = None
+    srvinfo: str | None = None
+
+
+@dataclass(frozen=True)
+class VtduStreamResponse:
+    """Decoded fields shared by StartStreamRsp and PeerStreamRsp."""
+
+    result: int | None = None
+    streamhead: str | None = None
+    streamssn: str | None = None
+    datakey: int | None = None
+
+
+@dataclass(frozen=True)
+class StopStreamResponse:
+    """Decoded fields from a StopStreamRsp protobuf body."""
+
+    result: int | None = None
 
 
 def encode_vtm_packet(
@@ -224,45 +256,145 @@ def build_stream_keepalive_request(stream_ssn: str) -> bytes:
     return _proto_bytes(1, stream_ssn.encode())
 
 
+def build_get_vtdu_info_request(
+    serial: str,
+    vtdu_token: str,
+    *,
+    channel: int = 1,
+    stream_type: int = 1,
+    business_type: int = 0,
+    client_isp_type: int = 0,
+    is_proxy: bool = False,
+) -> bytes:
+    """Encode the native GetVtduInfoReq protobuf."""
+
+    return b"".join(
+        (
+            _proto_string(1, serial),
+            _proto_varint(2, channel),
+            _proto_varint(3, stream_type),
+            _proto_varint(4, client_isp_type),
+            _proto_varint(5, business_type),
+            _proto_string(6, vtdu_token),
+            _proto_varint(7, int(is_proxy)),
+        )
+    )
+
+
+def build_start_stream_request(
+    serial: str,
+    vtdu_token: str,
+    stream_key: str,
+    *,
+    channel: int = 1,
+    stream_type: int = 1,
+    business_type: int = 0,
+    client_type: int = 9,
+    peer_host: str | None = None,
+    peer_port: int | None = None,
+) -> bytes:
+    """Encode the native StartStreamReq protobuf."""
+
+    parts = [
+        _proto_string(1, serial),
+        _proto_varint(2, channel),
+        _proto_varint(3, stream_type),
+        _proto_varint(4, business_type),
+        _proto_string(5, vtdu_token),
+        _proto_varint(6, client_type),
+        _proto_string(7, stream_key),
+    ]
+    if peer_host:
+        parts.append(_proto_string(8, peer_host))
+    if peer_port is not None:
+        parts.append(_proto_varint(9, peer_port))
+    return b"".join(parts)
+
+
+def build_peer_stream_request(
+    serial: str,
+    vtdu_token: str,
+    *,
+    channel: int = 1,
+    stream_type: int = 1,
+    business_type: int = 0,
+) -> bytes:
+    """Encode the native PeerStreamReq protobuf."""
+
+    return b"".join(
+        (
+            _proto_string(1, serial),
+            _proto_varint(2, channel),
+            _proto_varint(3, stream_type),
+            _proto_varint(4, business_type),
+            _proto_string(5, vtdu_token),
+        )
+    )
+
+
+def build_stop_stream_request(stream_ssn: str, *, ssn_info: str | None = None) -> bytes:
+    """Encode the native StopStreamReq protobuf."""
+
+    parts = [_proto_string(1, stream_ssn)]
+    if ssn_info:
+        parts.append(_proto_string(2, ssn_info))
+    return b"".join(parts)
+
+
 def parse_stream_info_response(data: bytes) -> StreamInfoResponse:
     """Decode known scalar fields from a StreamInfoRsp protobuf body."""
 
-    values: dict[int, int | str] = {}
-    pos = 0
-    while pos < len(data):
-        key, pos = _read_varint(data, pos)
-        field = key >> 3
-        wire_type = key & 0x07
-        if wire_type == 0:
-            value, pos = _read_varint(data, pos)
-            values[field] = value
-            continue
-        if wire_type == 2:
-            length, pos = _read_varint(data, pos)
-            if pos + length > len(data):
-                raise PyEzvizError(
-                    "StreamInfoRsp length-delimited field exceeds payload"
-                )
-            raw = data[pos : pos + length]
-            pos += length
-            if field != 12:
-                values[field] = raw.decode("utf-8", errors="replace")
-            continue
-        raise PyEzvizError(f"Unsupported StreamInfoRsp wire type: {wire_type}")
+    fields = _read_proto_fields(data, "StreamInfoRsp")
 
     return StreamInfoResponse(
-        result=_maybe_int(values.get(1)),
-        datakey=_maybe_int(values.get(2)),
-        streamhead=_maybe_str(values.get(3)),
-        streamssn=_maybe_str(values.get(4)),
-        vtmstreamkey=_maybe_str(values.get(5)),
-        serverinfo=_maybe_str(values.get(6)),
-        streamurl=_maybe_str(values.get(7)),
-        srvinfo=_maybe_str(values.get(8)),
-        aesmd5=_maybe_str(values.get(9)),
-        udptransinfo=_maybe_str(values.get(10)),
-        peerpbkey=_maybe_str(values.get(11)),
+        result=_proto_last_int(fields, 1),
+        datakey=_proto_last_int(fields, 2),
+        streamhead=_proto_last_str(fields, 3),
+        streamssn=_proto_last_str(fields, 4),
+        vtmstreamkey=_proto_last_str(fields, 5),
+        serverinfo=_proto_last_str(fields, 6),
+        streamurl=_proto_last_str(fields, 7),
+        srvinfo=_proto_last_str(fields, 8),
+        aesmd5=_proto_last_str(fields, 9),
+        udptransinfo=_proto_last_str(fields, 10),
+        peerpbkey=_proto_last_str(fields, 11),
+        pdslist=tuple(_proto_bytes_values(fields, 12)),
+        srvipv6_addr=_proto_last_str(fields, 13),
     )
+
+
+def parse_get_vtdu_info_response(data: bytes) -> VtduInfoResponse:
+    """Decode known scalar fields from a GetVtduInfoRsp protobuf body."""
+
+    fields = _read_proto_fields(data, "GetVtduInfoRsp")
+    return VtduInfoResponse(
+        result=_proto_last_int(fields, 1),
+        host=_proto_last_str(fields, 2),
+        port=_proto_last_int(fields, 3),
+        streamkey=_proto_last_str(fields, 4),
+        peerhost=_proto_last_str(fields, 5),
+        peerport=_proto_last_int(fields, 6),
+        srvinfo=_proto_last_str(fields, 7),
+    )
+
+
+def parse_start_stream_response(data: bytes) -> VtduStreamResponse:
+    """Decode known scalar fields from a StartStreamRsp protobuf body."""
+
+    return _parse_vtdu_stream_response(data, "StartStreamRsp")
+
+
+def parse_peer_stream_response(data: bytes) -> VtduStreamResponse:
+    """Decode known scalar fields from a PeerStreamRsp protobuf body."""
+
+    return _parse_vtdu_stream_response(data, "PeerStreamRsp")
+
+
+def parse_stop_stream_response(data: bytes) -> StopStreamResponse:
+    """Decode known scalar fields from a StopStreamRsp protobuf body."""
+
+    fields = _read_proto_fields(data, "StopStreamRsp")
+    return StopStreamResponse(result=_proto_last_int(fields, 1))
 
 
 def detect_transport(data: bytes) -> StreamTransport:
@@ -345,6 +477,65 @@ def _proto_bytes(field: int, value: bytes) -> bytes:
 
 def _proto_string(field: int, value: str) -> bytes:
     return _proto_bytes(field, value.encode())
+
+
+ProtoValue = int | bytes
+
+
+def _read_proto_fields(data: bytes, message_name: str) -> dict[int, list[ProtoValue]]:
+    values: dict[int, list[ProtoValue]] = {}
+    pos = 0
+    while pos < len(data):
+        key, pos = _read_varint(data, pos)
+        field = key >> 3
+        wire_type = key & 0x07
+        if wire_type == 0:
+            value, pos = _read_varint(data, pos)
+            values.setdefault(field, []).append(value)
+            continue
+        if wire_type == 2:
+            length, pos = _read_varint(data, pos)
+            if pos + length > len(data):
+                raise PyEzvizError(
+                    f"{message_name} length-delimited field exceeds payload"
+                )
+            values.setdefault(field, []).append(data[pos : pos + length])
+            pos += length
+            continue
+        raise PyEzvizError(f"Unsupported {message_name} wire type: {wire_type}")
+    return values
+
+
+def _proto_last_int(fields: dict[int, list[ProtoValue]], field: int) -> int | None:
+    values = fields.get(field)
+    if not values:
+        return None
+    value = values[-1]
+    return value if isinstance(value, int) else None
+
+
+def _proto_last_str(fields: dict[int, list[ProtoValue]], field: int) -> str | None:
+    values = fields.get(field)
+    if not values:
+        return None
+    value = values[-1]
+    if isinstance(value, int):
+        return None
+    return value.decode("utf-8", errors="replace")
+
+
+def _proto_bytes_values(fields: dict[int, list[ProtoValue]], field: int) -> list[bytes]:
+    return [value for value in fields.get(field, []) if isinstance(value, bytes)]
+
+
+def _parse_vtdu_stream_response(data: bytes, message_name: str) -> VtduStreamResponse:
+    fields = _read_proto_fields(data, message_name)
+    return VtduStreamResponse(
+        result=_proto_last_int(fields, 1),
+        streamhead=_proto_last_str(fields, 2),
+        streamssn=_proto_last_str(fields, 3),
+        datakey=_proto_last_int(fields, 4),
+    )
 
 
 def _encode_varint(value: int) -> bytes:

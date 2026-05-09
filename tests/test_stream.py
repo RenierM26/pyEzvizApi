@@ -14,21 +14,35 @@ from pyezvizapi.stream import (
     StreamTransport,
     VtmChannel,
     VtmMessageCode,
+    build_get_vtdu_info_request,
+    build_peer_stream_request,
+    build_start_stream_request,
+    build_stop_stream_request,
     build_stream_info_request,
     build_stream_keepalive_request,
     build_vtm_url,
     decode_vtm_packet,
     detect_transport,
     encode_vtm_packet,
+    parse_get_vtdu_info_response,
+    parse_peer_stream_response,
+    parse_start_stream_response,
+    parse_stop_stream_response,
     parse_stream_info_response,
     parse_vtm_url,
     rtp_payload,
 )
 
 BODY = b"abc"
+CAMERA_SERIAL_BYTES = b"CAM123"
 KEEPALIVE_REQ = b"\x0a\x07ssn-123"
+PEER_HOST_BYTES = b"peerhost"
+PUBLIC_KEY_BYTES = b"pub"
+STOP_STREAM_REQ = b"\x0a\x07ssn-123\x12\x04info"
 STREAM_URL = b"ysproto://vtm:8554/live"
 STREAM_KEY = b"key-1"
+STREAM_KEY_BYTES = b"stream-key"
+VTDU_TOKEN_BYTES = b"token-1"
 
 
 def _jwt(payload: dict[str, Any]) -> str:
@@ -190,7 +204,14 @@ def test_parse_vtm_url_normalizes_invalid_ports(url: str) -> None:
 
 
 def test_stream_info_protobuf_helpers_decode_known_fields() -> None:
-    rsp = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1\x3a\x18ysproto://vtdu:8554/live"
+    rsp = (
+        b"\x08\x00"
+        b"\x22\x07ssn-123"
+        b"\x2a\x05key-1"
+        b"\x3a\x18ysproto://vtdu:8554/live"
+        b"\x62\x04pds1"
+        b"\x6a\x03::1"
+    )
 
     decoded = parse_stream_info_response(rsp)
 
@@ -198,6 +219,8 @@ def test_stream_info_protobuf_helpers_decode_known_fields() -> None:
     assert decoded.streamssn == "ssn-123"
     assert decoded.vtmstreamkey == "key-1"
     assert decoded.streamurl == "ysproto://vtdu:8554/live"
+    assert decoded.pdslist == (b"pds1",)
+    assert decoded.srvipv6_addr == "::1"
 
     req = build_stream_info_request(STREAM_URL.decode(), vtm_stream_key=STREAM_KEY.decode())
     keepalive = build_stream_keepalive_request("ssn-123")
@@ -205,6 +228,79 @@ def test_stream_info_protobuf_helpers_decode_known_fields() -> None:
     assert STREAM_URL in req
     assert STREAM_KEY in req
     assert keepalive == KEEPALIVE_REQ
+
+
+def test_vtdu_info_protobuf_helpers_decode_known_fields() -> None:
+    req = build_get_vtdu_info_request(
+        "CAM123",
+        "token-1",
+        channel=2,
+        stream_type=1,
+        business_type=4,
+        client_isp_type=3,
+        is_proxy=True,
+    )
+    rsp = (
+        b"\x08\x00"
+        b"\x12\x031.2"
+        b"\x18\xea\x42"
+        b"\x22\x0astream-key"
+        b"\x2a\x08peerhost"
+        b"\x30\xd2\x4a"
+        b"\x3a\x07srvinfo"
+    )
+
+    decoded = parse_get_vtdu_info_response(rsp)
+
+    assert CAMERA_SERIAL_BYTES in req
+    assert VTDU_TOKEN_BYTES in req
+    assert decoded.result == 0
+    assert decoded.host == "1.2"
+    assert decoded.port == 8554
+    assert decoded.streamkey == "stream-key"
+    assert decoded.peerhost == "peerhost"
+    assert decoded.peerport == 9554
+    assert decoded.srvinfo == "srvinfo"
+
+
+def test_start_peer_and_stop_stream_protobuf_helpers() -> None:
+    start_req = build_start_stream_request(
+        "CAM123",
+        "token-1",
+        "stream-key",
+        channel=2,
+        stream_type=1,
+        business_type=4,
+        client_type=9,
+        peer_host="peerhost",
+        peer_port=9554,
+    )
+    peer_req = build_peer_stream_request(
+        "CAM123",
+        "token-1",
+        channel=2,
+        stream_type=1,
+        business_type=4,
+    )
+    stop_req = build_stop_stream_request("ssn-123", ssn_info="info")
+
+    start_rsp = parse_start_stream_response(
+        b"\x08\x00\x12\x06header\x1a\x07ssn-123\x20\x07"
+    )
+    peer_rsp = parse_peer_stream_response(
+        b"\x08\x00\x12\x06header\x1a\x07ssn-123\x20\x08"
+    )
+    stop_rsp = parse_stop_stream_response(b"\x08\x00")
+
+    assert STREAM_KEY_BYTES in start_req
+    assert PEER_HOST_BYTES in start_req
+    assert CAMERA_SERIAL_BYTES in peer_req
+    assert stop_req == STOP_STREAM_REQ
+    assert start_rsp.streamssn == "ssn-123"
+    assert start_rsp.datakey == 7
+    assert peer_rsp.streamhead == "header"
+    assert peer_rsp.datakey == 8
+    assert stop_rsp.result == 0
 
 
 def test_stream_info_response_rejects_truncated_length_delimited_field() -> None:
@@ -241,7 +337,7 @@ def test_get_vtdu_token_v2_uses_auth_addr_and_session_sign(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_http_request", fake_http_request)
 
-    assert get_vtdu_token_v2(client)["tokens"] == ["token-1"]
+    assert get_vtdu_token_v2(client).get("tokens") == ["token-1"]
     assert calls[0]["url"] == "https://auth.example.test/vtdutoken2"
     assert calls[0]["params"]["ssid"] == client.export_token()["session_id"]
     assert calls[0]["params"]["sign"] == "sign-value"
@@ -276,7 +372,7 @@ def test_get_vtdu_token_v2_recomputes_auth_after_login(monkeypatch) -> None:
     monkeypatch.setattr(client, "_http_request", fake_http_request)
     monkeypatch.setattr(client, "login", fake_login)
 
-    assert get_vtdu_token_v2(client)["tokens"] == ["token-2"]
+    assert get_vtdu_token_v2(client).get("tokens") == ["token-2"]
     assert len(calls) == 2
     assert calls[0]["params"]["sign"] == "sign-value"
     assert calls[1]["params"]["ssid"] == client.export_token()["session_id"]
@@ -323,7 +419,7 @@ def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
                 "Video": {
                     "externalIp": "1.2.3.4",
                     "port": 8554,
-                    "publicKey": {"key": "pub"},
+                    "publicKey": {"version": "2", "key": "cHVi"},
                 }
             },
         },
@@ -338,6 +434,8 @@ def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
     assert info["vtdu_token"] == "token-1"
     assert info["resource"]["resourceId"] == "Video"
     assert info["vtm"]["externalIp"] == "1.2.3.4"
+    assert info["vtm_public_key"].version == 2
+    assert info["vtm_public_key"].key_bytes == PUBLIC_KEY_BYTES
     assert parse_vtm_url(info["stream_url"])[3]["chn"] == "2"
 
 

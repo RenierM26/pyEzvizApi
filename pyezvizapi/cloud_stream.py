@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import binascii
+from dataclasses import dataclass
 import json
 from typing import Any, TypedDict, cast
 from urllib.parse import urlparse
@@ -21,6 +23,15 @@ class VtduTokenResponse(TypedDict, total=False):
     msg: str
     tokens: list[str]
     retcode: int
+
+
+@dataclass(frozen=True)
+class VtmServerPublicKey:
+    """VTM server public key material from pagelist metadata."""
+
+    version: int
+    key: str
+    key_bytes: bytes
 
 
 def get_vtdu_token_v2(client: Any, max_retries: int = 0) -> VtduTokenResponse:
@@ -127,9 +138,36 @@ def get_cloud_stream_info(
     return {
         "resource": resource,
         "vtm": vtm,
+        "vtm_public_key": parse_vtm_server_public_key(vtm),
         "vtdu_token": vtdu_token,
         "stream_url": stream_url,
     }
+
+
+def parse_vtm_server_public_key(vtm: JsonDict) -> VtmServerPublicKey | None:
+    """Return decoded VTM server public key metadata when present."""
+
+    public_key = vtm.get("publicKey")
+    if not isinstance(public_key, dict):
+        return None
+
+    key = public_key.get("key")
+    version = public_key.get("version")
+    if not isinstance(key, str) or not key:
+        return None
+    if not isinstance(version, (int, str)) or not str(version).isdigit():
+        raise PyEzvizError("VTM public key version is invalid")
+
+    try:
+        key_bytes = base64.b64decode(key, validate=True)
+    except (ValueError, binascii.Error) as err:
+        raise PyEzvizError("VTM public key is not valid base64") from err
+
+    return VtmServerPublicKey(
+        version=int(version),
+        key=key,
+        key_bytes=key_bytes,
+    )
 
 
 def _find_vtm_resource(

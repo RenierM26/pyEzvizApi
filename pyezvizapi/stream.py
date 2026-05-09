@@ -239,7 +239,12 @@ class VtmStreamClient:
 
         raise PyEzvizError("Timed out waiting for VTM stream info response")
 
-    def send_keepalive(self, stream_ssn: str | None = None) -> int:
+    def send_keepalive(
+        self,
+        stream_ssn: str | None = None,
+        *,
+        message_code: int = VtmMessageCode.KEEPALIVE_REQ,
+    ) -> int:
         """Send a VTM stream keepalive request."""
 
         stream_ssn = stream_ssn or (
@@ -249,7 +254,7 @@ class VtmStreamClient:
             raise PyEzvizError("Cannot send keepalive without a stream session")
         return self.send_packet(
             build_stream_keepalive_request(stream_ssn),
-            message_code=VtmMessageCode.KEEPALIVE_REQ,
+            message_code=message_code,
         )
 
     def iter_packets(
@@ -268,7 +273,7 @@ class VtmStreamClient:
         while max_packets is None or seen < max_packets:
             packet = self.read_packet()
             if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
-                self.send_keepalive()
+                self.send_keepalive(message_code=VtmMessageCode.KEEPALIVE_RSP)
                 if include_control:
                     seen += 1
                     yield packet

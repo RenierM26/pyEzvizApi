@@ -45,6 +45,13 @@ class StreamProxyConfig:
     max_packets: int | None
 
 
+class StreamProxyHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server that does not block CLI shutdown on active streams."""
+
+    daemon_threads = True
+    block_on_close = False
+
+
 def _parse_duration_seconds(value: str) -> float | None:
     """Parse a CLI duration value into seconds."""
 
@@ -1069,7 +1076,7 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
             _LOGGER.info("stream proxy: " + format, *args)
 
     try:
-        server = ThreadingHTTPServer(
+        server = StreamProxyHTTPServer(
             (args.listen_host, args.listen_port),
             StreamProxyHandler,
         )

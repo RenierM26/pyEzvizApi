@@ -799,7 +799,7 @@ def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:
     def fake_server(*_args: object, **_kwargs: object) -> None:
         raise OSError("Address already in use")
 
-    monkeypatch.setattr(cli_module, "ThreadingHTTPServer", fake_server)
+    monkeypatch.setattr(cli_module, "StreamProxyHTTPServer", fake_server)
 
     args = argparse.Namespace(
         serial="CAM123",
@@ -824,6 +824,11 @@ def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:
         assert "Address already in use" in message
     else:
         raise AssertionError("Expected PyEzvizError")
+
+
+def test_stream_proxy_server_does_not_block_on_active_stream_threads() -> None:
+    assert cli_module.StreamProxyHTTPServer.daemon_threads is True
+    assert cli_module.StreamProxyHTTPServer.block_on_close is False
 
 
 def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, capsys) -> None:

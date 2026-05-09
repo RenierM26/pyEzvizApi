@@ -44,6 +44,23 @@ def static_path_parts(path: str) -> tuple[str, ...]:
     return tuple(part for part in PATH_PARAM.split(normalize_path(path)) if part)
 
 
+def is_composed_from_fragments(path: str, fragments: frozenset[str]) -> bool:
+    normalized = normalize_path(path)
+    reachable: set[tuple[int, int]] = {(0, 0)}
+    for index in range(len(normalized) + 1):
+        counts = [count for position, count in reachable if position == index]
+        if not counts:
+            continue
+        for fragment in fragments:
+            candidates = [fragment]
+            if index > 0 and fragment.startswith("/"):
+                candidates.append(fragment[1:])
+            for candidate in candidates:
+                if candidate and normalized.startswith(candidate, index):
+                    reachable.add((index + len(candidate), max(counts) + 1))
+    return any(position == len(normalized) and count > 1 for position, count in reachable)
+
+
 def load_known_paths(path: Path | None) -> KnownApiPaths:
     if path is None or not path.exists():
         return KnownApiPaths(frozenset(), frozenset())
@@ -70,7 +87,9 @@ def is_implemented(path: str, known_paths: KnownApiPaths) -> bool:
     if path_key(path) in known_paths.exact:
         return True
     parts = static_path_parts(path)
-    return len(parts) > 1 and all(part in known_paths.fragments for part in parts)
+    if len(parts) > 1 and all(part in known_paths.fragments for part in parts):
+        return True
+    return is_composed_from_fragments(path, known_paths.fragments)
 
 
 def extract_params(signature: str) -> tuple[str, ...]:

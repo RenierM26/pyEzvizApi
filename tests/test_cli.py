@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import sys
 from typing import Any, ClassVar, cast
 
 from cli_fakes import (
@@ -13,6 +15,7 @@ from cli_fakes import (
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
+from pyezvizapi.stream import VtmChannel, VtmPacket
 
 _format_cell = cli_module._format_cell  # noqa: SLF001
 _write_table = cli_module._write_table  # noqa: SLF001
@@ -325,6 +328,261 @@ def test_stream_trace_outputs_sanitized_json_lines(monkeypatch, tmp_path, capsys
     assert output[0]["message_name"] == "STREAMINFO_RSP"
     assert output[1]["encrypted"] is True
     assert "body" not in output[1]
+
+
+def test_stream_dump_writes_payload_bytes_to_file(monkeypatch, tmp_path) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    expected_payload = b"abcdef"
+
+    class FakeStream:
+        def __init__(self) -> None:
+            self.closed = False
+            self.started = False
+
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            self.closed = True
+
+        def start(self) -> None:
+            self.started = True
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert self.started is True
+            assert max_packets == 2
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=3,
+                    sequence=1,
+                    message_code=0,
+                    body=b"abc",
+                ),
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=3,
+                    sequence=2,
+                    message_code=0,
+                    body=b"def",
+                ),
+            ]
+
+    calls: list[dict[str, Any]] = []
+    fake_stream = FakeStream()
+
+    def fake_open_cloud_stream(client: Any, serial: str, **kwargs: Any) -> FakeStream:
+        calls.append({"client": client, "serial": serial, **kwargs})
+        return fake_stream
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", fake_open_cloud_stream)
+    output_file = tmp_path / "stream.bin"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "dump",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--max-packets",
+                "2",
+                "--timeout",
+                "3",
+                "--no-refresh-vtm",
+                "--output",
+                str(output_file),
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "channel": 2,
+            "client_type": 9,
+            "token_index": 0,
+            "refresh_vtm": False,
+            "timeout": 3.0,
+        }
+    ]
+    assert client.closed is True
+    assert fake_stream.closed is True
+    assert output_file.read_bytes() == expected_payload
+
+
+def test_stream_dump_rejects_encrypted_packets_by_default(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    _install_fake_client(monkeypatch)
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            return [
+                VtmPacket(
+                    channel=VtmChannel.ENCRYPTED_STREAM,
+                    length=6,
+                    sequence=1,
+                    message_code=0,
+                    body=b"secret",
+                )
+            ]
+
+    monkeypatch.setattr(
+        cli_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: FakeStream(),
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "dump",
+                "--serial",
+                "CAM123",
+                "--max-packets",
+                "1",
+                "--output",
+                str(tmp_path / "stream.bin"),
+            ]
+        )
+        == 1
+    )
+
+    assert "media decryption is not implemented" in caplog.text
+
+
+def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
+    expected_payload = b"abcdef"
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 2
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=3,
+                    sequence=1,
+                    message_code=0,
+                    body=b"abc",
+                ),
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=3,
+                    sequence=2,
+                    message_code=0,
+                    body=b"def",
+                ),
+            ]
+
+    output = io.BytesIO()
+
+    cli_module._remux_stream_payloads_to_mpegts(  # noqa: SLF001
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=2,
+        allow_encrypted=False,
+    )
+
+    assert output.getvalue() == expected_payload
+
+
+def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    calls: list[dict[str, Any]] = []
+
+    def fake_serve_stream_proxy(args: Any, client: _FakeClient) -> None:
+        calls.append(
+            {
+                "client": client,
+                "serial": args.serial,
+                "channel": args.channel,
+                "listen_host": args.listen_host,
+                "listen_port": args.listen_port,
+                "path": args.path,
+                "ffmpeg_path": args.ffmpeg_path,
+                "refresh_vtm": not args.no_refresh_vtm,
+                "max_packets": args.max_packets,
+            }
+        )
+
+    monkeypatch.setattr(cli_module, "_serve_stream_proxy", fake_serve_stream_proxy)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "proxy",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--listen-host",
+                "0.0.0.0",
+                "--listen-port",
+                "8559",
+                "--path",
+                "/camera.ts",
+                "--ffmpeg-path",
+                sys.executable,
+                "--max-packets",
+                "4",
+                "--no-refresh-vtm",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "channel": 2,
+            "listen_host": "0.0.0.0",
+            "listen_port": 8559,
+            "path": "/camera.ts",
+            "ffmpeg_path": sys.executable,
+            "refresh_vtm": False,
+            "max_packets": 4,
+        }
+    ]
+    assert client.closed is True
+
+
+def test_stream_proxy_path_defaults_to_serial() -> None:
+    assert cli_module._normalize_stream_proxy_path(None, "CAM123") == "/CAM123.ts"  # noqa: SLF001
+    assert cli_module._normalize_stream_proxy_path("camera.ts", "CAM123") == "/camera.ts"  # noqa: SLF001
 
 
 def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, capsys) -> None:

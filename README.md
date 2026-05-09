@@ -102,6 +102,27 @@ name | status | device_category | device_sub_category | sleep | privacy | audio 
 
 The CLI also computes a `switch_flags` map for each device (all switch states by name, e.g. `privacy`, `sleep`, `sound`, `infrared_light`, `light`, etc.).
 
+### stream
+
+Experimental VTM cloud stream helpers. Packet tracing prints sanitized metadata only. Dumping writes stream payload bytes for FFmpeg/proxy experiments and fails on encrypted packets unless `--allow-encrypted` is set.
+
+```bash
+# Inspect stream packet metadata without printing media bytes
+pyezvizapi stream trace --serial ABC123 --channel 1 --max-packets 20 --json-lines
+
+# Dump raw VTM stream payloads to a file
+pyezvizapi stream dump --serial ABC123 --channel 1 --max-packets 500 --output stream.ps
+
+# Pipe directly into FFmpeg and remux to MPEG-TS
+pyezvizapi stream dump --serial ABC123 --channel 1 | \
+  ffmpeg -f mpeg -i pipe:0 -c copy -f mpegts stream.ts
+
+# Serve a local MPEG-TS URL for Home Assistant/FFmpeg clients
+pyezvizapi stream proxy --serial ABC123 --channel 1 --listen-host 0.0.0.0 --listen-port 8558
+```
+
+The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg.
+
 ### camera
 
 Requires `--serial`.

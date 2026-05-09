@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import IntEnum
 from ipaddress import IPv6Address, ip_address
+import socket
 import time
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 from .exceptions import PyEzvizError
@@ -112,6 +115,202 @@ class StopStreamResponse:
     """Decoded fields from a StopStreamRsp protobuf body."""
 
     result: int | None = None
+
+
+SocketFactory = Callable[[tuple[str, int], float | None], Any]
+
+
+class VtmStreamClient:
+    """Experimental synchronous client for the APK-discovered VTM TCP stream.
+
+    This implements the unencrypted VTM framing path observed in the EZVIZ APK:
+    open TCP to the VTM endpoint, send ``StreamInfoReq`` on the message channel,
+    parse ``StreamInfoRsp``, then consume stream-channel packets. Encrypted ECDH
+    packets are surfaced as packets but not decrypted.
+    """
+
+    def __init__(
+        self,
+        stream_url: str,
+        *,
+        timeout: float | None = 10.0,
+        client_version: str = "v3.6.3.20221124",
+        socket_factory: SocketFactory = socket.create_connection,
+    ) -> None:
+        self.stream_url = stream_url
+        self.timeout = timeout
+        self.client_version = client_version
+        self._socket_factory = socket_factory
+        self._socket: Any | None = None
+        self._sequence = 0
+        self.stream_info: StreamInfoResponse | None = None
+
+    def __enter__(self) -> VtmStreamClient:
+        """Open the TCP connection when used as a context manager."""
+
+        return self.connect()
+
+    def __exit__(self, *_exc_info: object) -> None:
+        """Close the TCP connection when leaving a context manager."""
+
+        self.close()
+
+    @property
+    def connected(self) -> bool:
+        """Return True when a socket is currently attached."""
+
+        return self._socket is not None
+
+    def connect(self) -> VtmStreamClient:
+        """Open the VTM TCP connection."""
+
+        if self._socket is not None:
+            return self
+        host, port, _path, _params = parse_vtm_url(self.stream_url)
+        sock = self._socket_factory((host, port), self.timeout)
+        if self.timeout is not None:
+            sock.settimeout(self.timeout)
+        self._socket = sock
+        return self
+
+    def close(self) -> None:
+        """Close the VTM TCP connection."""
+
+        sock = self._socket
+        self._socket = None
+        if sock is not None:
+            sock.close()
+
+    def send_packet(
+        self,
+        body: bytes,
+        *,
+        channel: int = VtmChannel.MESSAGE,
+        message_code: int = VtmMessageCode.STREAMINFO_REQ,
+    ) -> int:
+        """Send a VTM packet and return the sequence number used."""
+
+        sock = self._require_socket()
+        sequence = self._sequence
+        packet = encode_vtm_packet(
+            body,
+            channel=channel,
+            message_code=message_code,
+            sequence=sequence,
+        )
+        sock.sendall(packet)
+        self._sequence = (self._sequence + 1) & 0xFFFF
+        return sequence
+
+    def read_packet(self) -> VtmPacket:
+        """Read one complete VTM packet from the TCP stream."""
+
+        header = decode_vtm_header(self._recv_exact(VTM_HEADER_SIZE))
+        body = self._recv_exact(header.length)
+        return VtmPacket(
+            channel=header.channel,
+            length=header.length,
+            sequence=header.sequence,
+            message_code=header.message_code,
+            body=body,
+        )
+
+    def start(
+        self,
+        *,
+        vtm_stream_key: str | None = None,
+        max_control_packets: int = 20,
+    ) -> StreamInfoResponse:
+        """Request stream info and return the decoded ``StreamInfoRsp``."""
+
+        self.connect()
+        request = build_stream_info_request(
+            self.stream_url,
+            vtm_stream_key=vtm_stream_key,
+            client_version=self.client_version,
+        )
+        self.send_packet(request)
+
+        for _ in range(max_control_packets):
+            packet = self.read_packet()
+            if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
+                self.stream_info = parse_stream_info_response(packet.body)
+                return self.stream_info
+
+        raise PyEzvizError("Timed out waiting for VTM stream info response")
+
+    def send_keepalive(
+        self,
+        stream_ssn: str | None = None,
+        *,
+        message_code: int = VtmMessageCode.KEEPALIVE_REQ,
+    ) -> int:
+        """Send a VTM stream keepalive request."""
+
+        stream_ssn = stream_ssn or (
+            self.stream_info.streamssn if self.stream_info is not None else None
+        )
+        if not stream_ssn:
+            raise PyEzvizError("Cannot send keepalive without a stream session")
+        return self.send_packet(
+            build_stream_keepalive_request(stream_ssn),
+            message_code=message_code,
+        )
+
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+        include_control: bool = False,
+    ) -> Iterator[VtmPacket]:
+        """Yield stream packets from the VTM connection.
+
+        Control packets are normally handled internally. Set ``include_control``
+        to surface them to callers while still iterating over the same TCP feed.
+        """
+
+        seen = 0
+        while max_packets is None or seen < max_packets:
+            packet = self.read_packet()
+            if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
+                self.send_keepalive(message_code=VtmMessageCode.KEEPALIVE_RSP)
+                if include_control:
+                    seen += 1
+                    yield packet
+                continue
+
+            if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+                seen += 1
+                yield packet
+                continue
+
+            if include_control:
+                seen += 1
+                yield packet
+
+    def iter_payloads(self, *, max_packets: int | None = None) -> Iterator[bytes]:
+        """Yield stream packet bodies from the VTM connection."""
+
+        for packet in self.iter_packets(max_packets=max_packets):
+            yield packet.body
+
+    def _require_socket(self) -> Any:
+        sock = self._socket
+        if sock is None:
+            raise PyEzvizError("VTM socket is not connected")
+        return sock
+
+    def _recv_exact(self, length: int) -> bytes:
+        sock = self._require_socket()
+        chunks: list[bytes] = []
+        remaining = length
+        while remaining:
+            chunk = sock.recv(remaining)
+            if not chunk:
+                raise PyEzvizError("VTM socket closed while reading packet")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
 
 def encode_vtm_packet(

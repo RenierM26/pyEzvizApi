@@ -7,13 +7,20 @@ from typing import Any
 import pytest
 import requests
 
+import pyezvizapi
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.cloud_stream import get_cloud_stream_info, get_vtdu_token_v2
+from pyezvizapi.cloud_stream import (
+    get_cloud_stream_info,
+    get_vtdu_token_v2,
+    get_vtm_info,
+    open_cloud_stream,
+)
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 from pyezvizapi.stream import (
     StreamTransport,
     VtmChannel,
     VtmMessageCode,
+    VtmStreamClient,
     build_get_vtdu_info_request,
     build_peer_stream_request,
     build_start_stream_request,
@@ -42,7 +49,30 @@ STOP_STREAM_REQ = b"\x0a\x07ssn-123\x12\x04info"
 STREAM_URL = b"ysproto://vtm:8554/live"
 STREAM_KEY = b"key-1"
 STREAM_KEY_BYTES = b"stream-key"
+VTM_STREAM_URL = b"ysproto://vtm.example.test:8554/live"
 VTDU_TOKEN_BYTES = b"token-1"
+
+
+class FakeVtmSocket:
+    def __init__(self, responses: list[bytes]) -> None:
+        self._buffer = b"".join(responses)
+        self.sent = b""
+        self.timeout: float | None = None
+        self.closed = False
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.timeout = timeout
+
+    def sendall(self, data: bytes) -> None:
+        self.sent += data
+
+    def recv(self, size: int) -> bytes:
+        chunk = self._buffer[:size]
+        self._buffer = self._buffer[size:]
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _jwt(payload: dict[str, Any]) -> str:
@@ -68,6 +98,20 @@ def _http_error(status_code: int) -> HTTPError:
     wrapped = HTTPError()
     wrapped.__cause__ = err
     return wrapped
+
+
+def test_package_exports_vtdu_stream_helpers() -> None:
+    assert pyezvizapi.VtduInfoResponse is not None
+    assert pyezvizapi.VtduStreamResponse is not None
+    assert pyezvizapi.StopStreamResponse is not None
+    assert pyezvizapi.build_get_vtdu_info_request is build_get_vtdu_info_request
+    assert pyezvizapi.build_start_stream_request is build_start_stream_request
+    assert pyezvizapi.build_peer_stream_request is build_peer_stream_request
+    assert pyezvizapi.build_stop_stream_request is build_stop_stream_request
+    assert pyezvizapi.parse_get_vtdu_info_response is parse_get_vtdu_info_response
+    assert pyezvizapi.parse_start_stream_response is parse_start_stream_response
+    assert pyezvizapi.parse_peer_stream_response is parse_peer_stream_response
+    assert pyezvizapi.parse_stop_stream_response is parse_stop_stream_response
 
 
 def test_vtm_packet_roundtrip() -> None:
@@ -317,6 +361,67 @@ def test_detect_transport_and_rtp_payload() -> None:
     assert rtp_payload(rtp) == BODY
 
 
+def test_vtm_stream_client_starts_and_reads_payloads() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    responses = [
+        encode_vtm_packet(
+            stream_info_body,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            sequence=7,
+        ),
+        encode_vtm_packet(
+            build_stream_keepalive_request("ssn-123"),
+            message_code=VtmMessageCode.KEEPALIVE_REQ,
+            sequence=8,
+        ),
+        encode_vtm_packet(
+            b"\x47abc",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=9,
+        ),
+    ]
+    fake_socket = FakeVtmSocket(responses)
+    calls: list[tuple[tuple[str, int], float | None]] = []
+
+    def socket_factory(
+        address: tuple[str, int],
+        timeout: float | None,
+    ) -> FakeVtmSocket:
+        calls.append((address, timeout))
+        return fake_socket
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=3,
+        socket_factory=socket_factory,
+    ) as stream:
+        info = stream.start()
+        payloads = list(stream.iter_payloads(max_packets=1))
+
+    first_sent_length = int.from_bytes(fake_socket.sent[2:4], "big") + 8
+    first_sent = decode_vtm_packet(fake_socket.sent[:first_sent_length])
+    second_start = first_sent.length + 8
+    second_sent = decode_vtm_packet(fake_socket.sent[second_start:])
+
+    assert calls == [(("vtm.example.test", 8554), 3)]
+    assert fake_socket.closed
+    assert info.streamssn == "ssn-123"
+    assert info.vtmstreamkey == "key-1"
+    assert STREAM_URL not in first_sent.body
+    assert VTM_STREAM_URL in first_sent.body
+    assert first_sent.message_code == VtmMessageCode.STREAMINFO_REQ
+    assert second_sent.message_code == VtmMessageCode.KEEPALIVE_RSP
+    assert payloads == [b"\x47abc"]
+
+
+def test_vtm_stream_client_rejects_closed_socket() -> None:
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+
+    with pytest.raises(PyEzvizError, match="not connected"):
+        stream.read_packet()
+
+
 def test_get_vtdu_token_v2_uses_auth_addr_and_session_sign(monkeypatch) -> None:
     client = _client()
     calls: list[dict[str, Any]] = []
@@ -401,6 +506,27 @@ def test_get_vtdu_token_v2_does_not_relogin_after_non_auth_error(monkeypatch) ->
     assert login_calls == 0
 
 
+def test_get_vtm_info_uses_apk_discovered_endpoint() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def _request_json(self, method: str, path: str) -> dict[str, Any]:
+            calls.append((method, path))
+            return {
+                "streamServerConfig": {
+                    "externalIp": "1.2.3.4",
+                    "port": 8554,
+                    "publicKey": {"version": "2", "key": "cHVi"},
+                }
+            }
+
+    info = get_vtm_info(FakeClient(), "CAM123", channel=0)
+
+    assert calls == [("GET", "/v3/streaming/vtm/CAM123/1")]
+    assert info["externalIp"] == "1.2.3.4"
+    assert info["port"] == 8554
+
+
 def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
     client = _client()
 
@@ -437,6 +563,57 @@ def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
     assert info["vtm_public_key"].version == 2
     assert info["vtm_public_key"].key_bytes == PUBLIC_KEY_BYTES
     assert parse_vtm_url(info["stream_url"])[3]["chn"] == "2"
+
+
+def test_get_cloud_stream_info_can_refresh_vtm_from_app_endpoint(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video",
+                    "localIndex": "2",
+                    "streamBizUrl": "serial=CAM123&streamtag=abc",
+                }
+            ],
+            "VTM": {"Video": {"externalIp": "1.2.3.4", "port": 8554}},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_info",
+        lambda _client, _serial, _channel: {"externalIp": "5.6.7.8", "port": 9554},
+    )
+
+    info = get_cloud_stream_info(client, "CAM123", refresh_vtm=True)
+    host, port, _path, _params = parse_vtm_url(info["stream_url"])
+
+    assert host == "5.6.7.8"
+    assert port == 9554
+
+
+def test_open_cloud_stream_returns_unstarted_vtm_client(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_cloud_stream_info",
+        lambda *_args, **_kwargs: {
+            "stream_url": "ysproto://vtm.example.test:8554/live?dev=CAM123"
+        },
+    )
+
+    stream = open_cloud_stream(client, "CAM123", timeout=3)
+
+    assert isinstance(stream, VtmStreamClient)
+    assert stream.stream_url == "ysproto://vtm.example.test:8554/live?dev=CAM123"
+    assert stream.timeout == 3
+    assert not stream.connected
 
 
 def test_get_cloud_stream_info_uses_requested_channel_resource(monkeypatch) -> None:

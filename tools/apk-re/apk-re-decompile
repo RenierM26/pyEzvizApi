@@ -59,7 +59,15 @@ esac
 
 if [[ -n "$output" ]]; then
   if [[ "$output" = /* ]]; then
-    container_out="$output"
+    output_real="$(realpath -m "$output")"
+    case "$output_real" in
+      "$repo_root"/*) container_out="/work/${output_real#"$repo_root/"}" ;;
+      "$repo_root") container_out="/work" ;;
+      *)
+        echo "Absolute output directory must live inside this repo/worktree: $repo_root" >&2
+        exit 1
+        ;;
+    esac
   else
     container_out="/work/discovery/apk/out/$output"
   fi

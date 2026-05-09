@@ -411,7 +411,7 @@ def test_vtm_stream_client_starts_and_reads_payloads() -> None:
     assert STREAM_URL not in first_sent.body
     assert VTM_STREAM_URL in first_sent.body
     assert first_sent.message_code == VtmMessageCode.STREAMINFO_REQ
-    assert second_sent.message_code == VtmMessageCode.KEEPALIVE_REQ
+    assert second_sent.message_code == VtmMessageCode.KEEPALIVE_RSP
     assert payloads == [b"\x47abc"]
 
 

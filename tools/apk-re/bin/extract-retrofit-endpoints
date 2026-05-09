@@ -24,6 +24,12 @@ class Endpoint:
     params: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class KnownApiPaths:
+    exact: frozenset[str]
+    fragments: frozenset[str]
+
+
 def normalize_path(path: str) -> str:
     if not path:
         return "<dynamic-url>"
@@ -34,23 +40,95 @@ def path_key(path: str) -> str:
     return PATH_PARAM.sub("{}", normalize_path(path))
 
 
-def load_known_paths(path: Path | None) -> set[str]:
+def static_path_parts(path: str) -> tuple[str, ...]:
+    return tuple(part for part in PATH_PARAM.split(normalize_path(path)) if part)
+
+
+def _path_expr_key(node: ast.AST, constants: dict[str, str]) -> tuple[str, bool] | None:
+    expression_path = None
+    uses_endpoint = False
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        expression_path = node.value
+    elif isinstance(node, ast.Name) and node.id.startswith("API_ENDPOINT_"):
+        expression_path = constants.get(node.id)
+        uses_endpoint = expression_path is not None
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _path_expr_key(node.left, constants)
+        right = _path_expr_key(node.right, constants)
+        if left is not None and right is not None:
+            expression_path = f"{left[0]}{right[0]}"
+            uses_endpoint = left[1] or right[1]
+    elif isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                resolved = _path_expr_key(value.value, constants)
+                if resolved is None:
+                    parts.append("{}")
+                else:
+                    parts.append(resolved[0])
+                    uses_endpoint = uses_endpoint or resolved[1]
+            else:
+                return None
+        expression_path = "".join(parts)
+    if expression_path is None:
+        return None
+    return expression_path, uses_endpoint
+
+
+def _load_expression_paths(root: Path, constants: dict[str, str]) -> set[str]:
+    paths: set[str] = set()
+    for py_file in root.glob("*.py"):
+        if py_file.name == "api_endpoints.py":
+            continue
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            resolved = _path_expr_key(node, constants)
+            if resolved is not None:
+                expression_path, uses_endpoint = resolved
+                if uses_endpoint and "/" in expression_path:
+                    paths.add(path_key(expression_path))
+    return paths
+
+
+def load_known_paths(path: Path | None) -> KnownApiPaths:
     if path is None or not path.exists():
-        return set()
+        return KnownApiPaths(frozenset(), frozenset())
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    constants: set[str] = set()
+    constants: dict[str, str] = {}
+    exact: set[str] = set()
+    fragments: set[str] = set()
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
-        if not any(isinstance(target, ast.Name) and target.id.startswith("API_ENDPOINT_") for target in node.targets):
+        targets = [
+            target.id
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id.startswith("API_ENDPOINT_")
+        ]
+        if not targets:
             continue
         try:
             value = ast.literal_eval(node.value)
         except (ValueError, SyntaxError):
             continue
         if isinstance(value, str):
-            constants.add(path_key(value))
-    return constants
+            for target in targets:
+                constants[target] = value
+            normalized = normalize_path(value)
+            exact.add(path_key(normalized))
+            fragments.add(normalized)
+    exact.update(_load_expression_paths(path.parent, constants))
+    return KnownApiPaths(frozenset(exact), frozenset(fragments))
+
+
+def is_implemented(path: str, known_paths: KnownApiPaths) -> bool:
+    if path_key(path) in known_paths.exact:
+        return True
+    parts = static_path_parts(path)
+    return len(parts) > 1 and all(part in known_paths.fragments for part in parts)
 
 
 def extract_params(signature: str) -> tuple[str, ...]:
@@ -88,18 +166,18 @@ def extract_from_file(path: Path, root: Path) -> list[Endpoint]:
     return endpoints
 
 
-def markdown(endpoints: list[Endpoint], known_paths: set[str]) -> str:
+def markdown(endpoints: list[Endpoint], known_paths: KnownApiPaths) -> str:
     rows = [
         "# Retrofit Endpoint Inventory",
         "",
         f"- Extracted endpoints: {len(endpoints)}",
-        f"- Exact paths already present in pyezvizapi: {sum(1 for item in endpoints if path_key(item.path) in known_paths)}",
+        f"- Paths detected in pyezvizapi: {sum(1 for item in endpoints if is_implemented(item.path, known_paths))}",
         "",
         "| Implemented | Method | Path | Java method | Params | Source |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for item in sorted(endpoints, key=lambda endpoint: (endpoint.path, endpoint.http_method, endpoint.source)):
-        implemented = "yes" if path_key(item.path) in known_paths else "no"
+        implemented = "yes" if is_implemented(item.path, known_paths) else "no"
         params = ", ".join(item.params)
         rows.append(
             f"| {implemented} | {item.http_method} | `{item.path}` | `{item.java_method}` | `{params}` | `{item.source}` |"

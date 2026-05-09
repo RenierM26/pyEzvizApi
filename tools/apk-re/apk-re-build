@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-docker build -t pyezviz-apk-re:local -f tools/apk-re/Dockerfile tools/apk-re
+image="${APK_RE_IMAGE:-pyezviz-apk-re:local}"
+docker build -t "$image" -f tools/apk-re/Dockerfile tools/apk-re

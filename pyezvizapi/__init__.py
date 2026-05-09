@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         VtmMessageCode,
         VtmPacket,
         VtmStreamClient,
+        VtmTraceEvent,
         build_get_vtdu_info_request,
         build_peer_stream_request,
         build_start_stream_request,
@@ -108,6 +109,7 @@ if TYPE_CHECKING:
         parse_stream_info_response,
         parse_vtm_url,
         rtp_payload,
+        summarize_vtm_packet,
     )
     from .test_cam_rtsp import TestRTSPAuth
 
@@ -153,6 +155,7 @@ _EXPORTS = {
     "VtmMessageCode": "stream",
     "VtmPacket": "stream",
     "VtmStreamClient": "stream",
+    "VtmTraceEvent": "stream",
     "build_device_records_map": "models",
     "build_get_vtdu_info_request": "stream",
     "build_peer_stream_request": "stream",
@@ -199,6 +202,7 @@ _EXPORTS = {
     "port_security_port_enabled": "feature",
     "resolve_channel": "feature",
     "rtp_payload": "stream",
+    "summarize_vtm_packet": "stream",
     "supplement_light_available": "feature",
     "supplement_light_enabled": "feature",
     "supplement_light_params": "feature",

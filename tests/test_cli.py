@@ -239,6 +239,94 @@ def test_unifiedmsg_urls_only_extracts_media_urls(monkeypatch, tmp_path, capsys)
     ]
 
 
+def test_stream_trace_outputs_sanitized_json_lines(monkeypatch, tmp_path, capsys) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+
+    class FakeEvent:
+        def __init__(self, index: int, encrypted: bool) -> None:
+            self.index = index
+            self.encrypted = encrypted
+
+        def as_dict(self) -> dict[str, Any]:
+            return {
+                "index": self.index,
+                "channel": 11 if self.encrypted else 0,
+                "channel_name": "ENCRYPTED_STREAM" if self.encrypted else "MESSAGE",
+                "length": 12,
+                "sequence": self.index + 7,
+                "message_code": 330 if self.encrypted else 316,
+                "message_name": "STREAM_VTMSTREAM_ECDH_NOTIFY"
+                if self.encrypted
+                else "STREAMINFO_RSP",
+                "encrypted": self.encrypted,
+                "transport": "UNKNOWN",
+            }
+
+    class FakeStream:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            self.closed = True
+
+        def trace_packets(self, *, max_packets: int) -> list[FakeEvent]:
+            assert max_packets == 2
+            return [FakeEvent(0, False), FakeEvent(1, True)]
+
+    calls: list[dict[str, Any]] = []
+    fake_stream = FakeStream()
+
+    def fake_open_cloud_stream(client: Any, serial: str, **kwargs: Any) -> FakeStream:
+        calls.append({"client": client, "serial": serial, **kwargs})
+        return fake_stream
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", fake_open_cloud_stream)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "trace",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--max-packets",
+                "2",
+                "--timeout",
+                "3",
+                "--no-refresh-vtm",
+                "--json-lines",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "channel": 2,
+            "client_type": 9,
+            "token_index": 0,
+            "refresh_vtm": False,
+            "timeout": 3.0,
+        }
+    ]
+    assert client.closed is True
+    assert fake_stream.closed is True
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[0]["message_name"] == "STREAMINFO_RSP"
+    assert output[1]["encrypted"] is True
+    assert "body" not in output[1]
+
+
 def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, capsys) -> None:
     class UnifiedClient(_FakeClient):
         def get_device_messages_list(self, **_kwargs: Any) -> dict[str, Any]:

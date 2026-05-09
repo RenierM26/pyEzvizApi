@@ -302,7 +302,7 @@ def _auth_base_url(client: Any) -> str:
 
     auth_addr = str(service_urls.get("authAddr", "")).strip()
     if _missing_auth_addr(auth_addr):
-        raise PyEzvizError("Missing authAddr in service URLs")
+        auth_addr = _derive_auth_addr(token)
     if not auth_addr.startswith(("http://", "https://")):
         auth_addr = f"https://{auth_addr}"
     parsed = urlparse(auth_addr)
@@ -320,3 +320,18 @@ def _missing_auth_addr(value: Any) -> bool:
         candidate = f"https://{candidate}"
     parsed = urlparse(candidate)
     return (parsed.hostname or "").lower() in {"", "none", "null"}
+
+
+def _derive_auth_addr(token: Any) -> str:
+    """Derive the auth service host when system info returns a null authAddr."""
+
+    api_url = str(token.get("api_url", "") if isinstance(token, dict) else "").strip()
+    parsed = urlparse(api_url if "://" in api_url else f"https://{api_url}")
+    host = parsed.hostname or ""
+    prefix = "apii"
+    suffix = ".ezvizlife.com"
+    if host.startswith(prefix) and host.endswith(suffix):
+        region = host[len(prefix) : -len(suffix)]
+        if region:
+            return f"https://{region}auth.ezvizlife.com"
+    raise PyEzvizError("Missing authAddr in service URLs")

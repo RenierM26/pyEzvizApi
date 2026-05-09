@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from .camera import EzvizCamera
 from .client import EzvizClient
+from .cloud_stream import open_cloud_stream
 from .constants import BatteryCameraWorkMode, DefenseModeType, DeviceSwitchType
 from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 from .light_bulb import EzvizLightBulb
@@ -287,6 +288,57 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--urls-only",
         action="store_true",
         help="Print only deviceSerial + media URLs instead of full metadata",
+    )
+
+    parser_stream = subparsers.add_parser(
+        "stream",
+        help="Experimental VTM cloud stream helpers",
+    )
+    subparsers_stream = parser_stream.add_subparsers(dest="stream_action")
+    parser_stream_trace = subparsers_stream.add_parser(
+        "trace",
+        help="Trace sanitized VTM packet metadata for a camera",
+    )
+    parser_stream_trace.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_stream_trace.add_argument(
+        "--channel",
+        type=int,
+        default=None,
+        help="Camera channel/local index (default: first matching VTM resource)",
+    )
+    parser_stream_trace.add_argument(
+        "--max-packets",
+        type=int,
+        default=20,
+        help="Number of incoming VTM packets to summarize (default: 20)",
+    )
+    parser_stream_trace.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_trace.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type used in the ysproto URL (default: 9)",
+    )
+    parser_stream_trace.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index to use from /vtdutoken2 (default: 0)",
+    )
+    parser_stream_trace.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing via /v3/streaming/vtm",
+    )
+    parser_stream_trace.add_argument(
+        "--json-lines",
+        action="store_true",
+        help="Print one JSON object per trace event instead of a JSON array",
     )
 
     return parser.parse_args(argv)
@@ -581,6 +633,35 @@ def _handle_mqtt(_: argparse.Namespace, client: EzvizClient) -> int:
     return 0
 
 
+def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle experimental stream helpers."""
+
+    if args.stream_action != "trace":
+        _LOGGER.error("Action not implemented, try running with -h switch for help")
+        return 2
+
+    with open_cloud_stream(
+        client,
+        args.serial,
+        channel=args.channel,
+        client_type=args.client_type,
+        token_index=args.token_index,
+        refresh_vtm=not args.no_refresh_vtm,
+        timeout=args.timeout,
+    ) as stream:
+        events = [
+            event.as_dict()
+            for event in stream.trace_packets(max_packets=args.max_packets)
+        ]
+
+    if args.json_lines:
+        for event in events:
+            sys.stdout.write(json.dumps(event, sort_keys=True) + "\n")
+    else:
+        _write_json(events)
+    return 0
+
+
 def _handle_camera(args: argparse.Namespace, client: EzvizClient) -> int:
     """Handle `camera` subcommands (status/move/unlock/switch/alarm/select)."""
     camera = EzvizCamera(client, args.serial)
@@ -705,6 +786,8 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_home_defence_mode(args, client)
         if args.action == "mqtt":
             return _handle_mqtt(args, client)
+        if args.action == "stream":
+            return _handle_stream(args, client)
         if args.action == "camera":
             return _handle_camera(args, client)
         if args.action == "pagelist":

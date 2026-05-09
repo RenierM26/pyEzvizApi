@@ -881,32 +881,35 @@ def _remux_stream_payloads_to_mpegts(
 ) -> None:
     """Remux VTM MPEG-PS payloads to MPEG-TS and write them to output."""
 
-    process = subprocess.Popen(
-        [
-            ffmpeg_path,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "mpeg",
-            "-i",
-            "pipe:0",
-            "-c",
-            "copy",
-            "-f",
-            "mpegts",
-            "pipe:1",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        process = subprocess.Popen(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "mpeg",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
     stdin = process.stdin
     stdout = process.stdout
     if stdin is None or stdout is None:
         raise PyEzvizError("Could not open FFmpeg pipes")
 
-    writer_errors: list[BaseException] = []
+    writer_errors: list[Exception] = []
 
     def _write_input() -> None:
         try:
@@ -919,8 +922,8 @@ def _remux_stream_payloads_to_mpegts(
                 flush_each=True,
             )
         except (BrokenPipeError, ConnectionResetError):
-            pass
-        except BaseException as err:  # pragma: no cover - defensive thread handoff
+            _LOGGER.debug("FFmpeg closed its input pipe")
+        except Exception as err:  # pragma: no cover - defensive thread handoff
             writer_errors.append(err)
         finally:
             with suppress(OSError):

@@ -1,6 +1,7 @@
 # Ezviz PyPi
 
 ![Upload Python Package](https://github.com/RenierM26/pyEzvizApi/workflows/Upload%20Python%20Package/badge.svg)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-renierm-yellow?logo=buymeacoffee)](https://www.buymeacoffee.com/renierm)
 
 ## Overview
 

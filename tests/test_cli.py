@@ -642,6 +642,29 @@ def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
     assert output.getvalue() == expected_payload
 
 
+def test_remux_stream_payloads_to_mpegts_wraps_ffmpeg_launch_failure() -> None:
+    output = io.BytesIO()
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            return []
+
+    try:
+        cli_module._remux_stream_payloads_to_mpegts(  # noqa: SLF001
+            FakeStream(),
+            output,
+            ffmpeg_path="/does/not/exist/ffmpeg",
+            max_packets=2,
+            duration_seconds=None,
+            allow_encrypted=False,
+        )
+    except PyEzvizError as err:
+        assert "Could not launch FFmpeg" in str(err)
+        assert "/does/not/exist/ffmpeg" in str(err)
+    else:
+        raise AssertionError("Expected PyEzvizError")
+
+
 def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
     fake_client = _install_fake_client(monkeypatch)
     calls: list[dict[str, Any]] = []

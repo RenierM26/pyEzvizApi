@@ -4,7 +4,7 @@ import importlib.util
 import io
 import json
 import sys
-from typing import Any, ClassVar, cast
+from typing import Any, BinaryIO, ClassVar, cast
 
 from cli_fakes import (
     FakeClient as _FakeClient,
@@ -396,6 +396,8 @@ def test_stream_dump_writes_payload_bytes_to_file(monkeypatch, tmp_path) -> None
                 "--no-refresh-vtm",
                 "--output",
                 str(output_file),
+                "--format",
+                "raw",
             ]
         )
         == 0
@@ -416,6 +418,128 @@ def test_stream_dump_writes_payload_bytes_to_file(monkeypatch, tmp_path) -> None
     assert client.closed is True
     assert fake_stream.closed is True
     assert output_file.read_bytes() == expected_payload
+
+
+def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
+    _install_fake_client(monkeypatch)
+    expected_payload = b"mpegts"
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_remux(
+        stream: FakeStream,
+        output: BinaryIO,
+        *,
+        ffmpeg_path: str,
+        max_packets: int | None,
+        duration_seconds: float | None,
+        allow_encrypted: bool,
+    ) -> None:
+        calls.append(
+            {
+                "stream": stream,
+                "ffmpeg_path": ffmpeg_path,
+                "max_packets": max_packets,
+                "duration_seconds": duration_seconds,
+                "allow_encrypted": allow_encrypted,
+            }
+        )
+        output.write(expected_payload)
+
+    monkeypatch.setattr(
+        cli_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: FakeStream(),
+    )
+    monkeypatch.setattr(cli_module, "_remux_stream_payloads_to_mpegts", fake_remux)
+    output_file = tmp_path / "stream.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "dump",
+                "--serial",
+                "CAM123",
+                "--duration",
+                "2min",
+                "--ffmpeg-path",
+                "ffmpeg-custom",
+                "--output",
+                str(output_file),
+            ]
+        )
+        == 0
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["ffmpeg_path"] == "ffmpeg-custom"
+    assert calls[0]["max_packets"] is None
+    assert calls[0]["duration_seconds"] == cli_module._parse_duration_seconds("2min")  # noqa: SLF001
+    assert calls[0]["allow_encrypted"] is False
+    assert output_file.read_bytes() == expected_payload
+
+
+def test_parse_stream_dump_duration_units() -> None:
+    cases = {
+        "30": 30.0,
+        "30s": 30.0,
+        "1m": 60.0,
+        "2min": 120.0,
+    }
+    for value, expected in cases.items():
+        assert cli_module._parse_duration_seconds(value) == expected  # noqa: SLF001
+    assert cli_module._parse_duration_seconds("0") is None  # noqa: SLF001
+
+
+def test_write_stream_payloads_stops_after_duration() -> None:
+    expected_payload = b"abc"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets is None
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=3,
+                    sequence=1,
+                    message_code=0,
+                    body=b"abc",
+                ),
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=3,
+                    sequence=2,
+                    message_code=0,
+                    body=b"def",
+                ),
+            ]
+
+    times = iter([100.0, 100.5, 101.5])
+    output = io.BytesIO()
+
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        FakeStream(),
+        output,
+        max_packets=None,
+        duration_seconds=1.0,
+        allow_encrypted=False,
+        monotonic=lambda: next(times),
+    )
+
+    assert output.getvalue() == expected_payload
 
 
 def test_stream_dump_rejects_encrypted_packets_by_default(
@@ -463,6 +587,8 @@ def test_stream_dump_rejects_encrypted_packets_by_default(
                 "1",
                 "--output",
                 str(tmp_path / "stream.bin"),
+                "--format",
+                "raw",
             ]
         )
         == 1
@@ -509,6 +635,7 @@ def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
         output,
         ffmpeg_path=str(fake_ffmpeg),
         max_packets=2,
+        duration_seconds=None,
         allow_encrypted=False,
     )
 

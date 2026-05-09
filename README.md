@@ -104,24 +104,24 @@ The CLI also computes a `switch_flags` map for each device (all switch states by
 
 ### stream
 
-Experimental VTM cloud stream helpers. Packet tracing prints sanitized metadata only. Dumping writes stream payload bytes for FFmpeg/proxy experiments and fails on encrypted packets unless `--allow-encrypted` is set.
+Experimental VTM cloud stream helpers. Packet tracing prints sanitized metadata only. Dumping writes VLC-friendly MPEG-TS by default using FFmpeg `-c copy` remuxing only, with `--format raw` available for unchanged VTM payloads. Encrypted packets fail unless `--allow-encrypted` is set.
 
 ```bash
 # Inspect stream packet metadata without printing media bytes
 pyezvizapi stream trace --serial ABC123 --channel 1 --max-packets 20 --json-lines
 
-# Dump raw VTM stream payloads to a file
-pyezvizapi stream dump --serial ABC123 --channel 1 --max-packets 500 --output stream.ps
+# Dump a VLC-playable MPEG-TS capture to a file
+pyezvizapi stream dump --serial ABC123 --channel 1 --duration 1m --output stream.ts
 
-# Pipe directly into FFmpeg and remux to MPEG-TS
-pyezvizapi stream dump --serial ABC123 --channel 1 | \
+# Pipe raw MPEG-PS payloads directly into FFmpeg and remux to MPEG-TS
+pyezvizapi stream dump --serial ABC123 --channel 1 --format raw | \
   ffmpeg -f mpeg -i pipe:0 -c copy -f mpegts stream.ts
 
 # Serve a local MPEG-TS URL for Home Assistant/FFmpeg clients
 pyezvizapi stream proxy --serial ABC123 --channel 1 --listen-host 0.0.0.0 --listen-port 8558
 ```
 
-The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg.
+The dump command captures one minute by default. Use `--duration 30s`, `--duration 2min`, or `--duration 0` for unlimited capture; `--max-packets` can still be used as an additional stop limit. MPEG-TS output requires FFmpeg and remuxes the camera payload with codec copy only; it does not transcode video or audio. The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg.
 
 ### camera
 

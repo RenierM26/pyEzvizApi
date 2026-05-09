@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 from threading import Thread
+import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import urlparse
 
@@ -42,6 +43,54 @@ class StreamProxyConfig:
     ffmpeg_path: str
     allow_encrypted: bool
     max_packets: int | None
+
+
+def _parse_duration_seconds(value: str) -> float | None:
+    """Parse a CLI duration value into seconds."""
+
+    text = value.strip().lower()
+    if text in {"0", "none", "unlimited"}:
+        return None
+
+    multipliers = {
+        "s": 1.0,
+        "sec": 1.0,
+        "secs": 1.0,
+        "second": 1.0,
+        "seconds": 1.0,
+        "m": 60.0,
+        "min": 60.0,
+        "mins": 60.0,
+        "minute": 60.0,
+        "minutes": 60.0,
+        "h": 3600.0,
+        "hr": 3600.0,
+        "hrs": 3600.0,
+        "hour": 3600.0,
+        "hours": 3600.0,
+    }
+
+    multiplier = 1.0
+    for suffix, suffix_multiplier in sorted(
+        multipliers.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        if text.endswith(suffix):
+            number = text[: -len(suffix)].strip()
+            multiplier = suffix_multiplier
+            break
+    else:
+        number = text
+
+    try:
+        duration = float(number) * multiplier
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"invalid duration: {value}") from err
+
+    if duration <= 0:
+        raise argparse.ArgumentTypeError("duration must be positive, or 0 for unlimited")
+    return duration
 
 
 def _setup_logging(debug: bool) -> None:
@@ -380,6 +429,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Stop after this many stream packets (default: run until interrupted)",
     )
     parser_stream_dump.add_argument(
+        "--duration",
+        type=_parse_duration_seconds,
+        default=60.0,
+        help=(
+            "Stop after this capture duration; accepts seconds or units like "
+            "30s/1m/2min (default: 1m, use 0 for unlimited)"
+        ),
+    )
+    parser_stream_dump.add_argument(
         "--timeout",
         type=float,
         default=10.0,
@@ -406,6 +464,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output",
         default="-",
         help="Output file for stream bytes, or '-' for stdout (default: -)",
+    )
+    parser_stream_dump.add_argument(
+        "--format",
+        choices=("mpegts", "raw"),
+        default="mpegts",
+        help="Output container format: mpegts is VLC-friendly and remuxes with codec copy; raw writes VTM payloads unchanged (default: mpegts)",
+    )
+    parser_stream_dump.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
     )
     parser_stream_dump.add_argument(
         "--allow-encrypted",
@@ -776,12 +845,20 @@ def _write_stream_payloads(
     output: BinaryIO,
     *,
     max_packets: int | None,
+    duration_seconds: float | None = None,
     allow_encrypted: bool,
     flush_each: bool = False,
+    monotonic: Any = time.monotonic,
 ) -> None:
     """Write VTM stream packet bodies to a binary file-like object."""
 
+    deadline = None
+    if duration_seconds is not None:
+        deadline = monotonic() + duration_seconds
+
     for packet in stream.iter_packets(max_packets=max_packets):
+        if deadline is not None and monotonic() >= deadline:
+            break
         if packet.encrypted and not allow_encrypted:
             raise PyEzvizError(
                 "Received encrypted VTM stream packet; "
@@ -799,6 +876,7 @@ def _remux_stream_payloads_to_mpegts(
     *,
     ffmpeg_path: str,
     max_packets: int | None,
+    duration_seconds: float | None = None,
     allow_encrypted: bool,
 ) -> None:
     """Remux VTM MPEG-PS payloads to MPEG-TS and write them to output."""
@@ -836,6 +914,7 @@ def _remux_stream_payloads_to_mpegts(
                 stream,
                 cast(BinaryIO, stdin),
                 max_packets=max_packets,
+                duration_seconds=duration_seconds,
                 allow_encrypted=allow_encrypted,
                 flush_each=True,
             )
@@ -975,20 +1054,42 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
         if args.stream_action == "dump":
             stream.start()
             if args.output == "-":
-                _write_stream_payloads(
-                    stream,
-                    sys.stdout.buffer,
-                    max_packets=args.max_packets,
-                    allow_encrypted=args.allow_encrypted,
-                )
-            else:
-                with Path(args.output).open("wb") as output:
+                if args.format == "raw":
                     _write_stream_payloads(
                         stream,
-                        output,
+                        sys.stdout.buffer,
                         max_packets=args.max_packets,
+                        duration_seconds=args.duration,
                         allow_encrypted=args.allow_encrypted,
                     )
+                else:
+                    _remux_stream_payloads_to_mpegts(
+                        stream,
+                        sys.stdout.buffer,
+                        ffmpeg_path=args.ffmpeg_path,
+                        max_packets=args.max_packets,
+                        duration_seconds=args.duration,
+                        allow_encrypted=args.allow_encrypted,
+                    )
+            else:
+                with Path(args.output).open("wb") as output:
+                    if args.format == "raw":
+                        _write_stream_payloads(
+                            stream,
+                            output,
+                            max_packets=args.max_packets,
+                            duration_seconds=args.duration,
+                            allow_encrypted=args.allow_encrypted,
+                        )
+                    else:
+                        _remux_stream_payloads_to_mpegts(
+                            stream,
+                            output,
+                            ffmpeg_path=args.ffmpeg_path,
+                            max_packets=args.max_packets,
+                            duration_seconds=args.duration,
+                            allow_encrypted=args.allow_encrypted,
+                        )
             return 0
 
         events = [

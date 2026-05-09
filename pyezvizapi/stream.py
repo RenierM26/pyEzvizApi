@@ -240,24 +240,40 @@ class VtmStreamClient:
         *,
         vtm_stream_key: str | None = None,
         max_control_packets: int = 20,
+        max_redirects: int = 3,
     ) -> StreamInfoResponse:
         """Request stream info and return the decoded ``StreamInfoRsp``."""
 
-        self.connect()
-        request = build_stream_info_request(
-            self.stream_url,
-            vtm_stream_key=vtm_stream_key,
-            client_version=self.client_version,
-        )
-        self.send_packet(request)
+        redirect_count = 0
+        while True:
+            self.connect()
+            request = build_stream_info_request(
+                self.stream_url,
+                vtm_stream_key=vtm_stream_key,
+                client_version=self.client_version,
+            )
+            self.send_packet(request)
 
-        for _ in range(max_control_packets):
-            packet = self.read_packet()
-            if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
-                self.stream_info = parse_stream_info_response(packet.body)
-                return self.stream_info
-
-        raise PyEzvizError("Timed out waiting for VTM stream info response")
+            for _ in range(max_control_packets):
+                packet = self.read_packet()
+                if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
+                    self.stream_info = parse_stream_info_response(packet.body)
+                    redirect_url = self.stream_info.streamurl
+                    redirect_key = self.stream_info.vtmstreamkey
+                    if (
+                        self.stream_info.result
+                        and redirect_url
+                        and redirect_key
+                        and redirect_count < max_redirects
+                    ):
+                        self.close()
+                        self.stream_url = redirect_url
+                        vtm_stream_key = redirect_key
+                        redirect_count += 1
+                        break
+                    return self.stream_info
+            else:
+                raise PyEzvizError("Timed out waiting for VTM stream info response")
 
     def send_keepalive(
         self,
@@ -319,6 +335,7 @@ class VtmStreamClient:
         *,
         max_packets: int = 20,
         vtm_stream_key: str | None = None,
+        max_redirects: int = 3,
     ) -> list[VtmTraceEvent]:
         """Return sanitized packet summaries from the VTM connection.
 
@@ -332,21 +349,46 @@ class VtmStreamClient:
         if max_packets < 1:
             raise PyEzvizError("VTM trace must request at least one packet")
 
-        self.connect()
-        request = build_stream_info_request(
-            self.stream_url,
-            vtm_stream_key=vtm_stream_key,
-            client_version=self.client_version,
-        )
-        self.send_packet(request)
-
         events: list[VtmTraceEvent] = []
-        for index in range(max_packets):
+        redirect_count = 0
+        while len(events) < max_packets:
+            self.connect()
+            request = build_stream_info_request(
+                self.stream_url,
+                vtm_stream_key=vtm_stream_key,
+                client_version=self.client_version,
+            )
+            self.send_packet(request)
+
             packet = self.read_packet()
-            events.append(summarize_vtm_packet(packet, index=index))
+            events.append(summarize_vtm_packet(packet, index=len(events)))
             if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
                 self.stream_info = parse_stream_info_response(packet.body)
+                redirect_url = self.stream_info.streamurl
+                redirect_key = self.stream_info.vtmstreamkey
+                if (
+                    self.stream_info.result
+                    and redirect_url
+                    and redirect_key
+                    and redirect_count < max_redirects
+                    and len(events) < max_packets
+                ):
+                    self.close()
+                    self.stream_url = redirect_url
+                    vtm_stream_key = redirect_key
+                    redirect_count += 1
+                    continue
             elif packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
+                self.send_packet(
+                    packet.body,
+                    message_code=VtmMessageCode.KEEPALIVE_RSP,
+                )
+            break
+
+        while len(events) < max_packets:
+            packet = self.read_packet()
+            events.append(summarize_vtm_packet(packet, index=len(events)))
+            if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
                 self.send_packet(
                     packet.body,
                     message_code=VtmMessageCode.KEEPALIVE_RSP,

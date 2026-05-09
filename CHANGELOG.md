@@ -11,6 +11,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 ### Added
 
 - Added cloud stream bootstrap helpers for VTM pagelist metadata, VTDU token retrieval, VTM/VTDU packet framing, `ysproto` URL handling, limited stream protobuf parsing, RTP payload extraction, and transport detection.
+- Added VTM server public-key extraction plus native VTDU protobuf helpers for `GetVtduInfo`, `StartStream`, `PeerStream`, and `StopStream` stream-control messages.
+- Added a Docker-based APK reverse-engineering lab and EZVIZ VTDU/VTM streaming notes to support future stream protocol work.
 - Added sanitized full pagelist fixture coverage for `get_device_infos()` and `load_devices(refresh=False)` so the parser is tested against a realistic cloud response without live EZVIZ credentials.
 
 ### Changed

@@ -114,6 +114,7 @@ from .constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_UNIFIEDMSG_STYPE,
     FEATURE_CODE,
+    HIK_ENCRYPTION_HEADER,
     MAX_RETRIES,
     REQUEST_HEADER,
     DefenseModeType,
@@ -131,7 +132,7 @@ from .exceptions import (
 from .feature import optionals_mapping
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
-from .utils import convert_to_dict, deep_merge
+from .utils import convert_to_dict, decrypt_image, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -2649,6 +2650,46 @@ class EzvizClient:
             )
 
         raise PyEzvizError("Could not get camera encryption key: exceeded retries")
+
+    def download_alarm_image(
+        self,
+        image_url: str,
+        serial: str | None = None,
+        *,
+        encryption_key: str | None = None,
+        smscode: str | int | None = None,
+        decrypt: bool = True,
+        max_retries: int = 0,
+    ) -> bytes:
+        """Download an alarm image and decrypt EZVIZ/Hik encrypted payloads.
+
+        Encrypted alarm snapshots contain the ``hikencodepicture`` header. When
+        that header is present and no explicit ``encryption_key`` is supplied,
+        ``serial`` is used to fetch the camera encryption key from the EZVIZ API.
+        """
+
+        resp = self._http_request(
+            "GET",
+            image_url,
+            retry_401=False,
+            max_retries=0,
+        )
+        image_data = resp.content
+        if (
+            not decrypt
+            or not image_data
+            or HIK_ENCRYPTION_HEADER not in image_data[:256]
+        ):
+            return image_data
+
+        key = encryption_key
+        if key is None:
+            if not serial:
+                raise PyEzvizError(
+                    "Camera serial or encryption key is required to decrypt image"
+                )
+            key = self.get_cam_key(serial, smscode=smscode, max_retries=max_retries)
+        return decrypt_image(image_data, key)
 
     def get_cam_auth_code(
         self,

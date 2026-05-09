@@ -11,6 +11,7 @@ import requests
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import (
     FEATURE_CODE,
+    HIK_ENCRYPTION_HEADER,
     DefenseModeType,
     DeviceSwitchType,
     UnifiedMessageSubtype,
@@ -40,6 +41,14 @@ def _response(*, status_code: int = 200, text: str = '{"meta": {"code": 200}}') 
     resp.status_code = status_code
     resp._content = text.encode()
     resp.url = "https://api.example.test/path"
+    return resp
+
+
+def _binary_response(content: bytes) -> requests.Response:
+    resp = requests.Response()
+    resp.status_code = 200
+    resp._content = content
+    resp.url = "https://image.example.test/alarm.jpg"
     return resp
 
 
@@ -2406,6 +2415,82 @@ def test_get_cam_key_retries_and_returns_encrypt_key(monkeypatch) -> None:
     }
     assert calls[0]["retry_401"] is True
     assert calls[0]["max_retries"] == 0
+
+
+def test_download_alarm_image_returns_plain_image_without_key_lookup(monkeypatch) -> None:
+    client = _client()
+    plain_payload = b"plain-jpeg-bytes"
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        assert method == "GET"
+        assert url == "https://image.example.test/plain.jpg"
+        assert kwargs["retry_401"] is False
+        return _binary_response(plain_payload)
+
+    def fail_get_cam_key(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("plain images should not fetch the camera key")
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+    monkeypatch.setattr(client, "get_cam_key", fail_get_cam_key)
+
+    assert client.download_alarm_image("https://image.example.test/plain.jpg") == plain_payload
+
+
+def test_download_alarm_image_fetches_key_and_decrypts_encrypted_payload(monkeypatch) -> None:
+    client = _client()
+    encrypted_payload = HIK_ENCRYPTION_HEADER + b"x" * 64
+    decrypted_payload = b"decrypted-jpeg"
+    calls: dict[str, Any] = {}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        calls["http"] = {"method": method, "url": url, **kwargs}
+        return _binary_response(encrypted_payload)
+
+    def fake_get_cam_key(serial: str, **kwargs: Any) -> str:
+        calls["key"] = {"serial": serial, **kwargs}
+        return "ENC123"
+
+    def fake_decrypt_image(image_data: bytes, password: str) -> bytes:
+        calls["decrypt"] = {"image_data": image_data, "password": password}
+        return decrypted_payload
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+    monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
+    monkeypatch.setattr("pyezvizapi.client.decrypt_image", fake_decrypt_image)
+
+    assert (
+        client.download_alarm_image(
+            "https://image.example.test/encrypted.jpg",
+            "CAM123",
+            smscode=123456,
+            max_retries=2,
+        )
+        == decrypted_payload
+    )
+    assert calls["http"]["retry_401"] is False
+    assert calls["key"] == {
+        "serial": "CAM123",
+        "smscode": 123456,
+        "max_retries": 2,
+    }
+    assert calls["decrypt"] == {
+        "image_data": encrypted_payload,
+        "password": "ENC123",
+    }
+
+
+def test_download_alarm_image_requires_serial_or_key_for_encrypted_payload(
+    monkeypatch,
+) -> None:
+    client = _client()
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        return _binary_response(HIK_ENCRYPTION_HEADER + b"x" * 64)
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    with pytest.raises(PyEzvizError, match="Camera serial or encryption key"):
+        client.download_alarm_image("https://image.example.test/encrypted.jpg")
 
 
 def test_get_cam_key_maps_special_errors(monkeypatch) -> None:

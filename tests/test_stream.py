@@ -765,6 +765,44 @@ def test_get_vtdu_token_v2_recomputes_auth_after_login(monkeypatch) -> None:
     assert calls[1]["retry_401"] is False
 
 
+def test_get_vtdu_token_v2_derives_auth_addr_when_service_returns_null(
+    monkeypatch,
+) -> None:
+    client = EzvizClient(
+        token={
+            "session_id": _jwt({"s": "sign-value"}),
+            "api_url": "apiieu.ezvizlife.com",
+            "service_urls": {"authAddr": "https://null"},
+        },
+        timeout=1,
+    )
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers: dict[str, str] = {}
+            self.content = b"{}"
+            self.text = "{}"
+
+        def json(self) -> dict[str, Any]:
+            return {"retcode": 0, "tokens": ["token-1"], "msg": "ok"}
+
+    def fake_get_service_urls() -> dict[str, Any]:
+        return {"authAddr": "https://null"}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"method": method, "url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr(client, "get_service_urls", fake_get_service_urls)
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert get_vtdu_token_v2(client).get("tokens") == ["token-1"]
+    assert calls[0]["url"] == "https://euauth.ezvizlife.com/vtdutoken2"
+    assert client.export_token()["service_urls"]["authAddr"] == "https://null"
+
+
 def test_get_vtdu_token_v2_does_not_relogin_after_non_auth_error(monkeypatch) -> None:
     client = _client()
     login_calls = 0

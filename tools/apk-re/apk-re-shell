@@ -37,6 +37,7 @@ fi
 exec docker run --rm "${tty_args[@]}" \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \
+  -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
   -v "$host_repo_root:/work" \
   -w /work \
   --security-opt no-new-privileges \

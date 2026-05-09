@@ -1068,7 +1068,15 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
         def log_message(self, format: str, *args: Any) -> None:
             _LOGGER.info("stream proxy: " + format, *args)
 
-    server = ThreadingHTTPServer((args.listen_host, args.listen_port), StreamProxyHandler)
+    try:
+        server = ThreadingHTTPServer(
+            (args.listen_host, args.listen_port),
+            StreamProxyHandler,
+        )
+    except OSError as err:
+        raise PyEzvizError(
+            f"Could not bind stream proxy to {args.listen_host}:{args.listen_port}: {err}"
+        ) from err
     url = f"http://{args.listen_host}:{args.listen_port}{config.path}"
     _LOGGER.info("Serving VTM stream proxy at %s", url)
     try:

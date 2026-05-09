@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import io
 import json
@@ -792,6 +793,37 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
 
     assert handler.responses == []
     assert handler.errors == [(502, "Could not launch FFmpeg")]
+
+
+def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:
+    def fake_server(*_args: object, **_kwargs: object) -> None:
+        raise OSError("Address already in use")
+
+    monkeypatch.setattr(cli_module, "ThreadingHTTPServer", fake_server)
+
+    args = argparse.Namespace(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        no_refresh_vtm=False,
+        timeout=None,
+        path=None,
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=False,
+        max_packets=None,
+        listen_host="127.0.0.1",
+        listen_port=8558,
+    )
+
+    try:
+        cli_module._serve_stream_proxy(args, cast(Any, object()))  # noqa: SLF001
+    except PyEzvizError as err:
+        message = str(err)
+        assert "Could not bind stream proxy to 127.0.0.1:8558" in message
+        assert "Address already in use" in message
+    else:
+        raise AssertionError("Expected PyEzvizError")
 
 
 def test_unifiedmsg_table_output_handles_empty_response(monkeypatch, tmp_path, capsys) -> None:

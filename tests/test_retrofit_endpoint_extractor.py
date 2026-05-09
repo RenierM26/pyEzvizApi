@@ -27,6 +27,7 @@ def test_known_paths_match_exact_and_composed_fragments(tmp_path: Path) -> None:
             [
                 'API_ENDPOINT_DEVICES = "/v3/devices/"',
                 'API_ENDPOINT_PTZCONTROL = "/ptzControl"',
+                'API_ENDPOINT_VIDEO_ENCRYPT = "/encryptedInfo/risk"',
                 'API_ENDPOINT_STREAMING_VTM = "/v3/streaming/vtm/{device_serial}/{channel_no}"',
             ]
         ),
@@ -37,6 +38,7 @@ def test_known_paths_match_exact_and_composed_fragments(tmp_path: Path) -> None:
 
     assert extractor.is_implemented("/v3/streaming/vtm/{deviceSerial}/{channelNo}", known_paths)
     assert extractor.is_implemented("/v3/devices/{deviceSerial}/ptzControl", known_paths)
+    assert extractor.is_implemented("/v3/devices/encryptedInfo/risk", known_paths)
     assert not extractor.is_implemented("/v3/devices/{deviceSerial}/unknown", known_paths)
 
 

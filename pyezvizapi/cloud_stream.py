@@ -9,10 +9,10 @@ import json
 from typing import Any, TypedDict, cast
 from urllib.parse import urlparse
 
-from .api_endpoints import API_ENDPOINT_VTDU_TOKEN_V2
+from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError
-from .stream import build_vtm_url
+from .stream import SocketFactory, VtmStreamClient, build_vtm_url
 
 JsonDict = dict[str, Any]
 
@@ -32,6 +32,34 @@ class VtmServerPublicKey:
     version: int
     key: str
     key_bytes: bytes
+
+
+def get_vtm_info(client: Any, serial: str, channel: int = 1) -> JsonDict:
+    """Fetch the app's current VTM server metadata for a camera channel.
+
+    The Android app uses ``GET v3/streaming/vtm/{deviceSerial}/{channelNo}``
+    and stores the returned ``streamServerConfig`` before starting the native
+    player. Channel ``0`` is normalized to ``1`` to match the app.
+    """
+
+    channel_no = 1 if channel == 0 else channel
+    if channel_no < 1:
+        raise PyEzvizError("VTM channel must be greater than zero")
+
+    payload = cast(
+        JsonDict,
+        client._request_json(
+            "GET",
+            API_ENDPOINT_STREAMING_VTM.format(
+                device_serial=serial,
+                channel_no=channel_no,
+            ),
+        ),
+    )
+    server_config = payload.get("streamServerConfig")
+    if not isinstance(server_config, dict):
+        raise PyEzvizError(f"VTM response is missing streamServerConfig: {payload}")
+    return cast(JsonDict, server_config)
 
 
 def get_vtdu_token_v2(client: Any, max_retries: int = 0) -> VtduTokenResponse:
@@ -79,6 +107,7 @@ def get_cloud_stream_info(
     channel: int | None = None,
     client_type: int = 9,
     token_index: int = 0,
+    refresh_vtm: bool = False,
 ) -> JsonDict:
     """Build VTM stream bootstrap metadata for a camera.
 
@@ -116,6 +145,9 @@ def get_cloud_stream_info(
         local_index_text = str(local_index)
         stream_channel = int(local_index_text) if local_index_text.isdigit() else 1
 
+    if refresh_vtm:
+        vtm = {**vtm, **get_vtm_info(client, serial, stream_channel)}
+
     host = vtm.get("externalIp") or vtm.get("domain") or vtm.get("internalIp")
     if not isinstance(host, str) or not host.strip():
         raise PyEzvizError(f"Could not find VTM endpoint for resource {resource_id}")
@@ -142,6 +174,40 @@ def get_cloud_stream_info(
         "vtdu_token": vtdu_token,
         "stream_url": stream_url,
     }
+
+
+def open_cloud_stream(
+    client: Any,
+    serial: str,
+    *,
+    channel: int | None = None,
+    client_type: int = 9,
+    token_index: int = 0,
+    refresh_vtm: bool = True,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory | None = None,
+) -> VtmStreamClient:
+    """Return a VTM TCP client bootstrapped from EZVIZ cloud metadata.
+
+    The returned client is not started automatically. Use ``with`` and call
+    ``start()`` before reading packets.
+    """
+
+    info = get_cloud_stream_info(
+        client,
+        serial,
+        channel=channel,
+        client_type=client_type,
+        token_index=token_index,
+        refresh_vtm=refresh_vtm,
+    )
+    if socket_factory is None:
+        return VtmStreamClient(info["stream_url"], timeout=timeout)
+    return VtmStreamClient(
+        info["stream_url"],
+        timeout=timeout,
+        socket_factory=socket_factory,
+    )
 
 
 def parse_vtm_server_public_key(vtm: JsonDict) -> VtmServerPublicKey | None:

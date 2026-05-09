@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: inspect-so <library.so> [output-dir]" >&2
+  exit 2
+fi
+
+so="$1"
+out="${2:-$(dirname "$so")/$(basename "$so").analysis}"
+
+if [[ ! -f "$so" ]]; then
+  echo "Shared library not found: $so" >&2
+  exit 1
+fi
+
+mkdir -p "$out"
+file "$so" > "$out/file.txt"
+sha256sum "$so" > "$out/sha256.txt"
+readelf -h "$so" > "$out/readelf-header.txt" 2>&1 || true
+readelf -d "$so" > "$out/readelf-dynamic.txt" 2>&1 || true
+readelf -Ws "$so" > "$out/readelf-symbols.txt" 2>&1 || true
+nm -D --defined-only "$so" > "$out/nm-defined.txt" 2>&1 || true
+strings -a -n 6 "$so" > "$out/strings.txt" 2>&1 || true
+llvm-objdump -T "$so" > "$out/llvm-dynamic-symbols.txt" 2>&1 || true
+llvm-objdump -d --no-show-raw-insn "$so" > "$out/disassembly.txt" 2>&1 || true
+
+cat <<DONE
+Native analysis written to: $out
+Key files:
+  strings.txt
+  readelf-symbols.txt
+  disassembly.txt
+DONE

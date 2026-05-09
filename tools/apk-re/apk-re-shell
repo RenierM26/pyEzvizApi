@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+image="${APK_RE_IMAGE:-pyezviz-apk-re:local}"
+host_repo_root="${APK_RE_HOST_REPO_ROOT:-}"
+if [[ -z "$host_repo_root" ]]; then
+  host_workspace="/srv/openclaw/workspace"
+  if command -v docker >/dev/null 2>&1; then
+    detected_workspace="$(
+      docker inspect openclaw \
+        --format '{{range .Mounts}}{{if eq .Destination "/home/node/.openclaw/workspace"}}{{.Source}}{{end}}{{end}}' \
+        2>/dev/null || true
+    )"
+    if [[ -n "$detected_workspace" ]]; then
+      host_workspace="$detected_workspace"
+    fi
+  fi
+  case "$repo_root" in
+    /home/node/.openclaw/workspace/*)
+      host_repo_root="$host_workspace/${repo_root#/home/node/.openclaw/workspace/}"
+      ;;
+    /home/node/.openclaw/workspace)
+      host_repo_root="$host_workspace"
+      ;;
+    *)
+      host_repo_root="$repo_root"
+      ;;
+  esac
+fi
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  "$repo_root/tools/apk-re/apk-re-build"
+fi
+tty_args=()
+if [[ -t 0 && -t 1 ]]; then
+  tty_args=(-it)
+fi
+exec docker run --rm "${tty_args[@]}" \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -v "$host_repo_root:/work" \
+  -w /work \
+  --security-opt no-new-privileges \
+  "$image" "$@"

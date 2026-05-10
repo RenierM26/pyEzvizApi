@@ -990,34 +990,61 @@ def decrypt_hikvision_ps_video(
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
     output = bytearray(data)
+    pending_block_positions: list[int] = []
+    pending_block = bytearray()
+    active_nal = False
     find_nal_start_codes = (
         _find_h264_nal_start_codes
         if nalu_header_size == 1
         else _find_hevc_nal_start_codes
     )
 
+    def reset_nal_state() -> None:
+        nonlocal active_nal
+        pending_block_positions.clear()
+        pending_block.clear()
+        active_nal = False
+
+    def decrypt_nal_body_segment(start: int, end: int) -> None:
+        if end <= start:
+            return
+        for pos in range(start, end):
+            pending_block_positions.append(pos)
+            pending_block.append(output[pos])
+            if len(pending_block) != AES.block_size:
+                continue
+            cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
+            decrypted = cipher.decrypt(bytes(pending_block))
+            for block_pos, decrypted_byte in zip(
+                pending_block_positions,
+                decrypted,
+                strict=True,
+            ):
+                output[block_pos] = decrypted_byte
+            pending_block_positions.clear()
+            pending_block.clear()
+
     for payload_start, payload_end in _video_pes_payload_ranges(data):
         nal_starts = find_nal_start_codes(data, payload_start, payload_end)
+        segment_start = payload_start
+        if not nal_starts:
+            if active_nal:
+                decrypt_nal_body_segment(payload_start, payload_end)
+            continue
+
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
+            if active_nal and segment_start < start_code_pos:
+                decrypt_nal_body_segment(segment_start, start_code_pos)
+            reset_nal_state()
+            active_nal = True
             decrypt_start = start_code_pos + start_code_len + nalu_header_size
             decrypt_end = (
                 nal_starts[idx + 1][0]
                 if idx + 1 < len(nal_starts)
                 else payload_end
             )
-            length = decrypt_end - decrypt_start
-            if length < AES.block_size:
-                continue
-            block_length = length - (length % AES.block_size)
-            for block_start in range(
-                decrypt_start,
-                decrypt_start + block_length,
-                AES.block_size,
-            ):
-                cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
-                output[block_start : block_start + AES.block_size] = cipher.decrypt(
-                    bytes(output[block_start : block_start + AES.block_size])
-                )
+            decrypt_nal_body_segment(decrypt_start, decrypt_end)
+            segment_start = decrypt_end
 
     return bytes(output)
 

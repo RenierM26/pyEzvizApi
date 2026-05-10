@@ -2493,6 +2493,97 @@ def test_download_alarm_image_requires_serial_or_key_for_encrypted_payload(
         client.download_alarm_image("https://image.example.test/encrypted.jpg")
 
 
+def test_download_cloud_video_fetches_direct_http_url(monkeypatch) -> None:
+    client = _client()
+    payload = b"video-bytes"
+    calls: dict[str, Any] = {}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        calls.update({"method": method, "url": url, **kwargs})
+        return _binary_response(payload)
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert (
+        client.download_cloud_video(
+            {
+                "seqId": 12345,
+                "downloadInfo": {"fileUrl": "https://video.example.test/clip.ps"},
+            },
+            max_retries=2,
+        )
+        == payload
+    )
+    assert calls == {
+        "method": "GET",
+        "url": "https://video.example.test/clip.ps",
+        "retry_401": False,
+        "max_retries": 2,
+    }
+
+
+def test_download_cloud_video_ignores_nested_thumbnail_url(monkeypatch) -> None:
+    client = _client()
+    payload = b"video-bytes"
+    calls: dict[str, Any] = {}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        calls.update({"method": method, "url": url, **kwargs})
+        return _binary_response(payload)
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert (
+        client.download_cloud_video(
+            {
+                "seqId": 12345,
+                "cover": {"url": "https://image.example.test/cover.jpg"},
+                "downloadInfo": {"fileUrl": "https://video.example.test/clip.ps"},
+            }
+        )
+        == payload
+    )
+    assert calls["url"] == "https://video.example.test/clip.ps"
+
+
+def test_download_cloud_video_accepts_generic_url_in_media_container(
+    monkeypatch,
+) -> None:
+    client = _client()
+    payload = b"video-bytes"
+    calls: dict[str, Any] = {}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        calls.update({"method": method, "url": url, **kwargs})
+        return _binary_response(payload)
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert (
+        client.download_cloud_video(
+            {
+                "seqId": 12345,
+                "cover": {"url": "https://image.example.test/cover.jpg"},
+                "video": {"url": "https://video.example.test/clip.ps"},
+            }
+        )
+        == payload
+    )
+    assert calls["url"] == "https://video.example.test/clip.ps"
+
+
+def test_download_cloud_video_rejects_native_stream_descriptor() -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="direct HTTP\\(S\\) download URL"):
+        client.download_cloud_video(
+            {
+                "seqId": 12345,
+                "streamUrl": "hweustreamer.ezvizlife.com:32723",
+            }
+        )
+
+
 def test_get_cam_key_maps_special_errors(monkeypatch) -> None:
     client = _client()
 
@@ -2764,6 +2855,64 @@ def test_black_level_time_plan_and_record_helpers_build_requests(monkeypatch) ->
         size=50,
         max_retries=4,
     )["meta"]["code"] == 200
+    assert client.search_records_v2(
+        "CAM123",
+        2,
+        "2026-04-27T08:00:00Z",
+        "2026-04-27T09:00:00Z",
+        size=10,
+        sort_by=1,
+        require_label=1,
+        max_retries=5,
+    )["meta"]["code"] == 200
+    assert client.search_common_records(
+        "CAM123",
+        2,
+        "2026-04-27T08:00:00Z",
+        "2026-04-27T09:00:00Z",
+        channel_serial="CHAN123",
+        record_type=2,
+        size=11,
+        version=3,
+        max_retries=6,
+    )["meta"]["code"] == 200
+    assert client.search_intelligent_records(
+        "CAM123",
+        2,
+        "2026-04-27T08:00:00Z",
+        "2026-04-27T09:00:00Z",
+        version=4,
+        record_filter='{"person":true}',
+        max_retries=7,
+    )["meta"]["code"] == 200
+    assert client.get_cloud_videos(
+        "CAM123",
+        2,
+        limit=5,
+        video_type=-1,
+        support_multi_channel_shared_service=1,
+        max_retries=8,
+    )["meta"]["code"] == 200
+    assert client.get_cloud_video_details(
+        "CAM123",
+        2,
+        [
+            {
+                "seqId": 12345,
+                "startTime": "2026-04-27 08:00:00",
+                "stopTime": "2026-04-27 08:01:00",
+                "storageVersion": 2,
+            }
+        ],
+        support_multi_channel_shared_service=1,
+        max_retries=9,
+    )["meta"]["code"] == 200
+    assert client.get_camera_ticket_info(
+        "CAM123",
+        2,
+        support_multi_channel_shared_service=1,
+        max_retries=10,
+    )["meta"]["code"] == 200
 
     assert calls[0]["method"] == "GET"
     assert calls[0]["path"].endswith("CAM123")
@@ -2795,7 +2944,102 @@ def test_black_level_time_plan_and_record_helpers_build_requests(monkeypatch) ->
         "size": 50,
     }
     assert calls[4]["max_retries"] == 4
+    assert calls[5]["method"] == "GET"
+    assert calls[5]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "startTime": "2026-04-27T08:00:00Z",
+        "stopTime": "2026-04-27T09:00:00Z",
+        "size": 10,
+        "sortBy": 1,
+        "requireLabel": 1,
+    }
+    assert calls[5]["max_retries"] == 5
+    assert calls[6]["method"] == "GET"
+    assert calls[6]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "startTime": "2026-04-27T08:00:00Z",
+        "stopTime": "2026-04-27T09:00:00Z",
+        "recordType": 2,
+        "size": 11,
+        "version": 3,
+        "channelSerial": "CHAN123",
+    }
+    assert calls[6]["max_retries"] == 6
+    assert calls[7]["method"] == "GET"
+    assert calls[7]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "startTime": "2026-04-27T08:00:00Z",
+        "stopTime": "2026-04-27T09:00:00Z",
+        "version": 4,
+        "filter": '{"person":true}',
+    }
+    assert calls[7]["max_retries"] == 7
+    assert calls[8]["method"] == "GET"
+    assert calls[8]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "limit": 5,
+        "videoType": -1,
+        "supportMultiChannelSharedService": 1,
+    }
+    assert calls[8]["max_retries"] == 8
+    assert calls[9]["method"] == "POST"
+    assert calls[9]["json_body"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "supportMultiChannelSharedService": 1,
+        "videos": [
+            {
+                "seqId": 12345,
+                "startTime": "2026-04-27 08:00:00",
+                "stopTime": "2026-04-27 08:01:00",
+                "storageVersion": 2,
+            }
+        ],
+    }
+    assert calls[9]["max_retries"] == 9
+    assert calls[10]["method"] == "GET"
+    assert calls[10]["params"] == {
+        "deviceSerial": "CAM123",
+        "channelNo": 2,
+        "supportMultiChannelSharedService": 1,
+    }
+    assert calls[10]["max_retries"] == 10
     assert all(call["retry_401"] is True for call in calls)
+
+
+def test_get_cloud_video_details_defaults_missing_storage_version(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_cloud_video_details(
+        "CAM123",
+        2,
+        [
+            {
+                "seqId": 12345,
+                "startTime": "2026-04-27 08:00:00",
+                "stopTime": "2026-04-27 08:01:00",
+            }
+        ],
+    )["meta"]["code"] == 200
+    assert calls[0]["json_body"]["videos"] == [
+        {
+            "seqId": 12345,
+            "startTime": "2026-04-27 08:00:00",
+            "stopTime": "2026-04-27 08:01:00",
+            "storageVersion": 2,
+        }
+    ]
 
 
 def test_time_plan_and_record_helpers_raise_contextual_errors(monkeypatch) -> None:
@@ -2817,6 +3061,35 @@ def test_time_plan_and_record_helpers_raise_contextual_errors(monkeypatch) -> No
 
     with pytest.raises(PyEzvizError, match="Could not search records"):
         client.search_records("CAM123", 2, "CHAN123", "start", "stop")
+
+    with pytest.raises(PyEzvizError, match="Could not search v2 records"):
+        client.search_records_v2("CAM123", 2, "start", "stop")
+
+    with pytest.raises(PyEzvizError, match="Could not search common records"):
+        client.search_common_records("CAM123", 2, "start", "stop")
+
+    with pytest.raises(PyEzvizError, match="Could not search intelligent records"):
+        client.search_intelligent_records("CAM123", 2, "start", "stop")
+
+    with pytest.raises(PyEzvizError, match="Could not get cloud videos"):
+        client.get_cloud_videos("CAM123", 2)
+
+    with pytest.raises(PyEzvizError, match="Could not get cloud video details"):
+        client.get_cloud_video_details(
+            "CAM123",
+            2,
+            [
+                {
+                    "seqId": 12345,
+                    "startTime": "start",
+                    "stopTime": "stop",
+                    "storageVersion": 2,
+                }
+            ],
+        )
+
+    with pytest.raises(PyEzvizError, match="Could not get camera ticket info"):
+        client.get_camera_ticket_info("CAM123", 2)
 
 
 def test_search_device_builds_prepared_request(monkeypatch) -> None:

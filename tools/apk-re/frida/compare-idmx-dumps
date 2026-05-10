@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Summarize native IDMX before/after Frida dump pairs."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from pathlib import Path
+import argparse
+
+
+PAIR_LABELS = (
+    ("idmx-aes-frame-before", "idmx-aes-frame-after"),
+    ("idmx-aes-frame-com-before", "idmx-aes-frame-com-after"),
+    ("idmx-process-encrypt-before", "idmx-process-encrypt-after"),
+)
+
+
+def dump_label(path: Path) -> str | None:
+    name = path.name
+    for before, after in PAIR_LABELS:
+        if before in name:
+            return before
+        if after in name:
+            return after
+    return None
+
+
+def first_diff(a: bytes, b: bytes) -> int | None:
+    for idx, (left, right) in enumerate(zip(a, b, strict=False)):
+        if left != right:
+            return idx
+    if len(a) != len(b):
+        return min(len(a), len(b))
+    return None
+
+
+def changed_ranges(a: bytes, b: bytes, *, limit: int = 8) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    start: int | None = None
+    max_len = max(len(a), len(b))
+    for idx in range(max_len):
+        left = a[idx] if idx < len(a) else None
+        right = b[idx] if idx < len(b) else None
+        if left != right and start is None:
+            start = idx
+        elif left == right and start is not None:
+            ranges.append((start, idx))
+            start = None
+            if len(ranges) >= limit:
+                return ranges
+    if start is not None:
+        ranges.append((start, max_len))
+    return ranges
+
+
+def nal_types(data: bytes) -> dict[int, int]:
+    counts: dict[int, int] = defaultdict(int)
+    pos = 0
+    while pos < len(data) - 5:
+        sc_len = 0
+        if data[pos : pos + 4] == b"\x00\x00\x00\x01":
+            sc_len = 4
+        elif data[pos : pos + 3] == b"\x00\x00\x01":
+            sc_len = 3
+        if sc_len:
+            header = pos + sc_len
+            if header + 1 < len(data):
+                counts[(data[header] >> 1) & 0x3F] += 1
+            pos += sc_len
+        else:
+            pos += 1
+    return dict(sorted(counts.items()))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("dump_dir", type=Path)
+    args = parser.parse_args()
+
+    files_by_label: dict[str, list[Path]] = defaultdict(list)
+    for path in sorted(args.dump_dir.rglob("*.bin")):
+        label = dump_label(path)
+        if label:
+            files_by_label[label].append(path)
+
+    found = False
+    for before_label, after_label in PAIR_LABELS:
+        befores = files_by_label.get(before_label, [])
+        afters = files_by_label.get(after_label, [])
+        for idx, (before_path, after_path) in enumerate(zip(befores, afters, strict=False), start=1):
+            before = before_path.read_bytes()
+            after = after_path.read_bytes()
+            diff = first_diff(before, after)
+            found = True
+            print(f"{before_label} pair {idx}")
+            print(f"  before: {before_path}")
+            print(f"  after:  {after_path}")
+            print(f"  sizes:  {len(before)} -> {len(after)}")
+            print(f"  first_diff: {diff}")
+            print(f"  changed_ranges: {changed_ranges(before, after)}")
+            print(f"  before_nal_types: {nal_types(before)}")
+            print(f"  after_nal_types:  {nal_types(after)}")
+
+    if not found:
+        print(f"No IDMX before/after dump pairs found under {args.dump_dir}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

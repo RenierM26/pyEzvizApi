@@ -12,7 +12,14 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added VTM server public-key extraction plus native VTDU protobuf helpers for `GetVtduInfo`, `StartStream`, `PeerStream`, and `StopStream` stream-control messages.
 - Added a sanitized VTM trace harness and CLI command for live stream diagnostics without exposing packet bodies, tokens, or keys.
 - Added experimental VTM stream dump/proxy CLI commands and README usage for writing VLC-friendly one-minute MPEG-TS captures by default, raw payload dumps on request, or serving a local FFmpeg-remuxed MPEG-TS URL.
+- Added Hikvision/EZVIZ MPEG-PS video payload decryption for `stream dump --decrypt-video` and `stream proxy --decrypt-video`, covering battery-camera streams that keep the VTM channel clear but encrypt HEVC/H.264 NAL bodies.
+- Added cloud video list/detail client helpers plus `cloud_videos` and `cloud_video_download` CLI commands for exploring and saving EZVIZ cloud clip media when the API returns a direct HTTP(S) URL.
+- Added `get_camera_ticket_info()` for the `/v3/cameras/ticketInfo` ticket used by the native cloud-storage download path.
+- Added pure-Python cloud `.tmp` PS/NAL decryption through `cloud_video_decrypt`.
+- Added pure-Python EZVIZ cloud replay download support for regular cloud-storage `streamUrl` clips, so `cloud_video_download` can fetch encrypted `.tmp` bytes without Android/Frida and decrypt them locally.
+- Added SD-card playback record helpers plus the `sdcard_videos` CLI for probing the EZVIZ app's v2/common/intelligent record-list endpoints.
 - Added alarm image download/decrypt helper support for EZVIZ/Hik encrypted snapshot payloads.
+- Added the Android/Frida native cloud-download bridge as a diagnostic-only helper under `tools/apk-re/bin`, outside the installed package CLI.
 
 ### Changed
 

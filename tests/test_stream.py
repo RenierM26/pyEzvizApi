@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 from typing import Any
 
@@ -22,6 +23,7 @@ from pyezvizapi.stream import (
     VtmMessageCode,
     VtmStreamClient,
     VtmTraceEvent,
+    _find_hevc_nal_start_codes,
     build_get_vtdu_info_request,
     build_peer_stream_request,
     build_start_stream_request,
@@ -30,8 +32,12 @@ from pyezvizapi.stream import (
     build_stream_keepalive_request,
     build_vtm_url,
     decode_vtm_packet,
+    decrypt_hikvision_ps_video,
     detect_transport,
+    download_ezviz_cloud_replay,
     encode_vtm_packet,
+    mpeg_ps_complete_prefix_length,
+    mpeg_ps_decryptable_prefix_length,
     parse_get_vtdu_info_response,
     parse_peer_stream_response,
     parse_start_stream_response,
@@ -43,6 +49,7 @@ from pyezvizapi.stream import (
 )
 
 BODY = b"abc"
+stream_module = importlib.import_module("pyezvizapi.stream")
 CAMERA_SERIAL_BYTES = b"CAM123"
 KEEPALIVE_REQ = b"\x0a\x07ssn-123"
 PEER_HOST_BYTES = b"peerhost"
@@ -373,6 +380,385 @@ def test_detect_transport_and_rtp_payload() -> None:
     assert detect_transport(b"\x47...") == StreamTransport.MPEG_TS
     assert detect_transport(rtp) == StreamTransport.RTP
     assert rtp_payload(rtp) == BODY
+
+
+def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
+    key = "camera-key"
+    clear_body = b"fedcba9876543210" * 2
+    encrypted_body = bytes.fromhex(
+        "71ec10ded9beb3a19fcdd7205152d6c6"
+        "71ec10ded9beb3a19fcdd7205152d6c6"
+    )
+    clear_payload = b"\x00\x00\x00\x01\x65" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x65" + encrypted_body
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=1)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_handles_all_video_pes_stream_ids() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
+    pes = (
+        b"\x00\x00\x01\xe1"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe1"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_bounds_zero_length_pes_at_next_ps_packet() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_payload
+    audio_pes = b"\x00\x00\x01\xc0\x00\x04keep"
+
+    assert (
+        decrypt_hikvision_ps_video(video_pes + audio_pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + clear_payload + audio_pes
+    )
+
+
+def test_decrypt_hikvision_ps_video_carries_nal_body_across_pes_packets() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    encrypted_first = b"\x00\x00\x00\x01\x42\x01" + encrypted_body[:20]
+    encrypted_second = encrypted_body[20:]
+    clear_first = b"\x00\x00\x00\x01\x42\x01" + clear_body[:20]
+    clear_second = clear_body[20:]
+    first_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_first) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_first
+    )
+    second_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_second) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_second
+    )
+
+    assert decrypt_hikvision_ps_video(first_pes + second_pes, key) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_first) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_first
+        + b"\x00\x00\x01\xe0"
+        + (len(clear_second) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_second
+    )
+
+
+def test_decrypt_hikvision_ps_video_bounds_adjacent_zero_length_pes_packets() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    encrypted_first = b"\x00\x00\x00\x01\x42\x01" + encrypted_body[:20]
+    encrypted_second = encrypted_body[20:]
+    clear_first = b"\x00\x00\x00\x01\x42\x01" + clear_body[:20]
+    clear_second = clear_body[20:]
+    first_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_first
+    second_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_second
+    audio_pes = b"\x00\x00\x01\xc0\x00\x04keep"
+
+    assert decrypt_hikvision_ps_video(first_pes + second_pes + audio_pes, key) == (
+        b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
+        + clear_first
+        + b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
+        + clear_second
+        + audio_pes
+    )
+
+
+def test_mpeg_ps_complete_prefix_ignores_ciphertext_start_code_lookalikes() -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + (
+        b"ciphertext"
+        b"\x00\x00\x01\xe0\x00\x04"
+        b"tail"
+    )
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_payload
+    audio_pes = b"\x00\x00\x01\xc0\x00\x07\x80\x00\x00keep"
+
+    assert mpeg_ps_complete_prefix_length(pack + video_pes) == len(pack)
+    assert mpeg_ps_complete_prefix_length(pack + video_pes + audio_pes) == len(
+        pack + video_pes + audio_pes
+    )
+
+
+def test_mpeg_ps_complete_prefix_ignores_ciphertext_pack_header_lookalikes() -> None:
+    invalid_pack_lookalike = b"\x00\x00\x01\xba" + b"\xff" * 20
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        b"ciphertext"
+        + invalid_pack_lookalike
+        + b"tail"
+    )
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_payload
+    audio_pes = b"\x00\x00\x01\xc0\x00\x07\x80\x00\x00keep"
+
+    assert mpeg_ps_complete_prefix_length(video_pes + audio_pes) == len(video_pes + audio_pes)
+
+
+def test_mpeg_ps_decryptable_prefix_keeps_trailing_video_pes_run() -> None:
+    first_video_pes = b"\x00\x00\x01\xe0\x00\x08\x80\x00\x00first"
+    second_video_pes = b"\x00\x00\x01\xe0\x00\x09\x80\x00\x00second"
+    audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes) == 0
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes) == 0
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes + audio_pes) == len(
+        first_video_pes + second_video_pes + audio_pes
+    )
+
+
+def test_mpeg_ps_decryptable_prefix_keeps_all_trailing_video_stream_ids() -> None:
+    first_video_pes = b"\x00\x00\x01\xe1\x00\x08\x80\x00\x00first"
+    second_video_pes = b"\x00\x00\x01\xe2\x00\x09\x80\x00\x00second"
+    audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes) == 0
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes) == 0
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes + audio_pes) == len(
+        first_video_pes + second_video_pes + audio_pes
+    )
+
+
+def test_mpeg_ps_decryptable_prefix_flushes_before_trailing_video_pes() -> None:
+    audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+    video_pes = b"\x00\x00\x01\xe0\x00\x08\x80\x00\x00video"
+
+    assert mpeg_ps_decryptable_prefix_length(audio_pes + video_pes) == len(audio_pes)
+
+
+def test_download_ezviz_cloud_replay_preserves_type_2_media(monkeypatch) -> None:
+    expected_payload = b"firstsecond"
+    messages = [
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>1</Type></Response>",
+            data=b"first",
+            md5_ok=True,
+            result=0,
+            data_type=1,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>2</Type></Response>",
+            data=b"second",
+            md5_ok=True,
+            result=0,
+            data_type=2,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>100</Type></Response>",
+            data=b"",
+            md5_ok=True,
+            result=0,
+            data_type=100,
+        ),
+    ]
+
+    class FakeSocket:
+        def __enter__(self) -> FakeSocket:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+    class FakeSslContext:
+        minimum_version: object
+
+        def wrap_socket(self, raw_socket: FakeSocket, *, server_hostname: str) -> FakeSocket:
+            assert server_hostname == "cloud.example.test"
+            return raw_socket
+
+    def fake_read_cloud_replay_message(
+        _tls_socket: FakeSocket,
+        _buffer: bytes,
+    ) -> tuple[Any, bytes]:
+        return messages.pop(0), b""
+
+    monkeypatch.setattr(
+        stream_module.socket,
+        "create_connection",
+        lambda address, timeout: FakeSocket(),
+    )
+    monkeypatch.setattr(
+        stream_module.ssl,
+        "create_default_context",
+        FakeSslContext,
+    )
+    monkeypatch.setattr(
+        stream_module,
+        "_read_cloud_replay_message",
+        fake_read_cloud_replay_message,
+    )
+
+    assert (
+        download_ezviz_cloud_replay(
+            stream_url="cloud.example.test:32723",
+            ticket="ticket",
+            serial="CAM123",
+            channel=1,
+            seq_id=123,
+            begin_cas="20260509T215000Z",
+            end_cas="20260509T215010Z",
+        )
+        == expected_payload
+    )
+
+
+def test_download_ezviz_cloud_replay_rejects_short_download(monkeypatch) -> None:
+    messages = [
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>1</Type></Response>",
+            data=b"short",
+            md5_ok=True,
+            result=0,
+            data_type=1,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>100</Type></Response>",
+            data=b"",
+            md5_ok=True,
+            result=0,
+            data_type=100,
+        ),
+    ]
+
+    class FakeSocket:
+        def __enter__(self) -> FakeSocket:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+    class FakeSslContext:
+        minimum_version: object
+
+        def wrap_socket(self, raw_socket: FakeSocket, *, server_hostname: str) -> FakeSocket:
+            assert server_hostname == "cloud.example.test"
+            return raw_socket
+
+    def fake_read_cloud_replay_message(
+        _tls_socket: FakeSocket,
+        _buffer: bytes,
+    ) -> tuple[Any, bytes]:
+        return messages.pop(0), b""
+
+    monkeypatch.setattr(
+        stream_module.socket,
+        "create_connection",
+        lambda address, timeout: FakeSocket(),
+    )
+    monkeypatch.setattr(
+        stream_module.ssl,
+        "create_default_context",
+        FakeSslContext,
+    )
+    monkeypatch.setattr(
+        stream_module,
+        "_read_cloud_replay_message",
+        fake_read_cloud_replay_message,
+    )
+
+    with pytest.raises(PyEzvizError, match="ended before expected file size"):
+        download_ezviz_cloud_replay(
+            stream_url="cloud.example.test:32723",
+            ticket="ticket",
+            serial="CAM123",
+            channel=1,
+            seq_id=123,
+            begin_cas="20260509T215000Z",
+            end_cas="20260509T215010Z",
+            file_size=6,
+        )
+
+
+def test_find_hevc_nal_start_codes_ignores_ciphertext_start_code_lookalikes() -> None:
+    payload = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x01\xe0ciphertext-lookalike"
+        b"\x00\x00\x01\x26\x01idr"
+    )
+
+    assert _find_hevc_nal_start_codes(payload, 0, len(payload)) == [(0, 4), (33, 3)]
 
 
 def test_vtm_stream_client_starts_and_reads_payloads() -> None:

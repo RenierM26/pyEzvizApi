@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+host="${1:-${EZVIZ_ANDROID_HOST:-}}"
+package="${2:-com.ezviz}"
+
+status=0
+
+echo "== local tools =="
+for tool in adb frida frida-ps; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    printf "%-8s %s\n" "$tool" "$(command -v "$tool")"
+  else
+    echo "$tool missing"
+    status=1
+  fi
+done
+
+echo
+echo "== adb devices =="
+adb devices -l || status=1
+
+if [[ -n "$host" ]]; then
+  echo
+  echo "== tcp probes for $host =="
+  for port in 5555 27042 27043; do
+    if timeout 2 bash -c "</dev/tcp/$host/$port" >/dev/null 2>&1; then
+      echo "$host:$port open"
+    else
+      echo "$host:$port closed"
+    fi
+  done
+fi
+
+echo
+echo "== frida usb =="
+usb_output="$(timeout 5 frida-ps -Uai 2>&1 || true)"
+if [[ -n "$usb_output" ]] && ! grep -q "Waiting for USB device" <<<"$usb_output"; then
+  echo "USB Frida target is visible"
+  sed -n '1,20p' <<<"$usb_output"
+else
+  echo "USB Frida target is not visible"
+  status=1
+fi
+
+if [[ -n "$host" ]]; then
+  echo
+  echo "== frida remote =="
+  remote_output="$(timeout 5 frida-ps -H "$host:27042" -ai 2>&1 || true)"
+  if [[ -n "$remote_output" ]] && ! grep -q "unable to connect" <<<"$remote_output"; then
+    echo "Remote Frida target is visible at $host:27042"
+    sed -n '1,20p' <<<"$remote_output"
+  else
+    echo "Remote Frida target is not visible at $host:27042"
+    status=1
+  fi
+fi
+
+echo
+echo "== package hint =="
+echo "Hook package: $package"
+echo "Run with USB:    ./tools/apk-re/frida/run-ezviz-stream-hook $package"
+if [[ -n "$host" ]]; then
+  echo "Run with TCP:    EZVIZ_FRIDA_HOST=$host:27042 ./tools/apk-re/frida/run-ezviz-stream-hook $package"
+fi
+
+exit "$status"

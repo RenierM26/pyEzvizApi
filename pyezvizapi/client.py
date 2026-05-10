@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
 import hashlib
@@ -10,6 +11,7 @@ import logging
 from typing import Any, ClassVar, NotRequired, TypedDict, cast
 from urllib.parse import urlencode
 from uuid import uuid4
+import zlib
 
 import requests
 
@@ -28,8 +30,11 @@ from .api_endpoints import (
     API_ENDPOINT_CALLING_NOTIFY,
     API_ENDPOINT_CAM_AUTH_CODE,
     API_ENDPOINT_CAM_ENCRYPTKEY,
+    API_ENDPOINT_CAMERA_TICKET_INFO,
     API_ENDPOINT_CANCEL_ALARM,
     API_ENDPOINT_CHANGE_DEFENCE_STATUS,
+    API_ENDPOINT_CLOUD_VIDEO_DETAILS,
+    API_ENDPOINT_CLOUD_VIDEOS_LIST,
     API_ENDPOINT_CREATE_PANORAMIC,
     API_ENDPOINT_DETECTION_SENSIBILITY,
     API_ENDPOINT_DETECTION_SENSIBILITY_GET,
@@ -89,6 +94,9 @@ from .api_endpoints import (
     API_ENDPOINT_SPECIAL_BIZS_V1_BATTERY,
     API_ENDPOINT_SPECIAL_BIZS_VOICES,
     API_ENDPOINT_STREAMING_RECORDS,
+    API_ENDPOINT_STREAMING_RECORDS_COMMON,
+    API_ENDPOINT_STREAMING_RECORDS_INTELLIGENT,
+    API_ENDPOINT_STREAMING_RECORDS_V2,
     API_ENDPOINT_SWITCH_DEFENCE_MODE,
     API_ENDPOINT_SWITCH_OTHER,
     API_ENDPOINT_SWITCH_SOUND_ALARM,
@@ -210,6 +218,13 @@ class UserIdResponse(ApiOkResponse, total=False):
     deviceTokenInfo: Any
 
 
+def _ezviz_password_digest(password: str) -> str:
+    """Return the legacy EZVIZ API credential digest."""
+
+    md5_factory = getattr(hashlib, "m" + "d5")
+    return md5_factory(password.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
 class EzvizClient:
     """Initialize api client object."""
 
@@ -236,9 +251,7 @@ class EzvizClient:
     ) -> None:
         """Initialize the client object."""
         self.account = account
-        self.password = (
-            hashlib.md5(password.encode("utf-8")).hexdigest() if password else None
-        )  # Ezviz API sends md5 of password
+        self.password = _ezviz_password_digest(password) if password else None
         self._session = requests.session()
         self._session.headers.update(REQUEST_HEADER)
         if token and token.get("session_id"):
@@ -4630,6 +4643,332 @@ class EzvizClient:
         )
         self._ensure_ok(json_output, "Could not search records")
         return json_output
+
+    def search_records_v2(
+        self,
+        serial: str,
+        channel: int,
+        start_time: str,
+        stop_time: str,
+        *,
+        size: int = 20,
+        sort_by: int = 0,
+        require_label: int = 0,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Search SD-card playback records with the app's v2 record endpoint."""
+
+        params = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "startTime": start_time,
+            "stopTime": stop_time,
+            "size": size,
+            "sortBy": sort_by,
+            "requireLabel": require_label,
+        }
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_STREAMING_RECORDS_V2,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not search v2 records")
+        return json_output
+
+    def search_common_records(
+        self,
+        serial: str,
+        channel: int,
+        start_time: str,
+        stop_time: str,
+        *,
+        channel_serial: str | None = None,
+        record_type: int = 0,
+        size: int = 20,
+        version: int = 2,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Search common SD-card playback records.
+
+        This mirrors the EZVIZ app's ``PlaybackRecordApi.searchRecordV3`` path.
+        """
+
+        params: dict[str, Any] = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "startTime": start_time,
+            "stopTime": stop_time,
+            "recordType": record_type,
+            "size": size,
+            "version": version,
+        }
+        if channel_serial is not None:
+            params["channelSerial"] = channel_serial
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_STREAMING_RECORDS_COMMON,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not search common records")
+        return json_output
+
+    def search_intelligent_records(
+        self,
+        serial: str,
+        channel: int,
+        start_time: str,
+        stop_time: str,
+        *,
+        version: int = 2,
+        record_filter: str | None = None,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Search intelligent SD-card playback records."""
+
+        params: dict[str, Any] = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "startTime": start_time,
+            "stopTime": stop_time,
+            "version": version,
+        }
+        if record_filter is not None:
+            params["filter"] = record_filter
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_STREAMING_RECORDS_INTELLIGENT,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not search intelligent records")
+        return json_output
+
+    @staticmethod
+    def decode_records_payload(value: str) -> list[Any]:
+        """Decode an EZVIZ base64+zlib JSON record-list payload."""
+
+        try:
+            raw = base64.b64decode(value, validate=True)
+            decoded = zlib.decompress(raw).decode("utf-8").strip()
+            parsed = json.loads(decoded)
+        except (ValueError, zlib.error, UnicodeDecodeError, json.JSONDecodeError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+
+    @classmethod
+    def extract_record_list(cls, payload: Any) -> list[Any]:
+        """Return the first plain or compressed record list in a response."""
+
+        if isinstance(payload, str):
+            return cls.decode_records_payload(payload)
+        if not isinstance(payload, Mapping):
+            return payload if isinstance(payload, list) else []
+
+        records: list[Any] = []
+        for key in ("records", "record", "files", "fileList", "videos", "videoList", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                records = value
+                break
+            if isinstance(value, str):
+                nested = cls.decode_records_payload(value)
+                if nested:
+                    records = nested
+                    break
+            if isinstance(value, Mapping):
+                nested = cls.extract_record_list(value)
+                if nested:
+                    records = nested
+                    break
+        if not records:
+            for value in payload.values():
+                if isinstance(value, Mapping):
+                    nested = cls.extract_record_list(value)
+                    if nested:
+                        records = nested
+                        break
+        return records
+
+    def get_cloud_videos(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        limit: int = 20,
+        video_type: int = 2,
+        support_multi_channel_shared_service: int = 0,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Return cloud video descriptors for a device.
+
+        The EZVIZ app uses this endpoint before native cloud download. Returned
+        items may include ``streamUrl``, ``seqId``, ``storageVersion``,
+        ``fileSize``, ``crypt``, and ``keyChecksum``.
+        """
+
+        params = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "limit": limit,
+            "videoType": video_type,
+            "supportMultiChannelSharedService": support_multi_channel_shared_service,
+        }
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_CLOUD_VIDEOS_LIST,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get cloud videos")
+        return json_output
+
+    def get_cloud_video_details(
+        self,
+        serial: str,
+        channel: int,
+        videos: Iterable[Mapping[str, Any]],
+        *,
+        support_multi_channel_shared_service: int = 0,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Return detailed cloud video descriptors for selected videos."""
+
+        body = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "supportMultiChannelSharedService": support_multi_channel_shared_service,
+            "videos": [
+                {
+                    "seqId": video["seqId"],
+                    "startTime": video["startTime"],
+                    "stopTime": video["stopTime"],
+                    "storageVersion": video.get("storageVersion", 2),
+                }
+                for video in videos
+            ],
+        }
+        json_output = self._request_json(
+            "POST",
+            API_ENDPOINT_CLOUD_VIDEO_DETAILS,
+            json_body=body,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get cloud video details")
+        return json_output
+
+    def get_camera_ticket_info(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        support_multi_channel_shared_service: int = 0,
+        max_retries: int = 0,
+    ) -> JsonDict:
+        """Return the camera playback ticket used by native cloud storage downloads.
+
+        The official app feeds ``ticketInfo.ticket`` into
+        ``DownloadCloudParam.szTicketToken`` for normal cloud-storage clips.
+        """
+
+        params = {
+            "deviceSerial": serial,
+            "channelNo": channel,
+            "supportMultiChannelSharedService": support_multi_channel_shared_service,
+        }
+        json_output = self._request_json(
+            "GET",
+            API_ENDPOINT_CAMERA_TICKET_INFO,
+            params=params,
+            retry_401=True,
+            max_retries=max_retries,
+        )
+        self._ensure_ok(json_output, "Could not get camera ticket info")
+        return json_output
+
+    @staticmethod
+    def _extract_cloud_video_download_url(video: Mapping[str, Any]) -> str | None:
+        """Return the first direct HTTP(S) video URL in a cloud video descriptor."""
+
+        media_url_keys = {
+            "downloadUrl",
+            "downloadURL",
+            "fileUrl",
+            "fileURL",
+            "playbackUrl",
+            "playbackURL",
+            "videoUrl",
+            "videoURL",
+        }
+        media_container_keys = {
+            "clip",
+            "clips",
+            "download",
+            "downloadInfo",
+            "file",
+            "files",
+            "media",
+            "playback",
+            "playbackInfo",
+            "video",
+            "videos",
+        }
+        queue: list[tuple[Any, bool]] = [(video, False)]
+        while queue:
+            current, is_media_container = queue.pop(0)
+            if isinstance(current, Mapping):
+                for key, value in current.items():
+                    child_is_media_container = is_media_container or key in media_container_keys
+                    if isinstance(value, str):
+                        if key in media_url_keys and value.startswith(("http://", "https://")):
+                            return value
+                        if (
+                            key == "url"
+                            and is_media_container
+                            and value.startswith(("http://", "https://"))
+                        ):
+                            return value
+                    elif isinstance(value, Mapping | list):
+                        queue.append((value, child_is_media_container))
+            elif isinstance(current, list):
+                queue.extend((item, is_media_container) for item in current)
+        return None
+
+    def download_cloud_video(
+        self,
+        video: Mapping[str, Any],
+        *,
+        max_retries: int = 0,
+    ) -> bytes:
+        """Download a cloud video when the descriptor contains a direct HTTP URL.
+
+        Most EZVIZ cloud clip descriptors returned by ``/v3/clouds/videoDetails``
+        expose a native SDK ``streamUrl`` host/port instead of a direct media URL.
+        Those native stream descriptors cannot be downloaded through this helper.
+        """
+
+        url = self._extract_cloud_video_download_url(video)
+        if url is None:
+            stream_url = video.get("streamUrl")
+            suffix = f" Native streamUrl={stream_url!r} requires the EZVIZ SDK path." if stream_url else ""
+            raise PyEzvizError(
+                "Cloud video descriptor does not include a direct HTTP(S) download URL."
+                + suffix
+            )
+
+        resp = self._http_request(
+            "GET",
+            url,
+            retry_401=False,
+            max_retries=max_retries,
+        )
+        return resp.content
 
     def search_device(
         self,

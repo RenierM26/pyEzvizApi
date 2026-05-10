@@ -105,7 +105,7 @@ The CLI also computes a `switch_flags` map for each device (all switch states by
 
 ### stream
 
-Experimental VTM cloud stream helpers. Packet tracing prints sanitized metadata only. Dumping writes VLC-friendly MPEG-TS by default using FFmpeg `-c copy` remuxing only, with `--format raw` available for unchanged VTM payloads. Encrypted packets fail unless `--allow-encrypted` is set.
+Experimental VTM cloud stream helpers. Packet tracing prints sanitized metadata only. Dumping writes VLC-friendly MPEG-TS by default using FFmpeg `-c copy` remuxing only, with `--format raw` available for unchanged VTM payloads. Encrypted packets fail unless `--allow-encrypted` is set. Some battery cameras keep the VTM channel unencrypted but encrypt the video NAL payloads inside MPEG-PS; use `--decrypt-video` to decrypt those HEVC/H.264 NAL payloads with the camera encrypt key before writing or remuxing.
 
 ```bash
 # Inspect stream packet metadata without printing media bytes
@@ -114,15 +114,61 @@ pyezvizapi stream trace --serial ABC123 --channel 1 --max-packets 20 --json-line
 # Dump a VLC-playable MPEG-TS capture to a file
 pyezvizapi stream dump --serial ABC123 --channel 1 --duration 1m --output stream.ts
 
+# Decrypt encrypted battery-camera HEVC video while dumping
+pyezvizapi stream dump --serial ABC123 --channel 1 --duration 30s --decrypt-video --output stream.ts
+
 # Pipe raw MPEG-PS payloads directly into FFmpeg and remux to MPEG-TS
 pyezvizapi stream dump --serial ABC123 --channel 1 --format raw | \
   ffmpeg -f mpeg -i pipe:0 -c copy -f mpegts stream.ts
 
 # Serve a local MPEG-TS URL for Home Assistant/FFmpeg clients
 pyezvizapi stream proxy --serial ABC123 --channel 1 --listen-port 8558
+
+# Serve a decrypted local MPEG-TS URL for encrypted battery cameras
+pyezvizapi stream proxy --serial ABC123 --channel 1 --decrypt-video --listen-port 8558
 ```
 
 The dump command captures one minute by default. Use `--duration 30s`, `--duration 2min`, or `--duration 0` for unlimited capture; `--max-packets` can still be used as an additional stop limit. MPEG-TS output requires FFmpeg and remuxes the camera payload with codec copy only; it does not transcode video or audio. The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg. Keep the proxy bound to loopback unless you put it behind an authenticated reverse proxy or otherwise restrict access; the stream URL is not authenticated by `pyezvizapi`.
+
+### cloud_videos
+
+Fetch cloud clip descriptors used by the EZVIZ app download path. The returned metadata can include `seqId`, `storageVersion`, `fileSize`, `crypt`, `keyChecksum`, and the native SDK `streamUrl` host/port.
+
+```bash
+# List recent cloud clips
+pyezvizapi cloud_videos --serial ABC123 --channel 1 --limit 10
+
+# Hydrate details and emit JSON for further investigation
+pyezvizapi --json cloud_videos --serial ABC123 --channel 1 --limit 5 --details
+
+# Download a cloud clip. Direct HTTP(S) URLs are saved as-is; native streamUrl
+# clips are fetched through the pure-Python cloud replay protocol and decrypted.
+pyezvizapi cloud_video_download --serial ABC123 --channel 1 --seq-id 12345 \
+  --output clip.ps --encrypted-output clip.tmp
+
+# Decrypt a previously captured native .tmp file locally in Python
+pyezvizapi cloud_video_decrypt --serial ABC123 --input clip.tmp --output clip.ps
+```
+
+Some cloud clips only expose the EZVIZ native SDK `streamUrl` host/port in `videoDetails`. For regular cloud-storage clips, `cloud_video_download` now fetches `/v3/cameras/ticketInfo`, downloads the encrypted cloud replay `.tmp` stream over TLS, and applies the local Python PS/NAL decrypt transform. `--encrypted-output` keeps the encrypted `.tmp` for comparison.
+
+`cloud_video_decrypt` is the pure-Python transform step for captured cloud `.tmp` files. Prefer `--serial` so `pyezvizapi` fetches the camera encrypt key without putting it in shell history; `--key` is available for offline/manual experiments. Use `--decrypt-codec h264` for H.264 clips; the default is HEVC.
+
+### sdcard_videos
+
+Fetch SD-card playback record descriptors using the same record-list endpoints exposed by the EZVIZ app.
+
+```bash
+# List recent SD-card playback records
+pyezvizapi sdcard_videos --serial ABC123 --channel 1 \
+  --start-time "2026-05-10T21:50:00" --stop-time "2026-05-10T21:55:00"
+
+# Try the app's common/intelligent record endpoints when the default v2 path is empty
+pyezvizapi --json sdcard_videos --serial ABC123 --source common \
+  --start-time "2026-05-10T21:50:00" --stop-time "2026-05-10T21:55:00"
+```
+
+SD-card records are descriptors for native playback/download. The public API does not currently expose a direct HTTP media URL for every record; use `stream dump` for live VTM capture or `cloud_video_download` when cloud `videoDetails` includes an HTTP(S) URL.
 
 ### camera
 

@@ -693,6 +693,28 @@ def test_detect_hikvision_ps_video_nalu_header_size_probes_plausible_ciphertext_
     )
 
 
+def test_detect_hikvision_ps_video_nalu_header_size_prefers_encrypted_h264_ties() -> None:
+    key = "camera-key"
+    clear_payload = b"\x00\x00\x00\x01\x65fedcba987654\x00\x04\x4a"
+    encrypted_payload = (
+        b"\x00\x00\x00\x01" + bytes.fromhex("440118af4abbc532349fca0d73eb8f6d")
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert detect_hikvision_ps_video_nalu_header_size(pes, key) == 0
+    assert decrypt_hikvision_ps_video(pes, key, nalu_header_size=None) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_detect_hikvision_ps_video_nalu_header_size_can_defer_without_nals() -> None:
     pack_header_only = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
 
@@ -719,6 +741,34 @@ def test_decrypt_hikvision_ps_video_leaves_nal_body_after_encrypted_prefix() -> 
         + encrypted_tail
     )
     encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_prefix + encrypted_tail
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_ignores_in_prefix_hevc_start_code_lookalikes() -> None:
+    key = "camera-key"
+    encrypted_body = bytes.fromhex(
+        "61626364000001420178797a41424344"
+        "454647483132333435363738395a5a5a"
+    )
+    clear_body = bytes.fromhex(
+        "a975b9f55f84cf306171221b11dd62e9"
+        "e432ab89e61b55585a6cdee222a5f42e"
+    )
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
     pes = (
         b"\x00\x00\x01\xe0"
         + (len(encrypted_payload) + 3).to_bytes(2, "big")

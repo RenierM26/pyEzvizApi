@@ -1145,7 +1145,10 @@ def detect_hikvision_ps_video_nalu_header_size(
 
     if not any(scores.values()):
         return default
-    if scores["h264"] > max(scores["hevc"], scores["h264-clear-header"]):
+    if (
+        scores["h264"] >= scores["hevc"]
+        and scores["h264"] > scores["h264-clear-header"]
+    ):
         return 0
     if scores["h264-clear-header"] > scores["hevc"]:
         return 1
@@ -1286,23 +1289,20 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 if idx + 1 < len(nal_starts)
                 else payload_end
             )
-            if (
-                active_nal
-                and nalu_header_size == 0
-                and (
-                    candidate_decrypted := active_nal_decrypted
-                    + max(0, start_code_pos - segment_start)
+            if active_nal:
+                candidate_decrypted = active_nal_decrypted + max(
+                    0,
+                    start_code_pos - segment_start,
                 )
-                < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and (
-                    candidate_decrypted == 0
+                if candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH and (
+                    nalu_header_size != 0
+                    or candidate_decrypted == 0
                     or not starts_plausible_encrypted_h264_nal(
                         start_code_pos + start_code_len,
                         decrypt_end,
                     )
-                )
-            ):
-                continue
+                ):
+                    continue
             if (
                 active_nal
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH

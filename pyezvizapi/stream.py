@@ -863,7 +863,7 @@ def _mpeg_ps_complete_packet_ranges(
             payload_start = _pes_payload_start(view, i)
             if payload_start is None:
                 break
-            next_start = _next_complete_mpeg_ps_packet_start(view, payload_start)
+            next_start = _next_unbounded_video_pes_boundary(view, payload_start)
             if next_start is None:
                 break
             ranges.append(_MpegPsPacketRange(i, next_start, view[i + 3]))
@@ -893,11 +893,14 @@ def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
             packet_length = int.from_bytes(data[start + 4 : start + 6], "big")
             candidate_end = start + 6 + packet_length
             if packet_length and candidate_end <= len(data):
-                payload_start = (
-                    _pes_payload_start(data, start)
-                    if 0xC0 <= stream_id <= 0xEF or stream_id == _PRIVATE_STREAM_1_ID
-                    else start + 6
-                )
+                if _is_video_pes_stream_id(stream_id) or (
+                    stream_id == _PRIVATE_STREAM_1_ID
+                ):
+                    payload_start = _pes_payload_start(data, start)
+                elif 0xC0 <= stream_id <= 0xDF:
+                    payload_start = _pes_payload_start(data, start) or start + 6
+                else:
+                    payload_start = start + 6
                 if payload_start is not None and payload_start <= candidate_end:
                     packet_end = candidate_end
     return packet_end
@@ -1164,7 +1167,7 @@ def _find_h264_nal_start_codes(
     ]
 
 
-def decrypt_hikvision_ps_video(  # noqa: PLR0915
+def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
     data: bytes,
     key: str | bytes,
     *,
@@ -1242,7 +1245,15 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
         nal_type = decrypted_header & 0x1F
         return 1 <= nal_type <= 23
 
-    for payload_start, payload_end in _video_pes_payload_ranges(data):
+    for packet_range in _mpeg_ps_complete_packet_ranges(data):
+        if not _is_video_pes_stream_id(packet_range.stream_id):
+            reset_nal_state()
+            continue
+
+        payload_start = _pes_payload_start(data, packet_range.start)
+        if payload_start is None or payload_start >= packet_range.end:
+            continue
+        payload_end = packet_range.end
         nal_starts = find_nal_start_codes(data, payload_start, payload_end)
         segment_start = payload_start
         if not nal_starts:

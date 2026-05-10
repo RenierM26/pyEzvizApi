@@ -939,6 +939,54 @@ def test_decrypt_hikvision_ps_video_carries_nal_body_across_pes_packets() -> Non
     )
 
 
+def test_decrypt_hikvision_ps_video_resets_after_non_video_packets() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_body = b"0123456789abcdef" * (
+        HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16
+    )
+    encrypted_body = bytearray()
+    for pos in range(0, len(clear_body), 16):
+        cipher = stream_module.AES.new(
+            aes_key,
+            stream_module.AES.MODE_CBC,
+            iv=bytes(16),
+        )
+        encrypted_body.extend(cipher.encrypt(clear_body[pos : pos + 16]))
+
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + bytes(encrypted_body)
+    first_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+    second_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+    audio_pes = b"\x00\x00\x01\xc0\x00\x04keep"
+
+    assert decrypt_hikvision_ps_video(
+        first_pes + audio_pes + second_pes,
+        key,
+        nalu_header_size=2,
+    ) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+        + audio_pes
+        + b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_decrypt_hikvision_ps_video_bounds_adjacent_zero_length_pes_packets() -> None:
     key = "camera-key"
     clear_body = b"0123456789abcdef" * 2

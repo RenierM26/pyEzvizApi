@@ -37,6 +37,7 @@ from pyezvizapi.stream import (
     download_ezviz_cloud_replay,
     encode_vtm_packet,
     mpeg_ps_complete_prefix_length,
+    mpeg_ps_decryptable_prefix_length,
     parse_get_vtdu_info_response,
     parse_peer_stream_response,
     parse_start_stream_response,
@@ -523,6 +524,25 @@ def test_mpeg_ps_complete_prefix_ignores_ciphertext_start_code_lookalikes() -> N
     assert mpeg_ps_complete_prefix_length(pack + video_pes + audio_pes) == len(
         pack + video_pes + audio_pes
     )
+
+
+def test_mpeg_ps_decryptable_prefix_keeps_trailing_video_pes_run() -> None:
+    first_video_pes = b"\x00\x00\x01\xe0\x00\x08\x80\x00\x00first"
+    second_video_pes = b"\x00\x00\x01\xe0\x00\x09\x80\x00\x00second"
+    audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes) == 0
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes) == 0
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes + audio_pes) == len(
+        first_video_pes + second_video_pes + audio_pes
+    )
+
+
+def test_mpeg_ps_decryptable_prefix_flushes_before_trailing_video_pes() -> None:
+    audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+    video_pes = b"\x00\x00\x01\xe0\x00\x08\x80\x00\x00video"
+
+    assert mpeg_ps_decryptable_prefix_length(audio_pes + video_pes) == len(audio_pes)
 
 
 def test_download_ezviz_cloud_replay_preserves_type_2_media(monkeypatch) -> None:

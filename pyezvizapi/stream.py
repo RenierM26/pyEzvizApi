@@ -788,16 +788,55 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
     return ranges
 
 
+@dataclass(frozen=True)
+class _MpegPsPacketRange:
+    """Parsed MPEG-PS packet bounds."""
+
+    start: int
+    end: int
+    stream_id: int
+
+
 def mpeg_ps_complete_prefix_length(data: bytes | bytearray) -> int:
     """Return the length of the fully parsed MPEG-PS packet prefix."""
 
+    ranges = _mpeg_ps_complete_packet_ranges(data)
+    return ranges[-1].end if ranges else 0
+
+
+def mpeg_ps_decryptable_prefix_length(data: bytes | bytearray) -> int:
+    """Return complete MPEG-PS bytes that are safe to decrypt independently.
+
+    A video NAL can continue across adjacent video PES packets. Keep any trailing
+    video PES run buffered until a following non-video packet or stream end lets
+    the decryptor see the full run in one call.
+    """
+
+    ranges = _mpeg_ps_complete_packet_ranges(data)
+    if not ranges:
+        return 0
+
+    decryptable_end = ranges[-1].end
+    trailing_video_start = decryptable_end
+    for packet_range in reversed(ranges):
+        if packet_range.stream_id != VIDEO_PES_STREAM_ID:
+            break
+        trailing_video_start = packet_range.start
+    return trailing_video_start if trailing_video_start != decryptable_end else decryptable_end
+
+
+def _mpeg_ps_complete_packet_ranges(
+    data: bytes | bytearray,
+) -> list[_MpegPsPacketRange]:
+    """Return fully parsed MPEG-PS packet ranges from the start of ``data``."""
+
     view = bytes(data)
-    complete_end = 0
+    ranges: list[_MpegPsPacketRange] = []
     i = 0
     while i < len(view):
         packet_end = _mpeg_ps_packet_end(view, i)
         if packet_end is not None:
-            complete_end = packet_end
+            ranges.append(_MpegPsPacketRange(i, packet_end, view[i + 3]))
             i = packet_end
             continue
 
@@ -813,12 +852,12 @@ def mpeg_ps_complete_prefix_length(data: bytes | bytearray) -> int:
             next_start = _next_complete_mpeg_ps_packet_start(view, payload_start)
             if next_start is None:
                 break
-            complete_end = next_start
+            ranges.append(_MpegPsPacketRange(i, next_start, view[i + 3]))
             i = next_start
             continue
 
         break
-    return complete_end
+    return ranges
 
 
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:

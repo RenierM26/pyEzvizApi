@@ -31,7 +31,7 @@ from .light_bulb import EzvizLightBulb
 from .stream import (
     decrypt_hikvision_ps_video,
     download_ezviz_cloud_replay,
-    mpeg_ps_complete_prefix_length,
+    mpeg_ps_decryptable_prefix_length,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1516,7 +1516,7 @@ class _BufferedStreamPayloadDecryptor:
 
     def __call__(self, data: bytes) -> bytes:
         self._buffer.extend(data)
-        complete_end = mpeg_ps_complete_prefix_length(self._buffer)
+        complete_end = mpeg_ps_decryptable_prefix_length(self._buffer)
         if complete_end <= 0:
             return b""
         chunk = bytes(self._buffer[:complete_end])

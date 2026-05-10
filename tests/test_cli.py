@@ -1359,12 +1359,14 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
 
     def fake_copy_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
         transform_payload = kwargs["transform_payload"]
-        video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00encrypted"
+        first_video_pes = b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-1"
+        second_video_pes = b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-2"
         audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
-        first = transform_payload(video_pes)
-        second = transform_payload(audio_pes)
+        first = transform_payload(first_video_pes)
+        second = transform_payload(second_video_pes)
+        third = transform_payload(audio_pes)
         tail = transform_payload.flush()
-        copy_calls.extend([first, second, tail])
+        copy_calls.extend([first, second, third, tail])
 
     monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
     monkeypatch.setattr(cli_module, "_open_mpegts_remux_process", lambda _path: object())
@@ -1379,14 +1381,15 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
     assert decrypt_calls == [
         {
             "data": (
-                b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00encrypted"
+                b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-1"
+                b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-2"
                 b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
             ),
             "key": "camera-key",
             "nalu_header_size": 2,
         },
     ]
-    assert copy_calls == [b"", b"decrypted", b""]
+    assert copy_calls == [b"", b"", b"decrypted", b""]
 
 
 def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:

@@ -537,7 +537,7 @@ def test_cloud_video_download_handles_native_stream_url(
             "end_cas": "20260509T215010Z",
             "storage_version": 2,
             "video_type": 2,
-            "file_size": 1092348,
+            "file_size": len(NATIVE_ENCRYPTED_PAYLOAD),
             "timeout": 12,
         }
     ]

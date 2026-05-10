@@ -1547,6 +1547,7 @@ def _handle_cloud_video_native_download(
         "beginCas": _cas_time_from_millis(start_millis),
         "endCas": _cas_time_from_millis(stop_millis),
         "outputName": output_name,
+        "runMs": int(max(args.timeout, 1) * 1000),
     }
 
     try:
@@ -1574,6 +1575,14 @@ def _handle_cloud_video_native_download(
                 ),
                 timeout=args.timeout,
             )
+            expected_size = selected.get("fileSize")
+            if isinstance(expected_size, int | str) and str(expected_size).isdigit():
+                actual_size = pulled_encrypted_output.stat().st_size
+                if actual_size < int(expected_size):
+                    raise PyEzvizError(
+                        "Native cloud download produced fewer bytes than expected: "
+                        f"{actual_size} < {expected_size}"
+                    )
 
         if args.transform == "python":
             if pulled_encrypted_output is None:

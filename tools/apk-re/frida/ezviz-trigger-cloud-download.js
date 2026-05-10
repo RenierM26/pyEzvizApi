@@ -9,7 +9,7 @@
 "use strict";
 
 const INPUT_NAME = "ezviz-cloud-download-input.json";
-const RUN_MS = 25000;
+const DEFAULT_RUN_MS = 25000;
 const RUN_ID = Date.now();
 
 function readText(path) {
@@ -101,6 +101,7 @@ Java.perform(() => {
   const port = streamParts.length > 1 ? parseInt(streamParts[1], 10) : 0;
   const startMillis = jsonLong(input, "startMillis", 0);
   const stopMillis = jsonLong(input, "stopMillis", startMillis + jsonLong(video, "videoLong", 0));
+  const runMs = jsonLong(input, "runMs", DEFAULT_RUN_MS);
   const outDir = ensureDir(app.getExternalFilesDir(null), "ezviz-direct-download");
   const tmpFile = File.$new(outDir, `${outputName}.tmp`);
 
@@ -176,7 +177,7 @@ Java.perform(() => {
   const ret = client.startDownloadFromCloud(param);
   console.log(`[direct-download] startDownloadFromCloud ret=${ret}`);
 
-  finished.await(RUN_MS, TimeUnit.MILLISECONDS.value);
+  const completed = finished.await(runMs, TimeUnit.MILLISECONDS.value);
   try {
     client.stopDownloadFromCloud();
   } catch (err) {
@@ -193,4 +194,7 @@ Java.perform(() => {
     stream = null;
   }
   console.log(`[direct-download] done total=${total} tmp=${tmpFile.getAbsolutePath()}`);
+  if (!completed) {
+    throw new Error(`cloud download did not finish within ${runMs}ms`);
+  }
 });

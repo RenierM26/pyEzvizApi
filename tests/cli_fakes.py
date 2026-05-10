@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, ClassVar
 
@@ -68,11 +67,8 @@ class FakeClient:
                     "startTime": "2026-05-09 21:50:00",
                     "stopTime": "2026-05-09 21:50:10",
                     "storageVersion": 2,
-                    "fileSize": 1092348,
+                    "fileSize": 9,
                     "crypt": 13,
-                    "keyChecksum": hashlib.md5(
-                        hashlib.md5(b"camera-secret").hexdigest().encode("utf-8")
-                    ).hexdigest(),
                     "coverPic": "https://example.test/api/cloud?startTime=1778363400000",
                     "streamUrl": "hweustreamer.ezvizlife.com:32723",
                     "videoLong": 10000,

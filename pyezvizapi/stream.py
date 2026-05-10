@@ -1158,7 +1158,6 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos
                 > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and start_code_pos != payload_start
             ):
                 continue
             if active_nal and segment_start < start_code_pos:

@@ -645,6 +645,38 @@ def test_decrypt_hikvision_ps_video_keeps_exact_prefix_nal_boundary() -> None:
     )
 
 
+def test_decrypt_hikvision_ps_video_preserves_pes_start_tail_lookalike() -> None:
+    key = "camera-key"
+    clear_block = b"0123456789abcdef"
+    encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+    false_nal_tail = b"\x00\x00\x00\x01\x42\x01" + encrypted_block
+    encrypted_first = b"\x00\x00\x00\x01\x42\x01" + encrypted_prefix
+    clear_first = b"\x00\x00\x00\x01\x42\x01" + clear_block * (
+        HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16
+    )
+    first_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_first) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_first
+    )
+    second_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(false_nal_tail) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + false_nal_tail
+    )
+
+    assert decrypt_hikvision_ps_video(first_pes + second_pes, key) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_first) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_first
+        + second_pes
+    )
+
+
 def test_decrypt_hikvision_ps_video_handles_all_video_pes_stream_ids() -> None:
     key = "camera-key"
     clear_body = b"0123456789abcdef" * 2

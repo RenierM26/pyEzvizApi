@@ -1006,11 +1006,11 @@ def download_ezviz_cloud_replay(  # noqa: PLR0913
                 if message.err_code not in (None, 0):
                     raise PyEzvizError(f"Cloud replay returned packet error {message.err_code}")
 
-                if message.data_type in (0, 1) and message.data:
+                if message.data_type in (0, 1, 2) and message.data:
                     output.extend(message.data)
                     if file_size is not None and len(output) >= file_size:
                         return bytes(output[:file_size])
-                elif message.data_type == 2:
+                elif message.data_type == 100:
                     return bytes(output)
 
                 if time.monotonic() - last_heartbeat >= 5:

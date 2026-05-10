@@ -764,7 +764,7 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
             continue
 
         stream_id = data[i + 3]
-        if stream_id != VIDEO_PES_STREAM_ID:
+        if not _is_video_pes_stream_id(stream_id):
             i += 4
             continue
 
@@ -930,10 +930,16 @@ def _is_zero_length_video_pes_start(data: bytes, start: int) -> bool:
     return (
         start + 9 <= len(data)
         and data[start : start + 3] == MPEG_START_CODE_PREFIX
-        and data[start + 3] == VIDEO_PES_STREAM_ID
+        and _is_video_pes_stream_id(data[start + 3])
         and int.from_bytes(data[start + 4 : start + 6], "big") == 0
         and _pes_payload_start(data, start) is not None
     )
+
+
+def _is_video_pes_stream_id(stream_id: int) -> bool:
+    """Return True for MPEG-PS video PES stream IDs."""
+
+    return 0xE0 <= stream_id <= 0xEF
 
 
 def _is_mpeg_ps_packet_start_id(stream_id: int) -> bool:

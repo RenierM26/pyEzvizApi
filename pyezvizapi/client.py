@@ -4848,7 +4848,7 @@ class EzvizClient:
                     "seqId": video["seqId"],
                     "startTime": video["startTime"],
                     "stopTime": video["stopTime"],
-                    "storageVersion": video["storageVersion"],
+                    "storageVersion": video.get("storageVersion", 2),
                 }
                 for video in videos
             ],

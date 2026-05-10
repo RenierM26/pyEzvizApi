@@ -3011,6 +3011,37 @@ def test_black_level_time_plan_and_record_helpers_build_requests(monkeypatch) ->
     assert all(call["retry_401"] is True for call in calls)
 
 
+def test_get_cloud_video_details_defaults_missing_storage_version(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_cloud_video_details(
+        "CAM123",
+        2,
+        [
+            {
+                "seqId": 12345,
+                "startTime": "2026-04-27 08:00:00",
+                "stopTime": "2026-04-27 08:01:00",
+            }
+        ],
+    )["meta"]["code"] == 200
+    assert calls[0]["json_body"]["videos"] == [
+        {
+            "seqId": 12345,
+            "startTime": "2026-04-27 08:00:00",
+            "stopTime": "2026-04-27 08:01:00",
+            "storageVersion": 2,
+        }
+    ]
+
+
 def test_time_plan_and_record_helpers_raise_contextual_errors(monkeypatch) -> None:
     client = _client()
 

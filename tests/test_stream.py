@@ -18,6 +18,7 @@ from pyezvizapi.cloud_stream import (
 )
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 from pyezvizapi.stream import (
+    HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
     VtmChannel,
     VtmMessageCode,
@@ -432,6 +433,34 @@ def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
     )
 
 
+def test_decrypt_hikvision_ps_video_leaves_nal_body_after_encrypted_prefix() -> None:
+    key = "camera-key"
+    clear_block = b"0123456789abcdef"
+    encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+    encrypted_tail = encrypted_block
+    clear_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + clear_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+        + encrypted_tail
+    )
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_prefix + encrypted_tail
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_decrypt_hikvision_ps_video_handles_all_video_pes_stream_ids() -> None:
     key = "camera-key"
     clear_body = b"0123456789abcdef" * 2
@@ -813,6 +842,50 @@ def test_vtm_stream_client_starts_and_reads_payloads() -> None:
     assert first_sent.message_code == VtmMessageCode.STREAMINFO_REQ
     assert second_sent.message_code == VtmMessageCode.KEEPALIVE_RSP
     assert payloads == [b"\x47abc"]
+
+
+def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    responses = [
+        encode_vtm_packet(
+            stream_info_body,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            sequence=7,
+        ),
+        encode_vtm_packet(
+            b"\x47one",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=8,
+        ),
+        encode_vtm_packet(
+            b"\x47two",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=9,
+        ),
+    ]
+    fake_socket = FakeVtmSocket(responses)
+    times = iter([0.0, 0.0, 6.0, 6.0])
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                max_packets=2,
+                keepalive_interval=5.0,
+                monotonic=lambda: next(times),
+            )
+        )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+
+    assert [packet.body for packet in packets] == [b"\x47one", b"\x47two"]
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+    assert sent_packets[-1].body == build_stream_keepalive_request("ssn-123")
 
 
 def test_vtm_stream_client_start_follows_redirect_response() -> None:

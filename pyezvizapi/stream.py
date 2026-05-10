@@ -25,6 +25,7 @@ MPEG_PS_START_CODE = b"\x00\x00\x01\xba"
 MPEG_TS_SYNC_BYTE = b"\x47"
 MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
 ANNEX_B_LONG_START_CODE = b"\x00\x00\x00\x01"
+HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH = 4096
 VIDEO_PES_STREAM_ID = 0xE0
 _PACK_HEADER_STREAM_ID = 0xBA
 _SYSTEM_HEADER_STREAM_ID = 0xBB
@@ -325,6 +326,8 @@ class VtmStreamClient:
         *,
         max_packets: int | None = None,
         include_control: bool = False,
+        keepalive_interval: float | None = 5.0,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[VtmPacket]:
         """Yield stream packets from the VTM connection.
 
@@ -333,10 +336,21 @@ class VtmStreamClient:
         """
 
         seen = 0
+        last_keepalive = monotonic()
         while max_packets is None or seen < max_packets:
+            if (
+                keepalive_interval is not None
+                and self.stream_info is not None
+                and self.stream_info.streamssn
+                and monotonic() - last_keepalive >= keepalive_interval
+            ):
+                self.send_keepalive()
+                last_keepalive = monotonic()
+
             packet = self.read_packet()
             if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
                 self.send_keepalive(message_code=VtmMessageCode.KEEPALIVE_RSP)
+                last_keepalive = monotonic()
                 if include_control:
                     seen += 1
                     yield packet
@@ -1067,8 +1081,9 @@ def decrypt_hikvision_ps_video(
     EZVIZ battery-camera VTM streams keep MPEG-PS/PES and Annex B NAL framing
     clear, but encrypt the video NAL body after the codec NAL header. The mobile
     SDK's native transform layer accepts the camera encrypt key as AES material;
-    observed HEVC streams decrypt with AES-ECB, key zero-padded/truncated to
-    16 bytes, while preserving the two-byte HEVC NAL header.
+    observed HEVC streams decrypt the first encrypted prefix of each NAL body
+    with AES-ECB, key zero-padded/truncated to 16 bytes, while preserving the
+    two-byte HEVC NAL header.
     """
 
     if nalu_header_size < 1:
@@ -1080,6 +1095,7 @@ def decrypt_hikvision_ps_video(
     pending_block_positions: list[int] = []
     pending_block = bytearray()
     active_nal = False
+    active_nal_decrypted = 0
     find_nal_start_codes = (
         _find_h264_nal_start_codes
         if nalu_header_size == 1
@@ -1087,17 +1103,24 @@ def decrypt_hikvision_ps_video(
     )
 
     def reset_nal_state() -> None:
-        nonlocal active_nal
+        nonlocal active_nal, active_nal_decrypted
         pending_block_positions.clear()
         pending_block.clear()
         active_nal = False
+        active_nal_decrypted = 0
 
     def decrypt_nal_body_segment(start: int, end: int) -> None:
+        nonlocal active_nal_decrypted
         if end <= start:
             return
-        for pos in range(start, end):
+        remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - active_nal_decrypted
+        if remaining <= 0:
+            return
+        decrypt_end = min(end, start + remaining)
+        for pos in range(start, decrypt_end):
             pending_block_positions.append(pos)
             pending_block.append(output[pos])
+            active_nal_decrypted += 1
             if len(pending_block) != AES.block_size:
                 continue
             cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))

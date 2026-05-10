@@ -899,18 +899,21 @@ def test_decrypt_hikvision_ps_video_keeps_scanning_real_nals_after_prefix() -> N
     clear_block = b"0123456789abcdef"
     encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
     encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+    preserved_tail = b"preserved-tail"
     clear_second_body = b"fedcba9876543210"
     encrypted_second_body = bytes.fromhex("71ec10ded9beb3a19fcdd7205152d6c6")
     clear_payload = (
         b"\x00\x00\x00\x01\x42\x01"
         + clear_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
-        + b"\x00\x00\x01\x42\x01"
+        + preserved_tail
+        + b"\x00\x00\x01\x26\x01"
         + clear_second_body
     )
     encrypted_payload = (
         b"\x00\x00\x00\x01\x42\x01"
         + encrypted_prefix
-        + b"\x00\x00\x01\x42\x01"
+        + preserved_tail
+        + b"\x00\x00\x01\x26\x01"
         + encrypted_second_body
     )
     pes = (

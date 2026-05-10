@@ -1277,6 +1277,18 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
         nal_type = decrypted_header & 0x1F
         return 1 <= nal_type <= 23
 
+    def is_post_prefix_tail_lookalike(
+        start_code_pos: int,
+        start_code_len: int,
+    ) -> bool:
+        if nalu_header_size == 0:
+            return True
+        if nalu_header_size == 1:
+            nal_type = _h264_nal_type(data, start_code_pos, start_code_len)
+            return nal_type is None or not 1 <= nal_type <= 5
+        nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
+        return nal_type is None or nal_type >= 32
+
     for packet_range in _mpeg_ps_complete_packet_ranges(
         data,
         include_trailing_unbounded_video=True,
@@ -1325,6 +1337,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos
                 > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
             ):
                 continue
             if active_nal and segment_start < start_code_pos:

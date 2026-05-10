@@ -27,6 +27,12 @@ class FakeClient:
         self.closed = False
         self.exported_token = {"session_id": "new-session", "api_url": url}
         self.device_infos = {"CAM123": {"deviceInfos": {"name": "Front"}}}
+        self.cloud_videos_request: dict[str, Any] = {}
+        self.cloud_video_details_request: dict[str, Any] = {}
+        self.cloud_video_download_request: dict[str, Any] = {}
+        self.sdcard_videos_request: dict[str, Any] = {}
+        self.camera_ticket_info_request: dict[str, Any] = {}
+        self.cam_key_request: dict[str, Any] = {}
         self.__class__.instances.append(self)
 
     def login(self, sms_code: int | None = None) -> None:

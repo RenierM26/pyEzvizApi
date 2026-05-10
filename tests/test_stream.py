@@ -785,6 +785,40 @@ def test_decrypt_hikvision_ps_video_ignores_in_prefix_hevc_start_code_lookalikes
     )
 
 
+def test_decrypt_hikvision_ps_video_preserves_short_hevc_nal_boundaries() -> None:
+    key = "camera-key"
+    clear_first_body = b"0123456789abcdef"
+    encrypted_first_body = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    clear_second_body = b"fedcba9876543210"
+    encrypted_second_body = bytes.fromhex("71ec10ded9beb3a19fcdd7205152d6c6")
+    clear_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + clear_first_body
+        + b"\x00\x00\x01\x42\x01"
+        + clear_second_body
+    )
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + encrypted_first_body
+        + b"\x00\x00\x01\x42\x01"
+        + encrypted_second_body
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_decrypt_hikvision_ps_video_ignores_tail_start_code_lookalikes() -> None:
     key = "camera-key"
     clear_block = b"0123456789abcdef"

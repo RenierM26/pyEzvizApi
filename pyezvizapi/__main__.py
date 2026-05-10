@@ -1543,10 +1543,18 @@ class _BufferedStreamPayloadDecryptor:
 
     def _decrypt_chunk(self, chunk: bytes) -> bytes:
         if self._nalu_header_size is None:
-            self._nalu_header_size = detect_hikvision_ps_video_nalu_header_size(
+            detected_nalu_header_size = detect_hikvision_ps_video_nalu_header_size(
                 chunk,
                 self._key,
+                default=None,
             )
+            if detected_nalu_header_size is None:
+                return decrypt_hikvision_ps_video(
+                    chunk,
+                    self._key,
+                    nalu_header_size=2,
+                )
+            self._nalu_header_size = detected_nalu_header_size
         return decrypt_hikvision_ps_video(
             chunk,
             self._key,

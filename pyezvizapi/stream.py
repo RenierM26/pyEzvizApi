@@ -1081,12 +1081,18 @@ def _hevc_header_score(nal_type: int) -> int:
     return 1
 
 
-def detect_hikvision_ps_video_nalu_header_size(data: bytes, key: str | bytes) -> int:
+def detect_hikvision_ps_video_nalu_header_size(
+    data: bytes,
+    key: str | bytes,
+    *,
+    default: int | None = 2,
+) -> int | None:
     """Best-effort detect the NAL header mode for Hikvision/EZVIZ PS video.
 
     Returns the number of clear codec header bytes to preserve before AES
     decryption: ``2`` for HEVC, ``1`` for H.264 with a clear header, and ``0``
-    for H.264 where the NAL header is encrypted.
+    for H.264 where the NAL header is encrypted. ``default`` is returned when
+    no video NAL evidence is present.
     """
 
     key_bytes = key.encode() if isinstance(key, str) else key
@@ -1118,6 +1124,8 @@ def detect_hikvision_ps_video_nalu_header_size(data: bytes, key: str | bytes) ->
                     if 1 <= nal_type <= 23:
                         scores["h264"] += _h264_header_score(nal_type)
 
+    if not any(scores.values()):
+        return default
     if scores["h264"] > max(scores["hevc"], scores["h264-clear-header"]):
         return 0
     if scores["h264-clear-header"] > scores["hevc"]:
@@ -1174,6 +1182,8 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
 
     if nalu_header_size is None:
         nalu_header_size = detect_hikvision_ps_video_nalu_header_size(data, key)
+    if nalu_header_size is None:
+        nalu_header_size = 2
     if nalu_header_size < 0:
         raise ValueError("nalu_header_size must be non-negative")
 

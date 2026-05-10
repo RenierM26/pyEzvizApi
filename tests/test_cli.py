@@ -1392,6 +1392,47 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
     assert copy_calls == [b"", b"", b"decrypted", b""]
 
 
+def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> None:
+    pack_chunk = b"pack"
+    video_chunk = b"video"
+    next_chunk = b"next"
+    detect_calls: list[bytes] = []
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_detect(data: bytes, key: str, *, default: int | None = 2) -> int | None:
+        assert key == "camera-key"
+        assert default is None
+        detect_calls.append(data)
+        return 0 if data == video_chunk else None
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
+        return b"decrypted-" + data
+
+    monkeypatch.setattr(
+        cli_module,
+        "detect_hikvision_ps_video_nalu_header_size",
+        fake_detect,
+    )
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    decryptor = cli_module._BufferedStreamPayloadDecryptor(  # noqa: SLF001
+        "camera-key",
+        codec="auto",
+    )
+
+    assert decryptor._decrypt_chunk(pack_chunk) == b"decrypted-" + pack_chunk  # noqa: SLF001
+    assert decryptor._decrypt_chunk(video_chunk) == b"decrypted-" + video_chunk  # noqa: SLF001
+    assert decryptor._decrypt_chunk(next_chunk) == b"decrypted-" + next_chunk  # noqa: SLF001
+
+    assert detect_calls == [pack_chunk, video_chunk]
+    assert decrypt_calls == [
+        {"data": pack_chunk, "key": "camera-key", "nalu_header_size": 2},
+        {"data": video_chunk, "key": "camera-key", "nalu_header_size": 0},
+        {"data": next_chunk, "key": "camera-key", "nalu_header_size": 0},
+    ]
+
+
 def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:
     def fake_server(*_args: object, **_kwargs: object) -> None:
         raise OSError("Address already in use")

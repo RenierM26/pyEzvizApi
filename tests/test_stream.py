@@ -646,6 +646,20 @@ def test_detect_hikvision_ps_video_nalu_header_size_identifies_h264_encrypted_he
     )
 
 
+def test_detect_hikvision_ps_video_nalu_header_size_can_defer_without_nals() -> None:
+    pack_header_only = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+
+    assert detect_hikvision_ps_video_nalu_header_size(pack_header_only, "camera-key") == 2
+    assert (
+        detect_hikvision_ps_video_nalu_header_size(
+            pack_header_only,
+            "camera-key",
+            default=None,
+        )
+        is None
+    )
+
+
 def test_decrypt_hikvision_ps_video_leaves_nal_body_after_encrypted_prefix() -> None:
     key = "camera-key"
     clear_block = b"0123456789abcdef"

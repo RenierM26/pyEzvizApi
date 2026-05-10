@@ -929,6 +929,9 @@ def decrypt_hikvision_ps_video(
             if length < AES.block_size:
                 continue
             block_length = length - (length % AES.block_size)
+            # codeql[py/weak-cryptographic-algorithm] EZVIZ/Hikvision encrypted
+            # PS clips use this legacy AES-ECB NAL-body transform on the wire;
+            # this client reproduces it only to decode camera-owned media.
             cipher = AES.new(aes_key, AES.MODE_ECB)
             output[decrypt_start : decrypt_start + block_length] = cipher.decrypt(
                 bytes(output[decrypt_start : decrypt_start + block_length])

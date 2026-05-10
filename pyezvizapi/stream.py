@@ -26,6 +26,12 @@ MPEG_TS_SYNC_BYTE = b"\x47"
 MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
 ANNEX_B_LONG_START_CODE = b"\x00\x00\x00\x01"
 VIDEO_PES_STREAM_ID = 0xE0
+_PACK_HEADER_STREAM_ID = 0xBA
+_SYSTEM_HEADER_STREAM_ID = 0xBB
+_PROGRAM_STREAM_MAP_ID = 0xBC
+_PRIVATE_STREAM_1_ID = 0xBD
+_PADDING_STREAM_ID = 0xBE
+_PRIVATE_STREAM_2_ID = 0xBF
 CLOUD_REPLAY_MAGIC = 0x9EBAACE9
 CLOUD_REPLAY_OPEN_CMD = 0x5003
 CLOUD_REPLAY_HEARTBEAT_CMD = 0x5010
@@ -763,9 +769,6 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
             continue
 
         pes_length = int.from_bytes(data[i + 4 : i + 6], "big")
-        packet_end = i + 6 + pes_length if pes_length else len(data)
-        if packet_end > len(data):
-            break
 
         flags = data[i + 6]
         if (flags & 0xC0) == 0x80:
@@ -774,10 +777,48 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
         else:
             payload_start = i + 6
 
+        packet_end = (
+            i + 6 + pes_length
+            if pes_length
+            else _next_mpeg_ps_packet_start(data, payload_start) or len(data)
+        )
+        if packet_end > len(data):
+            break
+
         if payload_start < packet_end:
             ranges.append((payload_start, packet_end))
         i = max(i + 4, packet_end)
     return ranges
+
+
+def _is_mpeg_ps_packet_start_id(stream_id: int) -> bool:
+    """Return True for MPEG-PS packet start codes, excluding Annex B NAL IDs."""
+
+    return (
+        stream_id
+        in {
+            _PACK_HEADER_STREAM_ID,
+            _SYSTEM_HEADER_STREAM_ID,
+            _PROGRAM_STREAM_MAP_ID,
+            _PRIVATE_STREAM_1_ID,
+            _PADDING_STREAM_ID,
+            _PRIVATE_STREAM_2_ID,
+        }
+        or 0xC0 <= stream_id <= 0xEF
+    )
+
+
+def _next_mpeg_ps_packet_start(data: bytes, start: int) -> int | None:
+    """Return the next plausible MPEG-PS packet start code at or after ``start``."""
+
+    i = start
+    while i < len(data) - 3:
+        if data[i : i + 3] == MPEG_START_CODE_PREFIX and _is_mpeg_ps_packet_start_id(
+            data[i + 3]
+        ):
+            return i
+        i += 1
+    return None
 
 
 def _find_nal_start_codes(

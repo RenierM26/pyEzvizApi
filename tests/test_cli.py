@@ -424,7 +424,8 @@ def test_cloud_videos_table_output(monkeypatch, tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert "seqId" in output
     assert "12345" in output
-    assert "hweustreamer.ezvizlife.com:32723" in output
+    assert "hweustreamer.ezvizlife.com" in output
+    assert "32723" in output
 
 
 def test_cloud_video_download_writes_selected_clip(monkeypatch, tmp_path, capsys) -> None:

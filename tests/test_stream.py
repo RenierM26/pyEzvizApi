@@ -4,7 +4,6 @@ import base64
 import json
 from typing import Any
 
-from Crypto.Cipher import AES
 import pytest
 import requests
 
@@ -380,9 +379,11 @@ def test_detect_transport_and_rtp_payload() -> None:
 
 def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:
     key = "camera-key"
-    aes_key = key.encode().ljust(16, b"\0")[:16]
     clear_body = b"0123456789abcdef" * 2
-    encrypted_body = AES.new(aes_key, AES.MODE_ECB).encrypt(clear_body)
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
     clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
     encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
     pes = (
@@ -403,9 +404,11 @@ def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> 
 
 def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
     key = "camera-key"
-    aes_key = key.encode().ljust(16, b"\0")[:16]
     clear_body = b"fedcba9876543210" * 2
-    encrypted_body = AES.new(aes_key, AES.MODE_ECB).encrypt(clear_body)
+    encrypted_body = bytes.fromhex(
+        "71ec10ded9beb3a19fcdd7205152d6c6"
+        "71ec10ded9beb3a19fcdd7205152d6c6"
+    )
     clear_payload = b"\x00\x00\x00\x01\x65" + clear_body
     encrypted_payload = b"\x00\x00\x00\x01\x65" + encrypted_body
     pes = (
@@ -421,6 +424,24 @@ def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
         + (len(clear_payload) + 3).to_bytes(2, "big")
         + b"\x80\x00\x00"
         + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_bounds_zero_length_pes_at_next_ps_packet() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_payload
+    audio_pes = b"\x00\x00\x01\xc0\x00\x04keep"
+
+    assert (
+        decrypt_hikvision_ps_video(video_pes + audio_pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + clear_payload + audio_pes
     )
 
 

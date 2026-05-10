@@ -2522,6 +2522,56 @@ def test_download_cloud_video_fetches_direct_http_url(monkeypatch) -> None:
     }
 
 
+def test_download_cloud_video_ignores_nested_thumbnail_url(monkeypatch) -> None:
+    client = _client()
+    payload = b"video-bytes"
+    calls: dict[str, Any] = {}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        calls.update({"method": method, "url": url, **kwargs})
+        return _binary_response(payload)
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert (
+        client.download_cloud_video(
+            {
+                "seqId": 12345,
+                "cover": {"url": "https://image.example.test/cover.jpg"},
+                "downloadInfo": {"fileUrl": "https://video.example.test/clip.ps"},
+            }
+        )
+        == payload
+    )
+    assert calls["url"] == "https://video.example.test/clip.ps"
+
+
+def test_download_cloud_video_accepts_generic_url_in_media_container(
+    monkeypatch,
+) -> None:
+    client = _client()
+    payload = b"video-bytes"
+    calls: dict[str, Any] = {}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+        calls.update({"method": method, "url": url, **kwargs})
+        return _binary_response(payload)
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert (
+        client.download_cloud_video(
+            {
+                "seqId": 12345,
+                "cover": {"url": "https://image.example.test/cover.jpg"},
+                "video": {"url": "https://video.example.test/clip.ps"},
+            }
+        )
+        == payload
+    )
+    assert calls["url"] == "https://video.example.test/clip.ps"
+
+
 def test_download_cloud_video_rejects_native_stream_descriptor() -> None:
     client = _client()
 

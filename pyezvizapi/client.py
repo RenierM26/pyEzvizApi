@@ -4896,29 +4896,48 @@ class EzvizClient:
     def _extract_cloud_video_download_url(video: Mapping[str, Any]) -> str | None:
         """Return the first direct HTTP(S) video URL in a cloud video descriptor."""
 
-        candidate_keys = {
+        media_url_keys = {
             "downloadUrl",
             "downloadURL",
             "fileUrl",
             "fileURL",
             "playbackUrl",
             "playbackURL",
-            "url",
             "videoUrl",
             "videoURL",
         }
-        queue: list[Any] = [video]
+        media_container_keys = {
+            "clip",
+            "clips",
+            "download",
+            "downloadInfo",
+            "file",
+            "files",
+            "media",
+            "playback",
+            "playbackInfo",
+            "video",
+            "videos",
+        }
+        queue: list[tuple[Any, bool]] = [(video, False)]
         while queue:
-            current = queue.pop(0)
+            current, is_media_container = queue.pop(0)
             if isinstance(current, Mapping):
                 for key, value in current.items():
+                    child_is_media_container = is_media_container or key in media_container_keys
                     if isinstance(value, str):
-                        if key in candidate_keys and value.startswith(("http://", "https://")):
+                        if key in media_url_keys and value.startswith(("http://", "https://")):
+                            return value
+                        if (
+                            key == "url"
+                            and is_media_container
+                            and value.startswith(("http://", "https://"))
+                        ):
                             return value
                     elif isinstance(value, Mapping | list):
-                        queue.append(value)
+                        queue.append((value, child_is_media_container))
             elif isinstance(current, list):
-                queue.extend(current)
+                queue.extend((item, is_media_container) for item in current)
         return None
 
     def download_cloud_video(

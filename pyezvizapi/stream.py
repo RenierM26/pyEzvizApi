@@ -1039,6 +1039,92 @@ def _h264_nal_type(data: bytes, start_code_pos: int, start_code_len: int) -> int
     return data[header_pos] & 0x1F
 
 
+def _is_plausible_hevc_header(data: bytes, start_code_pos: int, start_code_len: int) -> bool:
+    """Return True when the bytes after an Annex B start look like clear HEVC."""
+
+    header_pos = start_code_pos + start_code_len
+    if header_pos + 1 >= len(data):
+        return False
+    if (data[header_pos] & 0x80) != 0:
+        return False
+    nal_type = (data[header_pos] >> 1) & 0x3F
+    return nal_type <= 40 and (data[header_pos + 1] & 0x07) != 0
+
+
+def _is_plausible_h264_header(data: bytes, start_code_pos: int, start_code_len: int) -> bool:
+    """Return True when the byte after an Annex B start looks like clear H.264."""
+
+    header_pos = start_code_pos + start_code_len
+    if header_pos >= len(data):
+        return False
+    nal_header = data[header_pos]
+    return (nal_header & 0x80) == 0 and 1 <= (nal_header & 0x1F) <= 23
+
+
+def _h264_header_score(nal_type: int) -> int:
+    """Return a small confidence score for a plausible H.264 NAL type."""
+
+    if nal_type in {5, 7, 8}:
+        return 4
+    if nal_type in {1, 2, 3, 4}:
+        return 2
+    return 1
+
+
+def _hevc_header_score(nal_type: int) -> int:
+    """Return a small confidence score for a plausible HEVC NAL type."""
+
+    if nal_type in {32, 33, 34}:
+        return 4
+    if nal_type < 32:
+        return 2
+    return 1
+
+
+def detect_hikvision_ps_video_nalu_header_size(data: bytes, key: str | bytes) -> int:
+    """Best-effort detect the NAL header mode for Hikvision/EZVIZ PS video.
+
+    Returns the number of clear codec header bytes to preserve before AES
+    decryption: ``2`` for HEVC, ``1`` for H.264 with a clear header, and ``0``
+    for H.264 where the NAL header is encrypted.
+    """
+
+    key_bytes = key.encode() if isinstance(key, str) else key
+    aes_key = key_bytes.ljust(16, b"\0")[:16]
+    scores = {"hevc": 0, "h264-clear-header": 0, "h264": 0}
+
+    for payload_start, payload_end in _video_pes_payload_ranges(data):
+        for start_code_pos, start_code_len in _find_nal_start_codes(
+            data,
+            payload_start,
+            payload_end,
+        ):
+            header_pos = start_code_pos + start_code_len
+            if _is_plausible_hevc_header(data, start_code_pos, start_code_len):
+                scores["hevc"] += _hevc_header_score(
+                    (data[header_pos] >> 1) & 0x3F,
+                )
+            if _is_plausible_h264_header(data, start_code_pos, start_code_len):
+                scores["h264-clear-header"] += _h264_header_score(
+                    data[header_pos] & 0x1F,
+                )
+            if header_pos + AES.block_size <= payload_end:
+                cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
+                decrypted_header = cipher.decrypt(
+                    bytes(data[header_pos : header_pos + AES.block_size]),
+                )[0]
+                if (decrypted_header & 0x80) == 0:
+                    nal_type = decrypted_header & 0x1F
+                    if 1 <= nal_type <= 23:
+                        scores["h264"] += _h264_header_score(nal_type)
+
+    if scores["h264"] > max(scores["hevc"], scores["h264-clear-header"]):
+        return 0
+    if scores["h264-clear-header"] > scores["hevc"]:
+        return 1
+    return 2
+
+
 def _find_hevc_nal_start_codes(
     data: bytes, start: int, end: int
 ) -> list[tuple[int, int]]:
@@ -1074,7 +1160,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
     data: bytes,
     key: str | bytes,
     *,
-    nalu_header_size: int = 2,
+    nalu_header_size: int | None = 2,
 ) -> bytes:
     """Decrypt Hikvision/EZVIZ encrypted MPEG-PS video NAL payloads.
 
@@ -1086,6 +1172,8 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
     two-byte HEVC NAL header.
     """
 
+    if nalu_header_size is None:
+        nalu_header_size = detect_hikvision_ps_video_nalu_header_size(data, key)
     if nalu_header_size < 0:
         raise ValueError("nalu_header_size must be non-negative")
 

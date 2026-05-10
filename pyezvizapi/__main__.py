@@ -30,6 +30,7 @@ from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 from .light_bulb import EzvizLightBulb
 from .stream import (
     decrypt_hikvision_ps_video,
+    detect_hikvision_ps_video_nalu_header_size,
     download_ezviz_cloud_replay,
     mpeg_ps_decryptable_prefix_length,
 )
@@ -499,12 +500,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_cloud_video_download.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264", "h264-clear-header"),
-        default="hevc",
+        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        default="auto",
         help=(
-            "Video codec transform when decrypting streamUrl clips: hevc preserves "
+            "Video codec transform when decrypting streamUrl clips: auto detects the "
+            "NAL header mode; hevc preserves "
             "the two-byte HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
         ),
     )
     parser_cloud_video_download.add_argument(
@@ -550,12 +552,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_cloud_video_decrypt.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264", "h264-clear-header"),
-        default="hevc",
+        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        default="auto",
         help=(
-            "Video codec transform during decryption: hevc preserves the two-byte "
+            "Video codec transform during decryption: auto detects the NAL header "
+            "mode; hevc preserves the two-byte "
             "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
         ),
     )
 
@@ -689,12 +692,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_dump.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264", "h264-clear-header"),
-        default="hevc",
+        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        default="auto",
         help=(
-            "Video codec transform for --decrypt-video: hevc preserves the two-byte "
+            "Video codec transform for --decrypt-video: auto detects the NAL header "
+            "mode; hevc preserves the two-byte "
             "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
         ),
     )
     parser_stream_proxy = subparsers_stream.add_parser(
@@ -767,12 +771,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_proxy.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264", "h264-clear-header"),
-        default="hevc",
+        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        default="auto",
         help=(
-            "Video codec transform for --decrypt-video: hevc preserves the two-byte "
+            "Video codec transform for --decrypt-video: auto detects the NAL header "
+            "mode; hevc preserves the two-byte "
             "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
         ),
     )
     parser_stream_proxy.add_argument(
@@ -1516,9 +1521,11 @@ def _decrypt_stream_payload_bytes(
     )
 
 
-def _codec_nalu_header_size(codec: str) -> int:
+def _codec_nalu_header_size(codec: str) -> int | None:
     """Return the Annex B NAL header length preserved by the decrypt transform."""
 
+    if codec == "auto":
+        return None
     if codec == "hevc":
         return 2
     if codec == "h264-clear-header":
@@ -1534,6 +1541,18 @@ class _BufferedStreamPayloadDecryptor:
         self._nalu_header_size = _codec_nalu_header_size(codec)
         self._buffer = bytearray()
 
+    def _decrypt_chunk(self, chunk: bytes) -> bytes:
+        if self._nalu_header_size is None:
+            self._nalu_header_size = detect_hikvision_ps_video_nalu_header_size(
+                chunk,
+                self._key,
+            )
+        return decrypt_hikvision_ps_video(
+            chunk,
+            self._key,
+            nalu_header_size=self._nalu_header_size,
+        )
+
     def __call__(self, data: bytes) -> bytes:
         self._buffer.extend(data)
         complete_end = mpeg_ps_decryptable_prefix_length(self._buffer)
@@ -1541,11 +1560,7 @@ class _BufferedStreamPayloadDecryptor:
             return b""
         chunk = bytes(self._buffer[:complete_end])
         del self._buffer[:complete_end]
-        return decrypt_hikvision_ps_video(
-            chunk,
-            self._key,
-            nalu_header_size=self._nalu_header_size,
-        )
+        return self._decrypt_chunk(chunk)
 
     def flush(self) -> bytes:
         """Decrypt and return any buffered tail at stream end."""
@@ -1554,11 +1569,7 @@ class _BufferedStreamPayloadDecryptor:
             return b""
         chunk = bytes(self._buffer)
         self._buffer.clear()
-        return decrypt_hikvision_ps_video(
-            chunk,
-            self._key,
-            nalu_header_size=self._nalu_header_size,
-        )
+        return self._decrypt_chunk(chunk)
 
 
 def _stream_payload_decryptor(

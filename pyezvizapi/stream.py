@@ -1095,7 +1095,7 @@ def decrypt_hikvision_ps_video(
     pending_block_positions: list[int] = []
     pending_block = bytearray()
     active_nal = False
-    active_nal_decrypted = 0
+    active_nal_decrypted = active_nal_body_start = 0
     find_nal_start_codes = (
         _find_h264_nal_start_codes
         if nalu_header_size == 1
@@ -1103,11 +1103,11 @@ def decrypt_hikvision_ps_video(
     )
 
     def reset_nal_state() -> None:
-        nonlocal active_nal, active_nal_decrypted
+        nonlocal active_nal, active_nal_body_start, active_nal_decrypted
         pending_block_positions.clear()
         pending_block.clear()
         active_nal = False
-        active_nal_decrypted = 0
+        active_nal_decrypted = active_nal_body_start = 0
 
     def decrypt_nal_body_segment(start: int, end: int) -> None:
         nonlocal active_nal_decrypted
@@ -1146,7 +1146,8 @@ def decrypt_hikvision_ps_video(
             if (
                 active_nal
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and start_code_len == len(MPEG_START_CODE_PREFIX)
+                and start_code_pos
+                == active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos != payload_start
             ):
                 continue
@@ -1155,6 +1156,7 @@ def decrypt_hikvision_ps_video(
             reset_nal_state()
             active_nal = True
             decrypt_start = start_code_pos + start_code_len + nalu_header_size
+            active_nal_body_start = decrypt_start
             decrypt_end = (
                 nal_starts[idx + 1][0]
                 if idx + 1 < len(nal_starts)

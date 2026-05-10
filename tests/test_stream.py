@@ -547,6 +547,79 @@ def test_download_ezviz_cloud_replay_preserves_type_2_media(monkeypatch) -> None
     )
 
 
+def test_download_ezviz_cloud_replay_rejects_short_download(monkeypatch) -> None:
+    messages = [
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>1</Type></Response>",
+            data=b"short",
+            md5_ok=True,
+            result=0,
+            data_type=1,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>100</Type></Response>",
+            data=b"",
+            md5_ok=True,
+            result=0,
+            data_type=100,
+        ),
+    ]
+
+    class FakeSocket:
+        def __enter__(self) -> FakeSocket:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+    class FakeSslContext:
+        minimum_version: object
+
+        def wrap_socket(self, raw_socket: FakeSocket, *, server_hostname: str) -> FakeSocket:
+            assert server_hostname == "cloud.example.test"
+            return raw_socket
+
+    def fake_read_cloud_replay_message(
+        _tls_socket: FakeSocket,
+        _buffer: bytes,
+    ) -> tuple[Any, bytes]:
+        return messages.pop(0), b""
+
+    monkeypatch.setattr(
+        stream_module.socket,
+        "create_connection",
+        lambda address, timeout: FakeSocket(),
+    )
+    monkeypatch.setattr(
+        stream_module.ssl,
+        "create_default_context",
+        FakeSslContext,
+    )
+    monkeypatch.setattr(
+        stream_module,
+        "_read_cloud_replay_message",
+        fake_read_cloud_replay_message,
+    )
+
+    with pytest.raises(PyEzvizError, match="ended before expected file size"):
+        download_ezviz_cloud_replay(
+            stream_url="cloud.example.test:32723",
+            ticket="ticket",
+            serial="CAM123",
+            channel=1,
+            seq_id=123,
+            begin_cas="20260509T215000Z",
+            end_cas="20260509T215010Z",
+            file_size=6,
+        )
+
+
 def test_find_hevc_nal_start_codes_ignores_ciphertext_start_code_lookalikes() -> None:
     payload = (
         b"\x00\x00\x00\x01\x40\x01vps"

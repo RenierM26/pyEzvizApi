@@ -1091,6 +1091,11 @@ def download_ezviz_cloud_replay(  # noqa: PLR0913
                     if file_size is not None and len(output) >= file_size:
                         return bytes(output[:file_size])
                 elif message.data_type == 100:
+                    if file_size is not None and len(output) < file_size:
+                        raise PyEzvizError(
+                            "Cloud replay ended before expected file size: "
+                            f"{len(output)}/{file_size} bytes"
+                        )
                     return bytes(output)
 
                 if time.monotonic() - last_heartbeat >= 5:

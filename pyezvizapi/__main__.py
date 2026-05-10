@@ -24,8 +24,6 @@ import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
-from Crypto.Hash import MD5
-
 from .camera import EzvizCamera
 from .client import EzvizClient
 from .cloud_stream import open_cloud_stream
@@ -36,13 +34,6 @@ from .stream import decrypt_hikvision_ps_video, download_ezviz_cloud_replay
 
 _LOGGER = logging.getLogger(__name__)
 _REAL_EZVIZ_CLIENT = EzvizClient
-
-
-def _ezviz_key_checksum(secret_key: str) -> str:
-    """Return the EZVIZ cloud clip key checksum for compatibility checks."""
-
-    first = MD5.new(secret_key.encode("utf-8")).hexdigest()
-    return MD5.new(first.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -1302,11 +1293,6 @@ def _handle_cloud_video_download(args: argparse.Namespace, client: EzvizClient) 
             )
         )
         secret_key = client.get_cam_key(args.serial, max_retries=1)
-        checksum = selected.get("keyChecksum") or selected.get("checksum")
-        if isinstance(checksum, str) and _ezviz_key_checksum(secret_key) != checksum:
-            raise PyEzvizError(
-                "Camera key does not match cloud clip keyChecksum"
-            ) from None
 
         start_millis = _cloud_video_start_millis(selected)
         stop_millis = start_millis + int(selected.get("videoLong") or 0)
@@ -1521,9 +1507,6 @@ def _handle_cloud_video_native_download(
         )
     )
     secret_key = client.get_cam_key(args.serial, max_retries=1)
-    checksum = selected.get("keyChecksum") or selected.get("checksum")
-    if isinstance(checksum, str) and _ezviz_key_checksum(secret_key) != checksum:
-        raise PyEzvizError("Camera key does not match cloud clip keyChecksum")
 
     start_millis = _cloud_video_start_millis(selected)
     stop_millis = start_millis + int(selected.get("videoLong") or 0)

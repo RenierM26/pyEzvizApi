@@ -1078,9 +1078,9 @@ def _is_plausible_h264_header(data: bytes, start_code_pos: int, start_code_len: 
 def _h264_header_score(nal_type: int) -> int:
     """Return a small confidence score for a plausible H.264 NAL type."""
 
-    if nal_type in {5, 7, 8}:
+    if nal_type in {1, 5, 7, 8}:
         return 4
-    if nal_type in {1, 2, 3, 4}:
+    if nal_type in {2, 3, 4}:
         return 2
     return 1
 
@@ -1133,7 +1133,7 @@ def detect_hikvision_ps_video_nalu_header_size(
                 scores["h264-clear-header"] += _h264_header_score(
                     data[header_pos] & 0x1F,
                 )
-            if not has_clear_h264_header and header_pos + AES.block_size <= payload_end:
+            if header_pos + AES.block_size <= payload_end:
                 cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
                 decrypted_header = cipher.decrypt(
                     bytes(data[header_pos : header_pos + AES.block_size]),

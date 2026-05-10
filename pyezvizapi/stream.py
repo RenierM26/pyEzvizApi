@@ -1061,7 +1061,8 @@ def _is_plausible_hevc_header(data: bytes, start_code_pos: int, start_code_len: 
     if (data[header_pos] & 0x80) != 0:
         return False
     nal_type = (data[header_pos] >> 1) & 0x3F
-    return nal_type <= 40 and (data[header_pos + 1] & 0x07) != 0
+    layer_id = ((data[header_pos] & 0x01) << 5) | (data[header_pos + 1] >> 3)
+    return nal_type <= 40 and layer_id == 0 and (data[header_pos + 1] & 0x07) != 0
 
 
 def _is_plausible_h264_header(data: bytes, start_code_pos: int, start_code_len: int) -> bool:
@@ -1123,11 +1124,16 @@ def detect_hikvision_ps_video_nalu_header_size(
                 scores["hevc"] += _hevc_header_score(
                     (data[header_pos] >> 1) & 0x3F,
                 )
-            if _is_plausible_h264_header(data, start_code_pos, start_code_len):
+            has_clear_h264_header = _is_plausible_h264_header(
+                data,
+                start_code_pos,
+                start_code_len,
+            )
+            if has_clear_h264_header:
                 scores["h264-clear-header"] += _h264_header_score(
                     data[header_pos] & 0x1F,
                 )
-            if header_pos + AES.block_size <= payload_end:
+            if not has_clear_h264_header and header_pos + AES.block_size <= payload_end:
                 cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
                 decrypted_header = cipher.decrypt(
                     bytes(data[header_pos : header_pos + AES.block_size]),

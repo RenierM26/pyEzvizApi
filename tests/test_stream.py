@@ -536,7 +536,7 @@ def test_decrypt_hikvision_ps_video_bounds_adjacent_zero_length_pes_packets() ->
 
 
 def test_mpeg_ps_complete_prefix_ignores_ciphertext_start_code_lookalikes() -> None:
-    pack = b"\x00\x00\x01\xba" + b"\x44" * 9 + b"\x40"
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
     encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + (
         b"ciphertext"
         b"\x00\x00\x01\xe0\x00\x04"
@@ -549,6 +549,20 @@ def test_mpeg_ps_complete_prefix_ignores_ciphertext_start_code_lookalikes() -> N
     assert mpeg_ps_complete_prefix_length(pack + video_pes + audio_pes) == len(
         pack + video_pes + audio_pes
     )
+
+
+def test_mpeg_ps_complete_prefix_ignores_ciphertext_pack_header_lookalikes() -> None:
+    invalid_pack_lookalike = b"\x00\x00\x01\xba" + b"\xff" * 20
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        b"ciphertext"
+        + invalid_pack_lookalike
+        + b"tail"
+    )
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_payload
+    audio_pes = b"\x00\x00\x01\xc0\x00\x07\x80\x00\x00keep"
+
+    assert mpeg_ps_complete_prefix_length(video_pes + audio_pes) == len(video_pes + audio_pes)
 
 
 def test_mpeg_ps_decryptable_prefix_keeps_trailing_video_pes_run() -> None:

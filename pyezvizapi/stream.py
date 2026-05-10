@@ -866,7 +866,11 @@ def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
     packet_end = None
     if start + 4 <= len(data) and data[start : start + 3] == MPEG_START_CODE_PREFIX:
         stream_id = data[start + 3]
-        if stream_id == _PACK_HEADER_STREAM_ID and start + 14 <= len(data):
+        if (
+            stream_id == _PACK_HEADER_STREAM_ID
+            and start + 14 <= len(data)
+            and _is_mpeg2_pack_header(data, start)
+        ):
             stuffing_length = data[start + 13] & 0x07
             candidate_end = start + 14 + stuffing_length
             if candidate_end <= len(data):
@@ -883,6 +887,18 @@ def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
                 if payload_start is not None and payload_start <= candidate_end:
                     packet_end = candidate_end
     return packet_end
+
+
+def _is_mpeg2_pack_header(data: bytes, start: int) -> bool:
+    """Return True when ``start`` has MPEG-2 pack-header marker bits."""
+
+    return (
+        (data[start + 4] & 0xC4) == 0x44
+        and (data[start + 6] & 0x04) == 0x04
+        and (data[start + 8] & 0x04) == 0x04
+        and (data[start + 12] & 0x01) == 0x01
+        and (data[start + 13] & 0xF8) == 0xF8
+    )
 
 
 def _pes_payload_start(data: bytes, packet_start: int) -> int | None:

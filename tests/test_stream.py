@@ -757,18 +757,24 @@ def test_decrypt_hikvision_ps_video_leaves_nal_body_after_encrypted_prefix() -> 
     )
 
 
-def test_decrypt_hikvision_ps_video_ignores_in_prefix_hevc_start_code_lookalikes() -> None:
+def test_decrypt_hikvision_ps_video_preserves_short_hevc_nal_boundaries() -> None:
     key = "camera-key"
-    encrypted_body = bytes.fromhex(
-        "61626364000001420178797a41424344"
-        "454647483132333435363738395a5a5a"
+    clear_first_body = b"0123456789abcdef"
+    encrypted_first_body = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    clear_second_body = b"fedcba9876543210"
+    encrypted_second_body = bytes.fromhex("71ec10ded9beb3a19fcdd7205152d6c6")
+    clear_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + clear_first_body
+        + b"\x00\x00\x01\x42\x01"
+        + clear_second_body
     )
-    clear_body = bytes.fromhex(
-        "a975b9f55f84cf306171221b11dd62e9"
-        "e432ab89e61b55585a6cdee222a5f42e"
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + encrypted_first_body
+        + b"\x00\x00\x01\x42\x01"
+        + encrypted_second_body
     )
-    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
-    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
     pes = (
         b"\x00\x00\x01\xe0"
         + (len(encrypted_payload) + 3).to_bytes(2, "big")
@@ -785,15 +791,14 @@ def test_decrypt_hikvision_ps_video_ignores_in_prefix_hevc_start_code_lookalikes
     )
 
 
-def test_decrypt_hikvision_ps_video_preserves_short_hevc_nal_boundaries() -> None:
+def test_decrypt_hikvision_ps_video_preserves_sub_block_hevc_nal_boundaries() -> None:
     key = "camera-key"
-    clear_first_body = b"0123456789abcdef"
-    encrypted_first_body = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    encrypted_first_body = b"tiny"
     clear_second_body = b"fedcba9876543210"
     encrypted_second_body = bytes.fromhex("71ec10ded9beb3a19fcdd7205152d6c6")
     clear_payload = (
         b"\x00\x00\x00\x01\x42\x01"
-        + clear_first_body
+        + encrypted_first_body
         + b"\x00\x00\x01\x42\x01"
         + clear_second_body
     )

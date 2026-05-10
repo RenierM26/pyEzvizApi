@@ -14,11 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
 import logging
-import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 from threading import Thread
 import time
 from typing import Any, BinaryIO, cast
@@ -34,6 +32,7 @@ from .stream import decrypt_hikvision_ps_video, download_ezviz_cloud_replay
 
 _LOGGER = logging.getLogger(__name__)
 _REAL_EZVIZ_CLIENT = EzvizClient
+MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
 
 
 @dataclass(frozen=True)
@@ -466,7 +465,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     parser_cloud_video_download = subparsers.add_parser(
         "cloud_video_download",
-        help="Download one cloud video when videoDetails returns a direct HTTP URL",
+        help="Download one cloud video from direct HTTP(S) or cloud replay streamUrl details",
     )
     parser_cloud_video_download.add_argument("--serial", required=True, help="camera SERIAL")
     parser_cloud_video_download.add_argument(
@@ -496,6 +495,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Cloud replay socket timeout in seconds (default: 30)",
     )
     parser_cloud_video_download.add_argument(
+        "--decrypt-codec",
+        choices=("hevc", "h264"),
+        default="hevc",
+        help="Codec NAL header size to preserve when decrypting streamUrl clips (default: hevc)",
+    )
+    parser_cloud_video_download.add_argument(
         "--limit",
         type=int,
         default=20,
@@ -512,95 +517,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=0,
         help="EZVIZ multi-channel shared-service flag (default: 0)",
-    )
-
-    parser_cloud_video_native_download = subparsers.add_parser(
-        "cloud_video_native_download",
-        help="Download and transform a cloud clip through a gadget-loaded EZVIZ app",
-    )
-    parser_cloud_video_native_download.add_argument("--serial", required=True, help="camera SERIAL")
-    parser_cloud_video_native_download.add_argument(
-        "--channel",
-        type=int,
-        default=1,
-        help="Camera channel number (default: 1)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--seq-id",
-        required=True,
-        help="Cloud video seqId to select from /v3/clouds/videos/list",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--output",
-        required=True,
-        help="Output path for the transformed PS media",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--encrypted-output",
-        help="Optional output path for the native encrypted .tmp bytes",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--transform",
-        choices=("python", "native"),
-        default="python",
-        help=(
-            "Transform/decrypt the native .tmp bytes locally in Python or through "
-            "Android TransformUtils (default: python)"
-        ),
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--limit",
-        type=int,
-        default=20,
-        help="Number of cloud videos to inspect while finding seqId (default: 20)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--video-type",
-        type=int,
-        default=2,
-        help="Cloud video type (default: 2, as used by the app list view)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--support-multi-channel-shared-service",
-        type=int,
-        default=0,
-        help="EZVIZ multi-channel shared-service flag (default: 0)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--adb-serial",
-        default=None,
-        help="ADB device serial for the Android device running EZVIZ",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--frida-host",
-        default="127.0.0.1:27046",
-        help="Frida host for the embedded gadget (default: 127.0.0.1:27046)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--android-package",
-        default="com.ezviz",
-        help="Android package name used for app external files (default: com.ezviz)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--frida-target",
-        default="Gadget",
-        help="Frida process name to attach to (default: Gadget)",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--native-download-script",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--output-name",
-        default=None,
-        help="Device-side basename for temporary native files",
-    )
-    parser_cloud_video_native_download.add_argument(
-        "--timeout",
-        type=float,
-        default=45.0,
-        help="Timeout in seconds for each ADB/Frida operation (default: 45)",
     )
 
     parser_cloud_video_decrypt = subparsers.add_parser(
@@ -624,6 +540,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_cloud_video_decrypt.add_argument(
         "--key",
         help="Camera encrypt key. Prefer --serial so the key is not exposed in shell history",
+    )
+    parser_cloud_video_decrypt.add_argument(
+        "--decrypt-codec",
+        choices=("hevc", "h264"),
+        default="hevc",
+        help="Codec NAL header size to preserve during decryption (default: hevc)",
     )
 
     parser_stream = subparsers.add_parser(
@@ -1320,7 +1242,11 @@ def _handle_cloud_video_download(args: argparse.Namespace, client: EzvizClient) 
         if encrypted_output is not None:
             encrypted_output.parent.mkdir(parents=True, exist_ok=True)
             encrypted_output.write_bytes(encrypted_data)
-        data = decrypt_hikvision_ps_video(encrypted_data, secret_key)
+        data = decrypt_hikvision_ps_video(
+            encrypted_data,
+            secret_key,
+            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+        )
         transform = "cloud_replay_python"
 
     output = Path(args.output)
@@ -1423,231 +1349,6 @@ def _cas_time_from_millis(value: int) -> str:
     return dt.datetime.fromtimestamp(value / 1000, tz=dt.UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _script_path(name: str) -> Path:
-    """Return the repository Frida script path."""
-
-    path = Path(__file__).resolve().parents[1] / "tools" / "apk-re" / "frida" / name
-    if not path.exists():
-        raise PyEzvizError(f"Frida helper script not found: {path}")
-    return path
-
-
-def _run_checked(command: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
-    """Run a helper command and raise a contextual error on failure."""
-
-    try:
-        return subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError as err:
-        raise PyEzvizError(f"Required command not found: {command[0]}") from err
-    except subprocess.TimeoutExpired as err:
-        raise PyEzvizError(f"Command timed out: {' '.join(command)}") from err
-    except subprocess.CalledProcessError as err:
-        output = (err.stderr or err.stdout or "").strip()
-        suffix = f": {output}" if output else ""
-        raise PyEzvizError(f"Command failed: {' '.join(command)}{suffix}") from err
-
-
-def _adb_command(adb_serial: str | None, *args: str) -> list[str]:
-    """Build an adb command."""
-
-    command = ["adb"]
-    if adb_serial:
-        command.extend(["-s", adb_serial])
-    command.extend(args)
-    return command
-
-
-def _frida_command(frida_host: str, frida_target: str, script: Path, timeout: float) -> list[str]:
-    """Build a non-interactive Frida command."""
-
-    return [
-        "frida",
-        "-q",
-        "--exit-on-error",
-        "-t",
-        str(int(max(timeout, 1))),
-        "-H",
-        frida_host,
-        "-n",
-        frida_target,
-        "-l",
-        str(script),
-    ]
-
-
-def _handle_cloud_video_native_download(
-    args: argparse.Namespace,
-    client: EzvizClient,
-) -> int:
-    """Download a cloud clip by driving the EZVIZ app's native SDK path."""
-
-    selected = _select_cloud_video_for_seq_id(
-        client,
-        serial=args.serial,
-        channel=args.channel,
-        seq_id=args.seq_id,
-        limit=args.limit,
-        video_type=args.video_type,
-        support_multi_channel_shared_service=args.support_multi_channel_shared_service,
-    )
-    if not isinstance(selected.get("streamUrl"), str):
-        raise PyEzvizError("Cloud video descriptor does not include native streamUrl")
-
-    ticket = _extract_ticket(
-        client.get_camera_ticket_info(
-            args.serial,
-            args.channel,
-            support_multi_channel_shared_service=args.support_multi_channel_shared_service,
-        )
-    )
-    secret_key = client.get_cam_key(args.serial, max_retries=1)
-
-    start_millis = _cloud_video_start_millis(selected)
-    stop_millis = start_millis + int(selected.get("videoLong") or 0)
-    if stop_millis <= start_millis:
-        stop_millis = start_millis + 10_000
-
-    output_name = args.output_name or f"cloud-{args.serial}-{args.seq_id}"
-    device_base = f"/sdcard/Android/data/{args.android_package}/files"
-    device_input = f"{device_base}/ezviz-cloud-download-input.json"
-    device_output_dir = f"{device_base}/ezviz-direct-download"
-    download_script = (
-        Path(args.native_download_script)
-        if args.native_download_script
-        else _script_path("ezviz-trigger-cloud-download.js")
-    )
-    transform_script = _script_path("ezviz-transform-cloud-download.js")
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    encrypted_output = Path(args.encrypted_output) if args.encrypted_output else None
-    if encrypted_output is not None:
-        encrypted_output.parent.mkdir(parents=True, exist_ok=True)
-    temp_paths: list[Path] = []
-    pulled_encrypted_output = encrypted_output
-    if pulled_encrypted_output is None and args.transform == "python":
-        fd, temp_encrypted_name = tempfile.mkstemp(suffix=".tmp")
-        os.close(fd)
-        pulled_encrypted_output = Path(temp_encrypted_name)
-        temp_paths.append(pulled_encrypted_output)
-
-    payload = {
-        "serial": args.serial,
-        "channel": args.channel,
-        "ticket": ticket,
-        "video": selected,
-        "startMillis": start_millis,
-        "stopMillis": stop_millis,
-        "beginCas": _cas_time_from_millis(start_millis),
-        "endCas": _cas_time_from_millis(stop_millis),
-        "outputName": output_name,
-        "runMs": int(max(args.timeout, 1) * 1000),
-    }
-
-    try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
-            temp_path = Path(tmp.name)
-            temp_paths.append(temp_path)
-            json.dump(payload, tmp)
-        os.chmod(temp_path, 0o600)
-
-        _run_checked(
-            _adb_command(args.adb_serial, "push", str(temp_path), device_input),
-            timeout=args.timeout,
-        )
-        _run_checked(
-            _frida_command(args.frida_host, args.frida_target, download_script, args.timeout),
-            timeout=args.timeout + 5,
-        )
-        if pulled_encrypted_output is not None:
-            _run_checked(
-                _adb_command(
-                    args.adb_serial,
-                    "pull",
-                    f"{device_output_dir}/{output_name}.tmp",
-                    str(pulled_encrypted_output),
-                ),
-                timeout=args.timeout,
-            )
-            expected_size = selected.get("fileSize")
-            if isinstance(expected_size, int | str) and str(expected_size).isdigit():
-                actual_size = pulled_encrypted_output.stat().st_size
-                if actual_size < int(expected_size):
-                    raise PyEzvizError(
-                        "Native cloud download produced fewer bytes than expected: "
-                        f"{actual_size} < {expected_size}"
-                    )
-
-        if args.transform == "python":
-            if pulled_encrypted_output is None:
-                raise PyEzvizError("Internal error: encrypted cloud bytes were not pulled")
-            output.write_bytes(
-                decrypt_hikvision_ps_video(pulled_encrypted_output.read_bytes(), secret_key)
-            )
-        else:
-            payload["secretKey"] = secret_key
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
-                transform_temp_path = Path(tmp.name)
-                temp_paths.append(transform_temp_path)
-                json.dump(payload, tmp)
-            os.chmod(transform_temp_path, 0o600)
-
-            _run_checked(
-                _adb_command(args.adb_serial, "push", str(transform_temp_path), device_input),
-                timeout=args.timeout,
-            )
-            _run_checked(
-                _frida_command(
-                    args.frida_host,
-                    args.frida_target,
-                    transform_script,
-                    args.timeout,
-                ),
-                timeout=args.timeout,
-            )
-            _run_checked(
-                _adb_command(
-                    args.adb_serial,
-                    "pull",
-                    f"{device_output_dir}/{output_name}.ps",
-                    str(output),
-                ),
-                timeout=args.timeout,
-            )
-    finally:
-        for temp_path in temp_paths:
-            with suppress(OSError):
-                temp_path.unlink()
-        with suppress(PyEzvizError):
-            _run_checked(
-                _adb_command(args.adb_serial, "shell", "rm", "-f", device_input),
-                timeout=min(args.timeout, 10),
-            )
-
-    result: dict[str, Any] = {
-        "output": str(output),
-        "encrypted_output": str(encrypted_output) if encrypted_output else None,
-        "seqId": selected.get("seqId"),
-        "streamUrl": selected.get("streamUrl"),
-        "ticket": "<redacted>",
-        "secretKey": "<redacted>",
-        "transform": args.transform,
-    }
-    if args.json:
-        _write_json(result)
-    else:
-        sys.stdout.write(f"Wrote transformed cloud video to {output}\n")
-        if encrypted_output is not None:
-            sys.stdout.write(f"Wrote encrypted native download to {encrypted_output}\n")
-    return 0
-
-
 def _handle_cloud_video_decrypt(
     args: argparse.Namespace,
     client: EzvizClient | None,
@@ -1666,7 +1367,13 @@ def _handle_cloud_video_decrypt(
     input_path = Path(args.input)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(decrypt_hikvision_ps_video(input_path.read_bytes(), key))
+    output_path.write_bytes(
+        decrypt_hikvision_ps_video(
+            input_path.read_bytes(),
+            key,
+            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+        )
+    )
 
     result = {"input": str(input_path), "output": str(output_path), "bytes": output_path.stat().st_size}
     if args.json:
@@ -1733,9 +1440,14 @@ def _write_stream_payloads(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
             )
         payload = transform_payload(packet.body) if transform_payload else packet.body
-        output.write(payload)
+        if payload:
+            output.write(payload)
         if flush_each:
             output.flush()
+    if transform_payload and hasattr(transform_payload, "flush"):
+        tail = transform_payload.flush()
+        if tail:
+            output.write(tail)
     output.flush()
 
 
@@ -1778,12 +1490,72 @@ def _decrypt_stream_payload_bytes(
     key = client.get_cam_key(serial, max_retries=1)
     if not key:
         raise PyEzvizError("Could not get camera encryption key")
-    nalu_header_size = 2 if codec == "hevc" else 1
     return decrypt_hikvision_ps_video(
         data,
         str(key),
-        nalu_header_size=nalu_header_size,
+        nalu_header_size=_codec_nalu_header_size(codec),
     )
+
+
+def _codec_nalu_header_size(codec: str) -> int:
+    """Return the Annex B NAL header length preserved by the decrypt transform."""
+
+    return 2 if codec == "hevc" else 1
+
+
+class _BufferedStreamPayloadDecryptor:
+    """Decrypt MPEG-PS payloads after buffering across VTM packet splits."""
+
+    def __init__(self, key: str, *, codec: str) -> None:
+        self._key = key
+        self._nalu_header_size = _codec_nalu_header_size(codec)
+        self._buffer = bytearray()
+
+    def __call__(self, data: bytes) -> bytes:
+        self._buffer.extend(data)
+        complete_end = _complete_mpegps_prefix_length(self._buffer)
+        if complete_end <= 0:
+            return b""
+        chunk = bytes(self._buffer[:complete_end])
+        del self._buffer[:complete_end]
+        return decrypt_hikvision_ps_video(
+            chunk,
+            self._key,
+            nalu_header_size=self._nalu_header_size,
+        )
+
+    def flush(self) -> bytes:
+        """Decrypt and return any buffered tail at stream end."""
+
+        if not self._buffer:
+            return b""
+        chunk = bytes(self._buffer)
+        self._buffer.clear()
+        return decrypt_hikvision_ps_video(
+            chunk,
+            self._key,
+            nalu_header_size=self._nalu_header_size,
+        )
+
+
+def _complete_mpegps_prefix_length(data: bytes | bytearray) -> int:
+    """Return bytes ending before the final plausible MPEG-PS packet start."""
+
+    last_start = -1
+    i = 0
+    while i < len(data) - 3:
+        if data[i : i + 3] == MPEG_START_CODE_PREFIX and _is_mpegps_packet_start_id(data[i + 3]):
+            last_start = i
+            i += 4
+            continue
+        i += 1
+    return last_start if last_start > 0 else 0
+
+
+def _is_mpegps_packet_start_id(stream_id: int) -> bool:
+    """Return True for MPEG-PS packet starts and video/audio PES IDs."""
+
+    return stream_id in {0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF} or 0xC0 <= stream_id <= 0xEF
 
 
 def _stream_payload_decryptor(
@@ -1792,21 +1564,12 @@ def _stream_payload_decryptor(
     *,
     codec: str,
 ) -> Callable[[bytes], bytes]:
-    """Return a per-payload MPEG-PS decryptor using the camera encrypt key."""
+    """Return a buffered MPEG-PS decryptor using the camera encrypt key."""
 
     key = client.get_cam_key(serial, max_retries=1)
     if not key:
         raise PyEzvizError("Could not get camera encryption key")
-    nalu_header_size = 2 if codec == "hevc" else 1
-
-    def _decrypt_payload(data: bytes) -> bytes:
-        return decrypt_hikvision_ps_video(
-            data,
-            str(key),
-            nalu_header_size=nalu_header_size,
-        )
-
-    return _decrypt_payload
+    return _BufferedStreamPayloadDecryptor(str(key), codec=codec)
 
 
 def _remux_mpegps_bytes_to_mpegts(
@@ -2315,8 +2078,6 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_cloud_videos(args, client)
         if args.action == "cloud_video_download":
             return _handle_cloud_video_download(args, client)
-        if args.action == "cloud_video_native_download":
-            return _handle_cloud_video_native_download(args, client)
         if args.action == "cloud_video_decrypt":
             return _handle_cloud_video_decrypt(args, client)
 

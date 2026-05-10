@@ -82,7 +82,9 @@ jobs:
             tools/apk-re/apk-re-shell \
             tools/apk-re/bin/decompile-apk \
             tools/apk-re/bin/inspect-so
-          python -m py_compile tools/apk-re/bin/extract-retrofit-endpoints
+          python -m py_compile \
+            tools/apk-re/bin/cloud-video-native-download \
+            tools/apk-re/bin/extract-retrofit-endpoints
 
       - name: Audit Python dependencies
         if: matrix.python-version == '3.12'

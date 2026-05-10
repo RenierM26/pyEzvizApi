@@ -117,16 +117,34 @@ Summarize native before/after transform pairs:
 Trigger a cloud-storage clip download through the gadget-loaded app:
 
 ```bash
+./tools/apk-re/bin/cloud-video-native-download \
+  --token-file ../secrets/ezviz_token.json \
+  --serial BB5130008 --channel 1 --seq-id 9713217646 \
+  --output discovery/cloud-captures/clip.ps \
+  --encrypted-output discovery/cloud-captures/clip.tmp \
+  --adb-serial 192.168.1.56:41653 \
+  --frida-host 127.0.0.1:27046
+```
+
+This diagnostic wrapper prepares the temporary JSON handoff, verifies the pulled
+`.tmp` size against `fileSize`, and removes the temporary handoff from the
+device. By default it uses the local Python PS/NAL transform after the app
+downloads the encrypted bytes. To compare Android `TransformUtils.trans(...)`,
+add `--transform native`.
+
+For lower-level manual experiments, the input JSON contains the clip descriptor
+and `/v3/cameras/ticketInfo` ticket. Do not commit it. The script writes
+`<outputName>.tmp` under the EZVIZ app external files directory:
+
+```bash
 adb -s 192.168.1.56:41653 push /tmp/ezviz-cloud-download-input.json \
   /sdcard/Android/data/com.ezviz/files/ezviz-cloud-download-input.json
 frida -H 127.0.0.1:27046 -n Gadget \
   -l tools/apk-re/frida/ezviz-trigger-cloud-download.js
 ```
 
-The input JSON contains the clip descriptor and `/v3/cameras/ticketInfo` ticket.
-Do not commit it. The script writes `<outputName>.tmp` under the EZVIZ app
-external files directory. To run the app's PS transform/decrypt step, add the
-camera secret as `secretKey` in the same temporary JSON and run:
+To run the app's PS transform/decrypt step manually, add the camera secret as
+`secretKey` in the same temporary JSON and run:
 
 ```bash
 frida -H 127.0.0.1:27046 -n Gadget \

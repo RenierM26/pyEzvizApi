@@ -146,19 +146,13 @@ pyezvizapi --json cloud_videos --serial ABC123 --channel 1 --limit 5 --details
 pyezvizapi cloud_video_download --serial ABC123 --channel 1 --seq-id 12345 \
   --output clip.ps --encrypted-output clip.tmp
 
-# Drive the native EZVIZ app SDK path through ADB + Frida when only streamUrl is exposed
-pyezvizapi cloud_video_native_download --serial ABC123 --channel 1 --seq-id 12345 \
-  --output clip.ps --encrypted-output clip.tmp --adb-serial 192.168.1.56:41653
-
 # Decrypt a previously captured native .tmp file locally in Python
 pyezvizapi cloud_video_decrypt --serial ABC123 --input clip.tmp --output clip.ps
 ```
 
 Some cloud clips only expose the EZVIZ native SDK `streamUrl` host/port in `videoDetails`. For regular cloud-storage clips, `cloud_video_download` now fetches `/v3/cameras/ticketInfo`, downloads the encrypted cloud replay `.tmp` stream over TLS, and applies the local Python PS/NAL decrypt transform. `--encrypted-output` keeps the encrypted `.tmp` for comparison.
 
-`cloud_video_native_download` remains as an investigation bridge for comparing against the Android SDK. It requires a gadget-loaded EZVIZ Android app reachable by ADB and Frida, fetches `/v3/cameras/ticketInfo` plus the camera verification key through `pyezvizapi`, then asks the app to run `EZStreamClient.startDownloadFromCloud(...)`. By default it pulls the encrypted `.tmp` and runs the PS/NAL decrypt locally in Python; use `--transform native` to fall back to Android `TransformUtils.trans(...)`.
-
-`cloud_video_decrypt` is the pure-Python transform step for native cloud `.tmp` files. Prefer `--serial` so `pyezvizapi` fetches the camera encrypt key without putting it in shell history; `--key` is available for offline/manual experiments.
+`cloud_video_decrypt` is the pure-Python transform step for captured cloud `.tmp` files. Prefer `--serial` so `pyezvizapi` fetches the camera encrypt key without putting it in shell history; `--key` is available for offline/manual experiments. Use `--decrypt-codec h264` for H.264 clips; the default is HEVC.
 
 ### sdcard_videos
 

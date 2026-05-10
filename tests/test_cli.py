@@ -4,7 +4,6 @@ import argparse
 import importlib.util
 import io
 import json
-from pathlib import Path
 import sys
 from typing import Any, BinaryIO, ClassVar, cast
 
@@ -489,8 +488,8 @@ def test_cloud_video_download_handles_native_stream_url(
         replay_calls.append(kwargs)
         return NATIVE_ENCRYPTED_PAYLOAD
 
-    def fake_decrypt(data: bytes, key: str) -> bytes:
-        decrypt_calls.append({"data": data, "key": key})
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
     monkeypatch.setattr(_FakeClient, "download_cloud_video", fake_direct_download)
@@ -541,122 +540,15 @@ def test_cloud_video_download_handles_native_stream_url(
             "timeout": 12,
         }
     ]
-    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret"}]
+    assert decrypt_calls == [
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret", "nalu_header_size": 2}
+    ]
     assert json.loads(capsys.readouterr().out) == {
         "bytes": len(NATIVE_TRANSFORMED_PAYLOAD),
         "encrypted_output": str(encrypted_output),
         "output": str(output),
         "seqId": 12345,
         "transform": "cloud_replay_python",
-    }
-
-
-def test_cloud_video_native_download_drives_adb_and_frida(
-    monkeypatch,
-    tmp_path,
-    capsys,
-) -> None:
-    fake_client = _install_fake_client(monkeypatch)
-    token_file = tmp_path / "token.json"
-    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
-    output = tmp_path / "downloads" / "clip.ps"
-    encrypted_output = tmp_path / "downloads" / "clip.tmp"
-    pushed_payloads: list[dict[str, Any]] = []
-    commands: list[list[str]] = []
-    decrypt_calls: list[dict[str, Any]] = []
-
-    def fake_run(
-        command: list[str],
-        *,
-        check: bool,
-        capture_output: bool,
-        text: bool,
-        timeout: float,
-    ) -> cli_module.subprocess.CompletedProcess[str]:
-        commands.append(command)
-        assert check is True
-        assert capture_output is True
-        assert text is True
-        assert timeout > 0
-
-        if command[0] == "adb" and "push" in command:
-            pushed_payloads.append(json.loads(Path(command[-2]).read_text(encoding="utf-8")))
-        if command[0] == "adb" and "pull" in command:
-            destination = Path(command[-1])
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(
-                NATIVE_ENCRYPTED_PAYLOAD
-                if destination.suffix == ".tmp"
-                else NATIVE_TRANSFORMED_PAYLOAD
-            )
-        return cli_module.subprocess.CompletedProcess(command, 0, "", "")
-
-    def fake_decrypt(data: bytes, key: str) -> bytes:
-        decrypt_calls.append({"data": data, "key": key})
-        return NATIVE_TRANSFORMED_PAYLOAD
-
-    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
-    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
-
-    assert (
-        cli_module.main(
-            [
-                "--token-file",
-                str(token_file),
-                "--json",
-                "cloud_video_native_download",
-                "--serial",
-                "CAM123",
-                "--channel",
-                "2",
-                "--seq-id",
-                "12345",
-                "--output",
-                str(output),
-                "--encrypted-output",
-                str(encrypted_output),
-                "--adb-serial",
-                "adb-1",
-                "--frida-host",
-                "127.0.0.1:27046",
-                "--support-multi-channel-shared-service",
-                "1",
-                "--output-name",
-                "unit-output",
-            ]
-        )
-        == 0
-    )
-
-    client = fake_client.instances[0]
-    assert client.camera_ticket_info_request == {
-        "serial": "CAM123",
-        "channel": 2,
-        "support_multi_channel_shared_service": 1,
-        "max_retries": 0,
-    }
-    assert client.cam_key_request == {"serial": "CAM123", "max_retries": 1}
-    assert output.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
-    assert encrypted_output.read_bytes() == NATIVE_ENCRYPTED_PAYLOAD
-    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret"}]
-    assert len(pushed_payloads) == 1
-    assert pushed_payloads[0]["ticket"] == "ticket-value"
-    assert "secretKey" not in pushed_payloads[0]
-
-    frida_commands = [command for command in commands if command[0] == "frida"]
-    assert len(frida_commands) == 1
-    assert all("-H" in command and "127.0.0.1:27046" in command for command in frida_commands)
-    assert any(command[:4] == ["adb", "-s", "adb-1", "push"] for command in commands)
-    assert any(command[:4] == ["adb", "-s", "adb-1", "pull"] for command in commands)
-
-    assert json.loads(capsys.readouterr().out) == {
-        "encrypted_output": str(encrypted_output),
-        "output": str(output),
-        "secretKey": "<redacted>",
-        "seqId": 12345,
-        "streamUrl": "hweustreamer.ezvizlife.com:32723",
-        "ticket": "<redacted>",
-        "transform": "python",
     }
 
 
@@ -669,8 +561,8 @@ def test_cloud_video_decrypt_uses_camera_key(monkeypatch, tmp_path, capsys) -> N
     input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt(data: bytes, key: str) -> bytes:
-        decrypt_calls.append({"data": data, "key": key})
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
     monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
@@ -695,7 +587,9 @@ def test_cloud_video_decrypt_uses_camera_key(monkeypatch, tmp_path, capsys) -> N
 
     client = fake_client.instances[0]
     assert client.cam_key_request == {"serial": "CAM123", "max_retries": 1}
-    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret"}]
+    assert decrypt_calls == [
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret", "nalu_header_size": 2}
+    ]
     assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
     assert json.loads(capsys.readouterr().out) == {
         "bytes": len(NATIVE_TRANSFORMED_PAYLOAD),
@@ -714,8 +608,8 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
     input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt(data: bytes, key: str) -> bytes:
-        decrypt_calls.append({"data": data, "key": key})
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
     monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
@@ -731,12 +625,16 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
                 str(output_path),
                 "--key",
                 "manual-key",
+                "--decrypt-codec",
+                "h264",
             ]
         )
         == 0
     )
 
-    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key"}]
+    assert decrypt_calls == [
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key", "nalu_header_size": 1}
+    ]
     assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
     assert json.loads(capsys.readouterr().out)["bytes"] == len(NATIVE_TRANSFORMED_PAYLOAD)
 
@@ -1460,7 +1358,11 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
     copy_calls: list[bytes] = []
 
     def fake_copy_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
-        copy_calls.append(kwargs["transform_payload"](b"encrypted"))
+        transform_payload = kwargs["transform_payload"]
+        first = transform_payload(b"\x00\x00\x01\xe0encrypted")
+        second = transform_payload(b"\x00\x00\x01\xc0audio")
+        tail = transform_payload.flush()
+        copy_calls.extend([first, second, tail])
 
     monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
     monkeypatch.setattr(cli_module, "_open_mpegts_remux_process", lambda _path: object())
@@ -1472,8 +1374,11 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
 
     assert handler.responses == [200]
     assert handler.errors == []
-    assert decrypt_calls == [{"data": b"encrypted", "key": "camera-key", "nalu_header_size": 2}]
-    assert copy_calls == [b"decrypted"]
+    assert decrypt_calls == [
+        {"data": b"\x00\x00\x01\xe0encrypted", "key": "camera-key", "nalu_header_size": 2},
+        {"data": b"\x00\x00\x01\xc0audio", "key": "camera-key", "nalu_header_size": 2},
+    ]
+    assert copy_calls == [b"", b"decrypted", b"decrypted"]
 
 
 def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:

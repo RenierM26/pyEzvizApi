@@ -777,7 +777,7 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
         packet_end = (
             i + 6 + pes_length
             if pes_length
-            else _next_complete_mpeg_ps_packet_start(data, payload_start) or len(data)
+            else _next_unbounded_video_pes_boundary(data, payload_start) or len(data)
         )
         if packet_end > len(data):
             break
@@ -869,6 +869,32 @@ def _next_complete_mpeg_ps_packet_start(data: bytes, start: int) -> int | None:
             return i
         i += 1
     return None
+
+
+def _next_unbounded_video_pes_boundary(data: bytes, start: int) -> int | None:
+    """Return the next packet boundary after a zero-length video PES payload."""
+
+    i = start
+    while i < len(data) - 3:
+        if _mpeg_ps_packet_end(data, i) is not None or _is_zero_length_video_pes_start(
+            data,
+            i,
+        ):
+            return i
+        i += 1
+    return None
+
+
+def _is_zero_length_video_pes_start(data: bytes, start: int) -> bool:
+    """Return True for a complete-enough zero-length video PES header."""
+
+    return (
+        start + 9 <= len(data)
+        and data[start : start + 3] == MPEG_START_CODE_PREFIX
+        and data[start + 3] == VIDEO_PES_STREAM_ID
+        and int.from_bytes(data[start + 4 : start + 6], "big") == 0
+        and _pes_payload_start(data, start) is not None
+    )
 
 
 def _is_mpeg_ps_packet_start_id(stream_id: int) -> bool:

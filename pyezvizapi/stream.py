@@ -819,7 +819,7 @@ def mpeg_ps_decryptable_prefix_length(data: bytes | bytearray) -> int:
     decryptable_end = ranges[-1].end
     trailing_video_start = decryptable_end
     for packet_range in reversed(ranges):
-        if packet_range.stream_id != VIDEO_PES_STREAM_ID:
+        if not _is_video_pes_stream_id(packet_range.stream_id):
             break
         trailing_video_start = packet_range.start
     return trailing_video_start if trailing_video_start != decryptable_end else decryptable_end

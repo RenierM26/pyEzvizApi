@@ -1168,7 +1168,6 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
                 < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and (
                     candidate_decrypted == 0
-                    or candidate_decrypted % AES.block_size != 0
                     or not starts_plausible_encrypted_h264_nal(
                         start_code_pos + start_code_len,
                         decrypt_end,

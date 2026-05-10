@@ -1136,6 +1136,14 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
             pending_block_positions.clear()
             pending_block.clear()
 
+    def starts_plausible_encrypted_h264_nal(start: int, end: int) -> bool:
+        if end - start < AES.block_size:
+            return False
+        cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
+        decrypted_header = cipher.decrypt(bytes(output[start : start + AES.block_size]))[0]
+        nal_type = decrypted_header & 0x1F
+        return 1 <= nal_type <= 23
+
     for payload_start, payload_end in _video_pes_payload_ranges(data):
         nal_starts = find_nal_start_codes(data, payload_start, payload_end)
         segment_start = payload_start
@@ -1145,12 +1153,28 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
             continue
 
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
+            decrypt_end = (
+                nal_starts[idx + 1][0]
+                if idx + 1 < len(nal_starts)
+                else payload_end
+            )
             if (
                 active_nal
                 and nalu_header_size == 0
-                and active_nal_decrypted + max(0, start_code_pos - segment_start)
+                and (
+                    candidate_decrypted := active_nal_decrypted
+                    + max(0, start_code_pos - segment_start)
+                )
                 < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos != payload_start
+                and (
+                    candidate_decrypted == 0
+                    or candidate_decrypted % AES.block_size != 0
+                    or not starts_plausible_encrypted_h264_nal(
+                        start_code_pos + start_code_len,
+                        decrypt_end,
+                    )
+                )
             ):
                 continue
             if (
@@ -1166,11 +1190,6 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
             active_nal = True
             decrypt_start = start_code_pos + start_code_len + nalu_header_size
             active_nal_body_start = decrypt_start
-            decrypt_end = (
-                nal_starts[idx + 1][0]
-                if idx + 1 < len(nal_starts)
-                else payload_end
-            )
             decrypt_nal_body_segment(decrypt_start, decrypt_end)
             segment_start = decrypt_end
         if active_nal and segment_start < payload_end:

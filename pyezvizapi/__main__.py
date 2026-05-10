@@ -499,9 +499,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_cloud_video_download.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264"),
+        choices=("hevc", "h264", "h264-clear-header"),
         default="hevc",
-        help="Codec NAL header size to preserve when decrypting streamUrl clips (default: hevc)",
+        help=(
+            "Video codec transform when decrypting streamUrl clips: hevc preserves "
+            "the two-byte HEVC NAL header; h264 decrypts the H.264 NAL header too; "
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+        ),
     )
     parser_cloud_video_download.add_argument(
         "--limit",
@@ -546,9 +550,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_cloud_video_decrypt.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264"),
+        choices=("hevc", "h264", "h264-clear-header"),
         default="hevc",
-        help="Codec NAL header size to preserve during decryption (default: hevc)",
+        help=(
+            "Video codec transform during decryption: hevc preserves the two-byte "
+            "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+        ),
     )
 
     parser_stream = subparsers.add_parser(
@@ -681,9 +689,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_dump.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264"),
+        choices=("hevc", "h264", "h264-clear-header"),
         default="hevc",
-        help="Codec NAL header size to preserve during --decrypt-video (default: hevc)",
+        help=(
+            "Video codec transform for --decrypt-video: hevc preserves the two-byte "
+            "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+        ),
     )
     parser_stream_proxy = subparsers_stream.add_parser(
         "proxy",
@@ -755,9 +767,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_proxy.add_argument(
         "--decrypt-codec",
-        choices=("hevc", "h264"),
+        choices=("hevc", "h264", "h264-clear-header"),
         default="hevc",
-        help="Codec NAL header size to preserve during --decrypt-video (default: hevc)",
+        help=(
+            "Video codec transform for --decrypt-video: hevc preserves the two-byte "
+            "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
+            "h264-clear-header preserves the one-byte H.264 NAL header (default: hevc)"
+        ),
     )
     parser_stream_proxy.add_argument(
         "--max-packets",
@@ -1503,7 +1519,11 @@ def _decrypt_stream_payload_bytes(
 def _codec_nalu_header_size(codec: str) -> int:
     """Return the Annex B NAL header length preserved by the decrypt transform."""
 
-    return 2 if codec == "hevc" else 1
+    if codec == "hevc":
+        return 2
+    if codec == "h264-clear-header":
+        return 1
+    return 0
 
 
 class _BufferedStreamPayloadDecryptor:

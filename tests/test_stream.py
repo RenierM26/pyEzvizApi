@@ -433,6 +433,28 @@ def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
     )
 
 
+def test_decrypt_hikvision_ps_video_decrypts_h264_nal_headers() -> None:
+    key = "camera-key"
+    clear_payload = b"\x00\x00\x00\x01\x65fedcba987654321"
+    encrypted_payload = (
+        b"\x00\x00\x00\x01" + bytes.fromhex("8fe82ee6ed094aae8d04ab3315ecf2a4")
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=0)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_decrypt_hikvision_ps_video_leaves_nal_body_after_encrypted_prefix() -> None:
     key = "camera-key"
     clear_block = b"0123456789abcdef"

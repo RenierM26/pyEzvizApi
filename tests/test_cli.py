@@ -633,7 +633,7 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
     )
 
     assert decrypt_calls == [
-        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key", "nalu_header_size": 1}
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key", "nalu_header_size": 0}
     ]
     assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
     assert json.loads(capsys.readouterr().out)["bytes"] == len(NATIVE_TRANSFORMED_PAYLOAD)

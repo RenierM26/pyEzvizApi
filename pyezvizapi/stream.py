@@ -1086,8 +1086,8 @@ def decrypt_hikvision_ps_video(
     two-byte HEVC NAL header.
     """
 
-    if nalu_header_size < 1:
-        raise ValueError("nalu_header_size must be positive")
+    if nalu_header_size < 0:
+        raise ValueError("nalu_header_size must be non-negative")
 
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
@@ -1097,7 +1097,9 @@ def decrypt_hikvision_ps_video(
     active_nal = False
     active_nal_decrypted = active_nal_body_start = 0
     find_nal_start_codes = (
-        _find_h264_nal_start_codes
+        _find_nal_start_codes
+        if nalu_header_size == 0
+        else _find_h264_nal_start_codes
         if nalu_header_size == 1
         else _find_hevc_nal_start_codes
     )

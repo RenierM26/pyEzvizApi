@@ -401,6 +401,29 @@ def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> 
     )
 
 
+def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_body = b"fedcba9876543210" * 2
+    encrypted_body = AES.new(aes_key, AES.MODE_ECB).encrypt(clear_body)
+    clear_payload = b"\x00\x00\x00\x01\x65" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x65" + encrypted_body
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=1)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_find_hevc_nal_start_codes_ignores_ciphertext_start_code_lookalikes() -> None:
     payload = (
         b"\x00\x00\x00\x01\x40\x01vps"

@@ -34,6 +34,12 @@ XML_PREFIX = b"<?xml"
 _XML_END_RE = re.compile(br"</(Request|Response)>")
 
 
+def _ezviz_md5_hex(data: bytes) -> str:
+    """Return the EZVIZ protocol MD5 checksum for non-security integrity fields."""
+
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()
+
+
 class VtmChannel(IntEnum):
     """Known VTM/VTDU channels."""
 
@@ -802,6 +808,15 @@ def _hevc_nal_type(data: bytes, start_code_pos: int, start_code_len: int) -> int
     return (data[header_pos] >> 1) & 0x3F
 
 
+def _h264_nal_type(data: bytes, start_code_pos: int, start_code_len: int) -> int | None:
+    """Return the H.264 NAL unit type after an Annex B start code."""
+
+    header_pos = start_code_pos + start_code_len
+    if header_pos >= len(data):
+        return None
+    return data[header_pos] & 0x1F
+
+
 def _find_hevc_nal_start_codes(
     data: bytes, start: int, end: int
 ) -> list[tuple[int, int]]:
@@ -817,6 +832,19 @@ def _find_hevc_nal_start_codes(
         for pos, length in _find_nal_start_codes(data, start, end)
         if (nal_type := _hevc_nal_type(data, pos, length)) is not None
         and nal_type <= 40
+    ]
+
+
+def _find_h264_nal_start_codes(
+    data: bytes, start: int, end: int
+) -> list[tuple[int, int]]:
+    """Find plausible H.264 Annex B NAL start codes."""
+
+    return [
+        (pos, length)
+        for pos, length in _find_nal_start_codes(data, start, end)
+        if (nal_type := _h264_nal_type(data, pos, length)) is not None
+        and 1 <= nal_type <= 23
     ]
 
 
@@ -841,9 +869,14 @@ def decrypt_hikvision_ps_video(
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
     output = bytearray(data)
+    find_nal_start_codes = (
+        _find_h264_nal_start_codes
+        if nalu_header_size == 1
+        else _find_hevc_nal_start_codes
+    )
 
     for payload_start, payload_end in _video_pes_payload_ranges(data):
-        nal_starts = _find_hevc_nal_start_codes(data, payload_start, payload_end)
+        nal_starts = find_nal_start_codes(data, payload_start, payload_end)
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
             decrypt_start = start_code_pos + start_code_len + nalu_header_size
             decrypt_end = (
@@ -898,6 +931,7 @@ def download_ezviz_cloud_replay(  # noqa: PLR0913
     )
 
     context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     output = bytearray()
     buffer = b""
     sequence = 1
@@ -1022,7 +1056,7 @@ def _cloud_replay_frame(payload: bytes, *, sequence: int, command: int) -> bytes
         len(payload),
         0,
     )
-    return header + payload + hashlib.md5(payload).hexdigest().encode()
+    return header + payload + _ezviz_md5_hex(payload).encode()
 
 
 def _read_cloud_replay_message(
@@ -1066,7 +1100,7 @@ def _read_cloud_replay_message(
         _CloudReplayMessage(
             xml=xml,
             data=data,
-            md5_ok=hashlib.md5(body).hexdigest().encode() == digest,
+            md5_ok=_ezviz_md5_hex(body).encode() == digest,
             result=_cloud_xml_int(xml, b"Result"),
             err_code=_cloud_xml_attr_int(xml, b"Type", b"ErrCode"),
             data_type=_cloud_xml_int(xml, b"Type"),

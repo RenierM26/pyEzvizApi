@@ -37,6 +37,15 @@ _LOGGER = logging.getLogger(__name__)
 _REAL_EZVIZ_CLIENT = EzvizClient
 
 
+def _ezviz_key_checksum(secret_key: str) -> str:
+    """Return the EZVIZ cloud clip key checksum for compatibility checks."""
+
+    first = hashlib.md5(
+        secret_key.encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
+    return hashlib.md5(first.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
 @dataclass(frozen=True)
 class StreamProxyConfig:
     """Configuration for the experimental HTTP stream proxy."""
@@ -1295,14 +1304,10 @@ def _handle_cloud_video_download(args: argparse.Namespace, client: EzvizClient) 
         )
         secret_key = client.get_cam_key(args.serial, max_retries=1)
         checksum = selected.get("keyChecksum") or selected.get("checksum")
-        if isinstance(checksum, str):
-            double_md5 = hashlib.md5(
-                hashlib.md5(secret_key.encode("utf-8")).hexdigest().encode("utf-8")
-            ).hexdigest()
-            if double_md5 != checksum:
-                raise PyEzvizError(
-                    "Camera key does not match cloud clip keyChecksum"
-                ) from None
+        if isinstance(checksum, str) and _ezviz_key_checksum(secret_key) != checksum:
+            raise PyEzvizError(
+                "Camera key does not match cloud clip keyChecksum"
+            ) from None
 
         start_millis = _cloud_video_start_millis(selected)
         stop_millis = start_millis + int(selected.get("videoLong") or 0)
@@ -1518,12 +1523,8 @@ def _handle_cloud_video_native_download(
     )
     secret_key = client.get_cam_key(args.serial, max_retries=1)
     checksum = selected.get("keyChecksum") or selected.get("checksum")
-    if isinstance(checksum, str):
-        double_md5 = hashlib.md5(
-            hashlib.md5(secret_key.encode("utf-8")).hexdigest().encode("utf-8")
-        ).hexdigest()
-        if double_md5 != checksum:
-            raise PyEzvizError("Camera key does not match cloud clip keyChecksum")
+    if isinstance(checksum, str) and _ezviz_key_checksum(secret_key) != checksum:
+        raise PyEzvizError("Camera key does not match cloud clip keyChecksum")
 
     start_millis = _cloud_video_start_millis(selected)
     stop_millis = start_millis + int(selected.get("videoLong") or 0)

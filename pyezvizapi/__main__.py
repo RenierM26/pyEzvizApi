@@ -500,13 +500,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_cloud_video_download.add_argument(
         "--decrypt-codec",
-        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        choices=(
+            "auto",
+            "hevc",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+        ),
         default="auto",
         help=(
             "Video codec transform when decrypting streamUrl clips: auto detects the "
             "NAL header mode; hevc preserves "
-            "the two-byte HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
+            "the two-byte HEVC NAL header; h264/h264-clear-header preserve the "
+            "one-byte H.264 NAL header; h264-encrypted-header decrypts the H.264 "
+            "NAL header too (default: auto)"
         ),
     )
     parser_cloud_video_download.add_argument(
@@ -552,13 +559,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_cloud_video_decrypt.add_argument(
         "--decrypt-codec",
-        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        choices=(
+            "auto",
+            "hevc",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+        ),
         default="auto",
         help=(
             "Video codec transform during decryption: auto detects the NAL header "
             "mode; hevc preserves the two-byte "
-            "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
+            "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
+            "NAL header; h264-encrypted-header decrypts the H.264 NAL header too "
+            "(default: auto)"
         ),
     )
 
@@ -692,13 +706,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_dump.add_argument(
         "--decrypt-codec",
-        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        choices=(
+            "auto",
+            "hevc",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+        ),
         default="auto",
         help=(
             "Video codec transform for --decrypt-video: auto detects the NAL header "
             "mode; hevc preserves the two-byte "
-            "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
+            "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
+            "NAL header; h264-encrypted-header decrypts the H.264 NAL header too "
+            "(default: auto)"
         ),
     )
     parser_stream_proxy = subparsers_stream.add_parser(
@@ -771,13 +792,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_proxy.add_argument(
         "--decrypt-codec",
-        choices=("auto", "hevc", "h264", "h264-clear-header"),
+        choices=(
+            "auto",
+            "hevc",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+        ),
         default="auto",
         help=(
             "Video codec transform for --decrypt-video: auto detects the NAL header "
             "mode; hevc preserves the two-byte "
-            "HEVC NAL header; h264 decrypts the H.264 NAL header too; "
-            "h264-clear-header preserves the one-byte H.264 NAL header (default: auto)"
+            "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
+            "NAL header; h264-encrypted-header decrypts the H.264 NAL header too "
+            "(default: auto)"
         ),
     )
     parser_stream_proxy.add_argument(
@@ -1528,7 +1556,7 @@ def _codec_nalu_header_size(codec: str) -> int | None:
         return None
     if codec == "hevc":
         return 2
-    if codec == "h264-clear-header":
+    if codec in {"h264", "h264-clear-header"}:
         return 1
     return 0
 

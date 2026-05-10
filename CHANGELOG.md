@@ -30,6 +30,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Fixed VTM tracing to parse delayed `StreamInfoRsp` packets after earlier control packets so redirects are still followed.
 - Fixed encrypted alarm image detection to search the full payload for the encryption marker before deciding whether to decrypt.
 - Fixed VTDU token lookup when EZVIZ service URLs return a null `authAddr` by deriving the auth host from `api_url`.
+- Fixed `--decrypt-codec h264` to remain the backwards-compatible clear-header H.264 mode, with `h264-encrypted-header` for H.264 streams whose NAL header is encrypted.
 
 ## v1.0.4.8 - 2026-05-03
 

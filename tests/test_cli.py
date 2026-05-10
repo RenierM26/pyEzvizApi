@@ -626,7 +626,7 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
                 "--key",
                 "manual-key",
                 "--decrypt-codec",
-                "h264",
+                "h264-encrypted-header",
             ]
         )
         == 0
@@ -637,6 +637,43 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
     ]
     assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
     assert json.loads(capsys.readouterr().out)["bytes"] == len(NATIVE_TRANSFORMED_PAYLOAD)
+
+
+def test_cloud_video_decrypt_h264_keeps_clear_header_mapping(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    input_path = tmp_path / "clip.tmp"
+    output_path = tmp_path / "clip.ps"
+    input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
+        return NATIVE_TRANSFORMED_PAYLOAD
+
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    assert (
+        cli_module.main(
+            [
+                "cloud_video_decrypt",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--key",
+                "manual-key",
+                "--decrypt-codec",
+                "h264",
+            ]
+        )
+        == 0
+    )
+
+    assert decrypt_calls == [
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key", "nalu_header_size": 1}
+    ]
 
 
 def test_cloud_video_decrypt_rejects_missing_key(monkeypatch, tmp_path) -> None:

@@ -152,7 +152,7 @@ pyezvizapi cloud_video_decrypt --serial ABC123 --input clip.tmp --output clip.ps
 
 Some cloud clips only expose the EZVIZ native SDK `streamUrl` host/port in `videoDetails`. For regular cloud-storage clips, `cloud_video_download` now fetches `/v3/cameras/ticketInfo`, downloads the encrypted cloud replay `.tmp` stream over TLS, and applies the local Python PS/NAL decrypt transform. `--encrypted-output` keeps the encrypted `.tmp` for comparison.
 
-`cloud_video_decrypt` is the pure-Python transform step for captured cloud `.tmp` files. Prefer `--serial` so `pyezvizapi` fetches the camera encrypt key without putting it in shell history; `--key` is available for offline/manual experiments. By default, `--decrypt-codec auto` detects HEVC, H.264 with an encrypted NAL header, or H.264 with a clear one-byte NAL header. You can still force `--decrypt-codec hevc`, `--decrypt-codec h264`, or `--decrypt-codec h264-clear-header` for manual experiments.
+`cloud_video_decrypt` is the pure-Python transform step for captured cloud `.tmp` files. Prefer `--serial` so `pyezvizapi` fetches the camera encrypt key without putting it in shell history; `--key` is available for offline/manual experiments. By default, `--decrypt-codec auto` detects HEVC, H.264 with an encrypted NAL header, or H.264 with a clear one-byte NAL header. You can still force `--decrypt-codec hevc`, `--decrypt-codec h264`, `--decrypt-codec h264-clear-header`, or `--decrypt-codec h264-encrypted-header` for manual experiments. `h264` remains the backwards-compatible alias for clear-header H.264.
 
 ### sdcard_videos
 

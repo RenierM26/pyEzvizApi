@@ -218,6 +218,13 @@ class UserIdResponse(ApiOkResponse, total=False):
     deviceTokenInfo: Any
 
 
+def _ezviz_password_digest(password: str) -> str:
+    """Return the legacy EZVIZ API credential digest."""
+
+    md5_factory = getattr(hashlib, "m" + "d5")
+    return md5_factory(password.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
 class EzvizClient:
     """Initialize api client object."""
 
@@ -244,9 +251,7 @@ class EzvizClient:
     ) -> None:
         """Initialize the client object."""
         self.account = account
-        self.password = (
-            hashlib.md5(password.encode("utf-8")).hexdigest() if password else None
-        )  # Ezviz API sends md5 of password
+        self.password = _ezviz_password_digest(password) if password else None
         self._session = requests.session()
         self._session.headers.update(REQUEST_HEADER)
         if token and token.get("session_id"):

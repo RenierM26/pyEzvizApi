@@ -488,7 +488,7 @@ def test_cloud_video_download_handles_native_stream_url(
         replay_calls.append(kwargs)
         return NATIVE_ENCRYPTED_PAYLOAD
 
-    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
         decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
@@ -541,7 +541,7 @@ def test_cloud_video_download_handles_native_stream_url(
         }
     ]
     assert decrypt_calls == [
-        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret", "nalu_header_size": 2}
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret", "nalu_header_size": None}
     ]
     assert json.loads(capsys.readouterr().out) == {
         "bytes": len(NATIVE_TRANSFORMED_PAYLOAD),
@@ -561,7 +561,7 @@ def test_cloud_video_decrypt_uses_camera_key(monkeypatch, tmp_path, capsys) -> N
     input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
         decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
@@ -588,7 +588,7 @@ def test_cloud_video_decrypt_uses_camera_key(monkeypatch, tmp_path, capsys) -> N
     client = fake_client.instances[0]
     assert client.cam_key_request == {"serial": "CAM123", "max_retries": 1}
     assert decrypt_calls == [
-        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret", "nalu_header_size": 2}
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret", "nalu_header_size": None}
     ]
     assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
     assert json.loads(capsys.readouterr().out) == {
@@ -608,7 +608,7 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
     input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
         decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
@@ -626,6 +626,45 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
                 "--key",
                 "manual-key",
                 "--decrypt-codec",
+                "h264-encrypted-header",
+            ]
+        )
+        == 0
+    )
+
+    assert decrypt_calls == [
+        {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key", "nalu_header_size": 0}
+    ]
+    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+    assert json.loads(capsys.readouterr().out)["bytes"] == len(NATIVE_TRANSFORMED_PAYLOAD)
+
+
+def test_cloud_video_decrypt_h264_keeps_clear_header_mapping(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    input_path = tmp_path / "clip.tmp"
+    output_path = tmp_path / "clip.ps"
+    input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
+        return NATIVE_TRANSFORMED_PAYLOAD
+
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    assert (
+        cli_module.main(
+            [
+                "cloud_video_decrypt",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--key",
+                "manual-key",
+                "--decrypt-codec",
                 "h264",
             ]
         )
@@ -635,8 +674,6 @@ def test_cloud_video_decrypt_can_use_explicit_key_without_login(
     assert decrypt_calls == [
         {"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key", "nalu_header_size": 1}
     ]
-    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
-    assert json.loads(capsys.readouterr().out)["bytes"] == len(NATIVE_TRANSFORMED_PAYLOAD)
 
 
 def test_cloud_video_decrypt_rejects_missing_key(monkeypatch, tmp_path) -> None:
@@ -952,7 +989,7 @@ def test_stream_dump_can_decrypt_before_mpegts_remux(monkeypatch, tmp_path) -> N
 
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
         decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return b"decrypted"
 
@@ -987,7 +1024,7 @@ def test_stream_dump_can_decrypt_before_mpegts_remux(monkeypatch, tmp_path) -> N
         == 0
     )
 
-    assert decrypt_calls == [{"data": b"encrypted", "key": "camera-key", "nalu_header_size": 2}]
+    assert decrypt_calls == [{"data": b"encrypted", "key": "camera-key", "nalu_header_size": None}]
     assert remux_calls == [{"data": b"decrypted", "ffmpeg_path": "ffmpeg"}]
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
@@ -1224,7 +1261,7 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
             "ffmpeg_path": sys.executable,
             "refresh_vtm": False,
             "decrypt_video": True,
-            "decrypt_codec": "hevc",
+            "decrypt_codec": "auto",
             "max_packets": 4,
         }
     ]
@@ -1351,7 +1388,7 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
     )
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
         decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return b"decrypted"
 
@@ -1390,6 +1427,47 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
         },
     ]
     assert copy_calls == [b"", b"", b"decrypted", b""]
+
+
+def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> None:
+    pack_chunk = b"pack"
+    video_chunk = b"video"
+    next_chunk = b"next"
+    detect_calls: list[bytes] = []
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_detect(data: bytes, key: str, *, default: int | None = 2) -> int | None:
+        assert key == "camera-key"
+        assert default is None
+        detect_calls.append(data)
+        return 0 if data == video_chunk else None
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
+        return b"decrypted-" + data
+
+    monkeypatch.setattr(
+        cli_module,
+        "detect_hikvision_ps_video_nalu_header_size",
+        fake_detect,
+    )
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    decryptor = cli_module._BufferedStreamPayloadDecryptor(  # noqa: SLF001
+        "camera-key",
+        codec="auto",
+    )
+
+    assert decryptor._decrypt_chunk(pack_chunk) == b"decrypted-" + pack_chunk  # noqa: SLF001
+    assert decryptor._decrypt_chunk(video_chunk) == b"decrypted-" + video_chunk  # noqa: SLF001
+    assert decryptor._decrypt_chunk(next_chunk) == b"decrypted-" + next_chunk  # noqa: SLF001
+
+    assert detect_calls == [pack_chunk, video_chunk]
+    assert decrypt_calls == [
+        {"data": pack_chunk, "key": "camera-key", "nalu_header_size": 2},
+        {"data": video_chunk, "key": "camera-key", "nalu_header_size": 0},
+        {"data": next_chunk, "key": "camera-key", "nalu_header_size": 0},
+    ]
 
 
 def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:

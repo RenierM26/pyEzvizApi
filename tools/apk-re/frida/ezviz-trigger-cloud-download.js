@@ -79,7 +79,8 @@ Java.perform(() => {
   const File = Java.use("java.io.File");
   const BufferedOutputStream = Java.use("java.io.BufferedOutputStream");
   const FileOutputStream = Java.use("java.io.FileOutputStream");
-  const Thread = Java.use("java.lang.Thread");
+  const CountDownLatch = Java.use("java.util.concurrent.CountDownLatch");
+  const TimeUnit = Java.use("java.util.concurrent.TimeUnit");
 
   const app = ActivityThread.currentApplication();
   if (!app) {
@@ -105,6 +106,7 @@ Java.perform(() => {
 
   let stream = null;
   let total = 0;
+  const finished = CountDownLatch.$new(1);
   const Callback = Java.registerClass({
     name: `com.openclaw.EzvizCloudDownloadCallback${RUN_ID}`,
     implements: [EZStreamCallback],
@@ -125,6 +127,7 @@ Java.perform(() => {
             stream = null;
           }
           console.log(`[direct-download] end total=${total} tmp=${tmpFile.getAbsolutePath()}`);
+          finished.countDown();
         }
       },
       onMessageCallBack(msg, result) {
@@ -173,31 +176,21 @@ Java.perform(() => {
   const ret = client.startDownloadFromCloud(param);
   console.log(`[direct-download] startDownloadFromCloud ret=${ret}`);
 
-  Thread.$new(
-    Java.registerClass({
-      name: `com.openclaw.EzvizCloudDownloadStopper${RUN_ID}`,
-      implements: [Java.use("java.lang.Runnable")],
-      methods: {
-        run() {
-          Thread.sleep(RUN_MS);
-          try {
-            client.stopDownloadFromCloud();
-          } catch (err) {
-            console.log(`[direct-download] stop failed ${err}`);
-          }
-          try {
-            client.release();
-          } catch (err) {
-            console.log(`[direct-download] release failed ${err}`);
-          }
-          if (stream !== null) {
-            stream.flush();
-            stream.close();
-            stream = null;
-          }
-          console.log(`[direct-download] done total=${total} tmp=${tmpFile.getAbsolutePath()}`);
-        },
-      },
-    }).$new(),
-  ).start();
+  finished.await(RUN_MS, TimeUnit.MILLISECONDS.value);
+  try {
+    client.stopDownloadFromCloud();
+  } catch (err) {
+    console.log(`[direct-download] stop failed ${err}`);
+  }
+  try {
+    client.release();
+  } catch (err) {
+    console.log(`[direct-download] release failed ${err}`);
+  }
+  if (stream !== null) {
+    stream.flush();
+    stream.close();
+    stream = null;
+  }
+  console.log(`[direct-download] done total=${total} tmp=${tmpFile.getAbsolutePath()}`);
 });

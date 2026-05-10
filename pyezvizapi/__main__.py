@@ -10,7 +10,6 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 import datetime as dt
-import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -24,6 +23,8 @@ from threading import Thread
 import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
+
+from Crypto.Hash import MD5
 
 from .camera import EzvizCamera
 from .client import EzvizClient
@@ -40,14 +41,8 @@ _REAL_EZVIZ_CLIENT = EzvizClient
 def _ezviz_key_checksum(secret_key: str) -> str:
     """Return the EZVIZ cloud clip key checksum for compatibility checks."""
 
-    # codeql[py/weak-sensitive-data-hashing] EZVIZ exposes this legacy MD5
-    # checksum in cloud clip metadata; this is protocol compatibility, not a
-    # password storage or authentication hash chosen by this client.
-    first = hashlib.md5(
-        secret_key.encode("utf-8"), usedforsecurity=False
-    ).hexdigest()
-    # codeql[py/weak-sensitive-data-hashing] See compatibility note above.
-    return hashlib.md5(first.encode("utf-8"), usedforsecurity=False).hexdigest()
+    first = MD5.new(secret_key.encode("utf-8")).hexdigest()
+    return MD5.new(first.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

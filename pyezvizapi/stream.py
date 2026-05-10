@@ -1070,6 +1070,25 @@ def _find_h264_nal_start_codes(
     ]
 
 
+def _is_hikvision_tail_start_code_lookalike(
+    *,
+    nal_starts: list[tuple[int, int]],
+    idx: int,
+    payload_end: int,
+    active_nal_decrypted: int,
+    active_nal_body_start: int,
+    nalu_header_size: int,
+) -> bool:
+    start_code_pos, start_code_len = nal_starts[idx]
+    if active_nal_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
+        return False
+    if start_code_pos < active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
+        return False
+    next_start = nal_starts[idx + 1][0] if idx + 1 < len(nal_starts) else payload_end
+    candidate_body_len = next_start - (start_code_pos + start_code_len + nalu_header_size)
+    return candidate_body_len < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+
+
 def decrypt_hikvision_ps_video(
     data: bytes,
     key: str | bytes,
@@ -1145,9 +1164,14 @@ def decrypt_hikvision_ps_video(
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
             if (
                 active_nal
-                and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and start_code_pos
-                == active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and _is_hikvision_tail_start_code_lookalike(
+                    nal_starts=nal_starts,
+                    idx=idx,
+                    payload_end=payload_end,
+                    active_nal_decrypted=active_nal_decrypted,
+                    active_nal_body_start=active_nal_body_start,
+                    nalu_header_size=nalu_header_size,
+                )
                 and start_code_pos != payload_start
             ):
                 continue

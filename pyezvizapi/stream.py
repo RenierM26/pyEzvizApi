@@ -1070,7 +1070,7 @@ def _find_h264_nal_start_codes(
     ]
 
 
-def decrypt_hikvision_ps_video(
+def decrypt_hikvision_ps_video(  # noqa: PLR0915
     data: bytes,
     key: str | bytes,
     *,
@@ -1147,9 +1147,17 @@ def decrypt_hikvision_ps_video(
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
             if (
                 active_nal
+                and nalu_header_size == 0
+                and active_nal_decrypted + max(0, start_code_pos - segment_start)
+                < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and start_code_pos != payload_start
+            ):
+                continue
+            if (
+                active_nal
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos
-                == active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos != payload_start
             ):
                 continue
@@ -1166,6 +1174,8 @@ def decrypt_hikvision_ps_video(
             )
             decrypt_nal_body_segment(decrypt_start, decrypt_end)
             segment_start = decrypt_end
+        if active_nal and segment_start < payload_end:
+            decrypt_nal_body_segment(segment_start, payload_end)
 
     return bytes(output)
 

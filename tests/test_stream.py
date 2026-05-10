@@ -455,6 +455,28 @@ def test_decrypt_hikvision_ps_video_decrypts_h264_nal_headers() -> None:
     )
 
 
+def test_decrypt_hikvision_ps_video_ignores_h264_encrypted_header_lookalikes() -> None:
+    key = "camera-key"
+    clear_payload = b"\x00\x00\x00\x01" + b"0000000001899711"
+    encrypted_payload = (
+        b"\x00\x00\x00\x01" + bytes.fromhex("00000143a299a588a28243e34f055bab")
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=0)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_decrypt_hikvision_ps_video_leaves_nal_body_after_encrypted_prefix() -> None:
     key = "camera-key"
     clear_block = b"0123456789abcdef"
@@ -488,13 +510,20 @@ def test_decrypt_hikvision_ps_video_ignores_tail_start_code_lookalikes() -> None
     clear_block = b"0123456789abcdef"
     encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
     encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+    preserved_tail = b"preserved-tail"
     false_nal_tail = b"\x00\x00\x01\x42\x01" + encrypted_block
     clear_payload = (
         b"\x00\x00\x00\x01\x42\x01"
         + clear_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+        + preserved_tail
         + false_nal_tail
     )
-    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_prefix + false_nal_tail
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + encrypted_prefix
+        + preserved_tail
+        + false_nal_tail
+    )
     pes = (
         b"\x00\x00\x01\xe0"
         + (len(encrypted_payload) + 3).to_bytes(2, "big")
@@ -516,13 +545,20 @@ def test_decrypt_hikvision_ps_video_ignores_long_tail_start_code_lookalikes() ->
     clear_block = b"0123456789abcdef"
     encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
     encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+    preserved_tail = b"preserved-tail"
     false_nal_tail = b"\x00\x00\x00\x01\x42\x01" + encrypted_block
     clear_payload = (
         b"\x00\x00\x00\x01\x42\x01"
         + clear_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+        + preserved_tail
         + false_nal_tail
     )
-    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_prefix + false_nal_tail
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + encrypted_prefix
+        + preserved_tail
+        + false_nal_tail
+    )
     pes = (
         b"\x00\x00\x01\xe0"
         + (len(encrypted_payload) + 3).to_bytes(2, "big")
@@ -544,20 +580,52 @@ def test_decrypt_hikvision_ps_video_keeps_scanning_real_nals_after_prefix() -> N
     clear_block = b"0123456789abcdef"
     encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
     encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
-    preserved_tail = b"preserved-tail"
     clear_second_body = b"fedcba9876543210"
     encrypted_second_body = bytes.fromhex("71ec10ded9beb3a19fcdd7205152d6c6")
     clear_payload = (
         b"\x00\x00\x00\x01\x42\x01"
         + clear_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
-        + preserved_tail
+        + b"\x00\x00\x01\x42\x01"
+        + clear_second_body
+    )
+    encrypted_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + encrypted_prefix
+        + b"\x00\x00\x01\x42\x01"
+        + encrypted_second_body
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_keeps_exact_prefix_nal_boundary() -> None:
+    key = "camera-key"
+    clear_block = b"0123456789abcdef"
+    encrypted_block = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
+    encrypted_prefix = encrypted_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
+    clear_second_body = b"fedcba9876543210"
+    encrypted_second_body = bytes.fromhex("71ec10ded9beb3a19fcdd7205152d6c6")
+    clear_payload = (
+        b"\x00\x00\x00\x01\x42\x01"
+        + clear_block * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH // 16)
         + b"\x00\x00\x00\x01\x42\x01"
         + clear_second_body
     )
     encrypted_payload = (
         b"\x00\x00\x00\x01\x42\x01"
         + encrypted_prefix
-        + preserved_tail
         + b"\x00\x00\x00\x01\x42\x01"
         + encrypted_second_body
     )

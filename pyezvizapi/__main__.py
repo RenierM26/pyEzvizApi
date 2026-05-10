@@ -28,11 +28,14 @@ from .cloud_stream import open_cloud_stream
 from .constants import BatteryCameraWorkMode, DefenseModeType, DeviceSwitchType
 from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 from .light_bulb import EzvizLightBulb
-from .stream import decrypt_hikvision_ps_video, download_ezviz_cloud_replay
+from .stream import (
+    decrypt_hikvision_ps_video,
+    download_ezviz_cloud_replay,
+    mpeg_ps_complete_prefix_length,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _REAL_EZVIZ_CLIENT = EzvizClient
-MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
 
 
 @dataclass(frozen=True)
@@ -1513,7 +1516,7 @@ class _BufferedStreamPayloadDecryptor:
 
     def __call__(self, data: bytes) -> bytes:
         self._buffer.extend(data)
-        complete_end = _complete_mpegps_prefix_length(self._buffer)
+        complete_end = mpeg_ps_complete_prefix_length(self._buffer)
         if complete_end <= 0:
             return b""
         chunk = bytes(self._buffer[:complete_end])
@@ -1536,26 +1539,6 @@ class _BufferedStreamPayloadDecryptor:
             self._key,
             nalu_header_size=self._nalu_header_size,
         )
-
-
-def _complete_mpegps_prefix_length(data: bytes | bytearray) -> int:
-    """Return bytes ending before the final plausible MPEG-PS packet start."""
-
-    last_start = -1
-    i = 0
-    while i < len(data) - 3:
-        if data[i : i + 3] == MPEG_START_CODE_PREFIX and _is_mpegps_packet_start_id(data[i + 3]):
-            last_start = i
-            i += 4
-            continue
-        i += 1
-    return last_start if last_start > 0 else 0
-
-
-def _is_mpegps_packet_start_id(stream_id: int) -> bool:
-    """Return True for MPEG-PS packet starts and video/audio PES IDs."""
-
-    return stream_id in {0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF} or 0xC0 <= stream_id <= 0xEF
 
 
 def _stream_payload_decryptor(

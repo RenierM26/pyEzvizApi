@@ -36,6 +36,7 @@ from pyezvizapi.stream import (
     detect_transport,
     download_ezviz_cloud_replay,
     encode_vtm_packet,
+    mpeg_ps_complete_prefix_length,
     parse_get_vtdu_info_response,
     parse_peer_stream_response,
     parse_start_stream_response,
@@ -445,6 +446,22 @@ def test_decrypt_hikvision_ps_video_bounds_zero_length_pes_at_next_ps_packet() -
     assert (
         decrypt_hikvision_ps_video(video_pes + audio_pes, key, nalu_header_size=2)
         == b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + clear_payload + audio_pes
+    )
+
+
+def test_mpeg_ps_complete_prefix_ignores_ciphertext_start_code_lookalikes() -> None:
+    pack = b"\x00\x00\x01\xba" + b"\x44" * 9 + b"\x40"
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + (
+        b"ciphertext"
+        b"\x00\x00\x01\xe0\x00\x04"
+        b"tail"
+    )
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + encrypted_payload
+    audio_pes = b"\x00\x00\x01\xc0\x00\x07\x80\x00\x00keep"
+
+    assert mpeg_ps_complete_prefix_length(pack + video_pes) == len(pack)
+    assert mpeg_ps_complete_prefix_length(pack + video_pes + audio_pes) == len(
+        pack + video_pes + audio_pes
     )
 
 

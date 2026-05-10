@@ -1359,8 +1359,10 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
 
     def fake_copy_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
         transform_payload = kwargs["transform_payload"]
-        first = transform_payload(b"\x00\x00\x01\xe0encrypted")
-        second = transform_payload(b"\x00\x00\x01\xc0audio")
+        video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00encrypted"
+        audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+        first = transform_payload(video_pes)
+        second = transform_payload(audio_pes)
         tail = transform_payload.flush()
         copy_calls.extend([first, second, tail])
 
@@ -1375,10 +1377,16 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
     assert handler.responses == [200]
     assert handler.errors == []
     assert decrypt_calls == [
-        {"data": b"\x00\x00\x01\xe0encrypted", "key": "camera-key", "nalu_header_size": 2},
-        {"data": b"\x00\x00\x01\xc0audio", "key": "camera-key", "nalu_header_size": 2},
+        {
+            "data": (
+                b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00encrypted"
+                b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+            ),
+            "key": "camera-key",
+            "nalu_header_size": 2,
+        },
     ]
-    assert copy_calls == [b"", b"decrypted", b"decrypted"]
+    assert copy_calls == [b"", b"decrypted", b""]
 
 
 def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:

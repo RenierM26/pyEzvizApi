@@ -1143,6 +1143,12 @@ def decrypt_hikvision_ps_video(
             continue
 
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
+            if (
+                active_nal
+                and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and start_code_pos != payload_start
+            ):
+                break
             if active_nal and segment_start < start_code_pos:
                 decrypt_nal_body_segment(segment_start, start_code_pos)
             reset_nal_state()

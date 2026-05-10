@@ -841,6 +841,8 @@ def mpeg_ps_decryptable_prefix_length(data: bytes | bytearray) -> int:
 
 def _mpeg_ps_complete_packet_ranges(
     data: bytes | bytearray,
+    *,
+    include_trailing_unbounded_video: bool = False,
 ) -> list[_MpegPsPacketRange]:
     """Return fully parsed MPEG-PS packet ranges from the start of ``data``."""
 
@@ -865,6 +867,14 @@ def _mpeg_ps_complete_packet_ranges(
                 break
             next_start = _next_unbounded_video_pes_boundary(view, payload_start)
             if next_start is None:
+                if (
+                    include_trailing_unbounded_video
+                    and _is_video_pes_stream_id(view[i + 3])
+                    and payload_start <= len(view)
+                ):
+                    ranges.append(_MpegPsPacketRange(i, len(view), view[i + 3]))
+                    i = len(view)
+                    continue
                 break
             ranges.append(_MpegPsPacketRange(i, next_start, view[i + 3]))
             i = next_start
@@ -1245,7 +1255,10 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
         nal_type = decrypted_header & 0x1F
         return 1 <= nal_type <= 23
 
-    for packet_range in _mpeg_ps_complete_packet_ranges(data):
+    for packet_range in _mpeg_ps_complete_packet_ranges(
+        data,
+        include_trailing_unbounded_video=True,
+    ):
         if not _is_video_pes_stream_id(packet_range.stream_id):
             reset_nal_state()
             continue

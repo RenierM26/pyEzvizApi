@@ -824,30 +824,26 @@ def mpeg_ps_complete_prefix_length(data: bytes | bytearray) -> int:
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
     """Return the end offset for a complete MPEG-PS packet at ``start``."""
 
-    if start + 4 > len(data) or data[start : start + 3] != MPEG_START_CODE_PREFIX:
-        return None
-
-    stream_id = data[start + 3]
-    if stream_id == _PACK_HEADER_STREAM_ID:
-        if start + 14 > len(data):
-            return None
-        stuffing_length = data[start + 13] & 0x07
-        packet_end = start + 14 + stuffing_length
-        return packet_end if packet_end <= len(data) else None
-
-    if not _is_mpeg_ps_packet_start_id(stream_id) or start + 6 > len(data):
-        return None
-
-    packet_length = int.from_bytes(data[start + 4 : start + 6], "big")
-    if packet_length == 0:
-        return None
-
-    packet_end = start + 6 + packet_length
-    has_pes_header = not (0xC0 <= stream_id <= 0xEF or stream_id == _PRIVATE_STREAM_1_ID)
-    if packet_end <= len(data) and not has_pes_header:
-        payload_start = _pes_payload_start(data, start)
-        has_pes_header = payload_start is not None and payload_start <= packet_end
-    return packet_end if packet_end <= len(data) and has_pes_header else None
+    packet_end = None
+    if start + 4 <= len(data) and data[start : start + 3] == MPEG_START_CODE_PREFIX:
+        stream_id = data[start + 3]
+        if stream_id == _PACK_HEADER_STREAM_ID and start + 14 <= len(data):
+            stuffing_length = data[start + 13] & 0x07
+            candidate_end = start + 14 + stuffing_length
+            if candidate_end <= len(data):
+                packet_end = candidate_end
+        elif _is_mpeg_ps_packet_start_id(stream_id) and start + 6 <= len(data):
+            packet_length = int.from_bytes(data[start + 4 : start + 6], "big")
+            candidate_end = start + 6 + packet_length
+            if packet_length and candidate_end <= len(data):
+                payload_start = (
+                    _pes_payload_start(data, start)
+                    if 0xC0 <= stream_id <= 0xEF or stream_id == _PRIVATE_STREAM_1_ID
+                    else start + 6
+                )
+                if payload_start is not None and payload_start <= candidate_end:
+                    packet_end = candidate_end
+    return packet_end
 
 
 def _pes_payload_start(data: bytes, packet_start: int) -> int | None:

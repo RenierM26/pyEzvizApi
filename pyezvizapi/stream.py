@@ -1159,7 +1159,7 @@ def detect_hikvision_ps_video_nalu_header_size(
     if not any(scores.values()):
         return default
     if (
-        scores["h264"] >= scores["hevc"]
+        scores["h264"] > scores["hevc"]
         and scores["h264"] > scores["h264-clear-header"]
     ):
         return 0

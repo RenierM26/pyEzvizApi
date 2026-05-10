@@ -126,6 +126,9 @@ venv.bak/
 # Repository monitor local output
 .repo-watch/
 
+# Local crash dumps
+core.*
+
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -141,3 +144,5 @@ dmypy.json
 !/discovery/apk/out/.gitkeep
 /discovery/apk/work/*
 !/discovery/apk/work/.gitkeep
+/discovery/cloud-captures/
+/discovery/live-captures/

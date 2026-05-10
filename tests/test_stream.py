@@ -4,6 +4,7 @@ import base64
 import json
 from typing import Any
 
+from Crypto.Cipher import AES
 import pytest
 import requests
 
@@ -22,6 +23,7 @@ from pyezvizapi.stream import (
     VtmMessageCode,
     VtmStreamClient,
     VtmTraceEvent,
+    _find_hevc_nal_start_codes,
     build_get_vtdu_info_request,
     build_peer_stream_request,
     build_start_stream_request,
@@ -30,6 +32,7 @@ from pyezvizapi.stream import (
     build_stream_keepalive_request,
     build_vtm_url,
     decode_vtm_packet,
+    decrypt_hikvision_ps_video,
     detect_transport,
     encode_vtm_packet,
     parse_get_vtdu_info_response,
@@ -373,6 +376,39 @@ def test_detect_transport_and_rtp_payload() -> None:
     assert detect_transport(b"\x47...") == StreamTransport.MPEG_TS
     assert detect_transport(rtp) == StreamTransport.RTP
     assert rtp_payload(rtp) == BODY
+
+
+def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = AES.new(aes_key, AES.MODE_ECB).encrypt(clear_body)
+    clear_payload = b"\x00\x00\x00\x01\x42\x01" + clear_body
+    encrypted_payload = b"\x00\x00\x00\x01\x42\x01" + encrypted_body
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_find_hevc_nal_start_codes_ignores_ciphertext_start_code_lookalikes() -> None:
+    payload = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x01\xe0ciphertext-lookalike"
+        b"\x00\x00\x01\x26\x01idr"
+    )
+
+    assert _find_hevc_nal_start_codes(payload, 0, len(payload)) == [(0, 4), (33, 3)]
 
 
 def test_vtm_stream_client_starts_and_reads_payloads() -> None:

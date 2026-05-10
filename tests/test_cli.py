@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import io
 import json
+from pathlib import Path
 import sys
 from typing import Any, BinaryIO, ClassVar, cast
 
@@ -17,6 +18,11 @@ from cli_fakes import (
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
 from pyezvizapi.stream import VtmChannel, VtmPacket
+
+MPEGTS_PAYLOAD = b"mpegts"
+CLOUD_VIDEO_PAYLOAD = b"cloud-video-bytes"
+NATIVE_ENCRYPTED_PAYLOAD = b"encrypted"
+NATIVE_TRANSFORMED_PAYLOAD = b"decrypted"
 
 _format_cell = cli_module._format_cell  # noqa: SLF001
 _write_table = cli_module._write_table  # noqa: SLF001
@@ -65,7 +71,10 @@ def test_main_uses_existing_token_file_without_login(monkeypatch, tmp_path, caps
         encoding="utf-8",
     )
 
-    assert cli_module.main(["--token-file", str(token_file), "device_infos", "--serial", "CAM123"]) == 0
+    assert (
+        cli_module.main(["--token-file", str(token_file), "device_infos", "--serial", "CAM123"])
+        == 0
+    )
 
     client = fake_client.instances[0]
     assert client.account is None
@@ -241,6 +250,519 @@ def test_unifiedmsg_urls_only_extracts_media_urls(monkeypatch, tmp_path, capsys)
         "CAM2: https://example.test/default.jpg",
         "CAM3: https://example.test/first.jpg",
     ]
+
+
+def test_cloud_videos_json_fetches_details(monkeypatch, tmp_path, capsys) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "cloud_videos",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--limit",
+                "5",
+                "--video-type",
+                "-1",
+                "--support-multi-channel-shared-service",
+                "1",
+                "--details",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.cloud_videos_request == {
+        "serial": "CAM123",
+        "channel": 2,
+        "limit": 5,
+        "video_type": -1,
+        "support_multi_channel_shared_service": 1,
+        "max_retries": 0,
+    }
+    assert client.cloud_video_details_request["serial"] == "CAM123"
+    assert client.cloud_video_details_request["support_multi_channel_shared_service"] == 1
+    assert json.loads(capsys.readouterr().out)[0]["seqId"] == 12345
+
+
+def test_sdcard_videos_json_uses_v2_endpoint(monkeypatch, tmp_path, capsys) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "sdcard_videos",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--start-time",
+                "2026-05-10T21:50:00",
+                "--stop-time",
+                "2026-05-10T21:51:00",
+                "--size",
+                "5",
+                "--sort-by",
+                "1",
+                "--require-label",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.sdcard_videos_request == {
+        "source": "v2",
+        "serial": "CAM123",
+        "channel": 2,
+        "start_time": "2026-05-10T21:50:00",
+        "stop_time": "2026-05-10T21:51:00",
+        "size": 5,
+        "sort_by": 1,
+        "require_label": 1,
+        "max_retries": 0,
+    }
+    assert json.loads(capsys.readouterr().out)[0]["path"] == "/sd/record/clip.ps"
+
+
+def test_sdcard_videos_common_passes_channel_serial(monkeypatch, tmp_path) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "sdcard_videos",
+                "--serial",
+                "CAM123",
+                "--source",
+                "common",
+                "--channel-serial",
+                "CHAN123",
+                "--start-time",
+                "2026-05-10T21:50:00",
+                "--stop-time",
+                "2026-05-10T21:51:00",
+                "--record-type",
+                "2",
+                "--version",
+                "3",
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].sdcard_videos_request == {
+        "source": "common",
+        "serial": "CAM123",
+        "channel": 1,
+        "start_time": "2026-05-10T21:50:00",
+        "stop_time": "2026-05-10T21:51:00",
+        "channel_serial": "CHAN123",
+        "record_type": 2,
+        "size": 20,
+        "version": 3,
+        "max_retries": 0,
+    }
+
+
+def test_first_record_list_decodes_ezviz_compressed_records() -> None:
+    payload = {
+        "records": (
+            "eJyLrubi5FRyUrLiVDIyMDLTNTDVNbAMMTK0MjWwMjBQ0gHJumKXNYfIhlQWpAIV"
+            "GIA5QanFIMVKMI4RmMfFWRsLAPZWE10="
+        )
+    }
+
+    assert cli_module._first_record_list(payload) == [  # noqa: SLF001
+        {
+            "B": "2026-05-09T21:50:00",
+            "E": "2026-05-09T21:50:07",
+            "Type": 0,
+            "Res": "",
+            "Res2": "",
+        }
+    ]
+
+
+def test_cloud_videos_table_output(monkeypatch, tmp_path, capsys) -> None:
+    _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "cloud_videos",
+                "--serial",
+                "CAM123",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "seqId" in output
+    assert "12345" in output
+    assert "hweustreamer.ezvizlife.com:32723" in output
+
+
+def test_cloud_video_download_writes_selected_clip(monkeypatch, tmp_path, capsys) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+    output = tmp_path / "downloads" / "clip.ps"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "cloud_video_download",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--seq-id",
+                "12345",
+                "--output",
+                str(output),
+                "--support-multi-channel-shared-service",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert output.read_bytes() == CLOUD_VIDEO_PAYLOAD
+    assert client.cloud_video_details_request["videos"][0]["seqId"] == 12345
+    assert client.cloud_video_download_request["video"]["seqId"] == 12345
+    assert json.loads(capsys.readouterr().out) == {
+        "bytes": 17,
+        "encrypted_output": None,
+        "output": str(output),
+        "seqId": 12345,
+        "transform": "direct",
+    }
+
+
+def test_cloud_video_download_handles_native_stream_url(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+    output = tmp_path / "downloads" / "clip.ps"
+    encrypted_output = tmp_path / "downloads" / "clip.tmp"
+    replay_calls: list[dict[str, Any]] = []
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_direct_download(self: _FakeClient, video: dict[str, Any], **_: Any) -> bytes:
+        self.cloud_video_download_request = {"video": video}
+        raise PyEzvizError("native streamUrl requires cloud replay protocol")
+
+    def fake_replay(**kwargs: Any) -> bytes:
+        replay_calls.append(kwargs)
+        return NATIVE_ENCRYPTED_PAYLOAD
+
+    def fake_decrypt(data: bytes, key: str) -> bytes:
+        decrypt_calls.append({"data": data, "key": key})
+        return NATIVE_TRANSFORMED_PAYLOAD
+
+    monkeypatch.setattr(_FakeClient, "download_cloud_video", fake_direct_download)
+    monkeypatch.setattr(cli_module, "download_ezviz_cloud_replay", fake_replay)
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "cloud_video_download",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--seq-id",
+                "12345",
+                "--output",
+                str(output),
+                "--encrypted-output",
+                str(encrypted_output),
+                "--timeout",
+                "12",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert output.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+    assert encrypted_output.read_bytes() == NATIVE_ENCRYPTED_PAYLOAD
+    assert client.camera_ticket_info_request["serial"] == "CAM123"
+    assert client.cam_key_request == {"serial": "CAM123", "max_retries": 1}
+    assert replay_calls == [
+        {
+            "stream_url": "hweustreamer.ezvizlife.com:32723",
+            "ticket": "ticket-value",
+            "serial": "CAM123",
+            "channel": 2,
+            "seq_id": 12345,
+            "begin_cas": "20260509T215000Z",
+            "end_cas": "20260509T215010Z",
+            "storage_version": 2,
+            "video_type": 2,
+            "file_size": 1092348,
+            "timeout": 12,
+        }
+    ]
+    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret"}]
+    assert json.loads(capsys.readouterr().out) == {
+        "bytes": len(NATIVE_TRANSFORMED_PAYLOAD),
+        "encrypted_output": str(encrypted_output),
+        "output": str(output),
+        "seqId": 12345,
+        "transform": "cloud_replay_python",
+    }
+
+
+def test_cloud_video_native_download_drives_adb_and_frida(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+    output = tmp_path / "downloads" / "clip.ps"
+    encrypted_output = tmp_path / "downloads" / "clip.tmp"
+    pushed_payloads: list[dict[str, Any]] = []
+    commands: list[list[str]] = []
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+    ) -> cli_module.subprocess.CompletedProcess[str]:
+        commands.append(command)
+        assert check is True
+        assert capture_output is True
+        assert text is True
+        assert timeout > 0
+
+        if command[0] == "adb" and "push" in command:
+            pushed_payloads.append(json.loads(Path(command[-2]).read_text(encoding="utf-8")))
+        if command[0] == "adb" and "pull" in command:
+            destination = Path(command[-1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(
+                NATIVE_ENCRYPTED_PAYLOAD
+                if destination.suffix == ".tmp"
+                else NATIVE_TRANSFORMED_PAYLOAD
+            )
+        return cli_module.subprocess.CompletedProcess(command, 0, "", "")
+
+    def fake_decrypt(data: bytes, key: str) -> bytes:
+        decrypt_calls.append({"data": data, "key": key})
+        return NATIVE_TRANSFORMED_PAYLOAD
+
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "cloud_video_native_download",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--seq-id",
+                "12345",
+                "--output",
+                str(output),
+                "--encrypted-output",
+                str(encrypted_output),
+                "--adb-serial",
+                "adb-1",
+                "--frida-host",
+                "127.0.0.1:27046",
+                "--support-multi-channel-shared-service",
+                "1",
+                "--output-name",
+                "unit-output",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.camera_ticket_info_request == {
+        "serial": "CAM123",
+        "channel": 2,
+        "support_multi_channel_shared_service": 1,
+        "max_retries": 0,
+    }
+    assert client.cam_key_request == {"serial": "CAM123", "max_retries": 1}
+    assert output.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+    assert encrypted_output.read_bytes() == NATIVE_ENCRYPTED_PAYLOAD
+    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret"}]
+    assert len(pushed_payloads) == 1
+    assert pushed_payloads[0]["ticket"] == "ticket-value"
+    assert "secretKey" not in pushed_payloads[0]
+
+    frida_commands = [command for command in commands if command[0] == "frida"]
+    assert len(frida_commands) == 1
+    assert all("-H" in command and "127.0.0.1:27046" in command for command in frida_commands)
+    assert any(command[:4] == ["adb", "-s", "adb-1", "push"] for command in commands)
+    assert any(command[:4] == ["adb", "-s", "adb-1", "pull"] for command in commands)
+
+    assert json.loads(capsys.readouterr().out) == {
+        "encrypted_output": str(encrypted_output),
+        "output": str(output),
+        "secretKey": "<redacted>",
+        "seqId": 12345,
+        "streamUrl": "hweustreamer.ezvizlife.com:32723",
+        "ticket": "<redacted>",
+        "transform": "python",
+    }
+
+
+def test_cloud_video_decrypt_uses_camera_key(monkeypatch, tmp_path, capsys) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+    input_path = tmp_path / "clip.tmp"
+    output_path = tmp_path / "clip.ps"
+    input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str) -> bytes:
+        decrypt_calls.append({"data": data, "key": key})
+        return NATIVE_TRANSFORMED_PAYLOAD
+
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "--json",
+                "cloud_video_decrypt",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--serial",
+                "CAM123",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.cam_key_request == {"serial": "CAM123", "max_retries": 1}
+    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "camera-secret"}]
+    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+    assert json.loads(capsys.readouterr().out) == {
+        "bytes": len(NATIVE_TRANSFORMED_PAYLOAD),
+        "input": str(input_path),
+        "output": str(output_path),
+    }
+
+
+def test_cloud_video_decrypt_can_use_explicit_key_without_login(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    input_path = tmp_path / "clip.tmp"
+    output_path = tmp_path / "clip.ps"
+    input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str) -> bytes:
+        decrypt_calls.append({"data": data, "key": key})
+        return NATIVE_TRANSFORMED_PAYLOAD
+
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+
+    assert (
+        cli_module.main(
+            [
+                "--json",
+                "cloud_video_decrypt",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--key",
+                "manual-key",
+            ]
+        )
+        == 0
+    )
+
+    assert decrypt_calls == [{"data": NATIVE_ENCRYPTED_PAYLOAD, "key": "manual-key"}]
+    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+    assert json.loads(capsys.readouterr().out)["bytes"] == len(NATIVE_TRANSFORMED_PAYLOAD)
+
+
+def test_cloud_video_decrypt_rejects_missing_key(monkeypatch, tmp_path) -> None:
+    _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps({"session_id": "saved"}), encoding="utf-8")
+    input_path = tmp_path / "clip.tmp"
+    output_path = tmp_path / "clip.ps"
+    input_path.write_bytes(NATIVE_ENCRYPTED_PAYLOAD)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "cloud_video_decrypt",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 1
+    )
 
 
 def test_stream_trace_outputs_sanitized_json_lines(monkeypatch, tmp_path, capsys) -> None:
@@ -493,6 +1015,85 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
     assert output_file.read_bytes() == expected_payload
 
 
+def test_stream_dump_can_decrypt_before_mpegts_remux(monkeypatch, tmp_path) -> None:
+    class EncryptKeyClient(_FakeClient):
+        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+            assert serial == "CAM123"
+            assert max_retries == 1
+            return "camera-key"
+
+    _install_fake_client(monkeypatch, EncryptKeyClient)
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 1
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=9,
+                    sequence=1,
+                    message_code=0,
+                    body=b"encrypted",
+                )
+            ]
+
+    monkeypatch.setattr(
+        cli_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: FakeStream(),
+    )
+
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
+        return b"decrypted"
+
+    remux_calls: list[dict[str, Any]] = []
+
+    def fake_remux(data: bytes, output: BinaryIO, *, ffmpeg_path: str) -> None:
+        remux_calls.append({"data": data, "ffmpeg_path": ffmpeg_path})
+        output.write(MPEGTS_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+    monkeypatch.setattr(cli_module, "_remux_mpegps_bytes_to_mpegts", fake_remux)
+    output_file = tmp_path / "stream.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "dump",
+                "--serial",
+                "CAM123",
+                "--max-packets",
+                "1",
+                "--duration",
+                "0",
+                "--decrypt-video",
+                "--output",
+                str(output_file),
+            ]
+        )
+        == 0
+    )
+
+    assert decrypt_calls == [{"data": b"encrypted", "key": "camera-key", "nalu_header_size": 2}]
+    assert remux_calls == [{"data": b"decrypted", "ffmpeg_path": "ffmpeg"}]
+    assert output_file.read_bytes() == MPEGTS_PAYLOAD
+
+
 def test_parse_stream_dump_duration_units() -> None:
     cases = {
         "30": 30.0,
@@ -543,9 +1144,7 @@ def test_write_stream_payloads_stops_after_duration() -> None:
     assert output.getvalue() == expected_payload
 
 
-def test_stream_dump_rejects_encrypted_packets_by_default(
-    monkeypatch, tmp_path, caplog
-) -> None:
+def test_stream_dump_rejects_encrypted_packets_by_default(monkeypatch, tmp_path, caplog) -> None:
     _install_fake_client(monkeypatch)
 
     class FakeStream:
@@ -602,9 +1201,7 @@ def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
     expected_payload = b"abcdef"
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
     fake_ffmpeg.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        "#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n",
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
@@ -681,6 +1278,8 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
                 "path": args.path,
                 "ffmpeg_path": args.ffmpeg_path,
                 "refresh_vtm": not args.no_refresh_vtm,
+                "decrypt_video": args.decrypt_video,
+                "decrypt_codec": args.decrypt_codec,
                 "max_packets": args.max_packets,
             }
         )
@@ -706,6 +1305,7 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
                 "/camera.ts",
                 "--ffmpeg-path",
                 sys.executable,
+                "--decrypt-video",
                 "--max-packets",
                 "4",
                 "--no-refresh-vtm",
@@ -725,6 +1325,8 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
             "path": "/camera.ts",
             "ffmpeg_path": sys.executable,
             "refresh_vtm": False,
+            "decrypt_video": True,
+            "decrypt_codec": "hevc",
             "max_packets": 4,
         }
     ]
@@ -778,6 +1380,8 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
         path="/CAM123.ts",
         ffmpeg_path="/does/not/exist/ffmpeg",
         allow_encrypted=False,
+        decrypt_video=False,
+        decrypt_codec="hevc",
         max_packets=None,
     )
 
@@ -793,6 +1397,83 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
 
     assert handler.responses == []
     assert handler.errors == [(502, "Could not launch FFmpeg")]
+
+
+def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+    class FakeClient:
+        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+            assert serial == "CAM123"
+            assert max_retries == 1
+            return "camera-key"
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        wfile = io.BytesIO()
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.responses: list[int] = []
+            self.errors: list[tuple[int, str]] = []
+
+        def send_response(self, code: int) -> None:
+            self.responses.append(code)
+
+        def send_header(self, _key: str, _value: str) -> None:
+            return None
+
+        def end_headers(self) -> None:
+            return None
+
+        def send_error(self, code: int, message: str) -> None:
+            self.errors.append((code, message))
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=None,
+        path="/CAM123.ts",
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=False,
+        decrypt_video=True,
+        decrypt_codec="hevc",
+        max_packets=None,
+    )
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int) -> bytes:
+        decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
+        return b"decrypted"
+
+    copy_calls: list[bytes] = []
+
+    def fake_copy_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
+        copy_calls.append(kwargs["transform_payload"](b"encrypted"))
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
+    monkeypatch.setattr(cli_module, "_open_mpegts_remux_process", lambda _path: object())
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+    monkeypatch.setattr(cli_module, "_copy_stream_payloads_to_mpegts", fake_copy_stream_payloads_to_mpegts)
+
+    handler = FakeHandler()
+    cli_module._handle_stream_proxy_get(cast(Any, handler), config, cast(Any, FakeClient()))  # noqa: SLF001
+
+    assert handler.responses == [200]
+    assert handler.errors == []
+    assert decrypt_calls == [{"data": b"encrypted", "key": "camera-key", "nalu_header_size": 2}]
+    assert copy_calls == [b"decrypted"]
 
 
 def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:
@@ -811,6 +1492,8 @@ def test_stream_proxy_wraps_bind_failure(monkeypatch) -> None:
         path=None,
         ffmpeg_path="ffmpeg",
         allow_encrypted=False,
+        decrypt_video=False,
+        decrypt_codec="hevc",
         max_packets=None,
         listen_host="127.0.0.1",
         listen_port=8558,
@@ -1299,9 +1982,7 @@ def test_pagelist_outputs_raw_json(monkeypatch, tmp_path, capsys) -> None:
 
     assert cli_module.main(["--token-file", _token_file(tmp_path), "pagelist"]) == 0
 
-    assert json.loads(capsys.readouterr().out) == {
-        "deviceInfos": [{"deviceSerial": "CAM123"}]
-    }
+    assert json.loads(capsys.readouterr().out) == {"deviceInfos": [{"deviceSerial": "CAM123"}]}
     assert MiscClient.instances[0].closed is True
 
 
@@ -1317,9 +1998,7 @@ def test_device_infos_outputs_all_or_filtered_serial(monkeypatch, tmp_path, caps
     monkeypatch.setattr(cli_module, "EzvizClient", MiscClient)
 
     assert cli_module.main(["--token-file", _token_file(tmp_path), "device_infos"]) == 0
-    assert json.loads(capsys.readouterr().out) == {
-        "CAM123": {"deviceInfos": {"name": "Front"}}
-    }
+    assert json.loads(capsys.readouterr().out) == {"CAM123": {"deviceInfos": {"name": "Front"}}}
     assert cast(MiscClient, MiscClient.instances[-1]).requested_serial is None
 
     assert (
@@ -1334,9 +2013,7 @@ def test_device_infos_outputs_all_or_filtered_serial(monkeypatch, tmp_path, caps
         )
         == 0
     )
-    assert json.loads(capsys.readouterr().out) == {
-        "deviceInfos": {"deviceSerial": "CAM456"}
-    }
+    assert json.loads(capsys.readouterr().out) == {"deviceInfos": {"deviceSerial": "CAM456"}}
     assert cast(MiscClient, MiscClient.instances[-1]).requested_serial == "CAM456"
 
 

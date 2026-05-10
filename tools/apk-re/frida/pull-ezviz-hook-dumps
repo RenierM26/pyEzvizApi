@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+package="${1:-com.ezviz}"
+dest="${2:-/tmp/ezviz-hook-dumps}"
+remote="/sdcard/Android/data/$package/files/ezviz-hook"
+
+if ! command -v adb >/dev/null 2>&1; then
+  echo "adb not found on PATH" >&2
+  exit 127
+fi
+
+mkdir -p "$dest"
+adb_args=()
+if [[ -n "${ADB_SERIAL:-}" ]]; then
+  adb_args=(-s "$ADB_SERIAL")
+fi
+
+adb "${adb_args[@]}" pull "$remote" "$dest"
+echo "Pulled hook dumps into $dest/ezviz-hook"

@@ -1146,9 +1146,10 @@ def decrypt_hikvision_ps_video(
             if (
                 active_nal
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and start_code_len == len(MPEG_START_CODE_PREFIX)
                 and start_code_pos != payload_start
             ):
-                break
+                continue
             if active_nal and segment_start < start_code_pos:
                 decrypt_nal_body_segment(segment_start, start_code_pos)
             reset_nal_state()

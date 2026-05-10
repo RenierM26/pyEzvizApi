@@ -833,6 +833,8 @@ def mpeg_ps_decryptable_prefix_length(data: bytes | bytearray) -> int:
     decryptable_end = ranges[-1].end
     trailing_video_start = decryptable_end
     for packet_range in reversed(ranges):
+        if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
+            continue
         if not _is_video_pes_stream_id(packet_range.stream_id):
             break
         trailing_video_start = packet_range.start
@@ -983,6 +985,17 @@ def _is_video_pes_stream_id(stream_id: int) -> bool:
     """Return True for MPEG-PS video PES stream IDs."""
 
     return 0xE0 <= stream_id <= 0xEF
+
+
+def _is_mpeg_ps_metadata_stream_id(stream_id: int) -> bool:
+    """Return True for MPEG-PS container metadata that carries no ES bytes."""
+
+    return stream_id in {
+        _PACK_HEADER_STREAM_ID,
+        _SYSTEM_HEADER_STREAM_ID,
+        _PROGRAM_STREAM_MAP_ID,
+        _PADDING_STREAM_ID,
+    }
 
 
 def _is_mpeg_ps_packet_start_id(stream_id: int) -> bool:
@@ -1268,6 +1281,8 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
         data,
         include_trailing_unbounded_video=True,
     ):
+        if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
+            continue
         if not _is_video_pes_stream_id(packet_range.stream_id):
             reset_nal_state()
             continue

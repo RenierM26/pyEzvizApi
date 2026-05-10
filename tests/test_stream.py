@@ -1092,6 +1092,44 @@ def test_decrypt_hikvision_ps_video_carries_nal_body_across_pes_packets() -> Non
     )
 
 
+def test_decrypt_hikvision_ps_video_carries_nal_body_across_pack_header() -> None:
+    key = "camera-key"
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = bytes.fromhex(
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+        "34a1119c1a165ddeb3ad0fffba9282ec"
+    )
+    pack_header = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    encrypted_first = b"\x00\x00\x00\x01\x42\x01" + encrypted_body[:20]
+    encrypted_second = encrypted_body[20:]
+    clear_first = b"\x00\x00\x00\x01\x42\x01" + clear_body[:20]
+    clear_second = clear_body[20:]
+    first_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_first) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_first
+    )
+    second_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_second) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_second
+    )
+
+    assert decrypt_hikvision_ps_video(first_pes + pack_header + second_pes, key) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_first) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_first
+        + pack_header
+        + b"\x00\x00\x01\xe0"
+        + (len(clear_second) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_second
+    )
+
+
 def test_decrypt_hikvision_ps_video_resets_after_non_video_packets() -> None:
     key = "camera-key"
     aes_key = key.encode().ljust(16, b"\0")[:16]
@@ -1204,6 +1242,24 @@ def test_mpeg_ps_decryptable_prefix_keeps_trailing_video_pes_run() -> None:
     assert mpeg_ps_decryptable_prefix_length(first_video_pes + second_video_pes + audio_pes) == len(
         first_video_pes + second_video_pes + audio_pes
     )
+
+
+def test_mpeg_ps_decryptable_prefix_keeps_metadata_in_trailing_video_run() -> None:
+    first_video_pes = b"\x00\x00\x01\xe0\x00\x08\x80\x00\x00first"
+    pack_header = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    second_video_pes = b"\x00\x00\x01\xe0\x00\x09\x80\x00\x00second"
+    audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
+
+    assert mpeg_ps_decryptable_prefix_length(first_video_pes + pack_header) == 0
+    assert (
+        mpeg_ps_decryptable_prefix_length(
+            first_video_pes + pack_header + second_video_pes,
+        )
+        == 0
+    )
+    assert mpeg_ps_decryptable_prefix_length(
+        first_video_pes + pack_header + second_video_pes + audio_pes,
+    ) == len(first_video_pes + pack_header + second_video_pes + audio_pes)
 
 
 def test_mpeg_ps_decryptable_prefix_keeps_all_trailing_video_stream_ids() -> None:

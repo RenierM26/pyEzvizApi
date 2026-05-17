@@ -461,7 +461,9 @@ def test_decrypt_hikvision_ps_video_decrypts_hevc_nal_headers() -> None:
     key = "camera-key"
     aes_key = key.encode().ljust(16, b"\0")[:16]
     clear_payload = b"\x00\x00\x00\x01\x40\x01hevc-header!!!"
-    encrypted_header_and_body = _hikvision_aes_ecb_cipher(aes_key).encrypt(clear_payload[4:])
+    encrypted_header_and_body = _hikvision_aes_ecb_cipher(aes_key).encrypt(
+        clear_payload[4:]
+    )
     encrypted_payload = b"\x00\x00\x00\x01" + encrypted_header_and_body
     pes = (
         b"\x00\x00\x01\xe0"

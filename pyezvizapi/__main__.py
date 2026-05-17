@@ -1095,7 +1095,7 @@ def _ensure_client_service_urls(client: EzvizClient) -> None:
     if hasattr(client, "_token"):
         client._token["service_urls"] = service_urls  # noqa: SLF001
     if hasattr(client, "exported_token"):
-        client.exported_token["service_urls"] = service_urls
+        cast(Any, client).exported_token["service_urls"] = service_urls
 
 
 def _login(

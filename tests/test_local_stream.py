@@ -542,13 +542,12 @@ def test_copy_local_stream_to_mpegps_writes_payloads_without_ffmpeg() -> None:
 
 
 def test_collect_local_stream_mpegps_honors_duration() -> None:
-    class FakeClock:
-        def __init__(self) -> None:
-            self.calls = 0
+    clock_calls = 0
 
-        def __call__(self) -> float:
-            self.calls += 1
-            return float(self.calls)
+    def fake_monotonic() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        return float(clock_calls)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -562,7 +561,7 @@ def test_collect_local_stream_mpegps_honors_duration() -> None:
     assert collect_local_stream_mpegps(
         FakeStream(),
         duration_seconds=1.5,
-        monotonic=FakeClock(),
+        monotonic=fake_monotonic,
     ) == MPEG_PS_PAYLOAD[4:7]
 
 

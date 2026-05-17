@@ -107,7 +107,8 @@ def _random_hex_trailer(size: int = CAS_RANDOM_TRAILER_SIZE) -> bytes:
 
 def _cas_tls_context() -> ssl.SSLContext:
     """Return the legacy TLS context accepted by the CAS cloud endpoint."""
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(CAS_TLS_CIPHERS)
     return context
 

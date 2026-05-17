@@ -730,6 +730,7 @@ def _copy_local_stream_payloads_to_mpegts(
                 monotonic=monotonic,
             )
         except (BrokenPipeError, ConnectionResetError):
+            # FFmpeg may close stdin after producing enough output for the caller.
             pass
         except Exception as err:  # pragma: no cover - defensive thread handoff
             writer_errors.append(err)
@@ -781,6 +782,7 @@ def _copy_mpegps_payloads_to_mpegts(
                 stdin.write(payload)
                 stdin.flush()
         except (BrokenPipeError, ConnectionResetError):
+            # FFmpeg may close stdin after producing enough output for the caller.
             pass
         except Exception as err:  # pragma: no cover - defensive thread handoff
             writer_errors.append(err)

@@ -724,6 +724,33 @@ def test_decrypt_hikvision_ps_video_scans_later_video_pes_after_gap() -> None:
     )
 
 
+def test_decrypt_hikvision_ps_video_encrypted_header_resets_at_non_video_pes() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    encrypted_block = _encrypt_hikvision_fixture_blocks(
+        aes_key,
+        b"\x41\x9a\x00\x02split-prefix",
+    )
+    first_payload = b"\x00\x00\x00\x01" + encrypted_block[:8]
+    second_payload = encrypted_block[8:]
+    first_video_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(first_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + first_payload
+    )
+    audio_pes = b"\x00\x00\x01\xc0\x00\x04keep"
+    second_video_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(second_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + second_payload
+    )
+    clip = first_video_pes + audio_pes + second_video_pes
+
+    assert decrypt_hikvision_ps_video(clip, key, nalu_header_size=0) == clip
+
+
 def test_detect_hikvision_ps_video_nalu_header_size_identifies_hevc() -> None:
     key = "camera-key"
     clear_body = b"0123456789abcdef" * 2

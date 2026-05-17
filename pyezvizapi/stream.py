@@ -818,6 +818,26 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
     return ranges
 
 
+def _has_non_video_pes_packet(data: bytes, start: int, end: int) -> bool:
+    """Return True when a non-video PES packet appears in the byte range."""
+
+    i = start
+    while i < end - 3:
+        if data[i : i + 3] != MPEG_START_CODE_PREFIX:
+            i += 1
+            continue
+        stream_id = data[i + 3]
+        if _is_mpeg_ps_metadata_stream_id(stream_id):
+            i += 4
+            continue
+        if _is_mpeg_ps_packet_start_id(stream_id) and not _is_video_pes_stream_id(
+            stream_id
+        ):
+            return True
+        i += 4
+    return False
+
+
 @dataclass(frozen=True)
 class _MpegPsPacketRange:
     """Parsed MPEG-PS packet bounds."""
@@ -1544,10 +1564,18 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
         video_payload_offsets.clear()
         video_payload.clear()
 
+    previous_video_end: int | None = None
     for payload_start, payload_end in _video_pes_payload_ranges(data):
+        if previous_video_end is not None and _has_non_video_pes_packet(
+            data,
+            previous_video_end,
+            payload_start,
+        ):
+            flush_video_payload_run()
         for output_pos in range(payload_start, payload_end):
             video_payload_offsets.append(output_pos)
             video_payload.append(data[output_pos])
+        previous_video_end = payload_end
     flush_video_payload_run()
 
     return bytes(output)

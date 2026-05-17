@@ -1975,8 +1975,8 @@ def test_local_sdk_keys_fetches_endpoint_cas_and_media_key(
                 "CAM123456": {
                     "CONNECTION": {
                         "localIp": "192.0.2.10",
-                        "localCmdPort": 9010,
-                        "localStreamPort": 9020,
+                        "localCmdPort": "9010",
+                        "localStreamPort": "9020",
                     }
                 }
             }

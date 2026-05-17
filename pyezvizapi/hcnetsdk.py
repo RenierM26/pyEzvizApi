@@ -22,7 +22,7 @@ import math
 import re
 import socket
 import ssl
-from typing import Any
+from typing import Any, cast
 import xml.etree.ElementTree as ET
 
 from Crypto.Cipher import AES
@@ -983,9 +983,13 @@ class SadpDeviceInfo:
         return int(value) if value and value.isdigit() else None
 
 
-SocketFactory = Callable[[tuple[str, int], float | None], Any]
-LocalSdkIvFactory = Callable[[int], bytes]
 SocketSourceAddress = tuple[str, int] | None
+SocketFactory = Callable[[tuple[str, int], float | None], Any]
+SourceAddressSocketFactory = Callable[
+    [tuple[str, int], float | None, SocketSourceAddress],
+    Any,
+]
+LocalSdkIvFactory = Callable[[int], bytes]
 
 
 def ezviz_local_sdk_ssl_iv(
@@ -2253,7 +2257,8 @@ def _connect_with_optional_source_address(
     if source_address is None:
         return socket_factory(address, timeout)
     try:
-        return socket_factory(address, timeout, source_address)  # type: ignore[misc]
+        source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
+        return source_socket_factory(address, timeout, source_address)
     except TypeError:
         if socket_factory is socket.create_connection:
             return socket.create_connection(

@@ -169,7 +169,9 @@ def test_main_refreshes_saved_token_for_cas_service_metadata(
                 {
                     "session_id": "new-session",
                     "api_url": "apiieu.ezvizlife.com",
-                    "service_urls": {"cas": "cas.example.test"},
+                    "service_urls": {
+                        "sysConf": [None] * 15 + ["cas.example.test", 443]
+                    },
                 },
             )
 
@@ -177,7 +179,13 @@ def test_main_refreshes_saved_token_for_cas_service_metadata(
     monkeypatch.setattr(cli_module, "EzvizClient", KeyClient)
     token_file = tmp_path / "token.json"
     token_file.write_text(
-        json.dumps({"session_id": "saved-session", "api_url": "apiieu.ezvizlife.com"}),
+        json.dumps(
+            {
+                "session_id": "saved-session",
+                "api_url": "apiieu.ezvizlife.com",
+                "service_urls": {"pushAddr": "push.example.test"},
+            }
+        ),
         encoding="utf-8",
     )
     calls: list[dict[str, Any]] = []
@@ -225,7 +233,7 @@ def test_main_refreshes_saved_token_for_cas_service_metadata(
         "token": {
             "session_id": "new-session",
             "api_url": "apiieu.ezvizlife.com",
-            "service_urls": {"cas": "cas.example.test"},
+            "service_urls": {"sysConf": [None] * 15 + ["cas.example.test", 443]},
         }
     }
     assert calls[1] == {"cas_serial": "CAM123456"}

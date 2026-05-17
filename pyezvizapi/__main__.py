@@ -1048,10 +1048,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _token_has_service_urls(token: dict[str, Any] | None) -> bool:
-    """Return True when a saved token carries CAS service URL metadata."""
+    """Return True when a saved token carries the CAS sysConf endpoint metadata."""
 
     service_urls = token.get("service_urls") if token else None
-    return isinstance(service_urls, dict) and bool(service_urls)
+    if not isinstance(service_urls, dict):
+        return False
+    sys_conf = service_urls.get("sysConf")
+    return (
+        isinstance(sys_conf, (list, tuple))
+        and len(sys_conf) > 16
+        and bool(sys_conf[15])
+        and bool(sys_conf[16])
+    )
 
 
 def _action_requires_service_urls(args: argparse.Namespace) -> bool:

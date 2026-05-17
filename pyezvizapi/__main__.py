@@ -2940,12 +2940,15 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                 transport = _detect_stream_packets_transport(collected_packets)
                 if transport == StreamTransport.RTP:
                     rtp_codec = _detect_rtp_video_codec(collected_packets)
+                    decrypt_codec = (
+                        rtp_codec if args.decrypt_codec == "auto" else args.decrypt_codec
+                    )
                     payload = _rtp_packets_to_annexb(collected_packets, codec=rtp_codec)
                     payload = _decrypt_annexb_video_bytes(
                         client,
                         args.serial,
                         payload,
-                        codec=rtp_codec,
+                        codec=decrypt_codec,
                     )
                     if args.output == "-":
                         if args.format == "raw":

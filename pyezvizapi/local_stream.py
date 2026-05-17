@@ -11,6 +11,8 @@ from threading import Thread
 import time
 from typing import Any, BinaryIO, Literal, cast
 
+from Crypto.Cipher import AES
+
 from .cas import CasDeviceSession, EzvizCAS
 from .exceptions import PyEzvizError
 from .hcnetsdk import (
@@ -28,6 +30,8 @@ from .hcnetsdk import (
     iter_hcnetsdk_real_data_mpegps,
 )
 from .stream import (
+    ANNEX_B_LONG_START_CODE,
+    HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     MPEG_PS_START_CODE,
     decrypt_hikvision_ps_video,
     rtp_payload,
@@ -590,7 +594,10 @@ def copy_local_stream_to_decrypted_mpegts(
         monotonic=monotonic,
     )
     if _local_stream_packets_are_idmx(packets):
-        raise _unsupported_idmx_local_payload_error()
+        hevc = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
+        process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+        _copy_mpegps_payloads_to_mpegts([hevc], output, process=process)
+        return
     decrypted = decrypt_hikvision_ps_video(
         b"".join(packets),
         media_key,
@@ -730,8 +737,38 @@ def _open_local_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes
         raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
 
+def _open_local_hevc_mpegts_remux_process(
+    ffmpeg_path: str,
+) -> subprocess.Popen[bytes]:
+    try:
+        return subprocess.Popen(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "hevc",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+
+
 IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
 IDMX_LOCAL_FRAME_HEADER_SIZE = 13
+HEVC_NAL_HEADER_SIZE = 2
+IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = 12
 
 
 def collect_local_stream_media_packets(
@@ -767,9 +804,131 @@ def _local_stream_packets_are_idmx(packets: list[bytes]) -> bool:
 
 def _unsupported_idmx_local_payload_error() -> PyEzvizError:
     return PyEzvizError(
-        "Unsupported encrypted EZVIZ local IDMX stream payload: native PlayCtrl "
-        "frame transform is not implemented"
+        "Unsupported encrypted EZVIZ local IDMX stream payload: decrypt-video is required"
     )
+
+
+def _decrypt_idmx_local_packets_to_annexb(
+    packets: list[bytes],
+    media_key: str | bytes,
+) -> bytes:
+    aes_key = _local_media_aes_key(media_key)
+    output = bytearray()
+    active_fu: bytearray | None = None
+    for packet in packets:
+        if not _looks_like_idmx_local_payload(packet):
+            raise PyEzvizError("Mixed EZVIZ local stream payload formats are unsupported")
+        body = packet[IDMX_LOCAL_FRAME_HEADER_SIZE:]
+        if _looks_like_idmx_hevc_parameter_frame(body):
+            # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
+            # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
+            continue
+        if _looks_like_idmx_hevc_media_frame(body):
+            active_fu = _append_idmx_hevc_media_payload(
+                output,
+                body[IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET:],
+                aes_key,
+                active_fu=active_fu,
+            )
+    if active_fu is not None:
+        _append_decrypted_hevc_nal(output, bytes(active_fu), aes_key)
+    if not output:
+        raise PyEzvizError("EZVIZ local IDMX stream did not include HEVC media frames")
+    return bytes(output)
+
+
+def _local_media_aes_key(media_key: str | bytes) -> bytes:
+    key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
+    return key_bytes.ljust(16, b"\0")[:16]
+
+
+def _looks_like_idmx_hevc_parameter_frame(body: bytes) -> bool:
+    return len(body) > 4 and body[:2] in (
+        b"\x00\x01",
+        b"\x00\x02",
+    )
+
+
+def _looks_like_idmx_hevc_media_frame(body: bytes) -> bool:
+    return (
+        len(body) > IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET
+        and body.startswith(b"\x40\x00\x00\x02\x80\x06")
+    )
+
+
+def _append_idmx_hevc_media_payload(
+    output: bytearray,
+    payload: bytes,
+    aes_key: bytes,
+    *,
+    active_fu: bytearray | None,
+) -> bytearray | None:
+    if len(payload) < HEVC_NAL_HEADER_SIZE:
+        return active_fu
+    nal_type = (payload[0] >> 1) & 0x3F
+    if nal_type != 49:
+        if _is_plausible_hevc_nal(payload):
+            _append_decrypted_hevc_nal(output, payload, aes_key)
+        return active_fu
+    if len(payload) < 3:
+        return active_fu
+
+    fu_header = payload[2]
+    is_start = bool(fu_header & 0x80)
+    is_end = bool(fu_header & 0x40)
+    original_type = fu_header & 0x3F
+    reconstructed_header = bytes(
+        [
+            (payload[0] & 0x81) | (original_type << 1),
+            payload[1],
+        ]
+    )
+    if is_start or active_fu is None:
+        active_fu = bytearray(reconstructed_header)
+    active_fu.extend(payload[3:])
+    if is_end:
+        _append_decrypted_hevc_nal(output, bytes(active_fu), aes_key)
+        return None
+    return active_fu
+
+
+def _append_decrypted_hevc_nal(
+    output: bytearray,
+    nal: bytes,
+    aes_key: bytes,
+) -> None:
+    if not _is_plausible_hevc_nal(nal):
+        return
+    output.extend(ANNEX_B_LONG_START_CODE)
+    output.extend(_decrypt_hevc_nal_prefix(nal, aes_key))
+
+
+def _is_plausible_hevc_nal(nal: bytes) -> bool:
+    return (
+        len(nal) >= HEVC_NAL_HEADER_SIZE
+        and not nal[0] & 0x80
+        and nal[1] & 0x07 != 0
+        and (nal[0] >> 1) & 0x3F <= 40
+    )
+
+
+def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
+    # PlayCtrl's live HEVC path passes encLenInfo=null and decrypts a fixed
+    # 4096-byte AES-ECB prefix after the clear HEVC NAL header. For fragmented
+    # units, we reconstruct the full NAL first so the prefix spans fragments.
+    frame = bytearray(nal)
+    decrypt_length = min(
+        HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
+        len(frame) - HEVC_NAL_HEADER_SIZE,
+    )
+    decrypt_length -= decrypt_length % AES.block_size
+    if decrypt_length > 0:
+        cipher = AES.new(aes_key, AES.MODE_ECB)  # lgtm[py/weak-crypto]
+        decrypt_end = HEVC_NAL_HEADER_SIZE + decrypt_length
+        frame[HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(
+            bytes(frame[HEVC_NAL_HEADER_SIZE:decrypt_end])
+        )
+    return bytes(frame)
 
 
 def _iter_local_stream_payloads(

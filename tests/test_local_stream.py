@@ -4,6 +4,7 @@ import io
 from types import SimpleNamespace
 from typing import Any, cast
 
+from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
@@ -40,6 +41,7 @@ LOCAL_ENCRYPTED_PAYLOAD = b"encrypted-payload"
 LOCAL_DECRYPTED_PAYLOAD = b"decrypted"
 LOCAL_DECRYPTED_TS_PAYLOAD = b"ts:decrypted"
 LOCAL_DECRYPTED_WITH_KEY_PAYLOAD = b"decrypted:encrypted-payload:media-secret"
+IDMX_MEDIA_KEY = b"0123456789abcdef"
 
 
 def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
@@ -661,27 +663,65 @@ def test_copy_local_stream_to_decrypted_mpegts_remuxes_decrypted_payload(
     assert output.getvalue() == LOCAL_DECRYPTED_TS_PAYLOAD
 
 
-def test_copy_local_stream_to_decrypted_mpegts_rejects_idmx_payload() -> None:
-    idmx_frame = (
+def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    cipher = AES.new(IDMX_MEDIA_KEY, AES.MODE_ECB)
+    vps_plain = b"\x40\x01" + b"vps-plain-123456"
+    vps_cipher = cipher.encrypt(vps_plain[2:])
+    slice_plain = b"slice-plain-1234"
+    slice_cipher = cipher.encrypt(slice_plain)
+    ignored_parameter_frame = (
         b"\x0d\x90\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
-        b"\x00\x01\x00\x0c"
-        b"\x40\x0eencrypted-vps"
+        b"\x00\x01\x00\x0cignored"
+    )
+    vps_frame = (
+        b"\x0d\x90\x60\x77\xb2\x0f\x93\x78\xfe\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        + vps_plain[:2]
+        + vps_cipher
+    )
+    media_frame = (
+        b"\x0d\xb0\x60\x77\xb5\x0f\x93\x78\xfe\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        b"\x62\x01\x93"
+        + slice_cipher
     )
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
-            assert max_packets == 1
-            return [SimpleNamespace(body=idmx_frame)]
+            assert max_packets == 3
+            return [
+                SimpleNamespace(body=ignored_parameter_frame),
+                SimpleNamespace(body=vps_frame),
+                SimpleNamespace(body=media_frame),
+            ]
 
     output = io.BytesIO()
 
-    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
-        copy_local_stream_to_decrypted_mpegts(
-            FakeStream(),
-            output,
-            "media-secret",
-            max_packets=1,
-        )
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=3,
+    )
+
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01"
+        + vps_plain
+        + b"\x00\x00\x00\x01"
+        + b"\x26\x01"
+        + slice_plain
+    )
 
 
 def test_copy_local_stream_to_decrypted_mpegps_rejects_idmx_payload() -> None:
@@ -697,7 +737,7 @@ def test_copy_local_stream_to_decrypted_mpegps_rejects_idmx_payload() -> None:
 
     output = io.BytesIO()
 
-    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+    with pytest.raises(PyEzvizError, match="decrypt-video is required"):
         copy_local_stream_to_decrypted_mpegps(
             FakeStream(),
             output,
@@ -708,7 +748,7 @@ def test_copy_local_stream_to_decrypted_mpegps_rejects_idmx_payload() -> None:
     assert not output.getvalue()
 
 
-def test_copy_local_stream_to_decrypted_mpegts_rejects_idmx_before_ffmpeg(
+def test_copy_local_stream_to_decrypted_mpegts_rejects_unknown_idmx_before_ffmpeg(
     tmp_path,
 ) -> None:
     fake_ffmpeg = tmp_path / "ffmpeg"
@@ -724,7 +764,7 @@ def test_copy_local_stream_to_decrypted_mpegts_rejects_idmx_before_ffmpeg(
                 )
             ]
 
-    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+    with pytest.raises(PyEzvizError, match="did not include HEVC media frames"):
         copy_local_stream_to_decrypted_mpegts(
             FakeStream(),
             io.BytesIO(),
@@ -789,7 +829,7 @@ def test_copy_local_stream_to_mpegts_rejects_idmx_payload_without_decrypt() -> N
 
     output = io.BytesIO()
 
-    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+    with pytest.raises(PyEzvizError, match="decrypt-video is required"):
         copy_local_stream_to_mpegts(FakeStream(), output, max_packets=1)
 
 

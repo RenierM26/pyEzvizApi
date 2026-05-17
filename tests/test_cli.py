@@ -1391,6 +1391,12 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
+def test_rtp_payload_video_codec_keeps_h264_slice_bytes_before_hevc_ap_fu() -> None:
+    assert cli_module._rtp_payload_video_codec(b"\x61h264") == "h264"  # noqa: SLF001
+    assert cli_module._rtp_payload_video_codec(b"\x63h264") == "h264"  # noqa: SLF001
+    assert cli_module._rtp_payload_video_codec(b"\x62\x01\x85hevc-fu") == "hevc"  # noqa: SLF001
+
+
 def test_parse_stream_dump_duration_units() -> None:
     cases = {
         "30": 30.0,

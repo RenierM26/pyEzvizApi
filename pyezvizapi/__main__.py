@@ -1836,9 +1836,9 @@ def _rtp_payload_video_codec(payload: bytes) -> str | None:
         return None
     h264_type = payload[0] & 0x1F
     hevc_type = (payload[0] >> 1) & 0x3F
-    if hevc_type in {48, 49}:
+    if hevc_type in {48, 49} and _is_plausible_hevc_rtp_header(payload):
         return "hevc"
-    if 1 <= h264_type <= 5 and not _is_plausible_hevc_rtp_header(payload):
+    if 1 <= h264_type <= 5:
         return "h264"
     if hevc_type in {32, 33, 34, 39, 40}:
         return "hevc"
@@ -1856,7 +1856,7 @@ def _is_plausible_hevc_rtp_header(payload: bytes) -> bool:
     layer_id = ((payload[0] & 0x01) << 5) | (payload[1] >> 3)
     temporal_id_plus1 = payload[1] & 0x07
     nal_type = (payload[0] >> 1) & 0x3F
-    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 40
+    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 49
 
 
 def _detect_rtp_video_codec(packets: list[Any]) -> str:

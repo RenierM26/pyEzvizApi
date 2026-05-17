@@ -46,8 +46,8 @@ class FakeSocket:
 
 
 class FakeSSLContext:
-    def __init__(self, protocol: Any) -> None:
-        self.protocol = protocol
+    def __init__(self, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> None:
+        self.purpose = purpose
         self.ciphers: str | None = None
         self.default_cert_purpose: ssl.Purpose | None = None
 
@@ -97,7 +97,7 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
         return fake_socket
 
     monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.SSLContext", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
     monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(_token()).cas_get_encryption("CAM123")
@@ -156,7 +156,7 @@ def test_cas_get_encryption_rejects_empty_xml_body(monkeypatch) -> None:
         "pyezvizapi.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.SSLContext", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="did not contain an XML body"):
         EzvizCAS(_token()).cas_get_encryption("CAM123")
@@ -171,7 +171,7 @@ def test_cas_get_encryption_rejects_malformed_xml_body(monkeypatch) -> None:
         "pyezvizapi.cas.socket.create_connection",
         lambda _address: fake_socket,
     )
-    monkeypatch.setattr("pyezvizapi.cas.ssl.SSLContext", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="Could not parse CAS"):
         EzvizCAS(_token()).cas_get_encryption("CAM123")
@@ -187,11 +187,11 @@ def test_probe_local_operation_code_uses_plain_socket(monkeypatch) -> None:
         connect_calls.append(address)
         return fake_socket
 
-    def fail_ssl_context(protocol: Any) -> FakeSSLContext:
+    def fail_ssl_context(purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> FakeSSLContext:
         raise AssertionError("LAN probe must not create a TLS context")
 
     monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.SSLContext", fail_ssl_context)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", fail_ssl_context)
     monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
 
     result = EzvizCAS(_token()).probe_local_operation_code(
@@ -242,7 +242,7 @@ def test_set_camera_defence_state_sends_encrypted_payload(monkeypatch) -> None:
         return fake_socket
 
     monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
-    monkeypatch.setattr("pyezvizapi.cas.ssl.SSLContext", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
     monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
     monkeypatch.setattr(
         EzvizCAS,

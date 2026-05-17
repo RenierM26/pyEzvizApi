@@ -923,7 +923,8 @@ def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
     )
     decrypt_length -= decrypt_length % AES.block_size
     if decrypt_length > 0:
-        cipher = AES.new(aes_key, AES.MODE_ECB)  # lgtm[py/weak-crypto]
+        # EZVIZ/PlayCtrl encrypts local media NAL prefixes with AES-ECB.
+        cipher = AES.new(aes_key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
         decrypt_end = HEVC_NAL_HEADER_SIZE + decrypt_length
         frame[HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(
             bytes(frame[HEVC_NAL_HEADER_SIZE:decrypt_end])
@@ -965,7 +966,7 @@ def _copy_mpegps_payloads_to_mpegts(
                 stdin.flush()
         except (BrokenPipeError, ConnectionResetError):
             # FFmpeg may close stdin after producing enough output for the caller.
-            pass
+            return
         except Exception as err:  # pragma: no cover - defensive thread handoff
             writer_errors.append(err)
         finally:

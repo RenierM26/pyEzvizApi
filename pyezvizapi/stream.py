@@ -55,7 +55,7 @@ def _hikvision_aes_ecb_cipher(key: bytes) -> Any:
     a general-purpose cryptographic API.
     """
 
-    return AES.new(key, AES.MODE_ECB)  # lgtm[py/weak-crypto]
+    return AES.new(key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
 
 
 class VtmChannel(IntEnum):

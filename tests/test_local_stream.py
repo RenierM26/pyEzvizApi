@@ -674,7 +674,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
-    cipher = AES.new(IDMX_MEDIA_KEY, AES.MODE_ECB)
+    cipher = AES.new(IDMX_MEDIA_KEY, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
     vps_plain = b"\x40\x01" + b"vps-plain-123456"
     vps_cipher = cipher.encrypt(vps_plain[2:])
     slice_plain = b"slice-plain-1234"

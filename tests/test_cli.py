@@ -1291,6 +1291,106 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
+def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _install_fake_client(monkeypatch)
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 1
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=17,
+                    sequence=1,
+                    message_code=0,
+                    body=(
+                        b"\x80\x60\x00\x01"
+                        b"\x00\x00\x00\x01"
+                        b"\x00\x00\x00\x02"
+                        b"\x41h264"
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr(
+        cli_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: FakeStream(),
+    )
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt_annexb(
+        _client: Any,
+        _serial: str,
+        data: bytes,
+        *,
+        codec: str,
+    ) -> bytes:
+        decrypt_calls.append({"data": data, "codec": codec})
+        return b"decrypted-h264"
+
+    remux_calls: list[dict[str, Any]] = []
+
+    def fake_remux_elementary(
+        data: bytes,
+        output: BinaryIO,
+        *,
+        ffmpeg_path: str,
+        codec: str,
+    ) -> None:
+        remux_calls.append({"data": data, "ffmpeg_path": ffmpeg_path, "codec": codec})
+        output.write(MPEGTS_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_decrypt_annexb_video_bytes", fake_decrypt_annexb)
+    monkeypatch.setattr(
+        cli_module,
+        "_remux_elementary_video_bytes_to_mpegts",
+        fake_remux_elementary,
+    )
+    output_file = tmp_path / "stream.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "dump",
+                "--serial",
+                "CAM123",
+                "--max-packets",
+                "1",
+                "--duration",
+                "0",
+                "--decrypt-video",
+                "--output",
+                str(output_file),
+            ]
+        )
+        == 0
+    )
+
+    assert decrypt_calls == [
+        {"data": b"\x00\x00\x00\x01\x41h264", "codec": "h264"}
+    ]
+    assert remux_calls == [
+        {"data": b"decrypted-h264", "ffmpeg_path": "ffmpeg", "codec": "h264"}
+    ]
+    assert output_file.read_bytes() == MPEGTS_PAYLOAD
+
+
 def test_parse_stream_dump_duration_units() -> None:
     cases = {
         "30": 30.0,

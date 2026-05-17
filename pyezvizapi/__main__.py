@@ -623,631 +623,2617 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_trace.add_argument(
         "--max-packets",
-        ty…61174 tokens truncated…rt_time: str,
-        stop_time: str,
-        *,
-        size: int = 20,
-        sort_by: int = 0,
-        require_label: int = 0,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Search SD-card playback records with the app's v2 record endpoint."""
+        type=int,
+        default=20,
+        help="Number of incoming VTM packets to summarize (default: 20)",
+    )
+    parser_stream_trace.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_trace.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type used in the ysproto URL (default: 9)",
+    )
+    parser_stream_trace.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index to use from /vtdutoken2 (default: 0)",
+    )
+    parser_stream_trace.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing via /v3/streaming/vtm",
+    )
+    parser_stream_trace.add_argument(
+        "--json-lines",
+        action="store_true",
+        help="Print one JSON object per trace event instead of a JSON array",
+    )
+    parser_stream_dump = subparsers_stream.add_parser(
+        "dump",
+        help="Dump VTM stream payload bytes for FFmpeg/proxy experiments",
+    )
+    parser_stream_dump.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_stream_dump.add_argument(
+        "--channel",
+        type=int,
+        default=None,
+        help="Camera channel/local index (default: first matching VTM resource)",
+    )
+    parser_stream_dump.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Stop after this many stream packets (default: run until interrupted)",
+    )
+    parser_stream_dump.add_argument(
+        "--duration",
+        type=_parse_duration_seconds,
+        default=60.0,
+        help=(
+            "Stop after this capture duration; accepts seconds or units like "
+            "30s/1m/2min (default: 1m, use 0 for unlimited)"
+        ),
+    )
+    parser_stream_dump.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_dump.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type used in the ysproto URL (default: 9)",
+    )
+    parser_stream_dump.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index to use from /vtdutoken2 (default: 0)",
+    )
+    parser_stream_dump.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing via /v3/streaming/vtm",
+    )
+    parser_stream_dump.add_argument(
+        "--output",
+        default="-",
+        help="Output file for stream bytes, or '-' for stdout (default: -)",
+    )
+    parser_stream_dump.add_argument(
+        "--format",
+        choices=("mpegts", "raw"),
+        default="mpegts",
+        help="Output container format: mpegts is VLC-friendly and remuxes with codec copy; raw writes VTM payloads unchanged (default: mpegts)",
+    )
+    parser_stream_dump.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_stream_dump.add_argument(
+        "--allow-encrypted",
+        action="store_true",
+        help="Write encrypted stream payloads instead of failing on first encrypted packet",
+    )
+    parser_stream_dump.add_argument(
+        "--decrypt-video",
+        action="store_true",
+        help=(
+            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads with the "
+            "camera encrypt key before writing/remuxing (experimental)"
+        ),
+    )
+    parser_stream_dump.add_argument(
+        "--decrypt-codec",
+        choices=(
+            "auto",
+            "hevc",
+            "hevc-encrypted-header",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+            "encrypted-header",
+        ),
+        default="auto",
+        help=(
+            "Video codec transform for --decrypt-video: auto detects the NAL header "
+            "mode; hevc preserves the two-byte "
+            "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
+            "NAL header; encrypted-header/hevc-encrypted-header decrypts the "
+            "codec header too "
+            "(default: auto)"
+        ),
+    )
+    parser_stream_proxy = subparsers_stream.add_parser(
+        "proxy",
+        help="Serve a local HTTP MPEG-TS stream for FFmpeg/Home Assistant",
+    )
+    parser_stream_proxy.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_stream_proxy.add_argument(
+        "--channel",
+        type=int,
+        default=None,
+        help="Camera channel/local index (default: first matching VTM resource)",
+    )
+    parser_stream_proxy.add_argument(
+        "--listen-host",
+        default="127.0.0.1",
+        help="Host/IP to bind the proxy to (default: 127.0.0.1)",
+    )
+    parser_stream_proxy.add_argument(
+        "--listen-port",
+        type=int,
+        default=8558,
+        help="TCP port to bind the proxy to (default: 8558)",
+    )
+    parser_stream_proxy.add_argument(
+        "--path",
+        default=None,
+        help="HTTP path to serve (default: /<serial>.ts)",
+    )
+    parser_stream_proxy.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_proxy.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type used in the ysproto URL (default: 9)",
+    )
+    parser_stream_proxy.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index to use from /vtdutoken2 (default: 0)",
+    )
+    parser_stream_proxy.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing via /v3/streaming/vtm",
+    )
+    parser_stream_proxy.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_stream_proxy.add_argument(
+        "--allow-encrypted",
+        action="store_true",
+        help="Forward encrypted stream payloads instead of failing on first encrypted packet",
+    )
+    parser_stream_proxy.add_argument(
+        "--decrypt-video",
+        action="store_true",
+        help=(
+            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads with the "
+            "camera encrypt key before remuxing (experimental)"
+        ),
+    )
+    parser_stream_proxy.add_argument(
+        "--decrypt-codec",
+        choices=(
+            "auto",
+            "hevc",
+            "hevc-encrypted-header",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+            "encrypted-header",
+        ),
+        default="auto",
+        help=(
+            "Video codec transform for --decrypt-video: auto detects the NAL header "
+            "mode; hevc preserves the two-byte "
+            "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
+            "NAL header; encrypted-header/hevc-encrypted-header decrypts the "
+            "codec header too "
+            "(default: auto)"
+        ),
+    )
+    parser_stream_proxy.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Stop each HTTP stream after this many packets (default: unlimited)",
+    )
+    parser_stream_local_dump = subparsers_stream.add_parser(
+        "local-sdk-dump",
+        help="Dump the direct-local 9010/9020 SDK stream with caller-supplied fields",
+    )
+    parser_stream_local_dump.add_argument("--host", help="camera LAN address")
+    parser_stream_local_dump.add_argument("--serial", help="device serial")
+    parser_stream_local_dump.add_argument(
+        "--credentials-file",
+        help=(
+            "JSON file produced by local-sdk-keys; supplies serial, endpoint, "
+            "CAS tuple, and optional media key"
+        ),
+    )
+    parser_stream_local_dump.add_argument("--command-port", type=int)
+    parser_stream_local_dump.add_argument("--stream-port", type=int)
+    parser_stream_local_dump.add_argument("--channel", type=int, default=1)
+    parser_stream_local_dump.add_argument(
+        "--operation-code",
+        help="CAS operation code, or EZVIZ_LOCAL_OPERATION_CODE",
+    )
+    parser_stream_local_dump.add_argument(
+        "--cas-key",
+        help="CAS local-control key, or EZVIZ_LOCAL_CAS_KEY",
+    )
+    parser_stream_local_dump.add_argument(
+        "--fetch-cas",
+        action="store_true",
+        help=(
+            "Fetch operation-code/cas-key from authenticated EZVIZ CAS instead "
+            "of requiring --operation-code/--cas-key"
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--cas-serial",
+        help=(
+            "Device serial to send to cloud CAS when --fetch-cas is used "
+            "(default: --serial)"
+        ),
+    )
+    parser_stream_local_dump.add_argument("--encrypt-type", type=int, default=1)
+    parser_stream_local_dump.add_argument("--uuid", help="or EZVIZ_LOCAL_UUID")
+    parser_stream_local_dump.add_argument("--timestamp", help="or EZVIZ_LOCAL_TIMESTAMP")
+    parser_stream_local_dump.add_argument("--identifier")
+    parser_stream_local_dump.add_argument("--nat-address", default="")
+    parser_stream_local_dump.add_argument("--nat-port", type=int, default=0)
+    parser_stream_local_dump.add_argument("--upnp-address", default="")
+    parser_stream_local_dump.add_argument("--upnp-port", type=int, default=0)
+    parser_stream_local_dump.add_argument("--inner-address", default="")
+    parser_stream_local_dump.add_argument("--inner-port", type=int, default=0)
+    parser_stream_local_dump.add_argument(
+        "--receiver-shape",
+        choices=("app", "structured"),
+        default="app",
+        help=(
+            "Preview ReceiverInfo XML shape: app attributes from live EZVIZ "
+            "traces, or nested structured fields (default: app)"
+        ),
+    )
+    parser_stream_local_dump.add_argument("--receiver-stream-type", default="MAIN")
+    parser_stream_local_dump.add_argument("--receiver-port", type=int, default=10101)
+    parser_stream_local_dump.add_argument("--receiver-server-type", type=int, default=1)
+    parser_stream_local_dump.add_argument("--receiver-new-stream-type", type=int, default=1)
+    parser_stream_local_dump.add_argument("--receiver-trans-proto", default="TCP")
+    parser_stream_local_dump.add_argument("--receiver-ex-port", type=int, default=10101)
+    parser_stream_local_dump.add_argument("--auth-biz-code", default="biz=1")
+    parser_stream_local_dump.add_argument("--auth-interval", type=int, default=180)
+    parser_stream_local_dump.add_argument(
+        "--is-encrypt",
+        default="TRUE",
+        help="Preview IsEncrypt value (default: TRUE, matching the app local path)",
+    )
+    parser_stream_local_dump.add_argument("--udt", type=int)
+    parser_stream_local_dump.add_argument("--nat", type=int)
+    parser_stream_local_dump.add_argument("--port-guess-type", type=int)
+    parser_stream_local_dump.add_argument("--setup-timeout", type=int)
+    parser_stream_local_dump.add_argument("--heartbeat-interval", type=int)
+    parser_stream_local_dump.add_argument(
+        "--pre-start-body-file",
+        help="Optional file containing caller-owned 0x2013 pre-start body bytes",
+    )
+    parser_stream_local_dump.add_argument("--pre-start-sequence", type=int, default=27)
+    parser_stream_local_dump.add_argument("--preview-sequence", type=int, default=28)
+    parser_stream_local_dump.add_argument("--stream-sequence", type=int, default=29)
+    parser_stream_local_dump.add_argument("--stream-rate", default=1)
+    parser_stream_local_dump.add_argument("--stream-mode", default=-1)
+    parser_stream_local_dump.add_argument(
+        "--duration",
+        type=_parse_duration_seconds,
+        default=60.0,
+        help="Stop after this capture duration (default: 1m, use 0 for unlimited)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Stop after this many local RTP packets (default: duration only)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--socket-timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--max-prefix-bytes",
+        type=int,
+        default=4096,
+        help="Maximum non-RTP preface bytes to tolerate before first media",
+    )
+    parser_stream_local_dump.add_argument(
+        "--output",
+        default="-",
+        help="Output file for stream bytes, or '-' for stdout (default: -)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--metadata-output",
+        help=(
+            "Optional JSON file for non-secret local-SDK response metadata "
+            "(commands, statuses, body shapes, and first-media shape)"
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--format",
+        choices=("mpegps", "mpegts"),
+        default="mpegts",
+        help="Output container: raw MPEG-PS payloads or remuxed MPEG-TS (default: mpegts)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--decrypt-video",
+        action="store_true",
+        help=(
+            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads before "
+            "writing/remuxing. The media key can come from --media-key, "
+            "--media-key-hex, EZVIZ_LOCAL_MEDIA_KEY, "
+            "EZVIZ_LOCAL_MEDIA_KEY_HEX, --credentials-file, or the "
+            "authenticated client."
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--decrypt-codec",
+        choices=(
+            "auto",
+            "hevc",
+            "hevc-encrypted-header",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+            "encrypted-header",
+        ),
+        default="auto",
+        help=(
+            "Video codec transform for --decrypt-video: auto detects the NAL header "
+            "mode; use hevc-encrypted-header/encrypted-header for the observed "
+            "local-SDK encrypted-header path "
+            "(default: auto)"
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--media-key",
+        help=(
+            "Camera media decrypt key, or EZVIZ_LOCAL_MEDIA_KEY. This is distinct "
+            "from --cas-key, which only protects the local-SDK control channel."
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--media-key-hex",
+        help=(
+            "Hex-encoded binary media decrypt key, or EZVIZ_LOCAL_MEDIA_KEY_HEX. "
+            "Use this when the native local media key is not printable text."
+        ),
+    )
+    parser_stream_local_keys = subparsers_stream.add_parser(
+        "local-sdk-keys",
+        help="Fetch direct-local LAN endpoint, CAS tuple and media decrypt key",
+    )
+    parser_stream_local_keys.add_argument("--serial", required=True, help="device serial")
+    parser_stream_local_keys.add_argument(
+        "--cas-serial",
+        help="Device serial to send to cloud CAS (default: --serial)",
+    )
+    parser_stream_local_keys.add_argument(
+        "--no-media-key",
+        action="store_true",
+        help="Only fetch the LAN endpoint and CAS tuple",
+    )
+    parser_stream_local_keys.add_argument(
+        "--sms-code",
+        help="Optional MFA/elevation code for camera media key retrieval",
+    )
 
-        params = {
-            "deviceSerial": serial,
-            "channelNo": channel,
-            "startTime": start_time,
-            "stopTime": stop_time,
-            "size": size,
-            "sortBy": sort_by,
-            "requireLabel": require_label,
-        }
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_STREAMING_RECORDS_V2,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
+    return parser.parse_args(argv)
+
+
+def _token_has_service_urls(token: dict[str, Any] | None) -> bool:
+    """Return True when a saved token carries the CAS sysConf endpoint metadata."""
+
+    service_urls = token.get("service_urls") if token else None
+    if not isinstance(service_urls, dict):
+        return False
+    sys_conf = service_urls.get("sysConf")
+    return (
+        isinstance(sys_conf, (list, tuple))
+        and len(sys_conf) > 16
+        and bool(sys_conf[15])
+        and bool(sys_conf[16])
+    )
+
+
+def _token_has_refresh_session(token: dict[str, Any] | None) -> bool:
+    """Return True when a saved token can refresh itself without credentials."""
+
+    return bool(
+        token
+        and token.get("session_id")
+        and token.get("rf_session_id")
+        and token.get("api_url")
+    )
+
+
+def _action_requires_service_urls(args: argparse.Namespace) -> bool:
+    """Return True when the selected CLI path needs CAS service metadata."""
+
+    return bool(
+        args.action == "stream"
+        and (
+            args.stream_action == "local-sdk-keys"
+            or (args.stream_action == "local-sdk-dump" and args.fetch_cas)
         )
-        self._ensure_ok(json_output, "Could not search v2 records")
-        return json_output
+    )
 
-    def search_common_records(
-        self,
-        serial: str,
-        channel: int,
-        start_time: str,
-        stop_time: str,
-        *,
-        channel_serial: str | None = None,
-        record_type: int = 0,
-        size: int = 20,
-        version: int = 2,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Search common SD-card playback records.
 
-        This mirrors the EZVIZ app's ``PlaybackRecordApi.searchRecordV3`` path.
-        """
+def _ensure_client_service_urls(client: EzvizClient) -> None:
+    """Refresh the client's token service metadata for CAS-only CLI paths."""
 
-        params: dict[str, Any] = {
-            "deviceSerial": serial,
-            "channelNo": channel,
-            "startTime": start_time,
-            "stopTime": stop_time,
-            "recordType": record_type,
-            "size": size,
-            "version": version,
-        }
-        if channel_serial is not None:
-            params["channelSerial"] = channel_serial
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_STREAMING_RECORDS_COMMON,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not search common records")
-        return json_output
+    token = client.export_token()
+    if _token_has_service_urls(token):
+        return
+    service_urls = client.get_service_urls()
+    if hasattr(client, "_token"):
+        client._token["service_urls"] = service_urls  # noqa: SLF001
+    if hasattr(client, "exported_token"):
+        client.exported_token["service_urls"] = service_urls
 
-    def search_intelligent_records(
-        self,
-        serial: str,
-        channel: int,
-        start_time: str,
-        stop_time: str,
-        *,
-        version: int = 2,
-        record_filter: str | None = None,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Search intelligent SD-card playback records."""
 
-        params: dict[str, Any] = {
-            "deviceSerial": serial,
-            "channelNo": channel,
-            "startTime": start_time,
-            "stopTime": stop_time,
-            "version": version,
-        }
-        if record_filter is not None:
-            params["filter"] = record_filter
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_STREAMING_RECORDS_INTELLIGENT,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not search intelligent records")
-        return json_output
+def _login(
+    client: EzvizClient,
+    token: dict[str, Any] | None = None,
+    *,
+    require_service_urls: bool = False,
+) -> None:
+    """Login only when the saved token cannot satisfy the selected action."""
+    if token and token.get("session_id") and (
+        not require_service_urls or _token_has_service_urls(token)
+    ):
+        return
 
-    @staticmethod
-    def decode_records_payload(value: str) -> list[Any]:
-        """Decode an EZVIZ base64+zlib JSON record-list payload."""
+    if not (client.account and client.password) and not _token_has_refresh_session(token):
+        return
 
+    logged_in = False
+    if client.account and client.password:
         try:
-            raw = base64.b64decode(value, validate=True)
-            decoded = zlib.decompress(raw).decode("utf-8").strip()
-            parsed = json.loads(decoded)
-        except (ValueError, zlib.error, UnicodeDecodeError, json.JSONDecodeError):
-            return []
-        return parsed if isinstance(parsed, list) else []
+            client.login()
+        except EzvizAuthVerificationCode:
+            mfa_code = input("MFA code required, please input MFA code.\n")
+            try:
+                code_int = int(mfa_code.strip())
+            except ValueError:
+                code_int = None
+            client.login(sms_code=code_int)
+        logged_in = True
 
-    @classmethod
-    def extract_record_list(cls, payload: Any) -> list[Any]:
-        """Return the first plain or compressed record list in a response."""
+    if not logged_in:
+        client.login()
 
-        if isinstance(payload, str):
-            return cls.decode_records_payload(payload)
-        if not isinstance(payload, Mapping):
-            return payload if isinstance(payload, list) else []
+    if require_service_urls:
+        _ensure_client_service_urls(client)
 
-        records: list[Any] = []
-        for key in ("records", "record", "files", "fileList", "videos", "videoList", "data"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                records = value
+
+def _write_json(obj: Any) -> None:
+    """Write an object to stdout as pretty JSON."""
+    sys.stdout.write(json.dumps(obj, indent=2) + "\n")
+
+
+def _format_cell(value: Any) -> str:
+    """Return a compact printable representation for table cells."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def _write_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
+    """Write rows to stdout as a simple fixed-width table."""
+    if not rows:
+        sys.stdout.write("No rows returned.\n")
+        return
+
+    widths = {column: len(column) for column in columns}
+    formatted_rows: list[dict[str, str]] = []
+    for row in rows:
+        formatted = {column: _format_cell(row.get(column)) for column in columns}
+        formatted_rows.append(formatted)
+        for column, value in formatted.items():
+            widths[column] = max(widths[column], len(value))
+
+    header = "  ".join(column.ljust(widths[column]) for column in columns)
+    separator = "  ".join("-" * widths[column] for column in columns)
+    sys.stdout.write(header + "\n")
+    sys.stdout.write(separator + "\n")
+    for row in formatted_rows:
+        sys.stdout.write("  ".join(row[column].ljust(widths[column]) for column in columns) + "\n")
+
+
+def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `devices` subcommands (device/status/switch/connection)."""
+    if args.device_action == "device":
+        _write_json(client.get_device())
+        return 0
+
+    if args.device_action == "status":
+        data = client.load_cameras(refresh=getattr(args, "refresh", True))
+        if args.json:
+            _write_json(data)
+        else:
+            # Enrich with common switch flags when available
+            for payload in data.values():
+                sw = payload.get("SWITCH")
+                if sw is None:
+                    continue
+
+                # Compute all switch flags present on the device
+                flags: dict[str, bool] = {}
+                if isinstance(sw, list):
+                    for item in sw:
+                        if not isinstance(item, dict):
+                            continue
+                        t = item.get("type")
+                        en = item.get("enable")
+                        if not isinstance(t, int) or not isinstance(en, (bool, int)):
+                            continue
+                        try:
+                            name = DeviceSwitchType(t).name.lower()
+                        except ValueError:
+                            name = f"switch_{t}"
+                        flags[name] = bool(en)
+                elif isinstance(sw, dict):
+                    for k, v in sw.items():
+                        try:
+                            t = int(k)
+                        except (TypeError, ValueError):
+                            continue
+                        if not isinstance(v, (bool, int)):
+                            continue
+                        try:
+                            name = DeviceSwitchType(t).name.lower()
+                        except ValueError:
+                            name = f"switch_{t}"
+                        flags[name] = bool(v)
+
+                if flags:
+                    payload["switch_flags"] = flags
+
+                # Keep legacy-friendly individual columns
+                payload["sleep"] = flags.get("sleep")
+                payload["privacy"] = flags.get("privacy")
+                payload["audio"] = flags.get("sound")
+                payload["ir_led"] = flags.get("infrared_light")
+                payload["state_led"] = flags.get("light")
+
+            columns = [
+                "serial",
+                "name",
+                "status",
+                "device_category",
+                "device_sub_category",
+                "sleep",
+                "privacy",
+                "audio",
+                "ir_led",
+                "state_led",
+                "local_ip",
+                "local_rtsp_port",
+                "battery_level",
+                "alarm_schedules_enabled",
+                "alarm_notify",
+                "Motion_Trigger",
+            ]
+            rows = [
+                {"serial": serial, **payload}
+                for serial, payload in data.items()
+                if isinstance(payload, dict)
+            ]
+            _write_table(rows, columns)
+        return 0
+
+    if args.device_action == "switch":
+        _write_json(client.get_switch())
+        return 0
+
+    if args.device_action == "connection":
+        _write_json(client.get_connection())
+        return 0
+
+    _LOGGER.error("Action not implemented: %s", args.device_action)
+    return 2
+
+
+def _handle_devices_light(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `devices_light` subcommands (status)."""
+    if args.devices_light_action == "status":
+        data = client.load_light_bulbs(refresh=getattr(args, "refresh", True))
+        if args.json:
+            _write_json(data)
+        else:
+            columns = [
+                "serial",
+                "name",
+                "status",
+                "device_category",
+                "device_sub_category",
+                "local_ip",
+                "productId",
+                "is_on",
+                "brightness",
+                "color_temperature",
+            ]
+            rows = [
+                {"serial": serial, **payload}
+                for serial, payload in data.items()
+                if isinstance(payload, dict)
+            ]
+            _write_table(rows, columns)
+        return 0
+    return 2
+
+
+def _handle_pagelist(client: EzvizClient) -> int:
+    """Output full pagelist (raw JSON) for exploration in editors like Notepad++."""
+    data = client.get_page_list()
+    _write_json(data)
+    return 0
+
+
+def _handle_device_infos(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Output device infos mapping (raw JSON), optionally filtered by serial."""
+    data = client.get_device_infos(args.serial) if args.serial else client.get_device_infos()
+    _write_json(data)
+    return 0
+
+
+def _handle_unifiedmsg(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch unified message list and optionally dump media URLs."""
+
+    response = client.get_device_messages_list(
+        serials=args.serials,
+        limit=args.limit,
+        date=args.date,
+        end_time=args.end_time or "",
+    )
+    raw_messages = response.get("message")
+    if not isinstance(raw_messages, list):
+        raw_messages = response.get("messages")
+    if not isinstance(raw_messages, list):
+        raw_messages = []
+    messages: list[dict[str, Any]] = [msg for msg in raw_messages if isinstance(msg, dict)]
+
+    def _extract_url(message: dict[str, Any]) -> str | None:
+        url = message.get("pic")
+        if not url:
+            url = message.get("defaultPic") or message.get("image")
+        if not url:
+            ext = message.get("ext")
+            if isinstance(ext, dict):
+                pics = ext.get("pics")
+                if isinstance(pics, str) and pics:
+                    url = pics.split(";")[0]
+        return url
+
+    if args.urls_only:
+        for item in messages:
+            media_url = _extract_url(item)
+            if not media_url:
+                continue
+            sys.stdout.write(f"{item.get('deviceSerial', 'unknown')}: {media_url}\n")
+        return 0
+
+    if args.json:
+        _write_json(messages)
+        return 0
+
+    rows: list[dict[str, Any]] = []
+    for item in messages:
+        ext = item.get("ext")
+        ext_dict = ext if isinstance(ext, dict) else None
+        rows.append(
+            {
+                "deviceSerial": item.get("deviceSerial"),
+                "time": item.get("timeStr") or item.get("time"),
+                "subType": item.get("subType"),
+                "alarmType": ext_dict.get("alarmType") if ext_dict else None,
+                "title": item.get("title")
+                or item.get("detail")
+                or (ext_dict or {}).get("alarmName"),
+                "url": _extract_url(item) or "",
+                "msgId": item.get("msgId"),
+            }
+        )
+
+    if rows:
+        _write_table(
+            rows,
+            ["deviceSerial", "time", "subType", "alarmType", "title", "url", "msgId"],
+        )
+    else:
+        sys.stdout.write("No unified messages returned.\n")
+    return 0
+
+
+def _decode_compressed_record_list(value: str) -> list[Any]:
+    """Decode the app's base64+zlib JSON record-list payload when present."""
+
+    return _REAL_EZVIZ_CLIENT.decode_records_payload(value)
+
+
+def _first_record_list(payload: Any) -> list[Any]:
+    """Return the first plausible list of record dictionaries from an API response."""
+
+    return _REAL_EZVIZ_CLIENT.extract_record_list(payload)
+
+
+def _handle_sdcard_videos(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch SD-card playback record descriptors."""
+
+    if args.source == "legacy":
+        channel_serial = args.channel_serial or args.serial
+        response = client.search_records(
+            args.serial,
+            args.channel,
+            channel_serial,
+            args.start_time,
+            args.stop_time,
+            size=args.size,
+        )
+    elif args.source == "common":
+        response = client.search_common_records(
+            args.serial,
+            args.channel,
+            args.start_time,
+            args.stop_time,
+            channel_serial=args.channel_serial,
+            record_type=args.record_type,
+            size=args.size,
+            version=args.version,
+        )
+    elif args.source == "intelligent":
+        response = client.search_intelligent_records(
+            args.serial,
+            args.channel,
+            args.start_time,
+            args.stop_time,
+            version=args.version,
+            record_filter=args.filter,
+        )
+    else:
+        response = client.search_records_v2(
+            args.serial,
+            args.channel,
+            args.start_time,
+            args.stop_time,
+            size=args.size,
+            sort_by=args.sort_by,
+            require_label=args.require_label,
+        )
+
+    records = _first_record_list(response)
+    if args.json:
+        _write_json(records if records else response)
+        return 0
+
+    rows: list[dict[str, Any]] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "begin": item.get("begin")
+                or item.get("B")
+                or item.get("startTime")
+                or item.get("startTimeStr"),
+                "end": item.get("end")
+                or item.get("E")
+                or item.get("stopTime")
+                or item.get("stopTimeStr"),
+                "type": item.get("type")
+                or item.get("Type")
+                or item.get("recordType")
+                or item.get("videoType"),
+                "path": item.get("path") or item.get("filePath") or item.get("fileUrl"),
+                "cover": item.get("cover") or item.get("coverUrl") or item.get("coverPic"),
+            }
+        )
+
+    if rows:
+        _write_table(rows, ["begin", "end", "type", "path", "cover"])
+    else:
+        sys.stdout.write("No SD-card videos returned.\n")
+    return 0
+
+
+def _handle_cloud_videos(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch cloud video descriptors and optionally hydrate details."""
+
+    response = client.get_cloud_videos(
+        args.serial,
+        args.channel,
+        limit=args.limit,
+        video_type=args.video_type,
+        support_multi_channel_shared_service=args.support_multi_channel_shared_service,
+    )
+    videos = response.get("videos")
+    if not isinstance(videos, list):
+        videos = []
+
+    if args.details and videos:
+        response = client.get_cloud_video_details(
+            args.serial,
+            args.channel,
+            [video for video in videos if isinstance(video, dict)],
+            support_multi_channel_shared_service=args.support_multi_channel_shared_service,
+        )
+        videos = response.get("videos")
+        if not isinstance(videos, list):
+            videos = []
+
+    if args.json:
+        _write_json(videos)
+        return 0
+
+    rows: list[dict[str, Any]] = []
+    for item in videos:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "seqId": item.get("seqId"),
+                "startTime": item.get("startTime"),
+                "stopTime": item.get("stopTime"),
+                "fileSize": item.get("fileSize"),
+                "crypt": item.get("crypt"),
+                "keyChecksum": item.get("keyChecksum") or item.get("checksum"),
+                "streamUrl": item.get("streamUrl"),
+            }
+        )
+
+    if rows:
+        _write_table(
+            rows,
+            ["seqId", "startTime", "stopTime", "fileSize", "crypt", "keyChecksum", "streamUrl"],
+        )
+    else:
+        sys.stdout.write("No cloud videos returned.\n")
+    return 0
+
+
+def _handle_cloud_video_download(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch cloud video details, then download the selected media bytes."""
+
+    response = client.get_cloud_videos(
+        args.serial,
+        args.channel,
+        limit=args.limit,
+        video_type=args.video_type,
+        support_multi_channel_shared_service=args.support_multi_channel_shared_service,
+    )
+    videos = response.get("videos")
+    if not isinstance(videos, list):
+        videos = []
+
+    selected = None
+    for video in videos:
+        if isinstance(video, dict) and str(video.get("seqId")) == str(args.seq_id):
+            selected = video
+            break
+    if selected is None:
+        raise PyEzvizError(f"Cloud video seqId {args.seq_id!r} was not returned")
+
+    details_response = client.get_cloud_video_details(
+        args.serial,
+        args.channel,
+        [selected],
+        support_multi_channel_shared_service=args.support_multi_channel_shared_service,
+    )
+    details = details_response.get("videos")
+    if isinstance(details, list) and details and isinstance(details[0], dict):
+        selected = details[0]
+
+    encrypted_output = Path(args.encrypted_output) if args.encrypted_output else None
+    transform = "direct"
+    try:
+        data = client.download_cloud_video(selected)
+    except PyEzvizError:
+        if not isinstance(selected.get("streamUrl"), str):
+            raise
+
+        ticket = _extract_ticket(
+            client.get_camera_ticket_info(
+                args.serial,
+                args.channel,
+                support_multi_channel_shared_service=args.support_multi_channel_shared_service,
+            )
+        )
+        secret_key = client.get_cam_key(args.serial, max_retries=1)
+
+        start_millis = _cloud_video_start_millis(selected)
+        stop_millis = start_millis + int(selected.get("videoLong") or 0)
+        if stop_millis <= start_millis:
+            stop_millis = start_millis + 10_000
+
+        encrypted_data = download_ezviz_cloud_replay(
+            stream_url=selected["streamUrl"],
+            ticket=ticket,
+            serial=args.serial,
+            channel=args.channel,
+            seq_id=selected.get("seqId") or args.seq_id,
+            begin_cas=_cas_time_from_millis(start_millis),
+            end_cas=_cas_time_from_millis(stop_millis),
+            storage_version=int(selected.get("storageVersion") or 2),
+            video_type=int(selected.get("videoType") or args.video_type),
+            file_size=(
+                int(selected["fileSize"])
+                if isinstance(selected.get("fileSize"), int | str)
+                and str(selected.get("fileSize")).isdigit()
+                else None
+            ),
+            timeout=args.timeout,
+        )
+        if encrypted_output is not None:
+            encrypted_output.parent.mkdir(parents=True, exist_ok=True)
+            encrypted_output.write_bytes(encrypted_data)
+        data = decrypt_hikvision_ps_video(
+            encrypted_data,
+            secret_key,
+            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+        )
+        transform = "cloud_replay_python"
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(data)
+
+    result = {
+        "output": str(output),
+        "encrypted_output": str(encrypted_output) if encrypted_output else None,
+        "bytes": len(data),
+        "seqId": selected.get("seqId"),
+        "transform": transform,
+    }
+    if args.json:
+        _write_json(result)
+    else:
+        sys.stdout.write(f"Wrote {len(data)} bytes to {output}\n")
+    return 0
+
+
+def _select_cloud_video_for_seq_id(
+    client: EzvizClient,
+    *,
+    serial: str,
+    channel: int,
+    seq_id: str,
+    limit: int,
+    video_type: int,
+    support_multi_channel_shared_service: int,
+) -> dict[str, Any]:
+    """Return a hydrated cloud video descriptor for a selected seqId."""
+
+    response = client.get_cloud_videos(
+        serial,
+        channel,
+        limit=limit,
+        video_type=video_type,
+        support_multi_channel_shared_service=support_multi_channel_shared_service,
+    )
+    videos = response.get("videos")
+    if not isinstance(videos, list):
+        videos = []
+
+    selected = None
+    for video in videos:
+        if isinstance(video, dict) and str(video.get("seqId")) == str(seq_id):
+            selected = video
+            break
+    if selected is None:
+        raise PyEzvizError(f"Cloud video seqId {seq_id!r} was not returned")
+
+    details_response = client.get_cloud_video_details(
+        serial,
+        channel,
+        [selected],
+        support_multi_channel_shared_service=support_multi_channel_shared_service,
+    )
+    details = details_response.get("videos")
+    if isinstance(details, list) and details and isinstance(details[0], dict):
+        return cast(dict[str, Any], details[0])
+    return selected
+
+
+def _extract_ticket(ticket_response: dict[str, Any]) -> str:
+    """Extract the ticket string from known EZVIZ ticketInfo response shapes."""
+
+    candidates: list[Any] = [ticket_response.get("ticketInfo")]
+    data = ticket_response.get("data")
+    if isinstance(data, dict):
+        candidates.append(data.get("ticketInfo"))
+    for candidate in candidates:
+        if isinstance(candidate, dict) and isinstance(candidate.get("ticket"), str):
+            return candidate["ticket"]
+    raise PyEzvizError("Camera ticket response does not include ticketInfo.ticket")
+
+
+def _cloud_video_start_millis(video: dict[str, Any]) -> int:
+    """Return cloud clip start time in epoch milliseconds."""
+
+    cover_pic = video.get("coverPic")
+    if isinstance(cover_pic, str):
+        parsed = urlparse(cover_pic)
+        values = parse_qs(parsed.query).get("startTime")
+        if values:
+            with suppress(ValueError):
+                return int(values[0])
+
+    start_time = video.get("startTime")
+    if isinstance(start_time, str):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            with suppress(ValueError):
+                parsed_dt = dt.datetime.strptime(start_time, fmt).replace(tzinfo=dt.UTC)
+                return int(parsed_dt.timestamp() * 1000)
+    raise PyEzvizError("Cloud video descriptor does not include a usable start time")
+
+
+def _cas_time_from_millis(value: int) -> str:
+    """Format epoch milliseconds as the CAS timestamp string used by the app."""
+
+    return dt.datetime.fromtimestamp(value / 1000, tz=dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _handle_cloud_video_decrypt(
+    args: argparse.Namespace,
+    client: EzvizClient | None,
+) -> int:
+    """Decrypt a cloud download .tmp file using the Python PS/NAL transform."""
+
+    if bool(args.serial) == bool(args.key):
+        raise PyEzvizError("Provide exactly one of --serial or --key")
+
+    if args.key:
+        key = args.key
+    else:
+        if client is None:
+            raise PyEzvizError("Provide --key or EZVIZ credentials/token for --serial")
+        key = client.get_cam_key(args.serial, max_retries=1)
+    input_path = Path(args.input)
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(
+        decrypt_hikvision_ps_video(
+            input_path.read_bytes(),
+            key,
+            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+        )
+    )
+
+    result = {"input": str(input_path), "output": str(output_path), "bytes": output_path.stat().st_size}
+    if args.json:
+        _write_json(result)
+    else:
+        sys.stdout.write(f"Wrote decrypted cloud video to {output_path}\n")
+    return 0
+
+
+def _handle_light(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `light` subcommands (toggle/status)."""
+    light_bulb = EzvizLightBulb(client, args.serial)
+    _LOGGER.debug("Light bulb loaded")
+    if args.light_action == "toggle":
+        light_bulb.toggle_switch()
+        return 0
+    if args.light_action == "status":
+        _write_json(light_bulb.status())
+        return 0
+    _LOGGER.error("Action not implemented for light: %s", args.light_action)
+    return 2
+
+
+def _handle_home_defence_mode(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `home_defence_mode` subcommands (set mode)."""
+    if args.mode:
+        res = client.api_set_defence_mode(getattr(DefenseModeType, args.mode).value)
+        _write_json(res)
+        return 0
+    return 2
+
+
+def _handle_mqtt(_: argparse.Namespace, client: EzvizClient) -> int:
+    """Connect to MQTT push notifications using current session token."""
+    logging.getLogger().setLevel(logging.DEBUG)
+    client.login()
+    mqtt = client.get_mqtt_client()
+    mqtt.connect()
+    return 0
+
+
+def _write_stream_payloads(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    transform_payload: Callable[[bytes], bytes] | None = None,
+    flush_each: bool = False,
+    monotonic: Any = time.monotonic,
+) -> None:
+    """Write VTM stream packet bodies to a binary file-like object."""
+
+    deadline = None
+    if duration_seconds is not None:
+        deadline = monotonic() + duration_seconds
+
+    for packet in stream.iter_packets(max_packets=max_packets):
+        if deadline is not None and monotonic() >= deadline:
+            break
+        if packet.encrypted and not allow_encrypted:
+            raise PyEzvizError(
+                "Received encrypted VTM stream packet; media decryption is not implemented"
+            )
+        payload = transform_payload(packet.body) if transform_payload else packet.body
+        if payload:
+            output.write(payload)
+        if flush_each:
+            output.flush()
+    if transform_payload and hasattr(transform_payload, "flush"):
+        tail = transform_payload.flush()
+        if tail:
+            output.write(tail)
+    output.flush()
+
+
+def _collect_stream_payloads(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    monotonic: Any = time.monotonic,
+) -> bytes:
+    """Collect VTM stream packet bodies into memory."""
+
+    output = BytesIO()
+    try:
+        _write_stream_payloads(
+            stream,
+            output,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            allow_encrypted=allow_encrypted,
+            monotonic=monotonic,
+        )
+    except PyEzvizError as err:
+        if output.tell() == 0 or "VTM socket closed" not in str(err):
+            raise
+        _LOGGER.warning("%s; using partial captured stream", err)
+    return output.getvalue()
+
+
+def _collect_stream_packets(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    monotonic: Any = time.monotonic,
+) -> list[Any]:
+    """Collect VTM stream packets while preserving packet boundaries."""
+
+    packets: list[Any] = []
+    deadline = None
+    if duration_seconds is not None:
+        deadline = monotonic() + duration_seconds
+
+    try:
+        for packet in stream.iter_packets(max_packets=max_packets):
+            if deadline is not None and monotonic() >= deadline:
                 break
-            if isinstance(value, str):
-                nested = cls.decode_records_payload(value)
-                if nested:
-                    records = nested
-                    break
-            if isinstance(value, Mapping):
-                nested = cls.extract_record_list(value)
-                if nested:
-                    records = nested
-                    break
-        if not records:
-            for value in payload.values():
-                if isinstance(value, Mapping):
-                    nested = cls.extract_record_list(value)
-                    if nested:
-                        records = nested
+            if packet.encrypted and not allow_encrypted:
+                raise PyEzvizError(
+                    "Received encrypted VTM stream packet; media decryption is not implemented"
+                )
+            packets.append(packet)
+    except PyEzvizError as err:
+        if not packets or "VTM socket closed" not in str(err):
+            raise
+        _LOGGER.warning("%s; using partial captured stream", err)
+    return packets
+
+
+def _detect_stream_packets_transport(packets: list[Any]) -> StreamTransport:
+    """Return the first known media transport from collected VTM packets."""
+
+    for packet in packets:
+        transport = detect_transport(packet.body)
+        if transport != StreamTransport.UNKNOWN:
+            return transport
+    return StreamTransport.UNKNOWN
+
+
+def _rtp_payload_video_codec(payload: bytes) -> str | None:
+    """Best-effort codec detection for EZVIZ RTP video payloads."""
+
+    if len(payload) < 2:
+        return None
+    h264_type = payload[0] & 0x1F
+    hevc_type = (payload[0] >> 1) & 0x3F
+    if hevc_type in {48, 49} and _is_plausible_hevc_rtp_header(payload):
+        return "hevc"
+    if 1 <= h264_type <= 5:
+        return "h264"
+    if hevc_type in {32, 33, 34, 39, 40}:
+        return "hevc"
+    if h264_type in {7, 8, 24, 28}:
+        return "h264"
+    return None
+
+
+def _is_plausible_hevc_rtp_header(payload: bytes) -> bool:
+    """Return True when the RTP payload begins with a plausible HEVC NAL header."""
+
+    if len(payload) < 2:
+        return False
+    forbidden_zero = payload[0] & 0x80 == 0
+    layer_id = ((payload[0] & 0x01) << 5) | (payload[1] >> 3)
+    temporal_id_plus1 = payload[1] & 0x07
+    nal_type = (payload[0] >> 1) & 0x3F
+    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 49
+
+
+def _detect_rtp_video_codec(packets: list[Any]) -> str:
+    """Detect whether RTP stream packets carry HEVC or H.264 video."""
+
+    fallback: str | None = None
+    for packet in packets:
+        try:
+            payload = rtp_payload(packet.body)
+        except PyEzvizError:
+            continue
+        codec = _rtp_payload_video_codec(payload)
+        if codec in {"hevc", "h264"}:
+            return codec
+        if len(payload) >= 2 and fallback is None:
+            hevc_type = (payload[0] >> 1) & 0x3F
+            h264_type = payload[0] & 0x1F
+            if 0 <= hevc_type <= 50:
+                fallback = "hevc"
+            elif 1 <= h264_type <= 23:
+                fallback = "h264"
+    if fallback:
+        return fallback
+    raise PyEzvizError("Could not detect RTP video codec")
+
+
+def _rtp_packets_to_annexb(packets: list[Any], *, codec: str) -> bytes:
+    """Convert RTP HEVC/H.264 packets to Annex B elementary-stream bytes."""
+
+    output = bytearray()
+    fragmented_nal = bytearray()
+    in_fragment = False
+
+    def append_nal(nal: bytes) -> None:
+        if nal:
+            output.extend(b"\x00\x00\x00\x01")
+            output.extend(nal)
+
+    for packet in packets:
+        payload = rtp_payload(packet.body)
+        if codec == "hevc":
+            if len(payload) < 2:
+                continue
+            nal_type = (payload[0] >> 1) & 0x3F
+            if nal_type == 48:
+                # Aggregation packet. The streams observed here do not include DONL.
+                offset = 2
+                while offset + 2 <= len(payload):
+                    nal_size = int.from_bytes(payload[offset : offset + 2], "big")
+                    offset += 2
+                    if nal_size <= 0 or offset + nal_size > len(payload):
                         break
-        return records
+                    append_nal(payload[offset : offset + nal_size])
+                    offset += nal_size
+                in_fragment = False
+                fragmented_nal.clear()
+            elif nal_type == 49 and len(payload) >= 3:
+                fu_header = payload[2]
+                starts_fragment = bool(fu_header & 0x80)
+                ends_fragment = bool(fu_header & 0x40)
+                original_type = fu_header & 0x3F
+                if starts_fragment:
+                    fragmented_nal = bytearray()
+                    fragmented_nal.append((payload[0] & 0x81) | (original_type << 1))
+                    fragmented_nal.append(payload[1])
+                    fragmented_nal.extend(payload[3:])
+                    in_fragment = True
+                    if ends_fragment:
+                        append_nal(bytes(fragmented_nal))
+                        fragmented_nal.clear()
+                        in_fragment = False
+                elif in_fragment:
+                    fragmented_nal.extend(payload[3:])
+                    if ends_fragment:
+                        append_nal(bytes(fragmented_nal))
+                        fragmented_nal.clear()
+                        in_fragment = False
+            else:
+                append_nal(payload)
+                in_fragment = False
+                fragmented_nal.clear()
+            continue
 
-    def get_cloud_videos(
-        self,
-        serial: str,
-        channel: int,
-        *,
-        limit: int = 20,
-        video_type: int = 2,
-        support_multi_channel_shared_service: int = 0,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Return cloud video descriptors for a device.
+        if codec == "h264":
+            nal_type = payload[0] & 0x1F if payload else 0
+            if 1 <= nal_type <= 23:
+                append_nal(payload)
+                in_fragment = False
+                fragmented_nal.clear()
+            elif nal_type == 24:
+                offset = 1
+                while offset + 2 <= len(payload):
+                    nal_size = int.from_bytes(payload[offset : offset + 2], "big")
+                    offset += 2
+                    if nal_size <= 0 or offset + nal_size > len(payload):
+                        break
+                    append_nal(payload[offset : offset + nal_size])
+                    offset += nal_size
+                in_fragment = False
+                fragmented_nal.clear()
+            elif nal_type == 28 and len(payload) >= 2:
+                fu_indicator = payload[0]
+                fu_header = payload[1]
+                starts_fragment = bool(fu_header & 0x80)
+                ends_fragment = bool(fu_header & 0x40)
+                original_type = fu_header & 0x1F
+                if starts_fragment:
+                    fragmented_nal = bytearray([(fu_indicator & 0xE0) | original_type])
+                    fragmented_nal.extend(payload[2:])
+                    in_fragment = True
+                    if ends_fragment:
+                        append_nal(bytes(fragmented_nal))
+                        fragmented_nal.clear()
+                        in_fragment = False
+                elif in_fragment:
+                    fragmented_nal.extend(payload[2:])
+                    if ends_fragment:
+                        append_nal(bytes(fragmented_nal))
+                        fragmented_nal.clear()
+                        in_fragment = False
+            continue
 
-        The EZVIZ app uses this endpoint before native cloud download. Returned
-        items may include ``streamUrl``, ``seqId``, ``storageVersion``,
-        ``fileSize``, ``crypt``, and ``keyChecksum``.
-        """
+        raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
 
-        params = {
-            "deviceSerial": serial,
-            "channelNo": channel,
-            "limit": limit,
-            "videoType": video_type,
-            "supportMultiChannelSharedService": support_multi_channel_shared_service,
-        }
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_CLOUD_VIDEOS_LIST,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
+    return bytes(output)
+
+
+def _decrypt_annexb_video_bytes(
+    client: EzvizClient,
+    serial: str,
+    data: bytes,
+    *,
+    codec: str,
+) -> bytes:
+    """Decrypt Annex B video NAL payload bytes using the MPEG-PS transform."""
+
+    key = client.get_cam_key(serial, max_retries=1)
+    if not key:
+        raise PyEzvizError("Could not get camera encryption key")
+    header_size = _codec_nalu_header_size(codec)
+    if header_size is None:
+        header_size = 2 if codec == "hevc" else 1
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + data
+    return decrypt_hikvision_ps_video(
+        video_pes,
+        str(key),
+        nalu_header_size=header_size,
+    )[9:]
+
+
+def _remux_elementary_video_bytes_to_mpegts(
+    data: bytes,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    codec: str,
+) -> None:
+    """Remux Annex B HEVC/H.264 elementary stream bytes to MPEG-TS."""
+
+    process = _open_mpegts_remux_process(ffmpeg_path, input_format=codec)
+    stdout, _stderr = process.communicate(data)
+    if process.returncode != 0:
+        raise PyEzvizError(f"FFmpeg exited with status {process.returncode}")
+    output.write(stdout)
+    output.flush()
+
+
+def _decrypt_stream_payload_bytes(
+    client: EzvizClient,
+    serial: str,
+    data: bytes,
+    *,
+    codec: str,
+) -> bytes:
+    """Decrypt captured MPEG-PS stream bytes using the camera encrypt key."""
+
+    key = client.get_cam_key(serial, max_retries=1)
+    if not key:
+        raise PyEzvizError("Could not get camera encryption key")
+    return decrypt_hikvision_ps_video(
+        data,
+        str(key),
+        nalu_header_size=_codec_nalu_header_size(codec),
+    )
+
+
+def _codec_nalu_header_size(codec: str) -> int | None:
+    """Return the Annex B NAL header length preserved by the decrypt transform."""
+
+    if codec == "auto":
+        return None
+    if codec == "hevc":
+        return 2
+    if codec in {"h264", "h264-clear-header"}:
+        return 1
+    if codec in {"hevc-encrypted-header", "encrypted-header"}:
+        return 0
+    return 0
+
+
+class _BufferedStreamPayloadDecryptor:
+    """Decrypt MPEG-PS payloads after buffering across VTM packet splits."""
+
+    def __init__(self, key: str, *, codec: str) -> None:
+        self._key = key
+        self._nalu_header_size = _codec_nalu_header_size(codec)
+        self._buffer = bytearray()
+
+    def _decrypt_chunk(self, chunk: bytes) -> bytes:
+        if self._nalu_header_size is None:
+            detected_nalu_header_size = detect_hikvision_ps_video_nalu_header_size(
+                chunk,
+                self._key,
+                default=None,
+            )
+            if detected_nalu_header_size is None:
+                return decrypt_hikvision_ps_video(
+                    chunk,
+                    self._key,
+                    nalu_header_size=2,
+                )
+            self._nalu_header_size = detected_nalu_header_size
+        return decrypt_hikvision_ps_video(
+            chunk,
+            self._key,
+            nalu_header_size=self._nalu_header_size,
         )
-        self._ensure_ok(json_output, "Could not get cloud videos")
-        return json_output
 
-    def get_cloud_video_details(
-        self,
-        serial: str,
-        channel: int,
-        videos: Iterable[Mapping[str, Any]],
-        *,
-        support_multi_channel_shared_service: int = 0,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Return detailed cloud video descriptors for selected videos."""
+    def __call__(self, data: bytes) -> bytes:
+        self._buffer.extend(data)
+        complete_end = mpeg_ps_decryptable_prefix_length(self._buffer)
+        if complete_end <= 0:
+            return b""
+        chunk = bytes(self._buffer[:complete_end])
+        del self._buffer[:complete_end]
+        return self._decrypt_chunk(chunk)
 
-        body = {
-            "deviceSerial": serial,
-            "channelNo": channel,
-            "supportMultiChannelSharedService": support_multi_channel_shared_service,
-            "videos": [
-                {
-                    "seqId": video["seqId"],
-                    "startTime": video["startTime"],
-                    "stopTime": video["stopTime"],
-                    "storageVersion": video.get("storageVersion", 2),
-                }
-                for video in videos
+    def flush(self) -> bytes:
+        """Decrypt and return any buffered tail at stream end."""
+
+        if not self._buffer:
+            return b""
+        chunk = bytes(self._buffer)
+        self._buffer.clear()
+        return self._decrypt_chunk(chunk)
+
+
+def _stream_payload_decryptor(
+    client: EzvizClient,
+    serial: str,
+    *,
+    codec: str,
+) -> Callable[[bytes], bytes]:
+    """Return a buffered MPEG-PS decryptor using the camera encrypt key."""
+
+    key = client.get_cam_key(serial, max_retries=1)
+    if not key:
+        raise PyEzvizError("Could not get camera encryption key")
+    return _BufferedStreamPayloadDecryptor(str(key), codec=codec)
+
+
+def _remux_mpegps_bytes_to_mpegts(
+    data: bytes,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+) -> None:
+    """Remux in-memory MPEG-PS bytes to MPEG-TS."""
+
+    process = _open_mpegts_remux_process(ffmpeg_path)
+    stdout, _stderr = process.communicate(data)
+    if process.returncode != 0:
+        raise PyEzvizError(f"FFmpeg exited with status {process.returncode}")
+    output.write(stdout)
+    output.flush()
+
+
+def _remux_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+) -> None:
+    """Remux VTM MPEG-PS payloads to MPEG-TS and write them to output."""
+
+    process = _open_mpegts_remux_process(ffmpeg_path)
+    _copy_stream_payloads_to_mpegts(
+        stream,
+        output,
+        process=process,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        allow_encrypted=allow_encrypted,
+    )
+
+
+def _open_mpegts_remux_process(
+    ffmpeg_path: str,
+    *,
+    input_format: str = "mpeg",
+) -> subprocess.Popen[bytes]:
+    """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS stdout."""
+
+    try:
+        return subprocess.Popen(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                input_format,
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
             ],
-        }
-        json_output = self._request_json(
-            "POST",
-            API_ENDPOINT_CLOUD_VIDEO_DETAILS,
-            json_body=body,
-            retry_401=True,
-            max_retries=max_retries,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-        self._ensure_ok(json_output, "Could not get cloud video details")
-        return json_output
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
-    def get_camera_ticket_info(
-        self,
-        serial: str,
-        channel: int,
-        *,
-        support_multi_channel_shared_service: int = 0,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Return the camera playback ticket used by native cloud storage downloads.
 
-        The official app feeds ``ticketInfo.ticket`` into
-        ``DownloadCloudParam.szTicketToken`` for normal cloud-storage clips.
-        """
+def _copy_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    transform_payload: Callable[[bytes], bytes] | None = None,
+) -> None:
+    """Copy stream payloads through an already-started FFmpeg remuxer."""
 
-        params = {
-            "deviceSerial": serial,
-            "channelNo": channel,
-            "supportMultiChannelSharedService": support_multi_channel_shared_service,
-        }
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_CAMERA_TICKET_INFO,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
+    stdin = process.stdin
+    stdout = process.stdout
+    if stdin is None or stdout is None:
+        raise PyEzvizError("Could not open FFmpeg pipes")
+
+    writer_errors: list[Exception] = []
+
+    def _write_input() -> None:
+        try:
+            _write_stream_payloads(
+                stream,
+                cast(BinaryIO, stdin),
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                allow_encrypted=allow_encrypted,
+                transform_payload=transform_payload,
+                flush_each=True,
+            )
+        except (BrokenPipeError, ConnectionResetError):
+            _LOGGER.debug("FFmpeg closed its input pipe")
+        except Exception as err:  # pragma: no cover - defensive thread handoff
+            writer_errors.append(err)
+        finally:
+            with suppress(OSError):
+                stdin.close()
+
+    writer = Thread(target=_write_input, daemon=True)
+    writer.start()
+    try:
+        while True:
+            chunk = stdout.read(65536)
+            if not chunk:
+                break
+            output.write(chunk)
+            output.flush()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        writer.join(timeout=2)
+        try:
+            return_code = process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait()
+
+    if writer_errors:
+        raise writer_errors[0]
+    if return_code not in (0, -15):
+        raise PyEzvizError(f"FFmpeg exited with status {return_code}")
+
+
+def _default_stream_proxy_path(serial: str) -> str:
+    """Return the default HTTP path for a camera stream."""
+
+    return f"/{serial}.ts"
+
+
+def _normalize_stream_proxy_path(path: str | None, serial: str) -> str:
+    """Normalize a user-supplied proxy path."""
+
+    if not path:
+        return _default_stream_proxy_path(serial)
+    return path if path.startswith("/") else f"/{path}"
+
+
+def _handle_stream_proxy_get(
+    handler: BaseHTTPRequestHandler,
+    config: StreamProxyConfig,
+    client: EzvizClient,
+) -> None:
+    """Handle one experimental VTM-to-MPEG-TS HTTP proxy request."""
+
+    if urlparse(handler.path).path != config.path:
+        handler.send_error(404, "Stream not found")
+        return
+
+    response_started = False
+    try:
+        with open_cloud_stream(
+            client,
+            config.serial,
+            channel=config.channel,
+            client_type=config.client_type,
+            token_index=config.token_index,
+            refresh_vtm=config.refresh_vtm,
+            timeout=config.timeout,
+        ) as stream:
+            stream.start()
+            process = _open_mpegts_remux_process(config.ffmpeg_path)
+            handler.send_response(200)
+            response_started = True
+            handler.send_header("Content-Type", "video/MP2T")
+            handler.send_header("Cache-Control", "no-store")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            _copy_stream_payloads_to_mpegts(
+                stream,
+                cast(BinaryIO, handler.wfile),
+                process=process,
+                max_packets=config.max_packets,
+                allow_encrypted=config.allow_encrypted,
+                transform_payload=(
+                    _stream_payload_decryptor(client, config.serial, codec=config.decrypt_codec)
+                    if config.decrypt_video
+                    else None
+                ),
+            )
+    except (BrokenPipeError, ConnectionResetError):
+        _LOGGER.debug("Stream proxy client disconnected")
+    except PyEzvizError as err:
+        _LOGGER.error("%s", err)
+        if response_started:
+            if not handler.wfile.closed:
+                handler.close_connection = True
+        else:
+            handler.send_error(502, str(err))
+
+
+def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
+    """Serve the experimental VTM-to-MPEG-TS HTTP proxy until interrupted."""
+
+    config = StreamProxyConfig(
+        serial=args.serial,
+        channel=args.channel,
+        client_type=args.client_type,
+        token_index=args.token_index,
+        refresh_vtm=not args.no_refresh_vtm,
+        timeout=args.timeout,
+        path=_normalize_stream_proxy_path(args.path, args.serial),
+        ffmpeg_path=args.ffmpeg_path,
+        allow_encrypted=args.allow_encrypted,
+        decrypt_video=args.decrypt_video,
+        decrypt_codec=args.decrypt_codec,
+        max_packets=args.max_packets,
+    )
+
+    class StreamProxyHandler(BaseHTTPRequestHandler):
+        server_version = "pyezvizapi-stream-proxy/0"
+
+        def do_GET(self) -> None:
+            _handle_stream_proxy_get(self, config, client)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            _LOGGER.info("stream proxy: " + format, *args)
+
+    try:
+        server = StreamProxyHTTPServer(
+            (args.listen_host, args.listen_port),
+            StreamProxyHandler,
         )
-        self._ensure_ok(json_output, "Could not get camera ticket info")
-        return json_output
+    except OSError as err:
+        raise PyEzvizError(
+            f"Could not bind stream proxy to {args.listen_host}:{args.listen_port}: {err}"
+        ) from err
+    url = f"http://{args.listen_host}:{args.listen_port}{config.path}"
+    _LOGGER.info("Serving VTM stream proxy at %s", url)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
-    @staticmethod
-    def _extract_cloud_video_download_url(video: Mapping[str, Any]) -> str | None:
-        """Return the first direct HTTP(S) video URL in a cloud video descriptor."""
 
-        media_url_keys = {
-            "downloadUrl",
-            "downloadURL",
-            "fileUrl",
-            "fileURL",
-            "playbackUrl",
-            "playbackURL",
-            "videoUrl",
-            "videoURL",
+def _env_or_arg(args: argparse.Namespace, attr: str, env_name: str) -> str | None:
+    """Return a CLI argument value or matching environment fallback."""
+
+    value = getattr(args, attr, None)
+    if value:
+        return cast(str, value)
+    env_value = os_environ_get(env_name)
+    return env_value if env_value else None
+
+
+def os_environ_get(name: str) -> str | None:
+    """Small wrapper to make environment fallback easy to patch in tests."""
+    return os.environ.get(name)
+
+
+def _required_local_sdk_secret(
+    args: argparse.Namespace,
+    attr: str,
+    env_name: str,
+) -> str:
+    """Read a required local-SDK secret without logging or persisting it."""
+
+    value = _env_or_arg(args, attr, env_name)
+    if not value:
+        raise PyEzvizError(f"Missing --{attr.replace('_', '-')} or {env_name}")
+    return value
+
+
+def _local_sdk_credentials_file(args: argparse.Namespace) -> dict[str, Any]:
+    """Read a local-SDK credential bundle without logging secret values."""
+
+    cached = getattr(args, "_local_sdk_credentials_file_data", None)
+    if isinstance(cached, dict):
+        return cached
+    path = getattr(args, "credentials_file", None)
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as err:
+        raise PyEzvizError(f"Could not read --credentials-file: {err}") from err
+    except json.JSONDecodeError as err:
+        raise PyEzvizError(f"Invalid --credentials-file JSON: {err}") from err
+    if not isinstance(data, dict):
+        raise PyEzvizError("--credentials-file must contain a JSON object")
+    vars(args)["_local_sdk_credentials_file_data"] = data
+    return data
+
+
+def _local_sdk_credentials_value(
+    args: argparse.Namespace,
+    path: tuple[str, ...],
+) -> Any:
+    """Return a value from the optional local-SDK credential bundle."""
+
+    current: Any = _local_sdk_credentials_file(args)
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _local_sdk_arg_or_credentials(
+    args: argparse.Namespace,
+    attr: str,
+    path: tuple[str, ...],
+) -> Any:
+    """Return an explicit CLI value or matching credential-bundle value."""
+
+    value = getattr(args, attr, None)
+    if value not in (None, ""):
+        return value
+    return _local_sdk_credentials_value(args, path)
+
+
+def _required_local_sdk_arg_or_credentials(
+    args: argparse.Namespace,
+    attr: str,
+    path: tuple[str, ...],
+) -> Any:
+    """Return a required direct-local field from args or credentials file."""
+
+    value = _local_sdk_arg_or_credentials(args, attr, path)
+    if value in (None, ""):
+        option = attr.replace("_", "-")
+        raise PyEzvizError(
+            f"Missing --{option}; provide it explicitly or via --credentials-file"
+        )
+    return value
+
+
+def _local_sdk_media_key(
+    args: argparse.Namespace,
+    client: EzvizClient | None,
+) -> str | bytes:
+    """Read the direct-local media decrypt key without logging or persisting it."""
+
+    key_hex = _env_or_arg(args, "media_key_hex", "EZVIZ_LOCAL_MEDIA_KEY_HEX")
+    if key_hex:
+        try:
+            return bytes.fromhex(key_hex)
+        except ValueError as err:
+            raise PyEzvizError("Invalid --media-key-hex/EZVIZ_LOCAL_MEDIA_KEY_HEX") from err
+
+    key = _env_or_arg(args, "media_key", "EZVIZ_LOCAL_MEDIA_KEY")
+    if key:
+        return key
+    credential_key_hex = _local_sdk_credentials_value(args, ("media_key_hex",))
+    if credential_key_hex:
+        try:
+            return bytes.fromhex(str(credential_key_hex))
+        except ValueError as err:
+            raise PyEzvizError("Invalid media_key_hex in --credentials-file") from err
+    credential_key = _local_sdk_credentials_value(args, ("media_key",))
+    if credential_key:
+        return str(credential_key)
+    if client is not None:
+        serial = str(
+            _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
+        )
+        cloud_key = client.get_cam_key(serial, max_retries=1)
+        if cloud_key:
+            return str(cloud_key)
+    raise PyEzvizError(
+        "Missing media key for --decrypt-video; provide --media-key, "
+        "--media-key-hex, EZVIZ_LOCAL_MEDIA_KEY, EZVIZ_LOCAL_MEDIA_KEY_HEX, "
+        "credentials-file media_key/media_key_hex, or authenticated client access"
+    )
+
+
+def _local_sdk_has_static_media_key(args: argparse.Namespace) -> bool:
+    """Return True when local-sdk-dump can decrypt without cloud key lookup."""
+
+    return bool(
+        _env_or_arg(args, "media_key_hex", "EZVIZ_LOCAL_MEDIA_KEY_HEX")
+        or _env_or_arg(args, "media_key", "EZVIZ_LOCAL_MEDIA_KEY")
+        or _local_sdk_credentials_value(args, ("media_key_hex",))
+        or _local_sdk_credentials_value(args, ("media_key",))
+    )
+
+
+def _read_optional_binary_file(path: str | None) -> bytes | None:
+    """Read an optional caller-owned binary body from disk."""
+
+    if not path:
+        return None
+    return Path(path).read_bytes()
+
+
+def _local_sdk_cas_device_info(
+    args: argparse.Namespace,
+    client: EzvizClient | None,
+) -> EzvizCasDeviceInfo:
+    """Build local CAS device info from explicit fields or cloud CAS."""
+
+    if args.fetch_cas:
+        if client is None:
+            raise PyEzvizError("--fetch-cas requires --token-file or credentials")
+        serial = str(
+            _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
+        )
+        cas_serial = args.cas_serial or serial
+        session = CasDeviceSession.from_response(
+            EzvizCAS(client.export_token()).cas_get_encryption(cas_serial)
+        )
+        return EzvizCasDeviceInfo(
+            serial=serial,
+            operation_code=session.operation_code,
+            key=session.key,
+            encrypt_type=session.encrypt_type,
+        )
+
+    operation_code = _env_or_arg(
+        args,
+        "operation_code",
+        "EZVIZ_LOCAL_OPERATION_CODE",
+    ) or _local_sdk_credentials_value(args, ("cas", "operation_code"))
+    if not operation_code:
+        raise PyEzvizError(
+            "Missing --operation-code or EZVIZ_LOCAL_OPERATION_CODE; "
+            "provide it explicitly or via --credentials-file"
+        )
+    cas_key = _env_or_arg(args, "cas_key", "EZVIZ_LOCAL_CAS_KEY") or (
+        _local_sdk_credentials_value(args, ("cas", "key"))
+    )
+    if not cas_key:
+        raise PyEzvizError(
+            "Missing --cas-key or EZVIZ_LOCAL_CAS_KEY; "
+            "provide it explicitly or via --credentials-file"
+        )
+    serial = str(
+        _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
+    )
+    encrypt_type = _local_sdk_arg_or_credentials(
+        args,
+        "encrypt_type",
+        ("cas", "encrypt_type"),
+    )
+    return EzvizCasDeviceInfo(
+        serial=serial,
+        operation_code=str(operation_code),
+        key=str(cas_key),
+        encrypt_type=int(encrypt_type),
+    )
+
+
+def _build_local_sdk_cli_stream(
+    args: argparse.Namespace,
+    client: EzvizClient | None = None,
+) -> Any:
+    """Build the direct-local SDK stream from explicit CLI/environment fields."""
+
+    device_info = _local_sdk_cas_device_info(args, client)
+    host = str(_required_local_sdk_arg_or_credentials(args, "host", ("endpoint", "host")))
+    endpoint = HcNetSdkLanEndpoint(
+        serial=device_info.serial,
+        host=host,
+        command_port=int(
+            _local_sdk_arg_or_credentials(
+                args,
+                "command_port",
+                ("endpoint", "command_port"),
+            )
+            or 9010
+        ),
+        stream_port=int(
+            _local_sdk_arg_or_credentials(
+                args,
+                "stream_port",
+                ("endpoint", "stream_port"),
+            )
+            or 9020
+        ),
+    )
+    preview_request = EzvizLocalPreviewRequest(
+        operation_code=device_info.operation_code,
+        channel=args.channel,
+        receiver_info=_local_sdk_receiver_info_from_args(args),
+        receiver_info_ex=_local_sdk_receiver_info_ex_from_args(args),
+        authentication=_local_sdk_authentication_from_args(args),
+        is_encrypt=args.is_encrypt,
+        identifier=args.identifier,
+        uuid=(
+            _env_or_arg(args, "uuid", "EZVIZ_LOCAL_UUID")
+            if args.receiver_shape == "app"
+            else None
+        ),
+        timestamp=(
+            _env_or_arg(args, "timestamp", "EZVIZ_LOCAL_TIMESTAMP")
+            if args.receiver_shape == "app"
+            else None
+        ),
+        udt=args.udt,
+        nat=args.nat,
+        port_guess_type=args.port_guess_type,
+        timeout=args.setup_timeout,
+        heartbeat_interval=args.heartbeat_interval,
+    )
+    return open_local_sdk_stream(
+        endpoint,
+        device_info,
+        preview_request,
+        timeout=args.socket_timeout,
+        pre_start_body=_read_optional_binary_file(args.pre_start_body_file),
+        pre_start_sequence=args.pre_start_sequence,
+        preview_sequence=args.preview_sequence,
+        stream_setup_sequence=args.stream_sequence,
+        stream_rate=args.stream_rate,
+        stream_mode=args.stream_mode,
+        max_prefix_bytes=args.max_prefix_bytes,
+        command_source_port=(
+            args.receiver_port if args.receiver_shape == "app" else None
+        ),
+    )
+
+
+def _local_sdk_receiver_info_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalReceiverInfo | EzvizLocalReceiverInfoAttrs:
+    """Build the requested ReceiverInfo XML shape for local-SDK preview."""
+
+    if args.receiver_shape == "structured":
+        return EzvizLocalReceiverInfo(
+            nat_address=args.nat_address,
+            nat_port=args.nat_port,
+            upnp_address=args.upnp_address,
+            upnp_port=args.upnp_port,
+            inner_address=args.inner_address,
+            inner_port=args.inner_port,
+            stream_type=args.receiver_stream_type,
+        )
+    return EzvizLocalReceiverInfoAttrs(
+        address=args.nat_address,
+        port=args.receiver_port,
+        server_type=args.receiver_server_type,
+        stream_type=args.receiver_stream_type,
+        new_stream_type=args.receiver_new_stream_type,
+        trans_proto=args.receiver_trans_proto,
+    )
+
+
+def _local_sdk_receiver_info_ex_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalReceiverInfoEx | EzvizLocalReceiverInfoExAttrs:
+    """Build the requested ReceiverInfoEx XML shape for local-SDK preview."""
+
+    if args.receiver_shape == "structured":
+        return EzvizLocalReceiverInfoEx(
+            uuid=_env_or_arg(args, "uuid", "EZVIZ_LOCAL_UUID"),
+            timestamp=_env_or_arg(args, "timestamp", "EZVIZ_LOCAL_TIMESTAMP"),
+        )
+    return EzvizLocalReceiverInfoExAttrs(port=args.receiver_ex_port)
+
+
+def _local_sdk_authentication_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalAuthenticationAttrs | None:
+    """Return app-shaped Authentication only when that XML shape is requested."""
+
+    if args.receiver_shape == "structured":
+        return None
+    return EzvizLocalAuthenticationAttrs(
+        biz_code=args.auth_biz_code,
+        interval=args.auth_interval,
+    )
+
+
+def _handle_local_sdk_stream_dump(
+    args: argparse.Namespace,
+    client: EzvizClient | None = None,
+) -> int:
+    """Dump direct-local SDK media with caller-supplied local fields."""
+
+    with _build_local_sdk_cli_stream(args, client) as stream:
+        if args.output == "-":
+            if args.decrypt_video and args.format == "mpegps":
+                copy_local_stream_to_decrypted_mpegps(
+                    stream,
+                    sys.stdout.buffer,
+                    _local_sdk_media_key(args, client),
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.decrypt_video:
+                copy_local_stream_to_decrypted_mpegts(
+                    stream,
+                    sys.stdout.buffer,
+                    _local_sdk_media_key(args, client),
+                    ffmpeg_path=args.ffmpeg_path,
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.format == "mpegps":
+                copy_local_stream_to_mpegps(
+                    stream,
+                    sys.stdout.buffer,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            else:
+                copy_local_stream_to_mpegts(
+                    stream,
+                    sys.stdout.buffer,
+                    ffmpeg_path=args.ffmpeg_path,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            _write_local_sdk_metadata_output(args.metadata_output, stream)
+            return 0
+
+        with Path(args.output).open("wb") as output:
+            if args.decrypt_video and args.format == "mpegps":
+                copy_local_stream_to_decrypted_mpegps(
+                    stream,
+                    output,
+                    _local_sdk_media_key(args, client),
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.decrypt_video:
+                copy_local_stream_to_decrypted_mpegts(
+                    stream,
+                    output,
+                    _local_sdk_media_key(args, client),
+                    ffmpeg_path=args.ffmpeg_path,
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.format == "mpegps":
+                copy_local_stream_to_mpegps(
+                    stream,
+                    output,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            else:
+                copy_local_stream_to_mpegts(
+                    stream,
+                    output,
+                    ffmpeg_path=args.ffmpeg_path,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+        _write_local_sdk_metadata_output(args.metadata_output, stream)
+    return 0
+
+
+def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch and print direct-local SDK credentials for explicit setup flows."""
+
+    credentials = get_local_sdk_stream_credentials_from_client(
+        client,
+        args.serial,
+        cas_serial=args.cas_serial,
+        fetch_media_key=not args.no_media_key,
+        smscode=args.sms_code,
+    )
+    _write_json(credentials.as_dict(include_media_key=not args.no_media_key))
+    return 0
+
+
+def _write_local_sdk_metadata_output(path: str | None, stream: Any) -> None:
+    """Write a safe JSON summary for a completed direct-local SDK stream."""
+
+    if not path:
+        return
+    metadata = _local_sdk_stream_metadata(stream)
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _local_sdk_stream_metadata(stream: Any) -> dict[str, Any]:
+    """Return non-secret direct-local SDK bootstrap and media metadata."""
+
+    bootstrap = getattr(stream, "bootstrap", None)
+    metadata: dict[str, Any] = {
+        "bootstrap_complete": bootstrap is not None,
+    }
+    sdk_client = getattr(stream, "sdk_client", None)
+    endpoint = getattr(sdk_client, "endpoint", None)
+    if endpoint is not None:
+        metadata["endpoint"] = {
+            "serial": getattr(endpoint, "serial", None),
+            "host": getattr(endpoint, "host", None),
+            "command_port": getattr(endpoint, "command_port", None),
+            "stream_port": getattr(endpoint, "stream_port", None),
         }
-        media_container_keys = {
-            "clip",
-            "clips",
-            "download",
-            "downloadInfo",
-            "file",
-            "files",
-            "media",
-            "playback",
-            "playbackInfo",
-            "video",
-            "videos",
+    if bootstrap is None:
+        return metadata
+
+    exchanges: dict[str, Any] = {}
+    for name in ("pre_start", "preview", "stream_setup"):
+        exchange = getattr(bootstrap, name, None)
+        if exchange is None:
+            continue
+        response = getattr(exchange, "response", None)
+        header = getattr(response, "header", None)
+        body = getattr(response, "body", b"")
+        body_shape = classify_ezviz_local_sdk_body(body)
+        exchanges[name] = {
+            "response_command": getattr(header, "command", None),
+            "response_sequence": getattr(header, "sequence", None),
+            "response_status": getattr(header, "status", None),
+            "response_body_length": getattr(header, "body_length", None),
+            "response_body_kind": body_shape.kind,
+            "response_xml_tags": list(body_shape.xml_tags),
         }
-        queue: list[tuple[Any, bool]] = [(video, False)]
-        while queue:
-            current, is_media_container = queue.pop(0)
-            if isinstance(current, Mapping):
-                for key, value in current.items():
-                    child_is_media_container = is_media_container or key in media_container_keys
-                    if isinstance(value, str):
-                        if key in media_url_keys and value.startswith(("http://", "https://")):
-                            return value
-                        if (
-                            key == "url"
-                            and is_media_container
-                            and value.startswith(("http://", "https://"))
-                        ):
-                            return value
-                    elif isinstance(value, Mapping | list):
-                        queue.append((value, child_is_media_container))
-            elif isinstance(current, list):
-                queue.extend((item, is_media_container) for item in current)
+    metadata["exchanges"] = exchanges
+
+    first_media = getattr(bootstrap, "first_media", None)
+    if first_media is not None:
+        frame = first_media.frame
+        metadata["first_media"] = {
+            "prefix_length": len(first_media.prefix),
+            "channel": frame.header.channel,
+            "payload_length": frame.header.payload_length,
+        }
+    return metadata
+
+
+def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle experimental stream helpers."""
+
+    if args.stream_action not in {
+        "trace",
+        "dump",
+        "proxy",
+        "local-sdk-dump",
+        "local-sdk-keys",
+    }:
+        _LOGGER.error("Action not implemented, try running with -h switch for help")
+        return 2
+
+    if args.stream_action == "local-sdk-keys":
+        return _handle_local_sdk_keys(args, client)
+
+    if args.stream_action == "local-sdk-dump":
+        return _handle_local_sdk_stream_dump(args, client)
+
+    if args.stream_action == "proxy":
+        _serve_stream_proxy(args, client)
+        return 0
+
+    with open_cloud_stream(
+        client,
+        args.serial,
+        channel=args.channel,
+        client_type=args.client_type,
+        token_index=args.token_index,
+        refresh_vtm=not args.no_refresh_vtm,
+        timeout=args.timeout,
+    ) as stream:
+        if args.stream_action == "dump":
+            stream.start()
+            if args.decrypt_video and args.duration is None and args.max_packets is None:
+                raise PyEzvizError(
+                    "--decrypt-video requires --duration or --max-packets to bound memory use"
+                )
+            collected_packets: list[Any] | None = None
+            if args.decrypt_video:
+                collected_packets = _collect_stream_packets(
+                    stream,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                    allow_encrypted=args.allow_encrypted,
+                )
+                transport = _detect_stream_packets_transport(collected_packets)
+                if transport == StreamTransport.RTP:
+                    rtp_codec = _detect_rtp_video_codec(collected_packets)
+                    payload = _rtp_packets_to_annexb(collected_packets, codec=rtp_codec)
+                    payload = _decrypt_annexb_video_bytes(
+                        client,
+                        args.serial,
+                        payload,
+                        codec=rtp_codec,
+                    )
+                    if args.output == "-":
+                        if args.format == "raw":
+                            sys.stdout.buffer.write(payload)
+                            sys.stdout.buffer.flush()
+                        else:
+                            _remux_elementary_video_bytes_to_mpegts(
+                                payload,
+                                sys.stdout.buffer,
+                                ffmpeg_path=args.ffmpeg_path,
+                                codec=rtp_codec,
+                            )
+                    else:
+                        with Path(args.output).open("wb") as output:
+                            if args.format == "raw":
+                                output.write(payload)
+                                output.flush()
+                            else:
+                                _remux_elementary_video_bytes_to_mpegts(
+                                    payload,
+                                    output,
+                                    ffmpeg_path=args.ffmpeg_path,
+                                    codec=rtp_codec,
+                                )
+                    return 0
+            if args.output == "-":
+                if args.decrypt_video:
+                    payload = b"".join(packet.body for packet in collected_packets or [])
+                    payload = _decrypt_stream_payload_bytes(
+                        client,
+                        args.serial,
+                        payload,
+                        codec=args.decrypt_codec,
+                    )
+                    if args.format == "raw":
+                        sys.stdout.buffer.write(payload)
+                        sys.stdout.buffer.flush()
+                    else:
+                        _remux_mpegps_bytes_to_mpegts(
+                            payload,
+                            sys.stdout.buffer,
+                            ffmpeg_path=args.ffmpeg_path,
+                        )
+                elif args.format == "raw":
+                    _write_stream_payloads(
+                        stream,
+                        sys.stdout.buffer,
+                        max_packets=args.max_packets,
+                        duration_seconds=args.duration,
+                        allow_encrypted=args.allow_encrypted,
+                    )
+                else:
+                    _remux_stream_payloads_to_mpegts(
+                        stream,
+                        sys.stdout.buffer,
+                        ffmpeg_path=args.ffmpeg_path,
+                        max_packets=args.max_packets,
+                        duration_seconds=args.duration,
+                        allow_encrypted=args.allow_encrypted,
+                    )
+            else:
+                with Path(args.output).open("wb") as output:
+                    if args.decrypt_video:
+                        payload = b"".join(packet.body for packet in collected_packets or [])
+                        payload = _decrypt_stream_payload_bytes(
+                            client,
+                            args.serial,
+                            payload,
+                            codec=args.decrypt_codec,
+                        )
+                        if args.format == "raw":
+                            output.write(payload)
+                            output.flush()
+                        else:
+                            _remux_mpegps_bytes_to_mpegts(
+                                payload,
+                                output,
+                                ffmpeg_path=args.ffmpeg_path,
+                            )
+                    elif args.format == "raw":
+                        _write_stream_payloads(
+                            stream,
+                            output,
+                            max_packets=args.max_packets,
+                            duration_seconds=args.duration,
+                            allow_encrypted=args.allow_encrypted,
+                        )
+                    else:
+                        _remux_stream_payloads_to_mpegts(
+                            stream,
+                            output,
+                            ffmpeg_path=args.ffmpeg_path,
+                            max_packets=args.max_packets,
+                            duration_seconds=args.duration,
+                            allow_encrypted=args.allow_encrypted,
+                        )
+            return 0
+
+        events = [event.as_dict() for event in stream.trace_packets(max_packets=args.max_packets)]
+
+    if args.json_lines:
+        for event in events:
+            sys.stdout.write(json.dumps(event, sort_keys=True) + "\n")
+    else:
+        _write_json(events)
+    return 0
+
+
+def _handle_camera(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle `camera` subcommands (status/move/unlock/switch/alarm/select)."""
+    camera = EzvizCamera(client, args.serial)
+    _LOGGER.debug("Camera loaded")
+
+    if args.camera_action == "move":
+        camera.move(args.direction, args.speed)
+        return 0
+
+    if args.camera_action == "move_coords":
+        camera.move_coordinates(args.x, args.y)
+        return 0
+
+    if args.camera_action == "status":
+        _write_json(camera.status(refresh=getattr(args, "refresh", True)))
+        return 0
+
+    if args.camera_action == "unlock-door":
+        camera.door_unlock()
+        return 0
+
+    if args.camera_action == "unlock-gate":
+        camera.gate_unlock()
+        return 0
+
+    if args.camera_action == "switch":
+        if args.switch == "ir":
+            camera.switch_device_ir_led(args.enable)
+        elif args.switch == "state":
+            sys.stdout.write(str(args.enable) + "\n")
+            camera.switch_device_state_led(args.enable)
+        elif args.switch == "audio":
+            camera.switch_device_audio(args.enable)
+        elif args.switch == "privacy":
+            camera.switch_privacy_mode(args.enable)
+        elif args.switch == "sleep":
+            camera.switch_sleep_mode(args.enable)
+        elif args.switch == "follow_move":
+            camera.switch_follow_move(args.enable)
+        elif args.switch == "sound_alarm":
+            camera.switch_sound_alarm(args.enable + 1)
+        else:
+            _LOGGER.error("Unknown switch: %s", args.switch)
+            return 2
+        return 0
+
+    if args.camera_action == "alarm":
+        if args.sound is not None:
+            camera.alarm_sound(args.sound)
+        if args.notify is not None:
+            camera.alarm_notify(args.notify)
+        if args.sensibility is not None:
+            camera.alarm_detection_sensibility(args.sensibility)
+        if args.do_not_disturb is not None:
+            camera.do_not_disturb(args.do_not_disturb)
+        if args.schedule is not None:
+            camera.change_defence_schedule(args.schedule)
+        return 0
+
+    if args.camera_action == "select":
+        if args.battery_work_mode is not None:
+            camera.set_battery_camera_work_mode(
+                getattr(BatteryCameraWorkMode, args.battery_work_mode)
+            )
+            return 0
+        return 2
+
+    _LOGGER.error("Action not implemented, try running with -h switch for help")
+    return 2
+
+
+def _load_token_file(path: str | None) -> dict[str, Any] | None:
+    """Load a token dictionary from `path` if it exists; else return None."""
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        return cast(dict[str, Any], json.loads(p.read_text(encoding="utf-8")))
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):  # pragma: no cover - tolerate malformed file
+        _LOGGER.warning("Failed to read token file: %s", p)
         return None
 
-    def download_cloud_video(
-        self,
-        video: Mapping[str, Any],
-        *,
-        max_retries: int = 0,
-    ) -> bytes:
-        """Download a cloud video when the descriptor contains a direct HTTP URL.
 
-        Most EZVIZ cloud clip descriptors returned by ``/v3/clouds/videoDetails``
-        expose a native SDK ``streamUrl`` host/port instead of a direct media URL.
-        Those native stream descriptors cannot be downloaded through this helper.
-        """
+def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
+    """Persist the token dictionary to `path` in JSON format."""
+    if not path:
+        return
+    p = Path(path)
+    try:
+        p.write_text(json.dumps(token, indent=2), encoding="utf-8")
+        _LOGGER.info("Saved token to %s", p)
+    except OSError:  # pragma: no cover - filesystem issues
+        _LOGGER.warning("Failed to save token file: %s", p)
 
-        url = self._extract_cloud_video_download_url(video)
-        if url is None:
-            stream_url = video.get("streamUrl")
-            suffix = f" Native streamUrl={stream_url!r} requires the EZVIZ SDK path." if stream_url else ""
-            raise PyEzvizError(
-                "Cloud video descriptor does not include a direct HTTP(S) download URL."
-                + suffix
-            )
 
-        resp = self._http_request(
-            "GET",
-            url,
-            retry_401=False,
-            max_retries=max_retries,
-        )
-        return resp.content
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point."""
+    args = _parse_args(argv)
+    _setup_logging(args.debug)
 
-    def search_device(
-        self,
-        serial: str,
-        *,
-        user_ssid: str | None = None,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Find device information by serial."""
+    token = _load_token_file(args.token_file)
+    has_session_token = bool(token and token.get("session_id"))
+    if args.action == "cloud_video_decrypt" and args.key and not args.serial and not token:
+        try:
+            return _handle_cloud_video_decrypt(args, None)
+        except PyEzvizError as exp:
+            _LOGGER.error("%s", exp)
+            return 1
+    if (
+        args.action == "stream"
+        and args.stream_action == "local-sdk-dump"
+        and not args.fetch_cas
+        and (not args.decrypt_video or _local_sdk_has_static_media_key(args))
+    ):
+        try:
+            return _handle_local_sdk_stream_dump(args)
+        except PyEzvizError as exp:
+            _LOGGER.error("%s", exp)
+            return 1
 
-        headers = dict(self._session.headers)
-        if user_ssid is not None:
-            headers["userSsid"] = user_ssid
+    if not has_session_token and (not args.username or not args.password):
+        _LOGGER.error("Provide --token-file (existing) or --username/--password")
+        return 2
 
-        params = {"deviceSerial": serial}
-        req = requests.Request(
-            method="GET",
-            url=self._url(API_ENDPOINT_USERDEVICES_SEARCH),
-            headers=headers,
-            params=params,
-        ).prepare()
-
-        resp = self._send_prepared(
-            req,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        json_output = self._parse_json(resp)
-        if not self._meta_ok(json_output):
-            raise PyEzvizError(f"Could not search device: Got {json_output})")
-        return json_output
-
-    def get_socket_log_info(
-        self,
-        serial: str,
-        start: str,
-        end: str,
-        *,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Fetch smart outlet switch logs within a time range."""
-
-        path = API_ENDPOINT_SMARTHOME_OUTLET_LOG.format(**{"from": start, "to": end})
-        json_output = self._request_json(
-            "GET",
-            path,
-            params={"deviceSerial": serial},
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not get socket log info")
-        return json_output
-
-    def linked_cameras(
-        self,
-        serial: str,
-        detector_serial: str,
-        *,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """List cameras linked to a detector device."""
-
-        params = {
-            "deviceSerial": serial,
-            "detectorDeviceSerial": detector_serial,
-        }
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not get linked cameras")
-        return json_output
-
-    def set_microscope(
-        self,
-        serial: str,
-        multiple: float,
-        x: int,
-        y: int,
-        index: int,
-        *,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Configure microscope lens parameters."""
-
-        data = {
-            "multiple": multiple,
-            "x": x,
-            "y": y,
-            "index": index,
-        }
-        json_output = self._request_json(
-            "PUT",
-            f"{API_ENDPOINT_DEVICES}{serial}/microscope",
-            data=data,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not set microscope")
-        return json_output
-
-    def share_accept(
-        self,
-        serial: str,
-        *,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Accept a device share invitation."""
-
-        json_output = self._request_json(
-            "POST",
-            API_ENDPOINT_SHARE_ACCEPT,
-            data={"deviceSerial": serial},
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not accept share")
-        return json_output
-
-    def share_quit(
-        self,
-        serial: str,
-        *,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Leave a shared device."""
-
-        json_output = self._request_json(
-            "DELETE",
-            API_ENDPOINT_SHARE_QUIT,
-            params={"deviceSerial": serial},
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not quit share")
-        return json_output
-
-    def send_feedback(
-        self,
-        *,
-        email: str,
-        account: str,
-        score: int,
-        feedback: str,
-        pic_url: str | None = None,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Submit feedback to Ezviz support."""
-
-        params: dict[str, Any] = {
-            "email": email,
-            "account": account,
-            "score": score,
-            "feedback": feedback,
-        }
-        if pic_url is not None:
-            params["picUrl"] = pic_url
-
-        json_output = self._request_json(
-            "POST",
-            API_ENDPOINT_FEEDBACK,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not send feedback")
-        return json_output
-
-    def upload_device_log(
-        self,
-        serial: str,
-        *,
-        max_retries: int = 0,
-    ) -> JsonDict:
-        """Trigger device log upload to Ezviz cloud."""
-
-        json_output = self._request_json(
-            "POST",
-            "/v3/devconfig/dump/app/trigger",
-            data={"deviceSerial": serial},
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(json_output, "Could not upload device log")
-        return json_output
-
-    def alarm_sound(
-        self,
-        serial: str,
-        sound_type: int,
-        enable: int = 1,
-        voice_id: int | None = None,
-        max_retries: int = 0,
-    ) -> bool:
-        """Enable alarm sound by API."""
-        if max_retries > MAX_RETRIES:
-            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
-
-        if sound_type not in [0, 1, 2]:
-            raise PyEzvizError(
-                "Invalid sound_type, should be 0,1,2: " + str(sound_type)
-            )
-
-        voice_id_value = 0 if voice_id is None else voice_id
-
-        response_json = self._request_json(
-            "PUT",
-            f"{API_ENDPOINT_DEVICES}{serial}{API_ENDPOINT_ALARM_SOUND}",
-            data={
-                "enable": enable,
-                "soundType": sound_type,
-                "voiceId": voice_id_value,
-                "deviceSerial": serial,
-            },
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        self._ensure_ok(response_json, "Could not set alarm sound")
-        _LOGGER.debug(
-            "http_debug: serial=%s code=%s msg=%s",
-            serial,
-            self._meta_code(response_json),
-            "alarm_sound",
-        )
-        return True
-
-    def get_mqtt_client(
-        self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
-    ) -> MQTTClient:
-        """Return a configured MQTTClient using this client's session."""
-        if self.mqtt_client is None:
-            self.mqtt_client = MQTTClient(
-                token=cast(dict[Any, Any], self._token),
-                session=self._session,
-                timeout=self._timeout,
-                on_message_callback=on_message_callback,
-            )
-        return self.mqtt_client
-
-    def _get_page_list(self) -> Any:
-        """Get ezviz device info broken down in sections."""
-        return self._api_get_pagelist(
-            page_filter="CLOUD, TIME_PLAN, CONNECTION, SWITCH,"
-            "STATUS, WIFI, NODISTURB, KMS,"
-            "P2P, CHANNEL, VTM, DETECTOR,"
-            "FEATURE, CUSTOM_TAG, UPGRADE, VIDEO_QUALITY,"
-            "QOS, PRODUCTS_INFO, SIM_CARD, MULTI_UPGRADE_EXT,"
-            "FEATURE_INFO",
-            json_key=None,
+    client = EzvizClient(args.username, args.password, args.region, token=token)
+    try:
+        _login(
+            client,
+            token,
+            require_service_urls=_action_requires_service_urls(args),
         )
 
-    def get_page_list(self) -> Any:
-        """Return the full pagelist payload without filtering."""
+        if args.action == "devices":
+            return _handle_devices(args, client)
+        if args.action == "devices_light":
+            return _handle_devices_light(args, client)
+        if args.action == "light":
+            return _handle_light(args, client)
+        if args.action == "home_defence_mode":
+            return _handle_home_defence_mode(args, client)
+        if args.action == "mqtt":
+            return _handle_mqtt(args, client)
+        if args.action == "stream":
+            return _handle_stream(args, client)
+        if args.action == "camera":
+            return _handle_camera(args, client)
+        if args.action == "pagelist":
+            return _handle_pagelist(client)
+        if args.action == "device_infos":
+            return _handle_device_infos(args, client)
+        if args.action == "unifiedmsg":
+            return _handle_unifiedmsg(args, client)
+        if args.action == "sdcard_videos":
+            return _handle_sdcard_videos(args, client)
+        if args.action == "cloud_videos":
+            return _handle_cloud_videos(args, client)
+        if args.action == "cloud_video_download":
+            return _handle_cloud_video_download(args, client)
+        if args.action == "cloud_video_decrypt":
+            return _handle_cloud_video_decrypt(args, client)
 
-        return self._get_page_list()
+    except PyEzvizError as exp:
+        _LOGGER.error("%s", exp)
+        return 1
+    except KeyboardInterrupt:
+        _LOGGER.error("Interrupted")
+        return 130
+    else:
+        _LOGGER.error("Action not implemented: %s", args.action)
+        return 2
+    finally:
+        if args.save_token and args.token_file:
+            _save_token_file(args.token_file, client.export_token())
+        client.close_session()
 
-    def export_token(self) -> dict[str, Any]:
-        """Return a shallow copy of the current authentication token."""
 
-        return dict(self._token)
-
-    def get_device(self) -> Any:
-        """Get ezviz devices filter."""
-        return self._api_get_pagelist(page_filter="CLOUD", json_key="deviceInfos")
-
-    def get_connection(self) -> Any:
-        """Get ezviz connection infos filter."""
-        return self._api_get_pagelist(page_filter="CONNECTION", json_key="CONNECTION")
-
-    def _get_status(self) -> Any:
-        """Get ezviz status infos filter."""
-        return self._api_get_pagelist(page_filter="STATUS", json_key="STATUS")
-
-    def get_switch(self) -> Any:
-        """Get ezviz switch infos filter."""
-        return self._api_get_pagelist(page_filter="SWITCH", json_key="SWITCH")
-
-    def _get_wifi(self) -> Any:
-        """Get ezviz wifi infos filter."""
-        return self._api_get_pagelist(page_filter="WIFI", json_key="WIFI")
-
-    def _get_nodisturb(self) -> Any:
-        """Get ezviz nodisturb infos filter."""
-        return self._api_get_pagelist(page_filter="NODISTURB", json_key="NODISTURB")
-
-    def _get_p2p(self) -> Any:
-        """Get ezviz P2P infos filter."""
-        return self._api_get_pagelist(page_filter="P2P", json_key="P2P")
-
-    def _get_kms(self) -> Any:
-        """Get ezviz KMS infos filter."""
-        return self._api_get_pagelist(page_filter="KMS", json_key="KMS")
-
-    def _get_time_plan(self) -> Any:
-        """Get ezviz TIME_PLAN infos filter."""
-        return self._api_get_pagelist(page_filter="TIME_PLAN", json_key="TIME_PLAN")
-
-    def close_session(self) -> None:
-        """Clear current session."""
-        if self._session:
-            self._session.close()
-
-        self._session = requests.session()
-        self._session.headers.update(REQUEST_HEADER)  # Reset session.
+if __name__ == "__main__":
+    sys.exit(main())

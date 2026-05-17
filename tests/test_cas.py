@@ -211,6 +211,35 @@ def test_probe_local_operation_code_uses_plain_socket(monkeypatch) -> None:
     assert fake_socket.closed is True
 
 
+def test_probe_local_operation_code_retries_partial_socket_writes(monkeypatch) -> None:
+    class PartialSendSocket(FakeSocket):
+        def send(self, payload: bytes) -> int:
+            sent = min(7, len(payload))
+            self.sent.append(payload[:sent])
+            return sent
+
+    fake_socket = PartialSendSocket(LOCAL_RESPONSE)
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = EzvizCAS(_token()).probe_local_operation_code(
+        "CAM123",
+        host="192.0.2.10",
+        port=9010,
+    )
+
+    assert result.response == LOCAL_RESPONSE
+    assert len(fake_socket.sent) > 1
+    sent_payload = b"".join(fake_socket.sent)
+    assert DEV_SERIAL_XML in sent_payload
+    assert CasFrameHeader.parse(sent_payload).command == CAS_COMMAND_GET_OPERATION_CODE
+    assert fake_socket.closed is True
+
+
 def test_probe_local_operation_code_reports_connection_reset(monkeypatch) -> None:
     class ResetSocket(FakeSocket):
         def recv(self, size: int = 1024) -> bytes:

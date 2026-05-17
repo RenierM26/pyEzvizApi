@@ -113,6 +113,21 @@ def _cas_tls_context() -> ssl.SSLContext:
     return context
 
 
+def _send_all(sock: Any, payload: bytes) -> None:
+    """Send the complete CAS frame over socket-like transports."""
+    sendall = getattr(sock, "sendall", None)
+    if callable(sendall):
+        sendall(payload)
+        return
+
+    sent = 0
+    while sent < len(payload):
+        count = sock.send(payload[sent:])
+        if count <= 0:
+            raise PyEzvizError("Socket closed before CAS frame was sent")
+        sent += count
+
+
 def xor_enc_dec(msg: bytes, xor_key: bytes = XOR_KEY) -> bytes:
     """XOR encode/decode bytes with the given key."""
     with BytesIO(msg) as stream:
@@ -316,7 +331,7 @@ class EzvizCAS:
                 sock.settimeout(CAS_SOCKET_TIMEOUT)
 
         try:
-            sock.send(payload)
+            _send_all(sock, payload)
             response_bytes = sock.recv(recv_size)
         except TimeoutError as err:
             raise PyEzvizError("Timed out waiting for CAS response") from err

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ssl
 from typing import Any
 
 from Crypto.Cipher import AES
@@ -48,6 +49,10 @@ class FakeSSLContext:
     def __init__(self, protocol: Any) -> None:
         self.protocol = protocol
         self.ciphers: str | None = None
+        self.default_cert_purpose: ssl.Purpose | None = None
+
+    def load_default_certs(self, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> None:
+        self.default_cert_purpose = purpose
 
     def set_ciphers(self, ciphers: str) -> None:
         self.ciphers = ciphers

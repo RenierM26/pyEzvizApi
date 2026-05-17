@@ -109,6 +109,7 @@ def _cas_tls_context() -> ssl.SSLContext:
     """Return the legacy TLS context accepted by the CAS cloud endpoint."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_default_certs(ssl.Purpose.SERVER_AUTH)
     context.set_ciphers(CAS_TLS_CIPHERS)
     return context
 

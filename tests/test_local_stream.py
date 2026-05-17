@@ -4,7 +4,6 @@ import io
 from types import SimpleNamespace
 from typing import Any, cast
 
-from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
@@ -32,6 +31,7 @@ from pyezvizapi.local_stream import (
     open_local_sdk_stream,
     open_local_sdk_stream_from_client,
 )
+from pyezvizapi.stream import _hikvision_aes_ecb_cipher
 
 FIRST_PREFIX = b"preface"
 STREAM_TIMEOUT = 3.0
@@ -674,7 +674,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
-    cipher = AES.new(IDMX_MEDIA_KEY, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
+    cipher = _hikvision_aes_ecb_cipher(IDMX_MEDIA_KEY)
     vps_plain = b"\x40\x01" + b"vps-plain-123456"
     vps_cipher = cipher.encrypt(vps_plain[2:])
     slice_plain = b"slice-plain-1234"

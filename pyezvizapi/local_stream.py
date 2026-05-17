@@ -33,6 +33,7 @@ from .stream import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     MPEG_PS_START_CODE,
+    _hikvision_aes_ecb_cipher,
     decrypt_hikvision_ps_video,
     rtp_payload,
 )
@@ -923,8 +924,7 @@ def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
     )
     decrypt_length -= decrypt_length % AES.block_size
     if decrypt_length > 0:
-        # EZVIZ/PlayCtrl encrypts local media NAL prefixes with AES-ECB.
-        cipher = AES.new(aes_key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
+        cipher = _hikvision_aes_ecb_cipher(aes_key)
         decrypt_end = HEVC_NAL_HEADER_SIZE + decrypt_length
         frame[HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(
             bytes(frame[HEVC_NAL_HEADER_SIZE:decrypt_end])

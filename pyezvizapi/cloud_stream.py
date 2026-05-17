@@ -127,10 +127,6 @@ def get_cloud_stream_info(
         raise PyEzvizError(f"Could not find VTM resource for serial {serial}{channel_text}")
 
     resource_id = resource.get("resourceId")
-    vtm = vtms.get(resource_id)
-    if not isinstance(vtm, dict):
-        raise PyEzvizError(f"Could not find VTM server for resource {resource_id}")
-
     tokens = get_vtdu_token_v2(client).get("tokens", [])
     try:
         vtdu_token = tokens[token_index]
@@ -145,6 +141,11 @@ def get_cloud_stream_info(
         local_index_text = str(local_index)
         stream_channel = int(local_index_text) if local_index_text.isdigit() else 1
 
+    vtm = vtms.get(resource_id)
+    if not isinstance(vtm, dict):
+        if not refresh_vtm:
+            raise PyEzvizError(f"Could not find VTM server for resource {resource_id}")
+        vtm = {}
     if refresh_vtm:
         vtm = {**vtm, **get_vtm_info(client, serial, stream_channel)}
 

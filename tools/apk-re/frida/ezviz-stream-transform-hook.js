@@ -16,10 +16,21 @@ const DUMP_LIMIT = 256 * 1024;
 const HEX_LIMIT = 64;
 const MAX_DUMPS_PER_LABEL = 24;
 const LOG_SECRET_VALUES = false;
+const DUMP_SECRET_KEYS_RAW = deviceFlagExists("/data/local/tmp/ezviz-dump-media-keys.flag");
 const installed = new Set();
 let dumpDir = "/sdcard/Download/ezviz-hook";
 let dumpSeq = 0;
 const dumpCounts = {};
+
+function deviceFlagExists(path) {
+  try {
+    const file = new File(path, "rb");
+    file.close();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 function nowTag() {
   return new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
@@ -39,12 +50,29 @@ function bytesToHex(ptr, len) {
   }
 }
 
+function fingerprintBytes(ptr, len) {
+  if (ptr.isNull() || len <= 0) {
+    return "<none>";
+  }
+  try {
+    const data = new Uint8Array(ptr.readByteArray(len));
+    let hash = 2166136261;
+    for (const byte of data) {
+      hash ^= byte;
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return "fnv32=" + hash.toString(16).padStart(8, "0");
+  } catch (err) {
+    return "<fingerprint-failed " + err + ">";
+  }
+}
+
 function secretBytes(ptr, len) {
   if (ptr.isNull()) {
     return "<null>";
   }
   if (!LOG_SECRET_VALUES) {
-    return `<redacted len=${len}>`;
+    return `<redacted len=${len} ${fingerprintBytes(ptr, len)}>`;
   }
   return bytesToHex(ptr, len);
 }
@@ -233,6 +261,9 @@ function installNativeHooks() {
   hookExport("libPlayCtrl.so", "PlayM4_SetSecretKey", {
     onEnter(args) {
       // long port, long keyType, char *key, long keyLen.
+      if (DUMP_SECRET_KEYS_RAW) {
+        dumpBytes("secret-playm4-key", args[2], args[3].toInt32());
+      }
       console.log(
         `[key] PlayM4_SetSecretKey port=${args[0].toInt32()} type=${args[1].toInt32()} key=${secretBytes(args[2], args[3].toInt32())}`,
       );
@@ -242,9 +273,33 @@ function installNativeHooks() {
     },
   });
 
+  hookExport("libPlayCtrl.so", "IDMX_SetDecrptKey", {
+    onEnter(args) {
+      console.log(`[key] PlayCtrl.IDMX_SetDecrptKey args=${args[0]} ${args[1]} ${args[2]}`);
+    },
+    onLeave(retval) {
+      console.log(`[key] PlayCtrl.IDMX_SetDecrptKey ret=${retval.toInt32()}`);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "_ZN12CIDMXManager12SetDecrptKeyEPci15_IDMX_KEY_TYPE_", {
+    onEnter(args) {
+      const len = args[2].toInt32();
+      if (DUMP_SECRET_KEYS_RAW) {
+        dumpBytes("secret-playctrl-cidmx-key", args[1], len);
+      }
+      console.log(
+        `[key] PlayCtrl.CIDMXManager::SetDecrptKey this=${args[0]} key=${secretBytes(args[1], len)} type=${args[3].toInt32()}`,
+      );
+    },
+  });
+
   hookExport("libSystemTransform.so", "SYSTRANS_SetEncryptKey", {
     onEnter(args) {
       // void *handle, enum encryptType, char *key, uint keyLen.
+      if (DUMP_SECRET_KEYS_RAW) {
+        dumpBytes("secret-systrans-key", args[2], args[3].toInt32());
+      }
       console.log(
         `[key] SYSTRANS_SetEncryptKey handle=${args[0]} type=${args[1].toInt32()} key=${secretBytes(args[2], args[3].toInt32())}`,
       );
@@ -269,6 +324,14 @@ function installNativeHooks() {
       const len = args[2].toInt32();
       console.log(`[in] IDMX_InputData handle=${args[0]} len=${len} head=${bytesToHex(args[1], len)}`);
       dumpBytes("idmx-input", args[1], len);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "IDMX_InputData", {
+    onEnter(args) {
+      const len = args[2].toInt32();
+      console.log(`[in] PlayCtrl.IDMX_InputData handle=${args[0]} len=${len} head=${bytesToHex(args[1], len)}`);
+      dumpBytes("playctrl-idmx-input", args[1], len);
     },
   });
 
@@ -317,6 +380,51 @@ function installNativeHooks() {
     onLeave(retval) {
       console.log(`[aes] IDMXProcessEncryptFrame ret=${retval.toInt32()}`);
       dumpBytes("idmx-process-encrypt-after", this.data, this.len);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "_Z19IDMXAESDecryptFramePhjjjS_P29_IDMX_ENCRYPT_LEN_FRAME_INFO_", {
+    onEnter(args) {
+      this.data = args[0];
+      this.len = args[1].toInt32();
+      console.log(
+        `[aes] PlayCtrl.IDMXAESDecryptFrame len=${this.len} frameType=${args[2].toInt32()} encryptType=${args[3].toInt32()} key=${secretBytes(args[4], 32)} encLenInfo=${args[5]}`,
+      );
+      dumpBytes("playctrl-idmx-aes-frame-before", this.data, this.len);
+    },
+    onLeave(retval) {
+      console.log(`[aes] PlayCtrl.IDMXAESDecryptFrame ret=${retval.toInt32()}`);
+      dumpBytes("playctrl-idmx-aes-frame-after", this.data, this.len);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "_Z22IDMXAESDEcrpytFrameComPhjjjS_", {
+    onEnter(args) {
+      this.data = args[0];
+      this.len = args[1].toInt32();
+      console.log(
+        `[aes] PlayCtrl.IDMXAESDEcrpytFrameCom len=${this.len} frameType=${args[2].toInt32()} encryptType=${args[3].toInt32()} key=${secretBytes(args[4], 32)}`,
+      );
+      dumpBytes("playctrl-idmx-aes-frame-com-before", this.data, this.len);
+    },
+    onLeave(retval) {
+      console.log(`[aes] PlayCtrl.IDMXAESDEcrpytFrameCom ret=${retval.toInt32()}`);
+      dumpBytes("playctrl-idmx-aes-frame-com-after", this.data, this.len);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "_Z23IDMXProcessEncryptFramePhjjP15_IDMX_AES_NALU_", {
+    onEnter(args) {
+      this.data = args[0];
+      this.len = args[1].toInt32();
+      console.log(
+        `[aes] PlayCtrl.IDMXProcessEncryptFrame len=${this.len} naluCount=${args[2].toInt32()} entries=${args[3]}`,
+      );
+      dumpBytes("playctrl-idmx-process-encrypt-before", this.data, this.len);
+    },
+    onLeave(retval) {
+      console.log(`[aes] PlayCtrl.IDMXProcessEncryptFrame ret=${retval.toInt32()}`);
+      dumpBytes("playctrl-idmx-process-encrypt-after", this.data, this.len);
     },
   });
 

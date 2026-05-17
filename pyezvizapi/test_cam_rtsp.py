@@ -158,4 +158,4 @@ class TestRTSPAuth:
             if "401 Unauthorized" in decoded:
                 raise AuthTestResultFailed("Credentials not valid!!")
 
-        _LOGGER.info("Basic Auth test passed. Credentials Valid!")
+        raise AuthTestResultFailed("RTSP DESCRIBE did not return 200 OK")

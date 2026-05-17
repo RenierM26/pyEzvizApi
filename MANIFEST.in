@@ -1,2 +1,3 @@
 include LICENSE.md
 graft examples
+include tools/apk-re/bin/local-sdk-live-check

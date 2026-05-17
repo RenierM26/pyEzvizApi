@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+# ruff: noqa: PLC0415
+"""Probe the EZVIZ direct-local SDK preview path with caller-supplied fields.
+
+This is an operator tool for the reverse-engineering workflow. It intentionally
+does not discover, print, or persist CAS keys, operation codes, UUIDs, or
+timestamps. Supply those values through arguments or environment variables for
+one run, and the tool only reports response shapes.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+MPEG_PS_PACK_HEADER = b"\x00\x00\x01\xba"
+
+
+def _env(name: str) -> str | None:
+    value = os.environ.get(name)
+    return value if value else None
+
+
+def _required_secret(args: argparse.Namespace, attr: str, env_name: str) -> str:
+    value = getattr(args, attr) or _env(env_name)
+    if not value:
+        raise ValueError(f"missing {attr.replace('_', '-')} or {env_name}")
+    return value
+
+
+def _body_shape(body: bytes) -> dict[str, Any]:
+    from pyezvizapi import classify_ezviz_local_sdk_body
+
+    shape = classify_ezviz_local_sdk_body(body)
+    return asdict(shape)
+
+
+def _response_summary(exchange: Any) -> dict[str, Any]:
+    from pyezvizapi import parse_ezviz_local_sdk_xml_fields
+
+    fields = parse_ezviz_local_sdk_xml_fields(exchange.response)
+    safe_fields = {
+        key: value
+        for key, value in fields.items()
+        if key in {"Result", "Session", "StreamHeader"}
+    }
+    return {
+        "command": exchange.response.header.command,
+        "sequence": exchange.response.header.sequence,
+        "status": exchange.response.header.status,
+        "body": _body_shape(exchange.response.body),
+        "fields": safe_fields,
+    }
+
+
+def _media_summary(result: Any) -> dict[str, Any] | None:
+    if result.first_media is None:
+        return None
+    frame = result.first_media.frame
+    return {
+        "prefix_len": len(result.first_media.prefix),
+        "channel": frame.header.channel,
+        "payload_length": frame.header.payload_length,
+        "payload_head_hex": frame.payload[:16].hex(),
+        "contains_mpeg_ps_pack_header": MPEG_PS_PACK_HEADER in frame.payload[:64],
+    }
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="local-sdk-preview-probe")
+    parser.add_argument("--host", required=True, help="camera LAN address")
+    parser.add_argument("--serial", required=True, help="device serial")
+    parser.add_argument("--command-port", type=int, default=9010)
+    parser.add_argument("--stream-port", type=int, default=9020)
+    parser.add_argument("--channel", type=int, default=1)
+    parser.add_argument("--operation-code", help="or EZVIZ_LOCAL_OPERATION_CODE")
+    parser.add_argument("--cas-key", help="or EZVIZ_LOCAL_CAS_KEY")
+    parser.add_argument("--encrypt-type", type=int, default=1)
+    parser.add_argument("--uuid", help="or EZVIZ_LOCAL_UUID")
+    parser.add_argument("--timestamp", help="or EZVIZ_LOCAL_TIMESTAMP")
+    parser.add_argument("--identifier")
+    parser.add_argument("--nat-address", default="")
+    parser.add_argument("--nat-port", type=int, default=0)
+    parser.add_argument("--upnp-address", default="")
+    parser.add_argument("--upnp-port", type=int, default=0)
+    parser.add_argument("--inner-address", default="")
+    parser.add_argument("--inner-port", type=int, default=0)
+    parser.add_argument("--receiver-shape", choices=("app", "structured"), default="app")
+    parser.add_argument("--receiver-stream-type", default="MAIN")
+    parser.add_argument("--receiver-port", type=int, default=10101)
+    parser.add_argument("--receiver-server-type", type=int, default=1)
+    parser.add_argument("--receiver-new-stream-type", type=int, default=1)
+    parser.add_argument("--receiver-trans-proto", default="TCP")
+    parser.add_argument("--receiver-ex-port", type=int, default=10101)
+    parser.add_argument("--auth-biz-code", default="biz=1")
+    parser.add_argument("--auth-interval", type=int, default=180)
+    parser.add_argument("--is-encrypt", default="TRUE")
+    parser.add_argument("--udt", type=int)
+    parser.add_argument("--nat", type=int)
+    parser.add_argument("--port-guess-type", type=int)
+    parser.add_argument("--timeout", type=int)
+    parser.add_argument("--heartbeat-interval", type=int)
+    parser.add_argument("--preview-sequence", type=int, default=28)
+    parser.add_argument("--stream-sequence", type=int, default=29)
+    parser.add_argument("--stream-rate", default=1)
+    parser.add_argument("--stream-mode", default=-1)
+    parser.add_argument("--socket-timeout", type=float, default=5.0)
+    parser.add_argument("--read-first-media", action="store_true")
+    parser.add_argument("--max-prefix-bytes", type=int, default=4096)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
+    try:
+        from pyezvizapi import (
+            EzvizCasDeviceInfo,
+            EzvizLocalAuthenticationAttrs,
+            EzvizLocalPreviewRequest,
+            EzvizLocalReceiverInfo,
+            EzvizLocalReceiverInfoAttrs,
+            EzvizLocalReceiverInfoEx,
+            EzvizLocalReceiverInfoExAttrs,
+            EzvizLocalSdkClient,
+            HcNetSdkLanEndpoint,
+        )
+
+        operation_code = _required_secret(
+            args, "operation_code", "EZVIZ_LOCAL_OPERATION_CODE"
+        )
+        cas_key = _required_secret(args, "cas_key", "EZVIZ_LOCAL_CAS_KEY")
+        uuid = args.uuid or _env("EZVIZ_LOCAL_UUID")
+        timestamp = args.timestamp or _env("EZVIZ_LOCAL_TIMESTAMP")
+
+        endpoint = HcNetSdkLanEndpoint(
+            serial=args.serial,
+            host=args.host,
+            command_port=args.command_port,
+            stream_port=args.stream_port,
+        )
+        device_info = EzvizCasDeviceInfo(
+            serial=args.serial,
+            operation_code=operation_code,
+            key=cas_key,
+            encrypt_type=args.encrypt_type,
+        )
+        preview_request = EzvizLocalPreviewRequest(
+            operation_code=operation_code,
+            channel=args.channel,
+            receiver_info=(
+                EzvizLocalReceiverInfo(
+                    nat_address=args.nat_address,
+                    nat_port=args.nat_port,
+                    upnp_address=args.upnp_address,
+                    upnp_port=args.upnp_port,
+                    inner_address=args.inner_address,
+                    inner_port=args.inner_port,
+                    stream_type=args.receiver_stream_type,
+                )
+                if args.receiver_shape == "structured"
+                else EzvizLocalReceiverInfoAttrs(
+                    address=args.nat_address,
+                    port=args.receiver_port,
+                    server_type=args.receiver_server_type,
+                    stream_type=args.receiver_stream_type,
+                    new_stream_type=args.receiver_new_stream_type,
+                    trans_proto=args.receiver_trans_proto,
+                )
+            ),
+            receiver_info_ex=(
+                EzvizLocalReceiverInfoEx(uuid=uuid, timestamp=timestamp)
+                if args.receiver_shape == "structured"
+                else EzvizLocalReceiverInfoExAttrs(port=args.receiver_ex_port)
+            ),
+            authentication=(
+                None
+                if args.receiver_shape == "structured"
+                else EzvizLocalAuthenticationAttrs(
+                    biz_code=args.auth_biz_code,
+                    interval=args.auth_interval,
+                )
+            ),
+            is_encrypt=args.is_encrypt,
+            identifier=args.identifier,
+            uuid=uuid if args.receiver_shape == "app" else None,
+            timestamp=timestamp if args.receiver_shape == "app" else None,
+            udt=args.udt,
+            nat=args.nat,
+            port_guess_type=args.port_guess_type,
+            timeout=args.timeout,
+            heartbeat_interval=args.heartbeat_interval,
+        )
+
+        with EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            timeout=args.socket_timeout,
+            command_source_port=args.receiver_port,
+        ) as client:
+            result = client.bootstrap_preview_from_fields(
+                preview_request=preview_request,
+                preview_sequence=args.preview_sequence,
+                stream_setup_sequence=args.stream_sequence,
+                stream_rate=args.stream_rate,
+                stream_mode=args.stream_mode,
+                read_first_media=args.read_first_media,
+                max_prefix_bytes=args.max_prefix_bytes,
+            )
+
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "endpoint": {
+                        "serial": args.serial,
+                        "host": args.host,
+                        "command_port": args.command_port,
+                        "stream_port": args.stream_port,
+                    },
+                    "preview_response": _response_summary(result.preview),
+                    "stream_setup_response": _response_summary(result.stream_setup),
+                    "first_media": _media_summary(result),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    except Exception as err:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error_type": type(err).__name__,
+                    "error": str(err),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

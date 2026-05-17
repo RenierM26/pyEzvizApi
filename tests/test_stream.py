@@ -5,6 +5,7 @@ import importlib
 import json
 from typing import Any
 
+from Crypto.Cipher import AES
 import pytest
 import requests
 
@@ -16,7 +17,7 @@ from pyezvizapi.cloud_stream import (
     get_vtm_info,
     open_cloud_stream,
 )
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
+from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
 from pyezvizapi.stream import (
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
@@ -62,6 +63,19 @@ STREAM_KEY = b"key-1"
 STREAM_KEY_BYTES = b"stream-key"
 VTM_STREAM_URL = b"ysproto://vtm.example.test:8554/live"
 VTDU_TOKEN_BYTES = b"token-1"
+
+
+def _encrypt_hikvision_fixture_blocks(key: bytes, payload: bytes) -> bytes:
+    """Encrypt independent fixture blocks like the legacy media prefix transform."""
+
+    encrypted = bytearray()
+    for pos in range(0, len(payload), AES.block_size):
+        block = payload[pos : pos + AES.block_size]
+        if len(block) != AES.block_size:
+            raise ValueError("fixture payload must contain complete AES blocks")
+        cipher = AES.new(key, AES.MODE_CBC, iv=bytes(AES.block_size))
+        encrypted.extend(cipher.encrypt(block))
+    return bytes(encrypted)
 
 
 class FakeVtmSocket:
@@ -456,6 +470,31 @@ def test_decrypt_hikvision_ps_video_decrypts_h264_nal_headers() -> None:
     )
 
 
+def test_decrypt_hikvision_ps_video_decrypts_hevc_nal_headers() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_payload = b"\x00\x00\x00\x01\x40\x01hevc-header!!!"
+    encrypted_header_and_body = _encrypt_hikvision_fixture_blocks(
+        aes_key,
+        clear_payload[4:]
+    )
+    encrypted_payload = b"\x00\x00\x00\x01" + encrypted_header_and_body
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert (
+        decrypt_hikvision_ps_video(pes, key, nalu_header_size=0)
+        == b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
 def test_decrypt_hikvision_ps_video_ignores_h264_encrypted_header_lookalikes() -> None:
     key = "camera-key"
     clear_payload = b"\x00\x00\x00\x01" + b"0000000001899711"
@@ -574,6 +613,144 @@ def test_decrypt_hikvision_ps_video_preserves_h264_pes_start_continuation() -> N
     )
 
 
+def test_decrypt_hikvision_ps_video_starts_encrypted_header_across_pes_split() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_block = b"\x41\x9a\x00\x02local-frame!"
+    encrypted_block = _encrypt_hikvision_fixture_blocks(aes_key, clear_block)
+    encrypted_first_payload = b"\x00\x00\x00\x01" + encrypted_block[:8]
+    encrypted_second_payload = encrypted_block[8:]
+    first_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_first_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_first_payload
+    )
+    second_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_second_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_second_payload
+    )
+
+    assert decrypt_hikvision_ps_video(
+        first_pes + second_pes,
+        key,
+        nalu_header_size=0,
+    ) == (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_first_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + b"\x00\x00\x00\x01"
+        + clear_block[:8]
+        + b"\x00\x00\x01\xe0"
+        + (len(encrypted_second_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_block[8:]
+    )
+
+
+def test_decrypt_hikvision_ps_video_starts_later_encrypted_header_nal() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    first_clear = b"\x41\x9a\x00\x02" + (
+        b"a" * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH + 16)
+    )
+    second_clear = b"\x41\x9a\x00\x04later-frame!"
+    first_encrypted = (
+        _encrypt_hikvision_fixture_blocks(
+            aes_key,
+            first_clear[:HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH],
+        )
+        + first_clear[HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:]
+    )
+    second_encrypted = _encrypt_hikvision_fixture_blocks(aes_key, second_clear)
+    encrypted_payload = (
+        b"\x00\x00\x00\x01"
+        + first_encrypted
+        + b"\x00\x00\x00\x01"
+        + second_encrypted
+    )
+    clear_payload = (
+        b"\x00\x00\x00\x01"
+        + first_clear
+        + b"\x00\x00\x00\x01"
+        + second_clear
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert decrypt_hikvision_ps_video(
+        pes,
+        key,
+        nalu_header_size=0,
+    ) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_decrypt_hikvision_ps_video_scans_later_video_pes_after_gap() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_block = b"\x41\x9a\x00\x02local-frame!"
+    encrypted_block = _encrypt_hikvision_fixture_blocks(aes_key, clear_block)
+    payload = b"\x00\x00\x00\x01" + encrypted_block
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + payload
+    )
+    gap = b"\x00\x00\x01\xbd\x00\xffbroken-private-stream"
+
+    assert decrypt_hikvision_ps_video(
+        gap + pes,
+        key,
+        nalu_header_size=0,
+    ) == (
+        gap
+        + b"\x00\x00\x01\xe0"
+        + (len(payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + b"\x00\x00\x00\x01"
+        + clear_block
+    )
+
+
+def test_decrypt_hikvision_ps_video_encrypted_header_resets_at_non_video_pes() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    encrypted_block = _encrypt_hikvision_fixture_blocks(
+        aes_key,
+        b"\x41\x9a\x00\x02split-prefix",
+    )
+    first_payload = b"\x00\x00\x00\x01" + encrypted_block[:8]
+    second_payload = encrypted_block[8:]
+    first_video_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(first_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + first_payload
+    )
+    audio_pes = b"\x00\x00\x01\xc0\x00\x04keep"
+    second_video_pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(second_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + second_payload
+    )
+    clip = first_video_pes + audio_pes + second_video_pes
+
+    assert decrypt_hikvision_ps_video(clip, key, nalu_header_size=0) == clip
+
+
 def test_detect_hikvision_ps_video_nalu_header_size_identifies_hevc() -> None:
     key = "camera-key"
     clear_body = b"0123456789abcdef" * 2
@@ -654,6 +831,30 @@ def test_detect_hikvision_ps_video_nalu_header_size_identifies_h264_encrypted_he
     clear_payload = b"\x00\x00\x00\x01\x65fedcba987654321"
     encrypted_payload = (
         b"\x00\x00\x00\x01" + bytes.fromhex("8fe82ee6ed094aae8d04ab3315ecf2a4")
+    )
+    pes = (
+        b"\x00\x00\x01\xe0"
+        + (len(encrypted_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + encrypted_payload
+    )
+
+    assert detect_hikvision_ps_video_nalu_header_size(pes, key) == 0
+    assert decrypt_hikvision_ps_video(pes, key, nalu_header_size=None) == (
+        b"\x00\x00\x01\xe0"
+        + (len(clear_payload) + 3).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + clear_payload
+    )
+
+
+def test_detect_hikvision_ps_video_nalu_header_size_identifies_hevc_encrypted_header() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_payload = b"\x00\x00\x00\x01\x40\x01hevc-header!!!"
+    encrypted_payload = b"\x00\x00\x00\x01" + _encrypt_hikvision_fixture_blocks(
+        aes_key,
+        clear_payload[4:]
     )
     pes = (
         b"\x00\x00\x01\xe0"
@@ -1894,6 +2095,21 @@ def test_vtm_stream_client_rejects_closed_socket() -> None:
         stream.read_packet()
 
 
+def test_vtm_stream_timeout_raises_device_exception() -> None:
+    class TimeoutSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            raise TimeoutError
+
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda *_args: TimeoutSocket([]),
+    )
+    stream.connect()
+
+    with pytest.raises(DeviceException, match="offline or unreachable"):
+        stream.read_packet()
+
+
 def test_get_vtdu_token_v2_uses_auth_addr_and_session_sign(monkeypatch) -> None:
     client = _client()
     calls: list[dict[str, Any]] = []
@@ -2183,7 +2399,46 @@ def test_get_cloud_stream_info_rejects_missing_vtm_endpoint(monkeypatch) -> None
     )
 
     with pytest.raises(PyEzvizError, match="VTM endpoint"):
-        get_cloud_stream_info(client, "CAM123")
+        get_cloud_stream_info(client, "CAM123", refresh_vtm=False)
+
+
+def test_get_cloud_stream_info_refreshes_missing_pagelist_vtm(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video",
+                    "localIndex": "1",
+                    "streamBizUrl": "serial=CAM123&streamtag=tag-1",
+                }
+            ],
+            "VTM": {},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_info",
+        lambda _client, serial, channel: {
+            "externalIp": "1.2.3.4",
+            "port": 8554,
+            "serial": serial,
+            "channel": channel,
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    info = get_cloud_stream_info(client, "CAM123", refresh_vtm=True)
+    host, port, _path, params = parse_vtm_url(info["stream_url"])
+
+    assert host == "1.2.3.4"
+    assert port == 8554
+    assert params["streamtag"] == "tag-1"
 
 
 def test_get_cloud_stream_info_rejects_missing_vtm_port(monkeypatch) -> None:

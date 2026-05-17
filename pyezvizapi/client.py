@@ -157,6 +157,8 @@ class ClientToken(TypedDict):
     rf_session_id: NotRequired[str | None]
     username: NotRequired[str | None]
     api_url: str
+    feature_code: NotRequired[str]
+    hardware_code: NotRequired[str]
     service_urls: NotRequired[dict[str, Any]]
 
 
@@ -325,6 +327,7 @@ class EzvizClient:
                 "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
                 "username": str(json_result["loginUser"]["username"]),
                 "api_url": str(json_result["loginArea"]["apiDomain"]),
+                "feature_code": FEATURE_CODE,
             }
 
             self._token["service_urls"] = self.get_service_urls()
@@ -3167,6 +3170,7 @@ class EzvizClient:
                 self._token["rf_session_id"] = str(
                     json_result["sessionInfo"]["refreshSessionId"]
                 )
+                self._token["feature_code"] = FEATURE_CODE
 
                 if not self._token.get("service_urls"):
                     self._token["service_urls"] = self.get_service_urls()

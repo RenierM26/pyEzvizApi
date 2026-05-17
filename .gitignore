@@ -146,3 +146,12 @@ dmypy.json
 !/discovery/apk/work/.gitkeep
 /discovery/cloud-captures/
 /discovery/live-captures/
+/discovery/lan-captures/
+/discovery/live-clips/
+
+# Local SDK live-check scratch output
+/tmp/
+
+# Local reverse-engineering notes and resolver lock output
+/reviews/
+/uv.lock

@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 from Crypto.Cipher import AES
 
-from .exceptions import PyEzvizError
+from .exceptions import DeviceException, PyEzvizError
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
@@ -45,6 +45,17 @@ def _ezviz_md5_hex(data: bytes) -> str:
     """Return the EZVIZ protocol MD5 checksum for non-security integrity fields."""
 
     return hashlib.md5(data, usedforsecurity=False).hexdigest()
+
+
+def _hikvision_aes_ecb_cipher(key: bytes) -> Any:
+    """Return the AES-ECB cipher required by the legacy Hikvision media format.
+
+    EZVIZ/Hikvision local MPEG-PS payloads encrypt only fixed NAL prefixes with
+    AES-ECB and no IV. This is protocol compatibility code for camera media, not
+    a general-purpose cryptographic API.
+    """
+
+    return AES.new(key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
 
 
 class VtmChannel(IntEnum):
@@ -444,7 +455,12 @@ class VtmStreamClient:
         chunks: list[bytes] = []
         remaining = length
         while remaining:
-            chunk = sock.recv(remaining)
+            try:
+                chunk = sock.recv(remaining)
+            except TimeoutError as err:
+                raise DeviceException(
+                    "Device offline or unreachable: timed out waiting for VTM stream data"
+                ) from err
             if not chunk:
                 raise PyEzvizError("VTM socket closed while reading packet")
             chunks.append(chunk)
@@ -802,6 +818,26 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
     return ranges
 
 
+def _has_non_video_pes_packet(data: bytes, start: int, end: int) -> bool:
+    """Return True when a non-video PES packet appears in the byte range."""
+
+    i = start
+    while i < end - 3:
+        if data[i : i + 3] != MPEG_START_CODE_PREFIX:
+            i += 1
+            continue
+        stream_id = data[i + 3]
+        if _is_mpeg_ps_metadata_stream_id(stream_id):
+            i += 4
+            continue
+        if _is_mpeg_ps_packet_start_id(stream_id) and not _is_video_pes_stream_id(
+            stream_id
+        ):
+            return True
+        i += 4
+    return False
+
+
 @dataclass(frozen=True)
 class _MpegPsPacketRange:
     """Parsed MPEG-PS packet bounds."""
@@ -1124,7 +1160,12 @@ def detect_hikvision_ps_video_nalu_header_size(
 
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
-    scores = {"hevc": 0, "h264-clear-header": 0, "h264": 0}
+    scores = {
+        "hevc": 0,
+        "hevc-encrypted-header": 0,
+        "h264-clear-header": 0,
+        "h264": 0,
+    }
 
     for payload_start, payload_end in _video_pes_payload_ranges(data):
         for start_code_pos, start_code_len in _find_nal_start_codes(
@@ -1147,17 +1188,28 @@ def detect_hikvision_ps_video_nalu_header_size(
                     data[header_pos] & 0x1F,
                 )
             if header_pos + AES.block_size <= payload_end:
-                cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
+                cipher = _hikvision_aes_ecb_cipher(aes_key)
                 decrypted_header = cipher.decrypt(
                     bytes(data[header_pos : header_pos + AES.block_size]),
-                )[0]
-                if (decrypted_header & 0x80) == 0:
-                    nal_type = decrypted_header & 0x1F
+                )
+                first_byte = decrypted_header[0]
+                if _is_plausible_hevc_header_bytes(decrypted_header[:2]):
+                    scores["hevc-encrypted-header"] += _hevc_header_score(
+                        (decrypted_header[0] >> 1) & 0x3F,
+                    )
+                if (first_byte & 0x80) == 0:
+                    nal_type = first_byte & 0x1F
                     if 1 <= nal_type <= 23:
                         scores["h264"] += _h264_header_score(nal_type)
 
     if not any(scores.values()):
         return default
+    if (
+        scores["hevc-encrypted-header"] > scores["hevc"]
+        and scores["hevc-encrypted-header"] >= scores["h264"]
+        and scores["hevc-encrypted-header"] >= scores["h264-clear-header"]
+    ):
+        return 0
     if (
         scores["h264"] > scores["hevc"]
         and scores["h264"] > scores["h264-clear-header"]
@@ -1184,6 +1236,18 @@ def _find_hevc_nal_start_codes(
         if (nal_type := _hevc_nal_type(data, pos, length)) is not None
         and nal_type <= 40
     ]
+
+
+def _is_plausible_hevc_header_bytes(header: bytes) -> bool:
+    """Return True when two decrypted bytes look like a HEVC Annex B header."""
+
+    if len(header) < 2:
+        return False
+    forbidden_zero = header[0] & 0x80 == 0
+    layer_id = ((header[0] & 0x01) << 5) | (header[1] >> 3)
+    temporal_id_plus1 = header[1] & 0x07
+    nal_type = (header[0] >> 1) & 0x3F
+    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 40
 
 
 def _find_h264_nal_start_codes(
@@ -1224,97 +1288,212 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
 
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
-    output = bytearray(data)
-    pending_block_positions: list[int] = []
-    pending_block = bytearray()
-    active_nal = False
-    active_nal_decrypted = active_nal_body_start = 0
+    def find_encrypted_nal_start_codes(
+        data: bytes,
+        start: int,
+        end: int,
+    ) -> list[tuple[int, int]]:
+        starts: list[tuple[int, int]] = []
+        for start_code_pos, start_code_len in _find_nal_start_codes(data, start, end):
+            encrypted_header = start_code_pos + start_code_len
+            if encrypted_header + AES.block_size > end:
+                continue
+            cipher = _hikvision_aes_ecb_cipher(aes_key)
+            decrypted_header = cipher.decrypt(
+                bytes(data[encrypted_header : encrypted_header + AES.block_size])
+            )
+            first_byte = decrypted_header[0]
+            h264_nal_type = first_byte & 0x1F
+            if _is_plausible_hevc_header_bytes(decrypted_header[:2]) or (
+                (first_byte & 0x80) == 0 and 1 <= h264_nal_type <= 23
+            ):
+                starts.append((start_code_pos, start_code_len))
+        return starts
+
     find_nal_start_codes = (
-        _find_nal_start_codes
+        find_encrypted_nal_start_codes
         if nalu_header_size == 0
         else _find_h264_nal_start_codes
         if nalu_header_size == 1
         else _find_hevc_nal_start_codes
     )
 
-    def reset_nal_state() -> None:
-        nonlocal active_nal, active_nal_body_start, active_nal_decrypted
-        pending_block_positions.clear()
-        pending_block.clear()
+    if nalu_header_size != 0:
+        output = bytearray(data)
+        pending_block_positions: list[int] = []
+        pending_block = bytearray()
         active_nal = False
         active_nal_decrypted = active_nal_body_start = 0
 
-    def decrypt_nal_body_segment(start: int, end: int) -> None:
-        nonlocal active_nal_decrypted
-        if end <= start:
-            return
-        remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - active_nal_decrypted
-        if remaining <= 0:
-            return
-        decrypt_end = min(end, start + remaining)
-        for pos in range(start, decrypt_end):
-            pending_block_positions.append(pos)
-            pending_block.append(output[pos])
-            active_nal_decrypted += 1
-            if len(pending_block) != AES.block_size:
-                continue
-            cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
-            decrypted = cipher.decrypt(bytes(pending_block))
-            for block_pos, decrypted_byte in zip(
-                pending_block_positions,
-                decrypted,
-                strict=True,
-            ):
-                output[block_pos] = decrypted_byte
+        def reset_nal_state() -> None:
+            nonlocal active_nal, active_nal_body_start, active_nal_decrypted
             pending_block_positions.clear()
             pending_block.clear()
+            active_nal = False
+            active_nal_decrypted = active_nal_body_start = 0
 
-    def starts_plausible_encrypted_h264_nal(start: int, end: int) -> bool:
-        if end - start < AES.block_size:
-            return False
-        cipher = AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size))
-        decrypted_header = cipher.decrypt(bytes(output[start : start + AES.block_size]))[0]
-        nal_type = decrypted_header & 0x1F
-        return 1 <= nal_type <= 23
+        def decrypt_nal_body_segment(start: int, end: int) -> None:
+            nonlocal active_nal_decrypted
+            if end <= start:
+                return
+            remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - active_nal_decrypted
+            if remaining <= 0:
+                return
+            decrypt_end = min(end, start + remaining)
+            for pos in range(start, decrypt_end):
+                pending_block_positions.append(pos)
+                pending_block.append(output[pos])
+                active_nal_decrypted += 1
+                if len(pending_block) != AES.block_size:
+                    continue
+                cipher = _hikvision_aes_ecb_cipher(aes_key)
+                decrypted = cipher.decrypt(bytes(pending_block))
+                for block_pos, decrypted_byte in zip(
+                    pending_block_positions,
+                    decrypted,
+                    strict=True,
+                ):
+                    output[block_pos] = decrypted_byte
+                pending_block_positions.clear()
+                pending_block.clear()
 
-    def is_post_prefix_tail_lookalike(
-        start_code_pos: int,
-        start_code_len: int,
-    ) -> bool:
-        if nalu_header_size == 0:
-            return True
-        if nalu_header_size == 1:
-            nal_type = _h264_nal_type(data, start_code_pos, start_code_len)
-            return nal_type is None or not 1 <= nal_type <= 5
-        nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
-        return nal_type is None or nal_type >= 32
+        def is_post_prefix_tail_lookalike(
+            start_code_pos: int,
+            start_code_len: int,
+        ) -> bool:
+            if nalu_header_size == 1:
+                nal_type = _h264_nal_type(data, start_code_pos, start_code_len)
+                return nal_type is None or not 1 <= nal_type <= 5
+            nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
+            return nal_type is None or nal_type >= 32
 
-    for packet_range in _mpeg_ps_complete_packet_ranges(
-        data,
-        include_trailing_unbounded_video=True,
-    ):
-        if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
-            continue
-        if not _is_video_pes_stream_id(packet_range.stream_id):
-            reset_nal_state()
-            continue
+        for packet_range in _mpeg_ps_complete_packet_ranges(
+            data,
+            include_trailing_unbounded_video=True,
+        ):
+            if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
+                continue
+            if not _is_video_pes_stream_id(packet_range.stream_id):
+                reset_nal_state()
+                continue
 
-        payload_start = _pes_payload_start(data, packet_range.start)
-        if payload_start is None or payload_start >= packet_range.end:
-            continue
-        payload_end = packet_range.end
-        nal_starts = find_nal_start_codes(data, payload_start, payload_end)
-        segment_start = payload_start
-        if not nal_starts:
-            if active_nal:
-                decrypt_nal_body_segment(payload_start, payload_end)
-            continue
+            payload_start = _pes_payload_start(data, packet_range.start)
+            if payload_start is None or payload_start >= packet_range.end:
+                continue
+            payload_end = packet_range.end
+            nal_starts = find_nal_start_codes(data, payload_start, payload_end)
+            segment_start = payload_start
+            if not nal_starts:
+                if active_nal:
+                    decrypt_nal_body_segment(payload_start, payload_end)
+                continue
 
+            for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
+                decrypt_end = (
+                    nal_starts[idx + 1][0]
+                    if idx + 1 < len(nal_starts)
+                    else payload_end
+                )
+                if active_nal:
+                    candidate_decrypted = active_nal_decrypted + max(
+                        0,
+                        start_code_pos - segment_start,
+                    )
+                    if (
+                        candidate_decrypted
+                        < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                        and candidate_decrypted == 0
+                    ):
+                        continue
+                if (
+                    active_nal
+                    and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    and start_code_pos
+                    > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
+                ):
+                    continue
+                if active_nal and segment_start < start_code_pos:
+                    decrypt_nal_body_segment(segment_start, start_code_pos)
+                reset_nal_state()
+                active_nal = True
+                decrypt_start = start_code_pos + start_code_len + nalu_header_size
+                active_nal_body_start = decrypt_start
+                decrypt_nal_body_segment(decrypt_start, decrypt_end)
+                segment_start = decrypt_end
+            if active_nal and segment_start < payload_end:
+                decrypt_nal_body_segment(segment_start, payload_end)
+
+        return bytes(output)
+
+    def decrypt_video_payload_run(payload: bytes) -> bytes:  # noqa: PLR0915
+        payload_output = bytearray(payload)
+        pending_block_positions: list[int] = []
+        pending_block = bytearray()
+        active_nal = False
+        active_nal_decrypted = active_nal_body_start = 0
+
+        def reset_nal_state() -> None:
+            nonlocal active_nal, active_nal_body_start, active_nal_decrypted
+            pending_block_positions.clear()
+            pending_block.clear()
+            active_nal = False
+            active_nal_decrypted = active_nal_body_start = 0
+
+        def decrypt_nal_body_segment(start: int, end: int) -> None:
+            nonlocal active_nal_decrypted
+            if end <= start:
+                return
+            remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - active_nal_decrypted
+            if remaining <= 0:
+                return
+            decrypt_end = min(end, start + remaining)
+            for pos in range(start, decrypt_end):
+                pending_block_positions.append(pos)
+                pending_block.append(payload_output[pos])
+                active_nal_decrypted += 1
+                if len(pending_block) != AES.block_size:
+                    continue
+                cipher = _hikvision_aes_ecb_cipher(aes_key)
+                decrypted = cipher.decrypt(bytes(pending_block))
+                for block_pos, decrypted_byte in zip(
+                    pending_block_positions,
+                    decrypted,
+                    strict=True,
+                ):
+                    payload_output[block_pos] = decrypted_byte
+                pending_block_positions.clear()
+                pending_block.clear()
+
+        def starts_plausible_encrypted_nal(start: int, end: int) -> bool:
+            if end - start < AES.block_size:
+                return False
+            cipher = _hikvision_aes_ecb_cipher(aes_key)
+            decrypted_header = cipher.decrypt(
+                bytes(payload_output[start : start + AES.block_size])
+            )
+            h264_nal_type = decrypted_header[0] & 0x1F
+            return _is_plausible_hevc_header_bytes(decrypted_header[:2]) or (
+                1 <= h264_nal_type <= 23
+            )
+
+        def is_post_prefix_tail_lookalike(
+            start_code_pos: int,
+            start_code_len: int,
+        ) -> bool:
+            if nalu_header_size == 1:
+                nal_type = _h264_nal_type(payload, start_code_pos, start_code_len)
+                return nal_type is None or not 1 <= nal_type <= 5
+            nal_type = _hevc_nal_type(payload, start_code_pos, start_code_len)
+            return nal_type is None or nal_type >= 32
+
+        nal_starts = find_nal_start_codes(payload, 0, len(payload))
+        segment_start = 0
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
             decrypt_end = (
                 nal_starts[idx + 1][0]
                 if idx + 1 < len(nal_starts)
-                else payload_end
+                else len(payload)
             )
             if active_nal:
                 candidate_decrypted = active_nal_decrypted + max(
@@ -1324,7 +1503,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 if candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
                     if nalu_header_size == 0 and (
                         candidate_decrypted == 0
-                        or not starts_plausible_encrypted_h264_nal(
+                        or not starts_plausible_encrypted_nal(
                             start_code_pos + start_code_len,
                             decrypt_end,
                         )
@@ -1337,7 +1516,22 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and start_code_pos
                 > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
+                and (
+                    (
+                        nalu_header_size == 0
+                        and not starts_plausible_encrypted_nal(
+                            start_code_pos + start_code_len,
+                            decrypt_end,
+                        )
+                    )
+                    or (
+                        nalu_header_size != 0
+                        and is_post_prefix_tail_lookalike(
+                            start_code_pos,
+                            start_code_len,
+                        )
+                    )
+                )
             ):
                 continue
             if active_nal and segment_start < start_code_pos:
@@ -1348,8 +1542,41 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
             active_nal_body_start = decrypt_start
             decrypt_nal_body_segment(decrypt_start, decrypt_end)
             segment_start = decrypt_end
-        if active_nal and segment_start < payload_end:
-            decrypt_nal_body_segment(segment_start, payload_end)
+        if active_nal and segment_start < len(payload):
+            decrypt_nal_body_segment(segment_start, len(payload))
+
+        return bytes(payload_output)
+
+    output = bytearray(data)
+    video_payload_offsets: list[int] = []
+    video_payload = bytearray()
+
+    def flush_video_payload_run() -> None:
+        if not video_payload:
+            return
+        decrypted = decrypt_video_payload_run(bytes(video_payload))
+        for output_pos, decrypted_byte in zip(
+            video_payload_offsets,
+            decrypted,
+            strict=True,
+        ):
+            output[output_pos] = decrypted_byte
+        video_payload_offsets.clear()
+        video_payload.clear()
+
+    previous_video_end: int | None = None
+    for payload_start, payload_end in _video_pes_payload_ranges(data):
+        if previous_video_end is not None and _has_non_video_pes_packet(
+            data,
+            previous_video_end,
+            payload_start,
+        ):
+            flush_video_payload_run()
+        for output_pos in range(payload_start, payload_end):
+            video_payload_offsets.append(output_pos)
+            video_payload.append(data[output_pos])
+        previous_video_end = payload_end
+    flush_video_payload_run()
 
     return bytes(output)
 

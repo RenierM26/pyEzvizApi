@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Run a bounded direct-local SDK stream smoke check.
+
+This operator tool wraps pyezvizapi stream local-sdk-dump and then verifies
+the captured MPEG-TS with FFprobe plus one FFmpeg still extraction. It is meant
+for manual/live regression checks, not normal unit tests, because it needs a
+reachable camera and caller-owned local SDK credentials.
+
+The pass-through arguments after -- are forwarded to local-sdk-dump. Do not put
+secrets in logs; this tool deliberately reports only sanitized command status
+and media facts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="local-sdk-live-check")
+    parser.add_argument(
+        "--duration",
+        default="5s",
+        help="Capture duration passed to local-sdk-dump (default: 5s)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for the .ts, .jpg, metadata, and stderr artifacts",
+    )
+    parser.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable for local-sdk-dump remux and still extraction",
+    )
+    parser.add_argument(
+        "--ffprobe-path",
+        default="ffprobe",
+        help="FFprobe executable for stream inspection",
+    )
+    parser.add_argument(
+        "local_sdk_dump_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments for: pyezvizapi stream local-sdk-dump. Prefix with --.",
+    )
+    return parser.parse_args()
+
+
+def _passthrough_args(args: argparse.Namespace) -> list[str]:
+    values = list(args.local_sdk_dump_args)
+    if values and values[0] == "--":
+        values = values[1:]
+    if not values:
+        raise ValueError("pass local-sdk-dump arguments after --")
+    if _has_option(values, "--output") or _has_option(values, "--metadata-output"):
+        raise ValueError("do not pass --output or --metadata-output; this tool owns artifacts")
+    if _has_option(values, "--format"):
+        raise ValueError("do not pass --format; this tool captures MPEG-TS for validation")
+    if _has_option(values, "--duration"):
+        raise ValueError("use local-sdk-live-check --duration instead of pass-through --duration")
+    if _has_option(values, "--ffmpeg-path"):
+        raise ValueError("use local-sdk-live-check --ffmpeg-path instead of pass-through --ffmpeg-path")
+    return values
+
+
+def _has_option(values: list[str], option: str) -> bool:
+    return any(value == option or value.startswith(f"{option}=") for value in values)
+
+
+def _artifact_dir(value: str | None) -> Path:
+    if value:
+        path = Path(value)
+    else:
+        path = Path(tempfile.gettempdir()) / f"pyezvizapi-local-sdk-check-{int(time.time())}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _tail_text(data: bytes, *, max_chars: int = 4000) -> str:
+    text = data.decode("utf-8", errors="replace")
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _ffprobe(ffprobe_path: str, capture_path: Path) -> subprocess.CompletedProcess[bytes]:
+    return _run(
+        [
+            ffprobe_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            str(capture_path),
+        ],
+        cwd=REPO_ROOT,
+    )
+
+
+def _extract_still(
+    ffmpeg_path: str,
+    capture_path: Path,
+    still_path: Path,
+) -> subprocess.CompletedProcess[bytes]:
+    return _run(
+        [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(capture_path),
+            "-frames:v",
+            "1",
+            str(still_path),
+        ],
+        cwd=REPO_ROOT,
+    )
+
+
+def _stream_summary(ffprobe_stdout: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(ffprobe_stdout.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {"streams": []}
+    streams: list[dict[str, Any]] = []
+    for stream in payload.get("streams", []):
+        if not isinstance(stream, dict):
+            continue
+        streams.append(
+            {
+                "index": stream.get("index"),
+                "codec_type": stream.get("codec_type"),
+                "codec_name": stream.get("codec_name"),
+                "width": stream.get("width"),
+                "height": stream.get("height"),
+            }
+        )
+    return {"streams": streams}
+
+
+def main() -> int:
+    args = _parse_args()
+    try:
+        forwarded = _passthrough_args(args)
+        output_dir = _artifact_dir(args.output_dir)
+        capture_path = output_dir / "local-sdk-check.ts"
+        metadata_path = output_dir / "local-sdk-check.metadata.json"
+        still_path = output_dir / "local-sdk-check.jpg"
+
+        dump = _run(
+            [
+                sys.executable,
+                "-m",
+                "pyezvizapi",
+                "stream",
+                "local-sdk-dump",
+                *forwarded,
+                "--duration",
+                args.duration,
+                "--format",
+                "mpegts",
+                "--ffmpeg-path",
+                args.ffmpeg_path,
+                "--output",
+                str(capture_path),
+                "--metadata-output",
+                str(metadata_path),
+            ],
+            cwd=REPO_ROOT,
+        )
+        (output_dir / "local-sdk-dump.stderr.txt").write_bytes(dump.stderr)
+        if dump.returncode != 0:
+            result = {
+                "ok": False,
+                "stage": "local-sdk-dump",
+                "returncode": dump.returncode,
+                "output_dir": str(output_dir),
+                "stderr_tail": _tail_text(dump.stderr),
+            }
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 1
+
+        probe = _ffprobe(args.ffprobe_path, capture_path)
+        (output_dir / "ffprobe.stdout.json").write_bytes(probe.stdout)
+        (output_dir / "ffprobe.stderr.txt").write_bytes(probe.stderr)
+        if probe.returncode != 0:
+            result = {
+                "ok": False,
+                "stage": "ffprobe",
+                "returncode": probe.returncode,
+                "output_dir": str(output_dir),
+                "stderr_tail": _tail_text(probe.stderr),
+            }
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 1
+
+        still = _extract_still(args.ffmpeg_path, capture_path, still_path)
+        (output_dir / "ffmpeg-still.stderr.txt").write_bytes(still.stderr)
+        summary = {
+            "ok": still.returncode == 0 and still_path.exists() and still_path.stat().st_size > 0,
+            "stage": "complete" if still.returncode == 0 else "ffmpeg-still",
+            "output_dir": str(output_dir),
+            "capture": str(capture_path),
+            "metadata": str(metadata_path),
+            "still": str(still_path),
+            "capture_size": capture_path.stat().st_size,
+            "still_size": still_path.stat().st_size if still_path.exists() else 0,
+            "ffmpeg_still_returncode": still.returncode,
+            **_stream_summary(probe.stdout),
+        }
+        if still.returncode != 0:
+            summary["stderr_tail"] = _tail_text(still.stderr)
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0 if summary["ok"] else 1
+    except Exception as err:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": "argument-validation",
+                    "error_type": type(err).__name__,
+                    "error": str(err),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

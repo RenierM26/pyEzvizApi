@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+package="${1:-com.ezviz}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v frida >/dev/null 2>&1; then
+  echo "frida not found on PATH" >&2
+  exit 127
+fi
+
+target_args=()
+if [[ -n "${EZVIZ_FRIDA_HOST:-}" ]]; then
+  target_args=(-H "$EZVIZ_FRIDA_HOST")
+elif [[ -n "${EZVIZ_FRIDA_DEVICE:-}" ]]; then
+  target_args=(-D "$EZVIZ_FRIDA_DEVICE")
+else
+  target_args=(-U)
+fi
+
+attach_args=()
+if [[ -n "${EZVIZ_FRIDA_ATTACH_PID:-}" ]]; then
+  attach_args=(-p "$EZVIZ_FRIDA_ATTACH_PID")
+elif [[ -n "${EZVIZ_FRIDA_ATTACH_NAME:-}" ]]; then
+  attach_args=(-n "$EZVIZ_FRIDA_ATTACH_NAME")
+elif [[ "${EZVIZ_FRIDA_FRONTMOST:-}" == "1" ]]; then
+  attach_args=(-F)
+else
+  attach_args=(-f "$package")
+fi
+
+exec frida "${target_args[@]}" "${attach_args[@]}" -l "$script_dir/ezviz-hcnetsdk-command-shape-capture.js"

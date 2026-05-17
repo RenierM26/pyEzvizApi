@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
+from itertools import chain
 import subprocess
 from threading import Thread
 import time
@@ -26,7 +27,11 @@ from .hcnetsdk import (
     SocketFactory,
     iter_hcnetsdk_real_data_mpegps,
 )
-from .stream import decrypt_hikvision_ps_video, rtp_payload
+from .stream import (
+    MPEG_PS_START_CODE,
+    decrypt_hikvision_ps_video,
+    rtp_payload,
+)
 
 
 @dataclass(frozen=True)
@@ -543,12 +548,15 @@ def copy_local_stream_to_decrypted_mpegps(
         max_packets=max_packets,
         duration_seconds=duration_seconds,
     )
-    payload = collect_local_stream_mpegps(
+    packets = collect_local_stream_media_packets(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
         monotonic=monotonic,
     )
+    if _local_stream_packets_are_idmx(packets):
+        raise _unsupported_idmx_local_payload_error()
+    payload = b"".join(packets)
     output.write(
         decrypt_hikvision_ps_video(
             payload,
@@ -575,14 +583,16 @@ def copy_local_stream_to_decrypted_mpegts(
         max_packets=max_packets,
         duration_seconds=duration_seconds,
     )
-    payload = collect_local_stream_mpegps(
+    packets = collect_local_stream_media_packets(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
         monotonic=monotonic,
     )
+    if _local_stream_packets_are_idmx(packets):
+        raise _unsupported_idmx_local_payload_error()
     decrypted = decrypt_hikvision_ps_video(
-        payload,
+        b"".join(packets),
         media_key,
         nalu_header_size=nalu_header_size,
     )
@@ -610,15 +620,31 @@ def copy_local_stream_to_mpegts(
     duration_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Pipe local MPEG-PS payloads through FFmpeg and write MPEG-TS bytes."""
-    process = _open_local_mpegts_remux_process(ffmpeg_path)
-    _copy_local_stream_payloads_to_mpegts(
+    """Pipe local media payloads through FFmpeg and write MPEG-TS bytes."""
+    payloads = _iter_local_stream_payloads(
         stream,
-        output,
-        process=process,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
         monotonic=monotonic,
+    )
+    try:
+        first_payload = next(payloads)
+    except StopIteration:
+        output.flush()
+        return
+
+    if _looks_like_idmx_local_payload(first_payload):
+        raise _unsupported_idmx_local_payload_error()
+    if not first_payload.startswith(MPEG_PS_START_CODE):
+        raise PyEzvizError(
+            "Unsupported EZVIZ local stream payload format: expected MPEG-PS payload"
+        )
+
+    process = _open_local_mpegts_remux_process(ffmpeg_path)
+    _copy_mpegps_payloads_to_mpegts(
+        chain((first_payload,), payloads),
+        output,
+        process=process,
     )
 
 
@@ -704,63 +730,60 @@ def _open_local_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes
         raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
 
-def _copy_local_stream_payloads_to_mpegts(
+IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
+IDMX_LOCAL_FRAME_HEADER_SIZE = 13
+
+
+def collect_local_stream_media_packets(
     stream: Any,
-    output: BinaryIO,
     *,
-    process: subprocess.Popen[bytes],
+    max_packets: int | None = None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> list[bytes]:
+    """Collect bounded local media payloads while preserving RTP packet boundaries."""
+
+    return list(
+        _iter_local_stream_payloads(
+            stream,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+    )
+
+
+def _looks_like_idmx_local_payload(payload: bytes) -> bool:
+    return (
+        len(payload) >= IDMX_LOCAL_FRAME_HEADER_SIZE
+        and payload[0] == 0x0D
+        and payload[9:13] == IDMX_LOCAL_FRAME_SENTINEL
+    )
+
+
+def _local_stream_packets_are_idmx(packets: list[bytes]) -> bool:
+    return bool(packets) and _looks_like_idmx_local_payload(packets[0])
+
+
+def _unsupported_idmx_local_payload_error() -> PyEzvizError:
+    return PyEzvizError(
+        "Unsupported encrypted EZVIZ local IDMX stream payload: native PlayCtrl "
+        "frame transform is not implemented"
+    )
+
+
+def _iter_local_stream_payloads(
+    stream: Any,
+    *,
     max_packets: int | None,
     duration_seconds: float | None,
     monotonic: Callable[[], float],
-) -> None:
-    stdin = process.stdin
-    stdout = process.stdout
-    if stdin is None or stdout is None:
-        raise PyEzvizError("Could not open FFmpeg pipes")
-
-    writer_errors: list[Exception] = []
-
-    def _write_input() -> None:
-        try:
-            _write_local_stream_payloads(
-                stream,
-                cast(BinaryIO, stdin),
-                max_packets=max_packets,
-                duration_seconds=duration_seconds,
-                monotonic=monotonic,
-            )
-        except (BrokenPipeError, ConnectionResetError):
-            # FFmpeg may close stdin after producing enough output for the caller.
-            pass
-        except Exception as err:  # pragma: no cover - defensive thread handoff
-            writer_errors.append(err)
-        finally:
-            with suppress(OSError):
-                stdin.close()
-
-    writer = Thread(target=_write_input, daemon=True)
-    writer.start()
-    try:
-        while True:
-            chunk = stdout.read(65536)
-            if not chunk:
-                break
-            output.write(chunk)
-            output.flush()
-    finally:
-        if process.poll() is None:
-            process.terminate()
-        writer.join(timeout=2)
-        try:
-            return_code = process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait()
-
-    if writer_errors:
-        raise writer_errors[0]
-    if return_code not in (0, -15):
-        raise PyEzvizError(f"FFmpeg exited with status {return_code}")
+) -> Iterator[bytes]:
+    deadline = None if duration_seconds is None else monotonic() + duration_seconds
+    for packet in stream.iter_packets(max_packets=max_packets):
+        if deadline is not None and monotonic() >= deadline:
+            break
+        yield packet.body
 
 
 def _copy_mpegps_payloads_to_mpegts(

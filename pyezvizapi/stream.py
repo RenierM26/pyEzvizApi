@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 from Crypto.Cipher import AES
 
-from .exceptions import PyEzvizError
+from .exceptions import DeviceException, PyEzvizError
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
@@ -455,7 +455,12 @@ class VtmStreamClient:
         chunks: list[bytes] = []
         remaining = length
         while remaining:
-            chunk = sock.recv(remaining)
+            try:
+                chunk = sock.recv(remaining)
+            except TimeoutError as err:
+                raise DeviceException(
+                    "Device offline or unreachable: timed out waiting for VTM stream data"
+                ) from err
             if not chunk:
                 raise PyEzvizError("VTM socket closed while reading packet")
             chunks.append(chunk)

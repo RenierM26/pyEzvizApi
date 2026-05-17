@@ -661,6 +661,79 @@ def test_copy_local_stream_to_decrypted_mpegts_remuxes_decrypted_payload(
     assert output.getvalue() == LOCAL_DECRYPTED_TS_PAYLOAD
 
 
+def test_copy_local_stream_to_decrypted_mpegts_rejects_idmx_payload() -> None:
+    idmx_frame = (
+        b"\x0d\x90\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
+        b"\x00\x01\x00\x0c"
+        b"\x40\x0eencrypted-vps"
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame)]
+
+    output = io.BytesIO()
+
+    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+        copy_local_stream_to_decrypted_mpegts(
+            FakeStream(),
+            output,
+            "media-secret",
+            max_packets=1,
+        )
+
+
+def test_copy_local_stream_to_decrypted_mpegps_rejects_idmx_payload() -> None:
+    idmx_frame = (
+        b"\x0d\xb0\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
+        b"encrypted-playctrl-frame"
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame)]
+
+    output = io.BytesIO()
+
+    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+        copy_local_stream_to_decrypted_mpegps(
+            FakeStream(),
+            output,
+            "media-secret",
+            max_packets=1,
+        )
+
+    assert not output.getvalue()
+
+
+def test_copy_local_stream_to_decrypted_mpegts_rejects_idmx_before_ffmpeg(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "ffmpeg"
+    fake_ffmpeg.write_text("#!/bin/sh\nexit 42\n")
+    fake_ffmpeg.chmod(0o755)
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [
+                SimpleNamespace(
+                    body=b"\x0d\x90\x00\x00\x00\x00\x00\x00\x00\x55\x66\x77\x88"
+                )
+            ]
+
+    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+        copy_local_stream_to_decrypted_mpegts(
+            FakeStream(),
+            io.BytesIO(),
+            "media-secret",
+            ffmpeg_path=str(fake_ffmpeg),
+            max_packets=1,
+        )
+
+
 def test_copy_local_stream_to_decrypted_mpegts_requires_bounded_capture() -> None:
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -688,8 +761,8 @@ def test_copy_local_stream_to_mpegts_pipes_payloads(tmp_path) -> None:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
             assert max_packets == 2
             return [
-                SimpleNamespace(body=b"abc"),
-                SimpleNamespace(body=b"def"),
+                SimpleNamespace(body=b"\x00\x00\x01\xbaabc"),
+                SimpleNamespace(body=b"\x00\x00\x01\xbadef"),
             ]
 
     output = io.BytesIO()
@@ -701,7 +774,23 @@ def test_copy_local_stream_to_mpegts_pipes_payloads(tmp_path) -> None:
         max_packets=2,
     )
 
-    assert output.getvalue() == REMUXED_PAYLOAD
+    assert output.getvalue() == MPEG_PS_PAYLOAD
+
+
+def test_copy_local_stream_to_mpegts_rejects_idmx_payload_without_decrypt() -> None:
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [
+                SimpleNamespace(
+                    body=b"\x0d\x90\x00\x00\x00\x00\x00\x00\x00\x55\x66\x77\x88"
+                )
+            ]
+
+    output = io.BytesIO()
+
+    with pytest.raises(PyEzvizError, match="native PlayCtrl frame transform"):
+        copy_local_stream_to_mpegts(FakeStream(), output, max_packets=1)
 
 
 def test_copy_hcnetsdk_real_data_to_mpegts_filters_and_pipes_payloads(tmp_path) -> None:

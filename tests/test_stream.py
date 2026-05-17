@@ -17,7 +17,7 @@ from pyezvizapi.cloud_stream import (
     get_vtm_info,
     open_cloud_stream,
 )
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
+from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
 from pyezvizapi.stream import (
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
@@ -2065,6 +2065,21 @@ def test_vtm_stream_client_rejects_closed_socket() -> None:
     stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
 
     with pytest.raises(PyEzvizError, match="not connected"):
+        stream.read_packet()
+
+
+def test_vtm_stream_timeout_raises_device_exception() -> None:
+    class TimeoutSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            raise TimeoutError
+
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda *_args: TimeoutSocket([]),
+    )
+    stream.connect()
+
+    with pytest.raises(DeviceException, match="offline or unreachable"):
         stream.read_packet()
 
 

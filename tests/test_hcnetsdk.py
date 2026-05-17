@@ -5,7 +5,7 @@ import hashlib
 
 import pytest
 
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import DeviceException, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE,
     EZVIZ_HCNETUTIL_LOGIN_V40,
@@ -1046,6 +1046,15 @@ def test_read_ezviz_interleaved_rtp_frame_handles_fragmented_socket_reads() -> N
     assert frame.header.channel == 0
     assert frame.header.payload_length == 4
     assert frame.payload == payload
+
+
+def test_read_ezviz_interleaved_rtp_frame_timeout_raises_device_exception() -> None:
+    class TimeoutSocket:
+        def recv(self, length: int) -> bytes:
+            raise TimeoutError
+
+    with pytest.raises(DeviceException, match="offline or unreachable"):
+        read_ezviz_interleaved_rtp_frame(TimeoutSocket())
 
 
 def test_read_ezviz_interleaved_rtp_frame_after_prefix_keeps_local_preface() -> None:

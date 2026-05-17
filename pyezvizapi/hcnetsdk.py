@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 
 from Crypto.Cipher import AES
 
-from .exceptions import PyEzvizError
+from .exceptions import DeviceException, PyEzvizError
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
@@ -2953,7 +2953,12 @@ def _recv_exact(sock: Any, length: int) -> bytes:
     chunks: list[bytes] = []
     remaining = length
     while remaining:
-        chunk = sock.recv(remaining)
+        try:
+            chunk = sock.recv(remaining)
+        except TimeoutError as err:
+            raise DeviceException(
+                "Device offline or unreachable: timed out waiting for EZVIZ local SDK data"
+            ) from err
         if not chunk:
             raise PyEzvizError("Socket closed before expected EZVIZ frame bytes")
         chunks.append(chunk)

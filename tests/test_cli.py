@@ -240,6 +240,97 @@ def test_main_refreshes_saved_token_for_cas_service_metadata(
     assert json.loads(capsys.readouterr().out)["serial"] == "CAM123456"
 
 
+
+def test_main_refreshes_saved_session_for_cas_service_metadata_without_credentials(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    class KeyClient(_FakeClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.device_infos = {
+                "CAM123456": {
+                    "CONNECTION": {
+                        "localIp": "192.0.2.10",
+                        "localCmdPort": "9010",
+                        "localStreamPort": "9020",
+                    }
+                }
+            }
+
+        def login(self, sms_code: int | None = None) -> None:
+            super().login(sms_code)
+            self.exported_token = cast(
+                dict[str, Any],
+                {
+                    "session_id": "new-session",
+                    "rf_session_id": "new-refresh",
+                    "api_url": "apiieu.ezvizlife.com",
+                    "service_urls": {
+                        "sysConf": [None] * 15 + ["cas.example.test", 443]
+                    },
+                },
+            )
+
+    KeyClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", KeyClient)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "session_id": "saved-session",
+                "rf_session_id": "saved-refresh",
+                "api_url": "apiieu.ezvizlife.com",
+                "service_urls": {"pushAddr": "push.example.test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, Any]] = []
+
+    class FakeCas:
+        def __init__(self, token: dict[str, Any]) -> None:
+            calls.append({"token": token})
+
+        def cas_get_encryption(self, serial: str) -> dict[str, Any]:
+            calls.append({"cas_serial": serial})
+            return {
+                "Response": {
+                    "Session": {
+                        "@Key": "1234567890abcdef",
+                        "@OperationCode": "0123456",
+                        "@EncryptType": "2",
+                    }
+                }
+            }
+
+    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_file),
+                "stream",
+                "local-sdk-keys",
+                "--serial",
+                "CAM123456",
+                "--no-media-key",
+            ]
+        )
+        == 0
+    )
+
+    client = KeyClient.instances[0]
+    assert client.login_calls == [None]
+    assert calls[0]["token"]["service_urls"] == {
+        "sysConf": [None] * 15 + ["cas.example.test", 443]
+    }
+    assert calls[1] == {"cas_serial": "CAM123456"}
+    assert json.loads(capsys.readouterr().out)["serial"] == "CAM123456"
+
+
 def test_main_logs_in_with_credentials_and_saves_token(monkeypatch, tmp_path) -> None:
     fake_client = _install_fake_client(monkeypatch)
     token_file = tmp_path / "saved-token.json"

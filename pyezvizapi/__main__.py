@@ -1062,6 +1062,17 @@ def _token_has_service_urls(token: dict[str, Any] | None) -> bool:
     )
 
 
+def _token_has_refresh_session(token: dict[str, Any] | None) -> bool:
+    """Return True when a saved token can refresh itself without credentials."""
+
+    return bool(
+        token
+        and token.get("session_id")
+        and token.get("rf_session_id")
+        and token.get("api_url")
+    )
+
+
 def _action_requires_service_urls(args: argparse.Namespace) -> bool:
     """Return True when the selected CLI path needs CAS service metadata."""
 
@@ -1086,6 +1097,9 @@ def _login(
     ):
         return
 
+    if not (client.account and client.password) and not _token_has_refresh_session(token):
+        return
+
     if client.account and client.password:
         try:
             client.login()
@@ -1096,6 +1110,9 @@ def _login(
             except ValueError:
                 code_int = None
             client.login(sms_code=code_int)
+        return
+
+    client.login()
 
 
 def _write_json(obj: Any) -> None:

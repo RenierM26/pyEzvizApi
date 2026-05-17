@@ -162,6 +162,21 @@ class ClientToken(TypedDict):
     service_urls: NotRequired[dict[str, Any]]
 
 
+def _token_has_cas_service_urls(token: Mapping[str, Any]) -> bool:
+    """Return True when token service metadata includes the CAS sysConf endpoint."""
+
+    service_urls = token.get("service_urls")
+    if not isinstance(service_urls, Mapping):
+        return False
+    sys_conf = service_urls.get("sysConf")
+    return (
+        isinstance(sys_conf, (list, tuple))
+        and len(sys_conf) > 16
+        and bool(sys_conf[15])
+        and bool(sys_conf[16])
+    )
+
+
 class MetaDict(TypedDict, total=False):
     """Shape of the common 'meta' object used by the Ezviz API."""
 
@@ -3172,7 +3187,7 @@ class EzvizClient:
                 )
                 self._token["feature_code"] = FEATURE_CODE
 
-                if not self._token.get("service_urls"):
+                if not _token_has_cas_service_urls(self._token):
                     self._token["service_urls"] = self.get_service_urls()
 
                 return cast(dict[Any, Any], self._token)

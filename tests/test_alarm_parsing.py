@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import cast
+from typing import Any, cast
 
 from pyezvizapi.camera import DEFAULT_ALARM_IMAGE_URL, EzvizCamera
 from pyezvizapi.client import EzvizClient
@@ -93,7 +93,7 @@ def test_alarm_list_ignores_messages_for_other_devices() -> None:
     camera._client = cast(EzvizClient, FakeClient())
     camera._alarm_list()
 
-    status = camera.status(refresh=False)
+    status = cast(dict[str, Any], camera.status(refresh=False))
     assert status["Motion_Trigger"] is False
     assert status["Seconds_Last_Trigger"] is None
     assert status["last_alarm_pic"] == DEFAULT_ALARM_IMAGE_URL

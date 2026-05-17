@@ -86,13 +86,13 @@ By default the wrapper attaches to the USB Frida device (`frida -U`). For a
 network Frida server, pass the host:
 
 ```bash
-EZVIZ_FRIDA_HOST=192.168.1.56:27042 ./tools/apk-re/frida/run-ezviz-stream-hook
+EZVIZ_FRIDA_HOST=192.0.2.56:27042 ./tools/apk-re/frida/run-ezviz-stream-hook
 ```
 
 Check target readiness before capture:
 
 ```bash
-./tools/apk-re/frida/check-ezviz-frida-target 192.168.1.56
+./tools/apk-re/frida/check-ezviz-frida-target 192.0.2.56
 ```
 
 After reproducing live view in the EZVIZ app, pull the bounded binary samples:
@@ -122,7 +122,7 @@ Trigger a cloud-storage clip download through the gadget-loaded app:
   --serial BB5130008 --channel 1 --seq-id 9713217646 \
   --output discovery/cloud-captures/clip.ps \
   --encrypted-output discovery/cloud-captures/clip.tmp \
-  --adb-serial 192.168.1.56:41653 \
+  --adb-serial 192.0.2.56:41653 \
   --frida-host 127.0.0.1:27046
 ```
 
@@ -137,7 +137,7 @@ and `/v3/cameras/ticketInfo` ticket. Do not commit it. The script writes
 `<outputName>.tmp` under the EZVIZ app external files directory:
 
 ```bash
-adb -s 192.168.1.56:41653 push /tmp/ezviz-cloud-download-input.json \
+adb -s 192.0.2.56:41653 push /tmp/ezviz-cloud-download-input.json \
   /sdcard/Android/data/com.ezviz/files/ezviz-cloud-download-input.json
 frida -H 127.0.0.1:27046 -n Gadget \
   -l tools/apk-re/frida/ezviz-trigger-cloud-download.js

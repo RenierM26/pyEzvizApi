@@ -67,7 +67,7 @@ def test_camera_status_extracts_integration_facing_keys_without_refresh() -> Non
         device_obj=_camera_payload(),
     )
 
-    status = camera.status(refresh=False)
+    status = cast(dict[str, Any], camera.status(refresh=False))
 
     assert status["serial"] == "CAM123"
     assert status["name"] == "Front Door"
@@ -106,7 +106,7 @@ def test_camera_status_extracts_integration_facing_keys_without_refresh() -> Non
     assert status["battery_camera_work_mode"] == 1
     assert status["Alarm_AdvancedDetect"] == 4
     assert status["resouceid"] == "Video"
-    assert cast(dict[str, Any], status)["CUSTOM_TOP_LEVEL"] == {"kept": True}
+    assert status["CUSTOM_TOP_LEVEL"] == {"kept": True}
 
 
 def test_camera_status_uses_prefetched_alarm_without_network_refresh() -> None:
@@ -117,19 +117,22 @@ def test_camera_status_uses_prefetched_alarm_without_network_refresh() -> None:
     )
     now_ms = int((time.time() - 5) * 1000)
 
-    status = camera.status(
-        refresh=True,
-        latest_alarm={
-            "deviceSerial": "CAM123",
-            "time": now_ms,
-            "title": "Motion detected",
-            "ext": {
-                "alarmType": "10000",
-                "pics": "https://example.test/first.jpg;https://example.test/second.jpg",
-                "picChecksum": "checksum",
-                "picCrypt": "0",
+    status = cast(
+        dict[str, Any],
+        camera.status(
+            refresh=True,
+            latest_alarm={
+                "deviceSerial": "CAM123",
+                "time": now_ms,
+                "title": "Motion detected",
+                "ext": {
+                    "alarmType": "10000",
+                    "pics": "https://example.test/first.jpg;https://example.test/second.jpg",
+                    "picChecksum": "checksum",
+                    "picCrypt": "0",
+                },
             },
-        },
+        ),
     )
 
     assert status["Motion_Trigger"] is True
@@ -150,13 +153,13 @@ def test_camera_status_prefers_typed_record_core_fields_and_switches() -> None:
         device_obj=record,
     )
 
-    status = camera.status(refresh=False)
+    status = cast(dict[str, Any], camera.status(refresh=False))
 
     assert status["serial"] == "CAM456"
     assert status["name"] == "Back Yard"
     assert status["supportExt"] == {"SupportExt": "1"}
     assert status["switches"] == {7: True, 21: False}
-    assert cast(dict[str, Any], status)["CUSTOM_TOP_LEVEL"] == {"kept": True}
+    assert status["CUSTOM_TOP_LEVEL"] == {"kept": True}
 
 
 def test_camera_fetch_key_and_refresh_alarms_delegate(monkeypatch) -> None:

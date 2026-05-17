@@ -77,6 +77,7 @@ def test_login_refreshes_existing_token(monkeypatch) -> None:
     }
     assert token["session_id"] == "new-session"
     assert token["rf_session_id"] == "new-refresh"
+    assert token["feature_code"] == FEATURE_CODE
     assert token["service_urls"] == {"pushAddr": "push.example.test"}
     assert client._session.headers["sessionId"] == "new-session"
 
@@ -158,6 +159,7 @@ def test_login_with_credentials_posts_hashed_password_and_stores_token(monkeypat
         "rf_session_id": "refresh-id",
         "username": "internal-user",
         "api_url": "apiieu.ezvizlife.com",
+        "feature_code": FEATURE_CODE,
         "service_urls": {"pushAddr": "push.example.test"},
     }
 

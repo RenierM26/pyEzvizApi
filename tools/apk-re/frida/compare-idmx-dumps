@@ -3,25 +3,41 @@
 
 from __future__ import annotations
 
+import argparse
 from collections import defaultdict
 from pathlib import Path
-import argparse
+import re
 
-
+ANNEX_B_LONG_START_CODE = b"\x00\x00\x00\x01"
+ANNEX_B_SHORT_START_CODE = b"\x00\x00\x01"
 PAIR_LABELS = (
     ("idmx-aes-frame-before", "idmx-aes-frame-after"),
     ("idmx-aes-frame-com-before", "idmx-aes-frame-com-after"),
     ("idmx-process-encrypt-before", "idmx-process-encrypt-after"),
+    ("playctrl-idmx-aes-frame-before", "playctrl-idmx-aes-frame-after"),
+    ("playctrl-idmx-aes-frame-com-before", "playctrl-idmx-aes-frame-com-after"),
+    ("playctrl-idmx-process-encrypt-before", "playctrl-idmx-process-encrypt-after"),
 )
+DUMP_RE = re.compile(r"^(?P<ts>\d+)-(?P<seq>\d+)-(?P<label>.+)-(?P<size>\d+)\.bin$")
+
+
+def dump_key(path: Path) -> tuple[str, int] | None:
+    match = DUMP_RE.match(path.name)
+    if not match:
+        return None
+    return (match.group("ts"), int(match.group("seq")))
 
 
 def dump_label(path: Path) -> str | None:
     name = path.name
-    for before, after in PAIR_LABELS:
-        if before in name:
-            return before
-        if after in name:
-            return after
+    labels = sorted(
+        (label for pair in PAIR_LABELS for label in pair),
+        key=len,
+        reverse=True,
+    )
+    for label in labels:
+        if label in name:
+            return label
     return None
 
 
@@ -58,9 +74,9 @@ def nal_types(data: bytes) -> dict[int, int]:
     pos = 0
     while pos < len(data) - 5:
         sc_len = 0
-        if data[pos : pos + 4] == b"\x00\x00\x00\x01":
+        if data[pos : pos + 4] == ANNEX_B_LONG_START_CODE:
             sc_len = 4
-        elif data[pos : pos + 3] == b"\x00\x00\x01":
+        elif data[pos : pos + 3] == ANNEX_B_SHORT_START_CODE:
             sc_len = 3
         if sc_len:
             header = pos + sc_len
@@ -85,14 +101,26 @@ def main() -> int:
 
     found = False
     for before_label, after_label in PAIR_LABELS:
-        befores = files_by_label.get(before_label, [])
-        afters = files_by_label.get(after_label, [])
-        for idx, (before_path, after_path) in enumerate(zip(befores, afters, strict=False), start=1):
+        afters = {
+            (path.parent, dump_key(path)): path
+            for path in files_by_label.get(after_label, [])
+            if dump_key(path) is not None
+        }
+        pair_index = 0
+        for before_path in files_by_label.get(before_label, []):
+            before_key = dump_key(before_path)
+            if before_key is None:
+                continue
+            before_ts, before_seq = before_key
+            after_path = afters.get((before_path.parent, (before_ts, before_seq + 1)))
+            if after_path is None:
+                continue
+            pair_index += 1
             before = before_path.read_bytes()
             after = after_path.read_bytes()
             diff = first_diff(before, after)
             found = True
-            print(f"{before_label} pair {idx}")
+            print(f"{before_label} pair {pair_index}")
             print(f"  before: {before_path}")
             print(f"  after:  {after_path}")
             print(f"  sizes:  {len(before)} -> {len(after)}")

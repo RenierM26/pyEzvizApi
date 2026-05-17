@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
 import logging
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -23,11 +24,31 @@ from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
 from .camera import EzvizCamera
+from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
 from .cloud_stream import open_cloud_stream
 from .constants import BatteryCameraWorkMode, DefenseModeType, DeviceSwitchType
 from .exceptions import EzvizAuthVerificationCode, PyEzvizError
+from .hcnetsdk import (
+    EzvizCasDeviceInfo,
+    EzvizLocalAuthenticationAttrs,
+    EzvizLocalPreviewRequest,
+    EzvizLocalReceiverInfo,
+    EzvizLocalReceiverInfoAttrs,
+    EzvizLocalReceiverInfoEx,
+    EzvizLocalReceiverInfoExAttrs,
+    HcNetSdkLanEndpoint,
+    classify_ezviz_local_sdk_body,
+)
 from .light_bulb import EzvizLightBulb
+from .local_stream import (
+    copy_local_stream_to_decrypted_mpegps,
+    copy_local_stream_to_decrypted_mpegts,
+    copy_local_stream_to_mpegps,
+    copy_local_stream_to_mpegts,
+    get_local_sdk_stream_credentials_from_client,
+    open_local_sdk_stream,
+)
 from .stream import (
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
@@ -503,17 +524,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=(
             "auto",
             "hevc",
+            "hevc-encrypted-header",
             "h264",
             "h264-clear-header",
             "h264-encrypted-header",
+            "encrypted-header",
         ),
         default="auto",
         help=(
             "Video codec transform when decrypting streamUrl clips: auto detects the "
             "NAL header mode; hevc preserves "
             "the two-byte HEVC NAL header; h264/h264-clear-header preserve the "
-            "one-byte H.264 NAL header; h264-encrypted-header decrypts the H.264 "
-            "NAL header too (default: auto)"
+            "one-byte H.264 NAL header; encrypted-header/hevc-encrypted-header "
+            "decrypts the codec header too (default: auto)"
         ),
     )
     parser_cloud_video_download.add_argument(
@@ -562,16 +585,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=(
             "auto",
             "hevc",
+            "hevc-encrypted-header",
             "h264",
             "h264-clear-header",
             "h264-encrypted-header",
+            "encrypted-header",
         ),
         default="auto",
         help=(
             "Video codec transform during decryption: auto detects the NAL header "
             "mode; hevc preserves the two-byte "
             "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
-            "NAL header; h264-encrypted-header decrypts the H.264 NAL header too "
+            "NAL header; encrypted-header/hevc-encrypted-header decrypts the "
+            "codec header too "
             "(default: auto)"
         ),
     )
@@ -709,16 +735,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=(
             "auto",
             "hevc",
+            "hevc-encrypted-header",
             "h264",
             "h264-clear-header",
             "h264-encrypted-header",
+            "encrypted-header",
         ),
         default="auto",
         help=(
             "Video codec transform for --decrypt-video: auto detects the NAL header "
             "mode; hevc preserves the two-byte "
             "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
-            "NAL header; h264-encrypted-header decrypts the H.264 NAL header too "
+            "NAL header; encrypted-header/hevc-encrypted-header decrypts the "
+            "codec header too "
             "(default: auto)"
         ),
     )
@@ -795,16 +824,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=(
             "auto",
             "hevc",
+            "hevc-encrypted-header",
             "h264",
             "h264-clear-header",
             "h264-encrypted-header",
+            "encrypted-header",
         ),
         default="auto",
         help=(
             "Video codec transform for --decrypt-video: auto detects the NAL header "
             "mode; hevc preserves the two-byte "
             "HEVC NAL header; h264/h264-clear-header preserve the one-byte H.264 "
-            "NAL header; h264-encrypted-header decrypts the H.264 NAL header too "
+            "NAL header; encrypted-header/hevc-encrypted-header decrypts the "
+            "codec header too "
             "(default: auto)"
         ),
     )
@@ -814,12 +846,209 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Stop each HTTP stream after this many packets (default: unlimited)",
     )
+    parser_stream_local_dump = subparsers_stream.add_parser(
+        "local-sdk-dump",
+        help="Dump the direct-local 9010/9020 SDK stream with caller-supplied fields",
+    )
+    parser_stream_local_dump.add_argument("--host", help="camera LAN address")
+    parser_stream_local_dump.add_argument("--serial", help="device serial")
+    parser_stream_local_dump.add_argument(
+        "--credentials-file",
+        help=(
+            "JSON file produced by local-sdk-keys; supplies serial, endpoint, "
+            "CAS tuple, and optional media key"
+        ),
+    )
+    parser_stream_local_dump.add_argument("--command-port", type=int, default=9010)
+    parser_stream_local_dump.add_argument("--stream-port", type=int, default=9020)
+    parser_stream_local_dump.add_argument("--channel", type=int, default=1)
+    parser_stream_local_dump.add_argument(
+        "--operation-code",
+        help="CAS operation code, or EZVIZ_LOCAL_OPERATION_CODE",
+    )
+    parser_stream_local_dump.add_argument(
+        "--cas-key",
+        help="CAS local-control key, or EZVIZ_LOCAL_CAS_KEY",
+    )
+    parser_stream_local_dump.add_argument(
+        "--fetch-cas",
+        action="store_true",
+        help=(
+            "Fetch operation-code/cas-key from authenticated EZVIZ CAS instead "
+            "of requiring --operation-code/--cas-key"
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--cas-serial",
+        help=(
+            "Device serial to send to cloud CAS when --fetch-cas is used "
+            "(default: --serial)"
+        ),
+    )
+    parser_stream_local_dump.add_argument("--encrypt-type", type=int, default=1)
+    parser_stream_local_dump.add_argument("--uuid", help="or EZVIZ_LOCAL_UUID")
+    parser_stream_local_dump.add_argument("--timestamp", help="or EZVIZ_LOCAL_TIMESTAMP")
+    parser_stream_local_dump.add_argument("--identifier")
+    parser_stream_local_dump.add_argument("--nat-address", default="")
+    parser_stream_local_dump.add_argument("--nat-port", type=int, default=0)
+    parser_stream_local_dump.add_argument("--upnp-address", default="")
+    parser_stream_local_dump.add_argument("--upnp-port", type=int, default=0)
+    parser_stream_local_dump.add_argument("--inner-address", default="")
+    parser_stream_local_dump.add_argument("--inner-port", type=int, default=0)
+    parser_stream_local_dump.add_argument(
+        "--receiver-shape",
+        choices=("app", "structured"),
+        default="app",
+        help=(
+            "Preview ReceiverInfo XML shape: app attributes from live EZVIZ "
+            "traces, or nested structured fields (default: app)"
+        ),
+    )
+    parser_stream_local_dump.add_argument("--receiver-stream-type", default="MAIN")
+    parser_stream_local_dump.add_argument("--receiver-port", type=int, default=10101)
+    parser_stream_local_dump.add_argument("--receiver-server-type", type=int, default=1)
+    parser_stream_local_dump.add_argument("--receiver-new-stream-type", type=int, default=1)
+    parser_stream_local_dump.add_argument("--receiver-trans-proto", default="TCP")
+    parser_stream_local_dump.add_argument("--receiver-ex-port", type=int, default=10101)
+    parser_stream_local_dump.add_argument("--auth-biz-code", default="biz=1")
+    parser_stream_local_dump.add_argument("--auth-interval", type=int, default=180)
+    parser_stream_local_dump.add_argument(
+        "--is-encrypt",
+        default="TRUE",
+        help="Preview IsEncrypt value (default: TRUE, matching the app local path)",
+    )
+    parser_stream_local_dump.add_argument("--udt", type=int)
+    parser_stream_local_dump.add_argument("--nat", type=int)
+    parser_stream_local_dump.add_argument("--port-guess-type", type=int)
+    parser_stream_local_dump.add_argument("--setup-timeout", type=int)
+    parser_stream_local_dump.add_argument("--heartbeat-interval", type=int)
+    parser_stream_local_dump.add_argument(
+        "--pre-start-body-file",
+        help="Optional file containing caller-owned 0x2013 pre-start body bytes",
+    )
+    parser_stream_local_dump.add_argument("--pre-start-sequence", type=int, default=27)
+    parser_stream_local_dump.add_argument("--preview-sequence", type=int, default=28)
+    parser_stream_local_dump.add_argument("--stream-sequence", type=int, default=29)
+    parser_stream_local_dump.add_argument("--stream-rate", default=1)
+    parser_stream_local_dump.add_argument("--stream-mode", default=-1)
+    parser_stream_local_dump.add_argument(
+        "--duration",
+        type=_parse_duration_seconds,
+        default=60.0,
+        help="Stop after this capture duration (default: 1m, use 0 for unlimited)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Stop after this many local RTP packets (default: duration only)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--socket-timeout",
+        type=float,
+        default=10.0,
+        help="Socket timeout in seconds (default: 10)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--max-prefix-bytes",
+        type=int,
+        default=4096,
+        help="Maximum non-RTP preface bytes to tolerate before first media",
+    )
+    parser_stream_local_dump.add_argument(
+        "--output",
+        default="-",
+        help="Output file for stream bytes, or '-' for stdout (default: -)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--metadata-output",
+        help=(
+            "Optional JSON file for non-secret local-SDK response metadata "
+            "(commands, statuses, body shapes, and first-media shape)"
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--format",
+        choices=("mpegps", "mpegts"),
+        default="mpegts",
+        help="Output container: raw MPEG-PS payloads or remuxed MPEG-TS (default: mpegts)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_stream_local_dump.add_argument(
+        "--decrypt-video",
+        action="store_true",
+        help=(
+            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads before "
+            "writing/remuxing. The media key can come from --media-key, "
+            "--media-key-hex, EZVIZ_LOCAL_MEDIA_KEY, "
+            "EZVIZ_LOCAL_MEDIA_KEY_HEX, --credentials-file, or the "
+            "authenticated client."
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--decrypt-codec",
+        choices=(
+            "auto",
+            "hevc",
+            "hevc-encrypted-header",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+            "encrypted-header",
+        ),
+        default="auto",
+        help=(
+            "Video codec transform for --decrypt-video: auto detects the NAL header "
+            "mode; use hevc-encrypted-header/encrypted-header for the observed "
+            "local-SDK encrypted-header path "
+            "(default: auto)"
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--media-key",
+        help=(
+            "Camera media decrypt key, or EZVIZ_LOCAL_MEDIA_KEY. This is distinct "
+            "from --cas-key, which only protects the local-SDK control channel."
+        ),
+    )
+    parser_stream_local_dump.add_argument(
+        "--media-key-hex",
+        help=(
+            "Hex-encoded binary media decrypt key, or EZVIZ_LOCAL_MEDIA_KEY_HEX. "
+            "Use this when the native local media key is not printable text."
+        ),
+    )
+    parser_stream_local_keys = subparsers_stream.add_parser(
+        "local-sdk-keys",
+        help="Fetch direct-local LAN endpoint, CAS tuple and media decrypt key",
+    )
+    parser_stream_local_keys.add_argument("--serial", required=True, help="device serial")
+    parser_stream_local_keys.add_argument(
+        "--cas-serial",
+        help="Device serial to send to cloud CAS (default: --serial)",
+    )
+    parser_stream_local_keys.add_argument(
+        "--no-media-key",
+        action="store_true",
+        help="Only fetch the LAN endpoint and CAS tuple",
+    )
+    parser_stream_local_keys.add_argument(
+        "--sms-code",
+        help="Optional MFA/elevation code for camera media key retrieval",
+    )
 
     return parser.parse_args(argv)
 
 
-def _login(client: EzvizClient) -> None:
-    """Login if credentials are configured; skip when only a token is used."""
+def _login(client: EzvizClient, token: dict[str, Any] | None = None) -> None:
+    """Login only when no saved session token is available."""
+    if token and token.get("session_id"):
+        return
+
     if client.account and client.password:
         try:
             client.login()
@@ -1558,6 +1787,8 @@ def _codec_nalu_header_size(codec: str) -> int | None:
         return 2
     if codec in {"h264", "h264-clear-header"}:
         return 1
+    if codec in {"hevc-encrypted-header", "encrypted-header"}:
+        return 0
     return 0
 
 
@@ -1862,12 +2093,493 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
         server.server_close()
 
 
+def _env_or_arg(args: argparse.Namespace, attr: str, env_name: str) -> str | None:
+    """Return a CLI argument value or matching environment fallback."""
+
+    value = getattr(args, attr, None)
+    if value:
+        return cast(str, value)
+    env_value = os_environ_get(env_name)
+    return env_value if env_value else None
+
+
+def os_environ_get(name: str) -> str | None:
+    """Small wrapper to make environment fallback easy to patch in tests."""
+    return os.environ.get(name)
+
+
+def _required_local_sdk_secret(
+    args: argparse.Namespace,
+    attr: str,
+    env_name: str,
+) -> str:
+    """Read a required local-SDK secret without logging or persisting it."""
+
+    value = _env_or_arg(args, attr, env_name)
+    if not value:
+        raise PyEzvizError(f"Missing --{attr.replace('_', '-')} or {env_name}")
+    return value
+
+
+def _local_sdk_credentials_file(args: argparse.Namespace) -> dict[str, Any]:
+    """Read a local-SDK credential bundle without logging secret values."""
+
+    cached = getattr(args, "_local_sdk_credentials_file_data", None)
+    if isinstance(cached, dict):
+        return cached
+    path = getattr(args, "credentials_file", None)
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as err:
+        raise PyEzvizError(f"Could not read --credentials-file: {err}") from err
+    except json.JSONDecodeError as err:
+        raise PyEzvizError(f"Invalid --credentials-file JSON: {err}") from err
+    if not isinstance(data, dict):
+        raise PyEzvizError("--credentials-file must contain a JSON object")
+    vars(args)["_local_sdk_credentials_file_data"] = data
+    return data
+
+
+def _local_sdk_credentials_value(
+    args: argparse.Namespace,
+    path: tuple[str, ...],
+) -> Any:
+    """Return a value from the optional local-SDK credential bundle."""
+
+    current: Any = _local_sdk_credentials_file(args)
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _local_sdk_arg_or_credentials(
+    args: argparse.Namespace,
+    attr: str,
+    path: tuple[str, ...],
+) -> Any:
+    """Return an explicit CLI value or matching credential-bundle value."""
+
+    value = getattr(args, attr, None)
+    if value not in (None, ""):
+        return value
+    return _local_sdk_credentials_value(args, path)
+
+
+def _required_local_sdk_arg_or_credentials(
+    args: argparse.Namespace,
+    attr: str,
+    path: tuple[str, ...],
+) -> Any:
+    """Return a required direct-local field from args or credentials file."""
+
+    value = _local_sdk_arg_or_credentials(args, attr, path)
+    if value in (None, ""):
+        option = attr.replace("_", "-")
+        raise PyEzvizError(
+            f"Missing --{option}; provide it explicitly or via --credentials-file"
+        )
+    return value
+
+
+def _local_sdk_media_key(
+    args: argparse.Namespace,
+    client: EzvizClient | None,
+) -> str | bytes:
+    """Read the direct-local media decrypt key without logging or persisting it."""
+
+    key_hex = _env_or_arg(args, "media_key_hex", "EZVIZ_LOCAL_MEDIA_KEY_HEX")
+    if key_hex:
+        try:
+            return bytes.fromhex(key_hex)
+        except ValueError as err:
+            raise PyEzvizError("Invalid --media-key-hex/EZVIZ_LOCAL_MEDIA_KEY_HEX") from err
+
+    key = _env_or_arg(args, "media_key", "EZVIZ_LOCAL_MEDIA_KEY")
+    if key:
+        return key
+    credential_key_hex = _local_sdk_credentials_value(args, ("media_key_hex",))
+    if credential_key_hex:
+        try:
+            return bytes.fromhex(str(credential_key_hex))
+        except ValueError as err:
+            raise PyEzvizError("Invalid media_key_hex in --credentials-file") from err
+    credential_key = _local_sdk_credentials_value(args, ("media_key",))
+    if credential_key:
+        return str(credential_key)
+    if client is not None:
+        serial = str(
+            _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
+        )
+        cloud_key = client.get_cam_key(serial, max_retries=1)
+        if cloud_key:
+            return str(cloud_key)
+    raise PyEzvizError(
+        "Missing media key for --decrypt-video; provide --media-key, "
+        "--media-key-hex, EZVIZ_LOCAL_MEDIA_KEY, EZVIZ_LOCAL_MEDIA_KEY_HEX, "
+        "credentials-file media_key/media_key_hex, or authenticated client access"
+    )
+
+
+def _read_optional_binary_file(path: str | None) -> bytes | None:
+    """Read an optional caller-owned binary body from disk."""
+
+    if not path:
+        return None
+    return Path(path).read_bytes()
+
+
+def _local_sdk_cas_device_info(
+    args: argparse.Namespace,
+    client: EzvizClient | None,
+) -> EzvizCasDeviceInfo:
+    """Build local CAS device info from explicit fields or cloud CAS."""
+
+    if args.fetch_cas:
+        if client is None:
+            raise PyEzvizError("--fetch-cas requires --token-file or credentials")
+        session = CasDeviceSession.from_response(
+            EzvizCAS(client.export_token()).cas_get_encryption(args.cas_serial or args.serial)
+        )
+        return EzvizCasDeviceInfo(
+            serial=args.serial,
+            operation_code=session.operation_code,
+            key=session.key,
+            encrypt_type=session.encrypt_type,
+        )
+
+    operation_code = _env_or_arg(
+        args,
+        "operation_code",
+        "EZVIZ_LOCAL_OPERATION_CODE",
+    ) or _local_sdk_credentials_value(args, ("cas", "operation_code"))
+    if not operation_code:
+        raise PyEzvizError(
+            "Missing --operation-code or EZVIZ_LOCAL_OPERATION_CODE; "
+            "provide it explicitly or via --credentials-file"
+        )
+    cas_key = _env_or_arg(args, "cas_key", "EZVIZ_LOCAL_CAS_KEY") or (
+        _local_sdk_credentials_value(args, ("cas", "key"))
+    )
+    if not cas_key:
+        raise PyEzvizError(
+            "Missing --cas-key or EZVIZ_LOCAL_CAS_KEY; "
+            "provide it explicitly or via --credentials-file"
+        )
+    serial = str(
+        _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
+    )
+    encrypt_type = _local_sdk_arg_or_credentials(
+        args,
+        "encrypt_type",
+        ("cas", "encrypt_type"),
+    )
+    return EzvizCasDeviceInfo(
+        serial=serial,
+        operation_code=str(operation_code),
+        key=str(cas_key),
+        encrypt_type=int(encrypt_type),
+    )
+
+
+def _build_local_sdk_cli_stream(
+    args: argparse.Namespace,
+    client: EzvizClient | None = None,
+) -> Any:
+    """Build the direct-local SDK stream from explicit CLI/environment fields."""
+
+    device_info = _local_sdk_cas_device_info(args, client)
+    host = str(_required_local_sdk_arg_or_credentials(args, "host", ("endpoint", "host")))
+    endpoint = HcNetSdkLanEndpoint(
+        serial=device_info.serial,
+        host=host,
+        command_port=int(
+            _local_sdk_arg_or_credentials(
+                args,
+                "command_port",
+                ("endpoint", "command_port"),
+            )
+        ),
+        stream_port=int(
+            _local_sdk_arg_or_credentials(
+                args,
+                "stream_port",
+                ("endpoint", "stream_port"),
+            )
+        ),
+    )
+    preview_request = EzvizLocalPreviewRequest(
+        operation_code=device_info.operation_code,
+        channel=args.channel,
+        receiver_info=_local_sdk_receiver_info_from_args(args),
+        receiver_info_ex=_local_sdk_receiver_info_ex_from_args(args),
+        authentication=_local_sdk_authentication_from_args(args),
+        is_encrypt=args.is_encrypt,
+        identifier=args.identifier,
+        uuid=(
+            _env_or_arg(args, "uuid", "EZVIZ_LOCAL_UUID")
+            if args.receiver_shape == "app"
+            else None
+        ),
+        timestamp=(
+            _env_or_arg(args, "timestamp", "EZVIZ_LOCAL_TIMESTAMP")
+            if args.receiver_shape == "app"
+            else None
+        ),
+        udt=args.udt,
+        nat=args.nat,
+        port_guess_type=args.port_guess_type,
+        timeout=args.setup_timeout,
+        heartbeat_interval=args.heartbeat_interval,
+    )
+    return open_local_sdk_stream(
+        endpoint,
+        device_info,
+        preview_request,
+        timeout=args.socket_timeout,
+        pre_start_body=_read_optional_binary_file(args.pre_start_body_file),
+        pre_start_sequence=args.pre_start_sequence,
+        preview_sequence=args.preview_sequence,
+        stream_setup_sequence=args.stream_sequence,
+        stream_rate=args.stream_rate,
+        stream_mode=args.stream_mode,
+        max_prefix_bytes=args.max_prefix_bytes,
+        command_source_port=(
+            args.receiver_port if args.receiver_shape == "app" else None
+        ),
+    )
+
+
+def _local_sdk_receiver_info_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalReceiverInfo | EzvizLocalReceiverInfoAttrs:
+    """Build the requested ReceiverInfo XML shape for local-SDK preview."""
+
+    if args.receiver_shape == "structured":
+        return EzvizLocalReceiverInfo(
+            nat_address=args.nat_address,
+            nat_port=args.nat_port,
+            upnp_address=args.upnp_address,
+            upnp_port=args.upnp_port,
+            inner_address=args.inner_address,
+            inner_port=args.inner_port,
+            stream_type=args.receiver_stream_type,
+        )
+    return EzvizLocalReceiverInfoAttrs(
+        address=args.nat_address,
+        port=args.receiver_port,
+        server_type=args.receiver_server_type,
+        stream_type=args.receiver_stream_type,
+        new_stream_type=args.receiver_new_stream_type,
+        trans_proto=args.receiver_trans_proto,
+    )
+
+
+def _local_sdk_receiver_info_ex_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalReceiverInfoEx | EzvizLocalReceiverInfoExAttrs:
+    """Build the requested ReceiverInfoEx XML shape for local-SDK preview."""
+
+    if args.receiver_shape == "structured":
+        return EzvizLocalReceiverInfoEx(
+            uuid=_env_or_arg(args, "uuid", "EZVIZ_LOCAL_UUID"),
+            timestamp=_env_or_arg(args, "timestamp", "EZVIZ_LOCAL_TIMESTAMP"),
+        )
+    return EzvizLocalReceiverInfoExAttrs(port=args.receiver_ex_port)
+
+
+def _local_sdk_authentication_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalAuthenticationAttrs | None:
+    """Return app-shaped Authentication only when that XML shape is requested."""
+
+    if args.receiver_shape == "structured":
+        return None
+    return EzvizLocalAuthenticationAttrs(
+        biz_code=args.auth_biz_code,
+        interval=args.auth_interval,
+    )
+
+
+def _handle_local_sdk_stream_dump(
+    args: argparse.Namespace,
+    client: EzvizClient | None = None,
+) -> int:
+    """Dump direct-local SDK media with caller-supplied local fields."""
+
+    with _build_local_sdk_cli_stream(args, client) as stream:
+        if args.output == "-":
+            if args.decrypt_video and args.format == "mpegps":
+                copy_local_stream_to_decrypted_mpegps(
+                    stream,
+                    sys.stdout.buffer,
+                    _local_sdk_media_key(args, client),
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.decrypt_video:
+                copy_local_stream_to_decrypted_mpegts(
+                    stream,
+                    sys.stdout.buffer,
+                    _local_sdk_media_key(args, client),
+                    ffmpeg_path=args.ffmpeg_path,
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.format == "mpegps":
+                copy_local_stream_to_mpegps(
+                    stream,
+                    sys.stdout.buffer,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            else:
+                copy_local_stream_to_mpegts(
+                    stream,
+                    sys.stdout.buffer,
+                    ffmpeg_path=args.ffmpeg_path,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            _write_local_sdk_metadata_output(args.metadata_output, stream)
+            return 0
+
+        with Path(args.output).open("wb") as output:
+            if args.decrypt_video and args.format == "mpegps":
+                copy_local_stream_to_decrypted_mpegps(
+                    stream,
+                    output,
+                    _local_sdk_media_key(args, client),
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.decrypt_video:
+                copy_local_stream_to_decrypted_mpegts(
+                    stream,
+                    output,
+                    _local_sdk_media_key(args, client),
+                    ffmpeg_path=args.ffmpeg_path,
+                    nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            elif args.format == "mpegps":
+                copy_local_stream_to_mpegps(
+                    stream,
+                    output,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            else:
+                copy_local_stream_to_mpegts(
+                    stream,
+                    output,
+                    ffmpeg_path=args.ffmpeg_path,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+        _write_local_sdk_metadata_output(args.metadata_output, stream)
+    return 0
+
+
+def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Fetch and print direct-local SDK credentials for explicit setup flows."""
+
+    credentials = get_local_sdk_stream_credentials_from_client(
+        client,
+        args.serial,
+        cas_serial=args.cas_serial,
+        fetch_media_key=not args.no_media_key,
+        smscode=args.sms_code,
+    )
+    _write_json(credentials.as_dict(include_media_key=not args.no_media_key))
+    return 0
+
+
+def _write_local_sdk_metadata_output(path: str | None, stream: Any) -> None:
+    """Write a safe JSON summary for a completed direct-local SDK stream."""
+
+    if not path:
+        return
+    metadata = _local_sdk_stream_metadata(stream)
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _local_sdk_stream_metadata(stream: Any) -> dict[str, Any]:
+    """Return non-secret direct-local SDK bootstrap and media metadata."""
+
+    bootstrap = getattr(stream, "bootstrap", None)
+    metadata: dict[str, Any] = {
+        "bootstrap_complete": bootstrap is not None,
+    }
+    sdk_client = getattr(stream, "sdk_client", None)
+    endpoint = getattr(sdk_client, "endpoint", None)
+    if endpoint is not None:
+        metadata["endpoint"] = {
+            "serial": getattr(endpoint, "serial", None),
+            "host": getattr(endpoint, "host", None),
+            "command_port": getattr(endpoint, "command_port", None),
+            "stream_port": getattr(endpoint, "stream_port", None),
+        }
+    if bootstrap is None:
+        return metadata
+
+    exchanges: dict[str, Any] = {}
+    for name in ("pre_start", "preview", "stream_setup"):
+        exchange = getattr(bootstrap, name, None)
+        if exchange is None:
+            continue
+        response = getattr(exchange, "response", None)
+        header = getattr(response, "header", None)
+        body = getattr(response, "body", b"")
+        body_shape = classify_ezviz_local_sdk_body(body)
+        exchanges[name] = {
+            "response_command": getattr(header, "command", None),
+            "response_sequence": getattr(header, "sequence", None),
+            "response_status": getattr(header, "status", None),
+            "response_body_length": getattr(header, "body_length", None),
+            "response_body_kind": body_shape.kind,
+            "response_xml_tags": list(body_shape.xml_tags),
+        }
+    metadata["exchanges"] = exchanges
+
+    first_media = getattr(bootstrap, "first_media", None)
+    if first_media is not None:
+        frame = first_media.frame
+        metadata["first_media"] = {
+            "prefix_length": len(first_media.prefix),
+            "channel": frame.header.channel,
+            "payload_length": frame.header.payload_length,
+        }
+    return metadata
+
+
 def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
     """Handle experimental stream helpers."""
 
-    if args.stream_action not in {"trace", "dump", "proxy"}:
+    if args.stream_action not in {
+        "trace",
+        "dump",
+        "proxy",
+        "local-sdk-dump",
+        "local-sdk-keys",
+    }:
         _LOGGER.error("Action not implemented, try running with -h switch for help")
         return 2
+
+    if args.stream_action == "local-sdk-keys":
+        return _handle_local_sdk_keys(args, client)
+
+    if args.stream_action == "local-sdk-dump":
+        return _handle_local_sdk_stream_dump(args, client)
 
     if args.stream_action == "proxy":
         _serve_stream_proxy(args, client)
@@ -2087,20 +2799,31 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging(args.debug)
 
     token = _load_token_file(args.token_file)
+    has_session_token = bool(token and token.get("session_id"))
     if args.action == "cloud_video_decrypt" and args.key and not args.serial and not token:
         try:
             return _handle_cloud_video_decrypt(args, None)
         except PyEzvizError as exp:
             _LOGGER.error("%s", exp)
             return 1
+    if (
+        args.action == "stream"
+        and args.stream_action == "local-sdk-dump"
+        and not args.fetch_cas
+    ):
+        try:
+            return _handle_local_sdk_stream_dump(args)
+        except PyEzvizError as exp:
+            _LOGGER.error("%s", exp)
+            return 1
 
-    if not token and (not args.username or not args.password):
+    if not has_session_token and (not args.username or not args.password):
         _LOGGER.error("Provide --token-file (existing) or --username/--password")
         return 2
 
     client = EzvizClient(args.username, args.password, args.region, token=token)
     try:
-        _login(client)
+        _login(client, token)
 
         if args.action == "devices":
             return _handle_devices(args, client)

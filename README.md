@@ -56,6 +56,9 @@ pyezvizapi devices status --json
 - Username/password: `-u/--username` and `-p/--password`
 - Token file: `--token-file` (defaults to `ezviz_token.json` in the current directory)
 - Save token: `--save-token` writes the current token after login
+- Saved token precedence: if `--token-file` contains a session token, the CLI reuses
+  it even when username/password are also supplied. This preserves MFA/elevated
+  session state; a fresh credential login may require MFA again.
 - MFA: The CLI prompts for a code if required by your account
 - Region: `-r/--region` overrides the default region (`apiieu.ezvizlife.com`)
 
@@ -129,6 +132,117 @@ pyezvizapi stream proxy --serial ABC123 --channel 1 --decrypt-video --listen-por
 ```
 
 The dump command captures one minute by default. Use `--duration 30s`, `--duration 2min`, or `--duration 0` for unlimited capture; `--max-packets` can still be used as an additional stop limit. MPEG-TS output requires FFmpeg and remuxes the camera payload with codec copy only; it does not transcode video or audio. The proxy serves `http://<host>:8558/<serial>.ts` by default. Each HTTP client opens a fresh VTM stream and remuxes it through FFmpeg. Keep the proxy bound to loopback unless you put it behind an authenticated reverse proxy or otherwise restrict access; the stream URL is not authenticated by `pyezvizapi`.
+
+Direct-local SDK streaming is also available for devices that expose the local
+`9010/9020` SDK setup. Authenticated clients can fetch the LAN endpoint, CAS
+local-control tuple, and camera media decrypt key explicitly:
+
+```bash
+pyezvizapi --token-file ezviz_token.json stream local-sdk-keys \
+  --serial ABC123456
+```
+
+That command intentionally prints secrets for setup/debug use. For normal
+streaming, prefer fetching CAS directly with `--fetch-cas` and let
+`--decrypt-video` retrieve the media key from the authenticated client. You can
+also save that JSON to a protected file and pass it back with
+`--credentials-file`, supply values for one run, or use
+`EZVIZ_LOCAL_OPERATION_CODE` and `EZVIZ_LOCAL_CAS_KEY`:
+
+The Python implementation matches the normal app live-view wire shape: local
+SDK frames are `32-byte header + AES-CBC/PKCS#5 body + 32-byte ASCII MD5
+ciphertext trailer`, then the `9020` stream port emits `$` interleaved RTP carrying
+MPEG-PS payloads.
+
+```bash
+pyezvizapi stream local-sdk-dump \
+  --credentials-file local-sdk-credentials.json \
+  --decrypt-video --decrypt-codec encrypted-header \
+  --format mpegts --output local.ts \
+  --metadata-output local.metadata.json
+```
+
+```bash
+pyezvizapi stream local-sdk-dump \
+  --host 192.0.2.10 --serial ABC123456 \
+  --operation-code "$EZVIZ_LOCAL_OPERATION_CODE" \
+  --cas-key "$EZVIZ_LOCAL_CAS_KEY" \
+  --media-key-hex "$EZVIZ_LOCAL_MEDIA_KEY_HEX" \
+  --decrypt-video --decrypt-codec hevc-encrypted-header \
+  --inner-address 192.0.2.20 --inner-port 9020 \
+  --format mpegts --output local.ts \
+  --metadata-output local.metadata.json
+```
+
+If your token contains CAS service metadata, `--fetch-cas` can fetch the
+operation-code/key tuple through authenticated EZVIZ CAS instead of requiring
+those two values on the command line. When `--decrypt-video` is used without
+`--media-key` or `--media-key-hex`, the CLI fetches the camera media key with
+the authenticated client:
+
+```bash
+pyezvizapi --token-file ezviz_token.json stream local-sdk-dump \
+  --host 192.0.2.10 --serial ABC123456 --fetch-cas \
+  --inner-address 192.0.2.20 --inner-port 9020 \
+  --format mpegts --output local.ts
+```
+
+Use `--cas-serial` when the cloud CAS lookup needs a different serial form
+than the local SDK IV/device serial used for the stream setup. The default
+`--receiver-shape app` uses the self-closing attribute XML seen in normal EZVIZ
+live-view traces; use `--receiver-shape structured` when you need the older
+nested `NatAddress`/`InnerAddress` receiver XML shape.
+The local SDK client binds the command socket source port to the advertised
+receiver port before connecting to the camera command port, matching the
+normal app's `bind(0.0.0.0:<ReceiverInfo Port>) -> connect(<camera>:9010)`
+sequence.
+For encrypted local media, `--media-key` accepts printable media keys and
+`--media-key-hex`/`EZVIZ_LOCAL_MEDIA_KEY_HEX` accepts binary native media keys
+encoded as hex. This media key is separate from the CAS key used for the
+local-SDK control-channel envelope.
+The `--credentials-file` form accepts the JSON shape printed by
+`local-sdk-keys`: `serial`, `endpoint.host`, `endpoint.command_port`,
+`endpoint.stream_port`, `cas.operation_code`, `cas.key`, `cas.encrypt_type`, and
+optional `media_key` or `media_key_hex`. Explicit CLI arguments override matching
+credential-file fields.
+The optional metadata JSON contains only non-secret response commands, statuses,
+body classifications, XML tag names, and first-media shape; it deliberately does
+not include request bodies, keys, operation codes, UUIDs, timestamps, or payload
+bytes.
+
+Library callers that just want bytes can use
+`copy_local_sdk_stream_from_client(client, serial, output, ...)`. It fetches the
+LAN endpoint and CAS tuple, opens the local `9010/9020` stream, optionally fetches
+the media decrypt key when `decrypt_video=True`, and writes either `mpegps` or
+`mpegts` output before closing the sockets. Lower-level callers can still use
+`open_local_sdk_stream_from_client()` with
+`copy_local_stream_to_mpegps()`/`copy_local_stream_to_mpegts()` for clear local
+media, or `copy_local_stream_to_decrypted_mpegps()` /
+`copy_local_stream_to_decrypted_mpegts()` for encrypted local media. Decrypting
+captures must use a bounded `duration_seconds` or `max_packets` value; the decrypt
+transform buffers MPEG-PS data so it can handle NALs split across local RTP
+packets.
+
+For live regression checks from a source checkout while working on the
+direct-local path, use the operator harness under
+\`tools/apk-re/bin/local-sdk-live-check\`. It forwards your local-sdk-dump
+arguments, captures a short MPEG-TS sample, runs FFprobe, extracts one JPEG frame
+with FFmpeg, and prints sanitized JSON with the artifact paths and detected
+streams:
+
+    uv run tools/apk-re/bin/local-sdk-live-check --duration 5s --output-dir tmp/local-sdk-check -- \
+      --credentials-file local-sdk-credentials.json \
+      --decrypt-video --decrypt-codec encrypted-header
+
+The harness owns output, metadata, duration, format, and FFmpeg path arguments so
+it can keep the validation artifacts predictable. It does not print forwarded
+arguments, request bodies, keys, operation codes, UUIDs, timestamps, or payload
+bytes.
+
+This is separate from the proprietary HCNetSDK command protocol on port `8000`.
+That app path has been traced, but a standalone pure-Python `8000` login/player
+implementation still needs more packet-level reverse engineering or native SDK
+bindings.
 
 ### cloud_videos
 

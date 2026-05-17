@@ -22,6 +22,15 @@ MPEGTS_PAYLOAD = b"mpegts"
 CLOUD_VIDEO_PAYLOAD = b"cloud-video-bytes"
 NATIVE_ENCRYPTED_PAYLOAD = b"encrypted"
 NATIVE_TRANSFORMED_PAYLOAD = b"decrypted"
+LOCAL_SDK_TEST_PAYLOAD = b"mpeg-ps"
+LOCAL_SDK_PRE_START_BODY = b"pre"
+LOCAL_SDK_DEFAULT_DURATION = 60.0
+STRUCTURED_RECEIVER_INNER_ADDRESS_XML = b"<InnerAddress>192.0.2.20</InnerAddress>"
+STRUCTURED_RECEIVER_INNER_PORT_XML = b"<InnerPort>9020</InnerPort>"
+STRUCTURED_RECEIVER_AUTH_XML = b"<Authentication>"
+STRUCTURED_RECEIVER_UUID_XML = b"<Uuid>uuid</Uuid>"
+STRUCTURED_RECEIVER_TIMESTAMP_XML = b"<Timestamp>123456</Timestamp>"
+APP_RECEIVER_INFO_XML_PREFIX = b'<ReceiverInfo Address='
 
 _format_cell = cli_module._format_cell  # noqa: SLF001
 _write_table = cli_module._write_table  # noqa: SLF001
@@ -62,6 +71,18 @@ def test_main_requires_existing_token_or_credentials(tmp_path, caplog) -> None:
     assert "Provide --token-file" in caplog.text
 
 
+def test_main_rejects_token_file_without_session_id(tmp_path, caplog) -> None:
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps({"session_id": None, "api_url": "apiieu.ezvizlife.com"}),
+        encoding="utf-8",
+    )
+
+    assert cli_module.main(["--token-file", str(token_file), "device_infos"]) == 2
+
+    assert "Provide --token-file" in caplog.text
+
+
 def test_main_uses_existing_token_file_without_login(monkeypatch, tmp_path, capsys) -> None:
     fake_client = _install_fake_client(monkeypatch)
     token_file = tmp_path / "token.json"
@@ -79,6 +100,45 @@ def test_main_uses_existing_token_file_without_login(monkeypatch, tmp_path, caps
     assert client.account is None
     assert client.password is None
     assert client.token == {"session_id": "saved-session", "api_url": "apiieu.ezvizlife.com"}
+    assert client.login_calls == []
+    assert client.closed is True
+    assert json.loads(capsys.readouterr().out) == {"deviceInfos": {"name": "Front"}}
+
+
+def test_main_prefers_saved_token_when_credentials_are_also_present(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    token_file = tmp_path / "token.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "session_id": "saved-session",
+                "rf_session_id": "saved-refresh",
+                "api_url": "apiieu.ezvizlife.com",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--username",
+                "user@example.test",
+                "--password",
+                "secret",
+                "--token-file",
+                str(token_file),
+                "device_infos",
+                "--serial",
+                "CAM123",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
     assert client.login_calls == []
     assert client.closed is True
     assert json.loads(capsys.readouterr().out) == {"deviceInfos": {"name": "Front"}}
@@ -488,7 +548,7 @@ def test_cloud_video_download_handles_native_stream_url(
         replay_calls.append(kwargs)
         return NATIVE_ENCRYPTED_PAYLOAD
 
-    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
+    def fake_decrypt(data: bytes, key: str | bytes, *, nalu_header_size: int | None) -> bytes:
         decrypt_calls.append({"data": data, "key": key, "nalu_header_size": nalu_header_size})
         return NATIVE_TRANSFORMED_PAYLOAD
 
@@ -1271,6 +1331,714 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
 def test_stream_proxy_path_defaults_to_serial() -> None:
     assert cli_module._normalize_stream_proxy_path(None, "CAM123") == "/CAM123.ts"  # noqa: SLF001
     assert cli_module._normalize_stream_proxy_path("camera.ts", "CAM123") == "/camera.ts"  # noqa: SLF001
+
+
+def test_local_sdk_dump_runs_without_cloud_auth(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "local.ps"
+    metadata_path = tmp_path / "local.json"
+    calls: list[dict[str, Any]] = []
+
+    class FakeLocalStream:
+        closed = False
+
+        def __enter__(self) -> FakeLocalStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.closed = True
+
+    def fake_build(args: Any, client: Any = None) -> FakeLocalStream:
+        assert client is None
+        calls.append(
+            {
+                "serial": args.serial,
+                "host": args.host,
+                "format": args.format,
+                "max_packets": args.max_packets,
+                "operation_code": args.operation_code,
+                "cas_key": args.cas_key,
+            }
+        )
+        return FakeLocalStream()
+
+    def fake_copy(stream: FakeLocalStream, output: BinaryIO, **kwargs: Any) -> None:
+        calls.append({"stream": stream, **kwargs})
+        output.write(LOCAL_SDK_TEST_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_cli_stream", fake_build)
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--format",
+                "mpegps",
+                "--max-packets",
+                "2",
+                "--output",
+                str(output_path),
+                "--metadata-output",
+                str(metadata_path),
+            ]
+        )
+        == 0
+    )
+
+    assert calls[0] == {
+        "serial": "CAM123456",
+        "host": "192.0.2.10",
+        "format": "mpegps",
+        "max_packets": 2,
+        "operation_code": "0123456",
+        "cas_key": "1234567890abcdef",
+    }
+    assert calls[1]["max_packets"] == 2
+    assert calls[1]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
+    assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == {
+        "bootstrap_complete": False
+    }
+
+
+def test_local_sdk_dump_can_decrypt_mpegps_without_cloud_auth(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "local.ps"
+    copy_calls: list[dict[str, Any]] = []
+
+    class FakeLocalStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_copy(
+        stream: FakeLocalStream,
+        output: BinaryIO,
+        media_key: str | bytes,
+        **kwargs: Any,
+    ) -> None:
+        copy_calls.append({"stream": stream, "media_key": media_key, **kwargs})
+        output.write(NATIVE_TRANSFORMED_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_cli_stream", lambda *_args: FakeLocalStream())
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_decrypted_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--media-key",
+                "media-secret",
+                "--decrypt-video",
+                "--decrypt-codec",
+                "h264-encrypted-header",
+                "--format",
+                "mpegps",
+                "--max-packets",
+                "1",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert copy_calls[0]["media_key"] == "media-secret"
+    assert copy_calls[0]["nalu_header_size"] == 0
+    assert copy_calls[0]["max_packets"] == 1
+    assert copy_calls[0]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
+    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+
+
+def test_local_sdk_dump_accepts_hex_media_key(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "local.ps"
+    copy_calls: list[dict[str, Any]] = []
+
+    class FakeLocalStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_copy(
+        stream: FakeLocalStream,
+        output: BinaryIO,
+        media_key: str | bytes,
+        **kwargs: Any,
+    ) -> None:
+        copy_calls.append({"stream": stream, "media_key": media_key, **kwargs})
+        output.write(NATIVE_TRANSFORMED_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_cli_stream", lambda *_args: FakeLocalStream())
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_decrypted_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--media-key-hex",
+                "000102030405060708090a0b0c0d0e0f",
+                "--decrypt-video",
+                "--decrypt-codec",
+                "hevc-encrypted-header",
+                "--format",
+                "mpegps",
+                "--max-packets",
+                "1",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert copy_calls[0]["media_key"] == bytes(range(16))
+    assert copy_calls[0]["nalu_header_size"] == 0
+    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+
+
+def test_local_sdk_dump_help_documents_media_key_sources(capsys) -> None:
+    try:
+        cli_module.main(["stream", "local-sdk-dump", "--help"])
+    except SystemExit as err:
+        assert err.code == 0
+
+    output = capsys.readouterr().out
+    assert "--media-key-hex" in output
+    assert "EZVIZ_LOCAL_MEDIA_KEY_HEX" in output
+    assert "--credentials-file" in output
+    assert "authenticated client" in output
+
+
+def test_local_sdk_dump_accepts_credentials_file(monkeypatch, tmp_path) -> None:
+    credentials_path = tmp_path / "local-sdk-credentials.json"
+    output_path = tmp_path / "local.ps"
+    credentials_path.write_text(
+        json.dumps(
+            {
+                "serial": "CAM123456",
+                "endpoint": {
+                    "host": "192.0.2.10",
+                    "command_port": 9010,
+                    "stream_port": 9020,
+                },
+                "cas": {
+                    "operation_code": "0123456",
+                    "key": "1234567890abcdef",
+                    "encrypt_type": 1,
+                },
+                "media_key_hex": "000102030405060708090a0b0c0d0e0f",
+            }
+        ),
+        encoding="utf-8",
+    )
+    build_calls: list[dict[str, Any]] = []
+    copy_calls: list[dict[str, Any]] = []
+
+    class FakeLocalStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open_local_sdk_stream(
+        endpoint: Any,
+        device_info: Any,
+        _preview_request: Any,
+        **_kwargs: Any,
+    ) -> FakeLocalStream:
+        build_calls.append(
+            {
+                "serial": endpoint.serial,
+                "host": endpoint.host,
+                "command_port": endpoint.command_port,
+                "stream_port": endpoint.stream_port,
+                "operation_code": device_info.operation_code,
+                "cas_key": device_info.key,
+                "encrypt_type": device_info.encrypt_type,
+            }
+        )
+        return FakeLocalStream()
+
+    def fake_copy(
+        stream: FakeLocalStream,
+        output: BinaryIO,
+        media_key: str | bytes,
+        **kwargs: Any,
+    ) -> None:
+        copy_calls.append({"stream": stream, "media_key": media_key, **kwargs})
+        output.write(NATIVE_TRANSFORMED_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "open_local_sdk_stream", fake_open_local_sdk_stream)
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_decrypted_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--credentials-file",
+                str(credentials_path),
+                "--decrypt-video",
+                "--decrypt-codec",
+                "encrypted-header",
+                "--format",
+                "mpegps",
+                "--max-packets",
+                "1",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert build_calls == [
+        {
+            "serial": "CAM123456",
+            "host": "192.0.2.10",
+            "command_port": 9010,
+            "stream_port": 9020,
+            "operation_code": "0123456",
+            "cas_key": "1234567890abcdef",
+            "encrypt_type": 1,
+        }
+    ]
+    assert copy_calls[0]["media_key"] == bytes(range(16))
+    assert copy_calls[0]["nalu_header_size"] == 0
+    assert output_path.read_bytes() == NATIVE_TRANSFORMED_PAYLOAD
+
+
+def test_local_sdk_dump_can_decrypt_before_mpegts_remux(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "local.ts"
+    copy_calls: list[dict[str, Any]] = []
+
+    class FakeLocalStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_environ_get(name: str) -> str | None:
+        return {
+            "EZVIZ_LOCAL_MEDIA_KEY": "env-media-secret",
+        }.get(name)
+
+    def fake_copy(
+        stream: FakeLocalStream,
+        output: BinaryIO,
+        media_key: str | bytes,
+        **kwargs: Any,
+    ) -> None:
+        copy_calls.append({"stream": stream, "media_key": media_key, **kwargs})
+        output.write(MPEGTS_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_cli_stream", lambda *_args: FakeLocalStream())
+    monkeypatch.setattr(cli_module, "os_environ_get", fake_environ_get)
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_decrypted_mpegts", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--decrypt-video",
+                "--format",
+                "mpegts",
+                "--max-packets",
+                "1",
+                "--output",
+                str(output_path),
+                "--ffmpeg-path",
+                "custom-ffmpeg",
+            ]
+        )
+        == 0
+    )
+
+    assert copy_calls[0]["media_key"] == "env-media-secret"
+    assert copy_calls[0]["ffmpeg_path"] == "custom-ffmpeg"
+    assert copy_calls[0]["nalu_header_size"] is None
+    assert copy_calls[0]["max_packets"] == 1
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+
+
+def test_local_sdk_dump_reads_secret_environment_fallbacks(monkeypatch, tmp_path) -> None:
+    pre_start = tmp_path / "pre-start.bin"
+    pre_start.write_bytes(LOCAL_SDK_PRE_START_BODY)
+
+    def fake_environ_get(name: str) -> str | None:
+        return {
+            "EZVIZ_LOCAL_OPERATION_CODE": "0123456",
+            "EZVIZ_LOCAL_CAS_KEY": "1234567890abcdef",
+        }.get(name)
+
+    monkeypatch.setattr(cli_module, "os_environ_get", fake_environ_get)
+
+    stream = cli_module._build_local_sdk_cli_stream(  # noqa: SLF001
+        argparse.Namespace(
+            host="192.0.2.10",
+            serial="CAM123456",
+            command_port=9010,
+            stream_port=9020,
+            channel=1,
+            operation_code=None,
+            cas_key=None,
+            fetch_cas=False,
+            encrypt_type=1,
+            uuid=None,
+            timestamp=None,
+            identifier=None,
+            nat_address="",
+            nat_port=0,
+            upnp_address="",
+            upnp_port=0,
+            inner_address="192.0.2.20",
+            inner_port=9020,
+            receiver_shape="app",
+            receiver_stream_type="MAIN",
+            receiver_port=10101,
+            receiver_server_type=1,
+            receiver_new_stream_type=1,
+            receiver_trans_proto="TCP",
+            receiver_ex_port=10101,
+            auth_biz_code="biz=1",
+            auth_interval=180,
+            is_encrypt="TRUE",
+            udt=None,
+            nat=None,
+            port_guess_type=None,
+            setup_timeout=None,
+            heartbeat_interval=None,
+            pre_start_body_file=str(pre_start),
+            pre_start_sequence=27,
+            preview_sequence=28,
+            stream_sequence=29,
+            stream_rate=1,
+            stream_mode=-1,
+            socket_timeout=5.0,
+            max_prefix_bytes=128,
+        )
+    )
+
+    assert stream.sdk_client.endpoint.host == "192.0.2.10"
+    assert stream.sdk_client.device_info.operation_code == "0123456"
+    assert stream.sdk_client.device_info.key == "1234567890abcdef"
+    assert stream.pre_start_body == LOCAL_SDK_PRE_START_BODY
+    assert stream.max_prefix_bytes == 128
+    assert stream.preview_request.receiver_info.port == 10101
+
+
+def test_local_sdk_dump_can_build_structured_receiver_shape(monkeypatch) -> None:
+    def fake_environ_get(name: str) -> str | None:
+        return {
+            "EZVIZ_LOCAL_OPERATION_CODE": "0123456",
+            "EZVIZ_LOCAL_CAS_KEY": "1234567890abcdef",
+            "EZVIZ_LOCAL_UUID": "uuid",
+            "EZVIZ_LOCAL_TIMESTAMP": "123456",
+        }.get(name)
+
+    monkeypatch.setattr(cli_module, "os_environ_get", fake_environ_get)
+
+    stream = cli_module._build_local_sdk_cli_stream(  # noqa: SLF001
+        argparse.Namespace(
+            host="192.0.2.10",
+            serial="CAM123456",
+            command_port=9010,
+            stream_port=9020,
+            channel=1,
+            operation_code=None,
+            cas_key=None,
+            fetch_cas=False,
+            encrypt_type=1,
+            uuid=None,
+            timestamp=None,
+            identifier="ident",
+            nat_address="192.0.2.10",
+            nat_port=9010,
+            upnp_address="",
+            upnp_port=0,
+            inner_address="192.0.2.20",
+            inner_port=9020,
+            receiver_shape="structured",
+            receiver_stream_type="MAIN",
+            receiver_port=10101,
+            receiver_server_type=1,
+            receiver_new_stream_type=1,
+            receiver_trans_proto="TCP",
+            receiver_ex_port=10101,
+            auth_biz_code="biz=1",
+            auth_interval=180,
+            is_encrypt="TRUE",
+            udt=1,
+            nat=2,
+            port_guess_type=5,
+            setup_timeout=30,
+            heartbeat_interval=10,
+            pre_start_body_file=None,
+            pre_start_sequence=27,
+            preview_sequence=28,
+            stream_sequence=29,
+            stream_rate=1,
+            stream_mode=-1,
+            socket_timeout=5.0,
+            max_prefix_bytes=128,
+        )
+    )
+
+    body = stream.preview_request.to_xml()
+
+    assert STRUCTURED_RECEIVER_INNER_ADDRESS_XML in body
+    assert STRUCTURED_RECEIVER_INNER_PORT_XML in body
+    assert STRUCTURED_RECEIVER_AUTH_XML in body
+    assert STRUCTURED_RECEIVER_UUID_XML in body
+    assert STRUCTURED_RECEIVER_TIMESTAMP_XML in body
+    assert APP_RECEIVER_INFO_XML_PREFIX not in body
+
+
+def test_local_sdk_metadata_reports_first_media_payload_length() -> None:
+    stream = argparse.Namespace(
+        sdk_client=argparse.Namespace(
+            endpoint=argparse.Namespace(
+                serial="CAM123456",
+                host="192.0.2.10",
+                command_port=9010,
+                stream_port=9020,
+            )
+        ),
+        bootstrap=argparse.Namespace(
+            pre_start=None,
+            preview=None,
+            stream_setup=None,
+            first_media=argparse.Namespace(
+                prefix=b"abc",
+                frame=argparse.Namespace(
+                    header=argparse.Namespace(channel=0, payload_length=123)
+                ),
+            ),
+        ),
+    )
+
+    metadata = cli_module._local_sdk_stream_metadata(stream)  # noqa: SLF001
+
+    assert metadata["first_media"] == {
+        "prefix_length": 3,
+        "channel": 0,
+        "payload_length": 123,
+    }
+
+
+def test_local_sdk_dump_can_fetch_cas_tuple_with_auth(monkeypatch, tmp_path) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "local.ps"
+    calls: list[dict[str, Any]] = []
+
+    class FakeCas:
+        def __init__(self, token: dict[str, Any]) -> None:
+            calls.append({"token": token})
+
+        def cas_get_encryption(self, serial: str) -> dict[str, Any]:
+            calls.append({"cas_serial": serial})
+            return {
+                "Response": {
+                    "Session": {
+                        "@Key": "1234567890abcdef",
+                        "@OperationCode": "0123456",
+                        "@EncryptType": "2",
+                    }
+                }
+            }
+
+    class FakeLocalStream:
+        def __enter__(self) -> FakeLocalStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open_local_sdk_stream(_endpoint: Any, device_info: Any, _preview_request: Any, **kwargs: Any) -> FakeLocalStream:
+        calls.append(
+            {
+                "operation_code": device_info.operation_code,
+                "key": device_info.key,
+                "encrypt_type": device_info.encrypt_type,
+                "kwargs": kwargs,
+            }
+        )
+        return FakeLocalStream()
+
+    def fake_copy(_stream: FakeLocalStream, output: BinaryIO, **_kwargs: Any) -> None:
+        output.write(LOCAL_SDK_TEST_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "EzvizCAS", FakeCas)
+    monkeypatch.setattr(cli_module, "open_local_sdk_stream", fake_open_local_sdk_stream)
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "local-sdk-dump",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--fetch-cas",
+                "--cas-serial",
+                "CS-CAM123456",
+                "--format",
+                "mpegps",
+                "--max-packets",
+                "1",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].closed is True
+    assert calls[1] == {"cas_serial": "CS-CAM123456"}
+    assert calls[2]["operation_code"] == "0123456"
+    assert calls[2]["key"] == "1234567890abcdef"
+    assert calls[2]["encrypt_type"] == 2
+    assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
+
+
+def test_local_sdk_keys_fetches_endpoint_cas_and_media_key(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    class KeyClient(_FakeClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.device_infos = {
+                "CAM123456": {
+                    "CONNECTION": {
+                        "localIp": "192.0.2.10",
+                        "localCmdPort": 9010,
+                        "localStreamPort": 9020,
+                    }
+                }
+            }
+
+    KeyClient.instances = []
+    monkeypatch.setattr(cli_module, "EzvizClient", KeyClient)
+    token_path = _token_file(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    class FakeCas:
+        def __init__(self, token: dict[str, Any]) -> None:
+            calls.append({"token": token})
+
+        def cas_get_encryption(self, serial: str) -> dict[str, Any]:
+            calls.append({"cas_serial": serial})
+            return {
+                "Response": {
+                    "Session": {
+                        "@Key": "1234567890abcdef",
+                        "@OperationCode": "0123456",
+                        "@EncryptType": "2",
+                    }
+                }
+            }
+
+    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                token_path,
+                "stream",
+                "local-sdk-keys",
+                "--serial",
+                "CAM123456",
+                "--cas-serial",
+                "CS-CAM123456",
+            ]
+        )
+        == 0
+    )
+
+    assert KeyClient.instances[0].cam_key_request == {
+        "serial": "CAM123456",
+        "max_retries": 1,
+    }
+    assert calls[1] == {"cas_serial": "CS-CAM123456"}
+    assert json.loads(capsys.readouterr().out) == {
+        "serial": "CAM123456",
+        "endpoint": {
+            "host": "192.0.2.10",
+            "command_port": 9010,
+            "stream_port": 9020,
+        },
+        "cas": {
+            "operation_code": "0123456",
+            "key": "1234567890abcdef",
+            "encrypt_type": 2,
+        },
+        "media_key": "camera-secret",
+    }
 
 
 def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) -> None:

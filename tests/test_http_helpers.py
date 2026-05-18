@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 import requests
 
+from pyezvizapi.api_endpoints import API_ENDPOINT_IOT_ACTION
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import (
     FEATURE_CODE,
@@ -2348,26 +2349,66 @@ def test_ptz_control_coordinates_formats_payload_and_validates(monkeypatch) -> N
     client = _client()
     captured: dict[str, Any] = {}
 
-    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        captured.update({"method": method, "path": path, **kwargs})
+    def fake_iot_request(
+        method: str,
+        endpoint: str,
+        serial: str,
+        resource_identifier: str,
+        local_index: str,
+        domain_id: str,
+        action_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.update(
+            {
+                "method": method,
+                "endpoint": endpoint,
+                "serial": serial,
+                "resource_identifier": resource_identifier,
+                "local_index": local_index,
+                "domain_id": domain_id,
+                "action_id": action_id,
+                **kwargs,
+            }
+        )
         return {"meta": {"code": 200}}
 
-    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    monkeypatch.setattr(client, "_iot_request", fake_iot_request)
 
     assert client.ptz_control_coordinates("CAM123", 0.25, 0.75) is True
-    assert captured["method"] == "POST"
-    assert captured["data"] == {
-        "x": "0.250000",
-        "y": "0.750000",
-        "deviceSerial": "CAM123",
+    assert captured["method"] == "PUT"
+    assert captured["endpoint"] == API_ENDPOINT_IOT_ACTION
+    assert captured["serial"] == "CAM123"
+    assert captured["resource_identifier"] == "Video_1"
+    assert captured["local_index"] == "1"
+    assert captured["domain_id"] == "PTZManualCtrl"
+    assert captured["action_id"] == "CtrlPTZ3DPosition"
+    assert captured["payload"] == {
+        "positionCtrlType": "point",
+        "positionPoint": {
+            "x": 0.25,
+            "y": 0.75,
+        },
+        "positionRect": {
+            "height": 1.0,
+            "width": 1.0,
+            "x": 0.0,
+            "y": 0.0,
+        },
     }
-    assert captured["retry_401"] is False
+    assert captured["max_retries"] == 0
 
     with pytest.raises(PyEzvizError, match="Invalid X coordinate"):
         client.ptz_control_coordinates("CAM123", 1.1, 0.5)
 
+    with pytest.raises(PyEzvizError, match="Invalid X coordinate"):
+        client.ptz_control_coordinates("CAM123", -0.1, 0.5)
+
     with pytest.raises(PyEzvizError, match="Invalid Y coordinate"):
         client.ptz_control_coordinates("CAM123", 0.5, 1.1)
+
+    with pytest.raises(PyEzvizError, match="Invalid Y coordinate"):
+        client.ptz_control_coordinates("CAM123", 0.5, -0.1)
 
 
 def test_capture_picture_builds_request(monkeypatch) -> None:

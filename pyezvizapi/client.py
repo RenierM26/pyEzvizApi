@@ -73,7 +73,6 @@ from .api_endpoints import (
     API_ENDPOINT_OFFLINE_NOTIFY,
     API_ENDPOINT_OSD,
     API_ENDPOINT_PAGELIST,
-    API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
     API_ENDPOINT_PTZCONTROL,
     API_ENDPOINT_REFRESH_SESSION_ID,
     API_ENDPOINT_REMOTE_LOCK,
@@ -2870,28 +2869,50 @@ class EzvizClient:
         return json_output
 
     def ptz_control_coordinates(
-        self, serial: str, x_axis: float, y_axis: float
+        self,
+        serial: str,
+        x_axis: float,
+        y_axis: float,
+        *,
+        resource_identifier: str = "Video_1",
+        local_index: str = "1",
+        max_retries: int = 0,
     ) -> bool:
         """PTZ Coordinate Move."""
-        if 0 < x_axis > 1:
+        if not 0 <= x_axis <= 1:
             raise PyEzvizError(
                 f"Invalid X coordinate: {x_axis}: Should be between 0 and 1 inclusive"
             )
 
-        if 0 < y_axis > 1:
+        if not 0 <= y_axis <= 1:
             raise PyEzvizError(
                 f"Invalid Y coordinate: {y_axis}: Should be between 0 and 1 inclusive"
             )
 
-        json_result = self._request_json(
-            "POST",
-            API_ENDPOINT_PANORAMIC_DEVICES_OPERATION,
-            data={
-                "x": f"{x_axis:.6f}",
-                "y": f"{y_axis:.6f}",
-                "deviceSerial": serial,
+        json_result = self._iot_request(
+            "PUT",
+            API_ENDPOINT_IOT_ACTION,
+            serial,
+            resource_identifier,
+            local_index,
+            "PTZManualCtrl",
+            "CtrlPTZ3DPosition",
+            payload={
+                "positionCtrlType": "point",
+                "positionPoint": {
+                    "x": x_axis,
+                    "y": y_axis,
+                },
+                "positionRect": {
+                    "height": 1.0,
+                    "width": 1.0,
+                    "x": 0.0,
+                    "y": 0.0,
+                },
+                "zoomType": "zoomIn",
             },
-            retry_401=False,
+            max_retries=max_retries,
+            error_message="Could not move PTZ to coordinates",
         )
 
         _LOGGER.debug(

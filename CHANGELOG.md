@@ -6,6 +6,26 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Added
+
+- Added direct-local SDK streaming support for cached local-SDK credentials, including CAS probing, stream bootstrap, and FFmpeg remuxing for local live-view captures.
+- Added local IDMX HEVC stream handling for encrypted EZVIZ local payloads, converting media-wrapper frames to Annex B and decrypting encrypted HEVC NAL prefixes for `--decrypt-video` captures.
+- Added regression coverage for RTP dump decryption when `--decrypt-video` is used with explicit encrypted-header codec modes.
+
+### Changed
+
+- Refreshed CAS service metadata only for CLI CAS flows and preserved cached-session reuse behind stricter `sysConf` checks.
+- Updated RTP stream dumping so user-selected decrypt-codec modes control the decrypt offset while transport detection still drives RTP depacketizing and remuxing.
+- Bumped `requests` from 2.33.1 to 2.34.2.
+
+### Fixed
+
+- Fixed cloud and direct-local stream timeout handling so unreachable/offline cameras raise clear `DeviceException` errors instead of leaking raw timeouts.
+- Fixed direct-local encrypted-header decryption to preserve PES boundaries and avoid H.264/HEVC RTP payload overlap during stream remuxing.
+- Fixed partial CAS probe writes and base64 local-SDK CAS key handling.
+- Fixed `ptz_control_coordinates()` to use the app-matched `PTZManualCtrl/CtrlPTZ3DPosition` IoT action endpoint with `positionPoint.x/y`, restoring y-axis tilt coordinate moves.
+- Fixed PTZ coordinate validation to reject negative coordinate values and omitted zoom hints from point moves so focus/zoom metadata is left unchanged.
+
 ## v1.0.4.9 - 2026-05-10
 
 ### Added

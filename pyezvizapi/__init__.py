@@ -517,6 +517,8 @@ _EXPORTS = {
     "read_ezviz_interleaved_rtp_frame": "hcnetsdk",
     "read_ezviz_interleaved_rtp_frame_after_prefix": "hcnetsdk",
     "read_ezviz_local_sdk_frame": "hcnetsdk",
+    "read_hcnetsdk_command_port_interleaved_frame_after_prefix": "hcnetsdk",
+    "read_hcnetsdk_tcp_frame": "hcnetsdk",
     "SadpDeviceInfo": "hcnetsdk",
     "summarize_vtm_packet": "stream",
     "supplement_light_available": "feature",

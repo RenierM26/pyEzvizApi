@@ -21,6 +21,8 @@ def test_command_port_helpers_are_runtime_exports() -> None:
         "HcNetSdkCommandPortMediaStream",
         "HcNetSdkCommandPortStreamBootstrap",
         "open_hcnetsdk_command_port_stream",
+        "read_hcnetsdk_command_port_interleaved_frame_after_prefix",
+        "read_hcnetsdk_tcp_frame",
     }
 
     assert expected <= set(pyezvizapi.__all__)

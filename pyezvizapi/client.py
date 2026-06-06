@@ -2911,6 +2911,7 @@ class EzvizClient:
                 client_type=cloud_client_type,
                 token_index=cloud_token_index,
                 refresh_vtm=cloud_refresh_vtm,
+                smscode=smscode,
             )
         raise PyEzvizError(f"Unsupported clip source: {source}")
 
@@ -3091,6 +3092,7 @@ class EzvizClient:
         client_type: int,
         token_index: int,
         refresh_vtm: bool,
+        smscode: str | int | None,
     ) -> SaveMediaResult:
         """Save a clip through the EZVIZ VTM cloud live stream path."""
 
@@ -3113,6 +3115,7 @@ class EzvizClient:
                     decrypt_video=decrypt_video,
                     media_key=media_key,
                     nalu_header_size=nalu_header_size,
+                    smscode=smscode,
                 )
                 return
             copy_cloud_stream_to_mpegps(
@@ -3129,6 +3132,7 @@ class EzvizClient:
                 decrypt_video=decrypt_video,
                 media_key=media_key,
                 nalu_header_size=nalu_header_size,
+                smscode=smscode,
             )
 
         if isinstance(output, str | Path):

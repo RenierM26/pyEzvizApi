@@ -236,6 +236,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     decrypt_video: bool = False,
     media_key: str | bytes | None = None,
     nalu_header_size: int | None = None,
+    smscode: str | int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Copy a cloud VTM live stream to MPEG-PS bytes.
@@ -249,7 +250,10 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             max_packets=max_packets,
             duration_seconds=duration_seconds,
         )
-        selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+        if media_key is None and smscode is not None:
+            selected_key = client.get_cam_key(serial, smscode=smscode)
+        else:
+            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         with open_cloud_stream(
@@ -313,6 +317,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
     decrypt_video: bool = False,
     media_key: str | bytes | None = None,
     nalu_header_size: int | None = None,
+    smscode: str | int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Copy a cloud VTM live stream to MPEG-TS bytes."""
@@ -322,7 +327,10 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             max_packets=max_packets,
             duration_seconds=duration_seconds,
         )
-        selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+        if media_key is None and smscode is not None:
+            selected_key = client.get_cam_key(serial, smscode=smscode)
+        else:
+            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         with open_cloud_stream(

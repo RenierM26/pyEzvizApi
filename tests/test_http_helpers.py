@@ -2714,6 +2714,7 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         media_key="MEDIAKEY",
         nalu_header_size=1,
         timeout=5.0,
+        smscode="654321",
         cloud_client_type=7,
         cloud_token_index=1,
         cloud_refresh_vtm=False,
@@ -2733,6 +2734,7 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
             "decrypt_video": True,
             "media_key": "MEDIAKEY",
             "nalu_header_size": 1,
+            "smscode": "654321",
             "ffmpeg_path": "/usr/bin/ffmpeg",
         }
     ]

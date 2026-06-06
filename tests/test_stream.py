@@ -2493,6 +2493,63 @@ def test_copy_cloud_stream_to_mpegps_decrypts_bounded_payloads(monkeypatch) -> N
     assert output.getvalue() == clear_payload
 
 
+def test_copy_cloud_stream_to_mpegps_fetches_media_key_with_smscode(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    expected_payload = b"enc:camera-secret"
+    calls: dict[str, Any] = {}
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=3,
+                sequence=1,
+                message_code=0,
+                body=b"enc",
+            )
+
+    def fake_get_cam_key(
+        serial: str,
+        *,
+        smscode: str | int | None = None,
+    ) -> str:
+        calls["get_cam_key"] = {"serial": serial, "smscode": smscode}
+        return "camera-secret"
+
+    monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        lambda data, key, **_kwargs: b":".join((data, str(key).encode())),
+    )
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        max_packets=1,
+        decrypt_video=True,
+        smscode="123456",
+    )
+
+    assert calls == {"get_cam_key": {"serial": "CAM123", "smscode": "123456"}}
+    assert output.getvalue() == expected_payload
+
+
 def test_copy_cloud_stream_to_mpegps_requires_bounded_decrypt() -> None:
     with pytest.raises(PyEzvizError, match="requires duration_seconds or max_packets"):
         copy_cloud_stream_to_mpegps(
@@ -2615,6 +2672,15 @@ def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
         }
         return b"clear"
 
+    def fake_get_cam_key(
+        serial: str,
+        *,
+        smscode: str | int | None = None,
+    ) -> str:
+        calls["get_cam_key"] = {"serial": serial, "smscode": smscode}
+        return "camera-secret"
+
+    monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
     monkeypatch.setattr(
         "pyezvizapi.cloud_stream.open_cloud_stream",
         lambda *_args, **_kwargs: FakeCloudStream(),
@@ -2631,12 +2697,13 @@ def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
         output,
         max_packets=1,
         decrypt_video=True,
-        media_key=b"MEDIAKEY",
+        smscode="654321",
         nalu_header_size=2,
     )
 
     assert calls == {
-        "decrypt": {"data": b"enc", "key": b"MEDIAKEY", "nalu_header_size": 2},
+        "get_cam_key": {"serial": "CAM123", "smscode": "654321"},
+        "decrypt": {"data": b"enc", "key": "camera-secret", "nalu_header_size": 2},
         "remux_input": b"clear",
     }
     assert output.getvalue() == expected_payload

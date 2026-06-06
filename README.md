@@ -85,6 +85,73 @@ All commands are subcommands of the module runner:
 pyezvizapi <command> [options]
 ```
 
+### save
+
+Person-friendly media save commands for scripts and Home Assistant
+`shell_command` usage. These write to local filesystem paths and print a small
+JSON result when `--json` is used.
+
+```bash
+# Save a short direct-local live clip. MPEG-TS uses FFmpeg remuxing with copy.
+pyezvizapi --token-file ezviz_token.json --json save clip \
+  --serial ABC123 --channel 1 --duration 10s \
+  --output /config/www/ezviz/front.ts
+
+# Save a direct-local encrypted battery-camera clip.
+pyezvizapi --token-file ezviz_token.json --json save clip \
+  --serial ABC123 --duration 10s --decrypt-video \
+  --output /config/www/ezviz/front.ts
+
+# Save from the full local HCNetSDK command-port media path on port 8000.
+pyezvizapi --token-file ezviz_token.json --json save clip \
+  --source hcnetsdk-command-port --serial ABC123 --host 192.0.2.10 \
+  --hcnetsdk-command-frames-file /config/ezviz/ABC123-port8000-frames.json \
+  --duration 10s --output /config/www/ezviz/front.ts
+
+# Trigger a snapshot and save the returned image locally.
+pyezvizapi --token-file ezviz_token.json --json save image \
+  --serial ABC123 --channel 1 \
+  --output /config/www/ezviz/front.jpg
+
+# Save a known alarm/snapshot image URL without triggering a new capture.
+pyezvizapi --token-file ezviz_token.json --json save image \
+  --serial ABC123 --image-url "https://..." \
+  --output /config/www/ezviz/alarm.jpg
+```
+
+`save clip` uses the direct-local `9010/9020` SDK path and fetches the LAN
+endpoint/CAS tuple from the authenticated client by default. Use
+`--source hcnetsdk-command-port` for the full local port-8000 media path when
+you have the complete HCNetSDK bootstrap command frames from a trusted local
+implementation; the release package consumes those frames and keeps APK/Frida
+tooling under `tools/apk-re`. `save image` triggers the camera capture endpoint
+unless `--image-url` is supplied, then downloads and decrypts EZVIZ encrypted
+image payloads when needed.
+
+Integrations can use the same behavior directly from `client.py` without
+shelling out:
+
+```python
+result = client.save_clip(
+    "ABC123",
+    "/config/www/ezviz/front.ts",
+    duration_seconds=10,
+    source="local-sdk",
+)
+
+image = client.save_image(
+    "ABC123",
+    "/config/www/ezviz/front.jpg",
+    channel=1,
+)
+```
+
+Use `source="hcnetsdk-command-port"`, `host="192.0.2.10"`, `command_port=8000`,
+and `hcnetsdk_command_frames=(...)` when an integration already has the complete
+full-local HCNetSDK port-8000 command bootstrap frames. Both helpers accept a
+local path or a binary file object and return a small result dict with the output
+name, byte count, content type, and source metadata.
+
 ### devices
 
 - Actions: `device`, `status`, `switch`, `connection`
@@ -223,26 +290,12 @@ captures must use a bounded `duration_seconds` or `max_packets` value; the decry
 transform buffers MPEG-PS data so it can handle NALs split across local RTP
 packets.
 
-For live regression checks from a source checkout while working on the
-direct-local path, use the operator harness under
-\`tools/apk-re/bin/local-sdk-live-check\`. It forwards your local-sdk-dump
-arguments, captures a short MPEG-TS sample, runs FFprobe, extracts one JPEG frame
-with FFmpeg, and prints sanitized JSON with the artifact paths and detected
-streams:
-
-    uv run tools/apk-re/bin/local-sdk-live-check --duration 5s --output-dir tmp/local-sdk-check -- \
-      --credentials-file local-sdk-credentials.json \
-      --decrypt-video --decrypt-codec encrypted-header
-
-The harness owns output, metadata, duration, format, and FFmpeg path arguments so
-it can keep the validation artifacts predictable. It does not print forwarded
-arguments, request bodies, keys, operation codes, UUIDs, timestamps, or payload
-bytes.
-
 This is separate from the proprietary HCNetSDK command protocol on port `8000`.
-That app path has been traced, but a standalone pure-Python `8000` login/player
-implementation still needs more packet-level reverse engineering or native SDK
-bindings.
+`pyezvizapi` includes native-Python framing/remux primitives for caller-supplied
+command-port frames, including the port-8000 `$` media length format and clear
+H.264 IDMX payloads. The person-facing `save clip --source
+hcnetsdk-command-port` wrapper can consume those complete command frames and
+write a local MPEG-TS clip.
 
 ### cloud_videos
 
@@ -434,7 +487,7 @@ contracts.
 
 ## Side Notes
 
-There is no official API documentation. Much of this is based on reverse-engineering the Ezviz mobile app (Android/iOS). Some regions operate on separate endpoints; US example: `apiius.ezvizlife.com`.
+There is no official API documentation. Much of this is inferred from Ezviz mobile app behavior (Android/iOS). Some regions operate on separate endpoints; US example: `apiius.ezvizlife.com`.
 
 Example:
 

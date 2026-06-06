@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 import json
-from typing import Any, TypedDict, cast
+import subprocess
+from threading import Thread
+import time
+from typing import Any, BinaryIO, TypedDict, cast
 from urllib.parse import urlparse
 
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError
-from .stream import SocketFactory, VtmStreamClient, build_vtm_url
+from .stream import (
+    SocketFactory,
+    VtmStreamClient,
+    build_vtm_url,
+    decrypt_hikvision_ps_video,
+)
 
 JsonDict = dict[str, Any]
 
@@ -209,6 +219,330 @@ def open_cloud_stream(
         timeout=timeout,
         socket_factory=socket_factory,
     )
+
+
+def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
+    client: Any,
+    serial: str,
+    output: BinaryIO,
+    *,
+    channel: int | None = None,
+    client_type: int = 9,
+    token_index: int = 0,
+    refresh_vtm: bool = True,
+    timeout: float | None = 10.0,
+    max_packets: int | None = None,
+    duration_seconds: float | None = None,
+    decrypt_video: bool = False,
+    media_key: str | bytes | None = None,
+    nalu_header_size: int | None = None,
+    smscode: str | int | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Copy a cloud VTM live stream to MPEG-PS bytes.
+
+    ``decrypt_video`` collects a bounded capture before writing because the
+    Hikvision NAL-prefix transform is stateful across VTM packet boundaries.
+    """
+
+    if decrypt_video:
+        _require_bounded_cloud_decrypt_capture(
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+        )
+        if media_key is None and smscode is not None:
+            selected_key = client.get_cam_key(serial, smscode=smscode)
+        else:
+            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+        if selected_key is None:
+            raise PyEzvizError("decrypt_video requires a media_key or camera media key")
+        with open_cloud_stream(
+            client,
+            serial,
+            channel=channel,
+            client_type=client_type,
+            token_index=token_index,
+            refresh_vtm=refresh_vtm,
+            timeout=timeout,
+        ) as stream:
+            stream.start()
+            payload = _collect_cloud_stream_payloads(
+                stream,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
+        output.write(
+            decrypt_hikvision_ps_video(
+                payload,
+                selected_key,
+                nalu_header_size=nalu_header_size,
+            )
+        )
+        output.flush()
+        return
+
+    with open_cloud_stream(
+        client,
+        serial,
+        channel=channel,
+        client_type=client_type,
+        token_index=token_index,
+        refresh_vtm=refresh_vtm,
+        timeout=timeout,
+    ) as stream:
+        stream.start()
+        _write_cloud_stream_payloads(
+            stream,
+            output,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+
+
+def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
+    client: Any,
+    serial: str,
+    output: BinaryIO,
+    *,
+    channel: int | None = None,
+    client_type: int = 9,
+    token_index: int = 0,
+    refresh_vtm: bool = True,
+    timeout: float | None = 10.0,
+    ffmpeg_path: str = "ffmpeg",
+    max_packets: int | None = None,
+    duration_seconds: float | None = None,
+    decrypt_video: bool = False,
+    media_key: str | bytes | None = None,
+    nalu_header_size: int | None = None,
+    smscode: str | int | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Copy a cloud VTM live stream to MPEG-TS bytes."""
+
+    if decrypt_video:
+        _require_bounded_cloud_decrypt_capture(
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+        )
+        if media_key is None and smscode is not None:
+            selected_key = client.get_cam_key(serial, smscode=smscode)
+        else:
+            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+        if selected_key is None:
+            raise PyEzvizError("decrypt_video requires a media_key or camera media key")
+        with open_cloud_stream(
+            client,
+            serial,
+            channel=channel,
+            client_type=client_type,
+            token_index=token_index,
+            refresh_vtm=refresh_vtm,
+            timeout=timeout,
+        ) as stream:
+            stream.start()
+            payload = _collect_cloud_stream_payloads(
+                stream,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
+        _remux_cloud_mpegps_bytes_to_mpegts(
+            decrypt_hikvision_ps_video(
+                payload,
+                selected_key,
+                nalu_header_size=nalu_header_size,
+            ),
+            output,
+            ffmpeg_path=ffmpeg_path,
+        )
+        return
+
+    with open_cloud_stream(
+        client,
+        serial,
+        channel=channel,
+        client_type=client_type,
+        token_index=token_index,
+        refresh_vtm=refresh_vtm,
+        timeout=timeout,
+    ) as stream:
+        stream.start()
+        _copy_cloud_stream_payloads_to_mpegts(
+            stream,
+            output,
+            ffmpeg_path=ffmpeg_path,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+
+
+def _require_bounded_cloud_decrypt_capture(
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None,
+) -> None:
+    if max_packets is None and duration_seconds is None:
+        raise PyEzvizError(
+            "Encrypted cloud stream decrypt requires duration_seconds or max_packets"
+        )
+
+
+def _write_cloud_stream_payloads(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    flush_each: bool = False,
+) -> None:
+    """Write clear VTM stream packet bodies to a binary file-like object."""
+
+    deadline = None if duration_seconds is None else monotonic() + duration_seconds
+    for packet in stream.iter_packets(max_packets=max_packets):
+        if deadline is not None and monotonic() >= deadline:
+            break
+        if packet.encrypted:
+            raise PyEzvizError(
+                "Received encrypted VTM stream packet; media decryption is not implemented"
+            )
+        if packet.body:
+            output.write(packet.body)
+        if flush_each:
+            output.flush()
+    output.flush()
+
+
+def _collect_cloud_stream_payloads(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> bytes:
+    """Collect clear VTM stream packet bodies into memory."""
+
+    chunks: list[bytes] = []
+    deadline = None if duration_seconds is None else monotonic() + duration_seconds
+    for packet in stream.iter_packets(max_packets=max_packets):
+        if deadline is not None and monotonic() >= deadline:
+            break
+        if packet.encrypted:
+            raise PyEzvizError(
+                "Received encrypted VTM stream packet; media decryption is not implemented"
+            )
+        chunks.append(packet.body)
+    return b"".join(chunks)
+
+
+def _copy_cloud_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Pipe clear VTM MPEG-PS payloads through FFmpeg and write MPEG-TS."""
+
+    process = _open_cloud_mpegts_remux_process(ffmpeg_path)
+    stdin = process.stdin
+    stdout = process.stdout
+    if stdin is None or stdout is None:
+        raise PyEzvizError("Could not open FFmpeg pipes")
+
+    writer_errors: list[Exception] = []
+
+    def _write_input() -> None:
+        try:
+            _write_cloud_stream_payloads(
+                stream,
+                cast(BinaryIO, stdin),
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+                flush_each=True,
+            )
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as err:  # pragma: no cover - defensive thread handoff
+            writer_errors.append(err)
+        finally:
+            with suppress(OSError):
+                stdin.close()
+
+    writer = Thread(target=_write_input, daemon=True)
+    writer.start()
+    try:
+        while True:
+            chunk = stdout.read(65536)
+            if not chunk:
+                break
+            output.write(chunk)
+            output.flush()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        writer.join(timeout=2)
+        try:
+            return_code = process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait()
+
+    if writer_errors:
+        raise writer_errors[0]
+    if return_code not in (0, -15):
+        raise PyEzvizError(f"FFmpeg exited with status {return_code}")
+
+
+def _remux_cloud_mpegps_bytes_to_mpegts(
+    data: bytes,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+) -> None:
+    """Remux in-memory MPEG-PS bytes to MPEG-TS."""
+
+    process = _open_cloud_mpegts_remux_process(ffmpeg_path)
+    stdout, _stderr = process.communicate(data)
+    if process.returncode != 0:
+        raise PyEzvizError(f"FFmpeg exited with status {process.returncode}")
+    output.write(stdout)
+    output.flush()
+
+
+def _open_cloud_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
+    """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS."""
+
+    try:
+        return subprocess.Popen(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "mpeg",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
 
 def parse_vtm_server_public_key(vtm: JsonDict) -> VtmServerPublicKey | None:

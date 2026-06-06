@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import importlib
+import io
 import json
+import subprocess
 from typing import Any
 
 from Crypto.Cipher import AES
@@ -12,6 +14,8 @@ import requests
 import pyezvizapi
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    copy_cloud_stream_to_mpegps,
+    copy_cloud_stream_to_mpegts,
     get_cloud_stream_info,
     get_vtdu_token_v2,
     get_vtm_info,
@@ -23,6 +27,7 @@ from pyezvizapi.stream import (
     StreamTransport,
     VtmChannel,
     VtmMessageCode,
+    VtmPacket,
     VtmStreamClient,
     VtmTraceEvent,
     _find_hevc_nal_start_codes,
@@ -52,6 +57,7 @@ from pyezvizapi.stream import (
 )
 
 BODY = b"abc"
+cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
 stream_module = importlib.import_module("pyezvizapi.stream")
 CAMERA_SERIAL_BYTES = b"CAM123"
 KEEPALIVE_REQ = b"\x0a\x07ssn-123"
@@ -2340,6 +2346,451 @@ def test_open_cloud_stream_returns_unstarted_vtm_client(monkeypatch) -> None:
     assert stream.stream_url == "ysproto://vtm.example.test:8554/live?dev=CAM123"
     assert stream.timeout == 3
     assert not stream.connected
+
+
+def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    expected_payload = b"ps-1ps-2"
+    calls: list[dict[str, Any]] = []
+
+    class FakeCloudStream:
+        started = False
+
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            self.started = True
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert self.started
+            assert max_packets == 2
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=1,
+                message_code=0,
+                body=b"ps-1",
+            )
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=2,
+                message_code=0,
+                body=b"ps-2",
+            )
+
+    def fake_open_cloud_stream(
+        source_client: EzvizClient,
+        serial: str,
+        **kwargs: Any,
+    ) -> FakeCloudStream:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        return FakeCloudStream()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        fake_open_cloud_stream,
+    )
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        channel=2,
+        client_type=7,
+        token_index=1,
+        refresh_vtm=False,
+        timeout=3.0,
+        max_packets=2,
+    )
+
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "channel": 2,
+            "client_type": 7,
+            "token_index": 1,
+            "refresh_vtm": False,
+            "timeout": 3.0,
+        }
+    ]
+    assert output.getvalue() == expected_payload
+
+
+def test_copy_cloud_stream_to_mpegps_decrypts_bounded_payloads(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    clear_payload = b"clear-ps"
+    decrypt_calls: list[dict[str, Any]] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=1,
+                message_code=0,
+                body=b"enc1",
+            )
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=2,
+                message_code=0,
+                body=b"enc2",
+            )
+
+    def fake_decrypt(
+        data: bytes,
+        key: str | bytes,
+        *,
+        nalu_header_size: int | None = None,
+    ) -> bytes:
+        decrypt_calls.append(
+            {
+                "data": data,
+                "key": key,
+                "nalu_header_size": nalu_header_size,
+            }
+        )
+        return clear_payload
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr("pyezvizapi.cloud_stream.decrypt_hikvision_ps_video", fake_decrypt)
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        max_packets=2,
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+        nalu_header_size=1,
+    )
+
+    assert decrypt_calls == [
+        {"data": b"enc1enc2", "key": "MEDIAKEY", "nalu_header_size": 1}
+    ]
+    assert output.getvalue() == clear_payload
+
+
+def test_copy_cloud_stream_to_mpegps_fetches_media_key_with_smscode(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    expected_payload = b"enc:camera-secret"
+    calls: dict[str, Any] = {}
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=3,
+                sequence=1,
+                message_code=0,
+                body=b"enc",
+            )
+
+    def fake_get_cam_key(
+        serial: str,
+        *,
+        smscode: str | int | None = None,
+    ) -> str:
+        calls["get_cam_key"] = {"serial": serial, "smscode": smscode}
+        return "camera-secret"
+
+    monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        lambda data, key, **_kwargs: b":".join((data, str(key).encode())),
+    )
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        max_packets=1,
+        decrypt_video=True,
+        smscode="123456",
+    )
+
+    assert calls == {"get_cam_key": {"serial": "CAM123", "smscode": "123456"}}
+    assert output.getvalue() == expected_payload
+
+
+def test_copy_cloud_stream_to_mpegps_requires_bounded_decrypt() -> None:
+    with pytest.raises(PyEzvizError, match="requires duration_seconds or max_packets"):
+        copy_cloud_stream_to_mpegps(
+            _client(),
+            "CAM123",
+            io.BytesIO(),
+            duration_seconds=None,
+            max_packets=None,
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+
+def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    expected_payload = b"ps-1ps-2"
+    open_calls: list[str] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=1,
+                message_code=0,
+                body=b"ps-1",
+            )
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=2,
+                message_code=0,
+                body=b"ps-2",
+            )
+
+    def fake_open_remux(ffmpeg_path: str) -> subprocess.Popen[bytes]:
+        open_calls.append(ffmpeg_path)
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_to_mpegts(
+        client,
+        "CAM123",
+        output,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        max_packets=2,
+    )
+
+    assert open_calls == ["/usr/bin/ffmpeg"]
+    assert output.getvalue() == expected_payload
+
+
+def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    expected_payload = b"ts:clear"
+    calls: dict[str, Any] = {}
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=3,
+                sequence=1,
+                message_code=0,
+                body=b"enc",
+            )
+
+    class FakeRemuxProcess:
+        returncode = 0
+
+        def communicate(self, data: bytes) -> tuple[bytes, bytes]:
+            calls["remux_input"] = data
+            return (b"ts:" + data, b"")
+
+    def fake_decrypt(
+        data: bytes,
+        key: str | bytes,
+        *,
+        nalu_header_size: int | None = None,
+    ) -> bytes:
+        calls["decrypt"] = {
+            "data": data,
+            "key": key,
+            "nalu_header_size": nalu_header_size,
+        }
+        return b"clear"
+
+    def fake_get_cam_key(
+        serial: str,
+        *,
+        smscode: str | int | None = None,
+    ) -> str:
+        calls["get_cam_key"] = {"serial": serial, "smscode": smscode}
+        return "camera-secret"
+
+    monkeypatch.setattr(client, "get_cam_key", fake_get_cam_key)
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr("pyezvizapi.cloud_stream.decrypt_hikvision_ps_video", fake_decrypt)
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_mpegts_remux_process",
+        lambda _ffmpeg_path: FakeRemuxProcess(),
+    )
+
+    copy_cloud_stream_to_mpegts(
+        client,
+        "CAM123",
+        output,
+        max_packets=1,
+        decrypt_video=True,
+        smscode="654321",
+        nalu_header_size=2,
+    )
+
+    assert calls == {
+        "get_cam_key": {"serial": "CAM123", "smscode": "654321"},
+        "decrypt": {"data": b"enc", "key": "camera-secret", "nalu_header_size": 2},
+        "remux_input": b"clear",
+    }
+    assert output.getvalue() == expected_payload
+
+
+def test_copy_cloud_stream_rejects_encrypted_vtm_packets(monkeypatch) -> None:
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            yield VtmPacket(
+                channel=VtmChannel.ENCRYPTED_STREAM,
+                length=3,
+                sequence=1,
+                message_code=0,
+                body=b"enc",
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    with pytest.raises(PyEzvizError, match="Received encrypted VTM stream packet"):
+        copy_cloud_stream_to_mpegps(_client(), "CAM123", io.BytesIO(), max_packets=1)
+
+
+def test_open_cloud_mpegts_remux_process_builds_ffmpeg_command(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        calls.append({"args": args, **kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.Popen", fake_popen)
+
+    process = cloud_stream_module._open_cloud_mpegts_remux_process(  # noqa: SLF001
+        "/bin/ffmpeg"
+    )
+
+    assert isinstance(process, FakeProcess)
+    assert calls == [
+        {
+            "args": [
+                "/bin/ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "mpeg",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
+            ],
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.DEVNULL,
+        }
+    ]
+
+
+def test_open_cloud_mpegts_remux_process_reports_launch_errors(
+    monkeypatch,
+) -> None:
+    def fake_popen(_args: list[str], **_kwargs: Any) -> None:
+        raise OSError("missing")
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.Popen", fake_popen)
+
+    with pytest.raises(PyEzvizError, match="Could not launch FFmpeg"):
+        cloud_stream_module._open_cloud_mpegts_remux_process(  # noqa: SLF001
+            "/missing/ffmpeg"
+        )
 
 
 def test_get_cloud_stream_info_uses_requested_channel_resource(monkeypatch) -> None:

@@ -8,7 +8,8 @@ import datetime as dt
 import hashlib
 import json
 import logging
-from typing import Any, ClassVar, NotRequired, TypedDict, cast
+from pathlib import Path
+from typing import Any, BinaryIO, ClassVar, Literal, NotRequired, TypedDict, cast
 from urllib.parse import urlencode
 from uuid import uuid4
 import zlib
@@ -117,6 +118,7 @@ from .api_endpoints import (
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
 from .cas import EzvizCAS
+from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
 from .constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_UNIFIEDMSG_STYPE,
@@ -137,6 +139,12 @@ from .exceptions import (
     PyEzvizError,
 )
 from .feature import optionals_mapping
+from .hcnetsdk import HcNetSdkLanEndpoint
+from .local_stream import (
+    copy_local_sdk_stream_from_client,
+    copy_local_stream_to_mpegts,
+    open_hcnetsdk_command_port_stream,
+)
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .utils import convert_to_dict, decrypt_image, deep_merge
@@ -147,6 +155,29 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
+ClipSource = Literal["local-sdk", "hcnetsdk-command-port", "cloud"]
+ClipOutputFormat = Literal["mpegps", "mpegts"]
+
+
+class SaveMediaResult(TypedDict, total=False):
+    """Result returned by media save helpers."""
+
+    ok: bool
+    kind: str
+    serial: str
+    channel: int
+    output: str | None
+    bytes: int | None
+    source: str
+    format: str
+    duration_seconds: float | None
+    content_type: str
+    command_port: int
+    cloud_client_type: int
+    cloud_token_index: int
+    cloud_refresh_vtm: bool
+    image_url: str
+    triggered_capture: bool
 
 
 class ClientToken(TypedDict):
@@ -224,6 +255,98 @@ def _ezviz_password_digest(password: str) -> str:
 
     md5_factory = getattr(hashlib, "m" + "d5")
     return md5_factory(password.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+def _content_type_for_output(
+    output: str | Path | BinaryIO,
+    *,
+    default: str,
+) -> str:
+    """Return a conservative content type from a path-like output."""
+
+    suffix = Path(output).suffix.lower() if isinstance(output, str | Path) else ""
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".ts":
+        return "video/mp2t"
+    if suffix in {".ps", ".mpeg", ".mpg"}:
+        return "video/mpeg"
+    return default
+
+
+def _output_name(output: str | Path | BinaryIO) -> str | None:
+    """Return a stable output name for result metadata."""
+
+    if isinstance(output, str | Path):
+        return str(output)
+    name = getattr(output, "name", None)
+    return str(name) if isinstance(name, str) else None
+
+
+def _binary_position(output: BinaryIO) -> int | None:
+    """Return current binary stream position when available."""
+
+    try:
+        return int(output.tell())
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _bytes_written_to_output(
+    output: str | Path | BinaryIO,
+    *,
+    start_position: int | None = None,
+) -> int | None:
+    """Return byte count for path output, or written delta for seekable streams."""
+
+    if isinstance(output, str | Path):
+        return Path(output).stat().st_size
+    end_position = _binary_position(output)
+    if start_position is None or end_position is None:
+        return None
+    return max(0, end_position - start_position)
+
+
+def _first_image_url(value: Any) -> str | None:
+    """Return the first HTTP(S) image URL from a known EZVIZ response shape."""
+
+    def normalize(candidate: Any) -> str | None:
+        if not isinstance(candidate, str):
+            return None
+        for part in candidate.split(";"):
+            text = part.strip()
+            if text.startswith(("http://", "https://")):
+                return text
+        return None
+
+    if isinstance(value, dict):
+        for key in (
+            "picUrl",
+            "picURL",
+            "imageUrl",
+            "imageURL",
+            "captureUrl",
+            "captureURL",
+            "pic",
+            "pics",
+            "image",
+            "url",
+        ):
+            found = normalize(value.get(key))
+            if found:
+                return found
+        for item in value.values():
+            found = _first_image_url(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _first_image_url(item)
+            if found:
+                return found
+    return None
 
 
 class EzvizClient:
@@ -2705,6 +2828,435 @@ class EzvizClient:
                 )
             key = self.get_cam_key(serial, smscode=smscode, max_retries=max_retries)
         return decrypt_image(image_data, key)
+
+    def save_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        source: ClipSource = "local-sdk",
+        output_format: ClipOutputFormat = "mpegts",
+        duration_seconds: float | None = 10.0,
+        max_packets: int | None = None,
+        channel: int = 1,
+        ffmpeg_path: str = "ffmpeg",
+        decrypt_video: bool = False,
+        media_key: str | bytes | None = None,
+        nalu_header_size: int | None = 0,
+        cas_serial: str | None = None,
+        timeout: float | None = 10.0,
+        smscode: str | int | None = None,
+        host: str | None = None,
+        command_port: int | None = None,
+        hcnetsdk_command_frames: Iterable[bytes] | None = None,
+        hcnetsdk_read_response_after_each: bool | Iterable[bool] = True,
+        cloud_client_type: int = 9,
+        cloud_token_index: int = 0,
+        cloud_refresh_vtm: bool = True,
+    ) -> SaveMediaResult:
+        """Save a local camera clip to a path or binary file object.
+
+        ``source="local-sdk"`` uses the direct-local 9010/9020 SDK path.
+        ``source="cloud"`` uses the EZVIZ VTM cloud live stream path.
+        ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
+        port-8000 HCNetSDK bootstrap command frames, then remuxes the command
+        port media stream to MPEG-TS.
+        """
+
+        if source == "local-sdk":
+            return self._save_local_sdk_clip(
+                serial,
+                output,
+                output_format=output_format,
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+                channel=channel,
+                ffmpeg_path=ffmpeg_path,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                cas_serial=cas_serial,
+                timeout=timeout,
+                smscode=smscode,
+            )
+        if source == "hcnetsdk-command-port":
+            return self._save_hcnetsdk_command_port_clip(
+                serial,
+                output,
+                output_format=output_format,
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+                channel=channel,
+                ffmpeg_path=ffmpeg_path,
+                decrypt_video=decrypt_video,
+                timeout=timeout,
+                host=host,
+                command_port=command_port,
+                command_frames=hcnetsdk_command_frames,
+                read_response_after_each=hcnetsdk_read_response_after_each,
+            )
+        if source == "cloud":
+            return self._save_cloud_clip(
+                serial,
+                output,
+                output_format=output_format,
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+                channel=channel,
+                ffmpeg_path=ffmpeg_path,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                timeout=timeout,
+                client_type=cloud_client_type,
+                token_index=cloud_token_index,
+                refresh_vtm=cloud_refresh_vtm,
+                smscode=smscode,
+            )
+        raise PyEzvizError(f"Unsupported clip source: {source}")
+
+    def _save_local_sdk_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        output_format: ClipOutputFormat,
+        duration_seconds: float | None,
+        max_packets: int | None,
+        channel: int,
+        ffmpeg_path: str,
+        decrypt_video: bool,
+        media_key: str | bytes | None,
+        nalu_header_size: int | None,
+        cas_serial: str | None,
+        timeout: float | None,
+        smscode: str | int | None,
+    ) -> SaveMediaResult:
+        """Save a clip through the direct-local SDK path."""
+
+        start_position = None
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("wb") as output_file:
+                copy_local_sdk_stream_from_client(
+                    self,
+                    serial,
+                    output_file,
+                    output_format=output_format,
+                    decrypt_video=decrypt_video,
+                    media_key=media_key,
+                    nalu_header_size=nalu_header_size,
+                    channel=channel,
+                    cas_serial=cas_serial,
+                    timeout=timeout,
+                    max_packets=max_packets,
+                    duration_seconds=duration_seconds,
+                    ffmpeg_path=ffmpeg_path,
+                    smscode=smscode,
+                )
+        else:
+            start_position = _binary_position(output)
+            copy_local_sdk_stream_from_client(
+                self,
+                serial,
+                output,
+                output_format=output_format,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                channel=channel,
+                cas_serial=cas_serial,
+                timeout=timeout,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                ffmpeg_path=ffmpeg_path,
+                smscode=smscode,
+            )
+
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "source": "local-sdk",
+            "format": output_format,
+            "duration_seconds": duration_seconds,
+            "content_type": _content_type_for_output(
+                output,
+                default="video/mp2t" if output_format == "mpegts" else "video/mpeg",
+            ),
+        }
+
+    def _save_hcnetsdk_command_port_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        output_format: ClipOutputFormat,
+        duration_seconds: float | None,
+        max_packets: int | None,
+        channel: int,
+        ffmpeg_path: str,
+        decrypt_video: bool,
+        timeout: float | None,
+        host: str | None,
+        command_port: int | None,
+        command_frames: Iterable[bytes] | None,
+        read_response_after_each: bool | Iterable[bool],
+    ) -> SaveMediaResult:
+        """Save a clip through caller-supplied port-8000 HCNetSDK frames."""
+
+        if output_format != "mpegts":
+            raise PyEzvizError(
+                "source='hcnetsdk-command-port' currently writes MPEG-TS only"
+            )
+        if decrypt_video:
+            raise PyEzvizError(
+                "decrypt_video is not needed for the clear H.264 IDMX command-port path"
+            )
+
+        frames = tuple(command_frames or ())
+        if not frames:
+            raise PyEzvizError(
+                "source='hcnetsdk-command-port' requires hcnetsdk_command_frames"
+            )
+        endpoint = self._hcnetsdk_command_port_endpoint(
+            serial,
+            host=host,
+            command_port=command_port,
+        )
+        start_position = None
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open_hcnetsdk_command_port_stream(
+                endpoint,
+                frames,
+                timeout=timeout,
+                read_response_after_each=read_response_after_each,
+            ) as stream, output_path.open("wb") as output_file:
+                copy_local_stream_to_mpegts(
+                    stream,
+                    output_file,
+                    ffmpeg_path=ffmpeg_path,
+                    max_packets=max_packets,
+                    duration_seconds=duration_seconds,
+                )
+        else:
+            start_position = _binary_position(output)
+            with open_hcnetsdk_command_port_stream(
+                endpoint,
+                frames,
+                timeout=timeout,
+                read_response_after_each=read_response_after_each,
+            ) as stream:
+                copy_local_stream_to_mpegts(
+                    stream,
+                    output,
+                    ffmpeg_path=ffmpeg_path,
+                    max_packets=max_packets,
+                    duration_seconds=duration_seconds,
+                )
+
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "source": "hcnetsdk-command-port",
+            "format": output_format,
+            "duration_seconds": duration_seconds,
+            "content_type": _content_type_for_output(output, default="video/mp2t"),
+            "command_port": endpoint.command_port,
+        }
+
+    def _save_cloud_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        output_format: ClipOutputFormat,
+        duration_seconds: float | None,
+        max_packets: int | None,
+        channel: int,
+        ffmpeg_path: str,
+        decrypt_video: bool,
+        media_key: str | bytes | None,
+        nalu_header_size: int | None,
+        timeout: float | None,
+        client_type: int,
+        token_index: int,
+        refresh_vtm: bool,
+        smscode: str | int | None,
+    ) -> SaveMediaResult:
+        """Save a clip through the EZVIZ VTM cloud live stream path."""
+
+        start_position = None
+
+        def copy_cloud(output_file: BinaryIO) -> None:
+            if output_format == "mpegts":
+                copy_cloud_stream_to_mpegts(
+                    self,
+                    serial,
+                    output_file,
+                    channel=channel,
+                    client_type=client_type,
+                    token_index=token_index,
+                    refresh_vtm=refresh_vtm,
+                    timeout=timeout,
+                    ffmpeg_path=ffmpeg_path,
+                    max_packets=max_packets,
+                    duration_seconds=duration_seconds,
+                    decrypt_video=decrypt_video,
+                    media_key=media_key,
+                    nalu_header_size=nalu_header_size,
+                    smscode=smscode,
+                )
+                return
+            copy_cloud_stream_to_mpegps(
+                self,
+                serial,
+                output_file,
+                channel=channel,
+                client_type=client_type,
+                token_index=token_index,
+                refresh_vtm=refresh_vtm,
+                timeout=timeout,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                smscode=smscode,
+            )
+
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("wb") as output_file:
+                copy_cloud(output_file)
+        else:
+            start_position = _binary_position(output)
+            copy_cloud(output)
+
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "source": "cloud",
+            "format": output_format,
+            "duration_seconds": duration_seconds,
+            "content_type": _content_type_for_output(
+                output,
+                default="video/mp2t" if output_format == "mpegts" else "video/mpeg",
+            ),
+            "cloud_client_type": client_type,
+            "cloud_token_index": token_index,
+            "cloud_refresh_vtm": refresh_vtm,
+        }
+
+    def _hcnetsdk_command_port_endpoint(
+        self,
+        serial: str,
+        *,
+        host: str | None,
+        command_port: int | None,
+    ) -> HcNetSdkLanEndpoint:
+        """Return a command-port endpoint from overrides or device metadata."""
+
+        if host:
+            return HcNetSdkLanEndpoint(
+                serial=serial,
+                host=host,
+                command_port=command_port or 8000,
+            )
+
+        device_info = self.get_device_infos(serial)
+        device: dict[str, Any] | None = None
+        if isinstance(device_info, dict):
+            if isinstance(device_info.get("CONNECTION"), dict):
+                device = device_info
+            else:
+                for value in device_info.values():
+                    if isinstance(value, dict) and isinstance(value.get("CONNECTION"), dict):
+                        device = value
+                        break
+        if not isinstance(device, dict):
+            raise PyEzvizError(
+                "Could not find CONNECTION metadata for HCNetSDK command-port stream; "
+                "provide host"
+            )
+        endpoint = HcNetSdkLanEndpoint.from_connection(serial, device.get("CONNECTION"))
+        if command_port is None:
+            return endpoint
+        return HcNetSdkLanEndpoint(
+            serial=endpoint.serial,
+            host=endpoint.host,
+            net_host=endpoint.net_host,
+            command_port=command_port,
+            net_command_port=endpoint.net_command_port,
+            stream_port=endpoint.stream_port,
+            net_stream_port=endpoint.net_stream_port,
+            rtsp_port=endpoint.rtsp_port,
+            sdk_tls_port=endpoint.sdk_tls_port,
+        )
+
+    def save_image(
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        channel: int = 1,
+        image_url: str | None = None,
+        decrypt: bool = True,
+        smscode: str | int | None = None,
+    ) -> SaveMediaResult:
+        """Capture or download a camera image to a path or binary file object."""
+
+        capture_response: dict[str, Any] | None = None
+        selected_image_url = image_url
+        if selected_image_url is None:
+            capture_response = self.capture_picture(serial, channel, max_retries=1)
+            selected_image_url = _first_image_url(capture_response)
+            if selected_image_url is None:
+                raise PyEzvizError("Camera capture response did not include an image URL")
+
+        image_data = self.download_alarm_image(
+            selected_image_url,
+            serial,
+            decrypt=decrypt,
+            smscode=smscode,
+            max_retries=1,
+        )
+        start_position = None
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(image_data)
+        else:
+            start_position = _binary_position(output)
+            output.write(image_data)
+            output.flush()
+
+        return {
+            "ok": True,
+            "kind": "image",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "content_type": _content_type_for_output(output, default="image/jpeg"),
+            "image_url": selected_image_url,
+            "triggered_capture": capture_response is not None,
+        }
 
     def get_cam_auth_code(
         self,

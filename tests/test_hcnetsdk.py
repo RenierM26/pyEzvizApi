@@ -54,6 +54,7 @@ from pyezvizapi.hcnetsdk import (
     EzvizLocalReceiverInfoEx,
     EzvizLocalSdkClient,
     HcNetSdkClientInfo,
+    HcNetSdkCommandPortClient,
     HcNetSdkDvrCommand,
     HcNetSdkLanEndpoint,
     HcNetSdkRealDataPacket,
@@ -93,9 +94,9 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_settings_login_succeeded,
     ezviz_lan_settings_updates_services_switch,
     ezviz_lan_video_qualities,
-   ezviz_local_sdk_iv,
+    ezviz_local_sdk_iv,
     ezviz_local_sdk_ssl_iv,
-   ezviz_native_video_level,
+    ezviz_native_video_level,
     hcnetsdk_command_candidate_role,
     hcnetsdk_real_data_type_is_media,
     hcnetsdk_real_play_request,
@@ -114,6 +115,7 @@ from pyezvizapi.hcnetsdk import (
     read_ezviz_interleaved_rtp_frame,
     read_ezviz_interleaved_rtp_frame_after_prefix,
     read_ezviz_local_sdk_frame,
+    read_hcnetsdk_command_port_interleaved_frame_after_prefix,
     summarize_hcnetsdk_command_trace,
 )
 
@@ -1085,6 +1087,81 @@ def test_read_ezviz_interleaved_rtp_frame_after_prefix_rejects_long_preface() ->
 
     with pytest.raises(PyEzvizError, match="prefix exceeded"):
         read_ezviz_interleaved_rtp_frame_after_prefix(sock, max_prefix_bytes=3)
+
+
+def test_read_hcnetsdk_command_port_interleaved_frame_uses_total_length() -> None:
+    prefix = b"preface"
+    payload = b"a" * 1460
+    next_payload = b"next"
+    sock = _FragmentedSocket(
+        [
+            prefix,
+            bytes.fromhex("24 00 b8 05"),
+            payload,
+            bytes.fromhex("24 00 08 00"),
+            next_payload,
+        ]
+    )
+
+    first = read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock)
+    second = read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock)
+
+    assert first.prefix == prefix
+    assert first.frame.header.channel == 0
+    assert first.frame.header.payload_length == len(payload)
+    assert first.frame.payload == payload
+    assert not second.prefix
+    assert second.frame.header.payload_length == len(next_payload)
+    assert second.frame.payload == next_payload
+
+
+def test_read_hcnetsdk_command_port_interleaved_frame_rejects_short_length() -> None:
+    sock = _FragmentedSocket([bytes.fromhex("24 00 03 00")])
+
+    with pytest.raises(PyEzvizError, match="length is invalid"):
+        read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock)
+
+
+def test_hcnetsdk_command_port_client_bootstraps_first_media() -> None:
+    expected_timeout = 3.0
+    request_1 = build_hcnetsdk_tcp_frame(b"login-1", field_4=90)
+    request_2 = build_hcnetsdk_tcp_frame(b"play", field_4=99)
+    response_1 = build_hcnetsdk_tcp_frame(b"ok-1", field_4=1)
+    response_2 = build_hcnetsdk_tcp_frame(b"ok-2", field_4=1)
+    prefix = b"preface"
+    media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
+    media_frame = (
+        prefix
+        + b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    sock = _FakeSocket([response_1, response_2, media_frame])
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == expected_timeout
+        return sock
+
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=expected_timeout,
+        socket_factory=socket_factory,
+    )
+
+    bootstrap = client.bootstrap_media_stream(
+        [request_1, request_2],
+        max_prefix_bytes=16,
+    )
+
+    assert sock.sent == [request_1, request_2]
+    assert [exchange.response.body for exchange in bootstrap.exchanges if exchange.response] == [
+        b"ok-1",
+        b"ok-2",
+    ]
+    assert bootstrap.first_media is not None
+    assert bootstrap.first_media.prefix == prefix
+    assert bootstrap.first_media.frame.payload == media_payload
 
 
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:

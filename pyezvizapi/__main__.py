@@ -6,7 +6,7 @@ Small utility CLI for testing and scripting Ezviz operations.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 import datetime as dt
@@ -605,6 +605,172 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
 
+    parser_save = subparsers.add_parser(
+        "save",
+        help="Save a local live clip or camera image to a file",
+    )
+    subparsers_save = parser_save.add_subparsers(dest="save_action")
+    parser_save_clip = subparsers_save.add_parser(
+        "clip",
+        help="Save a direct-local camera clip to a local file",
+    )
+    parser_save_clip.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_save_clip.add_argument(
+        "--source",
+        choices=("local-sdk", "cloud", "hcnetsdk-command-port"),
+        default="local-sdk",
+        help=(
+            "Source to use: direct 9010/9020 SDK, VTM cloud live stream, or "
+            "full HCNetSDK command-port media on port 8000 (default: local-sdk)"
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--channel",
+        type=int,
+        default=1,
+        help="Camera channel number (default: 1)",
+    )
+    parser_save_clip.add_argument(
+        "--output",
+        required=True,
+        help="Local output path for the clip",
+    )
+    parser_save_clip.add_argument(
+        "--duration",
+        type=_parse_duration_seconds,
+        default=10.0,
+        help="Capture duration; accepts seconds or units like 10s/1m (default: 10s)",
+    )
+    parser_save_clip.add_argument(
+        "--max-packets",
+        type=int,
+        default=None,
+        help="Optional packet limit in addition to --duration",
+    )
+    parser_save_clip.add_argument(
+        "--format",
+        choices=("mpegts", "mpegps"),
+        default="mpegts",
+        help="Output container: MPEG-TS is easiest for FFmpeg/Home Assistant (default: mpegts)",
+    )
+    parser_save_clip.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
+    )
+    parser_save_clip.add_argument(
+        "--decrypt-video",
+        action="store_true",
+        help="Decrypt encrypted local video before writing/remuxing",
+    )
+    parser_save_clip.add_argument(
+        "--decrypt-codec",
+        choices=(
+            "auto",
+            "hevc",
+            "hevc-encrypted-header",
+            "h264",
+            "h264-clear-header",
+            "h264-encrypted-header",
+            "encrypted-header",
+        ),
+        default="encrypted-header",
+        help="Video codec transform for --decrypt-video (default: encrypted-header)",
+    )
+    parser_save_clip.add_argument(
+        "--cas-serial",
+        help="Device serial to send to cloud CAS when it differs from --serial",
+    )
+    parser_save_clip.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Local socket timeout in seconds (default: 10)",
+    )
+    parser_save_clip.add_argument(
+        "--sms-code",
+        help="Optional MFA/elevation code for media key retrieval",
+    )
+    parser_save_clip.add_argument(
+        "--host",
+        help="Camera LAN address for --source hcnetsdk-command-port",
+    )
+    parser_save_clip.add_argument(
+        "--command-port",
+        type=int,
+        help="Camera command port for --source hcnetsdk-command-port (default: 8000)",
+    )
+    parser_save_clip.add_argument(
+        "--hcnetsdk-command-frame-hex",
+        action="append",
+        default=[],
+        help=(
+            "One complete port-8000 HCNetSDK command frame as hex. May be "
+            "passed more than once."
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--hcnetsdk-command-frames-file",
+        help=(
+            "JSON or text file containing complete port-8000 command frame hex "
+            "values. JSON may be a list or an object with command_frames/frames."
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--hcnetsdk-read-responses",
+        help=(
+            "Comma-separated booleans controlling whether to read a response "
+            "after each HCNetSDK command frame (default: read after every frame)."
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type for --source cloud (default: 9)",
+    )
+    parser_save_clip.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index for --source cloud (default: 0)",
+    )
+    parser_save_clip.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing it for --source cloud",
+    )
+
+    parser_save_image = subparsers_save.add_parser(
+        "image",
+        help="Capture or download a camera image to a local file",
+    )
+    parser_save_image.add_argument("--serial", required=True, help="camera SERIAL")
+    parser_save_image.add_argument(
+        "--channel",
+        type=int,
+        default=1,
+        help="Camera channel number (default: 1)",
+    )
+    parser_save_image.add_argument(
+        "--output",
+        required=True,
+        help="Local output path for the image",
+    )
+    parser_save_image.add_argument(
+        "--image-url",
+        help="Download this existing EZVIZ image URL instead of triggering capture",
+    )
+    parser_save_image.add_argument(
+        "--no-decrypt",
+        action="store_true",
+        help="Write encrypted image bytes as-is instead of decrypting when needed",
+    )
+    parser_save_image.add_argument(
+        "--sms-code",
+        help="Optional MFA/elevation code for encrypted image key retrieval",
+    )
+
     parser_stream = subparsers.add_parser(
         "stream",
         help="Experimental VTM cloud stream helpers",
@@ -1077,10 +1243,17 @@ def _action_requires_service_urls(args: argparse.Namespace) -> bool:
     """Return True when the selected CLI path needs CAS service metadata."""
 
     return bool(
-        args.action == "stream"
-        and (
-            args.stream_action == "local-sdk-keys"
-            or (args.stream_action == "local-sdk-dump" and args.fetch_cas)
+        (
+            args.action == "stream"
+            and (
+                args.stream_action == "local-sdk-keys"
+                or (args.stream_action == "local-sdk-dump" and args.fetch_cas)
+            )
+        )
+        or (
+            args.action == "save"
+            and getattr(args, "save_action", None) == "clip"
+            and getattr(args, "source", None) == "local-sdk"
         )
     )
 
@@ -1734,6 +1907,176 @@ def _handle_cloud_video_decrypt(
     else:
         sys.stdout.write(f"Wrote decrypted cloud video to {output_path}\n")
     return 0
+
+
+def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> None:
+    """Write a human or JSON result for save commands."""
+
+    if args.json:
+        _write_json(result)
+    else:
+        sys.stdout.write(f"Wrote {result['bytes']} bytes to {result['output']}\n")
+
+
+def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Save a short direct-local camera clip to disk."""
+
+    command_frames = (
+        _hcnetsdk_command_frames_from_args(args)
+        if args.source == "hcnetsdk-command-port"
+        else None
+    )
+    read_response_after_each = (
+        _hcnetsdk_read_response_policy(args, len(command_frames or ()))
+        if command_frames is not None
+        else True
+    )
+    save_kwargs: dict[str, Any] = {
+        "source": args.source,
+        "output_format": args.format,
+        "duration_seconds": args.duration,
+        "max_packets": args.max_packets,
+        "channel": args.channel,
+        "ffmpeg_path": args.ffmpeg_path,
+        "decrypt_video": args.decrypt_video,
+        "nalu_header_size": _codec_nalu_header_size(args.decrypt_codec),
+        "cas_serial": args.cas_serial,
+        "timeout": args.timeout,
+        "smscode": args.sms_code,
+        "host": args.host,
+        "command_port": args.command_port,
+        "hcnetsdk_command_frames": command_frames,
+        "hcnetsdk_read_response_after_each": read_response_after_each,
+    }
+    if args.source == "cloud":
+        save_kwargs.update(
+            {
+                "cloud_client_type": args.client_type,
+                "cloud_token_index": args.token_index,
+                "cloud_refresh_vtm": not args.no_refresh_vtm,
+            }
+        )
+    result = client.save_clip(args.serial, args.output, **save_kwargs)
+    _write_save_result(args, result)
+    return 0
+
+
+def _hcnetsdk_command_frames_from_args(args: argparse.Namespace) -> tuple[bytes, ...]:
+    """Load complete command-port frames from CLI hex values or a file."""
+
+    frame_hex_values = list(getattr(args, "hcnetsdk_command_frame_hex", []) or [])
+    frames_file = getattr(args, "hcnetsdk_command_frames_file", None)
+    if frames_file:
+        frame_hex_values.extend(_hcnetsdk_command_frame_hex_values_from_file(frames_file))
+    frames = tuple(_bytes_from_hex_value(value) for value in frame_hex_values)
+    if not frames:
+        raise PyEzvizError(
+            "--source hcnetsdk-command-port requires --hcnetsdk-command-frame-hex "
+            "or --hcnetsdk-command-frames-file"
+        )
+    return frames
+
+
+def _hcnetsdk_command_frame_hex_values_from_file(path: str) -> list[str]:
+    """Read command-frame hex values from JSON or text."""
+
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return [
+            line.split("#", 1)[0].strip()
+            for line in text.splitlines()
+            if line.split("#", 1)[0].strip()
+        ]
+    return list(_iter_hcnetsdk_command_frame_hex_values(data))
+
+
+def _iter_hcnetsdk_command_frame_hex_values(value: Any) -> Iterator[str]:
+    """Yield command-frame hex strings from simple JSON shapes."""
+
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from _iter_hcnetsdk_command_frame_hex_values(item)
+        return
+    if isinstance(value, dict):
+        for key in (
+            "hex",
+            "frame_hex",
+            "frameHex",
+            "command_frame_hex",
+            "commandFrameHex",
+        ):
+            item = value.get(key)
+            if isinstance(item, str):
+                yield item
+        for key in ("command_frames", "commandFrames", "frames"):
+            item = value.get(key)
+            if isinstance(item, list):
+                yield from _iter_hcnetsdk_command_frame_hex_values(item)
+
+
+def _bytes_from_hex_value(value: str) -> bytes:
+    """Decode a user-supplied hex byte string."""
+
+    normalized = value.strip().replace(" ", "").replace(":", "").replace("-", "")
+    if normalized.startswith(("0x", "0X")):
+        normalized = normalized[2:]
+    try:
+        return bytes.fromhex(normalized)
+    except ValueError as err:
+        raise PyEzvizError("Invalid HCNetSDK command frame hex") from err
+
+
+def _hcnetsdk_read_response_policy(
+    args: argparse.Namespace,
+    frame_count: int,
+) -> bool | tuple[bool, ...]:
+    """Return response-read policy for command-port bootstrapping."""
+
+    value = getattr(args, "hcnetsdk_read_responses", None)
+    if not value:
+        return True
+    parts = [part.strip().lower() for part in value.split(",") if part.strip()]
+    flags = tuple(part in {"1", "true", "yes", "y"} for part in parts)
+    if len(flags) != frame_count:
+        raise PyEzvizError(
+            "--hcnetsdk-read-responses must include one boolean per command frame"
+        )
+    valid_values = {"1", "0", "true", "false", "yes", "no", "y", "n"}
+    unknown = [part for part in parts if part not in valid_values]
+    if unknown:
+        raise PyEzvizError("Invalid --hcnetsdk-read-responses value")
+    return flags
+
+
+def _handle_save_image(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Save a camera image to disk, triggering capture when no URL is supplied."""
+
+    result = client.save_image(
+        args.serial,
+        args.output,
+        channel=args.channel,
+        image_url=args.image_url,
+        decrypt=not args.no_decrypt,
+        smscode=args.sms_code,
+    )
+    _write_save_result(args, result)
+    return 0
+
+
+def _handle_save(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Handle person-friendly local save commands."""
+
+    if args.save_action == "clip":
+        return _handle_save_clip(args, client)
+    if args.save_action == "image":
+        return _handle_save_image(args, client)
+    _LOGGER.error("Action not implemented, try running with -h switch for help")
+    return 2
 
 
 def _handle_light(args: argparse.Namespace, client: EzvizClient) -> int:
@@ -3157,6 +3500,14 @@ def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
         _LOGGER.warning("Failed to save token file: %s", p)
 
 
+def _save_clip_can_run_without_cloud_credentials(args: argparse.Namespace) -> bool:
+    return (
+        args.action == "save"
+        and getattr(args, "save_action", None) == "clip"
+        and getattr(args, "source", None) == "hcnetsdk-command-port"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     args = _parse_args(argv)
@@ -3182,6 +3533,16 @@ def main(argv: list[str] | None = None) -> int:
             _LOGGER.error("%s", exp)
             return 1
 
+    if _save_clip_can_run_without_cloud_credentials(args):
+        client = EzvizClient(args.username, args.password, args.region, token=token)
+        try:
+            return _handle_save(args, client)
+        except PyEzvizError as exp:
+            _LOGGER.error("%s", exp)
+            return 1
+        finally:
+            client.close_session()
+
     if not has_session_token and (not args.username or not args.password):
         _LOGGER.error("Provide --token-file (existing) or --username/--password")
         return 2
@@ -3206,6 +3567,8 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_mqtt(args, client)
         if args.action == "stream":
             return _handle_stream(args, client)
+        if args.action == "save":
+            return _handle_save(args, client)
         if args.action == "camera":
             return _handle_camera(args, client)
         if args.action == "pagelist":

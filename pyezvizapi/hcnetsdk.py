@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import IntEnum
 import hashlib
@@ -365,7 +366,7 @@ class HcNetSdkTcpPayloadShape:
 
 @dataclass(frozen=True)
 class HcNetSdkTcpShapeLogRecord:
-    """One secret-safe HCNetSDK command-port shape line from Frida logs."""
+    """One secret-safe HCNetSDK command-port shape log line."""
 
     direction: str
     fd: int
@@ -379,7 +380,7 @@ class HcNetSdkTcpShapeLogRecord:
 
 @dataclass(frozen=True)
 class HcNetSdkSemanticLogEvent:
-    """One secret-safe semantic HCNetSDK event emitted by the Frida hook."""
+    """One secret-safe semantic HCNetSDK event."""
 
     name: str
     phase: str | None = None
@@ -390,11 +391,10 @@ class HcNetSdkSemanticLogEvent:
 class HcNetSdkCommandTraceSummary:
     """Secret-safe summary of one mixed HCNetSDK command-port trace.
 
-    The Frida command-shape hook intentionally avoids raw payloads. This
-    summary preserves only the useful correlation: which command candidates
-    were sent during the settings login call, which follow-up command
-    candidates appeared afterward, and whether playback/media/keyframe
-    boundaries were observed.
+    Shape logs intentionally avoid raw payloads. This summary preserves only
+    the useful correlation: which command candidates were sent during the
+    settings login call, which follow-up command candidates appeared afterward,
+    and whether playback/media/keyframe boundaries were observed.
     """
 
     settings_login_commands: tuple[int, ...] = ()
@@ -449,6 +449,22 @@ class HcNetSdkTcpFrame:
         if self.header.body_length != len(self.body):
             raise PyEzvizError("HCNetSDK TCP frame header/body length mismatch")
         return self.header.to_bytes() + self.body
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortExchange:
+    """One command-port request and its optional response."""
+
+    request: bytes
+    response: HcNetSdkTcpFrame | None = None
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortStreamBootstrap:
+    """Result of a command-port stream bootstrap."""
+
+    exchanges: tuple[HcNetSdkCommandPortExchange, ...]
+    first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
 
 
 @dataclass(frozen=True)
@@ -1365,12 +1381,12 @@ def classify_hcnetsdk_tcp_payload(data: bytes) -> HcNetSdkTcpPayloadShape:
 def parse_hcnetsdk_tcp_shape_log_line(
     line: str,
 ) -> HcNetSdkTcpShapeLogRecord | None:
-    """Parse one secret-safe Frida HCNetSDK TCP shape log line.
+    """Parse one secret-safe HCNetSDK TCP shape log line.
 
-    The narrow command-port hook intentionally prints only metadata, not raw
-    bytes. This parser turns those metadata lines into the same Python shape
-    model used by direct byte classification, so captured traces can drive the
-    next packet-builder tests without copying secrets into fixtures.
+    These lines contain only metadata, not raw bytes. This parser turns that
+    metadata into the same Python shape model used by direct byte
+    classification, so captured traces can drive packet-builder tests without
+    copying secrets into fixtures.
     """
     match = re.search(
         r"\[(?:hcnetsdk|native)-(?P<direction>send|recv|read|write)\]\s+"
@@ -1427,7 +1443,7 @@ def parse_hcnetsdk_tcp_shape_log_line(
 
 
 def parse_hcnetsdk_semantic_log_line(line: str) -> HcNetSdkSemanticLogEvent | None:
-    """Parse one secret-safe HCNetSDK semantic event line from Frida logs."""
+    """Parse one secret-safe HCNetSDK semantic event line."""
     match = re.search(r"\[hcnetsdk-semantic\]\s+(?P<body>.*)$", line.strip())
     if not match:
         return None
@@ -1463,7 +1479,7 @@ def parse_hcnetsdk_semantic_log_line(line: str) -> HcNetSdkSemanticLogEvent | No
 def summarize_hcnetsdk_command_trace(
     lines: Iterable[str],
 ) -> HcNetSdkCommandTraceSummary:
-    """Summarize one mixed HCNetSDK command-shape/semantic Frida trace.
+    """Summarize one mixed HCNetSDK command-shape/semantic trace.
 
     This reducer is deliberately conservative: it uses semantic enter/leave
     boundaries to associate redacted write command candidates with
@@ -1551,6 +1567,15 @@ def parse_hcnetsdk_tcp_frame(data: bytes) -> HcNetSdkTcpFrame:
     )
 
 
+def read_hcnetsdk_tcp_frame(sock: Any) -> HcNetSdkTcpFrame:
+    """Read one complete HCNetSDK command-port frame from a socket-like object."""
+    header = parse_hcnetsdk_tcp_frame_header(_recv_exact(sock, HCNETSDK_TCP_HEADER_LENGTH))
+    return HcNetSdkTcpFrame(
+        header=header,
+        body=_recv_exact(sock, header.body_length),
+    )
+
+
 def build_hcnetsdk_tcp_frame(
     body: bytes = b"",
     *,
@@ -1572,7 +1597,7 @@ def hcnetsdk_command_candidate_role(candidate: int | None) -> str | None:
     """Return the current role label for an observed command candidate.
 
     The names are trace-derived labels, not a complete HCNetSDK command table.
-    They are useful for reducing redacted Frida captures while the underlying
+    They are useful for reducing redacted captures while the underlying
     encrypted request format is still being mapped.
     """
     if candidate == HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN:
@@ -1587,11 +1612,11 @@ def iter_hcnetsdk_tcp_frame_shapes(
 ) -> Iterator[HcNetSdkTcpFrameShape]:
     """Yield command frames reconstructed from secret-safe socket shape logs.
 
-    The narrow Frida hook logs response headers and bodies as separate reads
-    when the app asks libc for 16 bytes first and then the implied body length.
-    This reducer pairs those adjacent records without needing payload bytes.
-    Whole-frame writes are yielded as header-only shapes because their body
-    content remains intentionally redacted.
+    Some logs record response headers and bodies as separate reads when the app
+    asks libc for 16 bytes first and then the implied body length. This reducer
+    pairs those adjacent records without needing payload bytes. Whole-frame
+    writes are yielded as header-only shapes because their body content remains
+    intentionally redacted.
     """
     pending = list(records)
     index = 0
@@ -2741,6 +2766,153 @@ def read_ezviz_interleaved_rtp_frame_after_prefix(
         prefix.extend(byte)
         if len(prefix) > max_prefix_bytes:
             raise PyEzvizError("EZVIZ RTP prefix exceeded limit before frame magic")
+
+
+def read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+    sock: Any,
+    *,
+    max_prefix_bytes: int = 4096,
+) -> EzvizInterleavedRtpFrameWithPrefix:
+    """Read one HCNetSDK command-port interleaved media frame.
+
+    The local stream port uses ``$`` + channel + big-endian payload length.
+    Port 8000 uses the same magic byte, but its two length bytes are a
+    little-endian total frame length. Keeping this reader separate prevents the
+    command-port path from coalescing adjacent media frames.
+    """
+    if max_prefix_bytes < 0:
+        raise PyEzvizError("HCNetSDK command-port prefix limit must be non-negative")
+
+    prefix = bytearray()
+    while True:
+        byte = _recv_exact(sock, 1)
+        if byte[0] == EZVIZ_RTP_INTERLEAVED_MAGIC:
+            header_tail = _recv_exact(sock, 3)
+            total_length = int.from_bytes(header_tail[1:3], "little")
+            if total_length < 4:
+                raise PyEzvizError(
+                    "HCNetSDK command-port interleaved frame length is invalid"
+                )
+            payload_length = total_length - 4
+            return EzvizInterleavedRtpFrameWithPrefix(
+                prefix=bytes(prefix),
+                frame=EzvizInterleavedRtpFrame(
+                    header=EzvizInterleavedRtpFrameHeader(
+                        channel=header_tail[0],
+                        payload_length=payload_length,
+                    ),
+                    payload=_recv_exact(sock, payload_length),
+                ),
+            )
+
+        prefix.extend(byte)
+        if len(prefix) > max_prefix_bytes:
+            raise PyEzvizError(
+                "HCNetSDK command-port prefix exceeded limit before frame magic"
+            )
+
+
+class HcNetSdkCommandPortClient:
+    """Small native-Python client for HCNetSDK command-port media framing."""
+
+    def __init__(
+        self,
+        endpoint: HcNetSdkLanEndpoint,
+        *,
+        timeout: float | None = 10.0,
+        socket_factory: SocketFactory = socket.create_connection,
+    ) -> None:
+        self.endpoint = endpoint
+        self.timeout = timeout
+        self.socket_factory = socket_factory
+        self._socket: Any | None = None
+
+    def __enter__(self) -> HcNetSdkCommandPortClient:
+        self.connect()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    @property
+    def sock(self) -> Any:
+        """Return the connected socket, opening it lazily."""
+        return self.connect()
+
+    def connect(self) -> Any:
+        """Open the command-port TCP socket if needed."""
+        if self._socket is None:
+            self._socket = self.socket_factory(
+                (self.endpoint.host, self.endpoint.command_port),
+                self.timeout,
+            )
+        return self._socket
+
+    def close(self) -> None:
+        """Close the command-port socket."""
+        if self._socket is None:
+            return
+        with suppress(Exception):
+            self._socket.close()
+        self._socket = None
+
+    def send_command_frame(self, frame: bytes) -> None:
+        """Send one complete command-port frame."""
+        _send_all(self.sock, frame)
+
+    def read_tcp_frame(self) -> HcNetSdkTcpFrame:
+        """Read one non-media command-port response frame."""
+        return read_hcnetsdk_tcp_frame(self.sock)
+
+    def read_media_frame_after_prefix(
+        self,
+        *,
+        max_prefix_bytes: int = 4096,
+    ) -> EzvizInterleavedRtpFrameWithPrefix:
+        """Read the next command-port media frame."""
+        return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+            self.sock,
+            max_prefix_bytes=max_prefix_bytes,
+        )
+
+    def bootstrap_media_stream(
+        self,
+        command_frames: Iterable[bytes],
+        *,
+        read_response_after_each: bool | Iterable[bool] = True,
+        read_first_media: bool = True,
+        max_prefix_bytes: int = 4096,
+    ) -> HcNetSdkCommandPortStreamBootstrap:
+        """Send command frames and optionally read the first media frame."""
+        frames = tuple(command_frames)
+        response_flags: tuple[bool, ...] | None
+        if isinstance(read_response_after_each, bool):
+            response_flags = None
+        else:
+            response_flags = tuple(read_response_after_each)
+            if len(response_flags) != len(frames):
+                raise PyEzvizError(
+                    "HCNetSDK response-read policy length must match command frames"
+                )
+
+        exchanges: list[HcNetSdkCommandPortExchange] = []
+        for index, frame in enumerate(frames):
+            self.send_command_frame(frame)
+            should_read = (
+                read_response_after_each if response_flags is None else response_flags[index]
+            )
+            response = self.read_tcp_frame() if should_read else None
+            exchanges.append(HcNetSdkCommandPortExchange(frame, response))
+
+        first_media = (
+            self.read_media_frame_after_prefix(max_prefix_bytes=max_prefix_bytes)
+            if read_first_media
+            else None
+        )
+        return HcNetSdkCommandPortStreamBootstrap(
+            exchanges=tuple(exchanges),
+            first_media=first_media,
+        )
 
 
 def _parse_local_device_content(value: Any) -> EzvizLocalDeviceContent | None:

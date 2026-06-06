@@ -24,6 +24,8 @@ from .hcnetsdk import (
     EzvizLocalReceiverInfoExAttrs,
     EzvizLocalSdkClient,
     EzvizLocalSdkStreamBootstrap,
+    HcNetSdkCommandPortClient,
+    HcNetSdkCommandPortStreamBootstrap,
     HcNetSdkLanEndpoint,
     HcNetSdkRealDataPacket,
     SocketFactory,
@@ -172,6 +174,75 @@ class EzvizLocalSdkMediaStream:
             emitted += 1
 
 
+class HcNetSdkCommandPortMediaStream:
+    """Port-8000 HCNetSDK media stream using caller-supplied command frames."""
+
+    def __init__(
+        self,
+        command_client: HcNetSdkCommandPortClient,
+        command_frames: Iterable[bytes],
+        *,
+        read_response_after_each: bool | Iterable[bool] = True,
+        read_first_media: bool = True,
+        max_prefix_bytes: int = 4096,
+    ) -> None:
+        self.command_client = command_client
+        self.command_frames = tuple(command_frames)
+        self.read_response_after_each = read_response_after_each
+        self.read_first_media = read_first_media
+        self.max_prefix_bytes = max_prefix_bytes
+        self.bootstrap: HcNetSdkCommandPortStreamBootstrap | None = None
+        self._first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
+
+    def __enter__(self) -> HcNetSdkCommandPortMediaStream:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the underlying command-port socket."""
+        self.command_client.close()
+
+    def start(self) -> HcNetSdkCommandPortStreamBootstrap:
+        """Send bootstrap frames and read the first media frame."""
+        self.bootstrap = self.command_client.bootstrap_media_stream(
+            self.command_frames,
+            read_response_after_each=self.read_response_after_each,
+            read_first_media=self.read_first_media,
+            max_prefix_bytes=self.max_prefix_bytes,
+        )
+        self._first_media = self.bootstrap.first_media
+        if self.read_first_media and self._first_media is None:
+            raise PyEzvizError("HCNetSDK command-port stream did not return media")
+        return self.bootstrap
+
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+    ) -> Iterator[EzvizLocalStreamPacket]:
+        """Yield command-port RTP payloads as MPEG-PS or IDMX packet bodies."""
+        if max_packets is not None and max_packets <= 0:
+            return
+
+        if self.bootstrap is None:
+            self.start()
+
+        emitted = 0
+        if self._first_media is not None:
+            yield _hcnetsdk_command_port_media_packet(self._first_media)
+            emitted += 1
+            self._first_media = None
+
+        while max_packets is None or emitted < max_packets:
+            media = self.command_client.read_media_frame_after_prefix(
+                max_prefix_bytes=self.max_prefix_bytes,
+            )
+            yield _hcnetsdk_command_port_media_packet(media)
+            emitted += 1
+
+
 def open_local_sdk_stream(  # noqa: PLR0913
     endpoint: HcNetSdkLanEndpoint,
     device_info: EzvizCasDeviceInfo,
@@ -213,6 +284,34 @@ def open_local_sdk_stream(  # noqa: PLR0913
         stream_setup_sequence=stream_setup_sequence,
         stream_rate=stream_rate,
         stream_mode=stream_mode,
+        max_prefix_bytes=max_prefix_bytes,
+    )
+
+
+def open_hcnetsdk_command_port_stream(
+    endpoint: HcNetSdkLanEndpoint,
+    command_frames: Iterable[bytes],
+    *,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory | None = None,
+    read_response_after_each: bool | Iterable[bool] = True,
+    read_first_media: bool = True,
+    max_prefix_bytes: int = 4096,
+) -> HcNetSdkCommandPortMediaStream:
+    """Return a command-port media stream for explicit bootstrap frames."""
+    if socket_factory is None:
+        command_client = HcNetSdkCommandPortClient(endpoint, timeout=timeout)
+    else:
+        command_client = HcNetSdkCommandPortClient(
+            endpoint,
+            timeout=timeout,
+            socket_factory=socket_factory,
+        )
+    return HcNetSdkCommandPortMediaStream(
+        command_client,
+        command_frames,
+        read_response_after_each=read_response_after_each,
+        read_first_media=read_first_media,
         max_prefix_bytes=max_prefix_bytes,
     )
 
@@ -595,9 +694,12 @@ def copy_local_stream_to_decrypted_mpegts(
         monotonic=monotonic,
     )
     if _local_stream_packets_are_idmx(packets):
-        hevc = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
-        process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
-        _copy_mpegps_payloads_to_mpegts([hevc], output, process=process)
+        annexb = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
+        if _annexb_looks_like_h264(annexb):
+            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        else:
+            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+        _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
     decrypted = decrypt_hikvision_ps_video(
         b"".join(packets),
@@ -641,8 +743,19 @@ def copy_local_stream_to_mpegts(
         output.flush()
         return
 
+    while _is_ignorable_leading_stream_payload(first_payload):
+        try:
+            first_payload = next(payloads)
+        except StopIteration:
+            output.flush()
+            return
+
     if _looks_like_idmx_local_payload(first_payload):
-        raise _unsupported_idmx_local_payload_error()
+        packets = list(chain((first_payload,), payloads))
+        annexb = _idmx_local_packets_to_h264_annexb(packets)
+        process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
+        return
     if not first_payload.startswith(MPEG_PS_START_CODE):
         raise PyEzvizError(
             "Unsupported EZVIZ local stream payload format: expected MPEG-PS payload"
@@ -654,6 +767,11 @@ def copy_local_stream_to_mpegts(
         output,
         process=process,
     )
+
+
+def _is_ignorable_leading_stream_payload(payload: bytes) -> bool:
+    """Return True for tiny command-port blips before the first media record."""
+    return bool(payload) and len(payload) < len(MPEG_PS_START_CODE)
 
 
 def copy_hcnetsdk_real_data_to_mpegts(
@@ -681,6 +799,43 @@ def _local_media_packet(
         body=body,
         prefix=media.prefix,
     )
+
+
+def _hcnetsdk_command_port_media_packet(
+    media: EzvizInterleavedRtpFrameWithPrefix,
+) -> EzvizLocalStreamPacket:
+    body = _strip_local_sdk_payload_header(
+        _hcnetsdk_command_port_media_payload(media.frame.payload)
+    )
+    return EzvizLocalStreamPacket(
+        channel=media.frame.header.channel,
+        length=len(body),
+        body=body,
+        encrypted=_looks_like_idmx_local_payload(body),
+        prefix=media.prefix,
+    )
+
+
+def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:
+    if _looks_like_idmx_local_payload(payload):
+        return payload
+    try:
+        unwrapped = rtp_payload(payload)
+    except PyEzvizError as err:
+        if str(err) not in {"Unsupported RTP version", "RTP packet is too short"}:
+            raise
+        return payload
+    if _looks_like_hcnetsdk_wrapped_media_payload(unwrapped):
+        return unwrapped
+    return payload
+
+
+def _looks_like_hcnetsdk_wrapped_media_payload(payload: bytes) -> bool:
+    if payload.startswith(MPEG_PS_START_CODE):
+        return True
+    if _looks_like_idmx_local_payload(payload):
+        return True
+    return _strip_local_sdk_payload_header(payload).startswith(MPEG_PS_START_CODE)
 
 
 def _strip_local_sdk_payload_header(payload: bytes) -> bytes:
@@ -766,10 +921,41 @@ def _open_local_hevc_mpegts_remux_process(
         raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
 
+def _open_local_h264_mpegts_remux_process(
+    ffmpeg_path: str,
+) -> subprocess.Popen[bytes]:
+    try:
+        return subprocess.Popen(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "h264",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+
+
 IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
 IDMX_LOCAL_FRAME_HEADER_SIZE = 13
+IDMX_LOCAL_FRAME_SENTINEL_OFFSETS = (8, 9)
 HEVC_NAL_HEADER_SIZE = 2
+H264_FU_A_NAL_TYPE = 28
 IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = 12
+IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = b"\x24\0"
 
 
 def collect_local_stream_media_packets(
@@ -792,11 +978,161 @@ def collect_local_stream_media_packets(
 
 
 def _looks_like_idmx_local_payload(payload: bytes) -> bool:
-    return (
-        len(payload) >= IDMX_LOCAL_FRAME_HEADER_SIZE
-        and payload[0] == 0x0D
-        and payload[9:13] == IDMX_LOCAL_FRAME_SENTINEL
+    return _idmx_local_frame_header_size(payload) is not None or any(
+        _iter_idmx_local_frames(payload)
     )
+
+
+def _idmx_local_frame_header_size(payload: bytes) -> int | None:
+    for sentinel_offset in IDMX_LOCAL_FRAME_SENTINEL_OFFSETS:
+        header_size = sentinel_offset + len(IDMX_LOCAL_FRAME_SENTINEL)
+        if (
+            len(payload) >= header_size
+            and payload[sentinel_offset:header_size] == IDMX_LOCAL_FRAME_SENTINEL
+        ):
+            return header_size
+    return None
+
+
+def _iter_idmx_local_frames(payload: bytes) -> Iterator[bytes]:  # noqa: PLR0912
+    search_start = 0
+    while True:
+        sentinel_offset = payload.find(IDMX_LOCAL_FRAME_SENTINEL, search_start)
+        if sentinel_offset < 0:
+            break
+
+        valid_frame_starts: list[tuple[int, int]] = []
+        prefixed_frames: list[tuple[int, int, int]] = []
+        for local_sentinel_offset in IDMX_LOCAL_FRAME_SENTINEL_OFFSETS:
+            frame_start = sentinel_offset - local_sentinel_offset
+            if frame_start < 0:
+                continue
+            header_size = _idmx_local_frame_header_size(payload[frame_start:])
+            header_score = _idmx_local_frame_header_score(
+                payload[frame_start:],
+                header_size,
+            )
+            if header_size is None or header_score is None:
+                continue
+            prefix_start = frame_start - 4
+            if prefix_start >= 0:
+                prefixed_length = int.from_bytes(
+                    payload[prefix_start:frame_start],
+                    "little",
+                )
+                frame_end = frame_start + prefixed_length
+                if prefixed_length >= header_size and frame_end <= len(payload):
+                    prefixed_frames.append((frame_start, frame_end, header_score))
+                else:
+                    valid_frame_starts.append((frame_start, header_score))
+            else:
+                valid_frame_starts.append((frame_start, header_score))
+
+        if prefixed_frames:
+            frame_start, frame_end, _score = min(
+                prefixed_frames,
+                key=lambda item: (item[1], item[2]),
+            )
+            yield from _iter_idmx_local_frame_or_nested(payload[frame_start:frame_end])
+            search_start = frame_end
+            continue
+
+        if valid_frame_starts:
+            frame_start, _score = min(valid_frame_starts, key=lambda item: item[1])
+            next_sentinel_offset = payload.find(
+                IDMX_LOCAL_FRAME_SENTINEL,
+                sentinel_offset + 1,
+            )
+            if next_sentinel_offset < 0:
+                yield payload[frame_start:]
+                break
+
+            frame_end = next_sentinel_offset
+            next_frame_starts: list[tuple[int, int]] = []
+            for local_sentinel_offset in IDMX_LOCAL_FRAME_SENTINEL_OFFSETS:
+                next_frame_start = next_sentinel_offset - local_sentinel_offset
+                next_header_size = _idmx_local_frame_header_size(
+                    payload[next_frame_start:]
+                )
+                next_header_score = _idmx_local_frame_header_score(
+                    payload[next_frame_start:],
+                    next_header_size,
+                )
+                if (
+                    next_frame_start > frame_start
+                    and next_header_size is not None
+                    and next_header_score is not None
+                ):
+                    next_frame_starts.append((next_frame_start, next_header_score))
+            if next_frame_starts:
+                next_frame_start, _score = min(
+                    next_frame_starts,
+                    key=lambda item: (item[1], item[0]),
+                )
+                frame_end = _idmx_frame_end_before_next_prefix(payload, next_frame_start)
+
+            yield from _iter_idmx_local_frame_or_nested(payload[frame_start:frame_end])
+            search_start = frame_end
+            continue
+
+        search_start = sentinel_offset + 1
+
+
+def _idmx_local_frame_header_score(
+    payload: bytes,
+    header_size: int | None,
+) -> int | None:
+    if header_size is None or len(payload) < header_size:
+        return None
+    lead = payload[0]
+    if header_size == 13 and lead in {0x0D, 0xFA}:
+        return 0
+    if header_size == 12 and lead in {0x80, 0x90, 0xA0}:
+        return 0
+    if header_size == 13 and payload[1] in {0x80, 0x90, 0xA0}:
+        return 1
+    return None
+
+
+def _iter_idmx_local_frame_or_nested(frame: bytes) -> Iterator[bytes]:
+    """Yield one IDMX frame, or nested frames from command-port aggregate records."""
+    header_size = _idmx_local_frame_header_size(frame)
+    if header_size is None:
+        yield frame
+        return
+    body = frame[header_size:]
+    if not body.startswith(b"\x00\x10") or body.count(IDMX_LOCAL_FRAME_SENTINEL) <= 1:
+        yield frame
+        return
+    nested_frames = tuple(_iter_idmx_local_frames(body))
+    if not any(_idmx_local_frame_contains_media(nested) for nested in nested_frames):
+        yield frame
+        return
+    yield from nested_frames
+
+
+def _idmx_local_frame_contains_media(frame: bytes) -> bool:
+    header_size = _idmx_local_frame_header_size(frame)
+    if header_size is None:
+        return False
+    body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    return (
+        _looks_like_idmx_hevc_parameter_frame(body)
+        or _looks_like_idmx_hevc_media_frame(body)
+        or _looks_like_idmx_h264_fu_a_frame(body)
+        or _looks_like_idmx_h264_clear_nal(body)
+    )
+
+
+def _idmx_frame_end_before_next_prefix(payload: bytes, next_frame_start: int) -> int:
+    prefix_start = next_frame_start - 4
+    if prefix_start < 0:
+        return next_frame_start
+    prefixed_length = int.from_bytes(payload[prefix_start:next_frame_start], "little")
+    remaining_after_prefix = len(payload) - next_frame_start
+    if 0 < prefixed_length <= remaining_after_prefix:
+        return prefix_start
+    return next_frame_start
 
 
 def _local_stream_packets_are_idmx(packets: list[bytes]) -> bool:
@@ -816,10 +1152,12 @@ def _decrypt_idmx_local_packets_to_annexb(
     aes_key = _local_media_aes_key(media_key)
     output = bytearray()
     active_fu: bytearray | None = None
-    for packet in packets:
-        if not _looks_like_idmx_local_payload(packet):
+    active_h264_fu: bytearray | None = None
+    for frame in _iter_idmx_local_frames(b"".join(packets)):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
             raise PyEzvizError("Mixed EZVIZ local stream payload formats are unsupported")
-        body = packet[IDMX_LOCAL_FRAME_HEADER_SIZE:]
+        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
         if _looks_like_idmx_hevc_parameter_frame(body):
             # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
             # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
@@ -831,11 +1169,45 @@ def _decrypt_idmx_local_packets_to_annexb(
                 aes_key,
                 active_fu=active_fu,
             )
+            continue
+        if _looks_like_idmx_h264_fu_a_frame(body):
+            active_h264_fu = _append_idmx_h264_fu_a_payload(
+                output,
+                body,
+                active_fu=active_h264_fu,
+            )
+            continue
+        if _looks_like_idmx_h264_clear_nal(body):
+            active_h264_fu = None
+            _append_h264_nal(output, body)
     if active_fu is not None:
         _append_decrypted_hevc_nal(output, bytes(active_fu), aes_key)
     if not output:
-        raise PyEzvizError("EZVIZ local IDMX stream did not include HEVC media frames")
+        raise PyEzvizError("EZVIZ local IDMX stream did not include media frames")
     return bytes(output)
+
+
+def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
+    output = bytearray()
+    active_h264_fu: bytearray | None = None
+    for frame in _iter_idmx_local_frames(b"".join(packets)):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        if _looks_like_idmx_h264_fu_a_frame(body):
+            active_h264_fu = _append_idmx_h264_fu_a_payload(
+                output,
+                body,
+                active_fu=active_h264_fu,
+            )
+            continue
+        if _looks_like_idmx_h264_clear_nal(body):
+            active_h264_fu = None
+            _append_h264_nal(output, body)
+    if not output:
+        raise PyEzvizError("EZVIZ local IDMX stream did not include clear H.264 media frames")
+    return _trim_trailing_h264_non_vcl_nals(bytes(output))
 
 
 def _local_media_aes_key(media_key: str | bytes) -> bytes:
@@ -855,6 +1227,31 @@ def _looks_like_idmx_hevc_media_frame(body: bytes) -> bool:
         len(body) > IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET
         and body.startswith(b"\x40\x00\x00\x02\x80\x06")
     )
+
+
+def _looks_like_idmx_h264_fu_a_frame(body: bytes) -> bool:
+    return len(body) > 2 and body[0] & 0x1F == H264_FU_A_NAL_TYPE
+
+
+def _looks_like_idmx_h264_clear_nal(body: bytes) -> bool:
+    if not body:
+        return False
+    return (body[0] & 0x1F) in {1, 5, 6, 7, 8, 9}
+
+
+def _strip_idmx_command_h264_record_trailer(body: bytes) -> bytes:
+    if len(body) <= 4:
+        return body
+    if not (
+        _looks_like_idmx_h264_fu_a_frame(body)
+        or _looks_like_idmx_h264_clear_nal(body)
+    ):
+        return body
+    if body[-3:-1] == IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX:
+        return body[:-3]
+    if body[-4:-2] == IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX:
+        return body[:-4]
+    return body
 
 
 def _append_idmx_hevc_media_payload(
@@ -893,6 +1290,28 @@ def _append_idmx_hevc_media_payload(
     return active_fu
 
 
+def _append_idmx_h264_fu_a_payload(
+    output: bytearray,
+    payload: bytes,
+    *,
+    active_fu: bytearray | None,
+) -> bytearray | None:
+    fu_header = payload[1]
+    is_start = bool(fu_header & 0x80)
+    is_end = bool(fu_header & 0x40)
+    if active_fu is None and not is_start:
+        return None
+    reconstructed_header = bytes([(payload[0] & 0xE0) | (fu_header & 0x1F)])
+    if is_start:
+        active_fu = bytearray(reconstructed_header)
+    assert active_fu is not None
+    active_fu.extend(payload[2:])
+    if is_end:
+        _append_h264_nal(output, bytes(active_fu))
+        return None
+    return active_fu
+
+
 def _append_decrypted_hevc_nal(
     output: bytearray,
     nal: bytes,
@@ -904,12 +1323,76 @@ def _append_decrypted_hevc_nal(
     output.extend(_decrypt_hevc_nal_prefix(nal, aes_key))
 
 
+def _append_h264_nal(output: bytearray, nal: bytes) -> None:
+    if not _is_plausible_h264_nal(nal):
+        return
+    output.extend(ANNEX_B_LONG_START_CODE)
+    output.extend(nal)
+
+
 def _is_plausible_hevc_nal(nal: bytes) -> bool:
     return (
         len(nal) >= HEVC_NAL_HEADER_SIZE
         and not nal[0] & 0x80
         and nal[1] & 0x07 != 0
         and (nal[0] >> 1) & 0x3F <= 40
+    )
+
+
+def _is_plausible_h264_nal(nal: bytes) -> bool:
+    return len(nal) >= 3 and nal[0] & 0x80 == 0 and _h264_nal_type(nal) in {
+        1,
+        5,
+        6,
+        7,
+        8,
+        9,
+    }
+
+
+def _h264_nal_type(nal: bytes) -> int:
+    return nal[0] & 0x1F if nal else 0
+
+
+def _h264_annexb_nal_spans(data: bytes) -> list[tuple[int, int, int]]:
+    spans: list[tuple[int, int, int]] = []
+    start = 0
+    while True:
+        offset = data.find(ANNEX_B_LONG_START_CODE, start)
+        if offset < 0:
+            break
+        spans.append((offset, offset + len(ANNEX_B_LONG_START_CODE), len(data)))
+        start = offset + 1
+    if not spans:
+        return spans
+    return [
+        (offset, nal_start, spans[index + 1][0] if index + 1 < len(spans) else len(data))
+        for index, (offset, nal_start, _end) in enumerate(spans)
+    ]
+
+
+def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:
+    spans = _h264_annexb_nal_spans(data)
+    if not spans:
+        return data
+    last_vcl_end: int | None = None
+    last_vcl_index: int | None = None
+    for index, (_offset, nal_start, end) in enumerate(spans):
+        nal_type = _h264_nal_type(data[nal_start:end])
+        if nal_type in {1, 5}:
+            last_vcl_end = end
+            last_vcl_index = index
+    if last_vcl_end is None:
+        return data
+    if last_vcl_index == len(spans) - 1:
+        return data
+    return data[:last_vcl_end]
+
+
+def _annexb_looks_like_h264(data: bytes) -> bool:
+    return any(
+        _h264_nal_type(data[nal_start:end]) in {1, 5, 6, 7, 8, 9}
+        for _offset, nal_start, end in _h264_annexb_nal_spans(data)
     )
 
 

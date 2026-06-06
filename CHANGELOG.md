@@ -22,6 +22,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 - Fixed cloud and direct-local stream timeout handling so unreachable/offline cameras raise clear `DeviceException` errors instead of leaking raw timeouts.
 - Fixed direct-local encrypted-header decryption to preserve PES boundaries and avoid H.264/HEVC RTP payload overlap during stream remuxing.
+- Fixed HCNetSDK command-port media framing by parsing port-8000 `$` length words as little-endian total frame lengths, and added clear H.264 IDMX remuxing for those media packets.
 - Fixed partial CAS probe writes and base64 local-SDK CAS key handling.
 - Fixed `ptz_control_coordinates()` to use the app-matched `PTZManualCtrl/CtrlPTZ3DPosition` IoT action endpoint with `positionPoint.x/y`, restoring y-axis tilt coordinate moves.
 - Fixed PTZ coordinate validation to reject negative coordinate values and omitted zoom hints from point moves so focus/zoom metadata is left unchanged.
@@ -38,10 +39,9 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added cloud video list/detail client helpers plus `cloud_videos` and `cloud_video_download` CLI commands for exploring and saving EZVIZ cloud clip media when the API returns a direct HTTP(S) URL.
 - Added `get_camera_ticket_info()` for the `/v3/cameras/ticketInfo` ticket used by the native cloud-storage download path.
 - Added pure-Python cloud `.tmp` PS/NAL decryption through `cloud_video_decrypt`.
-- Added pure-Python EZVIZ cloud replay download support for regular cloud-storage `streamUrl` clips, so `cloud_video_download` can fetch encrypted `.tmp` bytes without Android/Frida and decrypt them locally.
+- Added pure-Python EZVIZ cloud replay download support for regular cloud-storage `streamUrl` clips, so `cloud_video_download` can fetch encrypted `.tmp` bytes without Android tooling and decrypt them locally.
 - Added SD-card playback record helpers plus the `sdcard_videos` CLI for probing the EZVIZ app's v2/common/intelligent record-list endpoints.
 - Added alarm image download/decrypt helper support for EZVIZ/Hik encrypted snapshot payloads.
-- Added the Android/Frida native cloud-download bridge as a diagnostic-only helper under `tools/apk-re/bin`, outside the installed package CLI.
 
 ### Changed
 

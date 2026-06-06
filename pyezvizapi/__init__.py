@@ -140,6 +140,9 @@ if TYPE_CHECKING:
         EzvizLocalSdkStreamBootstrap,
         HcNetSdkAbility,
         HcNetSdkClientInfo,
+        HcNetSdkCommandPortClient,
+        HcNetSdkCommandPortExchange,
+        HcNetSdkCommandPortStreamBootstrap,
         HcNetSdkCommandTraceSummary,
         HcNetSdkDvrCommand,
         HcNetSdkLanEndpoint,
@@ -213,6 +216,8 @@ if TYPE_CHECKING:
         read_ezviz_interleaved_rtp_frame,
         read_ezviz_interleaved_rtp_frame_after_prefix,
         read_ezviz_local_sdk_frame,
+        read_hcnetsdk_command_port_interleaved_frame_after_prefix,
+        read_hcnetsdk_tcp_frame,
         summarize_hcnetsdk_command_trace,
     )
     from .light_bulb import EzvizLightBulb
@@ -220,6 +225,7 @@ if TYPE_CHECKING:
         EzvizLocalSdkCredentials,
         EzvizLocalSdkMediaStream,
         EzvizLocalStreamPacket,
+        HcNetSdkCommandPortMediaStream,
         LocalSdkOutputFormat,
         collect_local_stream_mpegps,
         copy_hcnetsdk_real_data_to_mpegts,
@@ -229,6 +235,7 @@ if TYPE_CHECKING:
         copy_local_stream_to_mpegps,
         copy_local_stream_to_mpegts,
         get_local_sdk_stream_credentials_from_client,
+        open_hcnetsdk_command_port_stream,
         open_local_sdk_stream,
         open_local_sdk_stream_from_client,
     )

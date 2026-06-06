@@ -762,7 +762,7 @@ def test_copy_local_stream_to_decrypted_mpegts_rejects_unknown_idmx_before_ffmpe
                 )
             ]
 
-    with pytest.raises(PyEzvizError, match="did not include HEVC media frames"):
+    with pytest.raises(PyEzvizError, match="did not include media frames"):
         copy_local_stream_to_decrypted_mpegts(
             FakeStream(),
             io.BytesIO(),
@@ -815,20 +815,144 @@ def test_copy_local_stream_to_mpegts_pipes_payloads(tmp_path) -> None:
     assert output.getvalue() == MPEG_PS_PAYLOAD
 
 
-def test_copy_local_stream_to_mpegts_rejects_idmx_payload_without_decrypt() -> None:
+def test_copy_local_stream_to_mpegts_remuxes_clear_h264_idmx_payload(tmp_path) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x01\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    pps = b"\x68\xee\x38"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 2
+            return [SimpleNamespace(body=idmx_frame(sps)), SimpleNamespace(body=idmx_frame(pps))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=2,
+    )
+
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01" + sps + b"\x00\x00\x00\x01" + pps
+    )
+
+
+def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    first_fu = b"\x7c\x85\x88\x80\x00\x00\x1a\x48native-first"
+    next_fu = b"\x7c\x05native-middle"
+    last_fu = b"\x7c\x45native-last"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
             assert max_packets == 1
             return [
                 SimpleNamespace(
-                    body=b"\x0d\x90\x00\x00\x00\x00\x00\x00\x00\x55\x66\x77\x88"
+                    body=idmx_frame(first_fu)
+                    + idmx_frame(next_fu)
+                    + idmx_frame(last_fu)
                 )
             ]
 
     output = io.BytesIO()
 
-    with pytest.raises(PyEzvizError, match="decrypt-video is required"):
-        copy_local_stream_to_mpegts(FakeStream(), output, max_packets=1)
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01"
+        b"\x65"
+        + first_fu[2:]
+        + next_fu[2:]
+        + last_fu[2:]
+    )
+
+
+def test_copy_local_stream_to_mpegts_flattens_command_port_idmx_aggregates(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    inner_header = b"\xa0\xe8\xb7\x12\x16\x54\x77\xeb\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00\x29"
+    pps = b"\x68\xee\x38\x80"
+    first_fu = b"\x7c\x85aggregate-first"
+    last_fu = b"\x7c\x45aggregate-last"
+
+    def inner_frame(body: bytes) -> bytes:
+        frame = inner_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    aggregate_body = (
+        b"\x00\x10aggregate-sidecar"
+        + inner_frame(sps)
+        + inner_frame(pps)
+        + inner_frame(first_fu)
+        + inner_frame(last_fu)
+    )
+    outer_frame = outer_header + aggregate_body
+    packet = len(outer_frame).to_bytes(4, "little") + outer_frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=packet)]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01\x65"
+        + first_fu[2:]
+        + last_fu[2:]
+    )
 
 
 def test_copy_hcnetsdk_real_data_to_mpegts_filters_and_pipes_payloads(tmp_path) -> None:

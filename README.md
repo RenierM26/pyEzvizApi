@@ -223,26 +223,11 @@ captures must use a bounded `duration_seconds` or `max_packets` value; the decry
 transform buffers MPEG-PS data so it can handle NALs split across local RTP
 packets.
 
-For live regression checks from a source checkout while working on the
-direct-local path, use the operator harness under
-\`tools/apk-re/bin/local-sdk-live-check\`. It forwards your local-sdk-dump
-arguments, captures a short MPEG-TS sample, runs FFprobe, extracts one JPEG frame
-with FFmpeg, and prints sanitized JSON with the artifact paths and detected
-streams:
-
-    uv run tools/apk-re/bin/local-sdk-live-check --duration 5s --output-dir tmp/local-sdk-check -- \
-      --credentials-file local-sdk-credentials.json \
-      --decrypt-video --decrypt-codec encrypted-header
-
-The harness owns output, metadata, duration, format, and FFmpeg path arguments so
-it can keep the validation artifacts predictable. It does not print forwarded
-arguments, request bodies, keys, operation codes, UUIDs, timestamps, or payload
-bytes.
-
 This is separate from the proprietary HCNetSDK command protocol on port `8000`.
-That app path has been traced, but a standalone pure-Python `8000` login/player
-implementation still needs more packet-level reverse engineering or native SDK
-bindings.
+`pyezvizapi` includes native-Python framing/remux primitives for caller-supplied
+command-port frames, including the port-8000 `$` media length format and clear
+H.264 IDMX payloads. A standalone pure-Python `8000` login/player implementation
+is not shipped yet.
 
 ### cloud_videos
 
@@ -434,7 +419,7 @@ contracts.
 
 ## Side Notes
 
-There is no official API documentation. Much of this is based on reverse-engineering the Ezviz mobile app (Android/iOS). Some regions operate on separate endpoints; US example: `apiius.ezvizlife.com`.
+There is no official API documentation. Much of this is inferred from Ezviz mobile app behavior (Android/iOS). Some regions operate on separate endpoints; US example: `apiius.ezvizlife.com`.
 
 Example:
 

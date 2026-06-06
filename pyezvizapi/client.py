@@ -118,6 +118,7 @@ from .api_endpoints import (
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
 from .cas import EzvizCAS
+from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
 from .constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_UNIFIEDMSG_STYPE,
@@ -154,7 +155,7 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
-ClipSource = Literal["local-sdk", "hcnetsdk-command-port"]
+ClipSource = Literal["local-sdk", "hcnetsdk-command-port", "cloud"]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
 
 
@@ -172,6 +173,9 @@ class SaveMediaResult(TypedDict, total=False):
     duration_seconds: float | None
     content_type: str
     command_port: int
+    cloud_client_type: int
+    cloud_token_index: int
+    cloud_refresh_vtm: bool
     image_url: str
     triggered_capture: bool
 
@@ -2846,10 +2850,14 @@ class EzvizClient:
         command_port: int | None = None,
         hcnetsdk_command_frames: Iterable[bytes] | None = None,
         hcnetsdk_read_response_after_each: bool | Iterable[bool] = True,
+        cloud_client_type: int = 9,
+        cloud_token_index: int = 0,
+        cloud_refresh_vtm: bool = True,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
         ``source="local-sdk"`` uses the direct-local 9010/9020 SDK path.
+        ``source="cloud"`` uses the EZVIZ VTM cloud live stream path.
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
         port-8000 HCNetSDK bootstrap command frames, then remuxes the command
         port media stream to MPEG-TS.
@@ -2886,6 +2894,23 @@ class EzvizClient:
                 command_port=command_port,
                 command_frames=hcnetsdk_command_frames,
                 read_response_after_each=hcnetsdk_read_response_after_each,
+            )
+        if source == "cloud":
+            return self._save_cloud_clip(
+                serial,
+                output,
+                output_format=output_format,
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+                channel=channel,
+                ffmpeg_path=ffmpeg_path,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                timeout=timeout,
+                client_type=cloud_client_type,
+                token_index=cloud_token_index,
+                refresh_vtm=cloud_refresh_vtm,
             )
         raise PyEzvizError(f"Unsupported clip source: {source}")
 
@@ -3047,6 +3072,91 @@ class EzvizClient:
             "duration_seconds": duration_seconds,
             "content_type": _content_type_for_output(output, default="video/mp2t"),
             "command_port": endpoint.command_port,
+        }
+
+    def _save_cloud_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        output_format: ClipOutputFormat,
+        duration_seconds: float | None,
+        max_packets: int | None,
+        channel: int,
+        ffmpeg_path: str,
+        decrypt_video: bool,
+        media_key: str | bytes | None,
+        nalu_header_size: int | None,
+        timeout: float | None,
+        client_type: int,
+        token_index: int,
+        refresh_vtm: bool,
+    ) -> SaveMediaResult:
+        """Save a clip through the EZVIZ VTM cloud live stream path."""
+
+        start_position = None
+
+        def copy_cloud(output_file: BinaryIO) -> None:
+            if output_format == "mpegts":
+                copy_cloud_stream_to_mpegts(
+                    self,
+                    serial,
+                    output_file,
+                    channel=channel,
+                    client_type=client_type,
+                    token_index=token_index,
+                    refresh_vtm=refresh_vtm,
+                    timeout=timeout,
+                    ffmpeg_path=ffmpeg_path,
+                    max_packets=max_packets,
+                    duration_seconds=duration_seconds,
+                    decrypt_video=decrypt_video,
+                    media_key=media_key,
+                    nalu_header_size=nalu_header_size,
+                )
+                return
+            copy_cloud_stream_to_mpegps(
+                self,
+                serial,
+                output_file,
+                channel=channel,
+                client_type=client_type,
+                token_index=token_index,
+                refresh_vtm=refresh_vtm,
+                timeout=timeout,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+            )
+
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("wb") as output_file:
+                copy_cloud(output_file)
+        else:
+            start_position = _binary_position(output)
+            copy_cloud(output)
+
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "source": "cloud",
+            "format": output_format,
+            "duration_seconds": duration_seconds,
+            "content_type": _content_type_for_output(
+                output,
+                default="video/mp2t" if output_format == "mpegts" else "video/mpeg",
+            ),
+            "cloud_client_type": client_type,
+            "cloud_token_index": token_index,
+            "cloud_refresh_vtm": refresh_vtm,
         }
 
     def _hcnetsdk_command_port_endpoint(

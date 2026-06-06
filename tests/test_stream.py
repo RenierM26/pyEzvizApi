@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import io
 import json
 from typing import Any
 
@@ -12,6 +13,7 @@ import requests
 import pyezvizapi
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    copy_cloud_stream_to_mpegps,
     get_cloud_stream_info,
     get_vtdu_token_v2,
     get_vtm_info,
@@ -23,6 +25,7 @@ from pyezvizapi.stream import (
     StreamTransport,
     VtmChannel,
     VtmMessageCode,
+    VtmPacket,
     VtmStreamClient,
     VtmTraceEvent,
     _find_hevc_nal_start_codes,
@@ -2340,6 +2343,81 @@ def test_open_cloud_stream_returns_unstarted_vtm_client(monkeypatch) -> None:
     assert stream.stream_url == "ysproto://vtm.example.test:8554/live?dev=CAM123"
     assert stream.timeout == 3
     assert not stream.connected
+
+
+def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    expected_payload = b"ps-1ps-2"
+    calls: list[dict[str, Any]] = []
+
+    class FakeCloudStream:
+        started = False
+
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            self.started = True
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert self.started
+            assert max_packets == 2
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=1,
+                message_code=0,
+                body=b"ps-1",
+            )
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=4,
+                sequence=2,
+                message_code=0,
+                body=b"ps-2",
+            )
+
+    def fake_open_cloud_stream(
+        source_client: EzvizClient,
+        serial: str,
+        **kwargs: Any,
+    ) -> FakeCloudStream:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        return FakeCloudStream()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        fake_open_cloud_stream,
+    )
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        channel=2,
+        client_type=7,
+        token_index=1,
+        refresh_vtm=False,
+        timeout=3.0,
+        max_packets=2,
+    )
+
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "channel": 2,
+            "client_type": 7,
+            "token_index": 1,
+            "refresh_vtm": False,
+            "timeout": 3.0,
+        }
+    ]
+    assert output.getvalue() == expected_payload
 
 
 def test_get_cloud_stream_info_uses_requested_channel_resource(monkeypatch) -> None:

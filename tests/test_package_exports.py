@@ -30,6 +30,17 @@ def test_command_port_helpers_are_runtime_exports() -> None:
         assert getattr(pyezvizapi, name) is not None
 
 
+def test_cloud_stream_copy_helpers_are_runtime_exports() -> None:
+    expected = {
+        "copy_cloud_stream_to_mpegps",
+        "copy_cloud_stream_to_mpegts",
+    }
+
+    assert expected <= set(pyezvizapi.__all__)
+    for name in expected:
+        assert getattr(pyezvizapi, name) is not None
+
+
 def test_dir_includes_lazy_exports() -> None:
     exported = set(pyezvizapi.__all__)
     visible = set(dir(pyezvizapi))

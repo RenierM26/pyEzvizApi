@@ -1104,6 +1104,87 @@ def test_save_clip_can_use_hcnetsdk_command_port_source(
     }
 
 
+def test_save_clip_can_use_cloud_source(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "cloud",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--duration",
+                "3s",
+                "--max-packets",
+                "4",
+                "--output",
+                str(output_path),
+                "--ffmpeg-path",
+                "/usr/bin/ffmpeg",
+                "--client-type",
+                "7",
+                "--token-index",
+                "1",
+                "--no-refresh-vtm",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.save_clip_request == {
+        "serial": "CAM123",
+        "output": str(output_path),
+        "source": "cloud",
+        "output_format": "mpegts",
+        "duration_seconds": HCNETSDK_TEST_SAVE_DURATION,
+        "max_packets": 4,
+        "channel": 2,
+        "ffmpeg_path": "/usr/bin/ffmpeg",
+        "decrypt_video": False,
+        "nalu_header_size": 0,
+        "cas_serial": None,
+        "timeout": HCNETSDK_DEFAULT_SAVE_TIMEOUT,
+        "smscode": None,
+        "host": None,
+        "command_port": None,
+        "hcnetsdk_command_frames": None,
+        "hcnetsdk_read_response_after_each": True,
+        "cloud_client_type": 7,
+        "cloud_token_index": 1,
+        "cloud_refresh_vtm": False,
+    }
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(MPEGTS_PAYLOAD),
+        "source": "cloud",
+        "format": "mpegts",
+        "duration_seconds": HCNETSDK_TEST_SAVE_DURATION,
+        "content_type": "video/mp2t",
+        "cloud_client_type": 7,
+        "cloud_token_index": 1,
+        "cloud_refresh_vtm": False,
+    }
+
+
 def test_save_image_triggers_capture_and_downloads_url(
     monkeypatch,
     tmp_path,

@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from .client import EzvizClient
     from .cloud_stream import (
         VtduTokenResponse,
+        copy_cloud_stream_to_mpegps,
+        copy_cloud_stream_to_mpegts,
         get_cloud_stream_info,
         get_vtdu_token_v2,
         get_vtm_info,
@@ -528,6 +530,8 @@ _EXPORTS = {
     "classify_lan_ports": "hcnetsdk",
     "collect_local_stream_mpegps": "local_stream",
     "copy_hcnetsdk_real_data_to_mpegts": "local_stream",
+    "copy_cloud_stream_to_mpegps": "cloud_stream",
+    "copy_cloud_stream_to_mpegts": "cloud_stream",
     "copy_local_sdk_stream_from_client": "local_stream",
     "copy_local_stream_to_decrypted_mpegps": "local_stream",
     "copy_local_stream_to_decrypted_mpegts": "local_stream",

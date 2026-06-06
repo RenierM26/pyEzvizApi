@@ -292,6 +292,15 @@ class FakeClient:
                 if kwargs.get("source") == "hcnetsdk-command-port"
                 else {}
             ),
+            **(
+                {
+                    "cloud_client_type": kwargs.get("cloud_client_type", 9),
+                    "cloud_token_index": kwargs.get("cloud_token_index", 0),
+                    "cloud_refresh_vtm": kwargs.get("cloud_refresh_vtm", True),
+                }
+                if kwargs.get("source") == "cloud"
+                else {}
+            ),
         }
 
     def save_image(

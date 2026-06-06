@@ -617,11 +617,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument("--serial", required=True, help="camera SERIAL")
     parser_save_clip.add_argument(
         "--source",
-        choices=("local-sdk", "hcnetsdk-command-port"),
+        choices=("local-sdk", "cloud", "hcnetsdk-command-port"),
         default="local-sdk",
         help=(
-            "Local source to use: direct 9010/9020 SDK or full HCNetSDK "
-            "command-port media on port 8000 (default: local-sdk)"
+            "Source to use: direct 9010/9020 SDK, VTM cloud live stream, or "
+            "full HCNetSDK command-port media on port 8000 (default: local-sdk)"
         ),
     )
     parser_save_clip.add_argument(
@@ -722,6 +722,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Comma-separated booleans controlling whether to read a response "
             "after each HCNetSDK command frame (default: read after every frame)."
         ),
+    )
+    parser_save_clip.add_argument(
+        "--client-type",
+        type=int,
+        default=9,
+        help="VTM client type for --source cloud (default: 9)",
+    )
+    parser_save_clip.add_argument(
+        "--token-index",
+        type=int,
+        default=0,
+        help="VTDU token index for --source cloud (default: 0)",
+    )
+    parser_save_clip.add_argument(
+        "--no-refresh-vtm",
+        action="store_true",
+        help="Use pagelist VTM metadata without refreshing it for --source cloud",
     )
 
     parser_save_image = subparsers_save.add_parser(
@@ -1914,25 +1931,32 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
         if command_frames is not None
         else True
     )
-    result = client.save_clip(
-        args.serial,
-        args.output,
-        source=args.source,
-        output_format=args.format,
-        duration_seconds=args.duration,
-        max_packets=args.max_packets,
-        channel=args.channel,
-        ffmpeg_path=args.ffmpeg_path,
-        decrypt_video=args.decrypt_video,
-        nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
-        cas_serial=args.cas_serial,
-        timeout=args.timeout,
-        smscode=args.sms_code,
-        host=args.host,
-        command_port=args.command_port,
-        hcnetsdk_command_frames=command_frames,
-        hcnetsdk_read_response_after_each=read_response_after_each,
-    )
+    save_kwargs: dict[str, Any] = {
+        "source": args.source,
+        "output_format": args.format,
+        "duration_seconds": args.duration,
+        "max_packets": args.max_packets,
+        "channel": args.channel,
+        "ffmpeg_path": args.ffmpeg_path,
+        "decrypt_video": args.decrypt_video,
+        "nalu_header_size": _codec_nalu_header_size(args.decrypt_codec),
+        "cas_serial": args.cas_serial,
+        "timeout": args.timeout,
+        "smscode": args.sms_code,
+        "host": args.host,
+        "command_port": args.command_port,
+        "hcnetsdk_command_frames": command_frames,
+        "hcnetsdk_read_response_after_each": read_response_after_each,
+    }
+    if args.source == "cloud":
+        save_kwargs.update(
+            {
+                "cloud_client_type": args.client_type,
+                "cloud_token_index": args.token_index,
+                "cloud_refresh_vtm": not args.no_refresh_vtm,
+            }
+        )
+    result = client.save_clip(args.serial, args.output, **save_kwargs)
     _write_save_result(args, result)
     return 0
 

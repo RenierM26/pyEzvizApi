@@ -2683,6 +2683,77 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
     }
 
 
+def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ts"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_cloud_stream_to_mpegts(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        duration_seconds=HCNETSDK_SAVE_DURATION,
+        max_packets=4,
+        channel=2,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+        nalu_header_size=1,
+        timeout=5.0,
+        cloud_client_type=7,
+        cloud_token_index=1,
+        cloud_refresh_vtm=False,
+    )
+
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "channel": 2,
+            "client_type": 7,
+            "token_index": 1,
+            "refresh_vtm": False,
+            "timeout": 5.0,
+            "max_packets": 4,
+            "duration_seconds": HCNETSDK_SAVE_DURATION,
+            "decrypt_video": True,
+            "media_key": "MEDIAKEY",
+            "nalu_header_size": 1,
+            "ffmpeg_path": "/usr/bin/ffmpeg",
+        }
+    ]
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert result == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(SAVE_CLIP_PAYLOAD),
+        "source": "cloud",
+        "format": "mpegts",
+        "duration_seconds": HCNETSDK_SAVE_DURATION,
+        "content_type": "video/mp2t",
+        "cloud_client_type": 7,
+        "cloud_token_index": 1,
+        "cloud_refresh_vtm": False,
+    }
+
+
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "snapshots" / "front.jpg"

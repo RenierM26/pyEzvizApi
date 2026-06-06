@@ -362,6 +362,10 @@ _EXPORTS = {
     "EzvizLocalStreamPacket": "local_stream",
     "LocalSdkOutputFormat": "local_stream",
     "HcNetSdkClientInfo": "hcnetsdk",
+    "HcNetSdkCommandPortClient": "hcnetsdk",
+    "HcNetSdkCommandPortExchange": "hcnetsdk",
+    "HcNetSdkCommandPortMediaStream": "local_stream",
+    "HcNetSdkCommandPortStreamBootstrap": "hcnetsdk",
     "HcNetSdkCommandTraceSummary": "hcnetsdk",
     "HcNetSdkRealDataPacket": "hcnetsdk",
     "HcNetSdkRealDataType": "hcnetsdk",
@@ -528,6 +532,7 @@ _EXPORTS = {
     "copy_local_stream_to_mpegps": "local_stream",
     "copy_local_stream_to_mpegts": "local_stream",
     "get_local_sdk_stream_credentials_from_client": "local_stream",
+    "open_hcnetsdk_command_port_stream": "local_stream",
     "open_local_sdk_stream": "local_stream",
     "open_local_sdk_stream_from_client": "local_stream",
 }

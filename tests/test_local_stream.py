@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 import io
 from types import SimpleNamespace
 from typing import Any, cast
@@ -669,7 +670,8 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     fake_ffmpeg.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
@@ -714,7 +716,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     )
 
     assert output.getvalue() == (
-        b"ts:\x00\x00\x00\x01"
+        b"hevc:\x00\x00\x00\x01"
         + vps_plain
         + b"\x00\x00\x00\x01"
         + b"\x26\x01"
@@ -783,6 +785,22 @@ def test_copy_local_stream_to_decrypted_mpegts_requires_bounded_capture() -> Non
             io.BytesIO(),
             "media-secret",
         )
+
+
+def test_copy_local_stream_to_mpegts_rejects_unbounded_clear_idmx_payload() -> None:
+    idmx_header = b"\x80\x01\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    frame = idmx_header + sps
+    idmx_packet = len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Iterator[Any]:
+            assert max_packets is None
+            yield SimpleNamespace(body=idmx_packet)
+            raise AssertionError("clear IDMX remux should require a bounded capture")
+
+    with pytest.raises(PyEzvizError, match="IDMX stream remux requires"):
+        copy_local_stream_to_mpegts(FakeStream(), io.BytesIO())
 
 
 def test_copy_local_stream_to_mpegts_pipes_payloads(tmp_path) -> None:

@@ -695,10 +695,12 @@ def copy_local_stream_to_decrypted_mpegts(
     )
     if _local_stream_packets_are_idmx(packets):
         annexb = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
-        if _annexb_looks_like_h264(annexb):
+        if _annexb_looks_like_hevc(annexb):
+            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+        elif _annexb_looks_like_h264(annexb):
             process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         else:
-            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+            raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
     decrypted = decrypt_hikvision_ps_video(
@@ -718,6 +720,17 @@ def _require_bounded_decrypt_capture(
     if max_packets is None and duration_seconds is None:
         raise PyEzvizError(
             "Encrypted local stream decrypt requires duration_seconds or max_packets"
+        )
+
+
+def _require_bounded_idmx_capture(
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None,
+) -> None:
+    if max_packets is None and duration_seconds is None:
+        raise PyEzvizError(
+            "EZVIZ local IDMX stream remux requires duration_seconds or max_packets"
         )
 
 
@@ -751,6 +764,10 @@ def copy_local_stream_to_mpegts(
             return
 
     if _looks_like_idmx_local_payload(first_payload):
+        _require_bounded_idmx_capture(
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+        )
         packets = list(chain((first_payload,), payloads))
         annexb = _idmx_local_packets_to_h264_annexb(packets)
         process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
@@ -1394,6 +1411,19 @@ def _annexb_looks_like_h264(data: bytes) -> bool:
         _h264_nal_type(data[nal_start:end]) in {1, 5, 6, 7, 8, 9}
         for _offset, nal_start, end in _h264_annexb_nal_spans(data)
     )
+
+
+def _annexb_looks_like_hevc(data: bytes) -> bool:
+    return any(
+        _is_plausible_hevc_nal(data[nal_start:end])
+        and _hevc_nal_type(data[nal_start:end])
+        in {16, 17, 18, 19, 20, 21, 32, 33, 34, 39, 40}
+        for _offset, nal_start, end in _h264_annexb_nal_spans(data)
+    )
+
+
+def _hevc_nal_type(nal: bytes) -> int:
+    return (nal[0] >> 1) & 0x3F if nal else 0
 
 
 def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:

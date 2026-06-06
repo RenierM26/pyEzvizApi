@@ -21,6 +21,7 @@ from pyezvizapi.hcnetsdk import (
 )
 from pyezvizapi.local_stream import (
     EzvizLocalSdkMediaStream,
+    HcNetSdkCommandPortMediaStream,
     collect_local_stream_mpegps,
     copy_hcnetsdk_real_data_to_mpegts,
     copy_local_sdk_stream_from_client,
@@ -102,6 +103,34 @@ class _FakeSdkClient:
         self.closed = True
 
 
+class _FakeCommandPortClient:
+    def __init__(self, *media: EzvizInterleavedRtpFrameWithPrefix) -> None:
+        self.media = list(media)
+        self.bootstrap_calls: list[dict[str, Any]] = []
+        self.read_prefix_limits: list[int] = []
+        self.closed = False
+
+    def bootstrap_media_stream(
+        self,
+        command_frames: tuple[bytes, ...],
+        **kwargs: Any,
+    ) -> Any:
+        self.bootstrap_calls.append(
+            {
+                "command_frames": command_frames,
+                **kwargs,
+            }
+        )
+        return SimpleNamespace(first_media=self.media.pop(0))
+
+    def read_media_frame_after_prefix(self, *, max_prefix_bytes: int) -> Any:
+        self.read_prefix_limits.append(max_prefix_bytes)
+        return self.media.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_local_sdk_media_stream_yields_mpeg_ps_payloads() -> None:
     first_payload = b"\x00\x00\x01\xbaabc"
     second_payload = b"\x00\x00\x01\xbadef"
@@ -150,6 +179,28 @@ def test_local_sdk_media_stream_strips_ezviz_fragment_headers() -> None:
         b"\x00\x00\x01\xbaabc",
         b"def",
     ]
+
+
+def test_hcnetsdk_command_port_media_stream_strips_rtp_continuation_fragments() -> None:
+    first_payload = b"\x1c\x80\x00\x00\x01\xbaabc"
+    continuation_payload = b"\x1c\x00def"
+    command_client = _FakeCommandPortClient(
+        _media(first_payload, sequence=1),
+        _media(continuation_payload, sequence=2),
+    )
+    stream = HcNetSdkCommandPortMediaStream(
+        command_client,  # type: ignore[arg-type]
+        (b"preview-start",),
+        max_prefix_bytes=128,
+    )
+
+    packets = list(stream.iter_packets(max_packets=2))
+
+    assert [packet.body for packet in packets] == [
+        b"\x00\x00\x01\xbaabc",
+        b"def",
+    ]
+    assert command_client.read_prefix_limits == [128]
 
 
 def test_local_sdk_media_stream_respects_zero_packet_limit() -> None:

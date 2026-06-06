@@ -844,7 +844,7 @@ def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:
         return payload
     if _looks_like_hcnetsdk_wrapped_media_payload(unwrapped):
         return unwrapped
-    return payload
+    return unwrapped
 
 
 def _looks_like_hcnetsdk_wrapped_media_payload(payload: bytes) -> bool:

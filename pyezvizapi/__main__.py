@@ -6,7 +6,7 @@ Small utility CLI for testing and scripting Ezviz operations.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 import datetime as dt
@@ -1892,7 +1892,7 @@ def _handle_cloud_video_decrypt(
     return 0
 
 
-def _write_save_result(args: argparse.Namespace, result: dict[str, Any]) -> None:
+def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> None:
     """Write a human or JSON result for save commands."""
 
     if args.json:

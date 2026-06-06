@@ -9,7 +9,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, BinaryIO, ClassVar, NotRequired, TypedDict, cast
+from typing import Any, BinaryIO, ClassVar, Literal, NotRequired, TypedDict, cast
 from urllib.parse import urlencode
 from uuid import uuid4
 import zlib
@@ -154,8 +154,8 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
-ClipSource = str
-ClipOutputFormat = str
+ClipSource = Literal["local-sdk", "hcnetsdk-command-port"]
+ClipOutputFormat = Literal["mpegps", "mpegts"]
 
 
 class SaveMediaResult(TypedDict, total=False):

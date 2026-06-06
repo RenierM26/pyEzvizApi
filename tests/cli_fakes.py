@@ -264,6 +264,7 @@ class FakeClient:
         **kwargs: Any,
     ) -> dict[str, Any]:
         self.save_clip_request = {"serial": serial, "output": output, **kwargs}
+        output_name: str | None
         if isinstance(output, str | Path):
             path = Path(output)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -310,6 +311,7 @@ class FakeClient:
             smscode=kwargs.get("smscode"),
             max_retries=1,
         )
+        output_name: str | None
         if isinstance(output, str | Path):
             path = Path(output)
             path.parent.mkdir(parents=True, exist_ok=True)

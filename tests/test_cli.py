@@ -1104,6 +1104,53 @@ def test_save_clip_can_use_hcnetsdk_command_port_source(
     }
 
 
+def test_save_clip_command_port_source_does_not_require_cloud_credentials(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+    missing_token = tmp_path / "missing-token.json"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(missing_token),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-frame-hex",
+                "00000010",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.account is None
+    assert client.password is None
+    assert client.token is None
+    assert client.login_calls == []
+    assert client.closed is True
+    assert client.save_clip_request["source"] == "hcnetsdk-command-port"
+    assert client.save_clip_request["host"] == "192.0.2.10"
+    assert client.save_clip_request["hcnetsdk_command_frames"] == (
+        bytes.fromhex("00000010"),
+    )
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+
 def test_save_clip_can_use_cloud_source(
     monkeypatch,
     tmp_path,

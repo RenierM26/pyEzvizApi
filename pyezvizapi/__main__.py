@@ -3500,6 +3500,14 @@ def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
         _LOGGER.warning("Failed to save token file: %s", p)
 
 
+def _save_clip_can_run_without_cloud_credentials(args: argparse.Namespace) -> bool:
+    return (
+        args.action == "save"
+        and getattr(args, "save_action", None) == "clip"
+        and getattr(args, "source", None) == "hcnetsdk-command-port"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     args = _parse_args(argv)
@@ -3524,6 +3532,16 @@ def main(argv: list[str] | None = None) -> int:
         except PyEzvizError as exp:
             _LOGGER.error("%s", exp)
             return 1
+
+    if _save_clip_can_run_without_cloud_credentials(args):
+        client = EzvizClient(args.username, args.password, args.region, token=token)
+        try:
+            return _handle_save(args, client)
+        except PyEzvizError as exp:
+            _LOGGER.error("%s", exp)
+            return 1
+        finally:
+            client.close_session()
 
     if not has_session_token and (not args.username or not args.password):
         _LOGGER.error("Provide --token-file (existing) or --username/--password")

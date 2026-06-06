@@ -25,6 +25,9 @@ NATIVE_TRANSFORMED_PAYLOAD = b"decrypted"
 LOCAL_SDK_TEST_PAYLOAD = b"mpeg-ps"
 LOCAL_SDK_PRE_START_BODY = b"pre"
 LOCAL_SDK_DEFAULT_DURATION = 60.0
+HCNETSDK_DEFAULT_SAVE_TIMEOUT = 10.0
+HCNETSDK_TEST_SAVE_DURATION = 3.0
+IMAGE_PAYLOAD = b"jpeg-bytes"
 STRUCTURED_RECEIVER_INNER_ADDRESS_XML = b"<InnerAddress>192.0.2.20</InnerAddress>"
 STRUCTURED_RECEIVER_INNER_PORT_XML = b"<InnerPort>9020</InnerPort>"
 STRUCTURED_RECEIVER_AUTH_XML = b"<Authentication>"
@@ -945,6 +948,249 @@ def test_cloud_video_decrypt_rejects_missing_key(monkeypatch, tmp_path) -> None:
         )
         == 1
     )
+
+
+def test_save_clip_uses_direct_local_stream_and_outputs_json(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--duration",
+                "5s",
+                "--output",
+                str(output_path),
+                "--decrypt-video",
+                "--decrypt-codec",
+                "h264-encrypted-header",
+                "--ffmpeg-path",
+                "/usr/bin/ffmpeg",
+                "--sms-code",
+                "123456",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.save_clip_request == {
+        "serial": "CAM123",
+        "output": str(output_path),
+        "source": "local-sdk",
+        "output_format": "mpegts",
+        "duration_seconds": 5.0,
+        "max_packets": None,
+        "channel": 2,
+        "ffmpeg_path": "/usr/bin/ffmpeg",
+        "decrypt_video": True,
+        "nalu_header_size": 0,
+        "cas_serial": None,
+        "timeout": 10.0,
+        "smscode": "123456",
+        "host": None,
+        "command_port": None,
+        "hcnetsdk_command_frames": None,
+        "hcnetsdk_read_response_after_each": True,
+    }
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(MPEGTS_PAYLOAD),
+        "source": "local-sdk",
+        "format": "mpegts",
+        "duration_seconds": 5.0,
+        "content_type": "video/mp2t",
+    }
+
+
+def test_save_clip_can_use_hcnetsdk_command_port_source(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+    frames_path = tmp_path / "frames.json"
+    frames_path.write_text(
+        json.dumps({"command_frames": [{"frame_hex": "00000010"}, "00000011"]}),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--command-port",
+                "8000",
+                "--duration",
+                "3s",
+                "--max-packets",
+                "4",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-frames-file",
+                str(frames_path),
+                "--hcnetsdk-read-responses",
+                "true,false",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.save_clip_request == {
+        "serial": "CAM123",
+        "output": str(output_path),
+        "source": "hcnetsdk-command-port",
+        "output_format": "mpegts",
+        "duration_seconds": HCNETSDK_TEST_SAVE_DURATION,
+        "max_packets": 4,
+        "channel": 1,
+        "ffmpeg_path": "ffmpeg",
+        "decrypt_video": False,
+        "nalu_header_size": 0,
+        "cas_serial": None,
+        "timeout": HCNETSDK_DEFAULT_SAVE_TIMEOUT,
+        "smscode": None,
+        "host": "192.0.2.10",
+        "command_port": 8000,
+        "hcnetsdk_command_frames": (
+            bytes.fromhex("00000010"),
+            bytes.fromhex("00000011"),
+        ),
+        "hcnetsdk_read_response_after_each": (True, False),
+    }
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 1,
+        "output": str(output_path),
+        "bytes": len(MPEGTS_PAYLOAD),
+        "source": "hcnetsdk-command-port",
+        "format": "mpegts",
+        "duration_seconds": HCNETSDK_TEST_SAVE_DURATION,
+        "content_type": "video/mp2t",
+        "command_port": 8000,
+    }
+
+
+def test_save_image_triggers_capture_and_downloads_url(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "snapshots" / "front.jpg"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "image",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--output",
+                str(output_path),
+                "--sms-code",
+                "654321",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.capture_picture_request == {
+        "serial": "CAM123",
+        "channel": 2,
+        "max_retries": 1,
+    }
+    assert client.download_alarm_image_request == {
+        "image_url": "https://image.example.test/capture.jpg",
+        "serial": "CAM123",
+        "encryption_key": None,
+        "smscode": "654321",
+        "decrypt": True,
+        "max_retries": 1,
+    }
+    assert output_path.read_bytes() == IMAGE_PAYLOAD
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "kind": "image",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(IMAGE_PAYLOAD),
+        "content_type": "image/jpeg",
+        "image_url": "https://image.example.test/capture.jpg",
+        "triggered_capture": True,
+    }
+
+
+def test_save_image_can_download_existing_url_without_capture(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "alarm.jpg"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "image",
+                "--serial",
+                "CAM123",
+                "--output",
+                str(output_path),
+                "--image-url",
+                "https://image.example.test/alarm.jpg",
+                "--no-decrypt",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.capture_picture_request == {}
+    assert client.download_alarm_image_request["image_url"] == "https://image.example.test/alarm.jpg"
+    assert client.download_alarm_image_request["decrypt"] is False
 
 
 def test_stream_trace_outputs_sanitized_json_lines(monkeypatch, tmp_path, capsys) -> None:

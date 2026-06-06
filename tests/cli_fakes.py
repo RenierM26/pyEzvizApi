@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, ClassVar
+from pathlib import Path
+from typing import Any, BinaryIO, ClassVar
 
 import pyezvizapi.__main__ as cli_module
 
@@ -32,6 +33,10 @@ class FakeClient:
         self.sdcard_videos_request: dict[str, Any] = {}
         self.camera_ticket_info_request: dict[str, Any] = {}
         self.cam_key_request: dict[str, Any] = {}
+        self.capture_picture_request: dict[str, Any] = {}
+        self.download_alarm_image_request: dict[str, Any] = {}
+        self.save_clip_request: dict[str, Any] = {}
+        self.save_image_request: dict[str, Any] = {}
         self.__class__.instances.append(self)
 
     def login(self, sms_code: int | None = None) -> None:
@@ -212,6 +217,119 @@ class FakeClient:
     def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
         self.cam_key_request = {"serial": serial, "max_retries": max_retries}
         return "camera-secret"
+
+    def capture_picture(
+        self,
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        self.capture_picture_request = {
+            "serial": serial,
+            "channel": channel,
+            "max_retries": max_retries,
+        }
+        return {
+            "data": {
+                "picUrl": "https://image.example.test/capture.jpg",
+            },
+            "meta": {"code": 200},
+        }
+
+    def download_alarm_image(
+        self,
+        image_url: str,
+        serial: str | None = None,
+        *,
+        encryption_key: str | None = None,
+        smscode: str | int | None = None,
+        decrypt: bool = True,
+        max_retries: int = 0,
+    ) -> bytes:
+        self.download_alarm_image_request = {
+            "image_url": image_url,
+            "serial": serial,
+            "encryption_key": encryption_key,
+            "smscode": smscode,
+            "decrypt": decrypt,
+            "max_retries": max_retries,
+        }
+        return b"jpeg-bytes"
+
+    def save_clip(
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.save_clip_request = {"serial": serial, "output": output, **kwargs}
+        if isinstance(output, str | Path):
+            path = Path(output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"mpegts")
+            output_name = str(path)
+            byte_count = path.stat().st_size
+        else:
+            output.write(b"mpegts")
+            output.flush()
+            output_name = getattr(output, "name", None)
+            byte_count = len(b"mpegts")
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": kwargs.get("channel", 1),
+            "output": output_name,
+            "bytes": byte_count,
+            "source": kwargs.get("source", "local-sdk"),
+            "format": kwargs.get("output_format", "mpegts"),
+            "duration_seconds": kwargs.get("duration_seconds"),
+            "content_type": "video/mp2t",
+            **(
+                {"command_port": kwargs.get("command_port") or 8000}
+                if kwargs.get("source") == "hcnetsdk-command-port"
+                else {}
+            ),
+        }
+
+    def save_image(
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.save_image_request = {"serial": serial, "output": output, **kwargs}
+        image_url = kwargs.get("image_url") or "https://image.example.test/capture.jpg"
+        if kwargs.get("image_url") is None:
+            self.capture_picture(serial, kwargs.get("channel", 1), max_retries=1)
+        payload = self.download_alarm_image(
+            image_url,
+            serial,
+            decrypt=kwargs.get("decrypt", True),
+            smscode=kwargs.get("smscode"),
+            max_retries=1,
+        )
+        if isinstance(output, str | Path):
+            path = Path(output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            output_name = str(path)
+        else:
+            output.write(payload)
+            output.flush()
+            output_name = getattr(output, "name", None)
+        return {
+            "ok": True,
+            "kind": "image",
+            "serial": serial,
+            "channel": kwargs.get("channel", 1),
+            "output": output_name,
+            "bytes": len(payload),
+            "content_type": "image/jpeg",
+            "image_url": image_url,
+            "triggered_capture": kwargs.get("image_url") is None,
+        }
 
     def export_token(self) -> dict[str, Any]:
         return dict(self.exported_token)

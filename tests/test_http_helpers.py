@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 import pytest
 import requests
@@ -23,6 +24,11 @@ from pyezvizapi.exceptions import (
     HTTPError,
     PyEzvizError,
 )
+
+DEFAULT_SAVE_TIMEOUT = 10.0
+HCNETSDK_SAVE_DURATION = 3.0
+SAVE_CLIP_PAYLOAD = b"mpegts"
+SAVE_IMAGE_PAYLOAD = b"jpeg-bytes"
 
 
 def _client() -> EzvizClient:
@@ -2532,6 +2538,246 @@ def test_download_alarm_image_requires_serial_or_key_for_encrypted_payload(
 
     with pytest.raises(PyEzvizError, match="Camera serial or encryption key"):
         client.download_alarm_image("https://image.example.test/encrypted.jpg")
+
+
+def test_save_clip_uses_local_sdk_convenience(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ts"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_local_sdk_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> object:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
+        return object()
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_stream_from_client",
+        fake_copy_local_sdk_stream_from_client,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        duration_seconds=5.0,
+        channel=2,
+        decrypt_video=True,
+        nalu_header_size=0,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        smscode="123456",
+    )
+
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "output_format": "mpegts",
+            "decrypt_video": True,
+            "media_key": None,
+            "nalu_header_size": 0,
+            "channel": 2,
+            "cas_serial": None,
+            "timeout": DEFAULT_SAVE_TIMEOUT,
+            "max_packets": None,
+            "duration_seconds": 5.0,
+            "ffmpeg_path": "/usr/bin/ffmpeg",
+            "smscode": "123456",
+        }
+    ]
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert result == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(SAVE_CLIP_PAYLOAD),
+        "source": "local-sdk",
+        "format": "mpegts",
+        "duration_seconds": 5.0,
+        "content_type": "video/mp2t",
+    }
+
+
+def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ts"
+    calls: list[dict[str, Any]] = []
+
+    class FakeCommandPortStream:
+        def __enter__(self) -> FakeCommandPortStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open_hcnetsdk_command_port_stream(
+        endpoint: Any,
+        command_frames: tuple[bytes, ...],
+        **kwargs: Any,
+    ) -> FakeCommandPortStream:
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "command_frames": command_frames,
+                **kwargs,
+            }
+        )
+        return FakeCommandPortStream()
+
+    def fake_copy_local_stream_to_mpegts(
+        stream: FakeCommandPortStream,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"stream": stream, **kwargs})
+        output.write(b"mpegts")
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.open_hcnetsdk_command_port_stream",
+        fake_open_hcnetsdk_command_port_stream,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_stream_to_mpegts",
+        fake_copy_local_stream_to_mpegts,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="hcnetsdk-command-port",
+        host="192.0.2.10",
+        command_port=8000,
+        hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
+        hcnetsdk_read_response_after_each=(False,),
+        duration_seconds=HCNETSDK_SAVE_DURATION,
+        max_packets=4,
+    )
+
+    endpoint = calls[0]["endpoint"]
+    assert endpoint.host == "192.0.2.10"
+    assert endpoint.command_port == 8000
+    assert calls[0]["command_frames"] == (bytes.fromhex("00000010"),)
+    assert calls[0]["timeout"] == DEFAULT_SAVE_TIMEOUT
+    assert calls[0]["read_response_after_each"] == (False,)
+    assert calls[1]["ffmpeg_path"] == "ffmpeg"
+    assert calls[1]["max_packets"] == 4
+    assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert result == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 1,
+        "output": str(output_path),
+        "bytes": len(SAVE_CLIP_PAYLOAD),
+        "source": "hcnetsdk-command-port",
+        "format": "mpegts",
+        "duration_seconds": HCNETSDK_SAVE_DURATION,
+        "content_type": "video/mp2t",
+        "command_port": 8000,
+    }
+
+
+def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "snapshots" / "front.jpg"
+    calls: dict[str, Any] = {}
+
+    def fake_capture_picture(
+        serial: str,
+        channel: int,
+        *,
+        max_retries: int = 0,
+    ) -> dict[str, Any]:
+        calls["capture"] = {
+            "serial": serial,
+            "channel": channel,
+            "max_retries": max_retries,
+        }
+        return {
+            "data": {
+                "picUrl": "https://image.example.test/capture.jpg",
+            },
+            "meta": {"code": 200},
+        }
+
+    def fake_download_alarm_image(
+        image_url: str,
+        serial: str | None = None,
+        **kwargs: Any,
+    ) -> bytes:
+        calls["download"] = {"image_url": image_url, "serial": serial, **kwargs}
+        return SAVE_IMAGE_PAYLOAD
+
+    monkeypatch.setattr(client, "capture_picture", fake_capture_picture)
+    monkeypatch.setattr(client, "download_alarm_image", fake_download_alarm_image)
+
+    result = client.save_image(
+        "CAM123",
+        output_path,
+        channel=2,
+        smscode="654321",
+    )
+
+    assert calls["capture"] == {
+        "serial": "CAM123",
+        "channel": 2,
+        "max_retries": 1,
+    }
+    assert calls["download"] == {
+        "image_url": "https://image.example.test/capture.jpg",
+        "serial": "CAM123",
+        "decrypt": True,
+        "smscode": "654321",
+        "max_retries": 1,
+    }
+    assert output_path.read_bytes() == SAVE_IMAGE_PAYLOAD
+    assert result == {
+        "ok": True,
+        "kind": "image",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(SAVE_IMAGE_PAYLOAD),
+        "content_type": "image/jpeg",
+        "image_url": "https://image.example.test/capture.jpg",
+        "triggered_capture": True,
+    }
+
+
+def test_save_image_can_write_to_binary_file(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+
+    def fake_download_alarm_image(*_args: Any, **_kwargs: Any) -> bytes:
+        return SAVE_IMAGE_PAYLOAD
+
+    monkeypatch.setattr(client, "download_alarm_image", fake_download_alarm_image)
+
+    result = client.save_image(
+        "CAM123",
+        output,
+        image_url="https://image.example.test/alarm.jpg",
+        decrypt=False,
+    )
+
+    assert output.getvalue() == SAVE_IMAGE_PAYLOAD
+    assert result == {
+        "ok": True,
+        "kind": "image",
+        "serial": "CAM123",
+        "channel": 1,
+        "output": None,
+        "bytes": len(SAVE_IMAGE_PAYLOAD),
+        "content_type": "image/jpeg",
+        "image_url": "https://image.example.test/alarm.jpg",
+        "triggered_capture": False,
+    }
 
 
 def test_download_cloud_video_fetches_direct_http_url(monkeypatch) -> None:

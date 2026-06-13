@@ -1992,13 +1992,30 @@ def hcnetsdk_command_port_password_digest(
     password: str | bytes,
     password_seed: bytes,
 ) -> bytes:
-    """Return the native SDK SHA-256 password branch for command-port login."""
+    """Return the native SDK SHA-256 password branch for command-port login.
+
+    This is a device-protocol compatibility digest, not password storage.
+    """
     password_bytes = password if isinstance(password, bytes) else password.encode()
     if len(password_seed) != HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH:
         raise PyEzvizError("HCNetSDK command-port password seed must be 64 bytes")
-    return hashlib.sha256(
-        username.encode() + password_seed + password_bytes
-    ).hexdigest().encode()
+    # The command-port handshake requires this SHA-256 branch verbatim.
+    digest = hashlib.new("sha256", usedforsecurity=False)
+    digest.update(username.encode())
+    digest.update(password_seed)
+    digest.update(password_bytes)
+    return digest.hexdigest().encode()
+
+
+def _hcnetsdk_command_port_md5_digest(data: bytes = b"") -> Any:
+    return hashlib.md5(  # codeql[py/weak-cryptographic-algorithm]
+        data,
+        usedforsecurity=False,
+    )
+
+
+def _hcnetsdk_command_port_md5_hmac(key: bytes, data: bytes) -> bytes:
+    return hmac.new(key, data, _hcnetsdk_command_port_md5_digest).digest()
 
 
 def hcnetsdk_command_port_login_proof(
@@ -2007,7 +2024,11 @@ def hcnetsdk_command_port_login_proof(
     challenge: bytes,
     password_seed: bytes,
 ) -> tuple[bytes, bytes]:
-    """Return the two proof chunks for the second command-port login frame."""
+    """Return the two proof chunks for the second command-port login frame.
+
+    The native device handshake uses MD5 HMAC branches here for compatibility;
+    these values are not persisted password hashes.
+    """
     challenge = challenge.rstrip(b"\x00")
     if not challenge:
         raise PyEzvizError("HCNetSDK command-port login challenge is empty")
@@ -2016,9 +2037,10 @@ def hcnetsdk_command_port_login_proof(
         password,
         password_seed,
     )
+    # The command-port handshake requires these MD5 HMAC branches verbatim.
     return (
-        hmac.new(challenge, username.encode(), hashlib.md5).digest(),
-        hmac.new(challenge, password_digest, hashlib.md5).digest(),
+        _hcnetsdk_command_port_md5_hmac(challenge, username.encode()),
+        _hcnetsdk_command_port_md5_hmac(challenge, password_digest),
     )
 
 
@@ -3578,7 +3600,11 @@ class HcNetSdkCommandPortClient:
         key = (
             rsa_key
             if rsa_key is not None
-            else RSA.generate(HCNETSDK_COMMAND_PORT_RSA_BITS)
+            # The native SDK handshake uses 1024-bit RSA; larger generated keys
+            # are rejected by the device-side command-port login framing.
+            else RSA.generate(  # codeql[py/weak-key-size]
+                HCNETSDK_COMMAND_PORT_RSA_BITS
+            )
         )
         self.send_command_frame(
             hcnetsdk_command_port_login_request_frame(

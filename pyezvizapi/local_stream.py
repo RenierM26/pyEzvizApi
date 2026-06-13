@@ -41,6 +41,7 @@ from .stream import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     MPEG_PS_START_CODE,
+    MPEG_START_CODE_PREFIX,
     _hikvision_aes_ecb_cipher,
     decrypt_hikvision_ps_video,
     rtp_payload,
@@ -916,8 +917,7 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         if self.bootstrap is not None:
             return self.bootstrap
 
-        login_client = self._login_client()
-        try:
+        with self._login_client() as login_client:
             local_ip = self.local_ip or self._client_local_ip(login_client)
             self.login_session = login_client.login(
                 password=self.password,
@@ -925,8 +925,6 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
                 local_ip=local_ip,
                 rsa_key=self.rsa_key,
             )
-        finally:
-            login_client.close()
 
         rendered_plan = self.generated_plan.to_socket_plan(
             session_id=self.login_session.session_id,
@@ -1597,7 +1595,11 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0913
         process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
-    if h264_skip_initial_idr_windows or h264_trim_to_clean_idr_window:
+    if (
+        h264_skip_initial_idr_windows
+        or h264_trim_to_clean_idr_window
+        or h264_wait_for_clean_idr_window
+    ):
         raise PyEzvizError(
             "H.264 startup trim options require a clear H.264 IDMX stream"
         )
@@ -2104,6 +2106,8 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(
             raise PyEzvizError(
                 "Timed out waiting for a clean H.264 IDR window" + suffix
             )
+        if capture_deadline is not None and now >= capture_deadline:
+            break
         collected.append(packet)
         if clean_start_offset is None:
             probe = _try_first_clean_h264_annexb_idr_window_offset(
@@ -2118,8 +2122,6 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(
             if clean_start_offset is not None:
                 capture_deadline = now + duration_seconds
             continue
-        if capture_deadline is not None and now >= capture_deadline:
-            break
 
     if clean_start_offset is None:
         suffix = _h264_clean_idr_timeout_suffix(
@@ -2910,17 +2912,27 @@ def _h264_annexb_nal_spans(data: bytes) -> list[tuple[int, int, int]]:
     spans: list[tuple[int, int, int]] = []
     start = 0
     while True:
-        offset = data.find(ANNEX_B_LONG_START_CODE, start)
-        if offset < 0:
+        start_code = _find_h264_annexb_start_code(data, start)
+        if start_code is None:
             break
-        spans.append((offset, offset + len(ANNEX_B_LONG_START_CODE), len(data)))
-        start = offset + 1
+        offset, nal_start = start_code
+        spans.append((offset, nal_start, len(data)))
+        start = nal_start
     if not spans:
         return spans
     return [
         (offset, nal_start, spans[index + 1][0] if index + 1 < len(spans) else len(data))
         for index, (offset, nal_start, _end) in enumerate(spans)
     ]
+
+
+def _find_h264_annexb_start_code(data: bytes, start: int) -> tuple[int, int] | None:
+    offset = data.find(MPEG_START_CODE_PREFIX, start)
+    if offset < 0:
+        return None
+    if offset > 0 and data[offset - 1] == 0:
+        return offset - 1, offset + len(MPEG_START_CODE_PREFIX)
+    return offset, offset + len(MPEG_START_CODE_PREFIX)
 
 
 def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:

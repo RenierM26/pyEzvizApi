@@ -25,7 +25,6 @@ from pyezvizapi.hcnetsdk import (
     build_hcnetsdk_tcp_frame,
     hcnetsdk_command_port_control_frame,
 )
-import pyezvizapi.local_stream as local_stream_module
 from pyezvizapi.local_stream import (
     EzvizLocalSdkMediaStream,
     HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
@@ -52,6 +51,7 @@ from pyezvizapi.local_stream import (
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
     summarize_idmx_h264_local_packets,
+    time as local_stream_time,
     trim_h264_annexb_to_first_clean_idr_window,
 )
 
@@ -358,7 +358,7 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
     sockets = [media_socket, keyframe_socket]
     monotonic_values = iter((0.0, 0.0, 1.0))
     monkeypatch.setattr(
-        local_stream_module.time,
+        local_stream_time,
         "monotonic",
         lambda: next(monotonic_values),
     )
@@ -1789,8 +1789,8 @@ def test_copy_local_stream_to_mpegts_can_wait_for_clean_idr_before_duration(
             1.0,
             1.5,
             2.0,
-            5.0,
-            5.5,
+            2.25,
+            2.5,
             6.0,
             6.75,
             7.0,
@@ -1885,18 +1885,15 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
         return clean_annexb
 
     monkeypatch.setattr(
-        local_stream_module,
-        "_iter_local_stream_payloads",
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
         fake_iter_payloads,
     )
     monkeypatch.setattr(
-        local_stream_module,
-        "_looks_like_idmx_local_payload",
+        "pyezvizapi.local_stream._looks_like_idmx_local_payload",
         lambda payload: True,
     )
     monkeypatch.setattr(
-        local_stream_module,
-        "collect_h264_idmx_annexb_after_first_clean_idr_window",
+        "pyezvizapi.local_stream.collect_h264_idmx_annexb_after_first_clean_idr_window",
         fake_collect,
     )
     output = io.BytesIO()
@@ -1923,6 +1920,58 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
     assert seen["collect_duration_seconds"] == duration_seconds
     assert seen["collect_wait_seconds"] == wait_seconds
     assert seen["collect_max_windows"] == 11
+
+
+def test_collect_h264_idmx_annexb_after_clean_idr_excludes_deadline_packet(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "else:\n"
+        "    sys.stdout.buffer.write(data)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    expected_annexb = (
+        b"\x00\x00\x00\x01\x67\x4d\x00"
+        b"\x00\x00\x00\x01\x68\xee\x38"
+        b"\x00\x00\x00\x01\x65clean"
+        b"\x00\x00\x00\x01\x41inside-window"
+        b"\x00\x00\x00\x01\x65next-idr"
+    )
+    post_deadline_body = b"\x41at-deadline"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    annexb = collect_h264_idmx_annexb_after_first_clean_idr_window(
+        (
+            idmx_frame(body)
+            for body in (
+                b"\x65bad",
+                b"\x67\x4d\x00",
+                b"\x68\xee\x38",
+                b"\x65clean",
+                b"\x41inside-window",
+                b"\x65next-idr",
+                post_deadline_body,
+            )
+        ),
+        duration_seconds=1.0,
+        monotonic=iter([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.5]).__next__,
+        ffmpeg_path=str(fake_ffmpeg),
+        wait_seconds=10.0,
+    )
+
+    assert annexb == expected_annexb
+    assert post_deadline_body not in annexb
 
 
 def test_collect_h264_idmx_annexb_after_clean_idr_times_out(tmp_path) -> None:
@@ -1984,6 +2033,21 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_rejects_trim_combo() -> 
             duration_seconds=1.0,
             h264_wait_for_clean_idr_window=True,
             h264_trim_to_clean_idr_window=True,
+        )
+
+
+def test_copy_local_stream_to_mpegts_wait_for_clean_idr_rejects_mpegps() -> None:
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets is None
+            return [SimpleNamespace(body=MPEG_PS_PAYLOAD)]
+
+    with pytest.raises(PyEzvizError, match=r"require a clear H\.264 IDMX stream"):
+        copy_local_stream_to_mpegts(
+            FakeStream(),
+            io.BytesIO(),
+            duration_seconds=1.0,
+            h264_wait_for_clean_idr_window=True,
         )
 
 
@@ -2391,6 +2455,36 @@ def test_summarize_h264_annexb_units_reports_sanitized_nal_shapes() -> None:
             "unknown": 0,
         },
     }
+
+
+def test_summarize_h264_annexb_units_accepts_short_start_codes() -> None:
+    sps = b"\x67\x4d\x00\x29"
+    idr = b"\x65idr"
+    data = b"\x00\x00\x01" + sps + b"\x00\x00\x00\x01" + idr
+
+    summary = summarize_h264_annexb_units(data)
+
+    assert summary["nal_count"] == 2
+    assert summary["samples"] == [
+        {
+            "index": 0,
+            "start_code_offset": 0,
+            "nal_offset": 3,
+            "end_offset": 7,
+            "nal_type": 7,
+            "payload_bytes": len(sps),
+            "sha256": "1d2096f80a4fa6ab69fefbbc2fdf1bb1d4cf7e3d27cf9083bf77354c011cd191",
+        },
+        {
+            "index": 1,
+            "start_code_offset": 7,
+            "nal_offset": 11,
+            "end_offset": 15,
+            "nal_type": 5,
+            "payload_bytes": len(idr),
+            "sha256": "a49bc921918ad4b8fbd220d813e3a73e72274ca219c839e4329716a9764ee4d9",
+        },
+    ]
 
 
 def test_summarize_h264_annexb_idr_windows_reports_sanitized_gops() -> None:

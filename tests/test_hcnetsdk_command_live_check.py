@@ -179,6 +179,57 @@ def test_dry_run_redacts_media_key_when_decrypting(tmp_path: Path) -> None:
     assert "dummy-enc-key-03" not in rendered
 
 
+def test_dotted_camera_name_preserves_retry_suffix_artifact_paths(tmp_path: Path) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=False,
+        no_skip_initial_idr=False,
+        dry_run=True,
+    )
+    item = tool.CameraInventoryItem(
+        name="Front.Door",
+        serial="SERIAL-FRONT-DOOR-01",
+        password="dummy-camera-password-01",
+        enc_key="dummy-enc-key-03",
+    )
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    attempts = result["credential_attempts"]
+    inventory_command = attempts[0]["command"]
+    enc_key_command = attempts[1]["command"]
+    assert (
+        inventory_command[inventory_command.index("--output") + 1]
+        == str(tmp_path / "camera-01-Front.Door-inventory_password.ts")
+    )
+    assert (
+        inventory_command[
+            inventory_command.index("--hcnetsdk-command-metadata-output") + 1
+        ]
+        == str(tmp_path / "camera-01-Front.Door-inventory_password.metadata.json")
+    )
+    assert enc_key_command[enc_key_command.index("--output") + 1] == str(
+        tmp_path / "camera-01-Front.Door-encryption_key_password.ts"
+    )
+    assert result["artifacts"]["capture"] == str(tmp_path / "camera-01-Front.Door.ts")
+
+
 def test_relative_output_dir_resolves_before_child_commands(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -440,4 +491,4 @@ def test_stdout_summary_compacts_packet_metadata() -> None:
 
 
 def sh_single_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\\''") + "'"
+    return "'" + value.replace("'", "'\''") + "'"

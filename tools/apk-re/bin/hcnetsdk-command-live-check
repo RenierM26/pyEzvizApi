@@ -454,6 +454,10 @@ def _attempt_base(base: Path, credential_source: str, *, include_suffix: bool) -
     return base.with_name(f"{base.name}-{credential_source}")
 
 
+def _artifact_path(base: Path, extension: str) -> Path:
+    return base.with_name(f"{base.name}{extension}")
+
+
 def _sanitized_command(command: list[str]) -> list[str]:
     sanitized = list(command)
     for index, value in enumerate(sanitized[:-1]):
@@ -522,8 +526,8 @@ def _check_item(
                             item=item,
                             command_password=command_password,
                             host=host,
-                            capture_path=attempt_base.with_suffix(".ts"),
-                            metadata_path=attempt_base.with_suffix(".metadata.json"),
+                            capture_path=_artifact_path(attempt_base, ".ts"),
+                            metadata_path=_artifact_path(attempt_base, ".metadata.json"),
                         )
                     ),
                 }
@@ -535,10 +539,10 @@ def _check_item(
                 "credential_attempts": commands,
                 "command": commands[0]["command"],
                 "artifacts": {
-                    "capture": str(base.with_suffix(".ts")),
-                    "metadata": str(base.with_suffix(".metadata.json")),
-                    "save_stdout": str(base.with_suffix(".save.stdout.json")),
-                    "save_stderr": str(base.with_suffix(".save.stderr.txt")),
+                    "capture": str(_artifact_path(base, ".ts")),
+                    "metadata": str(_artifact_path(base, ".metadata.json")),
+                    "save_stdout": str(_artifact_path(base, ".save.stdout.json")),
+                    "save_stderr": str(_artifact_path(base, ".save.stderr.txt")),
                 },
             }
         )
@@ -549,10 +553,10 @@ def _check_item(
         credential_attempts, 1
     ):
         attempt_base = _attempt_base(base, credential_source, include_suffix=include_attempt_suffix)
-        capture_path = attempt_base.with_suffix(".ts")
-        metadata_path = attempt_base.with_suffix(".metadata.json")
-        stderr_path = attempt_base.with_suffix(".save.stderr.txt")
-        stdout_path = attempt_base.with_suffix(".save.stdout.json")
+        capture_path = _artifact_path(attempt_base, ".ts")
+        metadata_path = _artifact_path(attempt_base, ".metadata.json")
+        stderr_path = _artifact_path(attempt_base, ".save.stderr.txt")
+        stdout_path = _artifact_path(attempt_base, ".save.stdout.json")
         command = _save_command(
             args=args,
             item=item,
@@ -604,8 +608,8 @@ def _check_item(
             return result
 
     probe = _ffprobe(args.ffprobe_path, capture_path)
-    ffprobe_stdout_path = attempt_base.with_suffix(".ffprobe.stdout.json")
-    ffprobe_stderr_path = attempt_base.with_suffix(".ffprobe.stderr.txt")
+    ffprobe_stdout_path = _artifact_path(attempt_base, ".ffprobe.stdout.json")
+    ffprobe_stderr_path = _artifact_path(attempt_base, ".ffprobe.stderr.txt")
     ffprobe_stdout_path.write_bytes(probe.stdout)
     ffprobe_stderr_path.write_bytes(probe.stderr)
     artifacts.update(

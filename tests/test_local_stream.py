@@ -1620,7 +1620,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         for body in (sps, pps, clean_idr, within_duration, second_idr, after_duration)
     ]
     seen: dict[str, Any] = {}
-    times = iter([0.0, 0.1, 0.2, 0.3, 0.8, 1.5])
+    times = iter([0.0, 0.0, 0.1, 0.2, 0.3, 0.8, 1.5])
 
     def monotonic() -> float:
         return next(times, 1.5)
@@ -1644,7 +1644,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
 
     output = io.BytesIO()
     stream = object()
-    requested_duration = 0.0
+    requested_duration = 0.25
     wait_seconds = 10.0
 
     copy_local_stream_to_decrypted_mpegts(
@@ -1670,8 +1670,6 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         + clean_idr
         + b"\x00\x00\x00\x01"
         + within_duration
-        + b"\x00\x00\x00\x01"
-        + second_idr
     )
 
 
@@ -1854,6 +1852,44 @@ def test_copy_local_stream_to_mpegts_prefers_direct_hevc_over_partial_h264(
         + pps
         + b"\x00\x00\x00\x01"
         + idr
+    )
+
+
+def test_copy_local_stream_to_mpegts_prefers_hevc_idr_over_h264_sei_shape(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    hevc_idr_with_h264_sei_shape = b"\x26\x01idr"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(hevc_idr_with_h264_sei_shape))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01" + hevc_idr_with_h264_sei_shape
     )
 
 

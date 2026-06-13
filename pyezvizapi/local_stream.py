@@ -92,6 +92,7 @@ class _H264CleanIdrProbeResult:
     """Result of probing partial H.264 Annex-B IDR windows."""
 
     start_offset: int | None
+    idr_start_offset: int | None = None
     first_decode_error: str | None = None
     idr_count: int = 0
     sampled_window_count: int = 0
@@ -2394,7 +2395,9 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
     wait_deadline = monotonic() + wait_seconds
     capture_deadline: float | None = None
     collected: list[bytes] = []
+    packet_times: list[float] = []
     clean_start_offset: int | None = None
+    clean_idr_time: float | None = None
     first_decode_error: str | None = None
     last_probe = _H264CleanIdrProbeResult(start_offset=None)
 
@@ -2411,6 +2414,7 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
         if capture_deadline is not None and now >= capture_deadline:
             break
         collected.append(packet)
+        packet_times.append(now)
         if clean_start_offset is None:
             probe = _try_first_clean_decrypted_h264_annexb_idr_window_offset(
                 collected,
@@ -2423,7 +2427,13 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
             if first_decode_error is None and probe.first_decode_error is not None:
                 first_decode_error = probe.first_decode_error
             if clean_start_offset is not None:
-                capture_deadline = now + duration_seconds
+                clean_idr_packet_index = _decrypted_h264_annexb_packet_index_for_offset(
+                    collected,
+                    media_key,
+                    probe.idr_start_offset or clean_start_offset,
+                )
+                clean_idr_time = packet_times[clean_idr_packet_index]
+                capture_deadline = clean_idr_time + duration_seconds
             continue
 
     if clean_start_offset is None:
@@ -2434,6 +2444,12 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
         raise PyEzvizError(
             "H.264 stream ended before a clean IDR window was found" + suffix
         )
+    if capture_deadline is not None and clean_idr_time is not None:
+        collected = [
+            packet
+            for packet, packet_time in zip(collected, packet_times, strict=True)
+            if packet_time < capture_deadline or packet_time == clean_idr_time
+        ]
     annexb = _decrypt_idmx_local_packets_to_annexb(collected, media_key)
     return annexb[clean_start_offset:]
 
@@ -2529,6 +2545,26 @@ def _try_first_clean_decrypted_h264_annexb_idr_window_offset(
     )
 
 
+def _decrypted_h264_annexb_packet_index_for_offset(
+    packets: list[bytes],
+    media_key: str | bytes,
+    offset: int,
+) -> int:
+    """Return the packet index that first contributes the given Annex-B offset."""
+
+    for index in range(len(packets)):
+        try:
+            annexb = _decrypt_idmx_local_packets_to_annexb(
+                packets[: index + 1],
+                media_key,
+            )
+        except PyEzvizError:
+            continue
+        if len(annexb) > offset:
+            return index
+    return max(len(packets) - 1, 0)
+
+
 def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
     annexb: bytes,
     *,
@@ -2572,6 +2608,7 @@ def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
         if not decode_errors:
             return _H264CleanIdrProbeResult(
                 start_offset=start_offset,
+                idr_start_offset=int(sample["idr_start_code_offset"]),
                 first_decode_error=first_decode_error,
                 idr_count=int(idr_summary.get("idr_count", 0)),
                 sampled_window_count=len(samples),
@@ -3143,12 +3180,21 @@ def _idmx_local_packets_to_annexb_with_codec(
         except PyEzvizError:
             pass
     try:
-        return _idmx_local_packets_to_h264_annexb(packets), "h264"
+        h264_annexb = _idmx_local_packets_to_h264_annexb(packets)
     except PyEzvizError as h264_error:
         try:
             return _idmx_local_packets_to_hevc_annexb(packets), "hevc"
         except PyEzvizError as hevc_error:
             raise h264_error from hevc_error
+    if not _annexb_has_h264_vcl(h264_annexb):
+        try:
+            hevc_annexb = _idmx_local_packets_to_hevc_annexb(packets)
+        except PyEzvizError:
+            pass
+        else:
+            if _annexb_looks_like_hevc(hevc_annexb):
+                return hevc_annexb, "hevc"
+    return h264_annexb, "h264"
 
 
 def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
@@ -3419,6 +3465,13 @@ def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:
 def _annexb_looks_like_h264(data: bytes) -> bool:
     return any(
         _h264_nal_type(data[nal_start:end]) in {1, 5, 6, 7, 8, 9}
+        for _offset, nal_start, end in _h264_annexb_nal_spans(data)
+    )
+
+
+def _annexb_has_h264_vcl(data: bytes) -> bool:
+    return any(
+        _h264_nal_type(data[nal_start:end]) in {1, 5}
         for _offset, nal_start, end in _h264_annexb_nal_spans(data)
     )
 

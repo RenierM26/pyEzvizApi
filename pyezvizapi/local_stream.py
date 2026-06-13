@@ -1600,7 +1600,7 @@ def copy_local_stream_to_decrypted_mpegps(
     output.flush()
 
 
-def copy_local_stream_to_decrypted_mpegts(
+def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
     stream: Any,
     output: BinaryIO,
     media_key: str | bytes,
@@ -1610,16 +1610,34 @@ def copy_local_stream_to_decrypted_mpegts(
     max_packets: int | None = None,
     duration_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    h264_skip_initial_idr_windows: int = 0,
+    h264_trim_to_clean_idr_window: bool = False,
+    h264_clean_idr_preroll_seconds: float = 0.0,
+    h264_clean_idr_max_windows: int = 32,
+    h264_wait_for_clean_idr_window: bool = False,
+    h264_clean_idr_wait_seconds: float = 60.0,
 ) -> None:
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
+    capture_duration_seconds = _h264_clean_idr_capture_duration_seconds(
+        duration_seconds=duration_seconds,
+        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+        h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+        h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+    )
+    if h264_wait_for_clean_idr_window:
+        assert duration_seconds is not None
+        capture_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
     _require_bounded_decrypt_capture(
         max_packets=max_packets,
-        duration_seconds=duration_seconds,
+        duration_seconds=capture_duration_seconds,
     )
     packets = collect_local_stream_media_packets(
         stream,
         max_packets=max_packets,
-        duration_seconds=duration_seconds,
+        duration_seconds=capture_duration_seconds,
         monotonic=monotonic,
     )
     if _local_stream_packets_are_idmx(packets):
@@ -1627,11 +1645,29 @@ def copy_local_stream_to_decrypted_mpegts(
         if _annexb_looks_like_hevc(annexb):
             process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
         elif _annexb_looks_like_h264(annexb):
+            annexb = skip_h264_annexb_initial_idr_windows(
+                annexb,
+                h264_skip_initial_idr_windows,
+            )
+            if h264_trim_to_clean_idr_window or h264_wait_for_clean_idr_window:
+                annexb = trim_h264_annexb_to_first_clean_idr_window(
+                    annexb,
+                    ffmpeg_path=ffmpeg_path,
+                    max_windows=h264_clean_idr_max_windows,
+                )
             process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         else:
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
+    if (
+        h264_skip_initial_idr_windows
+        or h264_trim_to_clean_idr_window
+        or h264_wait_for_clean_idr_window
+    ):
+        raise PyEzvizError(
+            "H.264 startup trim options require a decrypted H.264 IDMX stream"
+        )
     decrypted = decrypt_hikvision_ps_video(
         b"".join(packets),
         media_key,
@@ -3076,14 +3112,17 @@ def _append_idmx_hevc_media_payload(
     is_start = bool(fu_header & 0x80)
     is_end = bool(fu_header & 0x40)
     original_type = fu_header & 0x3F
+    if active_fu is None and not is_start:
+        return None
     reconstructed_header = bytes(
         [
             (payload[0] & 0x81) | (original_type << 1),
             payload[1],
         ]
     )
-    if is_start or active_fu is None:
+    if is_start:
         active_fu = bytearray(reconstructed_header)
+    assert active_fu is not None
     active_fu.extend(payload[3:])
     if is_end:
         _append_decrypted_hevc_nal(output, bytes(active_fu), aes_key)
@@ -3110,14 +3149,17 @@ def _append_idmx_hevc_clear_payload(
     is_start = bool(fu_header & 0x80)
     is_end = bool(fu_header & 0x40)
     original_type = fu_header & 0x3F
+    if active_fu is None and not is_start:
+        return None
     reconstructed_header = bytes(
         [
             (payload[0] & 0x81) | (original_type << 1),
             payload[1],
         ]
     )
-    if is_start or active_fu is None:
+    if is_start:
         active_fu = bytearray(reconstructed_header)
+    assert active_fu is not None
     active_fu.extend(payload[3:])
     if is_end:
         _append_hevc_nal(output, bytes(active_fu))

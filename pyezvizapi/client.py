@@ -3223,6 +3223,20 @@ class EzvizClient:
                             ffmpeg_path=ffmpeg_path,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
+                            h264_skip_initial_idr_windows=(
+                                h264_skip_initial_idr_windows
+                            ),
+                            h264_trim_to_clean_idr_window=(
+                                h264_trim_to_clean_idr_window
+                            ),
+                            h264_clean_idr_preroll_seconds=(
+                                h264_clean_idr_preroll_seconds
+                            ),
+                            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                            h264_wait_for_clean_idr_window=(
+                                h264_wait_for_clean_idr_window
+                            ),
+                            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
                         )
                     else:
                         copy_local_stream_to_mpegts(
@@ -3277,6 +3291,20 @@ class EzvizClient:
                             ffmpeg_path=ffmpeg_path,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
+                            h264_skip_initial_idr_windows=(
+                                h264_skip_initial_idr_windows
+                            ),
+                            h264_trim_to_clean_idr_window=(
+                                h264_trim_to_clean_idr_window
+                            ),
+                            h264_clean_idr_preroll_seconds=(
+                                h264_clean_idr_preroll_seconds
+                            ),
+                            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                            h264_wait_for_clean_idr_window=(
+                                h264_wait_for_clean_idr_window
+                            ),
+                            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
                         )
                     else:
                         copy_local_stream_to_mpegts(

@@ -17,6 +17,7 @@ PAIR_LABELS = (
     ("playctrl-idmx-aes-frame-before", "playctrl-idmx-aes-frame-after"),
     ("playctrl-idmx-aes-frame-com-before", "playctrl-idmx-aes-frame-com-after"),
     ("playctrl-idmx-process-encrypt-before", "playctrl-idmx-process-encrypt-after"),
+    ("playctrl-idmx-input", "playm4-input"),
 )
 DUMP_RE = re.compile(r"^(?P<ts>\d+)-(?P<seq>\d+)-(?P<label>.+)-(?P<size>\d+)\.bin$")
 

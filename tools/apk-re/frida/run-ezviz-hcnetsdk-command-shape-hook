@@ -18,6 +18,31 @@ else
   target_args=(-U)
 fi
 
+prelude=""
+cleanup() {
+  if [[ -n "$prelude" ]]; then
+    rm -f -- "$prelude"
+  fi
+}
+trap cleanup EXIT
+
+json_bool() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) printf 'true' ;;
+    *) printf 'false' ;;
+  esac
+}
+
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '"%s"' "$value"
+}
+
 attach_args=()
 if [[ -n "${EZVIZ_FRIDA_ATTACH_PID:-}" ]]; then
   attach_args=(-p "$EZVIZ_FRIDA_ATTACH_PID")
@@ -29,4 +54,31 @@ else
   attach_args=(-f "$package")
 fi
 
-exec frida "${target_args[@]}" "${attach_args[@]}" -l "$script_dir/ezviz-hcnetsdk-command-shape-capture.js"
+script_args=()
+if [[ -n "${EZVIZ_HCNETSDK_TARGET_SERIAL:-}${EZVIZ_HCNETSDK_TARGET_IP:-}${EZVIZ_HCNETSDK_TARGET_PORT:-}${EZVIZ_HCNETSDK_TARGET_PASSWORD:-}${EZVIZ_HCNETSDK_COMMAND_DUMP_DIR:-}${EZVIZ_HCNETSDK_INBOUND_MEDIA_DUMP_DIR:-}${EZVIZ_HCNETSDK_DUMP_COMMAND_FRAMES:-}${EZVIZ_HCNETSDK_DUMP_INBOUND_MEDIA_CHUNKS:-}${EZVIZ_HCNETSDK_INBOUND_MEDIA_DUMP_MAX_BYTES:-}${EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN:-}" ]]; then
+  prelude="$(mktemp "${TMPDIR:-/tmp}/ezviz-hcnetsdk-target.XXXXXX.js")"
+  {
+    printf 'globalThis.__EZVIZ_HCNETSDK_TARGET = {\n'
+    printf '  targetSerial: %s,\n' "$(json_string "${EZVIZ_HCNETSDK_TARGET_SERIAL:-CS-CV310-A0-1B2WFR0120200927CCRRFAKE001}")"
+    printf '  targetIp: %s,\n' "$(json_string "${EZVIZ_HCNETSDK_TARGET_IP:-192.0.2.47}")"
+    printf '  targetPort: %s,\n' "${EZVIZ_HCNETSDK_TARGET_PORT:-8000}"
+    if [[ -n "${EZVIZ_HCNETSDK_TARGET_PASSWORD:-}" ]]; then
+      printf '  targetPassword: %s,\n' "$(json_string "$EZVIZ_HCNETSDK_TARGET_PASSWORD")"
+    fi
+    printf '  dumpCommandFrames: %s,\n' "$(json_bool "${EZVIZ_HCNETSDK_DUMP_COMMAND_FRAMES:-}")"
+    printf '  commandFrameDumpDir: %s,\n' "$(json_string "${EZVIZ_HCNETSDK_COMMAND_DUMP_DIR:-/sdcard/Download}")"
+    printf '  dumpInboundMediaChunks: %s,\n' "$(json_bool "${EZVIZ_HCNETSDK_DUMP_INBOUND_MEDIA_CHUNKS:-}")"
+    printf '  inboundMediaDumpDir: %s,\n' "$(json_string "${EZVIZ_HCNETSDK_INBOUND_MEDIA_DUMP_DIR:-${EZVIZ_HCNETSDK_COMMAND_DUMP_DIR:-/sdcard/Download}}")"
+    printf '  inboundMediaDumpMaxBytes: %s,\n' "${EZVIZ_HCNETSDK_INBOUND_MEDIA_DUMP_MAX_BYTES:-8388608}"
+    printf '  forcePreviewAfterLogin: %s\n' "$(json_bool "${EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN:-}")"
+    printf '};\n'
+  } >"$prelude"
+  script_args+=(-l "$prelude")
+fi
+
+script_args+=(-l "$script_dir/ezviz-hcnetsdk-command-shape-capture.js")
+if [[ "${EZVIZ_FRIDA_WITH_STREAM_TRANSFORM:-}" == "1" ]]; then
+  script_args+=(-l "$script_dir/ezviz-stream-transform-hook.js")
+fi
+
+exec frida "${target_args[@]}" "${attach_args[@]}" "${script_args[@]}"

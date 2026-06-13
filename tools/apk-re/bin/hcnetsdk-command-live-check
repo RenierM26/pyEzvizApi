@@ -1,0 +1,768 @@
+#!/usr/bin/env python3
+"""Run a bounded HCNetSDK command-port live-view compatibility matrix.
+
+This operator tool wraps ``pyezvizapi save clip --source hcnetsdk-command-port``
+with the built-in native LAN live-view plan, then validates the MPEG-TS output
+with FFprobe. It is intended for owner-run compatibility checks against real
+cameras on the local network; it does not print camera passwords, serials, or
+encryption keys.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_INVENTORY_ENV = "EZVIZ_CAMERA_INVENTORY_JSON"
+DEFAULT_NATIVE_PLAN = "app-lan-live-view"
+REDACTED = "<redacted>"
+
+
+@dataclass(frozen=True)
+class CameraInventoryItem:
+    """One sanitized camera inventory entry."""
+
+    name: str
+    serial: str
+    password: str
+    enc_key: str = ""
+    battery: bool = False
+    in_use: bool = True
+    host: str | None = None
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="hcnetsdk-command-live-check")
+    parser.add_argument(
+        "--python",
+        default=_default_python(),
+        help="Python executable used for `python -m pyezvizapi` (default: repo .venv if present)",
+    )
+    parser.add_argument(
+        "--inventory-file",
+        help=(
+            "Optional .env file containing EZVIZ_CAMERA_INVENTORY_JSON. "
+            "If omitted, the process environment is used."
+        ),
+    )
+    parser.add_argument(
+        "--inventory-env",
+        default=DEFAULT_INVENTORY_ENV,
+        help=f"Environment variable containing inventory JSON (default: {DEFAULT_INVENTORY_ENV})",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for per-camera clips, metadata, logs, and matrix report",
+    )
+    parser.add_argument(
+        "--duration",
+        default="8s",
+        help="Capture duration passed to save clip (default: 8s)",
+    )
+    parser.add_argument(
+        "--timeout",
+        default="12",
+        help="Command-port socket timeout passed to save clip (default: 12)",
+    )
+    parser.add_argument(
+        "--command-port",
+        default="8000",
+        help="HCNetSDK command port passed to save clip (default: 8000)",
+    )
+    parser.add_argument(
+        "--channel",
+        default="1",
+        help="Camera channel passed to save clip (default: 1)",
+    )
+    parser.add_argument(
+        "--native-plan",
+        default=DEFAULT_NATIVE_PLAN,
+        help=f"Built-in native command-port plan (default: {DEFAULT_NATIVE_PLAN})",
+    )
+    parser.add_argument(
+        "--ffmpeg-path",
+        default="ffmpeg",
+        help="FFmpeg executable passed to save clip (default: ffmpeg)",
+    )
+    parser.add_argument(
+        "--ffprobe-path",
+        default="ffprobe",
+        help="FFprobe executable for stream inspection (default: ffprobe)",
+    )
+    parser.add_argument(
+        "--local-ip",
+        help="Optional client LAN IPv4 to patch into generated command-port frames",
+    )
+    parser.add_argument(
+        "--host",
+        action="append",
+        default=[],
+        metavar="SERIAL=HOST",
+        help="Camera host override. May be passed more than once.",
+    )
+    parser.add_argument(
+        "--serial",
+        action="append",
+        default=[],
+        help="Limit the matrix to this camera serial/mDNS id. May be repeated.",
+    )
+    parser.add_argument(
+        "--include-unused",
+        action="store_true",
+        help="Include inventory entries marked not in use",
+    )
+    parser.add_argument(
+        "--include-battery",
+        action="store_true",
+        help="Include battery cameras. Default skips them to avoid waking devices unnecessarily.",
+    )
+    parser.add_argument(
+        "--max-cameras",
+        type=int,
+        help="Optional cap after filters are applied",
+    )
+    parser.add_argument(
+        "--no-skip-initial-idr",
+        action="store_true",
+        help="Do not pass --hcnetsdk-h264-skip-initial-idr-windows 1",
+    )
+    parser.add_argument(
+        "--decrypt-video",
+        action="store_true",
+        help="Pass the inventory encryption key to decrypt encrypted IDMX video payloads",
+    )
+    parser.add_argument(
+        "--no-try-enc-key-password",
+        action="store_true",
+        help=(
+            "Do not retry command-port login with the inventory encryption key as "
+            "the command password after a pre-bootstrap password failure"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve/filter cameras and print the sanitized plan without contacting devices",
+    )
+    parser.add_argument(
+        "--include-metadata-in-stdout",
+        action="store_true",
+        help="Include full packet metadata in stdout. The report file always keeps full metadata.",
+    )
+    return parser.parse_args()
+
+
+def _default_python() -> str:
+    venv_python = REPO_ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
+def _artifact_dir(value: str | None) -> Path:
+    if value:
+        path = Path(value)
+    else:
+        path = Path(tempfile.gettempdir()) / f"pyezvizapi-hcnetsdk-command-check-{int(time.time())}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _inventory_json_from_env_file(path: str, env_name: str) -> str:
+    for raw_line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        try:
+            parsed = shlex.split(line, comments=True, posix=True)
+        except ValueError:
+            parsed = [line]
+        for token in parsed:
+            key, _, value = token.partition("=")
+            if key == env_name:
+                return value
+    raise ValueError(f"{env_name} was not found in {path}")
+
+
+def _load_inventory(args: argparse.Namespace) -> list[CameraInventoryItem]:
+    text = (
+        _inventory_json_from_env_file(args.inventory_file, args.inventory_env)
+        if args.inventory_file
+        else os.environ.get(args.inventory_env, "")
+    )
+    if not text:
+        raise ValueError(
+            f"provide --inventory-file or set {args.inventory_env} with camera inventory JSON"
+        )
+    try:
+        raw_items = json.loads(text)
+    except json.JSONDecodeError as err:
+        raise ValueError("camera inventory JSON is invalid") from err
+    if not isinstance(raw_items, list):
+        raise ValueError("camera inventory JSON must be a list")
+
+    items: list[CameraInventoryItem] = []
+    for index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            raise ValueError(f"camera inventory entry {index} must be an object")
+        serial = str(raw_item.get("mdns") or raw_item.get("serial") or "").strip()
+        password = str(raw_item.get("password") or "").strip()
+        if not serial or not password:
+            raise ValueError(f"camera inventory entry {index} requires serial/mdns and password")
+        items.append(
+            CameraInventoryItem(
+                name=str(raw_item.get("name") or f"camera-{index + 1}"),
+                serial=serial,
+                password=password,
+                enc_key=str(raw_item.get("enc_key") or ""),
+                battery=bool(raw_item.get("battery")),
+                in_use=bool(raw_item.get("in_use", True)),
+                host=(str(raw_item["host"]).strip() if raw_item.get("host") else None),
+            )
+        )
+    return items
+
+
+def _host_overrides(values: list[str]) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for value in values:
+        serial, sep, host = value.partition("=")
+        if not sep or not serial.strip() or not host.strip():
+            raise ValueError("--host values must use SERIAL=HOST")
+        overrides[serial.strip()] = host.strip()
+    return overrides
+
+
+def _filtered_items(
+    items: list[CameraInventoryItem],
+    *,
+    serials: list[str],
+    include_unused: bool,
+    include_battery: bool,
+    max_cameras: int | None,
+) -> list[CameraInventoryItem]:
+    selected = items
+    if serials:
+        wanted = set(serials)
+        selected = [item for item in selected if item.serial in wanted]
+    if not include_unused:
+        selected = [item for item in selected if item.in_use]
+    if not include_battery:
+        selected = [item for item in selected if not item.battery]
+    if max_cameras is not None:
+        if max_cameras < 1:
+            raise ValueError("--max-cameras must be positive")
+        selected = selected[:max_cameras]
+    return selected
+
+
+def _safe_name(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
+    return text or "camera"
+
+
+def _public_serial() -> str:
+    return REDACTED
+
+
+def _resolve_host(item: CameraInventoryItem, overrides: dict[str, str]) -> tuple[str | None, str]:
+    host = overrides.get(item.serial) or item.host
+    if host:
+        return host, "override"
+    for candidate, source in ((f"{item.serial}.local", "mdns"), (item.serial, "serial-host")):
+        try:
+            return socket.gethostbyname(candidate), source
+        except OSError:
+            continue
+    return None, "unresolved"
+
+
+def _run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(command, cwd=cwd, capture_output=True, check=False)
+
+
+def _tail_text(data: bytes, *, max_chars: int = 4000) -> str:
+    text = data.decode("utf-8", errors="replace")
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _ffprobe(ffprobe_path: str, capture_path: Path) -> subprocess.CompletedProcess[bytes]:
+    return _run(
+        [
+            ffprobe_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(capture_path),
+        ],
+        cwd=REPO_ROOT,
+    )
+
+
+def _stream_summary(ffprobe_stdout: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(ffprobe_stdout.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {"streams": []}
+    streams: list[dict[str, Any]] = []
+    for stream in payload.get("streams", []):
+        if not isinstance(stream, dict):
+            continue
+        streams.append(
+            {
+                "index": stream.get("index"),
+                "codec_type": stream.get("codec_type"),
+                "codec_name": stream.get("codec_name"),
+                "width": stream.get("width"),
+                "height": stream.get("height"),
+                "duration": stream.get("duration"),
+            }
+        )
+    return {
+        "streams": streams,
+        "format_duration": (payload.get("format") or {}).get("duration"),
+    }
+
+
+def _diagnose_save_failure(stderr_tail: str, metadata_path: Path) -> str:
+    metadata = _read_metadata(metadata_path)
+    lower_tail = stderr_tail.lower()
+    if "modulenotfounderror" in lower_tail or "importerror" in lower_tail:
+        return "environment_error"
+    if "connection refused" in lower_tail:
+        return "connection_refused"
+    if "did not contain enough idr windows" in lower_tail:
+        return "insufficient_idr_windows"
+    if not metadata.get("bootstrap_complete"):
+        diagnosis = "bootstrap_failed"
+        if "login" in lower_tail:
+            diagnosis = "login_failed"
+        elif "timed out" in lower_tail or "timeout" in lower_tail:
+            diagnosis = "bootstrap_timeout"
+        return diagnosis
+
+    diagnosis = "save_clip_failed"
+    packets = metadata.get("packets")
+    if isinstance(packets, dict):
+        if packets.get("packet_count", 0) == 0:
+            diagnosis = "no_media_packets"
+        elif packets.get("h264_idr_windows"):
+            diagnosis = "remux_failed_after_media"
+    elif "clean h.264 idr" in stderr_tail.lower():
+        diagnosis = "no_clean_idr_window"
+    return diagnosis
+
+
+def _read_metadata(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_command(
+    *,
+    args: argparse.Namespace,
+    item: CameraInventoryItem,
+    command_password: str,
+    host: str,
+    capture_path: Path,
+    metadata_path: Path,
+) -> list[str]:
+    command = [
+        args.python,
+        "-m",
+        "pyezvizapi",
+        "--json",
+        "save",
+        "clip",
+        "--serial",
+        item.serial,
+        "--source",
+        "hcnetsdk-command-port",
+        "--host",
+        host,
+        "--command-port",
+        args.command_port,
+        "--channel",
+        args.channel,
+        "--hcnetsdk-command-native-plan",
+        args.native_plan,
+        "--hcnetsdk-command-password",
+        command_password,
+        "--duration",
+        args.duration,
+        "--timeout",
+        args.timeout,
+        "--format",
+        "mpegts",
+        "--ffmpeg-path",
+        args.ffmpeg_path,
+        "--output",
+        str(capture_path),
+        "--hcnetsdk-command-metadata-output",
+        str(metadata_path),
+    ]
+    if args.local_ip:
+        command.extend(["--hcnetsdk-local-ip", args.local_ip])
+    if args.decrypt_video and item.enc_key:
+        command.append("--decrypt-video")
+        command.extend(["--media-key", item.enc_key])
+    if not args.no_skip_initial_idr:
+        command.extend(["--hcnetsdk-h264-skip-initial-idr-windows", "1"])
+    return command
+
+
+def _credential_attempts(
+    args: argparse.Namespace, item: CameraInventoryItem
+) -> list[tuple[str, str]]:
+    attempts = [("inventory_password", item.password)]
+    if (
+        not args.no_try_enc_key_password
+        and item.enc_key
+        and item.enc_key != item.password
+    ):
+        attempts.append(("encryption_key_password", item.enc_key))
+    return attempts
+
+
+def _attempt_base(base: Path, credential_source: str, *, include_suffix: bool) -> Path:
+    if not include_suffix:
+        return base
+    return base.with_name(f"{base.name}-{credential_source}")
+
+
+def _sanitized_command(command: list[str]) -> list[str]:
+    sanitized = list(command)
+    for index, value in enumerate(sanitized[:-1]):
+        if value in {"--hcnetsdk-command-password", "--media-key", "--serial"}:
+            sanitized[index + 1] = REDACTED
+    return sanitized
+
+
+def _redact_text(value: str, item: CameraInventoryItem) -> str:
+    redacted = value
+    for sensitive in (item.serial, item.password, item.enc_key):
+        if sensitive:
+            redacted = redacted.replace(sensitive, REDACTED)
+    return redacted
+
+
+def _redact_sensitive(value: Any, item: CameraInventoryItem) -> Any:
+    if isinstance(value, str):
+        return _redact_text(value, item)
+    if isinstance(value, list):
+        return [_redact_sensitive(entry, item) for entry in value]
+    if isinstance(value, dict):
+        return {key: _redact_sensitive(entry, item) for key, entry in value.items()}
+    return value
+
+
+def _check_item(
+    *,
+    args: argparse.Namespace,
+    item: CameraInventoryItem,
+    output_dir: Path,
+    host: str,
+    host_source: str,
+    camera_index: int,
+) -> dict[str, Any]:
+    base = output_dir / f"camera-{camera_index:02d}-{_safe_name(item.name)}"
+    credential_attempts = _credential_attempts(args, item)
+    include_attempt_suffix = len(credential_attempts) > 1
+    result: dict[str, Any] = {
+        "name": item.name,
+        "serial": _public_serial(),
+        "host": host,
+        "host_source": host_source,
+        "battery": item.battery,
+        "in_use": item.in_use,
+    }
+    if args.dry_run:
+        commands = []
+        for credential_source, command_password in credential_attempts:
+            attempt_base = _attempt_base(
+                base, credential_source, include_suffix=include_attempt_suffix
+            )
+            commands.append(
+                {
+                    "credential_source": credential_source,
+                    "command": _sanitized_command(
+                        _save_command(
+                            args=args,
+                            item=item,
+                            command_password=command_password,
+                            host=host,
+                            capture_path=attempt_base.with_suffix(".ts"),
+                            metadata_path=attempt_base.with_suffix(".metadata.json"),
+                        )
+                    ),
+                }
+            )
+        result.update(
+            {
+                "ok": None,
+                "stage": "dry-run",
+                "credential_attempts": commands,
+                "command": commands[0]["command"],
+                "artifacts": {
+                    "capture": str(base.with_suffix(".ts")),
+                    "metadata": str(base.with_suffix(".metadata.json")),
+                    "save_stdout": str(base.with_suffix(".save.stdout.json")),
+                    "save_stderr": str(base.with_suffix(".save.stderr.txt")),
+                },
+            }
+        )
+        return result
+
+    failed_attempts: list[dict[str, Any]] = []
+    for attempt_index, (credential_source, command_password) in enumerate(
+        credential_attempts, 1
+    ):
+        attempt_base = _attempt_base(base, credential_source, include_suffix=include_attempt_suffix)
+        capture_path = attempt_base.with_suffix(".ts")
+        metadata_path = attempt_base.with_suffix(".metadata.json")
+        stderr_path = attempt_base.with_suffix(".save.stderr.txt")
+        stdout_path = attempt_base.with_suffix(".save.stdout.json")
+        command = _save_command(
+            args=args,
+            item=item,
+            command_password=command_password,
+            host=host,
+            capture_path=capture_path,
+            metadata_path=metadata_path,
+        )
+        artifacts = {
+            "capture": str(capture_path),
+            "metadata": str(metadata_path),
+            "save_stdout": str(stdout_path),
+            "save_stderr": str(stderr_path),
+        }
+        save = _run(command, cwd=REPO_ROOT)
+        stdout_path.write_bytes(save.stdout)
+        stderr_path.write_bytes(save.stderr)
+        if save.returncode == 0:
+            break
+        stderr_tail = _tail_text(save.stderr)
+        diagnosis = _diagnose_save_failure(stderr_tail, metadata_path)
+        failed_attempts.append(
+            {
+                "credential_source": credential_source,
+                "stage": "save-clip",
+                "returncode": save.returncode,
+                "diagnosis": diagnosis,
+                "stderr_tail": _redact_text(stderr_tail, item),
+                "artifacts": artifacts,
+            }
+        )
+        if attempt_index == len(credential_attempts) or diagnosis not in {
+            "login_failed",
+            "bootstrap_failed",
+            "bootstrap_timeout",
+        }:
+            result.update(
+                {
+                    "ok": False,
+                    "stage": "save-clip",
+                    "credential_source": credential_source,
+                    "credential_attempts": failed_attempts,
+                    "returncode": save.returncode,
+                    "diagnosis": diagnosis,
+                    "stderr_tail": _redact_text(stderr_tail, item),
+                    "artifacts": artifacts,
+                }
+            )
+            return result
+
+    probe = _ffprobe(args.ffprobe_path, capture_path)
+    ffprobe_stdout_path = attempt_base.with_suffix(".ffprobe.stdout.json")
+    ffprobe_stderr_path = attempt_base.with_suffix(".ffprobe.stderr.txt")
+    ffprobe_stdout_path.write_bytes(probe.stdout)
+    ffprobe_stderr_path.write_bytes(probe.stderr)
+    artifacts.update(
+        {
+            "ffprobe_stdout": str(ffprobe_stdout_path),
+            "ffprobe_stderr": str(ffprobe_stderr_path),
+        }
+    )
+    if probe.returncode != 0:
+        result.update(
+            {
+                "ok": False,
+                "stage": "ffprobe",
+                "credential_source": credential_source,
+                "credential_attempts": failed_attempts,
+                "returncode": probe.returncode,
+                "diagnosis": "unreadable_media",
+                "stderr_tail": _redact_text(_tail_text(probe.stderr), item),
+                "capture_size": capture_path.stat().st_size if capture_path.exists() else 0,
+                "metadata": _redact_sensitive(_read_metadata(metadata_path), item),
+                "artifacts": artifacts,
+            }
+        )
+        return result
+
+    result.update(
+        {
+            "ok": True,
+            "stage": "complete",
+            "credential_source": credential_source,
+            "credential_attempts": failed_attempts,
+            "diagnosis": "playable_mpegts",
+            "capture_size": capture_path.stat().st_size,
+            "metadata": _redact_sensitive(_read_metadata(metadata_path), item),
+            "artifacts": artifacts,
+            **_stream_summary(probe.stdout),
+        }
+    )
+    return result
+
+
+def _stdout_result(result: dict[str, Any], *, include_metadata: bool) -> dict[str, Any]:
+    if include_metadata or "metadata" not in result:
+        return result
+    compact = dict(result)
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        packets = metadata.get("packets")
+        compact_metadata: dict[str, Any] = {
+            "bootstrap_complete": metadata.get("bootstrap_complete"),
+            "command_port_exchange_count": len(metadata.get("command_port_exchanges", [])),
+        }
+        if isinstance(packets, dict):
+            compact_metadata["packets"] = {
+                "packet_count": packets.get("packet_count"),
+                "last_packet_elapsed_seconds": packets.get("last_packet_elapsed_seconds"),
+                "idmx_h264": _compact_idmx_h264_summary(packets.get("idmx_h264")),
+            }
+        compact["metadata"] = compact_metadata
+    return compact
+
+
+def _compact_idmx_h264_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "packet_count": value.get("packet_count"),
+        "nal_type_counts": value.get("nal_type_counts"),
+        "rtp_payload_type_counts": value.get("rtp_payload_type_counts"),
+        "sequence_gap_count": value.get("sequence_gap_count"),
+        "invalid_media_marker_count": value.get("invalid_media_marker_count"),
+    }
+
+
+def _stdout_summary(summary: dict[str, Any], *, include_metadata: bool) -> dict[str, Any]:
+    compact = dict(summary)
+    results = summary.get("results", [])
+    if isinstance(results, list):
+        compact["results"] = [
+            _stdout_result(result, include_metadata=include_metadata)
+            if isinstance(result, dict)
+            else result
+            for result in results
+        ]
+    return compact
+
+
+def main() -> int:
+    args = _parse_args()
+    try:
+        inventory = _load_inventory(args)
+        overrides = _host_overrides(args.host)
+        selected = _filtered_items(
+            inventory,
+            serials=args.serial,
+            include_unused=args.include_unused,
+            include_battery=args.include_battery,
+            max_cameras=args.max_cameras,
+        )
+        output_dir = _artifact_dir(args.output_dir)
+        results: list[dict[str, Any]] = []
+        for camera_index, item in enumerate(selected, 1):
+            host, host_source = _resolve_host(item, overrides)
+            if host is None:
+                results.append(
+                    {
+                        "name": item.name,
+                        "serial": _public_serial(),
+                        "ok": None if args.dry_run else False,
+                        "stage": "resolve-host",
+                        "diagnosis": "host_unresolved",
+                        "battery": item.battery,
+                        "in_use": item.in_use,
+                    }
+                )
+                continue
+            results.append(
+                _check_item(
+                    args=args,
+                    item=item,
+                    output_dir=output_dir,
+                    host=host,
+                    host_source=host_source,
+                    camera_index=camera_index,
+                )
+            )
+
+        summary = {
+            "ok": all(result.get("ok") in (True, None) for result in results),
+            "dry_run": args.dry_run,
+            "output_dir": str(output_dir),
+            "selected": len(selected),
+            "results": results,
+        }
+        report_path = output_dir / "hcnetsdk-command-live-check.report.json"
+        report_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        summary["report"] = str(report_path)
+        print(
+            json.dumps(
+                _stdout_summary(
+                    summary,
+                    include_metadata=args.include_metadata_in_stdout,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if summary["ok"] else 1
+    except Exception as err:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "stage": "argument-validation",
+                    "error_type": type(err).__name__,
+                    "error": str(err),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

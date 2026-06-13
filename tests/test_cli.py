@@ -1012,6 +1012,7 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
         "channel": 2,
         "ffmpeg_path": "/usr/bin/ffmpeg",
         "decrypt_video": True,
+        "media_key": "camera-secret",
         "nalu_header_size": 0,
         "cas_serial": None,
         "timeout": 10.0,

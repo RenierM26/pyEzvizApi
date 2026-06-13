@@ -21,6 +21,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added sanitized H.264 Annex-B NAL-unit and IDR-window summarizers, plus an offline `stream h264-annexb-summary` CLI, for comparing native player dumps with generated command-port diagnostics without storing media contents.
 - Added offline `stream hcnetsdk-command-dump-summary` support for summarizing Frida command-frame, inbound-media, and PlayM4 input dump artifacts without printing frame bodies or credentials.
 - Added optional IDR-window FFmpeg decode checks to `stream hcnetsdk-command-dump-summary` so native command-port dumps can show startup corruption and later clean windows directly.
+- Added `tools/apk-re/bin/hcnetsdk-command-live-check`, an owner-run port-8000 compatibility matrix runner that loads ignored inventory secrets, runs the built-in native LAN live-view plan, validates MPEG-TS output with FFprobe, and writes per-camera verdicts without exposing passwords, serials, or encryption keys.
 - Added `EZVIZ_FRIDA_WITH_STREAM_TRANSFORM=1` support to the command-shape Frida runner so command-port and PlayM4 input artifacts can be captured in one native session.
 - Added `EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN=1` for Frida command-shape diagnostics that need to route a LAN login into the native preview activity.
 - Added Frida command-shape runner env injection for target and dump settings, and fixed TCP-shape fingerprint logging on Frida runtimes without `Uint8Array.slice()`.

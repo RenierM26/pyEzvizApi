@@ -491,4 +491,4 @@ def test_stdout_summary_compacts_packet_metadata() -> None:
 
 
 def sh_single_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\''") + "'"
+    return "'" + value.replace("'", "'\\''") + "'"

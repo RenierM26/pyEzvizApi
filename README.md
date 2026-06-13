@@ -215,10 +215,12 @@ pyezvizapi --json save clip \
   --hcnetsdk-h264-skip-initial-idr-windows 1
 ```
 
-The built-in `app-lan-live-view` plan keeps the media step on the native-prefix
-behavior above, refreshes native `0x111040` play-login date words at render
-time, sends bounded `0x30006` media keepalives, and issues the app-observed
-`0x90100` I-frame request after the media socket is open.
+The built-in `app-lan-live-view` plan currently supports `--channel 1` only
+because the app-observed command tails include channel-1 fields. It keeps the
+media step on the native-prefix behavior above, refreshes native `0x111040`
+play-login date words at render time, sends bounded `0x30006` media keepalives,
+and issues the app-observed `0x90100` I-frame request after the media socket is
+open.
 Use `--hcnetsdk-command-metadata-output` during command-port saves to write a
 sanitized JSON summary of command ids, response lengths/header fields, and
 first-media shape for diagnostics without storing frame bodies or credentials.

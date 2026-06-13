@@ -2249,6 +2249,12 @@ def _hcnetsdk_command_generated_plan_from_args(
             "--hcnetsdk-command-native-plan"
         )
     if native_plan:
+        if getattr(args, "channel", 1) != 1:
+            raise PyEzvizError(
+                "--hcnetsdk-command-native-plan app-lan-live-view currently "
+                "supports only --channel 1 because the app-observed command "
+                "tails contain channel-1 fields"
+            )
         return hcnetsdk_command_port_native_lan_live_view_plan(native_plan)
     if not plan_file:
         return None

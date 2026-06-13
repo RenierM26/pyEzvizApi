@@ -1510,6 +1510,46 @@ def test_save_clip_can_use_hcnetsdk_command_port_native_plan(
     assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
 
 
+def test_save_clip_native_plan_rejects_non_primary_channel(
+    monkeypatch,
+    tmp_path,
+    caplog,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(tmp_path / "front.ts"),
+                "--hcnetsdk-command-native-plan",
+                "app-lan-live-view",
+                "--hcnetsdk-command-password",
+                "123456",
+                "--hcnetsdk-local-ip",
+                "192.168.1.56",
+            ]
+        )
+        == 1
+    )
+
+    assert "supports only --channel 1" in caplog.text
+    assert fake_client.instances[0].save_clip_request == {}
+
+
 def test_hcnetsdk_command_plan_generate_writes_generated_plan_without_login(
     tmp_path,
     capsys,

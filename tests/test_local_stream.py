@@ -44,6 +44,7 @@ from pyezvizapi.local_stream import (
     copy_local_stream_to_mpegts,
     get_local_sdk_stream_credentials_from_client,
     hcnetsdk_command_port_generated_plan_from_socket_plan,
+    hcnetsdk_command_port_native_lan_live_view_plan,
     open_hcnetsdk_command_port_generated_multi_socket_stream,
     open_local_sdk_stream,
     open_local_sdk_stream_from_client,
@@ -542,6 +543,48 @@ def test_hcnetsdk_generated_multi_socket_plan_renders_fresh_session_frames() -> 
         b"\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04\x01"
     )
     assert len(rendered.steps[1].keepalive_frames) == 1
+
+
+def test_hcnetsdk_native_lan_live_view_plan_matches_app_observed_shape() -> None:
+    plan = hcnetsdk_command_port_native_lan_live_view_plan()
+
+    assert len(plan.steps) == 10
+    assert [step.name for step in plan.steps] == [
+        "control-0",
+        "control-1",
+        "control-2",
+        "control-3",
+        "control-4",
+        "control-5",
+        "control-111050",
+        "play-login",
+        "media",
+        "keyframe",
+    ]
+    assert plan.steps[7].control_templates[0].command_id == 0x111040
+    assert len(plan.steps[7].control_templates[0].body_tail) == 148
+    assert (
+        plan.steps[7].control_templates[0].body_tail_transform
+        == "play_login_today"
+    )
+    assert plan.steps[7].response_reads_after_each == 1
+
+    media_step = plan.steps[8]
+    assert media_step.media_socket is True
+    assert media_step.read_response_after_each is False
+    assert media_step.response_reads_after_each is None
+    assert media_step.control_templates[0].command_id == 0x30000
+    assert media_step.control_templates[0].body_tail == bytes.fromhex(
+        "000000010000000000000401"
+    )
+    assert [template.addend_delta for template in media_step.keepalive_templates] == [
+        10,
+        16,
+        22,
+        28,
+        34,
+        40,
+    ]
 
 
 def test_hcnetsdk_generated_plan_extracts_from_concrete_socket_plan() -> None:

@@ -46,6 +46,7 @@ from .hcnetsdk import (
 )
 from .light_bulb import EzvizLightBulb
 from .local_stream import (
+    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortGeneratedSocketStep,
     HcNetSdkCommandPortMultiSocketPlan,
@@ -57,6 +58,7 @@ from .local_stream import (
     copy_local_stream_to_mpegts,
     get_local_sdk_stream_credentials_from_client,
     hcnetsdk_command_port_generated_plan_from_socket_plan,
+    hcnetsdk_command_port_native_lan_live_view_plan,
     open_local_sdk_stream,
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
@@ -744,6 +746,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "JSON file describing a generated native-style multi-socket "
             "port-8000 command plan. The CLI logs in first, then renders "
             "session-relative command templates."
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--hcnetsdk-command-native-plan",
+        choices=(HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,),
+        help=(
+            "Use a built-in app-observed native-style generated port-8000 "
+            "command plan. Currently supports app-lan-live-view."
         ),
     )
     parser_save_clip.add_argument(
@@ -2232,6 +2242,14 @@ def _hcnetsdk_command_generated_plan_from_args(
     """Load a generated multi-socket command plan from CLI args."""
 
     plan_file = getattr(args, "hcnetsdk_command_generated_plan_file", None)
+    native_plan = getattr(args, "hcnetsdk_command_native_plan", None)
+    if plan_file and native_plan:
+        raise PyEzvizError(
+            "Provide only one of --hcnetsdk-command-generated-plan-file or "
+            "--hcnetsdk-command-native-plan"
+        )
+    if native_plan:
+        return hcnetsdk_command_port_native_lan_live_view_plan(native_plan)
     if not plan_file:
         return None
     text = Path(plan_file).read_text(encoding="utf-8")

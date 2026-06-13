@@ -238,6 +238,7 @@ if TYPE_CHECKING:
     )
     from .light_bulb import EzvizLightBulb
     from .local_stream import (
+        HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
         EzvizLocalSdkCredentials,
         EzvizLocalSdkMediaStream,
         EzvizLocalStreamPacket,
@@ -259,6 +260,7 @@ if TYPE_CHECKING:
         copy_local_stream_to_mpegts,
         get_local_sdk_stream_credentials_from_client,
         hcnetsdk_command_port_generated_plan_from_socket_plan,
+        hcnetsdk_command_port_native_lan_live_view_plan,
         open_hcnetsdk_command_port_generated_multi_socket_stream,
         open_hcnetsdk_command_port_multi_socket_stream,
         open_hcnetsdk_command_port_stream,
@@ -399,6 +401,7 @@ _EXPORTS = {
     "HcNetSdkCommandPortGeneratedMultiSocketPlan": "local_stream",
     "HcNetSdkCommandPortGeneratedMultiSocketMediaStream": "local_stream",
     "HcNetSdkCommandPortGeneratedSocketStep": "local_stream",
+    "HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW": "local_stream",
     "HcNetSdkCommandPortMediaStream": "local_stream",
     "HcNetSdkCommandPortMultiSocketMediaStream": "local_stream",
     "HcNetSdkCommandPortMultiSocketPlan": "local_stream",
@@ -589,6 +592,7 @@ _EXPORTS = {
     "collect_h264_idmx_annexb_after_first_clean_idr_window": "local_stream",
     "get_local_sdk_stream_credentials_from_client": "local_stream",
     "hcnetsdk_command_port_generated_plan_from_socket_plan": "local_stream",
+    "hcnetsdk_command_port_native_lan_live_view_plan": "local_stream",
     "open_hcnetsdk_command_port_generated_multi_socket_stream": "local_stream",
     "open_hcnetsdk_command_port_multi_socket_stream": "local_stream",
     "open_hcnetsdk_command_port_stream": "local_stream",

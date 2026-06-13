@@ -1457,6 +1457,59 @@ def test_save_clip_can_use_hcnetsdk_command_port_generated_plan_file(
     }
 
 
+def test_save_clip_can_use_hcnetsdk_command_port_native_plan(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-native-plan",
+                "app-lan-live-view",
+                "--hcnetsdk-command-password",
+                "123456",
+                "--hcnetsdk-local-ip",
+                "192.168.1.56",
+            ]
+        )
+        == 0
+    )
+
+    request = fake_client.instances[0].save_clip_request
+    generated_plan = request["hcnetsdk_command_generated_plan"]
+    assert request["hcnetsdk_command_frames"] is None
+    assert request["hcnetsdk_command_plan"] is None
+    assert request["hcnetsdk_command_password"] == "123456"
+    assert len(generated_plan.steps) == 10
+    assert generated_plan.steps[7].name == "play-login"
+    assert generated_plan.steps[7].control_templates[0].command_id == 0x111040
+    assert generated_plan.steps[7].response_reads_after_each == 1
+    assert generated_plan.steps[8].name == "media"
+    assert generated_plan.steps[8].media_socket is True
+    assert generated_plan.steps[8].read_response_after_each is False
+    assert generated_plan.steps[8].control_templates[0].command_id == 0x30000
+    assert generated_plan.steps[9].control_templates[0].command_id == 0x90100
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+
 def test_hcnetsdk_command_plan_generate_writes_generated_plan_without_login(
     tmp_path,
     capsys,

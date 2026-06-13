@@ -47,6 +47,23 @@ from .stream import (
     rtp_payload,
 )
 
+HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = "app-lan-live-view"
+
+_HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL = bytes.fromhex(
+    "000000083c417564696f566964656f436f6d7072657373496e666f3e"
+    "3c566964656f4368616e6e656c4e756d6265723e313c2f566964656f"
+    "4368616e6e656c4e756d6265723e3c2f417564696f566964656f436f"
+    "6d7072657373496e666f3e"
+)
+
+_HCNETSDK_APP_LAN_PLAY_LOGIN_TAIL = bytes.fromhex(
+    "00000001000000ff000000ff0000000000000000000000000000000000000000"
+    "00000000000007ea000000050000001f000000000000000000000000000007ea"
+    "000000050000001f000000170000003b0000003b000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000000000000"
+)
+
 
 @dataclass(frozen=True)
 class EzvizLocalStreamPacket:
@@ -247,6 +264,135 @@ class HcNetSdkCommandPortGeneratedMultiSocketPlan:
                 for step in self.steps
             )
         )
+
+
+def hcnetsdk_command_port_native_lan_live_view_plan(
+    name: str = HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
+) -> HcNetSdkCommandPortGeneratedMultiSocketPlan:
+    """Return an app-observed generated port-8000 LAN live-view plan.
+
+    The default plan mirrors the EZVIZ Android app's HCNetSDK LAN preview
+    sequence observed against the Husky camera: capability probes, play-login,
+    native-prefix media socket, bounded media keepalives, then an I-frame
+    request. The media socket deliberately keeps the native 64-byte ``IMKH``
+    response as prefix before the first media frame by not reading it as a
+    control response.
+    """
+    if name != HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW:
+        raise PyEzvizError(f"Unsupported HCNetSDK native command-port plan: {name}")
+    return HcNetSdkCommandPortGeneratedMultiSocketPlan(
+        steps=(
+            _hcnetsdk_generated_step(
+                "control-0",
+                _hcnetsdk_template(0x11000, "00000001", addend_delta=0),
+            ),
+            _hcnetsdk_generated_step(
+                "control-1",
+                _hcnetsdk_template(
+                    0x11000,
+                    "000000113c5265636f72644162696c6974792076657273696f6e3d22322e30222f3e",
+                    addend_delta=0,
+                ),
+            ),
+            _hcnetsdk_generated_step(
+                "control-2",
+                _hcnetsdk_template(
+                    0x11000,
+                    "000000113c50545a4162696c6974792076657273696f6e3d22322e30223e"
+                    "3c6368616e6e656c4e4f3e313c2f6368616e6e656c4e4f3e"
+                    "3c2f50545a4162696c6974793e",
+                    addend_delta=0,
+                ),
+            ),
+            _hcnetsdk_generated_step(
+                "control-3",
+                HcNetSdkCommandPortControlTemplate(
+                    command_id=0x11000,
+                    body_tail=_HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL,
+                    addend_delta=0,
+                ),
+            ),
+            _hcnetsdk_generated_step(
+                "control-4",
+                HcNetSdkCommandPortControlTemplate(
+                    command_id=0x11000,
+                    body_tail=_HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL,
+                    addend_delta=0,
+                ),
+            ),
+            _hcnetsdk_generated_step(
+                "control-5",
+                HcNetSdkCommandPortControlTemplate(
+                    command_id=0x11000,
+                    body_tail=_HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL,
+                    addend_delta=0,
+                ),
+            ),
+            _hcnetsdk_generated_step(
+                "control-111050",
+                HcNetSdkCommandPortControlTemplate(
+                    command_id=0x111050,
+                    addend_delta=2,
+                ),
+            ),
+            HcNetSdkCommandPortGeneratedSocketStep(
+                (
+                    HcNetSdkCommandPortControlTemplate(
+                        command_id=0x111040,
+                        body_tail=_HCNETSDK_APP_LAN_PLAY_LOGIN_TAIL,
+                        addend_delta=4,
+                        body_tail_transform="play_login_today",
+                    ),
+                ),
+                response_reads_after_each=1,
+                name="play-login",
+            ),
+            HcNetSdkCommandPortGeneratedSocketStep(
+                (
+                    _hcnetsdk_template(
+                        0x30000,
+                        "000000010000000000000401",
+                        addend_delta=5,
+                    ),
+                ),
+                read_response_after_each=False,
+                media_socket=True,
+                keepalive_templates=tuple(
+                    HcNetSdkCommandPortControlTemplate(
+                        command_id=0x30006,
+                        addend_delta=delta,
+                    )
+                    for delta in (10, 16, 22, 28, 34, 40)
+                ),
+                keepalive_interval_seconds=5.0,
+                name="media",
+            ),
+            _hcnetsdk_generated_step(
+                "keyframe",
+                _hcnetsdk_template(0x90100, "00000001", addend_delta=5),
+            ),
+        )
+    )
+
+
+def _hcnetsdk_generated_step(
+    name: str,
+    template: HcNetSdkCommandPortControlTemplate,
+) -> HcNetSdkCommandPortGeneratedSocketStep:
+    return HcNetSdkCommandPortGeneratedSocketStep((template,), name=name)
+
+
+def _hcnetsdk_template(
+    command_id: int,
+    body_tail_hex: str,
+    *,
+    addend_delta: int,
+) -> HcNetSdkCommandPortControlTemplate:
+    return HcNetSdkCommandPortControlTemplate(
+        command_id=command_id,
+        body_tail=bytes.fromhex(body_tail_hex),
+        addend_delta=addend_delta,
+    )
 
 
 def hcnetsdk_command_port_generated_plan_from_socket_plan(

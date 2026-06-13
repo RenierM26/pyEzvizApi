@@ -186,6 +186,9 @@ helpers can consume a generated plan directly with
 equivalents `--hcnetsdk-command-generated-plan-file` and
 `--hcnetsdk-command-password`; this runs a fresh command-port login and renders
 the session-relative templates before opening the native-style media sockets.
+For the app-observed LAN preview sequence, callers can skip the JSON plan file
+and use `hcnetsdk_command_port_native_lan_live_view_plan()` directly, or pass
+`--hcnetsdk-command-native-plan app-lan-live-view` in the CLI.
 Generated-plan JSON templates may set
 `"body_tail_transform": "play_login_today"` on the native `0x111040`
 play-login template to refresh the captured date words to the current local
@@ -197,7 +200,7 @@ first `$` media frame; consuming it as a control response can produce a stream
 that reaches media but fails to settle like the app. Set `"read_responses":
 true`/`"response_reads": 1` only when deliberately running a diagnostic variant.
 For generated plans captured from the native LAN preview path, the practical
-warning-free CLI shape is:
+CLI shape is:
 
 ```bash
 pyezvizapi --json save clip \
@@ -206,16 +209,18 @@ pyezvizapi --json save clip \
   --host 192.0.2.10 \
   --output front.ts \
   --duration 20 \
-  --hcnetsdk-command-generated-plan-file generated-plan.json \
+  --hcnetsdk-command-native-plan app-lan-live-view \
   --hcnetsdk-command-password "$EZVIZ_LAN_PASSWORD" \
   --hcnetsdk-local-ip 192.0.2.20 \
   --hcnetsdk-h264-skip-initial-idr-windows 1
 ```
 
-The generated plan should keep the media step on the default native-prefix
-behavior above, and native `0x111040` play-login templates should use
-`"body_tail_transform": "play_login_today"` so captured date words are refreshed
-at render time.
+The built-in `app-lan-live-view` plan currently supports `--channel 1` only
+because the app-observed command tails include channel-1 fields. It keeps the
+media step on the native-prefix behavior above, refreshes native `0x111040`
+play-login date words at render time, sends bounded `0x30006` media keepalives,
+and issues the app-observed `0x90100` I-frame request after the media socket is
+open.
 Use `--hcnetsdk-command-metadata-output` during command-port saves to write a
 sanitized JSON summary of command ids, response lengths/header fields, and
 first-media shape for diagnostics without storing frame bodies or credentials.

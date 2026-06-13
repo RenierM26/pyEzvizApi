@@ -1595,7 +1595,11 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0913
         process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
-    if h264_skip_initial_idr_windows or h264_trim_to_clean_idr_window:
+    if (
+        h264_skip_initial_idr_windows
+        or h264_trim_to_clean_idr_window
+        or h264_wait_for_clean_idr_window
+    ):
         raise PyEzvizError(
             "H.264 startup trim options require a clear H.264 IDMX stream"
         )

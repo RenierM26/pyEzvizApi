@@ -1984,6 +1984,21 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_rejects_trim_combo() -> 
         )
 
 
+def test_copy_local_stream_to_mpegts_wait_for_clean_idr_rejects_mpegps() -> None:
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets is None
+            return [SimpleNamespace(body=MPEG_PS_PAYLOAD)]
+
+    with pytest.raises(PyEzvizError, match=r"require a clear H\.264 IDMX stream"):
+        copy_local_stream_to_mpegts(
+            FakeStream(),
+            io.BytesIO(),
+            duration_seconds=1.0,
+            h264_wait_for_clean_idr_window=True,
+        )
+
+
 def test_copy_local_stream_to_mpegts_preroll_requires_clean_idr_trim() -> None:
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:

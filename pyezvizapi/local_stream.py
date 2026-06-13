@@ -2106,6 +2106,8 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(
             raise PyEzvizError(
                 "Timed out waiting for a clean H.264 IDR window" + suffix
             )
+        if capture_deadline is not None and now >= capture_deadline:
+            break
         collected.append(packet)
         if clean_start_offset is None:
             probe = _try_first_clean_h264_annexb_idr_window_offset(
@@ -2120,8 +2122,6 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(
             if clean_start_offset is not None:
                 capture_deadline = now + duration_seconds
             continue
-        if capture_deadline is not None and now >= capture_deadline:
-            break
 
     if clean_start_offset is None:
         suffix = _h264_clean_idr_timeout_suffix(

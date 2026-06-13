@@ -1789,8 +1789,8 @@ def test_copy_local_stream_to_mpegts_can_wait_for_clean_idr_before_duration(
             1.0,
             1.5,
             2.0,
-            5.0,
-            5.5,
+            2.25,
+            2.5,
             6.0,
             6.75,
             7.0,
@@ -1920,6 +1920,58 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
     assert seen["collect_duration_seconds"] == duration_seconds
     assert seen["collect_wait_seconds"] == wait_seconds
     assert seen["collect_max_windows"] == 11
+
+
+def test_collect_h264_idmx_annexb_after_clean_idr_excludes_deadline_packet(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "else:\n"
+        "    sys.stdout.buffer.write(data)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    expected_annexb = (
+        b"\x00\x00\x00\x01\x67\x4d\x00"
+        b"\x00\x00\x00\x01\x68\xee\x38"
+        b"\x00\x00\x00\x01\x65clean"
+        b"\x00\x00\x00\x01\x41inside-window"
+        b"\x00\x00\x00\x01\x65next-idr"
+    )
+    post_deadline_body = b"\x41at-deadline"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    annexb = collect_h264_idmx_annexb_after_first_clean_idr_window(
+        (
+            idmx_frame(body)
+            for body in (
+                b"\x65bad",
+                b"\x67\x4d\x00",
+                b"\x68\xee\x38",
+                b"\x65clean",
+                b"\x41inside-window",
+                b"\x65next-idr",
+                post_deadline_body,
+            )
+        ),
+        duration_seconds=1.0,
+        monotonic=iter([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.5]).__next__,
+        ffmpeg_path=str(fake_ffmpeg),
+        wait_seconds=10.0,
+    )
+
+    assert annexb == expected_annexb
+    assert post_deadline_body not in annexb
 
 
 def test_collect_h264_idmx_annexb_after_clean_idr_times_out(tmp_path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
 import io
 import time
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from pyezvizapi.hcnetsdk import (
     HcNetSdkRealDataType,
     build_hcnetsdk_tcp_frame,
     hcnetsdk_command_port_control_frame,
+    hcnetsdk_command_port_play_login_body_tail_for_today,
 )
 from pyezvizapi.local_stream import (
     EzvizLocalSdkMediaStream,
@@ -568,6 +570,25 @@ def test_hcnetsdk_native_lan_live_view_plan_matches_app_observed_shape() -> None
         == "play_login_today"
     )
     assert plan.steps[7].response_reads_after_each == 1
+    patched_tail = hcnetsdk_command_port_play_login_body_tail_for_today(
+        plan.steps[7].control_templates[0].body_tail,
+        today=date(2026, 6, 13),
+    )
+    patched_words = {
+        offset: int.from_bytes(patched_tail[offset : offset + 4], "big")
+        for offset in range(0, len(patched_tail), 4)
+    }
+    assert patched_words[36] == 2026
+    assert patched_words[40] == 6
+    assert patched_words[44] == 13
+    assert patched_words[48] == 0
+    assert patched_words[60] == 2026
+    assert patched_words[64] == 6
+    assert patched_words[68] == 13
+    assert patched_words[72] == 23
+    assert patched_words[76] == 59
+    assert patched_words[80] == 59
+    assert patched_words[84] == 0
 
     media_step = plan.steps[8]
     assert media_step.media_socket is True

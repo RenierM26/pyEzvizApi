@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 import datetime as dt
 import hashlib
 import json
 import logging
 from pathlib import Path
+import time
 from typing import Any, BinaryIO, ClassVar, Literal, NotRequired, TypedDict, cast
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -141,9 +142,14 @@ from .exceptions import (
 from .feature import optionals_mapping
 from .hcnetsdk import HcNetSdkLanEndpoint
 from .local_stream import (
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    HcNetSdkCommandPortMultiSocketPlan,
     copy_local_sdk_stream_from_client,
     copy_local_stream_to_mpegts,
+    open_hcnetsdk_command_port_generated_multi_socket_stream,
+    open_hcnetsdk_command_port_multi_socket_stream,
     open_hcnetsdk_command_port_stream,
+    summarize_idmx_h264_local_packets,
 )
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
@@ -307,6 +313,101 @@ def _bytes_written_to_output(
     if start_position is None or end_position is None:
         return None
     return max(0, end_position - start_position)
+
+
+class _LocalStreamPacketMetadataRecorder:
+    """Wrap a local media stream and record sanitized packet metadata."""
+
+    def __init__(
+        self,
+        stream: Any,
+        *,
+        max_samples: int = 32,
+        max_idmx_summary_frames: int = 256,
+        max_idmx_summary_packets: int = 512,
+        max_idmx_summary_bytes: int = 2_000_000,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._stream = stream
+        self._max_samples = max_samples
+        self._max_idmx_summary_frames = max_idmx_summary_frames
+        self._max_idmx_summary_packets = max_idmx_summary_packets
+        self._max_idmx_summary_bytes = max_idmx_summary_bytes
+        self._monotonic = monotonic
+        self._first_packet_time: float | None = None
+        self._idmx_summary_packets: list[bytes] = []
+        self._idmx_summary_bytes = 0
+        self._idmx_summary_truncated = False
+        self.packet_summary: dict[str, Any] = {
+            "packet_count": 0,
+            "sample_limit": max_samples,
+            "samples": [],
+        }
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def iter_packets(self, *, max_packets: int | None = None) -> Iterator[Any]:
+        try:
+            for packet in self._stream.iter_packets(max_packets=max_packets):
+                self._record_packet(packet)
+                yield packet
+        finally:
+            self._finalize_packet_summary()
+
+    def finalize_packet_summary(self) -> None:
+        """Finalize packet metadata before external serialization."""
+
+        self._finalize_packet_summary()
+
+    def _record_packet(self, packet: Any) -> None:
+        packet_count = int(self.packet_summary["packet_count"])
+        samples = self.packet_summary["samples"]
+        body = getattr(packet, "body", b"")
+        prefix = getattr(packet, "prefix", b"")
+        now = self._monotonic()
+        if self._first_packet_time is None:
+            self._first_packet_time = now
+            self.packet_summary["first_packet_elapsed_seconds"] = 0.0
+        elapsed_seconds = now - self._first_packet_time
+        self.packet_summary["last_packet_elapsed_seconds"] = elapsed_seconds
+        if isinstance(samples, list) and len(samples) < self._max_samples:
+            samples.append(
+                {
+                    "index": packet_count,
+                    "elapsed_seconds": elapsed_seconds,
+                    "channel": getattr(packet, "channel", None),
+                    "length": getattr(packet, "length", len(body)),
+                    "body_sha256": hashlib.sha256(body).hexdigest(),
+                    "prefix_length": len(prefix),
+                    "prefix_sha256": hashlib.sha256(prefix).hexdigest(),
+                }
+            )
+        if isinstance(body, bytes):
+            self._record_idmx_summary_packet(body)
+        self.packet_summary["packet_count"] = packet_count + 1
+
+    def _record_idmx_summary_packet(self, body: bytes) -> None:
+        if (
+            len(self._idmx_summary_packets) >= self._max_idmx_summary_packets
+            or self._idmx_summary_bytes + len(body) > self._max_idmx_summary_bytes
+        ):
+            self._idmx_summary_truncated = True
+            return
+        self._idmx_summary_packets.append(body)
+        self._idmx_summary_bytes += len(body)
+
+    def _finalize_packet_summary(self) -> None:
+        if not self._idmx_summary_packets or "idmx_h264" in self.packet_summary:
+            return
+        idmx_summary = summarize_idmx_h264_local_packets(
+            self._idmx_summary_packets,
+            max_frames=self._max_idmx_summary_frames,
+        )
+        idmx_summary["capture_packet_limit"] = self._max_idmx_summary_packets
+        idmx_summary["capture_byte_limit"] = self._max_idmx_summary_bytes
+        idmx_summary["capture_truncated"] = self._idmx_summary_truncated
+        self.packet_summary["idmx_h264"] = idmx_summary
 
 
 def _first_image_url(value: Any) -> str | None:
@@ -2849,7 +2950,19 @@ class EzvizClient:
         host: str | None = None,
         command_port: int | None = None,
         hcnetsdk_command_frames: Iterable[bytes] | None = None,
+        hcnetsdk_command_plan: HcNetSdkCommandPortMultiSocketPlan | None = None,
+        hcnetsdk_command_generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan
+        | None = None,
+        hcnetsdk_command_password: str | bytes | None = None,
+        hcnetsdk_local_ip: str | None = None,
         hcnetsdk_read_response_after_each: bool | Iterable[bool] = True,
+        hcnetsdk_command_metadata_callback: Callable[[Any], None] | None = None,
+        hcnetsdk_h264_skip_initial_idr_windows: int = 0,
+        hcnetsdk_h264_trim_to_clean_idr_window: bool = False,
+        hcnetsdk_h264_clean_idr_preroll_seconds: float = 0.0,
+        hcnetsdk_h264_clean_idr_max_windows: int = 32,
+        hcnetsdk_h264_wait_for_clean_idr_window: bool = False,
+        hcnetsdk_h264_clean_idr_wait_seconds: float = 60.0,
         cloud_client_type: int = 9,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
@@ -2893,7 +3006,30 @@ class EzvizClient:
                 host=host,
                 command_port=command_port,
                 command_frames=hcnetsdk_command_frames,
+                command_plan=hcnetsdk_command_plan,
+                generated_plan=hcnetsdk_command_generated_plan,
+                command_password=hcnetsdk_command_password,
+                local_ip=hcnetsdk_local_ip,
                 read_response_after_each=hcnetsdk_read_response_after_each,
+                metadata_callback=hcnetsdk_command_metadata_callback,
+                h264_skip_initial_idr_windows=(
+                    hcnetsdk_h264_skip_initial_idr_windows
+                ),
+                h264_trim_to_clean_idr_window=(
+                    hcnetsdk_h264_trim_to_clean_idr_window
+                ),
+                h264_clean_idr_preroll_seconds=(
+                    hcnetsdk_h264_clean_idr_preroll_seconds
+                ),
+                h264_clean_idr_max_windows=(
+                    hcnetsdk_h264_clean_idr_max_windows
+                ),
+                h264_wait_for_clean_idr_window=(
+                    hcnetsdk_h264_wait_for_clean_idr_window
+                ),
+                h264_clean_idr_wait_seconds=(
+                    hcnetsdk_h264_clean_idr_wait_seconds
+                ),
             )
         if source == "cloud":
             return self._save_cloud_clip(
@@ -3005,7 +3141,18 @@ class EzvizClient:
         host: str | None,
         command_port: int | None,
         command_frames: Iterable[bytes] | None,
+        command_plan: HcNetSdkCommandPortMultiSocketPlan | None,
+        generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan | None,
+        command_password: str | bytes | None,
+        local_ip: str | None,
         read_response_after_each: bool | Iterable[bool],
+        metadata_callback: Callable[[Any], None] | None,
+        h264_skip_initial_idr_windows: int = 0,
+        h264_trim_to_clean_idr_window: bool = False,
+        h264_clean_idr_preroll_seconds: float = 0.0,
+        h264_clean_idr_max_windows: int = 32,
+        h264_wait_for_clean_idr_window: bool = False,
+        h264_clean_idr_wait_seconds: float = 60.0,
     ) -> SaveMediaResult:
         """Save a clip through caller-supplied port-8000 HCNetSDK frames."""
 
@@ -3019,9 +3166,24 @@ class EzvizClient:
             )
 
         frames = tuple(command_frames or ())
-        if not frames:
+        supplied_modes = sum(
+            bool(mode)
+            for mode in (
+                frames,
+                command_plan is not None,
+                generated_plan is not None,
+            )
+        )
+        if supplied_modes != 1:
             raise PyEzvizError(
-                "source='hcnetsdk-command-port' requires hcnetsdk_command_frames"
+                "source='hcnetsdk-command-port' requires exactly one of "
+                "hcnetsdk_command_frames, hcnetsdk_command_plan, or "
+                "hcnetsdk_command_generated_plan"
+            )
+        if generated_plan is not None and command_password is None:
+            raise PyEzvizError(
+                "source='hcnetsdk-command-port' generated plans require "
+                "hcnetsdk_command_password"
             )
         endpoint = self._hcnetsdk_command_port_endpoint(
             serial,
@@ -3032,34 +3194,82 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open_hcnetsdk_command_port_stream(
+            stream_context = self._open_hcnetsdk_command_port_clip_stream(
                 endpoint,
-                frames,
+                frames=frames,
+                command_plan=command_plan,
+                generated_plan=generated_plan,
+                command_password=command_password,
                 timeout=timeout,
+                local_ip=local_ip,
                 read_response_after_each=read_response_after_each,
-            ) as stream, output_path.open("wb") as output_file:
-                copy_local_stream_to_mpegts(
-                    stream,
-                    output_file,
-                    ffmpeg_path=ffmpeg_path,
-                    max_packets=max_packets,
-                    duration_seconds=duration_seconds,
+            )
+            with stream_context as stream, output_path.open("wb") as output_file:
+                metadata_stream = (
+                    _LocalStreamPacketMetadataRecorder(stream)
+                    if metadata_callback is not None
+                    else stream
                 )
+                try:
+                    copy_local_stream_to_mpegts(
+                        metadata_stream,
+                        output_file,
+                        ffmpeg_path=ffmpeg_path,
+                        max_packets=max_packets,
+                        duration_seconds=duration_seconds,
+                        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+                        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+                        h264_clean_idr_preroll_seconds=(
+                            h264_clean_idr_preroll_seconds
+                        ),
+                        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                        h264_wait_for_clean_idr_window=(
+                            h264_wait_for_clean_idr_window
+                        ),
+                        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                    )
+                finally:
+                    if metadata_callback is not None:
+                        metadata_callback(metadata_stream)
         else:
             start_position = _binary_position(output)
-            with open_hcnetsdk_command_port_stream(
+            stream_context = self._open_hcnetsdk_command_port_clip_stream(
                 endpoint,
-                frames,
+                frames=frames,
+                command_plan=command_plan,
+                generated_plan=generated_plan,
+                command_password=command_password,
                 timeout=timeout,
+                local_ip=local_ip,
                 read_response_after_each=read_response_after_each,
-            ) as stream:
-                copy_local_stream_to_mpegts(
-                    stream,
-                    output,
-                    ffmpeg_path=ffmpeg_path,
-                    max_packets=max_packets,
-                    duration_seconds=duration_seconds,
+            )
+            with stream_context as stream:
+                metadata_stream = (
+                    _LocalStreamPacketMetadataRecorder(stream)
+                    if metadata_callback is not None
+                    else stream
                 )
+                try:
+                    copy_local_stream_to_mpegts(
+                        metadata_stream,
+                        output,
+                        ffmpeg_path=ffmpeg_path,
+                        max_packets=max_packets,
+                        duration_seconds=duration_seconds,
+                        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+                        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+                        h264_clean_idr_preroll_seconds=(
+                            h264_clean_idr_preroll_seconds
+                        ),
+                        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                        h264_wait_for_clean_idr_window=(
+                            h264_wait_for_clean_idr_window
+                        ),
+                        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                    )
+                finally:
+                    if metadata_callback is not None:
+                        metadata_callback(metadata_stream)
 
         return {
             "ok": True,
@@ -3074,6 +3284,42 @@ class EzvizClient:
             "content_type": _content_type_for_output(output, default="video/mp2t"),
             "command_port": endpoint.command_port,
         }
+
+    @staticmethod
+    def _open_hcnetsdk_command_port_clip_stream(
+        endpoint: HcNetSdkLanEndpoint,
+        *,
+        frames: tuple[bytes, ...],
+        command_plan: HcNetSdkCommandPortMultiSocketPlan | None,
+        generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan | None,
+        command_password: str | bytes | None,
+        timeout: float | None,
+        local_ip: str | None,
+        read_response_after_each: bool | Iterable[bool],
+    ) -> Any:
+        """Open the selected HCNetSDK command-port stream mode."""
+        if generated_plan is not None and command_password is not None:
+            return open_hcnetsdk_command_port_generated_multi_socket_stream(
+                endpoint,
+                generated_plan,
+                password=command_password,
+                timeout=timeout,
+                local_ip=local_ip,
+            )
+        if command_plan is not None:
+            return open_hcnetsdk_command_port_multi_socket_stream(
+                endpoint,
+                command_plan,
+                timeout=timeout,
+                local_ip=local_ip,
+            )
+        return open_hcnetsdk_command_port_stream(
+            endpoint,
+            frames,
+            timeout=timeout,
+            read_response_after_each=read_response_after_each,
+            local_ip=local_ip,
+        )
 
     def _save_cloud_clip(  # noqa: PLR0913
         self,

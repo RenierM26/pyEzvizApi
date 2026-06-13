@@ -148,9 +148,175 @@ image = client.save_image(
 
 Use `source="hcnetsdk-command-port"`, `host="192.0.2.10"`, `command_port=8000`,
 and `hcnetsdk_command_frames=(...)` when an integration already has the complete
-full-local HCNetSDK port-8000 command bootstrap frames. Both helpers accept a
-local path or a binary file object and return a small result dict with the output
-name, byte count, content type, and source metadata.
+full-local HCNetSDK port-8000 command bootstrap frames. For native-style flows
+that use several short command sockets before the media socket, pass
+`hcnetsdk_command_plan=HcNetSdkCommandPortMultiSocketPlan(...)` or use the CLI
+`--hcnetsdk-command-plan-file` JSON form with socket `steps`/`sockets`. If the
+frames were captured on another device, pass `hcnetsdk_local_ip` or
+`--hcnetsdk-local-ip` so the encoded client LAN IP word is patched for the
+current host. Both helpers accept a local path or a binary file object and
+return a small result dict with the output name, byte count, content type, and
+source metadata.
+
+Lower-level command-port callers can use `HcNetSdkCommandPortClient.login()` to
+generate the reboot-safe port-8000 RSA/challenge login sequence directly. The
+returned `HcNetSdkCommandPortLoginSession` exposes the 4-byte session id, device
+serial, decrypted challenge, password seed, and follow-up command auth seed from
+the second login response header. Use `hcnetsdk_command_port_auth_word()` with
+that session id, auth seed, decrypted challenge, command id, and the native
+addend/counter value to generate post-login command header auth words, or
+`hcnetsdk_command_port_control_frame()` to build a complete `0x63` post-login
+control frame when the command-specific body tail is known. The helper keeps
+the login session id in the same network order in both the `0x63` control body
+and auth-word generation. Use
+`hcnetsdk_command_port_control_template_from_frame()` to strip a captured or
+generated `0x63` frame down to the reusable command id/body tail before
+rebuilding it with fresh session values. A set of those templates can be grouped
+as `HcNetSdkCommandPortGeneratedSocketStep` /
+`HcNetSdkCommandPortGeneratedMultiSocketPlan` and rendered into a concrete
+`HcNetSdkCommandPortMultiSocketPlan` after a fresh login. If you already have a
+concrete plan, `hcnetsdk_command_port_generated_plan_from_socket_plan()` can
+extract a generated template plan from it and infer session-relative addend
+deltas when the original auth seed and challenge key are supplied. The offline
+CLI helper `pyezvizapi stream hcnetsdk-command-plan-generate --input plan.json`
+performs the same conversion for JSON plan files and can write directly to a
+generated-plan file for later live runs. The clip
+helpers can consume a generated plan directly with
+`hcnetsdk_command_generated_plan` plus `hcnetsdk_command_password`, or the CLI
+equivalents `--hcnetsdk-command-generated-plan-file` and
+`--hcnetsdk-command-password`; this runs a fresh command-port login and renders
+the session-relative templates before opening the native-style media sockets.
+Generated-plan JSON templates may set
+`"body_tail_transform": "play_login_today"` on the native `0x111040`
+play-login template to refresh the captured date words to the current local
+date before rendering the frame.
+For the native-style EZVIZ HCNetSDK media step (`0x30000`), plan JSON defaults
+to not reading a control response from the media socket. Native leaves the
+64-byte `IMKH` reply on the media socket and treats it as prefix before the
+first `$` media frame; consuming it as a control response can produce a stream
+that reaches media but fails to settle like the app. Set `"read_responses":
+true`/`"response_reads": 1` only when deliberately running a diagnostic variant.
+For generated plans captured from the native LAN preview path, the practical
+warning-free CLI shape is:
+
+```bash
+pyezvizapi --json save clip \
+  --source hcnetsdk-command-port \
+  --serial ABC123 \
+  --host 192.0.2.10 \
+  --output front.ts \
+  --duration 20 \
+  --hcnetsdk-command-generated-plan-file generated-plan.json \
+  --hcnetsdk-command-password "$EZVIZ_LAN_PASSWORD" \
+  --hcnetsdk-local-ip 192.0.2.20 \
+  --hcnetsdk-h264-skip-initial-idr-windows 1
+```
+
+The generated plan should keep the media step on the default native-prefix
+behavior above, and native `0x111040` play-login templates should use
+`"body_tail_transform": "play_login_today"` so captured date words are refreshed
+at render time.
+Use `--hcnetsdk-command-metadata-output` during command-port saves to write a
+sanitized JSON summary of command ids, response lengths/header fields, and
+first-media shape for diagnostics without storing frame bodies or credentials.
+For command frames, it also reports bounded nonzero 32-bit samples from the
+command-specific body tail while skipping the session-bound client IP/session
+prefix. When metadata output is enabled, the save path also records packet
+counts plus elapsed timing, lengths, and SHA-256 hashes for a bounded sample of
+media packets, along with a bounded IDMX/H.264 frame-shape summary that reports
+counts, NAL/FU-A types, RTP-like sequence/timestamp continuity, and hashes
+without storing media bytes. Media-socket keepalive send attempts are recorded
+as bounded command id/timing/success metadata when a plan includes keepalives.
+For offline Frida artifacts, the `hcnetsdk-command-dump-summary` stream helper
+can summarize dumped
+`ezviz-hcnetsdk-command-frame-*.bin` files and raw
+`ezviz-hcnetsdk-inbound-media-*.bin` media dumps. The output includes command
+counts, bounded command-body samples, scanned command-port media-frame counts,
+and the same bounded IDMX/H.264 frame-shape metadata used by live command-port
+capture diagnostics.
+When collecting a fresh Frida command-shape trace, set
+`EZVIZ_FRIDA_WITH_STREAM_TRANSFORM=1` on
+`tools/apk-re/frida/run-ezviz-hcnetsdk-command-shape-hook` to load the
+stream-transform hook in the same Frida session. This captures command frames,
+raw command-port inbound media, and PlayM4 input dumps from the same native run
+so their sanitized summaries can be compared directly. The same runner accepts
+`EZVIZ_HCNETSDK_TARGET_SERIAL`, `EZVIZ_HCNETSDK_TARGET_IP`,
+`EZVIZ_HCNETSDK_TARGET_PORT`, `EZVIZ_HCNETSDK_TARGET_PASSWORD`,
+`EZVIZ_HCNETSDK_DUMP_COMMAND_FRAMES`,
+`EZVIZ_HCNETSDK_COMMAND_DUMP_DIR`,
+`EZVIZ_HCNETSDK_DUMP_INBOUND_MEDIA_CHUNKS`,
+`EZVIZ_HCNETSDK_INBOUND_MEDIA_DUMP_DIR`, and
+`EZVIZ_HCNETSDK_INBOUND_MEDIA_DUMP_MAX_BYTES` to inject the target and dump
+settings before the hook loads. `EZVIZ_HCNETSDK_TARGET_PASSWORD` is only used
+inside the Frida-triggered app process when the app has no saved LAN password
+for the target serial; the hook logs only the password length. For
+LAN-device-list diagnostics,
+`EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN=1` can additionally route a successful
+LAN login into the native preview activity so command-port media and PlayM4
+input hooks fire without manual tablet interaction.
+If a command-port camera emits corrupt startup IDR refreshes before stabilizing,
+`--hcnetsdk-h264-skip-initial-idr-windows N` can drop the first `N`
+IDR-started H.264 windows before remuxing clear IDMX media. Native HCNetSDK
+startup traces can include non-video IDMX prelude records on RTP payload types
+104/112 before clear H.264 starts on payload type 96, followed by a large
+explicit keyframe request. When FFmpeg reports warnings only in that first real
+IDR window, `--hcnetsdk-h264-skip-initial-idr-windows 1` mirrors the practical
+native-player tolerance and yields a warning-free remux once a later IDR is
+available. For a more robust startup workaround,
+`--hcnetsdk-h264-trim-to-clean-idr-window` samples IDR
+windows with FFmpeg and remuxes from the first one that decodes without H.264
+errors. Because the output begins at the selected clean window, the resulting
+clip can be shorter than the requested capture duration. Add
+`--hcnetsdk-h264-clean-idr-preroll-seconds N` with the trim option to overcapture
+for up to `N` extra seconds before trimming; this gives generated command-port
+sessions time to stabilize while preserving more of the requested clean clip.
+Use `--hcnetsdk-h264-clean-idr-max-windows N` when long unstable starts need
+more than the default 32 IDR windows checked.
+If you need to preserve the requested clip duration instead of trimming after
+capture, use `--hcnetsdk-h264-wait-for-clean-idr-window`; this discards startup
+media until a decodable IDR window is found, then starts the requested duration
+window. Bound that pre-capture wait with
+`--hcnetsdk-h264-clean-idr-wait-seconds N`. Some cameras expose very sparse or
+persistently corrupt IDR refreshes on generated command-port sessions even
+after the media socket remains stable; in that case use the native-prefix media
+plan above for a playable remux and keep clean-IDR wait as a diagnostic.
+Experimental plan JSON can set
+`read_first_media_immediately` on the media socket step to drain one media
+packet before later short command sockets, which is useful when comparing native
+startup timing. Plan steps can also set `delay_after_commands_seconds` to keep a
+socket open briefly after its command/response exchange before the next step is
+run; this is intended for matching native command-port startup pacing during
+diagnostics. Media steps with keepalive templates can set
+`keepalive_initial_delay_seconds` to override the default first-keepalive delay;
+use `0.0` to send the first keepalive immediately, matching native HCNetSDK
+startup traces.
+For native player dumps that are already H.264 Annex-B bytes,
+`summarize_h264_annexb_units()` reports the same kind of bounded NAL-unit
+length/type/hash metadata without printing media contents.
+`summarize_h264_annexb_idr_windows()` additionally reports IDR-started GOP
+window offsets, lengths, and hashes. The CLI can run the same offline diagnostic
+without cloud credentials:
+
+```bash
+pyezvizapi stream h264-annexb-summary \
+  --input native-addtovideodata.h264 \
+  --decode-idr-windows
+```
+
+The optional decode check feeds each sampled IDR-started window to FFmpeg and
+records only the return code and bounded stderr lines. The same bounded decode
+check is available for native command-port dump folders:
+
+```bash
+pyezvizapi stream hcnetsdk-command-dump-summary \
+  --command-frame-dir native-dumps/command \
+  --inbound-media-file native-dumps/command/ezviz-hcnetsdk-inbound-media-fd116.bin \
+  --playm4-input-dir native-dumps/playm4 \
+  --decode-idr-windows
+```
+
+Command payload templates still vary by native call, so callers remain
+responsible for supplying the correct generated template plan.
 
 ### devices
 
@@ -295,7 +461,14 @@ This is separate from the proprietary HCNetSDK command protocol on port `8000`.
 command-port frames, including the port-8000 `$` media length format and clear
 H.264 IDMX payloads. The person-facing `save clip --source
 hcnetsdk-command-port` wrapper can consume those complete command frames and
-write a local MPEG-TS clip.
+write a local MPEG-TS clip. The generated command-port login helper covers the
+initial RSA/challenge session setup and exposes the native command auth seed;
+`hcnetsdk_command_port_auth_word()` covers the native post-login command-word
+transform, and `hcnetsdk_command_port_control_frame()` wraps that transform into
+a complete `0x63` control frame for callers that already know the command body
+tail. `hcnetsdk_command_port_control_template_from_frame()` extracts reusable
+control templates from captured/generated frames while dropping session-bound
+client IP and session-id fields.
 
 ### cloud_videos
 

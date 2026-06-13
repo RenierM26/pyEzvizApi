@@ -16,6 +16,12 @@ from cli_fakes import (
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
+from pyezvizapi.hcnetsdk import (
+    HcNetSdkCommandPortExchange,
+    build_hcnetsdk_tcp_frame,
+    hcnetsdk_command_port_control_frame,
+    parse_hcnetsdk_tcp_frame,
+)
 from pyezvizapi.stream import VtmChannel, VtmPacket
 
 MPEGTS_PAYLOAD = b"mpegts"
@@ -27,6 +33,15 @@ LOCAL_SDK_PRE_START_BODY = b"pre"
 LOCAL_SDK_DEFAULT_DURATION = 60.0
 HCNETSDK_DEFAULT_SAVE_TIMEOUT = 10.0
 HCNETSDK_TEST_SAVE_DURATION = 3.0
+HCNETSDK_PLAN_KEEPALIVE_INTERVAL = 2.0
+HCNETSDK_PLAN_STEP_DELAY = 0.5
+HCNETSDK_CLEAN_IDR_PREROLL_SECONDS = 45.5
+HCNETSDK_CLEAN_IDR_MAX_WINDOWS = 64
+HCNETSDK_CLEAN_IDR_DEFAULT_WAIT_SECONDS = 60.0
+HCNETSDK_CLEAN_IDR_WAIT_SECONDS = 12.5
+HCNETSDK_COMMAND_PORT_TEST_KEY_HEX = (
+    "3630343531663636393865353862623134313139323936386361333030663431"
+)
 IMAGE_PAYLOAD = b"jpeg-bytes"
 STRUCTURED_RECEIVER_INNER_ADDRESS_XML = b"<InnerAddress>192.0.2.20</InnerAddress>"
 STRUCTURED_RECEIVER_INNER_PORT_XML = b"<InnerPort>9020</InnerPort>"
@@ -1004,7 +1019,18 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
         "host": None,
         "command_port": None,
         "hcnetsdk_command_frames": None,
+        "hcnetsdk_command_plan": None,
+        "hcnetsdk_command_generated_plan": None,
+        "hcnetsdk_command_password": None,
+        "hcnetsdk_local_ip": None,
         "hcnetsdk_read_response_after_each": True,
+        "hcnetsdk_command_metadata_callback": None,
+        "hcnetsdk_h264_skip_initial_idr_windows": 0,
+        "hcnetsdk_h264_trim_to_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
+        "hcnetsdk_h264_clean_idr_max_windows": 32,
+        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
     }
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
     assert json.loads(capsys.readouterr().out) == {
@@ -1060,6 +1086,9 @@ def test_save_clip_can_use_hcnetsdk_command_port_source(
                 str(frames_path),
                 "--hcnetsdk-read-responses",
                 "true,false",
+                "--hcnetsdk-h264-wait-for-clean-idr-window",
+                "--hcnetsdk-h264-clean-idr-wait-seconds",
+                str(HCNETSDK_CLEAN_IDR_WAIT_SECONDS),
             ]
         )
         == 0
@@ -1086,7 +1115,18 @@ def test_save_clip_can_use_hcnetsdk_command_port_source(
             bytes.fromhex("00000010"),
             bytes.fromhex("00000011"),
         ),
+        "hcnetsdk_command_plan": None,
+        "hcnetsdk_command_generated_plan": None,
+        "hcnetsdk_command_password": None,
+        "hcnetsdk_local_ip": None,
         "hcnetsdk_read_response_after_each": (True, False),
+        "hcnetsdk_command_metadata_callback": None,
+        "hcnetsdk_h264_skip_initial_idr_windows": 0,
+        "hcnetsdk_h264_trim_to_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
+        "hcnetsdk_h264_clean_idr_max_windows": 32,
+        "hcnetsdk_h264_wait_for_clean_idr_window": True,
+        "hcnetsdk_h264_clean_idr_wait_seconds": HCNETSDK_CLEAN_IDR_WAIT_SECONDS,
     }
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
     assert json.loads(capsys.readouterr().out) == {
@@ -1151,6 +1191,378 @@ def test_save_clip_command_port_source_does_not_require_cloud_credentials(
     assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
 
 
+def test_save_clip_can_use_hcnetsdk_command_port_plan_file(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "sockets": [
+                    {"name": "auth", "frames": ["00000010"]},
+                    {
+                        "name": "media",
+                        "media_socket": True,
+                        "frames": ["00000011"],
+                        "keepalive_frames": ["00000012"],
+                        "keepalive_interval_seconds": HCNETSDK_PLAN_KEEPALIVE_INTERVAL,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-plan-file",
+                str(plan_path),
+                "--hcnetsdk-local-ip",
+                "192.168.1.26",
+            ]
+        )
+        == 0
+    )
+
+    request = fake_client.instances[0].save_clip_request
+    plan = request["hcnetsdk_command_plan"]
+    assert request["hcnetsdk_command_frames"] is None
+    assert request["hcnetsdk_command_generated_plan"] is None
+    assert request["hcnetsdk_command_password"] is None
+    assert request["hcnetsdk_local_ip"] == "192.168.1.26"
+    assert request["hcnetsdk_read_response_after_each"] is True
+    assert len(plan.steps) == 2
+    assert plan.steps[0].name == "auth"
+    assert plan.steps[0].command_frames == (bytes.fromhex("00000010"),)
+    assert plan.steps[0].read_response_after_each is True
+    assert plan.steps[1].media_socket is True
+    assert plan.steps[1].read_response_after_each is False
+    assert plan.steps[1].response_reads_after_each is None
+    assert plan.steps[1].keepalive_frames == (bytes.fromhex("00000012"),)
+    assert plan.steps[1].keepalive_interval_seconds == HCNETSDK_PLAN_KEEPALIVE_INTERVAL
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+
+def test_hcnetsdk_command_port_media_plan_can_explicitly_read_response(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "sockets": [
+                    {"name": "auth", "frames": ["00000010"]},
+                    {
+                        "name": "diagnostic-media",
+                        "media_socket": True,
+                        "frames": ["00000011"],
+                        "read_responses": True,
+                        "response_reads": 1,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-plan-file",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+
+    plan = fake_client.instances[0].save_clip_request["hcnetsdk_command_plan"]
+    assert plan.steps[1].media_socket is True
+    assert plan.steps[1].read_response_after_each is True
+    assert plan.steps[1].response_reads_after_each == 1
+    assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+
+def test_save_clip_can_use_hcnetsdk_command_port_generated_plan_file(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+    metadata_path = tmp_path / "www" / "front.metadata.json"
+    plan_path = tmp_path / "generated-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {
+                        "name": "control",
+                        "templates": [
+                            {
+                                "command_id": "0x111050",
+                                "addend_delta": 2,
+                                "body_tail_transform": "play_login_today",
+                            },
+                        ],
+                    },
+                    {
+                        "name": "media",
+                        "media_socket": True,
+                        "templates": [
+                            {
+                                "command_id": "0x30000",
+                                "body_tail_hex": "000000010000000000000401",
+                                "addend_delta": 3,
+                            }
+                        ],
+                        "read_first_media_immediately": True,
+                        "delay_after_commands_seconds": HCNETSDK_PLAN_STEP_DELAY,
+                        "keepalive_templates": [
+                            {"command_id": "0x30006", "addend_delta": 9}
+                        ],
+                        "keepalive_interval_seconds": HCNETSDK_PLAN_KEEPALIVE_INTERVAL,
+                        "keepalive_initial_delay_seconds": 0.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-generated-plan-file",
+                str(plan_path),
+                "--hcnetsdk-command-password",
+                "123456",
+                "--hcnetsdk-local-ip",
+                "192.168.1.56",
+                "--hcnetsdk-h264-skip-initial-idr-windows",
+                "2",
+                "--hcnetsdk-h264-trim-to-clean-idr-window",
+                "--hcnetsdk-h264-clean-idr-preroll-seconds",
+                str(HCNETSDK_CLEAN_IDR_PREROLL_SECONDS),
+                "--hcnetsdk-h264-clean-idr-max-windows",
+                str(HCNETSDK_CLEAN_IDR_MAX_WINDOWS),
+                "--hcnetsdk-command-metadata-output",
+                str(metadata_path),
+            ]
+        )
+        == 0
+    )
+
+    request = fake_client.instances[0].save_clip_request
+    generated_plan = request["hcnetsdk_command_generated_plan"]
+    assert request["hcnetsdk_command_frames"] is None
+    assert request["hcnetsdk_command_plan"] is None
+    assert request["hcnetsdk_command_password"] == "123456"
+    assert request["hcnetsdk_local_ip"] == "192.168.1.56"
+    assert request["hcnetsdk_h264_skip_initial_idr_windows"] == 2
+    assert request["hcnetsdk_h264_trim_to_clean_idr_window"] is True
+    assert (
+        request["hcnetsdk_h264_clean_idr_preroll_seconds"]
+        == HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
+    )
+    assert (
+        request["hcnetsdk_h264_clean_idr_max_windows"]
+        == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
+    )
+    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is False
+    assert (
+        request["hcnetsdk_h264_clean_idr_wait_seconds"]
+        == HCNETSDK_CLEAN_IDR_DEFAULT_WAIT_SECONDS
+    )
+    assert callable(request["hcnetsdk_command_metadata_callback"])
+    assert len(generated_plan.steps) == 2
+    assert generated_plan.steps[0].name == "control"
+    assert generated_plan.steps[0].control_templates[0].command_id == 0x111050
+    assert generated_plan.steps[0].control_templates[0].addend_delta == 2
+    assert (
+        generated_plan.steps[0].control_templates[0].body_tail_transform
+        == "play_login_today"
+    )
+    assert generated_plan.steps[1].media_socket is True
+    assert generated_plan.steps[1].read_response_after_each is False
+    assert generated_plan.steps[1].read_first_media_immediately is True
+    assert generated_plan.steps[1].response_reads_after_each is None
+    assert (
+        generated_plan.steps[1].delay_after_commands_seconds
+        == HCNETSDK_PLAN_STEP_DELAY
+    )
+    assert generated_plan.steps[1].keepalive_initial_delay_seconds == 0.0
+    assert generated_plan.steps[1].control_templates[0].body_tail == bytes.fromhex(
+        "000000010000000000000401"
+    )
+    assert generated_plan.steps[1].keepalive_templates[0].command_id == 0x30006
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+    request["hcnetsdk_command_metadata_callback"](
+        argparse.Namespace(bootstrap=argparse.Namespace(exchanges=(), first_media=None))
+    )
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == {
+        "bootstrap_complete": True,
+        "command_port_exchanges": [],
+        "exchanges": {},
+    }
+
+
+def test_hcnetsdk_command_plan_generate_writes_generated_plan_without_login(
+    tmp_path,
+    capsys,
+) -> None:
+    key = bytes.fromhex(HCNETSDK_COMMAND_PORT_TEST_KEY_HEX)
+    session_id = bytes.fromhex("71f872b7")
+    control_frame = hcnetsdk_command_port_control_frame(
+        session_id=session_id,
+        auth_seed=0x143D7840,
+        command_id=0x111050,
+        key=key,
+        local_ip="172.18.0.3",
+        addend=0x71F872B9,
+    )
+    media_frame = hcnetsdk_command_port_control_frame(
+        session_id=session_id,
+        auth_seed=0x143D7840,
+        command_id=0x30000,
+        key=key,
+        local_ip="172.18.0.3",
+        body_tail=bytes.fromhex("000000010000000000000401"),
+        addend=0x71F872BA,
+    )
+    keepalive_frame = hcnetsdk_command_port_control_frame(
+        session_id=session_id,
+        auth_seed=0x143D7840,
+        command_id=0x30006,
+        key=key,
+        local_ip="172.18.0.3",
+        addend=0x71F872C0,
+    )
+    plan_path = tmp_path / "concrete-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"name": "control", "frames": [control_frame.hex()]},
+                    {
+                        "name": "media",
+                        "frames": [media_frame.hex()],
+                        "media_socket": True,
+                        "read_responses": False,
+                        "response_reads": 0,
+                        "keepalive_frames": [keepalive_frame.hex()],
+                        "keepalive_initial_delay_seconds": 0.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(tmp_path / "missing-token.json"),
+                "stream",
+                "hcnetsdk-command-plan-generate",
+                "--input",
+                str(plan_path),
+                "--auth-seed",
+                "0x143d7840",
+                "--key-hex",
+                HCNETSDK_COMMAND_PORT_TEST_KEY_HEX,
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "steps": [
+            {
+                "name": "control",
+                "templates": [
+                    {
+                        "addend_delta": 2,
+                        "command_id": "0x111050",
+                    }
+                ],
+            },
+            {
+                "keepalive_initial_delay_seconds": 0.0,
+                "keepalive_templates": [
+                    {
+                        "addend_delta": 9,
+                        "command_id": "0x30006",
+                    }
+                ],
+                "media_socket": True,
+                "name": "media",
+                "read_responses": False,
+                "response_reads": 0,
+                "templates": [
+                    {
+                        "addend_delta": 3,
+                        "body_tail_hex": "000000010000000000000401",
+                        "command_id": "0x30000",
+                    }
+                ],
+            },
+        ]
+    }
+
+
 def test_save_clip_can_use_cloud_source(
     monkeypatch,
     tmp_path,
@@ -1209,7 +1621,18 @@ def test_save_clip_can_use_cloud_source(
         "host": None,
         "command_port": None,
         "hcnetsdk_command_frames": None,
+        "hcnetsdk_command_plan": None,
+        "hcnetsdk_command_generated_plan": None,
+        "hcnetsdk_command_password": None,
+        "hcnetsdk_local_ip": None,
         "hcnetsdk_read_response_after_each": True,
+        "hcnetsdk_command_metadata_callback": None,
+        "hcnetsdk_h264_skip_initial_idr_windows": 0,
+        "hcnetsdk_h264_trim_to_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
+        "hcnetsdk_h264_clean_idr_max_windows": 32,
+        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
         "cloud_client_type": 7,
         "cloud_token_index": 1,
         "cloud_refresh_vtm": False,
@@ -2823,19 +3246,266 @@ def test_local_sdk_metadata_reports_first_media_payload_length() -> None:
             first_media=argparse.Namespace(
                 prefix=b"abc",
                 frame=argparse.Namespace(
-                    header=argparse.Namespace(channel=0, payload_length=123)
+                    header=argparse.Namespace(channel=0, payload_length=123),
+                    payload=b"123",
                 ),
             ),
+        ),
+        packet_summary={
+            "packet_count": 1,
+            "sample_limit": 32,
+            "samples": [{"index": 0, "length": 123}],
+        },
+    )
+
+    metadata = cli_module._local_sdk_stream_metadata(stream)  # noqa: SLF001
+
+    assert metadata["packets"] == {
+        "packet_count": 1,
+        "sample_limit": 32,
+        "samples": [{"index": 0, "length": 123}],
+    }
+    assert metadata["first_media"] == {
+        "prefix_length": 3,
+        "prefix_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "channel": 0,
+        "payload_length": 123,
+        "payload_sha256": (
+            "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e"
+            "998e86f7f7a27ae3"
+        ),
+    }
+
+
+def test_local_sdk_metadata_finalizes_packet_summary_before_serializing() -> None:
+    class Stream:
+        def __init__(self) -> None:
+            self.bootstrap = argparse.Namespace(
+                pre_start=None,
+                preview=None,
+                stream_setup=None,
+                first_media=None,
+            )
+            self.packet_summary = {"packet_count": 1, "samples": []}
+
+        def finalize_packet_summary(self) -> None:
+            self.packet_summary["idmx_h264"] = {"looks_like_idmx": True}
+
+    metadata = cli_module._local_sdk_stream_metadata(Stream())  # noqa: SLF001
+
+    assert metadata["packets"] == {
+        "packet_count": 1,
+        "samples": [],
+        "idmx_h264": {"looks_like_idmx": True},
+    }
+
+
+def test_local_sdk_metadata_reports_command_port_exchanges() -> None:
+    request = build_hcnetsdk_tcp_frame(
+        b"\x01\x02\x03\x04",
+        field_4=0x63000000,
+        field_8=0x11223344,
+        field_12=0x111050,
+    )
+    request_with_tail = build_hcnetsdk_tcp_frame(
+        b"\x03\x00\x12\xac"
+        b"\x12\x34\x56\x78"
+        b"\x00\x00\x00\x00"
+        b"\x00\x00\x00\x00"
+        b"\x00\x00\x07\xea"
+        b"\x00\x00\x00\x05"
+        b"\x00\x00\x00\x1f",
+        field_4=0x63000000,
+        field_8=0x55667788,
+        field_12=0x111040,
+    )
+    response = parse_hcnetsdk_tcp_frame(
+        build_hcnetsdk_tcp_frame(
+            b"\x1e\xcd\x00\x01accepted-response",
+            field_4=0x1ECD,
+            field_8=1,
+        )
+    )
+    stream = argparse.Namespace(
+        bootstrap=argparse.Namespace(
+            exchanges=(
+                HcNetSdkCommandPortExchange(request, response),
+                HcNetSdkCommandPortExchange(request_with_tail, None),
+            ),
+            first_media=None,
         ),
     )
 
     metadata = cli_module._local_sdk_stream_metadata(stream)  # noqa: SLF001
 
-    assert metadata["first_media"] == {
-        "prefix_length": 3,
-        "channel": 0,
-        "payload_length": 123,
-    }
+    assert metadata["command_port_exchanges"] == [
+        {
+            "request_length": 20,
+            "request_command_family": 0x63000000,
+            "request_auth_word": 0x11223344,
+            "request_command_id": 0x111050,
+            "response": {
+                "total_length": 37,
+                "field_4": 0x1ECD,
+                "field_8": 1,
+                "field_12": 0,
+                "body_length": 21,
+                "body_prefix_hex": "1ecd000161636365707465642d726573",
+                "body_word_samples": [
+                    {"offset": 0, "be": 0x1ECD0001},
+                    {"offset": 4, "be": 0x61636365},
+                    {"offset": 8, "be": 0x70746564},
+                    {"offset": 12, "be": 0x2D726573},
+                    {"offset": 16, "be": 0x706F6E73},
+                ],
+            },
+        },
+        {
+            "request_length": 44,
+            "request_command_family": 0x63000000,
+            "request_auth_word": 0x55667788,
+            "request_command_id": 0x111040,
+            "request_body_tail_length": 12,
+            "request_body_tail_word_samples": [
+                {"offset": 0, "be": 0x7EA},
+                {"offset": 4, "be": 5},
+                {"offset": 8, "be": 0x1F},
+            ],
+            "response": None,
+        },
+    ]
+
+
+def test_h264_annexb_summary_runs_without_credentials(tmp_path, capsys) -> None:
+    h264_path = tmp_path / "sample.h264"
+    h264_path.write_bytes(
+        b"\x00\x00\x00\x01\x67\x4d\x00\x29"
+        b"\x00\x00\x00\x01\x68\xee\x38\x80"
+        b"\x00\x00\x00\x01\x65idr"
+    )
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(tmp_path / "missing.json"),
+                "stream",
+                "h264-annexb-summary",
+                "--input",
+                str(h264_path),
+                "--max-units",
+                "2",
+                "--decode-idr-windows",
+                "--ffmpeg-path",
+                str(fake_ffmpeg),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["units"]["nal_count"] == 3
+    assert output["units"]["truncated"] is True
+    assert output["idr_windows"]["idr_count"] == 1
+    assert output["decode_idr_windows"] == [
+        {
+            "index": 0,
+            "start_code_offset": 0,
+            "input_bytes": 24,
+            "returncode": 0,
+            "decode_clean": True,
+            "stderr": [],
+        }
+    ]
+
+
+def test_hcnetsdk_command_dump_summary_runs_without_credentials(tmp_path, capsys) -> None:
+    command_dir = tmp_path / "dumps"
+    command_dir.mkdir()
+    command_frame = build_hcnetsdk_tcp_frame(
+        b"\xc0\x00\x02\x20\x12\x34\x56\x78" + (b"\x00" * 8) + b"\x00\x00\x04\x01",
+        field_4=0x63000000,
+        field_8=0x11223344,
+        field_12=0x30000,
+    )
+    (command_dir / "ezviz-hcnetsdk-command-frame-0001-fd4-cmd0x30000.bin").write_bytes(
+        command_frame
+    )
+
+    idmx_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    idmx_frames = [
+        idmx_header + b"\x67\x4d\x00\x29",
+        idmx_header + b"\x68\xee\x38\x80",
+        idmx_header + b"\x65idr",
+    ]
+    media_payload = b"".join(
+        len(idmx_frame).to_bytes(4, "little") + idmx_frame
+        for idmx_frame in idmx_frames
+    )
+    media_record = (
+        b"$\x00" + (len(media_payload) + 4).to_bytes(2, "little") + media_payload
+    )
+    inbound_media = tmp_path / "ezviz-hcnetsdk-inbound-media-fd4.bin"
+    inbound_media.write_bytes(b"preface" + media_record)
+    for index, idmx_frame in enumerate(idmx_frames):
+        (command_dir / f"20260613070000-{index:04d}-playm4-input-16.bin").write_bytes(
+            idmx_frame
+        )
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(tmp_path / "missing.json"),
+                "stream",
+                "hcnetsdk-command-dump-summary",
+                "--command-frame-dir",
+                str(command_dir),
+                "--inbound-media-file",
+                str(inbound_media),
+                "--playm4-input-dir",
+                str(command_dir),
+                "--max-frames",
+                "8",
+                "--decode-idr-windows",
+                "--ffmpeg-path",
+                str(fake_ffmpeg),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["command_frames"]["file_count"] == 1
+    assert output["command_frames"]["command_counts"] == {"0x30000": 1}
+    assert output["command_frames"]["samples"][0]["command_id"] == 0x30000
+    assert output["inbound_media"]["frame_count"] == 1
+    assert output["inbound_media"]["prefix_bytes"] == 7
+    assert output["inbound_media"]["idmx_h264"]["looks_like_idmx"] is True
+    assert output["inbound_media"]["idmx_h264"]["h264"]["sps"] == 1
+    assert output["inbound_media"]["annexb_idr_windows"]["idr_count"] == 1
+    assert output["inbound_media"]["decode_idr_windows"][0]["decode_clean"] is True
+    assert output["playm4_input"]["file_count"] == 3
+    assert output["playm4_input"]["idmx_h264"]["h264"]["sps"] == 1
+    assert output["playm4_input"]["annexb_units"]["h264"]["sps"] == 1
+    assert output["playm4_input"]["annexb_idr_windows"]["idr_count"] == 1
+    assert output["playm4_input"]["decode_idr_windows"][0]["decode_clean"] is True
 
 
 def test_local_sdk_dump_can_fetch_cas_tuple_with_auth(monkeypatch, tmp_path) -> None:

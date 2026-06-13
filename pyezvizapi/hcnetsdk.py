@@ -18,8 +18,11 @@ import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import date
 from enum import IntEnum
 import hashlib
+import hmac
+import ipaddress
 import json
 import math
 import re
@@ -28,7 +31,9 @@ import ssl
 from typing import Any, cast
 import xml.etree.ElementTree as ET
 
-from Crypto.Cipher import AES
+from Crypto.Cipher import AES, PKCS1_v1_5
+from Crypto.PublicKey import RSA
+from Crypto.Util.asn1 import DerSequence
 
 from .exceptions import DeviceException, PyEzvizError
 
@@ -99,6 +104,281 @@ HCNETSDK_TCP_COMMAND_PORTS = (HCNETSDK_DEFAULT_SERVER_PORT, HCNETSDK_DEFAULT_TLS
 HCNETSDK_TCP_HEADER_LENGTH = 16
 HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN = 90
 HCNETSDK_COMMAND_CANDIDATE_CONTROL = 99
+HCNETSDK_COMMAND_PORT_LOGIN_FAMILY = 0x5A000000
+HCNETSDK_COMMAND_PORT_CONTROL_FAMILY = 0x63000000
+HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12 = 0x00010000
+HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX = bytes.fromhex("05013d4b00000001")
+HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX = bytes.fromhex("0000000000006f00")
+HCNETSDK_COMMAND_PORT_USERNAME_LENGTH = 48
+HCNETSDK_COMMAND_PORT_RSA_BITS = 1024
+HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH = 128
+HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH = 64
+HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH = 32
+HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH = 16
+HCNETSDK_COMMAND_PORT_EMPTY_SESSION_ID = b"\x00\x00\x00\x00"
+HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH = 16
+HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH = 6
+HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM = "play_login_today"
+
+_AES_SBOX = (
+    0x63,
+    0x7C,
+    0x77,
+    0x7B,
+    0xF2,
+    0x6B,
+    0x6F,
+    0xC5,
+    0x30,
+    0x01,
+    0x67,
+    0x2B,
+    0xFE,
+    0xD7,
+    0xAB,
+    0x76,
+    0xCA,
+    0x82,
+    0xC9,
+    0x7D,
+    0xFA,
+    0x59,
+    0x47,
+    0xF0,
+    0xAD,
+    0xD4,
+    0xA2,
+    0xAF,
+    0x9C,
+    0xA4,
+    0x72,
+    0xC0,
+    0xB7,
+    0xFD,
+    0x93,
+    0x26,
+    0x36,
+    0x3F,
+    0xF7,
+    0xCC,
+    0x34,
+    0xA5,
+    0xE5,
+    0xF1,
+    0x71,
+    0xD8,
+    0x31,
+    0x15,
+    0x04,
+    0xC7,
+    0x23,
+    0xC3,
+    0x18,
+    0x96,
+    0x05,
+    0x9A,
+    0x07,
+    0x12,
+    0x80,
+    0xE2,
+    0xEB,
+    0x27,
+    0xB2,
+    0x75,
+    0x09,
+    0x83,
+    0x2C,
+    0x1A,
+    0x1B,
+    0x6E,
+    0x5A,
+    0xA0,
+    0x52,
+    0x3B,
+    0xD6,
+    0xB3,
+    0x29,
+    0xE3,
+    0x2F,
+    0x84,
+    0x53,
+    0xD1,
+    0x00,
+    0xED,
+    0x20,
+    0xFC,
+    0xB1,
+    0x5B,
+    0x6A,
+    0xCB,
+    0xBE,
+    0x39,
+    0x4A,
+    0x4C,
+    0x58,
+    0xCF,
+    0xD0,
+    0xEF,
+    0xAA,
+    0xFB,
+    0x43,
+    0x4D,
+    0x33,
+    0x85,
+    0x45,
+    0xF9,
+    0x02,
+    0x7F,
+    0x50,
+    0x3C,
+    0x9F,
+    0xA8,
+    0x51,
+    0xA3,
+    0x40,
+    0x8F,
+    0x92,
+    0x9D,
+    0x38,
+    0xF5,
+    0xBC,
+    0xB6,
+    0xDA,
+    0x21,
+    0x10,
+    0xFF,
+    0xF3,
+    0xD2,
+    0xCD,
+    0x0C,
+    0x13,
+    0xEC,
+    0x5F,
+    0x97,
+    0x44,
+    0x17,
+    0xC4,
+    0xA7,
+    0x7E,
+    0x3D,
+    0x64,
+    0x5D,
+    0x19,
+    0x73,
+    0x60,
+    0x81,
+    0x4F,
+    0xDC,
+    0x22,
+    0x2A,
+    0x90,
+    0x88,
+    0x46,
+    0xEE,
+    0xB8,
+    0x14,
+    0xDE,
+    0x5E,
+    0x0B,
+    0xDB,
+    0xE0,
+    0x32,
+    0x3A,
+    0x0A,
+    0x49,
+    0x06,
+    0x24,
+    0x5C,
+    0xC2,
+    0xD3,
+    0xAC,
+    0x62,
+    0x91,
+    0x95,
+    0xE4,
+    0x79,
+    0xE7,
+    0xC8,
+    0x37,
+    0x6D,
+    0x8D,
+    0xD5,
+    0x4E,
+    0xA9,
+    0x6C,
+    0x56,
+    0xF4,
+    0xEA,
+    0x65,
+    0x7A,
+    0xAE,
+    0x08,
+    0xBA,
+    0x78,
+    0x25,
+    0x2E,
+    0x1C,
+    0xA6,
+    0xB4,
+    0xC6,
+    0xE8,
+    0xDD,
+    0x74,
+    0x1F,
+    0x4B,
+    0xBD,
+    0x8B,
+    0x8A,
+    0x70,
+    0x3E,
+    0xB5,
+    0x66,
+    0x48,
+    0x03,
+    0xF6,
+    0x0E,
+    0x61,
+    0x35,
+    0x57,
+    0xB9,
+    0x86,
+    0xC1,
+    0x1D,
+    0x9E,
+    0xE1,
+    0xF8,
+    0x98,
+    0x11,
+    0x69,
+    0xD9,
+    0x8E,
+    0x94,
+    0x9B,
+    0x1E,
+    0x87,
+    0xE9,
+    0xCE,
+    0x55,
+    0x28,
+    0xDF,
+    0x8C,
+    0xA1,
+    0x89,
+    0x0D,
+    0xBF,
+    0xE6,
+    0x42,
+    0x68,
+    0x41,
+    0x99,
+    0x2D,
+    0x0F,
+    0xB0,
+    0x54,
+    0xBB,
+    0x16,
+)
+_AES_RCON = (0x01, 0x02, 0x04, 0x08)
 
 
 class HcNetSdkDvrCommand(IntEnum):
@@ -465,6 +745,87 @@ class HcNetSdkCommandPortStreamBootstrap:
 
     exchanges: tuple[HcNetSdkCommandPortExchange, ...]
     first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortLoginChallenge:
+    """Decoded first-stage command-port login challenge."""
+
+    response: HcNetSdkTcpFrame
+    challenge: bytes
+    password_seed: bytes
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortLoginSession:
+    """Successful generated port-8000 login session."""
+
+    session_id: bytes
+    auth_seed: int
+    serial: str
+    first_response: HcNetSdkTcpFrame
+    second_response: HcNetSdkTcpFrame
+    challenge: bytes = b""
+    password_seed: bytes = b""
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortControlTemplate:
+    """Reusable post-login command-port control frame template."""
+
+    command_id: int
+    body_tail: bytes = b""
+    addend: int | None = None
+    addend_delta: int | None = None
+    mask_seed: bytes = b"\x00" * HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
+    body_tail_transform: str | None = None
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.addend is not None and self.addend_delta is not None:
+            raise PyEzvizError(
+                "HCNetSDK command-port template cannot set addend and addend_delta"
+            )
+        if (
+            self.body_tail_transform is not None
+            and self.body_tail_transform
+            != HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
+        ):
+            raise PyEzvizError(
+                "Unsupported HCNetSDK command-port body_tail_transform: "
+                f"{self.body_tail_transform}"
+            )
+
+    def to_frame(
+        self,
+        *,
+        session_id: bytes,
+        auth_seed: int,
+        key: bytes,
+        local_ip: str,
+        addend: int | None = None,
+    ) -> bytes:
+        """Build this template with fresh login/session values."""
+        template_addend = self.addend
+        if template_addend is None and self.addend_delta is not None:
+            template_addend = (
+                int.from_bytes(session_id, "big") + self.addend_delta
+            ) & 0xFFFFFFFF
+        body_tail = self.body_tail
+        if self.body_tail_transform == HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM:
+            body_tail = hcnetsdk_command_port_play_login_body_tail_for_today(
+                body_tail
+            )
+        return hcnetsdk_command_port_control_frame(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=self.command_id,
+            key=key,
+            local_ip=local_ip,
+            body_tail=body_tail,
+            addend=template_addend if addend is None else addend,
+            mask_seed=self.mask_seed,
+        )
 
 
 @dataclass(frozen=True)
@@ -1569,7 +1930,17 @@ def parse_hcnetsdk_tcp_frame(data: bytes) -> HcNetSdkTcpFrame:
 
 def read_hcnetsdk_tcp_frame(sock: Any) -> HcNetSdkTcpFrame:
     """Read one complete HCNetSDK command-port frame from a socket-like object."""
-    header = parse_hcnetsdk_tcp_frame_header(_recv_exact(sock, HCNETSDK_TCP_HEADER_LENGTH))
+    header_bytes = _recv_exact(sock, HCNETSDK_TCP_HEADER_LENGTH)
+    total_length = int.from_bytes(header_bytes[0:4], "big")
+    if total_length < HCNETSDK_TCP_HEADER_LENGTH:
+        header = HcNetSdkTcpFrameHeader(
+            total_length=HCNETSDK_TCP_HEADER_LENGTH,
+            field_4=int.from_bytes(header_bytes[4:8], "big"),
+            field_8=int.from_bytes(header_bytes[8:12], "big"),
+            field_12=int.from_bytes(header_bytes[12:16], "big"),
+        )
+        return HcNetSdkTcpFrame(header=header, body=b"")
+    header = parse_hcnetsdk_tcp_frame_header(header_bytes)
     return HcNetSdkTcpFrame(
         header=header,
         body=_recv_exact(sock, header.body_length),
@@ -1591,6 +1962,316 @@ def build_hcnetsdk_tcp_frame(
         field_12=field_12,
     )
     return HcNetSdkTcpFrame(header=header, body=body).to_bytes()
+
+
+def hcnetsdk_command_port_login_request_frame(
+    public_key_der: bytes,
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str,
+) -> bytes:
+    """Build the first port-8000 RSA login frame.
+
+    The native SDK sends a PKCS#1 ``RSAPublicKey`` DER blob, not the longer
+    SubjectPublicKeyInfo form returned by many RSA exporters.
+    """
+    body = (
+        _hcnetsdk_command_port_login_prefix(local_ip)
+        + _hcnetsdk_command_port_username(username)
+        + public_key_der
+    )
+    return build_hcnetsdk_tcp_frame(
+        body,
+        field_4=HCNETSDK_COMMAND_PORT_LOGIN_FAMILY,
+        field_12=HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12,
+    )
+
+
+def hcnetsdk_command_port_password_digest(
+    username: str,
+    password: str | bytes,
+    password_seed: bytes,
+) -> bytes:
+    """Return the native SDK SHA-256 password branch for command-port login."""
+    password_bytes = password if isinstance(password, bytes) else password.encode()
+    if len(password_seed) != HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH:
+        raise PyEzvizError("HCNetSDK command-port password seed must be 64 bytes")
+    return hashlib.sha256(
+        username.encode() + password_seed + password_bytes
+    ).hexdigest().encode()
+
+
+def hcnetsdk_command_port_login_proof(
+    username: str,
+    password: str | bytes,
+    challenge: bytes,
+    password_seed: bytes,
+) -> tuple[bytes, bytes]:
+    """Return the two proof chunks for the second command-port login frame."""
+    challenge = challenge.rstrip(b"\x00")
+    if not challenge:
+        raise PyEzvizError("HCNetSDK command-port login challenge is empty")
+    password_digest = hcnetsdk_command_port_password_digest(
+        username,
+        password,
+        password_seed,
+    )
+    return (
+        hmac.new(challenge, username.encode(), hashlib.md5).digest(),
+        hmac.new(challenge, password_digest, hashlib.md5).digest(),
+    )
+
+
+def hcnetsdk_command_port_login_proof_frame(
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    password: str | bytes,
+    challenge: bytes,
+    password_seed: bytes,
+    local_ip: str,
+) -> bytes:
+    """Build the second port-8000 login proof frame."""
+    primary, secondary = hcnetsdk_command_port_login_proof(
+        username,
+        password,
+        challenge,
+        password_seed,
+    )
+    body = (
+        _hcnetsdk_command_port_login_prefix(local_ip)
+        + primary.ljust(HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH, b"\x00")
+        + secondary[:HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH]
+    )
+    return build_hcnetsdk_tcp_frame(
+        body,
+        field_4=HCNETSDK_COMMAND_PORT_LOGIN_FAMILY,
+        field_12=HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12,
+    )
+
+
+def hcnetsdk_command_port_auth_word(
+    *,
+    session_id: bytes,
+    auth_seed: int,
+    command_id: int,
+    key: bytes,
+    addend: int | None = None,
+    mask_seed: bytes = b"\x00" * HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH,
+) -> int:
+    """Return the native HCNetSDK port-8000 post-login command auth word.
+
+    ``session_id`` is the network-order four-byte id returned in the login
+    response and reused in command bodies. Native ``libHCCore.so`` reverses it
+    into a host-order word before the auth routine, uses the first 16 challenge
+    bytes as a four-round AES-128 key, folds the 16-byte result down to one
+    little-endian word, then adds the session-derived time/addend word used in
+    the command header.
+    """
+    if len(session_id) != 4:
+        raise PyEzvizError("HCNetSDK command-port session id must be 4 bytes")
+    if len(key) < HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH:
+        raise PyEzvizError("HCNetSDK command-port auth key must be at least 16 bytes")
+    if len(mask_seed) < HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH:
+        raise PyEzvizError("HCNetSDK command-port auth mask seed must be 6 bytes")
+    session_word = int.from_bytes(session_id, "big")
+    input_word = (
+        auth_seed
+        + (command_id * 2)
+        + _hcnetsdk_command_port_auth_mask(session_word, mask_seed)
+    ) & 0xFFFFFFFF
+    transformed = _hcnetsdk_command_port_four_round_aes(
+        input_word.to_bytes(4, "little") + (b"\x00" * 12),
+        key[:HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH],
+    )
+    folded = bytes(
+        transformed[index]
+        ^ transformed[index + 4]
+        ^ transformed[index + 8]
+        ^ transformed[index + 12]
+        for index in range(4)
+    )
+    return (
+        int.from_bytes(folded, "little")
+        + (session_word if addend is None else addend)
+    ) & 0xFFFFFFFF
+
+
+def hcnetsdk_command_port_control_frame(
+    *,
+    session_id: bytes,
+    auth_seed: int,
+    command_id: int,
+    key: bytes,
+    local_ip: str,
+    body_tail: bytes = b"",
+    addend: int | None = None,
+    mask_seed: bytes = b"\x00" * HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH,
+) -> bytes:
+    """Build one generated post-login HCNetSDK port-8000 control frame.
+
+    The frame body format observed in native traces is the client LAN IPv4 word
+    in little-endian byte order, the four-byte network-order login session id,
+    eight reserved zero bytes, and then the command-specific tail. The auth word
+    uses the same network-order session id returned by login.
+    """
+    if len(session_id) != 4:
+        raise PyEzvizError("HCNetSDK command-port session id must be 4 bytes")
+    body = (
+        _hcnetsdk_command_port_local_ip_word(local_ip)
+        + session_id
+        + (b"\x00" * 8)
+        + body_tail
+    )
+    return build_hcnetsdk_tcp_frame(
+        body,
+        field_4=HCNETSDK_COMMAND_PORT_CONTROL_FAMILY,
+        field_8=hcnetsdk_command_port_auth_word(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=command_id,
+            key=key,
+            addend=addend,
+            mask_seed=mask_seed,
+        ),
+        field_12=command_id,
+    )
+
+
+def hcnetsdk_command_port_play_login_body_tail_for_today(
+    body_tail: bytes,
+    *,
+    today: date | None = None,
+) -> bytes:
+    """Refresh native play-login date words in a captured ``0x111040`` tail."""
+    if len(body_tail) != 148:
+        raise PyEzvizError(
+            "HCNetSDK play-login body tail transform requires a 148-byte tail"
+        )
+    current = today or date.today()
+    patched = bytearray(body_tail)
+    values = {
+        36: current.year,
+        40: current.month,
+        44: current.day,
+        60: current.year,
+        64: current.month,
+        68: current.day,
+        72: 23,
+        76: 59,
+        80: 59,
+    }
+    for offset, value in values.items():
+        patched[offset : offset + 4] = value.to_bytes(4, "big")
+    return bytes(patched)
+
+
+def hcnetsdk_command_port_control_template_from_frame(
+    frame: bytes,
+    *,
+    addend: int | None = None,
+    addend_delta: int | None = None,
+    auth_seed: int | None = None,
+    key: bytes | None = None,
+    mask_seed: bytes = b"\x00" * HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH,
+    body_tail_transform: str | None = None,
+    name: str | None = None,
+) -> HcNetSdkCommandPortControlTemplate:
+    """Extract the reusable command id and body tail from a ``0x63`` frame."""
+    parsed = parse_hcnetsdk_tcp_frame(frame)
+    if parsed.header.field_4 != HCNETSDK_COMMAND_PORT_CONTROL_FAMILY:
+        raise PyEzvizError("HCNetSDK command-port template requires a 0x63 frame")
+    if len(parsed.body) < 16:
+        raise PyEzvizError("HCNetSDK command-port control body is truncated")
+    if parsed.body[8:16] != b"\x00" * 8:
+        raise PyEzvizError("HCNetSDK command-port control reserved bytes are invalid")
+    if addend is not None and addend_delta is not None:
+        raise PyEzvizError(
+            "HCNetSDK command-port template cannot set addend and addend_delta"
+        )
+    if addend is None and addend_delta is None and auth_seed is not None and key is not None:
+        session_id = parsed.body[4:8]
+        folded = hcnetsdk_command_port_auth_word(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=parsed.header.field_12,
+            key=key,
+            addend=0,
+            mask_seed=mask_seed,
+        )
+        inferred_addend = (parsed.header.field_8 - folded) & 0xFFFFFFFF
+        addend_delta = (
+            inferred_addend - int.from_bytes(session_id, "big")
+        ) & 0xFFFFFFFF
+    return HcNetSdkCommandPortControlTemplate(
+        command_id=parsed.header.field_12,
+        body_tail=parsed.body[16:],
+        addend=addend,
+        addend_delta=addend_delta,
+        mask_seed=mask_seed,
+        body_tail_transform=body_tail_transform,
+        name=name,
+    )
+
+
+def hcnetsdk_command_port_public_key_der(rsa_key: Any) -> bytes:
+    """Return PKCS#1 ``RSAPublicKey`` DER for a PyCryptodome RSA key."""
+    public_key = rsa_key.publickey() if rsa_key.has_private() else rsa_key
+    return bytes(DerSequence([public_key.n, public_key.e]).encode())
+
+
+def decode_hcnetsdk_command_port_login_challenge(
+    response: HcNetSdkTcpFrame,
+    rsa_key: Any,
+) -> HcNetSdkCommandPortLoginChallenge:
+    """Decrypt the first command-port login response with the RSA private key."""
+    if len(response.body) < (
+        HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH
+        + HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH
+    ):
+        raise PyEzvizError("HCNetSDK command-port login challenge response is truncated")
+    challenge = PKCS1_v1_5.new(rsa_key).decrypt(
+        response.body[:HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH],
+        b"",
+    )
+    if not challenge:
+        raise PyEzvizError("HCNetSDK command-port RSA challenge decrypt failed")
+    return HcNetSdkCommandPortLoginChallenge(
+        response=response,
+        challenge=challenge.rstrip(b"\x00"),
+        password_seed=response.body[
+            HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH : (
+                HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH
+                + HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH
+            )
+        ],
+    )
+
+
+def parse_hcnetsdk_command_port_login_session(
+    first_response: HcNetSdkTcpFrame,
+    second_response: HcNetSdkTcpFrame,
+    *,
+    challenge: bytes = b"",
+    password_seed: bytes = b"",
+) -> HcNetSdkCommandPortLoginSession:
+    """Parse the successful second command-port login response."""
+    if (
+        len(second_response.body) < 4
+        or second_response.body[:4] == HCNETSDK_COMMAND_PORT_EMPTY_SESSION_ID
+    ):
+        raise PyEzvizError("HCNetSDK command-port login failed")
+    return HcNetSdkCommandPortLoginSession(
+        session_id=second_response.body[:4],
+        auth_seed=second_response.header.field_4,
+        serial=second_response.body[4:48].split(b"\x00", 1)[0].decode(
+            "ascii",
+            errors="ignore",
+        ),
+        first_response=first_response,
+        second_response=second_response,
+        challenge=challenge,
+        password_seed=password_seed,
+    )
 
 
 def hcnetsdk_command_candidate_role(candidate: int | None) -> str | None:
@@ -2875,6 +3556,56 @@ class HcNetSdkCommandPortClient:
             max_prefix_bytes=max_prefix_bytes,
         )
 
+    def login(
+        self,
+        *,
+        password: str | bytes,
+        username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+        local_ip: str | None = None,
+        rsa_key: Any | None = None,
+    ) -> HcNetSdkCommandPortLoginSession:
+        """Run the generated RSA/challenge command-port login handshake."""
+        sock = self.sock
+        if local_ip is None:
+            try:
+                local_ip = str(sock.getsockname()[0])
+            except (AttributeError, OSError, TypeError) as err:
+                raise PyEzvizError(
+                    "HCNetSDK command-port login requires local_ip when the "
+                    "socket does not expose getsockname()"
+                ) from err
+
+        key = (
+            rsa_key
+            if rsa_key is not None
+            else RSA.generate(HCNETSDK_COMMAND_PORT_RSA_BITS)
+        )
+        self.send_command_frame(
+            hcnetsdk_command_port_login_request_frame(
+                hcnetsdk_command_port_public_key_der(key),
+                username=username,
+                local_ip=local_ip,
+            )
+        )
+        first_response = self.read_tcp_frame()
+        challenge = decode_hcnetsdk_command_port_login_challenge(first_response, key)
+        self.send_command_frame(
+            hcnetsdk_command_port_login_proof_frame(
+                username=username,
+                password=password,
+                challenge=challenge.challenge,
+                password_seed=challenge.password_seed,
+                local_ip=local_ip,
+            )
+        )
+        second_response = self.read_tcp_frame()
+        return parse_hcnetsdk_command_port_login_session(
+            first_response,
+            second_response,
+            challenge=challenge.challenge,
+            password_seed=challenge.password_seed,
+        )
+
     def bootstrap_media_stream(
         self,
         command_frames: Iterable[bytes],
@@ -3098,6 +3829,126 @@ def _hcnetsdk_shape_command_candidate(
     if hcnetsdk_command_candidate_role(candidate) is None:
         return None
     return candidate
+
+
+def _hcnetsdk_command_port_login_prefix(local_ip: str) -> bytes:
+    return (
+        HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX
+        + _hcnetsdk_command_port_local_ip_word(local_ip)
+        + HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX
+    )
+
+
+def _hcnetsdk_command_port_local_ip_word(local_ip: str) -> bytes:
+    try:
+        return ipaddress.IPv4Address(local_ip).packed[::-1]
+    except ipaddress.AddressValueError as err:
+        raise PyEzvizError("HCNetSDK command-port local IP must be an IPv4 address") from err
+
+
+def _hcnetsdk_command_port_username(username: str) -> bytes:
+    username_bytes = username.encode()
+    if len(username_bytes) > HCNETSDK_COMMAND_PORT_USERNAME_LENGTH:
+        raise PyEzvizError("HCNetSDK command-port username is too long")
+    return username_bytes.ljust(HCNETSDK_COMMAND_PORT_USERNAME_LENGTH, b"\x00")
+
+
+def _hcnetsdk_command_port_auth_mask(session_word: int, mask_seed: bytes) -> int:
+    """Return the small native mask term mixed into command auth input."""
+    return sum(
+        mask_seed[index] & ((session_word >> (5 * index)) & 0xFF)
+        for index in range(HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH)
+    )
+
+
+def _hcnetsdk_command_port_four_round_aes(block: bytes, key: bytes) -> bytes:
+    """Encrypt one 16-byte block with the SDK's four-round AES-128 variant."""
+    if len(block) != 16:
+        raise PyEzvizError("HCNetSDK command-port auth block must be 16 bytes")
+    if len(key) != HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH:
+        raise PyEzvizError("HCNetSDK command-port auth key must be 16 bytes")
+
+    round_keys = _hcnetsdk_aes128_round_keys(key, rounds=4)
+    state = _hcnetsdk_aes_add_round_key(block, round_keys[0])
+    for round_index in range(1, 4):
+        state = _hcnetsdk_aes_sub_bytes(state)
+        state = _hcnetsdk_aes_shift_rows(state)
+        state = _hcnetsdk_aes_mix_columns(state)
+        state = _hcnetsdk_aes_add_round_key(state, round_keys[round_index])
+    state = _hcnetsdk_aes_sub_bytes(state)
+    state = _hcnetsdk_aes_shift_rows(state)
+    return _hcnetsdk_aes_add_round_key(state, round_keys[4])
+
+
+def _hcnetsdk_aes128_round_keys(key: bytes, *, rounds: int) -> tuple[bytes, ...]:
+    """Return AES-128 round keys, truncated to the native command-auth rounds."""
+    words = [list(key[index : index + 4]) for index in range(0, 16, 4)]
+    while len(words) < 4 * (rounds + 1):
+        word = words[-1][:]
+        if len(words) % 4 == 0:
+            word = word[1:] + word[:1]
+            word = [_AES_SBOX[item] for item in word]
+            word[0] ^= _AES_RCON[(len(words) // 4) - 1]
+        words.append([left ^ right for left, right in zip(words[-4], word, strict=True)])
+    expanded = bytes(item for word in words for item in word)
+    return tuple(
+        expanded[index : index + 16]
+        for index in range(0, 16 * (rounds + 1), 16)
+    )
+
+
+def _hcnetsdk_aes_add_round_key(state: bytes, round_key: bytes) -> bytes:
+    return bytes(left ^ right for left, right in zip(state, round_key, strict=True))
+
+
+def _hcnetsdk_aes_sub_bytes(state: bytes) -> bytes:
+    return bytes(_AES_SBOX[item] for item in state)
+
+
+def _hcnetsdk_aes_shift_rows(state: bytes) -> bytes:
+    return bytes(
+        (
+            state[0],
+            state[5],
+            state[10],
+            state[15],
+            state[4],
+            state[9],
+            state[14],
+            state[3],
+            state[8],
+            state[13],
+            state[2],
+            state[7],
+            state[12],
+            state[1],
+            state[6],
+            state[11],
+        )
+    )
+
+
+def _hcnetsdk_aes_xtime(value: int) -> int:
+    shifted = value << 1
+    if value & 0x80:
+        shifted ^= 0x1B
+    return shifted & 0xFF
+
+
+def _hcnetsdk_aes_mix_columns(state: bytes) -> bytes:
+    mixed = bytearray()
+    for column_index in range(0, 16, 4):
+        column = state[column_index : column_index + 4]
+        doubled = [_hcnetsdk_aes_xtime(item) for item in column]
+        mixed.extend(
+            (
+                doubled[0] ^ column[3] ^ column[2] ^ doubled[1] ^ column[1],
+                doubled[1] ^ column[0] ^ column[3] ^ doubled[2] ^ column[2],
+                doubled[2] ^ column[1] ^ column[0] ^ doubled[3] ^ column[3],
+                doubled[3] ^ column[2] ^ column[1] ^ doubled[0] ^ column[0],
+            )
+        )
+    return bytes(mixed)
 
 
 def _parse_length_candidates(value: str | None) -> dict[str, int]:

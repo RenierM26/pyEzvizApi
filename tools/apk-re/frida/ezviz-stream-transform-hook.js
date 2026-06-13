@@ -13,11 +13,13 @@
 "use strict";
 
 const DUMP_LIMIT = 256 * 1024;
+const JAVA_DECODE_DUMP_LIMIT = 512 * 1024;
 const HEX_LIMIT = 64;
-const MAX_DUMPS_PER_LABEL = 24;
+const MAX_DUMPS_PER_LABEL = deviceFlagExists("/data/local/tmp/ezviz-deep-idmx-dump.flag") ? 512 : 24;
 const LOG_SECRET_VALUES = false;
 const DUMP_SECRET_KEYS_RAW = deviceFlagExists("/data/local/tmp/ezviz-dump-media-keys.flag");
 const installed = new Set();
+const installedJavaDecodeClasses = new Set();
 let dumpDir = "/sdcard/Download/ezviz-hook";
 let dumpSeq = 0;
 const dumpCounts = {};
@@ -43,7 +45,7 @@ function bytesToHex(ptr, len) {
   try {
     const data = new Uint8Array(ptr.readByteArray(Math.min(len, HEX_LIMIT)));
     return Array.from(data)
-      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .map((byte) => leftPad(byte.toString(16), 2, "0"))
       .join(" ");
   } catch (err) {
     return `<read-failed ${err}>`;
@@ -57,14 +59,33 @@ function fingerprintBytes(ptr, len) {
   try {
     const data = new Uint8Array(ptr.readByteArray(len));
     let hash = 2166136261;
-    for (const byte of data) {
-      hash ^= byte;
-      hash = Math.imul(hash, 16777619) >>> 0;
+    for (let i = 0; i < data.length; i++) {
+      hash ^= data[i];
+      hash = imul32(hash, 16777619) >>> 0;
     }
-    return "fnv32=" + hash.toString(16).padStart(8, "0");
+    return "fnv32=" + leftPad(hash.toString(16), 8, "0");
   } catch (err) {
     return "<fingerprint-failed " + err + ">";
   }
+}
+
+function imul32(a, b) {
+  if (typeof Math.imul === "function") {
+    return Math.imul(a, b);
+  }
+  const ah = (a >>> 16) & 0xffff;
+  const al = a & 0xffff;
+  const bh = (b >>> 16) & 0xffff;
+  const bl = b & 0xffff;
+  return ((al * bl) + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
+}
+
+function leftPad(value, width, fill) {
+  let text = String(value);
+  while (text.length < width) {
+    text = fill + text;
+  }
+  return text;
 }
 
 function secretBytes(ptr, len) {
@@ -107,7 +128,7 @@ function dumpBytes(label, ptr, len) {
   }
   dumpCounts[label] += 1;
   const capped = Math.min(len, DUMP_LIMIT);
-  const path = `${dumpDir}/${nowTag()}-${String(dumpSeq++).padStart(4, "0")}-${label}-${capped}.bin`;
+  const path = `${dumpDir}/${nowTag()}-${leftPad(dumpSeq++, 4, "0")}-${label}-${capped}.bin`;
   try {
     const file = new File(path, "wb");
     file.write(ptr.readByteArray(capped));
@@ -149,6 +170,47 @@ function safeJavaValue(value) {
     return value.toString();
   } catch (err) {
     return `<toString-failed ${err}>`;
+  }
+}
+
+function safeJavaClassName(value) {
+  if (value === null || value === undefined) {
+    return "<null>";
+  }
+  try {
+    return value.getClass().getName().toString();
+  } catch (err) {
+    return `<class-failed ${err}>`;
+  }
+}
+
+function dumpJavaByteArray(label, value, len) {
+  if (value === null || value === undefined || len <= 0) {
+    return;
+  }
+  dumpCounts[label] = dumpCounts[label] || 0;
+  if (dumpCounts[label] >= MAX_DUMPS_PER_LABEL) {
+    return;
+  }
+  const arrayLen = value.length || 0;
+  const capped = Math.min(len, arrayLen, JAVA_DECODE_DUMP_LIMIT);
+  if (capped <= 0) {
+    return;
+  }
+  const bytes = new Uint8Array(capped);
+  for (let i = 0; i < capped; i++) {
+    bytes[i] = value[i] & 0xff;
+  }
+  dumpCounts[label] += 1;
+  const path = `${dumpDir}/${nowTag()}-${leftPad(dumpSeq++, 4, "0")}-${label}-${capped}.bin`;
+  try {
+    const file = new File(path, "wb");
+    file.write(bytes.buffer);
+    file.flush();
+    file.close();
+    console.log(`[dump] ${label} count=${dumpCounts[label]} len=${len} saved=${capped} path=${path}`);
+  } catch (err) {
+    console.log(`[dump-failed] ${label} len=${len} path=${path} err=${err}`);
   }
 }
 
@@ -448,6 +510,23 @@ function installNativeHooks() {
       console.log(`[cb] PlayM4_SetDecodeCallback port=${args[0].toInt32()} cb=${args[1]}`);
     },
   });
+
+  [
+    "Java_org_MediaPlayer_PlayM4_Player_SetDecodeCallback",
+    "Java_org_MediaPlayer_PlayM4_Player_SetDecodeCallbackEx",
+    "Java_org_MediaPlayer_PlayM4_Player_SetDisplayCallback",
+    "Java_org_MediaPlayer_PlayM4_Player_SetDisplayCallbackEx",
+    "Java_org_MediaPlayer_PlayM4_Player_SetVideoFrameCB",
+  ].forEach((name) => {
+    hookExport("libPlayCtrl.so", name, {
+      onEnter(args) {
+        console.log(`[jni-cb] ${name} port=${args[2].toInt32()} cb=${args[3]}`);
+      },
+      onLeave(retval) {
+        console.log(`[jni-cb] ${name} ret=${retval.toInt32()}`);
+      },
+    });
+  });
 }
 
 function installJavaHooks() {
@@ -569,6 +648,240 @@ function installJavaHooks() {
       console.log("[hook] Java org.MediaPlayer.PlayM4.Player.SetSecretKey");
     } catch (err) {
       console.log(`[warn] Java PlayM4 hook unavailable: ${err}`);
+    }
+
+    function hookJavaDecodeCallbackClass(className) {
+      if (!className || className.startsWith("<") || installedJavaDecodeClasses.has(className)) {
+        return;
+      }
+      try {
+        const CallbackClass = Java.use(className);
+        let hooked = false;
+        if (CallbackClass.onDecode !== undefined) {
+          for (const overload of CallbackClass.onDecode.overloads) {
+            overload.implementation = function () {
+              const port = arguments[0];
+              const data = arguments[1];
+              const len = Number(arguments[2]) || (data ? data.length : 0);
+              const meta = [];
+              for (let i = 2; i < arguments.length; i++) {
+                meta.push(safeJavaValue(arguments[i]));
+              }
+              console.log(`[decode-java] ${className}.onDecode port=${port} meta=${meta.join(",")} dataLen=${data ? data.length : 0}`);
+              dumpJavaByteArray("java-decode", data, len);
+              return overload.apply(this, arguments);
+            };
+          }
+          hooked = true;
+        }
+        if (CallbackClass.onDecodeEx !== undefined) {
+          for (const overload of CallbackClass.onDecodeEx.overloads) {
+            overload.implementation = function () {
+              const port = arguments[0];
+              const data = arguments[1];
+              const len = Number(arguments[2]) || (data ? data.length : 0);
+              const meta = [];
+              for (let i = 2; i < arguments.length; i++) {
+                meta.push(safeJavaValue(arguments[i]));
+              }
+              console.log(`[decode-java] ${className}.onDecodeEx port=${port} meta=${meta.join(",")} dataLen=${data ? data.length : 0}`);
+              dumpJavaByteArray("java-decode-ex", data, len);
+              return overload.apply(this, arguments);
+            };
+          }
+          hooked = true;
+        }
+        if (hooked) {
+          installedJavaDecodeClasses.add(className);
+          console.log(`[hook] Java decode callback ${className}`);
+        }
+      } catch (err) {
+        console.log(`[warn] Java decode callback hook unavailable class=${className}: ${err}`);
+      }
+    }
+
+    function hookJavaDisplayCallbackClass(className) {
+      if (!className || className.startsWith("<") || installedJavaDecodeClasses.has("display:" + className)) {
+        return;
+      }
+      try {
+        const CallbackClass = Java.use(className);
+        let hooked = false;
+        if (CallbackClass.onDisplay !== undefined) {
+          for (const overload of CallbackClass.onDisplay.overloads) {
+            overload.implementation = function () {
+              const port = arguments[0];
+              const data = arguments[1];
+              const len = Number(arguments[2]) || (data ? data.length : 0);
+              const meta = [];
+              for (let i = 2; i < arguments.length; i++) {
+                meta.push(safeJavaValue(arguments[i]));
+              }
+              console.log(`[display-java] ${className}.onDisplay port=${port} meta=${meta.join(",")} dataLen=${data ? data.length : 0}`);
+              dumpJavaByteArray("java-display", data, len);
+              return overload.apply(this, arguments);
+            };
+          }
+          hooked = true;
+        }
+        if (CallbackClass.onDisplayEx !== undefined) {
+          for (const overload of CallbackClass.onDisplayEx.overloads) {
+            overload.implementation = function () {
+              const port = arguments[0];
+              const data = arguments[1];
+              const len = Number(arguments[2]) || (data ? data.length : 0);
+              const meta = [];
+              for (let i = 2; i < arguments.length; i++) {
+                meta.push(safeJavaValue(arguments[i]));
+              }
+              console.log(`[display-java] ${className}.onDisplayEx port=${port} meta=${meta.join(",")} dataLen=${data ? data.length : 0}`);
+              dumpJavaByteArray("java-display-ex", data, len);
+              return overload.apply(this, arguments);
+            };
+          }
+          hooked = true;
+        }
+        if (CallbackClass.onVideoFrame !== undefined) {
+          for (const overload of CallbackClass.onVideoFrame.overloads) {
+            overload.implementation = function () {
+              const port = arguments[0];
+              const data = arguments[1];
+              const len = Number(arguments[2]) || (data ? data.length : 0);
+              const meta = [];
+              for (let i = 2; i < arguments.length; i++) {
+                meta.push(safeJavaValue(arguments[i]));
+              }
+              console.log(`[display-java] ${className}.onVideoFrame port=${port} meta=${meta.join(",")} dataLen=${data ? data.length : 0}`);
+              dumpJavaByteArray("java-video-frame", data, len);
+              return overload.apply(this, arguments);
+            };
+          }
+          hooked = true;
+        }
+        if (CallbackClass.onHWVideoFrame !== undefined) {
+          for (const overload of CallbackClass.onHWVideoFrame.overloads) {
+            overload.implementation = function () {
+              const meta = [];
+              for (let i = 0; i < arguments.length; i++) {
+                meta.push(safeJavaValue(arguments[i]));
+              }
+              console.log(`[display-java] ${className}.onHWVideoFrame meta=${meta.join(",")}`);
+              return overload.apply(this, arguments);
+            };
+          }
+          hooked = true;
+        }
+        if (hooked) {
+          installedJavaDecodeClasses.add("display:" + className);
+          console.log(`[hook] Java display callback ${className}`);
+        }
+      } catch (err) {
+        console.log(`[warn] Java display callback hook unavailable class=${className}: ${err}`);
+      }
+    }
+
+    try {
+      const Player = Java.use("org.MediaPlayer.PlayM4.Player");
+      if (Player.setDecodeCB !== undefined) {
+        for (const overload of Player.setDecodeCB.overloads) {
+          overload.implementation = function () {
+            const className = safeJavaClassName(arguments[1]);
+            console.log(`[decode-cb] Player.setDecodeCB port=${arguments[0]} cb=${className}`);
+            hookJavaDecodeCallbackClass(className);
+            const ret = overload.apply(this, arguments);
+            console.log(`[decode-cb] Player.setDecodeCB ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.setDecodeCBEx !== undefined) {
+        for (const overload of Player.setDecodeCBEx.overloads) {
+          overload.implementation = function () {
+            const className = safeJavaClassName(arguments[1]);
+            console.log(`[decode-cb] Player.setDecodeCBEx port=${arguments[0]} cb=${className}`);
+            hookJavaDecodeCallbackClass(className);
+            const ret = overload.apply(this, arguments);
+            console.log(`[decode-cb] Player.setDecodeCBEx ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.setStreamCB !== undefined) {
+        for (const overload of Player.setStreamCB.overloads) {
+          overload.implementation = function () {
+            const className = safeJavaClassName(arguments[1]);
+            console.log(
+              `[decode-cb] Player.setStreamCB port=${arguments[0]} cb=${className} args=${safeJavaValue(arguments[2])},${safeJavaValue(arguments[3])},${safeJavaValue(arguments[4])}`,
+            );
+            hookJavaDecodeCallbackClass(className);
+            const ret = overload.apply(this, arguments);
+            console.log(`[decode-cb] Player.setStreamCB ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.setDisplayCB !== undefined) {
+        for (const overload of Player.setDisplayCB.overloads) {
+          overload.implementation = function () {
+            const className = safeJavaClassName(arguments[1]);
+            console.log(`[display-cb] Player.setDisplayCB port=${arguments[0]} cb=${className}`);
+            hookJavaDisplayCallbackClass(className);
+            const ret = overload.apply(this, arguments);
+            console.log(`[display-cb] Player.setDisplayCB ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.setDisplayCBEx !== undefined) {
+        for (const overload of Player.setDisplayCBEx.overloads) {
+          overload.implementation = function () {
+            const className = safeJavaClassName(arguments[1]);
+            console.log(`[display-cb] Player.setDisplayCBEx port=${arguments[0]} cb=${className}`);
+            hookJavaDisplayCallbackClass(className);
+            const ret = overload.apply(this, arguments);
+            console.log(`[display-cb] Player.setDisplayCBEx ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.setVideoFrameCB !== undefined) {
+        for (const overload of Player.setVideoFrameCB.overloads) {
+          overload.implementation = function () {
+            const className = safeJavaClassName(arguments[1]);
+            console.log(`[display-cb] Player.setVideoFrameCB port=${arguments[0]} cb=${className}`);
+            hookJavaDisplayCallbackClass(className);
+            const ret = overload.apply(this, arguments);
+            console.log(`[display-cb] Player.setVideoFrameCB ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      console.log("[hook] Java PlayM4 decode/display callback registration");
+    } catch (err) {
+      console.log(`[warn] Java PlayM4 decode registration hook unavailable: ${err}`);
+    }
+
+    try {
+      const loaded = Java.enumerateLoadedClassesSync();
+      for (const className of loaded) {
+        if (className.indexOf("DecodeCB") !== -1 || className.indexOf("PlayerDecode") !== -1) {
+          hookJavaDecodeCallbackClass(className);
+        }
+        if (
+          className.indexOf("DisplayCB") !== -1
+          || className.indexOf("PlayerDisplay") !== -1
+          || className.indexOf("VideoFrameCB") !== -1
+          || className.indexOf("PlayerVideoFrame") !== -1
+          || className.indexOf("com.hikvision.playerlibrary.") === 0
+          || className.indexOf("HikPreviewPlayer") !== -1
+          || className.indexOf("HikPreviewMultiChannelPlayer") !== -1
+          || className.indexOf("HikRecordPlayer") !== -1
+        ) {
+          hookJavaDisplayCallbackClass(className);
+        }
+      }
+    } catch (err) {
+      console.log(`[warn] Java loaded decode callback enumeration failed: ${err}`);
     }
   });
 }

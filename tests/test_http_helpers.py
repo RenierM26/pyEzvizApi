@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 import datetime as dt
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
 
 import pytest
@@ -24,9 +26,15 @@ from pyezvizapi.exceptions import (
     HTTPError,
     PyEzvizError,
 )
+from pyezvizapi.local_stream import (
+    HcNetSdkCommandPortMultiSocketPlan,
+    HcNetSdkCommandPortSocketStep,
+)
 
 DEFAULT_SAVE_TIMEOUT = 10.0
 HCNETSDK_SAVE_DURATION = 3.0
+HCNETSDK_CLEAN_IDR_PREROLL_SECONDS = 12.5
+HCNETSDK_CLEAN_IDR_MAX_WINDOWS = 64
 SAVE_CLIP_PAYLOAD = b"mpegts"
 SAVE_IMAGE_PAYLOAD = b"jpeg-bytes"
 
@@ -2607,6 +2615,7 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
     client = _client()
     output_path = tmp_path / "www" / "front.ts"
     calls: list[dict[str, Any]] = []
+    metadata_calls: list[Any] = []
 
     class FakeCommandPortStream:
         def __enter__(self) -> FakeCommandPortStream:
@@ -2614,6 +2623,15 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
 
         def __exit__(self, *_args: object) -> None:
             return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Iterator[Any]:
+            assert max_packets == 1
+            yield SimpleNamespace(
+                channel=0,
+                length=4,
+                body=b"pkt1",
+                prefix=b"pre",
+            )
 
     def fake_open_hcnetsdk_command_port_stream(
         endpoint: Any,
@@ -2630,11 +2648,12 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
         return FakeCommandPortStream()
 
     def fake_copy_local_stream_to_mpegts(
-        stream: FakeCommandPortStream,
+        stream: Any,
         output: BinaryIO,
         **kwargs: Any,
     ) -> None:
         calls.append({"stream": stream, **kwargs})
+        list(stream.iter_packets(max_packets=1))
         output.write(b"mpegts")
 
     monkeypatch.setattr(
@@ -2654,6 +2673,13 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
         command_port=8000,
         hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
         hcnetsdk_read_response_after_each=(False,),
+        hcnetsdk_command_metadata_callback=metadata_calls.append,
+        hcnetsdk_h264_skip_initial_idr_windows=2,
+        hcnetsdk_h264_trim_to_clean_idr_window=True,
+        hcnetsdk_h264_clean_idr_preroll_seconds=(
+            HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
+        ),
+        hcnetsdk_h264_clean_idr_max_windows=HCNETSDK_CLEAN_IDR_MAX_WINDOWS,
         duration_seconds=HCNETSDK_SAVE_DURATION,
         max_packets=4,
     )
@@ -2667,6 +2693,23 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
     assert calls[1]["ffmpeg_path"] == "ffmpeg"
     assert calls[1]["max_packets"] == 4
     assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
+    assert calls[1]["h264_skip_initial_idr_windows"] == 2
+    assert calls[1]["h264_trim_to_clean_idr_window"] is True
+    assert (
+        calls[1]["h264_clean_idr_preroll_seconds"]
+        == HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
+    )
+    assert (
+        calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
+    )
+    assert metadata_calls == [calls[1]["stream"]]
+    assert metadata_calls[0].packet_summary["packet_count"] == 1
+    assert metadata_calls[0].packet_summary["first_packet_elapsed_seconds"] == 0.0
+    assert metadata_calls[0].packet_summary["last_packet_elapsed_seconds"] >= 0.0
+    assert metadata_calls[0].packet_summary["samples"][0]["length"] == 4
+    assert metadata_calls[0].packet_summary["samples"][0]["elapsed_seconds"] >= 0.0
+    assert metadata_calls[0].packet_summary["idmx_h264"]["looks_like_idmx"] is False
+    assert metadata_calls[0].packet_summary["idmx_h264"]["frame_count"] == 0
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
     assert result == {
         "ok": True,
@@ -2681,6 +2724,80 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
         "content_type": "video/mp2t",
         "command_port": 8000,
     }
+
+
+def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ts"
+    calls: list[dict[str, Any]] = []
+    plan = HcNetSdkCommandPortMultiSocketPlan(
+        steps=(
+            HcNetSdkCommandPortSocketStep((bytes.fromhex("00000010"),)),
+            HcNetSdkCommandPortSocketStep(
+                (bytes.fromhex("00000011"),),
+                media_socket=True,
+                read_response_after_each=False,
+            ),
+        )
+    )
+
+    class FakeCommandPortStream:
+        def __enter__(self) -> FakeCommandPortStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open_hcnetsdk_command_port_multi_socket_stream(
+        endpoint: Any,
+        command_plan: HcNetSdkCommandPortMultiSocketPlan,
+        **kwargs: Any,
+    ) -> FakeCommandPortStream:
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "command_plan": command_plan,
+                **kwargs,
+            }
+        )
+        return FakeCommandPortStream()
+
+    def fake_copy_local_stream_to_mpegts(
+        stream: FakeCommandPortStream,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"stream": stream, **kwargs})
+        output.write(b"mpegts")
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.open_hcnetsdk_command_port_multi_socket_stream",
+        fake_open_hcnetsdk_command_port_multi_socket_stream,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_stream_to_mpegts",
+        fake_copy_local_stream_to_mpegts,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="hcnetsdk-command-port",
+        host="192.0.2.10",
+        hcnetsdk_command_plan=plan,
+        duration_seconds=HCNETSDK_SAVE_DURATION,
+    )
+
+    assert calls[0]["endpoint"].host == "192.0.2.10"
+    assert calls[0]["command_plan"] is plan
+    assert calls[0]["timeout"] == DEFAULT_SAVE_TIMEOUT
+    assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert result["source"] == "hcnetsdk-command-port"
+    assert result["command_port"] == 8000
 
 
 def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:

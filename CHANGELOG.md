@@ -10,6 +10,27 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 - Added direct-local SDK streaming support for cached local-SDK credentials, including CAS probing, stream bootstrap, and FFmpeg remuxing for local live-view captures.
 - Added local IDMX HEVC stream handling for encrypted EZVIZ local payloads, converting media-wrapper frames to Annex B and decrypting encrypted HEVC NAL prefixes for `--decrypt-video` captures.
+- Added an HCNetSDK command-port multi-socket plan backend for native-style port-8000 flows that open short control sockets before the media socket.
+- Added native-Python HCNetSDK command-port login frame generation, RSA challenge decoding, login proof generation, and login-session parsing with the follow-up command auth seed.
+- Added native-Python HCNetSDK command-port auth word generation, complete `0x63` control-frame generation, and reusable control-template extraction for post-login port-8000 commands.
+- Added generated HCNetSDK command-port multi-socket save support, including fresh login, session-relative plan rendering, and CLI JSON loading via `--hcnetsdk-command-generated-plan-file`.
+- Added a generated-plan `body_tail_transform=play_login_today` option for refreshing captured native `0x111040` play-login date words during live command-port rendering.
+- Added offline `stream hcnetsdk-command-plan-generate` support to convert concrete port-8000 socket plan JSON into reusable generated-plan JSON.
+- Added sanitized command-port exchange metadata, bounded command-body tail word samples, media-socket keepalive timing, sampled packet timings/hashes, and bounded IDMX/H.264 frame-shape summaries with RTP-like sequence/timestamp continuity to local stream metadata output and `save clip --hcnetsdk-command-metadata-output` for generated-plan diagnostics.
+- Added sanitized H.264 Annex-B NAL-unit and IDR-window summarizers, plus an offline `stream h264-annexb-summary` CLI, for comparing native player dumps with generated command-port diagnostics without storing media contents.
+- Added offline `stream hcnetsdk-command-dump-summary` support for summarizing Frida command-frame, inbound-media, and PlayM4 input dump artifacts without printing frame bodies or credentials.
+- Added optional IDR-window FFmpeg decode checks to `stream hcnetsdk-command-dump-summary` so native command-port dumps can show startup corruption and later clean windows directly.
+- Added `EZVIZ_FRIDA_WITH_STREAM_TRANSFORM=1` support to the command-shape Frida runner so command-port and PlayM4 input artifacts can be captured in one native session.
+- Added `EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN=1` for Frida command-shape diagnostics that need to route a LAN login into the native preview activity.
+- Added Frida command-shape runner env injection for target and dump settings, and fixed TCP-shape fingerprint logging on Frida runtimes without `Uint8Array.slice()`.
+- Added an experimental `read_first_media_immediately` command-plan flag for HCNetSDK startup-order diagnostics.
+- Added an experimental `delay_after_commands_seconds` command-plan field for matching native HCNetSDK command-port startup pacing during diagnostics.
+- Added an experimental `keepalive_initial_delay_seconds` command-plan field for matching native HCNetSDK media-socket keepalive pacing during diagnostics.
+- Added `--hcnetsdk-h264-skip-initial-idr-windows` to drop corrupt startup IDR windows before remuxing clear H.264 IDMX command-port captures.
+- Added `--hcnetsdk-h264-trim-to-clean-idr-window` to decode-check sampled startup IDR windows and remux clear H.264 IDMX command-port captures from the first clean window.
+- Added `--hcnetsdk-h264-clean-idr-preroll-seconds` to overcapture before clean-IDR trimming so generated command-port clips can keep more requested clean duration after startup corruption is discarded.
+- Added `--hcnetsdk-h264-clean-idr-max-windows` to raise the clean-IDR decode-check search limit for long unstable command-port startups.
+- Added `--hcnetsdk-h264-wait-for-clean-idr-window` and `--hcnetsdk-h264-clean-idr-wait-seconds` to discard corrupt H.264 IDMX startup media before starting the requested capture duration.
 - Added regression coverage for RTP dump decryption when `--decrypt-video` is used with explicit encrypted-header codec modes.
 
 ### Changed
@@ -23,6 +44,15 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Fixed cloud and direct-local stream timeout handling so unreachable/offline cameras raise clear `DeviceException` errors instead of leaking raw timeouts.
 - Fixed direct-local encrypted-header decryption to preserve PES boundaries and avoid H.264/HEVC RTP payload overlap during stream remuxing.
 - Fixed HCNetSDK command-port media framing by parsing port-8000 `$` length words as little-endian total frame lengths, and added clear H.264 IDMX remuxing for those media packets.
+- Fixed generated HCNetSDK command-port `0x63` control bodies to serialize the login session id in native network order, matching auth-word generation and avoiding no-body `0x1e` responses.
+- Fixed bounded local-stream capture duration accounting so generated-login/bootstrap latency does not reduce the requested media capture window.
+- Fixed HCNetSDK command-port response reads to tolerate native short no-body ack headers used during play-login draining.
+- Documented and regression-tested the stable generated HCNetSDK media-step shape: plan JSON media sockets default to leaving the native `0x30000` IMKH reply on the media socket as prefix data instead of consuming it as a control response.
+- Fixed clear H.264 IDMX extraction to require the native RTP payload type 96 before treating IDMX bodies as H.264 NAL/FU-A media, leaving 104/112 startup prelude records out of the Annex-B remux even when their bytes look video-shaped.
+- Documented the practical generated-plan capture recipe for warning-free native-style command-port H.264 remuxes: preserve the media-prefix behavior, refresh play-login date words, and skip the first startup IDR window.
+- Fixed Frida command-shape TCP fingerprint helpers to avoid global-name collisions when the stream-transform hook is loaded in the same session.
+- Improved HCNetSDK command-port multi-socket errors with socket-step, frame, command id, and first-media context.
+- Preserved partial HCNetSDK command-port bootstrap metadata when the media socket resets before the first packet.
 - Fixed partial CAS probe writes and base64 local-SDK CAS key handling.
 - Fixed `ptz_control_coordinates()` to use the app-matched `PTZManualCtrl/CtrlPTZ3DPosition` IoT action endpoint with `positionPoint.x/y`, restoring y-axis tilt coordinate moves.
 - Fixed PTZ coordinate validation to reject negative coordinate values and omitted zoom hints from point moves so focus/zoom metadata is left unchanged.

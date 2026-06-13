@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
+import hashlib
+import ipaddress
 from itertools import chain
 import subprocess
-from threading import Thread
+from threading import Event, Thread
 import time
 from typing import Any, BinaryIO, Literal, cast
 
@@ -25,10 +27,14 @@ from .hcnetsdk import (
     EzvizLocalSdkClient,
     EzvizLocalSdkStreamBootstrap,
     HcNetSdkCommandPortClient,
+    HcNetSdkCommandPortControlTemplate,
+    HcNetSdkCommandPortExchange,
+    HcNetSdkCommandPortLoginSession,
     HcNetSdkCommandPortStreamBootstrap,
     HcNetSdkLanEndpoint,
     HcNetSdkRealDataPacket,
     SocketFactory,
+    hcnetsdk_command_port_control_template_from_frame,
     iter_hcnetsdk_real_data_mpegps,
 )
 from .stream import (
@@ -50,6 +56,297 @@ class EzvizLocalStreamPacket:
     body: bytes
     encrypted: bool = False
     prefix: bytes = b""
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortKeepaliveEvent:
+    """Safe timing metadata for one command-port keepalive send attempt."""
+
+    index: int
+    command_id: int | None
+    elapsed_seconds: float
+    sent: bool
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class _H264CleanIdrProbeResult:
+    """Result of probing partial H.264 Annex-B IDR windows."""
+
+    start_offset: int | None
+    first_decode_error: str | None = None
+    idr_count: int = 0
+    sampled_window_count: int = 0
+    complete_window_count: int = 0
+    nal_count: int = 0
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortSocketStep:
+    """One socket in an HCNetSDK command-port bootstrap plan.
+
+    The EZVIZ app uses several short-lived command sockets before opening the
+    long-lived media socket. A step marked ``media_socket`` is kept open and
+    later used for interleaved media reads; other steps are closed after their
+    command frames and expected responses have been exchanged.
+    """
+
+    command_frames: tuple[bytes, ...]
+    read_response_after_each: bool | tuple[bool, ...] = True
+    response_reads_after_each: int | tuple[int, ...] | None = None
+    media_socket: bool = False
+    read_first_media_immediately: bool = False
+    delay_after_commands_seconds: float = 0.0
+    drain_media_before_next_step_seconds: float = 0.0
+    keepalive_frames: tuple[bytes, ...] = ()
+    keepalive_interval_seconds: float = 5.0
+    keepalive_initial_delay_seconds: float | None = None
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortGeneratedSocketStep:
+    """One generated command-port socket step before session-bound rendering."""
+
+    control_templates: tuple[HcNetSdkCommandPortControlTemplate, ...]
+    read_response_after_each: bool | tuple[bool, ...] = True
+    response_reads_after_each: int | tuple[int, ...] | None = None
+    media_socket: bool = False
+    read_first_media_immediately: bool = False
+    delay_after_commands_seconds: float = 0.0
+    drain_media_before_next_step_seconds: float = 0.0
+    keepalive_templates: tuple[HcNetSdkCommandPortControlTemplate, ...] = ()
+    keepalive_interval_seconds: float = 5.0
+    keepalive_initial_delay_seconds: float | None = None
+    name: str | None = None
+
+    def to_socket_step(
+        self,
+        *,
+        session_id: bytes,
+        auth_seed: int,
+        key: bytes,
+        local_ip: str,
+    ) -> HcNetSdkCommandPortSocketStep:
+        """Render this template step into executable command frames."""
+        return HcNetSdkCommandPortSocketStep(
+            command_frames=tuple(
+                template.to_frame(
+                    session_id=session_id,
+                    auth_seed=auth_seed,
+                    key=key,
+                    local_ip=local_ip,
+                )
+                for template in self.control_templates
+            ),
+            read_response_after_each=self.read_response_after_each,
+            response_reads_after_each=self.response_reads_after_each,
+            media_socket=self.media_socket,
+            read_first_media_immediately=self.read_first_media_immediately,
+            delay_after_commands_seconds=self.delay_after_commands_seconds,
+            drain_media_before_next_step_seconds=(
+                self.drain_media_before_next_step_seconds
+            ),
+            keepalive_frames=tuple(
+                template.to_frame(
+                    session_id=session_id,
+                    auth_seed=auth_seed,
+                    key=key,
+                    local_ip=local_ip,
+                )
+                for template in self.keepalive_templates
+            ),
+            keepalive_interval_seconds=self.keepalive_interval_seconds,
+            keepalive_initial_delay_seconds=self.keepalive_initial_delay_seconds,
+            name=self.name,
+        )
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortMultiSocketPlan:
+    """Native-style command-port socket sequence for port-8000 media."""
+
+    steps: tuple[HcNetSdkCommandPortSocketStep, ...]
+
+    def __post_init__(self) -> None:  # noqa: PLR0912
+        if not self.steps:
+            raise PyEzvizError("HCNetSDK command-port socket plan is empty")
+        media_steps = [step for step in self.steps if step.media_socket]
+        if len(media_steps) != 1:
+            raise PyEzvizError(
+                "HCNetSDK command-port socket plan requires exactly one media socket"
+            )
+        for step in self.steps:
+            if not step.command_frames:
+                raise PyEzvizError("HCNetSDK command-port socket step has no frames")
+            if isinstance(step.read_response_after_each, tuple) and len(
+                step.read_response_after_each
+            ) != len(step.command_frames):
+                raise PyEzvizError(
+                    "HCNetSDK response-read policy length must match command frames"
+                )
+            if isinstance(step.response_reads_after_each, tuple) and len(
+                step.response_reads_after_each
+            ) != len(step.command_frames):
+                raise PyEzvizError(
+                    "HCNetSDK response-read count length must match command frames"
+                )
+            response_counts = _hcnetsdk_step_response_counts(step)
+            if any(count < 0 for count in response_counts):
+                raise PyEzvizError("HCNetSDK response-read count must be non-negative")
+            if step.read_first_media_immediately and not step.media_socket:
+                raise PyEzvizError(
+                    "HCNetSDK immediate first-media read requires a media socket step"
+                )
+            if step.delay_after_commands_seconds < 0:
+                raise PyEzvizError("HCNetSDK command step delay must be non-negative")
+            if step.drain_media_before_next_step_seconds < 0:
+                raise PyEzvizError("HCNetSDK command media drain must be non-negative")
+            if (
+                step.drain_media_before_next_step_seconds
+                and not step.media_socket
+            ):
+                raise PyEzvizError(
+                    "HCNetSDK command media drain requires a media socket step"
+                )
+            if step.keepalive_interval_seconds < 0:
+                raise PyEzvizError("HCNetSDK keepalive interval must be non-negative")
+            if (
+                step.keepalive_initial_delay_seconds is not None
+                and step.keepalive_initial_delay_seconds < 0
+            ):
+                raise PyEzvizError(
+                    "HCNetSDK keepalive initial delay must be non-negative"
+                )
+
+
+@dataclass(frozen=True)
+class HcNetSdkCommandPortGeneratedMultiSocketPlan:
+    """Generated native-style command-port plan template."""
+
+    steps: tuple[HcNetSdkCommandPortGeneratedSocketStep, ...]
+
+    def to_socket_plan(
+        self,
+        *,
+        session_id: bytes,
+        auth_seed: int,
+        key: bytes,
+        local_ip: str,
+    ) -> HcNetSdkCommandPortMultiSocketPlan:
+        """Render this generated template with fresh login/session values."""
+        return HcNetSdkCommandPortMultiSocketPlan(
+            steps=tuple(
+                step.to_socket_step(
+                    session_id=session_id,
+                    auth_seed=auth_seed,
+                    key=key,
+                    local_ip=local_ip,
+                )
+                for step in self.steps
+            )
+        )
+
+
+def hcnetsdk_command_port_generated_plan_from_socket_plan(
+    plan: HcNetSdkCommandPortMultiSocketPlan,
+    *,
+    auth_seed: int | None = None,
+    key: bytes | None = None,
+) -> HcNetSdkCommandPortGeneratedMultiSocketPlan:
+    """Extract a reusable generated plan from concrete ``0x63`` socket frames."""
+    return HcNetSdkCommandPortGeneratedMultiSocketPlan(
+        steps=tuple(
+            HcNetSdkCommandPortGeneratedSocketStep(
+                control_templates=tuple(
+                    hcnetsdk_command_port_control_template_from_frame(
+                        frame,
+                        auth_seed=auth_seed,
+                        key=key,
+                    )
+                    for frame in step.command_frames
+                ),
+                read_response_after_each=step.read_response_after_each,
+                response_reads_after_each=step.response_reads_after_each,
+                media_socket=step.media_socket,
+                read_first_media_immediately=step.read_first_media_immediately,
+                delay_after_commands_seconds=step.delay_after_commands_seconds,
+                drain_media_before_next_step_seconds=(
+                    step.drain_media_before_next_step_seconds
+                ),
+                keepalive_templates=tuple(
+                    hcnetsdk_command_port_control_template_from_frame(
+                        frame,
+                        auth_seed=auth_seed,
+                        key=key,
+                    )
+                    for frame in step.keepalive_frames
+                ),
+                keepalive_interval_seconds=step.keepalive_interval_seconds,
+                keepalive_initial_delay_seconds=step.keepalive_initial_delay_seconds,
+                name=step.name,
+            )
+            for step in plan.steps
+        )
+    )
+
+
+def _hcnetsdk_step_response_counts(
+    step: HcNetSdkCommandPortSocketStep,
+) -> tuple[int, ...]:
+    """Return response-frame reads expected after each command frame."""
+    if step.response_reads_after_each is not None:
+        if isinstance(step.response_reads_after_each, int):
+            return (step.response_reads_after_each,) * len(step.command_frames)
+        return step.response_reads_after_each
+    if isinstance(step.read_response_after_each, bool):
+        count = 1 if step.read_response_after_each else 0
+        return (count,) * len(step.command_frames)
+    return tuple(1 if flag else 0 for flag in step.read_response_after_each)
+
+
+def _hcnetsdk_command_port_frame_with_client_ip(
+    frame: bytes,
+    local_ip: str | None,
+) -> bytes:
+    """Patch the little-endian client IPv4 word in observed command frames."""
+    if local_ip is None:
+        return frame
+    try:
+        encoded_ip = ipaddress.IPv4Address(local_ip).packed[::-1]
+    except ipaddress.AddressValueError as err:
+        raise PyEzvizError("HCNetSDK local IP must be an IPv4 address") from err
+
+    if len(frame) < 8:
+        return frame
+    command_family = frame[4]
+    if command_family == 0x63 and len(frame) >= 20:
+        patched = bytearray(frame)
+        patched[16:20] = encoded_ip
+        return bytes(patched)
+    if command_family == 0x5A and len(frame) >= 28:
+        patched = bytearray(frame)
+        patched[24:28] = encoded_ip
+        return bytes(patched)
+    return frame
+
+
+def _hcnetsdk_command_port_step_context(
+    step: HcNetSdkCommandPortSocketStep,
+    *,
+    step_index: int,
+    frame_index: int | None = None,
+    frame: bytes | None = None,
+) -> str:
+    """Return concise context for command-port socket-plan errors."""
+    parts = [f"step {step_index + 1}"]
+    if step.name:
+        parts.append(f"'{step.name}'")
+    if frame_index is not None:
+        parts.append(f"frame {frame_index + 1}")
+    if frame is not None and len(frame) >= 16:
+        parts.append(f"command 0x{int.from_bytes(frame[12:16], 'big'):x}")
+    return " ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -185,9 +482,13 @@ class HcNetSdkCommandPortMediaStream:
         read_response_after_each: bool | Iterable[bool] = True,
         read_first_media: bool = True,
         max_prefix_bytes: int = 4096,
+        local_ip: str | None = None,
     ) -> None:
         self.command_client = command_client
-        self.command_frames = tuple(command_frames)
+        self.command_frames = tuple(
+            _hcnetsdk_command_port_frame_with_client_ip(frame, local_ip)
+            for frame in command_frames
+        )
         self.read_response_after_each = read_response_after_each
         self.read_first_media = read_first_media
         self.max_prefix_bytes = max_prefix_bytes
@@ -241,6 +542,434 @@ class HcNetSdkCommandPortMediaStream:
             )
             yield _hcnetsdk_command_port_media_packet(media)
             emitted += 1
+
+
+class HcNetSdkCommandPortMultiSocketMediaStream:
+    """Port-8000 stream using the app's native multi-socket command pattern."""
+
+    def __init__(
+        self,
+        endpoint: HcNetSdkLanEndpoint,
+        plan: HcNetSdkCommandPortMultiSocketPlan,
+        *,
+        timeout: float | None = 10.0,
+        socket_factory: SocketFactory | None = None,
+        read_first_media: bool = True,
+        max_prefix_bytes: int = 4096,
+        local_ip: str | None = None,
+    ) -> None:
+        self.endpoint = endpoint
+        self.plan = plan
+        self.timeout = timeout
+        self.socket_factory = socket_factory
+        self.read_first_media = read_first_media
+        self.max_prefix_bytes = max_prefix_bytes
+        self.local_ip = local_ip
+        self.bootstrap: HcNetSdkCommandPortStreamBootstrap | None = None
+        self._first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
+        self._drained_media: list[EzvizInterleavedRtpFrameWithPrefix] = []
+        self._media_client: HcNetSdkCommandPortClient | None = None
+        self._clients: list[HcNetSdkCommandPortClient] = []
+        self._keepalive_stop = Event()
+        self._keepalive_thread: Thread | None = None
+        self.keepalive_events: list[HcNetSdkCommandPortKeepaliveEvent] = []
+
+    def __enter__(self) -> HcNetSdkCommandPortMultiSocketMediaStream:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close all command-port sockets opened by the plan."""
+        self._keepalive_stop.set()
+        if self._keepalive_thread is not None:
+            self._keepalive_thread.join(timeout=2.0)
+            self._keepalive_thread = None
+        for client in reversed(self._clients):
+            client.close()
+        self._clients.clear()
+        self._media_client = None
+
+    def _new_client(self) -> HcNetSdkCommandPortClient:
+        kwargs: dict[str, Any] = {"timeout": self.timeout}
+        if self.socket_factory is not None:
+            kwargs["socket_factory"] = self.socket_factory
+        client = HcNetSdkCommandPortClient(self.endpoint, **kwargs)
+        self._clients.append(client)
+        return client
+
+    def _run_socket_step(
+        self,
+        client: HcNetSdkCommandPortClient,
+        step: HcNetSdkCommandPortSocketStep,
+        *,
+        step_index: int,
+    ) -> HcNetSdkCommandPortStreamBootstrap:
+        exchanges: list[HcNetSdkCommandPortExchange] = []
+        for frame_index, (frame, response_count) in enumerate(
+            zip(
+                step.command_frames,
+                _hcnetsdk_step_response_counts(step),
+                strict=True,
+            )
+        ):
+            context = _hcnetsdk_command_port_step_context(
+                step,
+                step_index=step_index,
+                frame_index=frame_index,
+                frame=frame,
+            )
+            frame_to_send = _hcnetsdk_command_port_frame_with_client_ip(
+                frame,
+                self.local_ip,
+            )
+            try:
+                client.send_command_frame(frame_to_send)
+            except (OSError, PyEzvizError) as err:
+                raise PyEzvizError(
+                    f"HCNetSDK command-port {context} send failed: {err}"
+                ) from err
+            if response_count <= 0:
+                exchanges.append(HcNetSdkCommandPortExchange(frame, None))
+                continue
+            try:
+                first_response = client.read_tcp_frame()
+            except (OSError, PyEzvizError) as err:
+                raise PyEzvizError(
+                    f"HCNetSDK command-port {context} response 1 failed: {err}"
+                ) from err
+            exchanges.append(HcNetSdkCommandPortExchange(frame, first_response))
+            for response_index in range(1, response_count):
+                try:
+                    response = client.read_tcp_frame()
+                except (OSError, PyEzvizError) as err:
+                    raise PyEzvizError(
+                        "HCNetSDK command-port "
+                        f"{context} response {response_index + 1} failed: {err}"
+                    ) from err
+                exchanges.append(HcNetSdkCommandPortExchange(b"", response))
+        return HcNetSdkCommandPortStreamBootstrap(
+            exchanges=tuple(exchanges),
+            first_media=None,
+        )
+
+    def _start_keepalives(self, step: HcNetSdkCommandPortSocketStep) -> None:
+        if self._media_client is None or not step.keepalive_frames:
+            return
+        if self._keepalive_thread is not None:
+            return
+
+        def send_keepalives() -> None:
+            assert self._media_client is not None
+            started_at = time.monotonic()
+            initial_delay = (
+                step.keepalive_interval_seconds
+                if step.keepalive_initial_delay_seconds is None
+                else step.keepalive_initial_delay_seconds
+            )
+            if initial_delay > 0 and self._keepalive_stop.wait(initial_delay):
+                return
+            for index, frame in enumerate(step.keepalive_frames):
+                if self._keepalive_stop.is_set():
+                    return
+                command_id = (
+                    int.from_bytes(frame[12:16], "big") if len(frame) >= 16 else None
+                )
+                try:
+                    self._media_client.send_command_frame(
+                        _hcnetsdk_command_port_frame_with_client_ip(
+                            frame,
+                            self.local_ip,
+                        )
+                    )
+                except Exception as err:
+                    self.keepalive_events.append(
+                        HcNetSdkCommandPortKeepaliveEvent(
+                            index=index,
+                            command_id=command_id,
+                            elapsed_seconds=time.monotonic() - started_at,
+                            sent=False,
+                            error=str(err),
+                        )
+                    )
+                else:
+                    self.keepalive_events.append(
+                        HcNetSdkCommandPortKeepaliveEvent(
+                            index=index,
+                            command_id=command_id,
+                            elapsed_seconds=time.monotonic() - started_at,
+                            sent=True,
+                        )
+                    )
+                if index == len(step.keepalive_frames) - 1:
+                    return
+                if (
+                    step.keepalive_interval_seconds > 0
+                    and self._keepalive_stop.wait(step.keepalive_interval_seconds)
+                ):
+                    return
+
+        self._keepalive_thread = Thread(target=send_keepalives, daemon=True)
+        self._keepalive_thread.start()
+
+    def _read_first_media(
+        self,
+        step: HcNetSdkCommandPortSocketStep,
+        *,
+        step_index: int,
+    ) -> None:
+        """Read and retain the first media frame from the active media socket."""
+        if self._media_client is None:
+            raise PyEzvizError("HCNetSDK command-port media socket is closed")
+        try:
+            self._first_media = self._media_client.read_media_frame_after_prefix(
+                max_prefix_bytes=self.max_prefix_bytes,
+            )
+        except (OSError, PyEzvizError) as err:
+            context = _hcnetsdk_command_port_step_context(
+                step,
+                step_index=step_index,
+            )
+            raise PyEzvizError(
+                "HCNetSDK command-port "
+                f"{context} first media read failed: {err}"
+            ) from err
+        if self._first_media is None:
+            raise PyEzvizError("HCNetSDK command-port stream did not return media")
+
+    def _drain_media_before_next_step(
+        self,
+        step: HcNetSdkCommandPortSocketStep,
+        *,
+        step_index: int,
+    ) -> None:
+        """Drain and preserve media packets before continuing later socket steps."""
+        if not step.drain_media_before_next_step_seconds:
+            return
+        if self._media_client is None:
+            raise PyEzvizError("HCNetSDK command-port media socket is closed")
+        deadline = time.monotonic() + step.drain_media_before_next_step_seconds
+        while time.monotonic() < deadline:
+            try:
+                media = self._media_client.read_media_frame_after_prefix(
+                    max_prefix_bytes=self.max_prefix_bytes,
+                )
+            except (OSError, PyEzvizError) as err:
+                context = _hcnetsdk_command_port_step_context(
+                    step,
+                    step_index=step_index,
+                )
+                raise PyEzvizError(
+                    "HCNetSDK command-port "
+                    f"{context} media drain failed: {err}"
+                ) from err
+            self._drained_media.append(media)
+
+    def start(self) -> HcNetSdkCommandPortStreamBootstrap:
+        """Execute all socket steps and read the first media frame."""
+        if self.bootstrap is not None:
+            return self.bootstrap
+
+        exchanges: list[HcNetSdkCommandPortExchange] = []
+        media_step: HcNetSdkCommandPortSocketStep | None = None
+        media_step_index: int | None = None
+        for step_index, step in enumerate(self.plan.steps):
+            client = self._new_client()
+            step_bootstrap = self._run_socket_step(
+                client,
+                step,
+                step_index=step_index,
+            )
+            exchanges.extend(step_bootstrap.exchanges)
+            if step.delay_after_commands_seconds:
+                time.sleep(step.delay_after_commands_seconds)
+            if step.media_socket:
+                self._media_client = client
+                media_step = step
+                media_step_index = step_index
+                if step.drain_media_before_next_step_seconds:
+                    self._start_keepalives(step)
+                if self.read_first_media and step.read_first_media_immediately:
+                    self._read_first_media(step, step_index=step_index)
+                self._drain_media_before_next_step(step, step_index=step_index)
+            else:
+                client.close()
+
+        if self._media_client is None or media_step is None or media_step_index is None:
+            raise PyEzvizError("HCNetSDK command-port socket plan has no media socket")
+
+        self._start_keepalives(media_step)
+        self.bootstrap = HcNetSdkCommandPortStreamBootstrap(
+            exchanges=tuple(exchanges),
+            first_media=None,
+        )
+        if (
+            self.read_first_media
+            and self._first_media is None
+            and not self._drained_media
+        ):
+            self._read_first_media(media_step, step_index=media_step_index)
+        self.bootstrap = HcNetSdkCommandPortStreamBootstrap(
+            exchanges=tuple(exchanges),
+            first_media=self._first_media,
+        )
+        return self.bootstrap
+
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+    ) -> Iterator[EzvizLocalStreamPacket]:
+        """Yield command-port RTP payloads from the media socket."""
+        if max_packets is not None and max_packets <= 0:
+            return
+
+        if self.bootstrap is None:
+            self.start()
+        if self._media_client is None:
+            raise PyEzvizError("HCNetSDK command-port media socket is closed")
+
+        emitted = 0
+        if self._first_media is not None:
+            yield _hcnetsdk_command_port_media_packet(self._first_media)
+            emitted += 1
+            self._first_media = None
+        while self._drained_media and (max_packets is None or emitted < max_packets):
+            yield _hcnetsdk_command_port_media_packet(self._drained_media.pop(0))
+            emitted += 1
+
+        while max_packets is None or emitted < max_packets:
+            try:
+                media = self._media_client.read_media_frame_after_prefix(
+                    max_prefix_bytes=self.max_prefix_bytes,
+                )
+            except (OSError, PyEzvizError) as err:
+                raise PyEzvizError(
+                    f"HCNetSDK command-port media packet read failed: {err}"
+                ) from err
+            yield _hcnetsdk_command_port_media_packet(media)
+            emitted += 1
+
+
+class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
+    """Port-8000 stream that logs in and renders a generated socket plan."""
+
+    def __init__(
+        self,
+        endpoint: HcNetSdkLanEndpoint,
+        generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan,
+        *,
+        password: str | bytes,
+        username: str = "admin",
+        timeout: float | None = 10.0,
+        socket_factory: SocketFactory | None = None,
+        read_first_media: bool = True,
+        max_prefix_bytes: int = 4096,
+        local_ip: str | None = None,
+        rsa_key: Any | None = None,
+    ) -> None:
+        self.endpoint = endpoint
+        self.generated_plan = generated_plan
+        self.password = password
+        self.username = username
+        self.timeout = timeout
+        self.socket_factory = socket_factory
+        self.read_first_media = read_first_media
+        self.max_prefix_bytes = max_prefix_bytes
+        self.local_ip = local_ip
+        self.rsa_key = rsa_key
+        self.login_session: HcNetSdkCommandPortLoginSession | None = None
+        self.bootstrap: HcNetSdkCommandPortStreamBootstrap | None = None
+        self._stream: HcNetSdkCommandPortMultiSocketMediaStream | None = None
+
+    def __enter__(self) -> HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the rendered multi-socket media stream."""
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+
+    def _login_client(self) -> HcNetSdkCommandPortClient:
+        kwargs: dict[str, Any] = {"timeout": self.timeout}
+        if self.socket_factory is not None:
+            kwargs["socket_factory"] = self.socket_factory
+        return HcNetSdkCommandPortClient(self.endpoint, **kwargs)
+
+    @staticmethod
+    def _client_local_ip(client: HcNetSdkCommandPortClient) -> str:
+        try:
+            return str(client.sock.getsockname()[0])
+        except (AttributeError, OSError, TypeError) as err:
+            raise PyEzvizError(
+                "HCNetSDK generated command-port plan requires local_ip when "
+                "the socket does not expose getsockname()"
+            ) from err
+
+    def start(self) -> HcNetSdkCommandPortStreamBootstrap:
+        """Run command-port login, render the plan, and read first media."""
+        if self.bootstrap is not None:
+            return self.bootstrap
+
+        login_client = self._login_client()
+        try:
+            local_ip = self.local_ip or self._client_local_ip(login_client)
+            self.login_session = login_client.login(
+                password=self.password,
+                username=self.username,
+                local_ip=local_ip,
+                rsa_key=self.rsa_key,
+            )
+        finally:
+            login_client.close()
+
+        rendered_plan = self.generated_plan.to_socket_plan(
+            session_id=self.login_session.session_id,
+            auth_seed=self.login_session.auth_seed,
+            key=self.login_session.challenge,
+            local_ip=local_ip,
+        )
+        self._stream = HcNetSdkCommandPortMultiSocketMediaStream(
+            self.endpoint,
+            rendered_plan,
+            timeout=self.timeout,
+            socket_factory=self.socket_factory,
+            read_first_media=self.read_first_media,
+            max_prefix_bytes=self.max_prefix_bytes,
+            local_ip=None,
+        )
+        try:
+            self.bootstrap = self._stream.start()
+        except PyEzvizError:
+            self.bootstrap = self._stream.bootstrap
+            raise
+        return self.bootstrap
+
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+    ) -> Iterator[EzvizLocalStreamPacket]:
+        """Yield command-port RTP payloads from the rendered media socket."""
+        if max_packets is not None and max_packets <= 0:
+            return
+        if self.bootstrap is None:
+            self.start()
+        if self._stream is None:
+            raise PyEzvizError("HCNetSDK generated command-port stream is closed")
+        yield from self._stream.iter_packets(max_packets=max_packets)
+
+    @property
+    def keepalive_events(self) -> tuple[HcNetSdkCommandPortKeepaliveEvent, ...]:
+        """Return keepalive send-attempt metadata from the rendered stream."""
+        if self._stream is None:
+            return ()
+        return tuple(self._stream.keepalive_events)
 
 
 def open_local_sdk_stream(  # noqa: PLR0913
@@ -297,6 +1026,7 @@ def open_hcnetsdk_command_port_stream(
     read_response_after_each: bool | Iterable[bool] = True,
     read_first_media: bool = True,
     max_prefix_bytes: int = 4096,
+    local_ip: str | None = None,
 ) -> HcNetSdkCommandPortMediaStream:
     """Return a command-port media stream for explicit bootstrap frames."""
     if socket_factory is None:
@@ -313,6 +1043,57 @@ def open_hcnetsdk_command_port_stream(
         read_response_after_each=read_response_after_each,
         read_first_media=read_first_media,
         max_prefix_bytes=max_prefix_bytes,
+        local_ip=local_ip,
+    )
+
+
+def open_hcnetsdk_command_port_multi_socket_stream(
+    endpoint: HcNetSdkLanEndpoint,
+    plan: HcNetSdkCommandPortMultiSocketPlan,
+    *,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory | None = None,
+    read_first_media: bool = True,
+    max_prefix_bytes: int = 4096,
+    local_ip: str | None = None,
+) -> HcNetSdkCommandPortMultiSocketMediaStream:
+    """Return a command-port media stream for a native-style socket plan."""
+    return HcNetSdkCommandPortMultiSocketMediaStream(
+        endpoint,
+        plan,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        read_first_media=read_first_media,
+        max_prefix_bytes=max_prefix_bytes,
+        local_ip=local_ip,
+    )
+
+
+def open_hcnetsdk_command_port_generated_multi_socket_stream(
+    endpoint: HcNetSdkLanEndpoint,
+    generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    *,
+    password: str | bytes,
+    username: str = "admin",
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory | None = None,
+    read_first_media: bool = True,
+    max_prefix_bytes: int = 4096,
+    local_ip: str | None = None,
+    rsa_key: Any | None = None,
+) -> HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
+    """Return a command-port stream that logs in before rendering a plan."""
+    return HcNetSdkCommandPortGeneratedMultiSocketMediaStream(
+        endpoint,
+        generated_plan,
+        password=password,
+        username=username,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        read_first_media=read_first_media,
+        max_prefix_bytes=max_prefix_bytes,
+        local_ip=local_ip,
+        rsa_key=rsa_key,
     )
 
 
@@ -624,10 +1405,14 @@ def collect_local_stream_mpegps(
     packet boundaries.
     """
     output = bytearray()
-    deadline = None if duration_seconds is None else monotonic() + duration_seconds
+    deadline: float | None = None
     for packet in stream.iter_packets(max_packets=max_packets):
-        if deadline is not None and monotonic() >= deadline:
-            break
+        if duration_seconds is not None:
+            now = monotonic()
+            if deadline is None:
+                deadline = now + duration_seconds
+            elif now >= deadline:
+                break
         output.extend(packet.body)
     return bytes(output)
 
@@ -734,7 +1519,7 @@ def _require_bounded_idmx_capture(
         )
 
 
-def copy_local_stream_to_mpegts(
+def copy_local_stream_to_mpegts(  # noqa: PLR0913
     stream: Any,
     output: BinaryIO,
     *,
@@ -742,12 +1527,31 @@ def copy_local_stream_to_mpegts(
     max_packets: int | None = None,
     duration_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    h264_skip_initial_idr_windows: int = 0,
+    h264_trim_to_clean_idr_window: bool = False,
+    h264_clean_idr_preroll_seconds: float = 0.0,
+    h264_clean_idr_max_windows: int = 32,
+    h264_wait_for_clean_idr_window: bool = False,
+    h264_clean_idr_wait_seconds: float = 60.0,
 ) -> None:
     """Pipe local media payloads through FFmpeg and write MPEG-TS bytes."""
+    capture_duration_seconds = _h264_clean_idr_capture_duration_seconds(
+        duration_seconds=duration_seconds,
+        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+        h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+        h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+    )
+    payload_duration_seconds = capture_duration_seconds
+    if h264_wait_for_clean_idr_window:
+        assert duration_seconds is not None
+        payload_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
     payloads = _iter_local_stream_payloads(
         stream,
         max_packets=max_packets,
-        duration_seconds=duration_seconds,
+        duration_seconds=payload_duration_seconds,
         monotonic=monotonic,
     )
     try:
@@ -768,11 +1572,35 @@ def copy_local_stream_to_mpegts(
             max_packets=max_packets,
             duration_seconds=duration_seconds,
         )
-        packets = list(chain((first_payload,), payloads))
-        annexb = _idmx_local_packets_to_h264_annexb(packets)
+        if h264_wait_for_clean_idr_window:
+            annexb = collect_h264_idmx_annexb_after_first_clean_idr_window(
+                chain((first_payload,), payloads),
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=h264_clean_idr_max_windows,
+                wait_seconds=h264_clean_idr_wait_seconds,
+            )
+        else:
+            packets = list(chain((first_payload,), payloads))
+            annexb = _idmx_local_packets_to_h264_annexb(packets)
+        annexb = skip_h264_annexb_initial_idr_windows(
+            annexb,
+            h264_skip_initial_idr_windows,
+        )
+        if h264_trim_to_clean_idr_window:
+            annexb = trim_h264_annexb_to_first_clean_idr_window(
+                annexb,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=h264_clean_idr_max_windows,
+            )
         process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
+    if h264_skip_initial_idr_windows or h264_trim_to_clean_idr_window:
+        raise PyEzvizError(
+            "H.264 startup trim options require a clear H.264 IDMX stream"
+        )
     if not first_payload.startswith(MPEG_PS_START_CODE):
         raise PyEzvizError(
             "Unsupported EZVIZ local stream payload format: expected MPEG-PS payload"
@@ -784,6 +1612,54 @@ def copy_local_stream_to_mpegts(
         output,
         process=process,
     )
+
+
+def _h264_clean_idr_capture_duration_seconds(
+    *,
+    duration_seconds: float | None,
+    h264_skip_initial_idr_windows: int,
+    h264_trim_to_clean_idr_window: bool,
+    h264_clean_idr_preroll_seconds: float,
+    h264_clean_idr_max_windows: int,
+    h264_wait_for_clean_idr_window: bool,
+    h264_clean_idr_wait_seconds: float,
+) -> float | None:
+    """Validate H.264 trim settings and return the capture duration budget."""
+
+    if h264_skip_initial_idr_windows < 0:
+        raise PyEzvizError("h264_skip_initial_idr_windows cannot be negative")
+    if h264_clean_idr_max_windows <= 0:
+        raise PyEzvizError("h264_clean_idr_max_windows must be positive")
+    if h264_clean_idr_preroll_seconds < 0:
+        raise PyEzvizError("h264_clean_idr_preroll_seconds cannot be negative")
+    if h264_clean_idr_wait_seconds < 0:
+        raise PyEzvizError("h264_clean_idr_wait_seconds cannot be negative")
+    if h264_wait_for_clean_idr_window and duration_seconds is None:
+        raise PyEzvizError(
+            "h264_wait_for_clean_idr_window requires duration_seconds"
+        )
+    if h264_wait_for_clean_idr_window and (
+        h264_skip_initial_idr_windows
+        or h264_trim_to_clean_idr_window
+        or h264_clean_idr_preroll_seconds
+    ):
+        raise PyEzvizError(
+            "h264_wait_for_clean_idr_window cannot be combined with H.264 "
+            "startup trim options"
+        )
+    if h264_clean_idr_preroll_seconds and not h264_trim_to_clean_idr_window:
+        raise PyEzvizError(
+            "h264_clean_idr_preroll_seconds requires "
+            "h264_trim_to_clean_idr_window"
+        )
+    if h264_clean_idr_preroll_seconds and duration_seconds is None:
+        raise PyEzvizError(
+            "h264_clean_idr_preroll_seconds requires duration_seconds"
+        )
+    if h264_trim_to_clean_idr_window and h264_clean_idr_preroll_seconds:
+        assert duration_seconds is not None
+        return duration_seconds + h264_clean_idr_preroll_seconds
+    return duration_seconds
 
 
 def _is_ignorable_leading_stream_payload(payload: bytes) -> bool:
@@ -970,6 +1846,7 @@ IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
 IDMX_LOCAL_FRAME_HEADER_SIZE = 13
 IDMX_LOCAL_FRAME_SENTINEL_OFFSETS = (8, 9)
 HEVC_NAL_HEADER_SIZE = 2
+IDMX_H264_RTP_PAYLOAD_TYPE = 96
 H264_FU_A_NAL_TYPE = 28
 IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = 12
 IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = b"\x24\0"
@@ -991,6 +1868,660 @@ def collect_local_stream_media_packets(
             duration_seconds=duration_seconds,
             monotonic=monotonic,
         )
+    )
+
+
+def summarize_idmx_h264_local_packets(
+    packets: Iterable[bytes],
+    *,
+    max_frames: int = 64,
+) -> dict[str, Any]:
+    """Return sanitized IDMX/H.264 frame-shape metadata for local media packets."""
+
+    payloads = list(packets)
+    summary: dict[str, Any] = {
+        "packet_count": len(payloads),
+        "payload_bytes": sum(len(payload) for payload in payloads),
+        "looks_like_idmx": _local_stream_packets_are_idmx(payloads),
+        "frame_count": 0,
+        "sample_limit": max_frames,
+        "samples": [],
+        "h264": {
+            "clear_nal": 0,
+            "fu_a": 0,
+            "fu_a_start": 0,
+            "fu_a_end": 0,
+            "non_idr": 0,
+            "idr": 0,
+            "sei": 0,
+            "sps": 0,
+            "pps": 0,
+            "aud": 0,
+            "unknown": 0,
+        },
+        "hevc": {
+            "parameter": 0,
+            "media": 0,
+        },
+        "h264_nal_units": {
+            "sample_limit": max_frames,
+            "samples": [],
+            "truncated": False,
+        },
+    }
+    samples = summary["samples"]
+    assert isinstance(samples, list)
+    active_h264_fu: dict[str, Any] | None = None
+    for frame_index, frame in enumerate(_iter_idmx_local_frames(b"".join(payloads))):
+        summary["frame_count"] = frame_index + 1
+        frame_summary = _summarize_idmx_h264_local_frame(frame, frame_index)
+        _merge_idmx_h264_frame_summary(summary, frame_summary)
+        active_h264_fu = _record_idmx_h264_nal_unit_summary(
+            summary,
+            frame,
+            frame_summary,
+            active_fu=active_h264_fu,
+        )
+        if len(samples) < max_frames:
+            samples.append(frame_summary)
+    if active_h264_fu is not None:
+        _append_idmx_h264_nal_unit_sample(
+            summary,
+            active_h264_fu,
+            complete=False,
+            end_frame_index=None,
+        )
+    return summary
+
+
+def summarize_h264_annexb_units(
+    data: bytes,
+    *,
+    max_units: int = 64,
+) -> dict[str, Any]:
+    """Return sanitized H.264 Annex-B NAL-unit metadata."""
+
+    summary: dict[str, Any] = {
+        "byte_count": len(data),
+        "nal_count": 0,
+        "sample_limit": max_units,
+        "samples": [],
+        "truncated": False,
+        "h264": {
+            "non_idr": 0,
+            "idr": 0,
+            "sei": 0,
+            "sps": 0,
+            "pps": 0,
+            "aud": 0,
+            "unknown": 0,
+        },
+    }
+    samples = summary["samples"]
+    h264 = summary["h264"]
+    assert isinstance(samples, list)
+    assert isinstance(h264, dict)
+
+    for index, (start_code_offset, nal_start, end) in enumerate(
+        _h264_annexb_nal_spans(data),
+    ):
+        nal = data[nal_start:end]
+        nal_type = _h264_nal_type(nal)
+        summary["nal_count"] = index + 1
+        _increment_h264_nal_type_count(h264, nal_type)
+        if len(samples) >= max_units:
+            summary["truncated"] = True
+            continue
+        samples.append(
+            {
+                "index": index,
+                "start_code_offset": start_code_offset,
+                "nal_offset": nal_start,
+                "end_offset": end,
+                "nal_type": nal_type,
+                "payload_bytes": len(nal),
+                "sha256": hashlib.sha256(nal).hexdigest(),
+            }
+        )
+    return summary
+
+
+def summarize_h264_annexb_idr_windows(
+    data: bytes,
+    *,
+    max_windows: int = 16,
+) -> dict[str, Any]:
+    """Return sanitized IDR-started H.264 Annex-B window metadata."""
+
+    spans = _h264_annexb_nal_spans(data)
+    nal_types = [_h264_nal_type(data[nal_start:end]) for _, nal_start, end in spans]
+    idr_indexes = [index for index, nal_type in enumerate(nal_types) if nal_type == 5]
+    summary: dict[str, Any] = {
+        "byte_count": len(data),
+        "nal_count": len(spans),
+        "idr_count": len(idr_indexes),
+        "sample_limit": max_windows,
+        "samples": [],
+        "truncated": False,
+    }
+    samples = summary["samples"]
+    assert isinstance(samples, list)
+
+    for sample_index, idr_nal_index in enumerate(idr_indexes):
+        if len(samples) >= max_windows:
+            summary["truncated"] = True
+            break
+        start_nal_index = _h264_annexb_idr_window_start_index(nal_types, idr_nal_index)
+        next_idr_nal_index = (
+            idr_indexes[sample_index + 1]
+            if sample_index + 1 < len(idr_indexes)
+            else None
+        )
+        end_nal_index = next_idr_nal_index if next_idr_nal_index is not None else len(spans)
+        start_offset = spans[start_nal_index][0]
+        end_offset = (
+            spans[next_idr_nal_index][0]
+            if next_idr_nal_index is not None
+            else len(data)
+        )
+        idr_start_code_offset, idr_nal_offset, idr_end_offset = spans[idr_nal_index]
+        samples.append(
+            {
+                "index": sample_index,
+                "start_nal_index": start_nal_index,
+                "idr_nal_index": idr_nal_index,
+                "end_nal_index": end_nal_index,
+                "start_code_offset": start_offset,
+                "idr_start_code_offset": idr_start_code_offset,
+                "end_offset": end_offset,
+                "window_bytes": max(end_offset - start_offset, 0),
+                "leading_nal_types": nal_types[start_nal_index:idr_nal_index],
+                "idr_payload_bytes": max(idr_end_offset - idr_nal_offset, 0),
+                "idr_sha256": hashlib.sha256(data[idr_nal_offset:idr_end_offset]).hexdigest(),
+                "window_sha256": hashlib.sha256(data[start_offset:end_offset]).hexdigest(),
+            }
+        )
+    return summary
+
+
+def skip_h264_annexb_initial_idr_windows(data: bytes, count: int) -> bytes:
+    """Return Annex-B bytes starting at the requested IDR window."""
+
+    if count < 0:
+        raise PyEzvizError("H.264 IDR-window skip count cannot be negative")
+    if count == 0:
+        return data
+    spans = _h264_annexb_nal_spans(data)
+    nal_types = [_h264_nal_type(data[nal_start:end]) for _, nal_start, end in spans]
+    idr_indexes = [index for index, nal_type in enumerate(nal_types) if nal_type == 5]
+    if count >= len(idr_indexes):
+        raise PyEzvizError(
+            "H.264 stream did not contain enough IDR windows to skip "
+            f"{count} startup window(s)"
+        )
+    start_index = _h264_annexb_idr_window_start_index(nal_types, idr_indexes[count])
+    return data[spans[start_index][0] :]
+
+
+def collect_h264_idmx_annexb_after_first_clean_idr_window(
+    packets: Iterable[bytes],
+    *,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float] = time.monotonic,
+    ffmpeg_path: str = "ffmpeg",
+    max_windows: int = 32,
+    wait_seconds: float = 60.0,
+) -> bytes:
+    """Collect IDMX packets from the first clean IDR window onward.
+
+    This is a streaming-friendly variant of post-capture clean-IDR trimming:
+    startup packets may be discarded for up to ``wait_seconds``, and the
+    requested ``duration_seconds`` window starts only after a decodable IDR
+    window is found.
+    """
+
+    if duration_seconds is None:
+        raise PyEzvizError("duration_seconds is required when waiting for clean IDR")
+    if wait_seconds < 0:
+        raise PyEzvizError("wait_seconds cannot be negative")
+    if max_windows <= 0:
+        raise PyEzvizError("max_windows must be positive")
+
+    wait_deadline = monotonic() + wait_seconds
+    capture_deadline: float | None = None
+    collected: list[bytes] = []
+    clean_start_offset: int | None = None
+    first_decode_error: str | None = None
+    last_probe = _H264CleanIdrProbeResult(start_offset=None)
+
+    for packet in packets:
+        now = monotonic()
+        if clean_start_offset is None and now >= wait_deadline:
+            suffix = _h264_clean_idr_timeout_suffix(
+                first_decode_error=first_decode_error,
+                probe=last_probe,
+            )
+            raise PyEzvizError(
+                "Timed out waiting for a clean H.264 IDR window" + suffix
+            )
+        collected.append(packet)
+        if clean_start_offset is None:
+            probe = _try_first_clean_h264_annexb_idr_window_offset(
+                collected,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=max_windows,
+            )
+            last_probe = probe
+            clean_start_offset = probe.start_offset
+            if first_decode_error is None and probe.first_decode_error is not None:
+                first_decode_error = probe.first_decode_error
+            if clean_start_offset is not None:
+                capture_deadline = now + duration_seconds
+            continue
+        if capture_deadline is not None and now >= capture_deadline:
+            break
+
+    if clean_start_offset is None:
+        suffix = _h264_clean_idr_timeout_suffix(
+            first_decode_error=first_decode_error,
+            probe=last_probe,
+        )
+        raise PyEzvizError(
+            "H.264 stream ended before a clean IDR window was found" + suffix
+        )
+    annexb = _idmx_local_packets_to_h264_annexb(collected)
+    return annexb[clean_start_offset:]
+
+
+def _h264_clean_idr_timeout_suffix(
+    *,
+    first_decode_error: str | None,
+    probe: _H264CleanIdrProbeResult,
+) -> str:
+    """Return concise diagnostic context for a failed clean-IDR wait."""
+
+    details = (
+        f"checked {probe.complete_window_count} complete sampled IDR windows "
+        f"from {probe.idr_count} IDRs/{probe.nal_count} NALs"
+    )
+    if first_decode_error:
+        return f": {details}; first decode error: {first_decode_error}"
+    if probe.idr_count or probe.nal_count:
+        return f": {details}"
+    return ""
+
+
+def trim_h264_annexb_to_first_clean_idr_window(
+    data: bytes,
+    *,
+    ffmpeg_path: str = "ffmpeg",
+    max_windows: int = 32,
+) -> bytes:
+    """Return Annex-B bytes from the first IDR window that decodes cleanly."""
+
+    idr_summary = summarize_h264_annexb_idr_windows(data, max_windows=max_windows)
+    samples = idr_summary.get("samples")
+    if not isinstance(samples, list) or not samples:
+        raise PyEzvizError("H.264 stream did not contain IDR windows")
+    first_error: str | None = None
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        start_offset = sample.get("start_code_offset")
+        if not isinstance(start_offset, int):
+            continue
+        end_offset = sample.get("end_offset")
+        if not isinstance(end_offset, int) or end_offset <= start_offset:
+            continue
+        window = data[start_offset:end_offset]
+        stderr_lines = _ffmpeg_h264_decode_errors(window, ffmpeg_path=ffmpeg_path)
+        if not stderr_lines:
+            return data[start_offset:]
+        if first_error is None and stderr_lines:
+            first_error = stderr_lines[0]
+    suffix = f": {first_error}" if first_error else ""
+    raise PyEzvizError(
+        "H.264 stream did not contain a clean sampled IDR window" + suffix
+    )
+
+
+def _try_first_clean_h264_annexb_idr_window_offset(
+    packets: list[bytes],
+    *,
+    ffmpeg_path: str,
+    max_windows: int,
+) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR window offset for partial IDMX packets."""
+
+    try:
+        annexb = _idmx_local_packets_to_h264_annexb(packets)
+    except PyEzvizError:
+        return _H264CleanIdrProbeResult(start_offset=None)
+    idr_summary = summarize_h264_annexb_idr_windows(annexb, max_windows=max_windows)
+    samples = idr_summary.get("samples")
+    if not isinstance(samples, list):
+        return _H264CleanIdrProbeResult(
+            start_offset=None,
+            idr_count=int(idr_summary.get("idr_count", 0)),
+            nal_count=int(idr_summary.get("nal_count", 0)),
+        )
+    first_decode_error: str | None = None
+    complete_window_count = 0
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        end_nal_index = sample.get("end_nal_index")
+        if (
+            not isinstance(end_nal_index, int)
+            or end_nal_index >= int(idr_summary["nal_count"])
+        ):
+            continue
+        start_offset = sample.get("start_code_offset")
+        end_offset = sample.get("end_offset")
+        if (
+            not isinstance(start_offset, int)
+            or not isinstance(end_offset, int)
+            or end_offset <= start_offset
+        ):
+            continue
+        complete_window_count += 1
+        decode_errors = _ffmpeg_h264_decode_errors(
+            annexb[start_offset:end_offset],
+            ffmpeg_path=ffmpeg_path,
+        )
+        if not decode_errors:
+            return _H264CleanIdrProbeResult(
+                start_offset=start_offset,
+                first_decode_error=first_decode_error,
+                idr_count=int(idr_summary.get("idr_count", 0)),
+                sampled_window_count=len(samples),
+                complete_window_count=complete_window_count,
+                nal_count=int(idr_summary.get("nal_count", 0)),
+            )
+        if first_decode_error is None:
+            first_decode_error = decode_errors[0]
+    return _H264CleanIdrProbeResult(
+        start_offset=None,
+        first_decode_error=first_decode_error,
+        idr_count=int(idr_summary.get("idr_count", 0)),
+        sampled_window_count=len(samples),
+        complete_window_count=complete_window_count,
+        nal_count=int(idr_summary.get("nal_count", 0)),
+    )
+
+
+def _ffmpeg_h264_decode_errors(
+    data: bytes,
+    *,
+    ffmpeg_path: str,
+) -> list[str]:
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg_path,
+                "-v",
+                "error",
+                "-f",
+                "h264",
+                "-i",
+                "pipe:0",
+                "-f",
+                "null",
+                "-",
+            ],
+            input=data,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    except subprocess.TimeoutExpired as err:
+        raise PyEzvizError("FFmpeg H.264 decode check timed out") from err
+    stderr_text = completed.stderr.decode("utf-8", errors="replace")
+    lines = [line for line in stderr_text.splitlines() if line]
+    if completed.returncode != 0 and not lines:
+        lines.append(f"ffmpeg exited with status {completed.returncode}")
+    return lines[:8]
+
+
+def _h264_annexb_idr_window_start_index(
+    nal_types: list[int],
+    idr_nal_index: int,
+) -> int:
+    start = idr_nal_index
+    while start > 0 and nal_types[start - 1] in {6, 7, 8, 9}:
+        start -= 1
+    return start
+
+
+def _summarize_idmx_h264_local_frame(
+    frame: bytes,
+    frame_index: int,
+) -> dict[str, Any]:
+    header_size = _idmx_local_frame_header_size(frame)
+    sample: dict[str, Any] = {
+        "index": frame_index,
+        "frame_length": len(frame),
+        "header_size": header_size,
+    }
+    if header_size is None:
+        sample["kind"] = "unknown"
+        sample["body_length"] = len(frame)
+        sample["body_sha256"] = hashlib.sha256(frame).hexdigest()
+        return sample
+
+    transport = _idmx_local_frame_transport_fields(frame, header_size)
+    sample.update(transport)
+    body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    sample["body_length"] = len(body)
+    sample["body_sha256"] = hashlib.sha256(body).hexdigest()
+    is_h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
+    if is_h264_transport and _looks_like_idmx_h264_fu_a_frame(body):
+        fu_header = body[1]
+        sample["kind"] = "h264_fu_a"
+        sample["nal_type"] = fu_header & 0x1F
+        sample["fu_start"] = bool(fu_header & 0x80)
+        sample["fu_end"] = bool(fu_header & 0x40)
+        return sample
+    if is_h264_transport and _looks_like_idmx_h264_clear_nal(body):
+        sample["kind"] = "h264_nal"
+        sample["nal_type"] = _h264_nal_type(body)
+        return sample
+    if _looks_like_idmx_hevc_parameter_frame(body):
+        sample["kind"] = "hevc_parameter"
+        return sample
+    if _looks_like_idmx_hevc_media_frame(body):
+        sample["kind"] = "hevc_media"
+        return sample
+    sample["kind"] = "unknown"
+    return sample
+
+
+def _idmx_local_frame_transport_fields(
+    frame: bytes,
+    header_size: int,
+) -> dict[str, Any]:
+    """Return sanitized RTP-like fields from an IDMX local frame header."""
+
+    sentinel_offset = header_size - len(IDMX_LOCAL_FRAME_SENTINEL)
+    rtp_header_offset = sentinel_offset - 8
+    if rtp_header_offset < 0 or len(frame) < sentinel_offset:
+        return {}
+    header = frame[rtp_header_offset:sentinel_offset]
+    if len(header) < 8:
+        return {}
+    return {
+        "rtp_marker": bool(header[1] & 0x80),
+        "rtp_payload_type": header[1] & 0x7F,
+        "sequence_number": int.from_bytes(header[2:4], "big"),
+        "rtp_timestamp": int.from_bytes(header[4:8], "big"),
+    }
+
+
+def _idmx_local_frame_is_h264_transport(frame: bytes, header_size: int) -> bool:
+    transport = _idmx_local_frame_transport_fields(frame, header_size)
+    return transport.get("rtp_payload_type") == IDMX_H264_RTP_PAYLOAD_TYPE
+
+
+def _merge_idmx_h264_frame_summary(
+    summary: dict[str, Any],
+    frame_summary: dict[str, Any],
+) -> None:
+    h264 = summary["h264"]
+    hevc = summary["hevc"]
+    assert isinstance(h264, dict)
+    assert isinstance(hevc, dict)
+
+    kind = frame_summary.get("kind")
+    if kind == "h264_fu_a":
+        h264["fu_a"] = int(h264["fu_a"]) + 1
+        if frame_summary.get("fu_start"):
+            h264["fu_a_start"] = int(h264["fu_a_start"]) + 1
+        if frame_summary.get("fu_end"):
+            h264["fu_a_end"] = int(h264["fu_a_end"]) + 1
+        _increment_h264_nal_type_count(h264, frame_summary.get("nal_type"))
+        return
+    if kind == "h264_nal":
+        h264["clear_nal"] = int(h264["clear_nal"]) + 1
+        _increment_h264_nal_type_count(h264, frame_summary.get("nal_type"))
+        return
+    if kind == "hevc_parameter":
+        hevc["parameter"] = int(hevc["parameter"]) + 1
+        return
+    if kind == "hevc_media":
+        hevc["media"] = int(hevc["media"]) + 1
+        return
+    h264["unknown"] = int(h264["unknown"]) + 1
+
+
+def _increment_h264_nal_type_count(h264: dict[str, Any], nal_type: Any) -> None:
+    names = {
+        1: "non_idr",
+        5: "idr",
+        6: "sei",
+        7: "sps",
+        8: "pps",
+        9: "aud",
+    }
+    name = names.get(nal_type)
+    if name is None:
+        h264["unknown"] = int(h264["unknown"]) + 1
+        return
+    h264[name] = int(h264[name]) + 1
+
+
+def _record_idmx_h264_nal_unit_summary(
+    summary: dict[str, Any],
+    frame: bytes,
+    frame_summary: dict[str, Any],
+    *,
+    active_fu: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    header_size = frame_summary.get("header_size")
+    if not isinstance(header_size, int):
+        return active_fu
+    if not _idmx_local_frame_is_h264_transport(frame, header_size):
+        return active_fu
+    body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    if _looks_like_idmx_h264_clear_nal(body):
+        _append_idmx_h264_nal_unit_sample(
+            summary,
+            {
+                "nal_type": _h264_nal_type(body),
+                "start_frame_index": frame_summary["index"],
+                "start_sequence": frame_summary.get("sequence_number"),
+                "end_sequence": frame_summary.get("sequence_number"),
+                "rtp_timestamp": frame_summary.get("rtp_timestamp"),
+                "sequence_gap_count": 0,
+                "fragment_count": 1,
+                "payload_bytes": len(body),
+                "sha256": hashlib.sha256(body),
+            },
+            complete=True,
+            end_frame_index=frame_summary["index"],
+        )
+        return None
+    if not _looks_like_idmx_h264_fu_a_frame(body):
+        return active_fu
+
+    fu_header = body[1]
+    is_start = bool(fu_header & 0x80)
+    is_end = bool(fu_header & 0x40)
+    nal_type = fu_header & 0x1F
+    if is_start or active_fu is None:
+        reconstructed_header = bytes([(body[0] & 0xE0) | nal_type])
+        active_fu = {
+            "nal_type": nal_type,
+            "start_frame_index": frame_summary["index"],
+            "start_sequence": frame_summary.get("sequence_number"),
+            "end_sequence": frame_summary.get("sequence_number"),
+            "rtp_timestamp": frame_summary.get("rtp_timestamp"),
+            "last_sequence": None,
+            "sequence_gap_count": 0,
+            "fragment_count": 0,
+            "payload_bytes": len(reconstructed_header),
+            "sha256": hashlib.sha256(reconstructed_header),
+        }
+    sequence_number = frame_summary.get("sequence_number")
+    last_sequence = active_fu.get("last_sequence")
+    if isinstance(sequence_number, int):
+        if isinstance(last_sequence, int) and (
+            (last_sequence + 1) & 0xFFFF
+        ) != sequence_number:
+            active_fu["sequence_gap_count"] = int(active_fu["sequence_gap_count"]) + 1
+        active_fu["last_sequence"] = sequence_number
+        active_fu["end_sequence"] = sequence_number
+    hasher = active_fu["sha256"]
+    assert hasattr(hasher, "update")
+    hasher.update(body[2:])
+    active_fu["fragment_count"] = int(active_fu["fragment_count"]) + 1
+    active_fu["payload_bytes"] = int(active_fu["payload_bytes"]) + max(
+        len(body) - 2,
+        0,
+    )
+    if is_end:
+        _append_idmx_h264_nal_unit_sample(
+            summary,
+            active_fu,
+            complete=True,
+            end_frame_index=frame_summary["index"],
+        )
+        return None
+    return active_fu
+
+
+def _append_idmx_h264_nal_unit_sample(
+    summary: dict[str, Any],
+    unit: dict[str, Any],
+    *,
+    complete: bool,
+    end_frame_index: Any,
+) -> None:
+    nal_units = summary["h264_nal_units"]
+    assert isinstance(nal_units, dict)
+    samples = nal_units["samples"]
+    assert isinstance(samples, list)
+    if len(samples) >= int(nal_units["sample_limit"]):
+        nal_units["truncated"] = True
+        return
+    hasher = unit["sha256"]
+    assert hasattr(hasher, "hexdigest")
+    samples.append(
+        {
+            "nal_type": unit["nal_type"],
+            "start_frame_index": unit["start_frame_index"],
+            "end_frame_index": end_frame_index,
+            "start_sequence": unit.get("start_sequence"),
+            "end_sequence": unit.get("end_sequence"),
+            "rtp_timestamp": unit.get("rtp_timestamp"),
+            "sequence_gap_count": unit.get("sequence_gap_count"),
+            "fragment_count": unit["fragment_count"],
+            "payload_bytes": unit["payload_bytes"],
+            "complete": complete,
+            "sha256": hasher.hexdigest(),
+        }
     )
 
 
@@ -1133,11 +2664,12 @@ def _idmx_local_frame_contains_media(frame: bytes) -> bool:
     if header_size is None:
         return False
     body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
     return (
         _looks_like_idmx_hevc_parameter_frame(body)
         or _looks_like_idmx_hevc_media_frame(body)
-        or _looks_like_idmx_h264_fu_a_frame(body)
-        or _looks_like_idmx_h264_clear_nal(body)
+        or (h264_transport and _looks_like_idmx_h264_fu_a_frame(body))
+        or (h264_transport and _looks_like_idmx_h264_clear_nal(body))
     )
 
 
@@ -1175,6 +2707,7 @@ def _decrypt_idmx_local_packets_to_annexb(
         if header_size is None:
             raise PyEzvizError("Mixed EZVIZ local stream payload formats are unsupported")
         body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
         if _looks_like_idmx_hevc_parameter_frame(body):
             # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
             # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
@@ -1187,14 +2720,14 @@ def _decrypt_idmx_local_packets_to_annexb(
                 active_fu=active_fu,
             )
             continue
-        if _looks_like_idmx_h264_fu_a_frame(body):
+        if h264_transport and _looks_like_idmx_h264_fu_a_frame(body):
             active_h264_fu = _append_idmx_h264_fu_a_payload(
                 output,
                 body,
                 active_fu=active_h264_fu,
             )
             continue
-        if _looks_like_idmx_h264_clear_nal(body):
+        if h264_transport and _looks_like_idmx_h264_clear_nal(body):
             active_h264_fu = None
             _append_h264_nal(output, body)
     if active_fu is not None:
@@ -1212,6 +2745,8 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
         if header_size is None:
             continue
         body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        if not _idmx_local_frame_is_h264_transport(frame, header_size):
+            continue
         if _looks_like_idmx_h264_fu_a_frame(body):
             active_h264_fu = _append_idmx_h264_fu_a_payload(
                 output,
@@ -1452,10 +2987,14 @@ def _iter_local_stream_payloads(
     duration_seconds: float | None,
     monotonic: Callable[[], float],
 ) -> Iterator[bytes]:
-    deadline = None if duration_seconds is None else monotonic() + duration_seconds
+    deadline: float | None = None
     for packet in stream.iter_packets(max_packets=max_packets):
-        if deadline is not None and monotonic() >= deadline:
-            break
+        if duration_seconds is not None:
+            now = monotonic()
+            if deadline is None:
+                deadline = now + duration_seconds
+            elif now >= deadline:
+                break
         yield packet.body
 
 

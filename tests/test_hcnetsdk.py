@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 import hashlib
+import hmac
 
+from Crypto.Cipher import PKCS1_v1_5
+from Crypto.PublicKey import RSA
 import pytest
 
 from pyezvizapi.exceptions import DeviceException, PyEzvizError
@@ -55,6 +59,8 @@ from pyezvizapi.hcnetsdk import (
     EzvizLocalSdkClient,
     HcNetSdkClientInfo,
     HcNetSdkCommandPortClient,
+    HcNetSdkCommandPortControlTemplate,
+    HcNetSdkCommandPortLoginSession,
     HcNetSdkDvrCommand,
     HcNetSdkLanEndpoint,
     HcNetSdkRealDataPacket,
@@ -98,6 +104,14 @@ from pyezvizapi.hcnetsdk import (
     ezviz_local_sdk_ssl_iv,
     ezviz_native_video_level,
     hcnetsdk_command_candidate_role,
+    hcnetsdk_command_port_auth_word,
+    hcnetsdk_command_port_control_frame,
+    hcnetsdk_command_port_control_template_from_frame,
+    hcnetsdk_command_port_login_proof,
+    hcnetsdk_command_port_login_proof_frame,
+    hcnetsdk_command_port_login_request_frame,
+    hcnetsdk_command_port_password_digest,
+    hcnetsdk_command_port_play_login_body_tail_for_today,
     hcnetsdk_real_data_type_is_media,
     hcnetsdk_real_play_request,
     iter_hcnetsdk_real_data_mpegps,
@@ -116,6 +130,7 @@ from pyezvizapi.hcnetsdk import (
     read_ezviz_interleaved_rtp_frame_after_prefix,
     read_ezviz_local_sdk_frame,
     read_hcnetsdk_command_port_interleaved_frame_after_prefix,
+    read_hcnetsdk_tcp_frame,
     summarize_hcnetsdk_command_trace,
 )
 
@@ -128,6 +143,9 @@ HCNETSDK_TCP_LOG_PRINTABLE_RATIO = 0.21
 HCNETSDK_TCP_LOG_NULL_RATIO = 0.10
 HCNETSDK_TCP_LOG_HIGH_BIT_RATIO = 0.48
 HCNETSDK_TCP_TEST_BODY = b"payload"
+HCNETSDK_COMMAND_PORT_TEST_SESSION_ID = b"\x12\x34\x56\x78"
+HCNETSDK_COMMAND_PORT_TEST_BODY_TAIL = b"\x00\x00\x00\x01"
+HCNETSDK_COMMAND_PORT_TEST_TIMEOUT = 3.0
 STREAM_SETUP_BODY = b"<Request><Session>1</Session></Request>"
 EXPECTED_PREVIEW_XML = (
     b'<?xml version="1.0" encoding="utf-8"?>\n'
@@ -974,6 +992,18 @@ def test_parse_hcnetsdk_tcp_frame_round_trips_generic_wrapper() -> None:
     assert frame.to_bytes() == frame_bytes
 
 
+def test_read_hcnetsdk_tcp_frame_tolerates_native_short_ack() -> None:
+    sock = _FakeSocket([bytes.fromhex("0000000800000019000000080000001a")])
+
+    frame = read_hcnetsdk_tcp_frame(sock)
+
+    assert frame.header.total_length == HCNETSDK_TCP_HEADER_LENGTH
+    assert frame.header.field_4 == 25
+    assert frame.header.field_8 == 8
+    assert frame.header.field_12 == 26
+    assert not frame.body
+
+
 def test_parse_hcnetsdk_tcp_frame_rejects_truncated_body() -> None:
     with pytest.raises(PyEzvizError, match="truncated"):
         parse_hcnetsdk_tcp_frame(bytes.fromhex("00 00 00 20") + (b"\x00" * 12))
@@ -1120,6 +1150,373 @@ def test_read_hcnetsdk_command_port_interleaved_frame_rejects_short_length() -> 
 
     with pytest.raises(PyEzvizError, match="length is invalid"):
         read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock)
+
+
+def test_hcnetsdk_command_port_login_request_matches_native_trace() -> None:
+    public_der = bytes.fromhex(
+        "30818902818100d2e10c644ddf15515e457d2f76992d96c23c964f1175bffcb8ae7"
+        "e3a73f59b05a49e7fe2d8d32362a7804dac6e1f4312805be654faed038f93570"
+        "ecdedfe530f75ce05821d529f4cbc41b458f5bb507c074f140ca0515d29b2bf"
+        "75d686d9e056ca6a877277bf4d5b02a71f90b6947b5bee494ca921aed4fc20"
+        "eba27b55a26db70203010001"
+    )
+
+    frame = hcnetsdk_command_port_login_request_frame(
+        public_der,
+        username="admin",
+        local_ip="192.168.1.56",
+    )
+
+    assert frame == bytes.fromhex(
+        "000000e05a000000000000000001000005013d4b000000013801a8c00000000000006f0061"
+        "646d696e000000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000030818902818100d2e10c644ddf15515e457d2f76992d96c23c964f"
+        "1175bffcb8ae7e3a73f59b05a49e7fe2d8d32362a7804dac6e1f4312805be654faed038f93"
+        "570ecdedfe530f75ce05821d529f4cbc41b458f5bb507c074f140ca0515d29b2bf75d686d9"
+        "e056ca6a877277bf4d5b02a71f90b6947b5bee494ca921aed4fc20eba27b55a26db7020301"
+        "0001"
+    )
+
+
+def test_hcnetsdk_command_port_login_proof_uses_native_digest_branches() -> None:
+    seed = b"s" * 64
+    challenge = b"0123456789abcdef0123456789abcdef"
+
+    digest = hcnetsdk_command_port_password_digest("admin", b"123456", seed)
+    primary, secondary = hcnetsdk_command_port_login_proof(
+        "admin",
+        b"123456",
+        challenge,
+        seed,
+    )
+
+    assert digest == hashlib.sha256(b"admin" + seed + b"123456").hexdigest().encode()
+    assert primary == hmac.new(challenge, b"admin", hashlib.md5).digest()
+    assert secondary == hmac.new(challenge, digest, hashlib.md5).digest()
+
+
+def test_hcnetsdk_command_port_login_proof_frame_shape() -> None:
+    seed = b"s" * 64
+    challenge = b"0123456789abcdef0123456789abcdef"
+
+    frame = hcnetsdk_command_port_login_proof_frame(
+        username="admin",
+        password=b"123456",
+        challenge=challenge,
+        password_seed=seed,
+        local_ip="192.168.1.56",
+    )
+    parsed = parse_hcnetsdk_tcp_frame(frame)
+    primary, secondary = hcnetsdk_command_port_login_proof(
+        "admin",
+        b"123456",
+        challenge,
+        seed,
+    )
+
+    assert parsed.header.total_length == 84
+    assert parsed.header.field_4 == 0x5A000000
+    assert parsed.header.field_12 == 0x00010000
+    assert parsed.body[:20] == bytes.fromhex("05013d4b000000013801a8c00000000000006f00")
+    assert parsed.body[20:36] == primary
+    assert parsed.body[36:52] == b"\x00" * 16
+    assert parsed.body[52:68] == secondary
+
+
+def test_hcnetsdk_command_port_auth_word_matches_native_trace_vectors() -> None:
+    session_id = bytes.fromhex("71f872b7")
+    auth_seed = 0x143D7840
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+
+    assert (
+        hcnetsdk_command_port_auth_word(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=0x11000,
+            key=key,
+        )
+        == 0x8AA5DD6C
+    )
+    assert (
+        hcnetsdk_command_port_auth_word(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=0x111050,
+            key=key,
+            addend=0x71F872B9,
+        )
+        == 0xBBD883CC
+    )
+    assert (
+        hcnetsdk_command_port_auth_word(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=0x30000,
+            key=key,
+            addend=0x71F872BC,
+        )
+        == 0x6207A7FB
+    )
+
+
+def test_hcnetsdk_command_port_auth_word_includes_native_mask_seed() -> None:
+    session_id = bytes.fromhex("71f872b7")
+    auth_seed = 0x143D7840
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+
+    assert (
+        hcnetsdk_command_port_auth_word(
+            session_id=session_id,
+            auth_seed=auth_seed,
+            command_id=0x11000,
+            key=key,
+            mask_seed=b"\x01\x02\x03\x04\x05\x06",
+        )
+        != 0x8AA5DD6C
+    )
+
+
+def test_hcnetsdk_command_port_control_frame_builds_native_post_login_header() -> None:
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+
+    frame = hcnetsdk_command_port_control_frame(
+        session_id=bytes.fromhex("71f872b7"),
+        auth_seed=0x143D7840,
+        command_id=0x111050,
+        key=key,
+        local_ip="172.18.0.3",
+        addend=0x71F872B9,
+    )
+
+    assert frame == bytes.fromhex(
+        "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
+    )
+
+
+def test_hcnetsdk_command_port_control_frame_appends_command_tail() -> None:
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+
+    frame = hcnetsdk_command_port_control_frame(
+        session_id=HCNETSDK_COMMAND_PORT_TEST_SESSION_ID,
+        auth_seed=0x143D7840,
+        command_id=0x11000,
+        key=key,
+        local_ip="192.168.1.56",
+        body_tail=HCNETSDK_COMMAND_PORT_TEST_BODY_TAIL,
+    )
+    parsed = parse_hcnetsdk_tcp_frame(frame)
+
+    assert parsed.header.field_4 == 0x63000000
+    assert parsed.header.field_12 == 0x11000
+    assert parsed.body == bytes.fromhex(
+        "3801a8c012345678000000000000000000000001"
+    )
+
+
+def test_hcnetsdk_command_port_control_template_strips_session_bound_fields() -> None:
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+    first_frame = hcnetsdk_command_port_control_frame(
+        session_id=bytes.fromhex("71f872b7"),
+        auth_seed=0x143D7840,
+        command_id=0x11000,
+        key=key,
+        local_ip="192.168.1.56",
+        body_tail=HCNETSDK_COMMAND_PORT_TEST_BODY_TAIL,
+    )
+    second_frame = hcnetsdk_command_port_control_frame(
+        session_id=HCNETSDK_COMMAND_PORT_TEST_SESSION_ID,
+        auth_seed=0x143D7840,
+        command_id=0x11000,
+        key=key,
+        local_ip="192.0.2.44",
+        body_tail=HCNETSDK_COMMAND_PORT_TEST_BODY_TAIL,
+    )
+
+    first_template = hcnetsdk_command_port_control_template_from_frame(
+        first_frame,
+        name="capability",
+    )
+    second_template = hcnetsdk_command_port_control_template_from_frame(second_frame)
+
+    assert isinstance(first_template, HcNetSdkCommandPortControlTemplate)
+    assert first_template.name == "capability"
+    assert first_template.command_id == 0x11000
+    assert first_template.body_tail == HCNETSDK_COMMAND_PORT_TEST_BODY_TAIL
+    assert first_template.body_tail == second_template.body_tail
+
+
+def test_hcnetsdk_command_port_control_template_rebuilds_native_frame() -> None:
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+    template = hcnetsdk_command_port_control_template_from_frame(
+        bytes.fromhex(
+            "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
+        ),
+        addend=0x71F872B9,
+    )
+
+    assert template.to_frame(
+        session_id=bytes.fromhex("71f872b7"),
+        auth_seed=0x143D7840,
+        key=key,
+        local_ip="172.18.0.3",
+    ) == bytes.fromhex(
+        "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
+    )
+
+
+def test_hcnetsdk_command_port_control_template_infers_session_relative_addend() -> None:
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+    template = hcnetsdk_command_port_control_template_from_frame(
+        bytes.fromhex(
+            "0000002063000000bbd883cc00111050030012ac71f872b70000000000000000"
+        ),
+        auth_seed=0x143D7840,
+        key=key,
+    )
+    new_session_id = bytes.fromhex("12345678")
+
+    assert template.addend_delta == 2
+    assert template.to_frame(
+        session_id=new_session_id,
+        auth_seed=0x143D7840,
+        key=key,
+        local_ip="192.168.1.56",
+    ) == hcnetsdk_command_port_control_frame(
+        session_id=new_session_id,
+        auth_seed=0x143D7840,
+        command_id=0x111050,
+        key=key,
+        local_ip="192.168.1.56",
+        addend=0x1234567A,
+    )
+
+
+def test_hcnetsdk_command_port_control_template_can_refresh_play_login_date() -> None:
+    stale_tail = bytearray(148)
+    stale_tail[36:48] = bytes.fromhex("000007ea000000050000001f")
+    stale_tail[60:84] = bytes.fromhex(
+        "000007ea000000050000001f000000120000002200000038"
+    )
+
+    patched = hcnetsdk_command_port_play_login_body_tail_for_today(
+        bytes(stale_tail),
+        today=date(2026, 6, 13),
+    )
+
+    assert patched[36:48] == bytes.fromhex("000007ea000000060000000d")
+    assert patched[60:84] == bytes.fromhex(
+        "000007ea000000060000000d000000170000003b0000003b"
+    )
+
+
+def test_hcnetsdk_command_port_control_template_renders_dynamic_play_login_tail() -> None:
+    key = bytes.fromhex(
+        "3630343531663636393865353862623134313139323936386361333030663431"
+    )
+    stale_tail = bytearray(148)
+    stale_tail[36:48] = bytes.fromhex("000007ea000000050000001f")
+    stale_tail[60:84] = bytes.fromhex(
+        "000007ea000000050000001f000000120000002200000038"
+    )
+    template = HcNetSdkCommandPortControlTemplate(
+        command_id=0x111040,
+        body_tail=bytes(stale_tail),
+        addend_delta=4,
+        body_tail_transform="play_login_today",
+    )
+
+    parsed = parse_hcnetsdk_tcp_frame(
+        template.to_frame(
+            session_id=bytes.fromhex("12345678"),
+            auth_seed=0x143D7840,
+            key=key,
+            local_ip="192.168.1.56",
+        )
+    )
+
+    today = date.today()
+    assert parsed.body[16 + 36 : 16 + 48] == (
+        today.year.to_bytes(4, "big")
+        + today.month.to_bytes(4, "big")
+        + today.day.to_bytes(4, "big")
+    )
+    assert parsed.body[16 + 72 : 16 + 84] == bytes.fromhex(
+        "000000170000003b0000003b"
+    )
+
+
+def test_hcnetsdk_command_port_control_template_rejects_conflicting_addends() -> None:
+    with pytest.raises(PyEzvizError, match="addend"):
+        HcNetSdkCommandPortControlTemplate(
+            command_id=0x11000,
+            addend=1,
+            addend_delta=2,
+        )
+
+
+def test_hcnetsdk_command_port_control_template_rejects_non_control_frame() -> None:
+    with pytest.raises(PyEzvizError, match="0x63"):
+        hcnetsdk_command_port_control_template_from_frame(
+            build_hcnetsdk_tcp_frame(b"\x00" * 16, field_4=0x5A000000)
+        )
+
+
+def test_hcnetsdk_command_port_client_runs_generated_login() -> None:
+    rsa_key = RSA.generate(1024)
+    challenge = b"0123456789abcdef0123456789abcdef"
+    seed = b"s" * 64
+    encrypted_challenge = PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge)
+    first_response = build_hcnetsdk_tcp_frame(encrypted_challenge + seed)
+    second_response_body = (
+        HCNETSDK_COMMAND_PORT_TEST_SESSION_ID
+        + b"CS-CV310-A0-1B2WFR0120200927CCRRE87288805\x00"
+    )
+    second_response = build_hcnetsdk_tcp_frame(
+        second_response_body,
+        field_4=0x10A24BF1,
+    )
+    sock = _FakeSocket([first_response, second_response])
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == HCNETSDK_COMMAND_PORT_TEST_TIMEOUT
+        return sock
+
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=HCNETSDK_COMMAND_PORT_TEST_TIMEOUT,
+        socket_factory=socket_factory,
+    )
+
+    session = client.login(
+        password=b"123456",
+        local_ip="192.168.1.56",
+        rsa_key=rsa_key,
+    )
+
+    assert isinstance(session, HcNetSdkCommandPortLoginSession)
+    assert session.session_id == HCNETSDK_COMMAND_PORT_TEST_SESSION_ID
+    assert session.auth_seed == 0x10A24BF1
+    assert session.serial == "CS-CV310-A0-1B2WFR0120200927CCRRE87288805"
+    assert session.challenge == challenge
+    assert session.password_seed == seed
+    assert len(sock.sent) == 2
+    assert parse_hcnetsdk_tcp_frame(sock.sent[0]).header.total_length == 224
+    assert parse_hcnetsdk_tcp_frame(sock.sent[1]).header.total_length == 84
 
 
 def test_hcnetsdk_command_port_client_bootstraps_first_media() -> None:

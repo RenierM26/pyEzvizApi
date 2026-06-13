@@ -511,6 +511,22 @@ def _check_item(
         "battery": item.battery,
         "in_use": item.in_use,
     }
+    if args.decrypt_video and not item.enc_key:
+        result.update(
+            {
+                "ok": False,
+                "stage": "credential-validation",
+                "diagnosis": "missing_encryption_key",
+                "credential_attempts": [],
+                "artifacts": {
+                    "capture": str(_artifact_path(base, ".ts")),
+                    "metadata": str(_artifact_path(base, ".metadata.json")),
+                    "save_stdout": str(_artifact_path(base, ".save.stdout.json")),
+                    "save_stderr": str(_artifact_path(base, ".save.stderr.txt")),
+                },
+            }
+        )
+        return result
     if args.dry_run:
         commands = []
         for credential_source, command_password in credential_attempts:

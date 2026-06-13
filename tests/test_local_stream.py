@@ -1585,6 +1585,96 @@ def test_copy_local_stream_to_decrypted_mpegts_applies_h264_startup_trim(
     assert output.getvalue() == b"ts:\x00\x00\x00\x01" + second_idr
 
 
+def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "elif '-f' in sys.argv and sys.argv[sys.argv.index('-f') + 1] == 'null':\n"
+        "    pass\n"
+        "else:\n"
+        "    sys.stdout.buffer.write(b'ts:' + data)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    pps = b"\x68\xee\x38"
+    clean_idr = b"\x65clean"
+    within_duration = b"\x41keep"
+    second_idr = b"\x65second"
+    after_duration = b"\x41drop"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    packets = [
+        idmx_frame(body)
+        for body in (sps, pps, clean_idr, within_duration, second_idr, after_duration)
+    ]
+    seen: dict[str, Any] = {}
+    times = iter([0.0, 0.1, 0.2, 0.3, 0.8, 1.5])
+
+    def monotonic() -> float:
+        return next(times, 1.5)
+
+    def fake_iter_payloads(
+        stream: Any,
+        *,
+        max_packets: int | None,
+        duration_seconds: float | None,
+        monotonic: Any,
+    ) -> Iterator[bytes]:
+        seen["stream"] = stream
+        seen["max_packets"] = max_packets
+        seen["duration_seconds"] = duration_seconds
+        yield from packets
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        fake_iter_payloads,
+    )
+
+    output = io.BytesIO()
+    stream = object()
+    requested_duration = 0.0
+    wait_seconds = 10.0
+
+    copy_local_stream_to_decrypted_mpegts(
+        stream,
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        duration_seconds=requested_duration,
+        monotonic=monotonic,
+        h264_wait_for_clean_idr_window=True,
+        h264_clean_idr_wait_seconds=wait_seconds,
+    )
+
+    assert seen["stream"] is stream
+    assert seen["max_packets"] is None
+    assert seen["duration_seconds"] == requested_duration + wait_seconds
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + clean_idr
+        + b"\x00\x00\x00\x01"
+        + within_duration
+        + b"\x00\x00\x00\x01"
+        + second_idr
+    )
+
+
 def test_copy_local_stream_to_mpegts_remuxes_direct_idmx_hevc_payload(
     tmp_path,
 ) -> None:

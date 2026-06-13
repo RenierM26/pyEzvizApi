@@ -1618,6 +1618,41 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
     h264_clean_idr_wait_seconds: float = 60.0,
 ) -> None:
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
+    if h264_wait_for_clean_idr_window:
+        _h264_clean_idr_capture_duration_seconds(
+            duration_seconds=duration_seconds,
+            h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+            h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+            h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+            h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+        )
+        assert duration_seconds is not None
+        payload_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
+        _require_bounded_decrypt_capture(
+            max_packets=max_packets,
+            duration_seconds=payload_duration_seconds,
+        )
+        payloads = _iter_local_stream_payloads(
+            stream,
+            max_packets=max_packets,
+            duration_seconds=payload_duration_seconds,
+            monotonic=monotonic,
+        )
+        annexb = collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            payloads,
+            media_key,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+            ffmpeg_path=ffmpeg_path,
+            max_windows=h264_clean_idr_max_windows,
+            wait_seconds=h264_clean_idr_wait_seconds,
+        )
+        process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
+        return
+
     capture_duration_seconds = _h264_clean_idr_capture_duration_seconds(
         duration_seconds=duration_seconds,
         h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
@@ -1627,9 +1662,6 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
         h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
         h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
     )
-    if h264_wait_for_clean_idr_window:
-        assert duration_seconds is not None
-        capture_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
     _require_bounded_decrypt_capture(
         max_packets=max_packets,
         duration_seconds=capture_duration_seconds,
@@ -2340,6 +2372,72 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(
     return annexb[clean_start_offset:]
 
 
+def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+    packets: Iterable[bytes],
+    media_key: str | bytes,
+    *,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float] = time.monotonic,
+    ffmpeg_path: str = "ffmpeg",
+    max_windows: int = 32,
+    wait_seconds: float = 60.0,
+) -> bytes:
+    """Collect decrypted IDMX H.264 from the first clean IDR window onward."""
+
+    if duration_seconds is None:
+        raise PyEzvizError("duration_seconds is required when waiting for clean IDR")
+    if wait_seconds < 0:
+        raise PyEzvizError("wait_seconds cannot be negative")
+    if max_windows <= 0:
+        raise PyEzvizError("max_windows must be positive")
+
+    wait_deadline = monotonic() + wait_seconds
+    capture_deadline: float | None = None
+    collected: list[bytes] = []
+    clean_start_offset: int | None = None
+    first_decode_error: str | None = None
+    last_probe = _H264CleanIdrProbeResult(start_offset=None)
+
+    for packet in packets:
+        now = monotonic()
+        if clean_start_offset is None and now >= wait_deadline:
+            suffix = _h264_clean_idr_timeout_suffix(
+                first_decode_error=first_decode_error,
+                probe=last_probe,
+            )
+            raise PyEzvizError(
+                "Timed out waiting for a clean H.264 IDR window" + suffix
+            )
+        if capture_deadline is not None and now >= capture_deadline:
+            break
+        collected.append(packet)
+        if clean_start_offset is None:
+            probe = _try_first_clean_decrypted_h264_annexb_idr_window_offset(
+                collected,
+                media_key,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=max_windows,
+            )
+            last_probe = probe
+            clean_start_offset = probe.start_offset
+            if first_decode_error is None and probe.first_decode_error is not None:
+                first_decode_error = probe.first_decode_error
+            if clean_start_offset is not None:
+                capture_deadline = now + duration_seconds
+            continue
+
+    if clean_start_offset is None:
+        suffix = _h264_clean_idr_timeout_suffix(
+            first_decode_error=first_decode_error,
+            probe=last_probe,
+        )
+        raise PyEzvizError(
+            "H.264 stream ended before a clean IDR window was found" + suffix
+        )
+    annexb = _decrypt_idmx_local_packets_to_annexb(collected, media_key)
+    return annexb[clean_start_offset:]
+
+
 def _h264_clean_idr_timeout_suffix(
     *,
     first_decode_error: str | None,
@@ -2404,6 +2502,41 @@ def _try_first_clean_h264_annexb_idr_window_offset(
         annexb = _idmx_local_packets_to_h264_annexb(packets)
     except PyEzvizError:
         return _H264CleanIdrProbeResult(start_offset=None)
+    return _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
+        annexb,
+        ffmpeg_path=ffmpeg_path,
+        max_windows=max_windows,
+    )
+
+
+def _try_first_clean_decrypted_h264_annexb_idr_window_offset(
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    ffmpeg_path: str,
+    max_windows: int,
+) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR offset for partial encrypted IDMX packets."""
+
+    try:
+        annexb = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
+    except PyEzvizError:
+        return _H264CleanIdrProbeResult(start_offset=None)
+    return _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
+        annexb,
+        ffmpeg_path=ffmpeg_path,
+        max_windows=max_windows,
+    )
+
+
+def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
+    annexb: bytes,
+    *,
+    ffmpeg_path: str,
+    max_windows: int,
+) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR window offset for Annex-B H.264 bytes."""
+
     idr_summary = summarize_h264_annexb_idr_windows(annexb, max_windows=max_windows)
     samples = idr_summary.get("samples")
     if not isinstance(samples, list):

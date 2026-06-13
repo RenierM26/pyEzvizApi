@@ -179,6 +179,47 @@ def test_dry_run_redacts_media_key_when_decrypting(tmp_path: Path) -> None:
     assert "dummy-enc-key-03" not in rendered
 
 
+def test_decrypt_video_without_encryption_key_is_untestable(tmp_path: Path) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        local_ip=None,
+        decrypt_video=True,
+        no_try_enc_key_password=False,
+        no_skip_initial_idr=False,
+        dry_run=True,
+    )
+    item = tool.CameraInventoryItem(
+        name="Garage",
+        serial="SERIAL-GARAGE-01",
+        password="dummy-camera-password-01",
+    )
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    rendered = json.dumps(result)
+    assert result["ok"] is False
+    assert result["stage"] == "credential-validation"
+    assert result["diagnosis"] == "missing_encryption_key"
+    assert result["credential_attempts"] == []
+    assert "command" not in result
+    assert "SERIAL-GARAGE-01" not in rendered
+    assert "dummy-camera-password-01" not in rendered
+
+
 def test_dotted_camera_name_preserves_retry_suffix_artifact_paths(tmp_path: Path) -> None:
     tool = _load_tool()
     args = argparse.Namespace(

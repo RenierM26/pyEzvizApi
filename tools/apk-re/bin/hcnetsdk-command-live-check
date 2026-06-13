@@ -480,6 +480,13 @@ def _redact_sensitive(value: Any, item: CameraInventoryItem) -> Any:
     return value
 
 
+def _write_redacted_artifact(path: Path, data: bytes, item: CameraInventoryItem) -> None:
+    path.write_text(
+        _redact_text(data.decode("utf-8", errors="replace"), item),
+        encoding="utf-8",
+    )
+
+
 def _check_item(
     *,
     args: argparse.Namespace,
@@ -561,8 +568,8 @@ def _check_item(
             "save_stderr": str(stderr_path),
         }
         save = _run(command, cwd=REPO_ROOT)
-        stdout_path.write_bytes(save.stdout)
-        stderr_path.write_bytes(save.stderr)
+        _write_redacted_artifact(stdout_path, save.stdout, item)
+        _write_redacted_artifact(stderr_path, save.stderr, item)
         if save.returncode == 0:
             break
         stderr_tail = _tail_text(save.stderr)

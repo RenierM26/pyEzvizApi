@@ -1731,7 +1731,9 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
             )
         else:
             packets = list(chain((first_payload,), payloads))
-            if is_h264_startup_options:
+            if _idmx_local_packets_have_direct_hevc_media(packets):
+                annexb = _idmx_local_packets_to_hevc_annexb(packets)
+            elif is_h264_startup_options:
                 try:
                     annexb = _idmx_local_packets_to_h264_annexb(packets)
                     annexb_is_h264 = True
@@ -2956,6 +2958,11 @@ def _idmx_local_packets_to_hevc_annexb(packets: list[bytes]) -> bytes:
 
 
 def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
+    if _idmx_local_packets_have_direct_hevc_media(packets):
+        try:
+            return _idmx_local_packets_to_hevc_annexb(packets)
+        except PyEzvizError:
+            pass
     try:
         return _idmx_local_packets_to_h264_annexb(packets)
     except PyEzvizError as h264_error:
@@ -2963,6 +2970,19 @@ def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
             return _idmx_local_packets_to_hevc_annexb(packets)
         except PyEzvizError as hevc_error:
             raise h264_error from hevc_error
+
+
+def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
+    for frame in _iter_idmx_local_frames(b"".join(packets)):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        if not _idmx_local_frame_is_h264_transport(frame, header_size):
+            continue
+        if _looks_like_idmx_hevc_evidence_frame(body):
+            return True
+    return False
 
 
 def _local_media_aes_key(media_key: str | bytes) -> bytes:
@@ -2989,6 +3009,15 @@ def _looks_like_idmx_hevc_direct_frame(body: bytes) -> bool:
         return False
     nal_type = _hevc_nal_type(body)
     return nal_type <= 40 or nal_type == 49
+
+
+def _looks_like_idmx_hevc_evidence_frame(body: bytes) -> bool:
+    if not _looks_like_idmx_hevc_direct_frame(body):
+        return False
+    nal_type = _hevc_nal_type(body)
+    if nal_type in {32, 33, 34}:
+        return body[1] & 0xF8 == 0
+    return nal_type == 49
 
 
 def _looks_like_idmx_h264_fu_a_frame(body: bytes) -> bool:

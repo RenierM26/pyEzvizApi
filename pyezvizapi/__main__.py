@@ -2229,7 +2229,9 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
                 "cloud_refresh_vtm": not args.no_refresh_vtm,
             }
         )
-    if args.decrypt_video:
+    if args.decrypt_video and (
+        args.source == "hcnetsdk-command-port" or _local_sdk_has_static_media_key(args)
+    ):
         save_kwargs["media_key"] = _local_sdk_media_key(args, client)
     result = client.save_clip(args.serial, args.output, **save_kwargs)
     _write_save_result(args, result)
@@ -3620,7 +3622,15 @@ def _local_sdk_media_key(
         serial = str(
             _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
         )
-        cloud_key = client.get_cam_key(serial, max_retries=1)
+        sms_code = getattr(args, "sms_code", None)
+        if sms_code is None:
+            cloud_key = client.get_cam_key(serial, max_retries=1)
+        else:
+            cloud_key = client.get_cam_key(
+                serial,
+                smscode=sms_code,
+                max_retries=1,
+            )
         if cloud_key:
             return str(cloud_key)
     raise PyEzvizError(

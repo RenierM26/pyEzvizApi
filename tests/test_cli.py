@@ -1012,7 +1012,6 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
         "channel": 2,
         "ffmpeg_path": "/usr/bin/ffmpeg",
         "decrypt_video": True,
-        "media_key": "camera-secret",
         "nalu_header_size": 0,
         "cas_serial": None,
         "timeout": 10.0,
@@ -1747,6 +1746,41 @@ def test_save_clip_can_use_cloud_source(
         "cloud_token_index": 1,
         "cloud_refresh_vtm": False,
     }
+
+
+def test_save_clip_cloud_decrypt_keeps_sms_code_key_lookup(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                "cloud",
+                "--serial",
+                "CAM123",
+                "--output",
+                str(output_path),
+                "--decrypt-video",
+                "--sms-code",
+                "654321",
+            ]
+        )
+        == 0
+    )
+
+    request = fake_client.instances[0].save_clip_request
+    assert request["source"] == "cloud"
+    assert request["decrypt_video"] is True
+    assert request["smscode"] == "654321"
+    assert "media_key" not in request
 
 
 def test_save_image_triggers_capture_and_downloads_url(

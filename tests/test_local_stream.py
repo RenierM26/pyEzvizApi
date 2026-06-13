@@ -1605,6 +1605,67 @@ def test_copy_local_stream_to_mpegts_remuxes_direct_idmx_hevc_payload(
     )
 
 
+def test_copy_local_stream_to_mpegts_prefers_direct_hevc_over_partial_h264(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    sps = b"\x42\x01sps"
+    pps = b"\x44\x01pps"
+    idr = b"\x26\x01idr-slice"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(sps, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(pps, sequence=sequence_base + 2)),
+                SimpleNamespace(body=frame(idr, sequence=sequence_base + 3)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+        h264_skip_initial_idr_windows=1,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + idr
+    )
+
+
 def test_copy_local_stream_to_decrypted_mpegps_rejects_idmx_payload() -> None:
     idmx_frame = (
         b"\x0d\xb0\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"

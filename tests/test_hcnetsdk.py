@@ -1190,9 +1190,20 @@ def test_hcnetsdk_command_port_login_proof_uses_native_digest_branches() -> None
         seed,
     )
 
-    assert digest == hashlib.sha256(b"admin" + seed + b"123456").hexdigest().encode()
-    assert primary == hmac.new(challenge, b"admin", hashlib.md5).digest()
-    assert secondary == hmac.new(challenge, digest, hashlib.md5).digest()
+    # These expected values mirror the device's native command-port handshake.
+    assert digest == hashlib.sha256(  # codeql[py/weak-sensitive-data-hashing]
+        b"admin" + seed + b"123456"
+    ).hexdigest().encode()
+    assert primary == hmac.new(  # codeql[py/weak-sensitive-data-hashing]
+        challenge,
+        b"admin",
+        hashlib.md5,
+    ).digest()
+    assert secondary == hmac.new(  # codeql[py/weak-sensitive-data-hashing]
+        challenge,
+        digest,
+        hashlib.md5,
+    ).digest()
 
 
 def test_hcnetsdk_command_port_login_proof_frame_shape() -> None:

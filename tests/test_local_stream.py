@@ -25,7 +25,6 @@ from pyezvizapi.hcnetsdk import (
     build_hcnetsdk_tcp_frame,
     hcnetsdk_command_port_control_frame,
 )
-import pyezvizapi.local_stream as local_stream_module
 from pyezvizapi.local_stream import (
     EzvizLocalSdkMediaStream,
     HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
@@ -52,6 +51,7 @@ from pyezvizapi.local_stream import (
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
     summarize_idmx_h264_local_packets,
+    time as local_stream_time,
     trim_h264_annexb_to_first_clean_idr_window,
 )
 
@@ -358,7 +358,7 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
     sockets = [media_socket, keyframe_socket]
     monotonic_values = iter((0.0, 0.0, 1.0))
     monkeypatch.setattr(
-        local_stream_module.time,
+        local_stream_time,
         "monotonic",
         lambda: next(monotonic_values),
     )
@@ -1885,18 +1885,15 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
         return clean_annexb
 
     monkeypatch.setattr(
-        local_stream_module,
-        "_iter_local_stream_payloads",
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
         fake_iter_payloads,
     )
     monkeypatch.setattr(
-        local_stream_module,
-        "_looks_like_idmx_local_payload",
+        "pyezvizapi.local_stream._looks_like_idmx_local_payload",
         lambda payload: True,
     )
     monkeypatch.setattr(
-        local_stream_module,
-        "collect_h264_idmx_annexb_after_first_clean_idr_window",
+        "pyezvizapi.local_stream.collect_h264_idmx_annexb_after_first_clean_idr_window",
         fake_collect,
     )
     output = io.BytesIO()

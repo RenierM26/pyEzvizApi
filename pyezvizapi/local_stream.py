@@ -916,8 +916,7 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         if self.bootstrap is not None:
             return self.bootstrap
 
-        login_client = self._login_client()
-        try:
+        with self._login_client() as login_client:
             local_ip = self.local_ip or self._client_local_ip(login_client)
             self.login_session = login_client.login(
                 password=self.password,
@@ -925,8 +924,6 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
                 local_ip=local_ip,
                 rsa_key=self.rsa_key,
             )
-        finally:
-            login_client.close()
 
         rendered_plan = self.generated_plan.to_socket_plan(
             session_id=self.login_session.session_id,

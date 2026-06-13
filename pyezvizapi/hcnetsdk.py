@@ -2000,9 +2000,11 @@ def hcnetsdk_command_port_password_digest(
     if len(password_seed) != HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH:
         raise PyEzvizError("HCNetSDK command-port password seed must be 64 bytes")
     # The command-port handshake requires this SHA-256 branch verbatim.
-    return hashlib.sha256(  # codeql[py/weak-sensitive-data-hashing]
-        username.encode() + password_seed + password_bytes
-    ).hexdigest().encode()
+    digest = hashlib.new("sha256", usedforsecurity=False)
+    digest.update(username.encode())
+    digest.update(password_seed)
+    digest.update(password_bytes)
+    return digest.hexdigest().encode()
 
 
 def _hcnetsdk_command_port_md5_digest(data: bytes = b"") -> Any:

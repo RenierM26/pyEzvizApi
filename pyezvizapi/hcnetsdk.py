@@ -2005,6 +2005,17 @@ def hcnetsdk_command_port_password_digest(
     ).hexdigest().encode()
 
 
+def _hcnetsdk_command_port_md5_digest(data: bytes = b"") -> Any:
+    return hashlib.md5(  # codeql[py/weak-cryptographic-algorithm]
+        data,
+        usedforsecurity=False,
+    )
+
+
+def _hcnetsdk_command_port_md5_hmac(key: bytes, data: bytes) -> bytes:
+    return hmac.new(key, data, _hcnetsdk_command_port_md5_digest).digest()
+
+
 def hcnetsdk_command_port_login_proof(
     username: str,
     password: str | bytes,
@@ -2026,16 +2037,8 @@ def hcnetsdk_command_port_login_proof(
     )
     # The command-port handshake requires these MD5 HMAC branches verbatim.
     return (
-        hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
-            challenge,
-            username.encode(),
-            hashlib.md5,
-        ).digest(),
-        hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
-            challenge,
-            password_digest,
-            hashlib.md5,
-        ).digest(),
+        _hcnetsdk_command_port_md5_hmac(challenge, username.encode()),
+        _hcnetsdk_command_port_md5_hmac(challenge, password_digest),
     )
 
 

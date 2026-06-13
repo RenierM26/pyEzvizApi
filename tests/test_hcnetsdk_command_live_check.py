@@ -5,6 +5,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 import json
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 
@@ -224,6 +225,93 @@ def test_relative_output_dir_resolves_before_child_commands(
     assert metadata == str(caller_cwd / "matrix-out" / "camera-01-Garage.metadata.json")
     assert command[command.index("--output") + 1] == capture
     assert command[command.index("--hcnetsdk-command-metadata-output") + 1] == metadata
+
+
+def test_success_artifacts_redact_child_save_output(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        local_ip=None,
+        decrypt_video=True,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        dry_run=False,
+    )
+    item = tool.CameraInventoryItem(
+        name="Garage",
+        serial="SERIAL-GARAGE-01",
+        password="dummy-camera-password-01",
+        enc_key="dummy-enc-key-03",
+    )
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    b'{"streams":[{"index":0,"codec_type":"video",'
+                    b'"codec_name":"h264","width":1920,"height":1080}],'
+                    b'"format":{"duration":"5.0"}}'
+                ),
+                stderr=b"",
+            )
+        capture_path = Path(command[command.index("--output") + 1])
+        metadata_path = Path(
+            command[command.index("--hcnetsdk-command-metadata-output") + 1]
+        )
+        capture_path.write_bytes(b"mpegts")
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "bootstrap_complete": True,
+                    "serial": "SERIAL-GARAGE-01",
+                    "password_hint": "dummy-camera-password-01",
+                    "media_key_hint": "dummy-enc-key-03",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                b'{"ok":true,"serial":"SERIAL-GARAGE-01",'
+                b'"media_key":"dummy-enc-key-03"}\n'
+            ),
+            stderr=b"connected SERIAL-GARAGE-01 with dummy-camera-password-01\n",
+        )
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert result["ok"] is True
+    stdout_text = Path(result["artifacts"]["save_stdout"]).read_text(encoding="utf-8")
+    stderr_text = Path(result["artifacts"]["save_stderr"]).read_text(encoding="utf-8")
+    rendered = json.dumps(result)
+    for text in (stdout_text, stderr_text, rendered):
+        assert "SERIAL-GARAGE-01" not in text
+        assert "dummy-camera-password-01" not in text
+        assert "dummy-enc-key-03" not in text
+    assert stdout_text.count("<redacted>") == 2
+    assert stderr_text.count("<redacted>") == 2
 
 
 def test_credential_attempts_can_skip_encryption_key_password() -> None:

@@ -41,6 +41,7 @@ from .stream import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     MPEG_PS_START_CODE,
+    MPEG_START_CODE_PREFIX,
     _hikvision_aes_ecb_cipher,
     decrypt_hikvision_ps_video,
     rtp_payload,
@@ -2907,17 +2908,27 @@ def _h264_annexb_nal_spans(data: bytes) -> list[tuple[int, int, int]]:
     spans: list[tuple[int, int, int]] = []
     start = 0
     while True:
-        offset = data.find(ANNEX_B_LONG_START_CODE, start)
-        if offset < 0:
+        start_code = _find_h264_annexb_start_code(data, start)
+        if start_code is None:
             break
-        spans.append((offset, offset + len(ANNEX_B_LONG_START_CODE), len(data)))
-        start = offset + 1
+        offset, nal_start = start_code
+        spans.append((offset, nal_start, len(data)))
+        start = nal_start
     if not spans:
         return spans
     return [
         (offset, nal_start, spans[index + 1][0] if index + 1 < len(spans) else len(data))
         for index, (offset, nal_start, _end) in enumerate(spans)
     ]
+
+
+def _find_h264_annexb_start_code(data: bytes, start: int) -> tuple[int, int] | None:
+    offset = data.find(MPEG_START_CODE_PREFIX, start)
+    if offset < 0:
+        return None
+    if offset > 0 and data[offset - 1] == 0:
+        return offset - 1, offset + len(MPEG_START_CODE_PREFIX)
+    return offset, offset + len(MPEG_START_CODE_PREFIX)
 
 
 def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:

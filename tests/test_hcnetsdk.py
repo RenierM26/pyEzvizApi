@@ -1194,12 +1194,12 @@ def test_hcnetsdk_command_port_login_proof_uses_native_digest_branches() -> None
     assert digest == hashlib.sha256(  # codeql[py/weak-sensitive-data-hashing]
         b"admin" + seed + b"123456"
     ).hexdigest().encode()
-    assert primary == hmac.new(  # codeql[py/weak-sensitive-data-hashing]
+    assert primary == hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
         challenge,
         b"admin",
         hashlib.md5,
     ).digest()
-    assert secondary == hmac.new(  # codeql[py/weak-sensitive-data-hashing]
+    assert secondary == hmac.new(  # codeql[py/weak-sensitive-data-hashing,py/weak-cryptographic-algorithm]
         challenge,
         digest,
         hashlib.md5,

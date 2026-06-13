@@ -2390,6 +2390,36 @@ def test_summarize_h264_annexb_units_reports_sanitized_nal_shapes() -> None:
     }
 
 
+def test_summarize_h264_annexb_units_accepts_short_start_codes() -> None:
+    sps = b"\x67\x4d\x00\x29"
+    idr = b"\x65idr"
+    data = b"\x00\x00\x01" + sps + b"\x00\x00\x00\x01" + idr
+
+    summary = summarize_h264_annexb_units(data)
+
+    assert summary["nal_count"] == 2
+    assert summary["samples"] == [
+        {
+            "index": 0,
+            "start_code_offset": 0,
+            "nal_offset": 3,
+            "end_offset": 7,
+            "nal_type": 7,
+            "payload_bytes": len(sps),
+            "sha256": "1d2096f80a4fa6ab69fefbbc2fdf1bb1d4cf7e3d27cf9083bf77354c011cd191",
+        },
+        {
+            "index": 1,
+            "start_code_offset": 7,
+            "nal_offset": 11,
+            "end_offset": 15,
+            "nal_type": 5,
+            "payload_bytes": len(idr),
+            "sha256": "a49bc921918ad4b8fbd220d813e3a73e72274ca219c839e4329716a9764ee4d9",
+        },
+    ]
+
+
 def test_summarize_h264_annexb_idr_windows_reports_sanitized_gops() -> None:
     sps = b"\x67\x4d\x00\x29"
     pps = b"\x68\xee\x38\x80"

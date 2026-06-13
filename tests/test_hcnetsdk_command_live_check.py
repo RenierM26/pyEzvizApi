@@ -178,6 +178,54 @@ def test_dry_run_redacts_media_key_when_decrypting(tmp_path: Path) -> None:
     assert "dummy-enc-key-03" not in rendered
 
 
+def test_relative_output_dir_resolves_before_child_commands(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    tool = _load_tool()
+    caller_cwd = tmp_path / "caller"
+    caller_cwd.mkdir()
+    monkeypatch.chdir(caller_cwd)
+    output_dir = tool._artifact_dir("matrix-out")  # noqa: SLF001
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        dry_run=True,
+    )
+    item = tool.CameraInventoryItem(
+        name="Garage",
+        serial="SERIAL-GARAGE-01",
+        password="dummy-camera-password-01",
+    )
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=output_dir,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert output_dir == caller_cwd / "matrix-out"
+    assert output_dir.is_absolute()
+    capture = result["artifacts"]["capture"]
+    metadata = result["artifacts"]["metadata"]
+    command = result["command"]
+    assert capture == str(caller_cwd / "matrix-out" / "camera-01-Garage.ts")
+    assert metadata == str(caller_cwd / "matrix-out" / "camera-01-Garage.metadata.json")
+    assert command[command.index("--output") + 1] == capture
+    assert command[command.index("--hcnetsdk-command-metadata-output") + 1] == metadata
+
+
 def test_credential_attempts_can_skip_encryption_key_password() -> None:
     tool = _load_tool()
     args = argparse.Namespace(no_try_enc_key_password=True)

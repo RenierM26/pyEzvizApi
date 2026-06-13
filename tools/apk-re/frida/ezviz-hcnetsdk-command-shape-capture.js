@@ -426,6 +426,29 @@ function inboundMediaDumpMaxBytes() {
   return latest.inboundMediaDumpMaxBytes || (8 * 1024 * 1024);
 }
 
+function ensureDumpDirectory(path) {
+  if (!path) return false;
+  if (typeof Java === "undefined" || !Java.available) return true;
+  let ok = false;
+  try {
+    const createDir = function() {
+      const FileCls = Java.use("java.io.File");
+      const dir = FileCls.$new(path);
+      ok = dir.exists() || dir.mkdirs();
+    };
+    if (typeof Java.performNow === "function") {
+      Java.performNow(createDir);
+    } else {
+      Java.perform(createDir);
+      ok = true;
+    }
+  } catch (e) {
+    console.log("[hcnetsdk-dump-failed] mkdir path=" + path + " err=" + e);
+    return false;
+  }
+  return ok;
+}
+
 function forcePreviewAfterLoginEnabled() {
   const latest = currentParameters();
   return latest.forcePreviewAfterLogin === true;
@@ -434,6 +457,7 @@ function forcePreviewAfterLoginEnabled() {
 function dumpOutboundCommandFrame(kind, fd, ptr, len) {
   const dumpDir = commandFrameDumpDirectory();
   if (!dumpDir || kind !== "send" || !ptr || ptr.isNull() || len < 16) return;
+  if (!ensureDumpDirectory(dumpDir)) return;
   try {
     const family = ptr.add(4).readU8();
     if (family !== 0x63) return;
@@ -468,6 +492,7 @@ function dumpInboundMediaChunk(kind, fd, ptr, len) {
   const dumpDir = inboundMediaDumpDirectory();
   if (!dumpDir || (kind !== "recv" && kind !== "read")) return;
   if (!mediaCommandFds.has(fd) || !ptr || ptr.isNull() || len <= 0) return;
+  if (!ensureDumpDirectory(dumpDir)) return;
   try {
     let state = inboundMediaDumpState.get(fd);
     if (!state) {

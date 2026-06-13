@@ -13,6 +13,7 @@
 "use strict";
 
 const DUMP_LIMIT = 256 * 1024;
+const CALLBACK_DUMP_LIMIT = 64 * 1024;
 const JAVA_DECODE_DUMP_LIMIT = 512 * 1024;
 const HEX_LIMIT = 64;
 const MAX_DUMPS_PER_LABEL = deviceFlagExists("/data/local/tmp/ezviz-deep-idmx-dump.flag") ? 512 : 24;
@@ -23,6 +24,13 @@ const installedJavaDecodeClasses = new Set();
 let dumpDir = "/sdcard/Download/ezviz-hook";
 let dumpSeq = 0;
 const dumpCounts = {};
+const logCounts = {};
+
+function shouldLog(label, limit) {
+  const current = logCounts[label] || 0;
+  logCounts[label] = current + 1;
+  return current < limit;
+}
 
 function deviceFlagExists(path) {
   try {
@@ -128,7 +136,8 @@ function dumpBytes(label, ptr, len) {
   }
   dumpCounts[label] += 1;
   const capped = Math.min(len, DUMP_LIMIT);
-  const path = `${dumpDir}/${nowTag()}-${leftPad(dumpSeq++, 4, "0")}-${label}-${capped}.bin`;
+  const safeLabel = label.replace(/[^A-Za-z0-9_.-]+/g, "-");
+  const path = `${dumpDir}/${nowTag()}-${leftPad(dumpSeq++, 4, "0")}-${safeLabel}-${capped}.bin`;
   try {
     const file = new File(path, "wb");
     file.write(ptr.readByteArray(capped));
@@ -298,6 +307,66 @@ function hookExport(moduleName, exportName, callbacks) {
   Interceptor.attach(ptr, callbacks);
   installed.add(key);
   console.log(`[hook] ${key} @ ${ptr}`);
+}
+
+function hookCallbackPointer(label, cbPtr, dumpArgIndex, lenArgIndex) {
+  if (cbPtr === null || cbPtr === undefined || cbPtr.isNull()) {
+    return;
+  }
+  const key = `callback:${label}:${cbPtr}`;
+  if (installed.has(key)) {
+    return;
+  }
+  try {
+    Interceptor.attach(cbPtr, {
+      onEnter(args) {
+        if (!shouldLog(key, 64)) {
+          return;
+        }
+        const parts = [];
+        for (let i = 0; i < 6; i++) {
+          parts.push(`arg${i}=${args[i]}`);
+        }
+        console.log(`[cb-call] ${label} ${parts.join(" ")}`);
+        if (dumpArgIndex === null || dumpArgIndex === undefined) {
+          return;
+        }
+        let len = 128;
+        if (lenArgIndex !== null && lenArgIndex !== undefined) {
+          try {
+            len = Math.max(args[lenArgIndex].toInt32(), 0);
+          } catch (_) {
+            len = 128;
+          }
+        }
+        if (!args[dumpArgIndex].isNull() && len > 0) {
+          const format = describeDecodedFrameSize(len);
+          if (format !== null) {
+            console.log(`[cb-call] ${label} arg${lenArgIndex}DecodedFrame=${format}`);
+          }
+          const savedLen = Math.min(len, CALLBACK_DUMP_LIMIT);
+          console.log(`[cb-call] ${label} arg${dumpArgIndex}Head=${bytesToHex(args[dumpArgIndex], len)}`);
+          dumpBytes(`callback-${label}`, args[dumpArgIndex], savedLen);
+        }
+      },
+    });
+    installed.add(key);
+    console.log(`[hook] callback ${label} @ ${cbPtr}`);
+  } catch (err) {
+    console.log(`[warn] callback hook failed label=${label} ptr=${cbPtr}: ${err}`);
+  }
+}
+
+function describeDecodedFrameSize(len) {
+  const commonYuv420Sizes = {
+    460800: "640x480-yuv420",
+    1382400: "1280x720-yuv420",
+    3110400: "1920x1080-yuv420",
+    4147200: "2560x1080-yuv420",
+    6220800: "2560x1440-yuv420",
+    12441600: "3840x2160-yuv420",
+  };
+  return commonYuv420Sizes[len] || null;
 }
 
 function installNativeHooks() {
@@ -509,6 +578,84 @@ function installNativeHooks() {
     onEnter(args) {
       console.log(`[cb] PlayM4_SetDecodeCallback port=${args[0].toInt32()} cb=${args[1]}`);
     },
+  });
+
+  [
+    ["PlayM4_SetDecCallBack", "[cb] PlayM4_SetDecCallBack", 1, 1, 2],
+    ["PlayM4_SetDecCallBackMend", "[cb] PlayM4_SetDecCallBackMend", 1, 1, 2],
+    ["PlayM4_RegisterDecCallBack", "[cb] PlayM4_RegisterDecCallBack", 1, 1, 2],
+    ["PlayM4_RegisterStreamCallBack", "[cb] PlayM4_RegisterStreamCallBack", 1, 1, 2],
+    ["PlayM4_SetDisplayCallBack", "[cb] PlayM4_SetDisplayCallBack", 1, null, null],
+    ["PlayM4_SetDisplayCallBackEx", "[cb] PlayM4_SetDisplayCallBackEx", 1, null, null],
+    ["PlayM4_RegisterDisplayCallBackEx", "[cb] PlayM4_RegisterDisplayCallBackEx", 1, null, null],
+    ["PlayM4_RegisterDisplayCallBackExAfter", "[cb] PlayM4_RegisterDisplayCallBackExAfter", 1, null, null],
+    ["PlayM4_RegisterDisplayProcessBufOutsideCallBack", "[cb] PlayM4_RegisterDisplayProcessBufOutsideCallBack", 1, null, null],
+    ["PlayM4_RegisterVideoFrameCallBack", "[cb] PlayM4_RegisterVideoFrameCallBack", 1, 0, null],
+    ["PlayM4_SetTextureProcessCallback", "[cb] PlayM4_SetTextureProcessCallback", 1, null, null],
+  ].forEach(([name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookExport("libPlayCtrl.so", name, {
+      onEnter(args) {
+        console.log(`${label} port=${args[0].toInt32()} cb=${args[cbIndex]}`);
+        hookCallbackPointer(label.replace(/^\[cb\] /, ""), args[cbIndex], dumpArgIndex, lenArgIndex);
+      },
+      onLeave(retval) {
+        console.log(`${label} ret=${retval.toInt32()}`);
+      },
+    });
+  });
+
+  [
+    ["_Z23PlayM4_SetDecCallBackExiPFviPciP10FRAME_INFOPvS2_ES_i", "[cb] PlayM4_SetDecCallBackEx", 1],
+    ["_Z27PlayM4_SetDecCallBackExMendiPFviPciP10FRAME_INFOPvS2_ES_iS2_", "[cb] PlayM4_SetDecCallBackExMend", 1],
+    ["_Z24PlayM4_SetDisplayInnerCBiPFvP14DISPLAY_INFOEXEPv", "[cb] PlayM4_SetDisplayInnerCB", 1],
+    ["_Z15VideoFrameCBFunP17PLAYM4_FRAME_INFOP18PLAYM4_SYSTEM_TIMEi", "[frame-cb] VideoFrameCBFun", null],
+  ].forEach(([name, label, cbIndex]) => {
+    hookExport("libPlayCtrl.so", name, {
+      onEnter(args) {
+        if (cbIndex === null) {
+          if (shouldLog(label, 64)) {
+            const frameInfo = args[0];
+            console.log(`${label} frameInfo=${frameInfo} sysTime=${args[1]} arg2=${args[2].toInt32()}`);
+            if (!frameInfo.isNull()) {
+              console.log(`${label} frameInfoHead=${bytesToHex(frameInfo, 64)}`);
+            }
+          }
+          return;
+        }
+        console.log(`${label} port=${args[0].toInt32()} cb=${args[cbIndex]}`);
+        hookCallbackPointer(label.replace(/^\[cb\] /, ""), args[cbIndex], 1, 2);
+      },
+      onLeave(retval) {
+        if (cbIndex !== null) {
+          console.log(`${label} ret=${retval.toInt32()}`);
+        }
+      },
+    });
+  });
+
+  [
+    ["H264D_process_callback", "[decode] H264D_process_callback"],
+    ["H264_DecodeOneFrame", "[decode] H264_DecodeOneFrame"],
+    ["H264_GetDisplayFrame", "[decode] H264_GetDisplayFrame"],
+    ["AVC_DecodeOneFrame", "[decode] AVC_DecodeOneFrame"],
+    ["AVC_SetPostDecodeCallBack", "[cb] AVC_SetPostDecodeCallBack"],
+    ["HEVCDEC_SetPostDecodeCallBack", "[cb] HEVCDEC_SetPostDecodeCallBack"],
+  ].forEach(([name, label]) => {
+    hookExport("libPlayCtrl.so", name, {
+      onEnter(args) {
+        if (shouldLog(label, 64)) {
+          console.log(`${label} args=${args[0]} ${args[1]} ${args[2]} ${args[3]}`);
+        }
+        if (label.indexOf("SetPostDecodeCallBack") !== -1) {
+          hookCallbackPointer(label.replace(/^\[cb\] /, ""), args[1], null, null);
+        }
+      },
+      onLeave(retval) {
+        if (shouldLog(`${label}:ret`, 64)) {
+          console.log(`${label} ret=${retval}`);
+        }
+      },
+    });
   });
 
   [

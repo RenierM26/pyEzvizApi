@@ -174,7 +174,7 @@ def _default_python() -> str:
 
 def _artifact_dir(value: str | None) -> Path:
     if value:
-        path = Path(value)
+        path = Path(value).resolve()
     else:
         path = Path(tempfile.gettempdir()) / f"pyezvizapi-hcnetsdk-command-check-{int(time.time())}"
     path.mkdir(parents=True, exist_ok=True)

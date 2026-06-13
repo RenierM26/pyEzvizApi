@@ -232,6 +232,23 @@ media packets, along with a bounded IDMX/H.264 frame-shape summary that reports
 counts, NAL/FU-A types, RTP-like sequence/timestamp continuity, and hashes
 without storing media bytes. Media-socket keepalive send attempts are recorded
 as bounded command id/timing/success metadata when a plan includes keepalives.
+For owner-run live compatibility checks across multiple cameras,
+`tools/apk-re/bin/hcnetsdk-command-live-check` wraps the same native-plan save
+path, validates each MPEG-TS output with FFprobe, and writes a sanitized matrix
+report. Pass inventory through `EZVIZ_CAMERA_INVENTORY_JSON` or an ignored
+`.env` file, and provide host overrides when mDNS resolution is not enough:
+
+```bash
+tools/apk-re/bin/hcnetsdk-command-live-check \
+  --inventory-file ../secrets/ezviz-camera-inventory.env \
+  --host BC380557=192.0.2.10 \
+  --duration 8s
+```
+
+The tool skips battery and out-of-use cameras by default, redacts
+`--hcnetsdk-command-password` in dry-run output, and classifies common failure
+stages such as host resolution, bootstrap/login, missing media packets,
+unreadable media, or playable MPEG-TS.
 For offline Frida artifacts, the `hcnetsdk-command-dump-summary` stream helper
 can summarize dumped
 `ezviz-hcnetsdk-command-frame-*.bin` files and raw

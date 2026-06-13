@@ -464,9 +464,9 @@ def _sanitized_command(command: list[str]) -> list[str]:
 
 def _redact_text(value: str, item: CameraInventoryItem) -> str:
     redacted = value
-    for sensitive in (item.serial, item.password, item.enc_key):
-        if sensitive:
-            redacted = redacted.replace(sensitive, REDACTED)
+    sensitive_values = {item.serial, item.password, item.enc_key}
+    for sensitive in sorted(filter(None, sensitive_values), key=len, reverse=True):
+        redacted = redacted.replace(sensitive, REDACTED)
     return redacted
 
 

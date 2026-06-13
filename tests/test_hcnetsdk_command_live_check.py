@@ -353,6 +353,33 @@ def test_recursive_redaction_covers_serial_password_and_enc_key() -> None:
     assert rendered.count("<redacted>") == 4
 
 
+def test_redaction_handles_overlapping_sensitive_values() -> None:
+    tool = _load_tool()
+    item = tool.CameraInventoryItem(
+        name="Garage",
+        serial="dummy-secret",
+        password="dummy-secret-password",
+        enc_key="dummy-secret-password-key",
+    )
+
+    redacted = tool._redact_sensitive(  # noqa: SLF001
+        {
+            "stdout": "dummy-secret-password-key",
+            "stderr": "dummy-secret-password",
+            "metadata": ["dummy-secret"],
+        },
+        item,
+    )
+
+    rendered = json.dumps(redacted)
+    assert "dummy-secret" not in rendered
+    assert "dummy-secret-password" not in rendered
+    assert "dummy-secret-password-key" not in rendered
+    assert "<redacted>-password" not in rendered
+    assert "<redacted>-password-key" not in rendered
+    assert rendered.count("<redacted>") == 3
+
+
 def test_diagnose_save_failure_prioritizes_connection_refused(tmp_path: Path) -> None:
     tool = _load_tool()
 

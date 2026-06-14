@@ -319,7 +319,7 @@ def test_relative_output_dir_resolves_before_child_commands(
     assert command[command.index("--hcnetsdk-command-metadata-output") + 1] == metadata
 
 
-def test_success_artifacts_redact_child_save_output(
+def test_success_artifacts_redact_child_save_artifacts(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     tool = _load_tool()
@@ -397,13 +397,15 @@ def test_success_artifacts_redact_child_save_output(
     assert result["ok"] is True
     stdout_text = Path(result["artifacts"]["save_stdout"]).read_text(encoding="utf-8")
     stderr_text = Path(result["artifacts"]["save_stderr"]).read_text(encoding="utf-8")
+    metadata_text = Path(result["artifacts"]["metadata"]).read_text(encoding="utf-8")
     rendered = json.dumps(result)
-    for text in (stdout_text, stderr_text, rendered):
+    for text in (stdout_text, stderr_text, metadata_text, rendered):
         assert "SERIAL-GARAGE-01" not in text
         assert "dummy-camera-password-01" not in text
         assert "dummy-enc-key-03" not in text
     assert stdout_text.count("<redacted>") == 2
     assert stderr_text.count("<redacted>") == 2
+    assert metadata_text.count("<redacted>") == 3
 
 
 def test_credential_attempts_can_skip_encryption_key_password() -> None:

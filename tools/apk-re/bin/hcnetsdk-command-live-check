@@ -491,6 +491,12 @@ def _write_redacted_artifact(path: Path, data: bytes, item: CameraInventoryItem)
     )
 
 
+def _redact_existing_artifact(path: Path, item: CameraInventoryItem) -> None:
+    if not path.exists():
+        return
+    _write_redacted_artifact(path, path.read_bytes(), item)
+
+
 def _check_item(
     *,
     args: argparse.Namespace,
@@ -590,6 +596,7 @@ def _check_item(
         save = _run(command, cwd=REPO_ROOT)
         _write_redacted_artifact(stdout_path, save.stdout, item)
         _write_redacted_artifact(stderr_path, save.stderr, item)
+        _redact_existing_artifact(metadata_path, item)
         if save.returncode == 0:
             break
         stderr_tail = _tail_text(save.stderr)

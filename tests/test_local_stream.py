@@ -1542,6 +1542,395 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     )
 
 
+def test_copy_local_stream_to_decrypted_mpegts_applies_h264_startup_trim(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    pps = b"\x68\xee\x38"
+    first_idr = b"\x65bad"
+    second_idr = b"\x65good"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=idmx_frame(body))
+                for body in (sps, pps, first_idr, second_idr)
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+        h264_skip_initial_idr_windows=1,
+    )
+
+    assert output.getvalue() == b"ts:\x00\x00\x00\x01" + second_idr
+
+
+def test_copy_local_stream_to_decrypted_mpegts_prefers_h264_vcl_before_hevc_probe(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    h264_non_idr = b"\x41\x01h264-slice"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(h264_non_idr))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == b"h264:\x00\x00\x00\x01" + h264_non_idr
+
+
+def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "elif '-f' in sys.argv and sys.argv[sys.argv.index('-f') + 1] == 'null':\n"
+        "    pass\n"
+        "else:\n"
+        "    sys.stdout.buffer.write(b'ts:' + data)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    pps = b"\x68\xee\x38"
+    clean_idr = b"\x65clean"
+    within_duration = b"\x41keep"
+    second_idr = b"\x65second"
+    after_duration = b"\x41drop"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    packets = [
+        idmx_frame(body)
+        for body in (sps, pps, clean_idr, within_duration, second_idr, after_duration)
+    ]
+    seen: dict[str, Any] = {}
+    times = iter([0.0, 0.0, 0.1, 0.2, 0.3, 0.8, 1.5])
+
+    def monotonic() -> float:
+        return next(times, 1.5)
+
+    def fake_iter_payloads(
+        stream: Any,
+        *,
+        max_packets: int | None,
+        duration_seconds: float | None,
+        monotonic: Any,
+    ) -> Iterator[bytes]:
+        seen["stream"] = stream
+        seen["max_packets"] = max_packets
+        seen["duration_seconds"] = duration_seconds
+        yield from packets
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        fake_iter_payloads,
+    )
+
+    output = io.BytesIO()
+    stream = object()
+    requested_duration = 0.25
+    wait_seconds = 10.0
+
+    copy_local_stream_to_decrypted_mpegts(
+        stream,
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        duration_seconds=requested_duration,
+        monotonic=monotonic,
+        h264_wait_for_clean_idr_window=True,
+        h264_clean_idr_wait_seconds=wait_seconds,
+    )
+
+    assert seen["stream"] is stream
+    assert seen["max_packets"] is None
+    assert seen["duration_seconds"] == requested_duration + wait_seconds
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + clean_idr
+        + b"\x00\x00\x00\x01"
+        + within_duration
+    )
+
+
+def test_copy_local_stream_to_mpegts_remuxes_direct_idmx_hevc_payload(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    sps = b"\x42\x01sps"
+    pps = b"\x44\x01pps"
+    first_fu = b"\x62\x01\x93slice-"
+    last_fu = b"\x62\x01\x53payload"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 5
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(sps, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(pps, sequence=sequence_base + 2)),
+                SimpleNamespace(body=frame(first_fu, sequence=sequence_base + 3)),
+                SimpleNamespace(body=frame(last_fu, sequence=sequence_base + 4)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=5,
+        h264_skip_initial_idr_windows=1,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + b"\x26\x01slice-payload"
+    )
+
+
+def test_copy_local_stream_to_mpegts_drops_hevc_fu_until_start(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    orphan_middle_fu = b"\x62\x01\x13orphan-"
+    orphan_end_fu = b"\x62\x01\x53tail"
+    valid_start_fu = b"\x62\x01\x93slice-"
+    valid_end_fu = b"\x62\x01\x53payload"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 5
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(orphan_middle_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(orphan_end_fu, sequence=sequence_base + 2)),
+                SimpleNamespace(body=frame(valid_start_fu, sequence=sequence_base + 3)),
+                SimpleNamespace(body=frame(valid_end_fu, sequence=sequence_base + 4)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=5,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + b"\x26\x01slice-payload"
+    )
+
+
+def test_copy_local_stream_to_mpegts_prefers_direct_hevc_over_partial_h264(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    sps = b"\x42\x01sps"
+    pps = b"\x44\x01pps"
+    idr = b"\x26\x01idr-slice"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(sps, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(pps, sequence=sequence_base + 2)),
+                SimpleNamespace(body=frame(idr, sequence=sequence_base + 3)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+        h264_skip_initial_idr_windows=1,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + idr
+    )
+
+
+def test_copy_local_stream_to_mpegts_prefers_hevc_idr_over_h264_sei_shape(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    hevc_idr_with_h264_sei_shape = b"\x26\x01idr"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(hevc_idr_with_h264_sei_shape))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+        h264_skip_initial_idr_windows=1,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01" + hevc_idr_with_h264_sei_shape
+    )
+
+
 def test_copy_local_stream_to_decrypted_mpegps_rejects_idmx_payload() -> None:
     idmx_frame = (
         b"\x0d\xb0\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
@@ -1687,6 +2076,51 @@ def test_copy_local_stream_to_mpegts_remuxes_clear_h264_idmx_payload(tmp_path) -
 
     assert output.getvalue() == (
         b"ts:\x00\x00\x00\x01" + sps + b"\x00\x00\x00\x01" + pps
+    )
+
+
+def test_copy_local_stream_to_mpegts_preserves_default_h264_idmx_codec(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    h264_p_slice_with_hevc_shape = b"\x41\x01p"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 2
+            return [
+                SimpleNamespace(body=idmx_frame(sps)),
+                SimpleNamespace(body=idmx_frame(h264_p_slice_with_hevc_shape)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=2,
+    )
+
+    assert output.getvalue() == (
+        b"h264:\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + h264_p_slice_with_hevc_shape
     )
 
 
@@ -2455,6 +2889,37 @@ def test_summarize_idmx_h264_local_packets_reports_sanitized_frame_shapes() -> N
         ],
         "truncated": False,
     }
+
+
+def test_summarize_idmx_h264_local_packets_labels_direct_hevc_frames() -> None:
+    sequence_base = 0xB712
+    rtp_timestamp = 0x165477EB
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        inner_header = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+        idmx_frame = inner_header + body
+        return len(idmx_frame).to_bytes(4, "little") + idmx_frame
+
+    summary = summarize_idmx_h264_local_packets(
+        [
+            frame(b"\x40\x01vps", sequence=sequence_base),
+            frame(b"\x62\x01\x93slice", sequence=sequence_base + 1),
+        ],
+        max_frames=2,
+    )
+
+    assert [sample["kind"] for sample in summary["samples"]] == [
+        "hevc_media",
+        "hevc_media",
+    ]
+    assert summary["samples"][0]["hevc_nal_type"] == 32
+    assert summary["samples"][1]["hevc_nal_type"] == 49
+    assert summary["hevc"] == {"parameter": 0, "media": 2}
 
 
 def test_summarize_h264_annexb_units_reports_sanitized_nal_shapes() -> None:

@@ -92,6 +92,7 @@ class _H264CleanIdrProbeResult:
     """Result of probing partial H.264 Annex-B IDR windows."""
 
     start_offset: int | None
+    idr_start_offset: int | None = None
     first_decode_error: str | None = None
     idr_count: int = 0
     sampled_window_count: int = 0
@@ -1600,7 +1601,7 @@ def copy_local_stream_to_decrypted_mpegps(
     output.flush()
 
 
-def copy_local_stream_to_decrypted_mpegts(
+def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
     stream: Any,
     output: BinaryIO,
     media_key: str | bytes,
@@ -1610,21 +1611,83 @@ def copy_local_stream_to_decrypted_mpegts(
     max_packets: int | None = None,
     duration_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    h264_skip_initial_idr_windows: int = 0,
+    h264_trim_to_clean_idr_window: bool = False,
+    h264_clean_idr_preroll_seconds: float = 0.0,
+    h264_clean_idr_max_windows: int = 32,
+    h264_wait_for_clean_idr_window: bool = False,
+    h264_clean_idr_wait_seconds: float = 60.0,
 ) -> None:
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
+    if h264_wait_for_clean_idr_window:
+        _h264_clean_idr_capture_duration_seconds(
+            duration_seconds=duration_seconds,
+            h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+            h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+            h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+            h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+        )
+        assert duration_seconds is not None
+        payload_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
+        _require_bounded_decrypt_capture(
+            max_packets=max_packets,
+            duration_seconds=payload_duration_seconds,
+        )
+        payloads = _iter_local_stream_payloads(
+            stream,
+            max_packets=max_packets,
+            duration_seconds=payload_duration_seconds,
+            monotonic=monotonic,
+        )
+        annexb = collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            payloads,
+            media_key,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+            ffmpeg_path=ffmpeg_path,
+            max_windows=h264_clean_idr_max_windows,
+            wait_seconds=h264_clean_idr_wait_seconds,
+        )
+        process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
+        return
+
+    capture_duration_seconds = _h264_clean_idr_capture_duration_seconds(
+        duration_seconds=duration_seconds,
+        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+        h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+        h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+    )
     _require_bounded_decrypt_capture(
         max_packets=max_packets,
-        duration_seconds=duration_seconds,
+        duration_seconds=capture_duration_seconds,
     )
     packets = collect_local_stream_media_packets(
         stream,
         max_packets=max_packets,
-        duration_seconds=duration_seconds,
+        duration_seconds=capture_duration_seconds,
         monotonic=monotonic,
     )
     if _local_stream_packets_are_idmx(packets):
         annexb = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
-        if _annexb_looks_like_hevc(annexb):
+        if _annexb_has_h264_vcl(annexb):
+            annexb = skip_h264_annexb_initial_idr_windows(
+                annexb,
+                h264_skip_initial_idr_windows,
+            )
+            if h264_trim_to_clean_idr_window or h264_wait_for_clean_idr_window:
+                annexb = trim_h264_annexb_to_first_clean_idr_window(
+                    annexb,
+                    ffmpeg_path=ffmpeg_path,
+                    max_windows=h264_clean_idr_max_windows,
+                )
+            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        elif _annexb_looks_like_hevc(annexb):
             process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
         elif _annexb_looks_like_h264(annexb):
             process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
@@ -1632,6 +1695,14 @@ def copy_local_stream_to_decrypted_mpegts(
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
+    if (
+        h264_skip_initial_idr_windows
+        or h264_trim_to_clean_idr_window
+        or h264_wait_for_clean_idr_window
+    ):
+        raise PyEzvizError(
+            "H.264 startup trim options require a decrypted H.264 IDMX stream"
+        )
     decrypted = decrypt_hikvision_ps_video(
         b"".join(packets),
         media_key,
@@ -1663,7 +1734,7 @@ def _require_bounded_idmx_capture(
         )
 
 
-def copy_local_stream_to_mpegts(  # noqa: PLR0913
+def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
     stream: Any,
     output: BinaryIO,
     *,
@@ -1716,6 +1787,10 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0913
             max_packets=max_packets,
             duration_seconds=duration_seconds,
         )
+        is_h264_startup_options = bool(
+            h264_skip_initial_idr_windows or h264_trim_to_clean_idr_window
+        )
+        annexb_is_h264 = False
         if h264_wait_for_clean_idr_window:
             annexb = collect_h264_idmx_annexb_after_first_clean_idr_window(
                 chain((first_payload,), payloads),
@@ -1727,18 +1802,34 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0913
             )
         else:
             packets = list(chain((first_payload,), payloads))
-            annexb = _idmx_local_packets_to_h264_annexb(packets)
-        annexb = skip_h264_annexb_initial_idr_windows(
-            annexb,
-            h264_skip_initial_idr_windows,
-        )
-        if h264_trim_to_clean_idr_window:
-            annexb = trim_h264_annexb_to_first_clean_idr_window(
+            if is_h264_startup_options:
+                annexb, annexb_codec = _idmx_local_packets_to_h264_annexb_with_codec(
+                    packets
+                )
+                annexb_is_h264 = annexb_codec == "h264"
+            else:
+                annexb, annexb_codec = _idmx_local_packets_to_annexb_with_codec(
+                    packets
+                )
+                annexb_is_h264 = annexb_codec == "h264"
+        if (
+            not annexb_is_h264
+            and not h264_wait_for_clean_idr_window
+            and _annexb_looks_like_hevc(annexb)
+        ):
+            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+        else:
+            annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
-                ffmpeg_path=ffmpeg_path,
-                max_windows=h264_clean_idr_max_windows,
+                h264_skip_initial_idr_windows,
             )
-        process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+            if h264_trim_to_clean_idr_window:
+                annexb = trim_h264_annexb_to_first_clean_idr_window(
+                    annexb,
+                    ffmpeg_path=ffmpeg_path,
+                    max_windows=h264_clean_idr_max_windows,
+                )
+            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
     if (
@@ -2281,6 +2372,87 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(
     return annexb[clean_start_offset:]
 
 
+def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+    packets: Iterable[bytes],
+    media_key: str | bytes,
+    *,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float] = time.monotonic,
+    ffmpeg_path: str = "ffmpeg",
+    max_windows: int = 32,
+    wait_seconds: float = 60.0,
+) -> bytes:
+    """Collect decrypted IDMX H.264 from the first clean IDR window onward."""
+
+    if duration_seconds is None:
+        raise PyEzvizError("duration_seconds is required when waiting for clean IDR")
+    if wait_seconds < 0:
+        raise PyEzvizError("wait_seconds cannot be negative")
+    if max_windows <= 0:
+        raise PyEzvizError("max_windows must be positive")
+
+    wait_deadline = monotonic() + wait_seconds
+    capture_deadline: float | None = None
+    collected: list[bytes] = []
+    packet_times: list[float] = []
+    clean_start_offset: int | None = None
+    clean_idr_time: float | None = None
+    first_decode_error: str | None = None
+    last_probe = _H264CleanIdrProbeResult(start_offset=None)
+
+    for packet in packets:
+        now = monotonic()
+        if clean_start_offset is None and now >= wait_deadline:
+            suffix = _h264_clean_idr_timeout_suffix(
+                first_decode_error=first_decode_error,
+                probe=last_probe,
+            )
+            raise PyEzvizError(
+                "Timed out waiting for a clean H.264 IDR window" + suffix
+            )
+        if capture_deadline is not None and now >= capture_deadline:
+            break
+        collected.append(packet)
+        packet_times.append(now)
+        if clean_start_offset is None:
+            probe = _try_first_clean_decrypted_h264_annexb_idr_window_offset(
+                collected,
+                media_key,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=max_windows,
+            )
+            last_probe = probe
+            clean_start_offset = probe.start_offset
+            if first_decode_error is None and probe.first_decode_error is not None:
+                first_decode_error = probe.first_decode_error
+            if clean_start_offset is not None:
+                clean_idr_packet_index = _decrypted_h264_annexb_packet_index_for_offset(
+                    collected,
+                    media_key,
+                    probe.idr_start_offset or clean_start_offset,
+                )
+                clean_idr_time = packet_times[clean_idr_packet_index]
+                capture_deadline = clean_idr_time + duration_seconds
+            continue
+
+    if clean_start_offset is None:
+        suffix = _h264_clean_idr_timeout_suffix(
+            first_decode_error=first_decode_error,
+            probe=last_probe,
+        )
+        raise PyEzvizError(
+            "H.264 stream ended before a clean IDR window was found" + suffix
+        )
+    if capture_deadline is not None and clean_idr_time is not None:
+        collected = [
+            packet
+            for packet, packet_time in zip(collected, packet_times, strict=True)
+            if packet_time < capture_deadline or packet_time == clean_idr_time
+        ]
+    annexb = _decrypt_idmx_local_packets_to_annexb(collected, media_key)
+    return annexb[clean_start_offset:]
+
+
 def _h264_clean_idr_timeout_suffix(
     *,
     first_decode_error: str | None,
@@ -2345,6 +2517,61 @@ def _try_first_clean_h264_annexb_idr_window_offset(
         annexb = _idmx_local_packets_to_h264_annexb(packets)
     except PyEzvizError:
         return _H264CleanIdrProbeResult(start_offset=None)
+    return _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
+        annexb,
+        ffmpeg_path=ffmpeg_path,
+        max_windows=max_windows,
+    )
+
+
+def _try_first_clean_decrypted_h264_annexb_idr_window_offset(
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    ffmpeg_path: str,
+    max_windows: int,
+) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR offset for partial encrypted IDMX packets."""
+
+    try:
+        annexb = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
+    except PyEzvizError:
+        return _H264CleanIdrProbeResult(start_offset=None)
+    return _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
+        annexb,
+        ffmpeg_path=ffmpeg_path,
+        max_windows=max_windows,
+    )
+
+
+def _decrypted_h264_annexb_packet_index_for_offset(
+    packets: list[bytes],
+    media_key: str | bytes,
+    offset: int,
+) -> int:
+    """Return the packet index that first contributes the given Annex-B offset."""
+
+    for index in range(len(packets)):
+        try:
+            annexb = _decrypt_idmx_local_packets_to_annexb(
+                packets[: index + 1],
+                media_key,
+            )
+        except PyEzvizError:
+            continue
+        if len(annexb) > offset:
+            return index
+    return max(len(packets) - 1, 0)
+
+
+def _try_first_clean_h264_annexb_idr_window_offset_from_annexb(
+    annexb: bytes,
+    *,
+    ffmpeg_path: str,
+    max_windows: int,
+) -> _H264CleanIdrProbeResult:
+    """Return the first clean IDR window offset for Annex-B H.264 bytes."""
+
     idr_summary = summarize_h264_annexb_idr_windows(annexb, max_windows=max_windows)
     samples = idr_summary.get("samples")
     if not isinstance(samples, list):
@@ -2380,6 +2607,7 @@ def _try_first_clean_h264_annexb_idr_window_offset(
         if not decode_errors:
             return _H264CleanIdrProbeResult(
                 start_offset=start_offset,
+                idr_start_offset=int(sample["idr_start_code_offset"]),
                 first_decode_error=first_decode_error,
                 idr_count=int(idr_summary.get("idr_count", 0)),
                 sampled_window_count=len(samples),
@@ -2444,7 +2672,7 @@ def _h264_annexb_idr_window_start_index(
     return start
 
 
-def _summarize_idmx_h264_local_frame(
+def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
     frame: bytes,
     frame_index: int,
 ) -> dict[str, Any]:
@@ -2482,6 +2710,10 @@ def _summarize_idmx_h264_local_frame(
         return sample
     if _looks_like_idmx_hevc_media_frame(body):
         sample["kind"] = "hevc_media"
+        return sample
+    if is_h264_transport and _looks_like_idmx_hevc_direct_frame(body):
+        sample["kind"] = "hevc_media"
+        sample["hevc_nal_type"] = _hevc_nal_type(body)
         return sample
     sample["kind"] = "unknown"
     return sample
@@ -2816,6 +3048,7 @@ def _idmx_local_frame_contains_media(frame: bytes) -> bool:
     return (
         _looks_like_idmx_hevc_parameter_frame(body)
         or _looks_like_idmx_hevc_media_frame(body)
+        or (h264_transport and _looks_like_idmx_hevc_direct_frame(body))
         or (h264_transport and _looks_like_idmx_h264_fu_a_frame(body))
         or (h264_transport and _looks_like_idmx_h264_clear_nal(body))
     )
@@ -2910,6 +3143,85 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
     return _trim_trailing_h264_non_vcl_nals(bytes(output))
 
 
+def _idmx_local_packets_to_hevc_annexb(packets: list[bytes]) -> bytes:
+    output = bytearray()
+    active_fu: bytearray | None = None
+    for frame in _iter_idmx_local_frames(b"".join(packets)):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        if not _idmx_local_frame_is_h264_transport(frame, header_size):
+            continue
+        if not _looks_like_idmx_hevc_direct_frame(body):
+            continue
+        active_fu = _append_idmx_hevc_clear_payload(
+            output,
+            body,
+            active_fu=active_fu,
+        )
+    if not output:
+        raise PyEzvizError("EZVIZ local IDMX stream did not include clear HEVC media frames")
+    return bytes(output)
+
+
+def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
+    annexb, _codec = _idmx_local_packets_to_annexb_with_codec(packets)
+    return annexb
+
+
+def _idmx_local_packets_to_annexb_with_codec(
+    packets: list[bytes],
+) -> tuple[bytes, str]:
+    try:
+        h264_annexb = _idmx_local_packets_to_h264_annexb(packets)
+    except PyEzvizError as h264_error:
+        try:
+            return _idmx_local_packets_to_hevc_annexb(packets), "hevc"
+        except PyEzvizError as hevc_error:
+            raise h264_error from hevc_error
+    if _annexb_has_h264_vcl(h264_annexb):
+        return h264_annexb, "h264"
+    if _idmx_local_packets_have_direct_hevc_media(packets):
+        try:
+            return _idmx_local_packets_to_hevc_annexb(packets), "hevc"
+        except PyEzvizError:
+            pass
+    try:
+        hevc_annexb = _idmx_local_packets_to_hevc_annexb(packets)
+    except PyEzvizError:
+        pass
+    else:
+        if _annexb_looks_like_hevc(hevc_annexb):
+            return hevc_annexb, "hevc"
+    return h264_annexb, "h264"
+
+
+def _idmx_local_packets_to_h264_annexb_with_codec(
+    packets: list[bytes],
+) -> tuple[bytes, str]:
+    try:
+        h264_annexb = _idmx_local_packets_to_h264_annexb(packets)
+    except PyEzvizError:
+        return _idmx_local_packets_to_annexb_with_codec(packets)
+    if _annexb_has_h264_vcl(h264_annexb):
+        return h264_annexb, "h264"
+    return _idmx_local_packets_to_annexb_with_codec(packets)
+
+
+def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
+    for frame in _iter_idmx_local_frames(b"".join(packets)):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        if not _idmx_local_frame_is_h264_transport(frame, header_size):
+            continue
+        if _looks_like_idmx_hevc_evidence_frame(body):
+            return True
+    return False
+
+
 def _local_media_aes_key(media_key: str | bytes) -> bytes:
     key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
     return key_bytes.ljust(16, b"\0")[:16]
@@ -2927,6 +3239,22 @@ def _looks_like_idmx_hevc_media_frame(body: bytes) -> bool:
         len(body) > IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET
         and body.startswith(b"\x40\x00\x00\x02\x80\x06")
     )
+
+
+def _looks_like_idmx_hevc_direct_frame(body: bytes) -> bool:
+    if len(body) < HEVC_NAL_HEADER_SIZE or body[0] & 0x80 or body[1] & 0x07 == 0:
+        return False
+    nal_type = _hevc_nal_type(body)
+    return nal_type <= 40 or nal_type == 49
+
+
+def _looks_like_idmx_hevc_evidence_frame(body: bytes) -> bool:
+    if not _looks_like_idmx_hevc_direct_frame(body):
+        return False
+    nal_type = _hevc_nal_type(body)
+    if nal_type in {32, 33, 34}:
+        return body[1] & 0xF8 == 0
+    return nal_type == 49
 
 
 def _looks_like_idmx_h264_fu_a_frame(body: bytes) -> bool:
@@ -2975,17 +3303,57 @@ def _append_idmx_hevc_media_payload(
     is_start = bool(fu_header & 0x80)
     is_end = bool(fu_header & 0x40)
     original_type = fu_header & 0x3F
+    if active_fu is None and not is_start:
+        return None
     reconstructed_header = bytes(
         [
             (payload[0] & 0x81) | (original_type << 1),
             payload[1],
         ]
     )
-    if is_start or active_fu is None:
+    if is_start:
         active_fu = bytearray(reconstructed_header)
+    assert active_fu is not None
     active_fu.extend(payload[3:])
     if is_end:
         _append_decrypted_hevc_nal(output, bytes(active_fu), aes_key)
+        return None
+    return active_fu
+
+
+def _append_idmx_hevc_clear_payload(
+    output: bytearray,
+    payload: bytes,
+    *,
+    active_fu: bytearray | None,
+) -> bytearray | None:
+    if len(payload) < HEVC_NAL_HEADER_SIZE:
+        return active_fu
+    nal_type = _hevc_nal_type(payload)
+    if nal_type != 49:
+        _append_hevc_nal(output, payload)
+        return active_fu
+    if len(payload) < 3:
+        return active_fu
+
+    fu_header = payload[2]
+    is_start = bool(fu_header & 0x80)
+    is_end = bool(fu_header & 0x40)
+    original_type = fu_header & 0x3F
+    if active_fu is None and not is_start:
+        return None
+    reconstructed_header = bytes(
+        [
+            (payload[0] & 0x81) | (original_type << 1),
+            payload[1],
+        ]
+    )
+    if is_start:
+        active_fu = bytearray(reconstructed_header)
+    assert active_fu is not None
+    active_fu.extend(payload[3:])
+    if is_end:
+        _append_hevc_nal(output, bytes(active_fu))
         return None
     return active_fu
 
@@ -3025,6 +3393,13 @@ def _append_decrypted_hevc_nal(
 
 def _append_h264_nal(output: bytearray, nal: bytes) -> None:
     if not _is_plausible_h264_nal(nal):
+        return
+    output.extend(ANNEX_B_LONG_START_CODE)
+    output.extend(nal)
+
+
+def _append_hevc_nal(output: bytearray, nal: bytes) -> None:
+    if not _is_plausible_hevc_nal(nal):
         return
     output.extend(ANNEX_B_LONG_START_CODE)
     output.extend(nal)
@@ -3102,6 +3477,13 @@ def _trim_trailing_h264_non_vcl_nals(data: bytes) -> bytes:
 def _annexb_looks_like_h264(data: bytes) -> bool:
     return any(
         _h264_nal_type(data[nal_start:end]) in {1, 5, 6, 7, 8, 9}
+        for _offset, nal_start, end in _h264_annexb_nal_spans(data)
+    )
+
+
+def _annexb_has_h264_vcl(data: bytes) -> bool:
+    return any(
+        _h264_nal_type(data[nal_start:end]) in {1, 5}
         for _offset, nal_start, end in _h264_annexb_nal_spans(data)
     )
 

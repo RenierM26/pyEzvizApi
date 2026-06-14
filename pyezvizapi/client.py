@@ -145,6 +145,7 @@ from .local_stream import (
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortMultiSocketPlan,
     copy_local_sdk_stream_from_client,
+    copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
     open_hcnetsdk_command_port_generated_multi_socket_stream,
     open_hcnetsdk_command_port_multi_socket_stream,
@@ -3002,6 +3003,7 @@ class EzvizClient:
                 channel=channel,
                 ffmpeg_path=ffmpeg_path,
                 decrypt_video=decrypt_video,
+                media_key=media_key,
                 timeout=timeout,
                 host=host,
                 command_port=command_port,
@@ -3126,7 +3128,7 @@ class EzvizClient:
             ),
         }
 
-    def _save_hcnetsdk_command_port_clip(  # noqa: PLR0913
+    def _save_hcnetsdk_command_port_clip(  # noqa: PLR0912, PLR0913
         self,
         serial: str,
         output: str | Path | BinaryIO,
@@ -3137,6 +3139,7 @@ class EzvizClient:
         channel: int,
         ffmpeg_path: str,
         decrypt_video: bool,
+        media_key: str | bytes | None,
         timeout: float | None,
         host: str | None,
         command_port: int | None,
@@ -3160,9 +3163,9 @@ class EzvizClient:
             raise PyEzvizError(
                 "source='hcnetsdk-command-port' currently writes MPEG-TS only"
             )
-        if decrypt_video:
+        if decrypt_video and media_key is None:
             raise PyEzvizError(
-                "decrypt_video is not needed for the clear H.264 IDMX command-port path"
+                "source='hcnetsdk-command-port' decrypt_video requires media_key"
             )
 
         frames = tuple(command_frames or ())
@@ -3211,23 +3214,52 @@ class EzvizClient:
                     else stream
                 )
                 try:
-                    copy_local_stream_to_mpegts(
-                        metadata_stream,
-                        output_file,
-                        ffmpeg_path=ffmpeg_path,
-                        max_packets=max_packets,
-                        duration_seconds=duration_seconds,
-                        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
-                        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
-                        h264_clean_idr_preroll_seconds=(
-                            h264_clean_idr_preroll_seconds
-                        ),
-                        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
-                        h264_wait_for_clean_idr_window=(
-                            h264_wait_for_clean_idr_window
-                        ),
-                        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
-                    )
+                    if decrypt_video:
+                        assert media_key is not None
+                        copy_local_stream_to_decrypted_mpegts(
+                            metadata_stream,
+                            output_file,
+                            media_key,
+                            ffmpeg_path=ffmpeg_path,
+                            max_packets=max_packets,
+                            duration_seconds=duration_seconds,
+                            h264_skip_initial_idr_windows=(
+                                h264_skip_initial_idr_windows
+                            ),
+                            h264_trim_to_clean_idr_window=(
+                                h264_trim_to_clean_idr_window
+                            ),
+                            h264_clean_idr_preroll_seconds=(
+                                h264_clean_idr_preroll_seconds
+                            ),
+                            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                            h264_wait_for_clean_idr_window=(
+                                h264_wait_for_clean_idr_window
+                            ),
+                            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                        )
+                    else:
+                        copy_local_stream_to_mpegts(
+                            metadata_stream,
+                            output_file,
+                            ffmpeg_path=ffmpeg_path,
+                            max_packets=max_packets,
+                            duration_seconds=duration_seconds,
+                            h264_skip_initial_idr_windows=(
+                                h264_skip_initial_idr_windows
+                            ),
+                            h264_trim_to_clean_idr_window=(
+                                h264_trim_to_clean_idr_window
+                            ),
+                            h264_clean_idr_preroll_seconds=(
+                                h264_clean_idr_preroll_seconds
+                            ),
+                            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                            h264_wait_for_clean_idr_window=(
+                                h264_wait_for_clean_idr_window
+                            ),
+                            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                        )
                 finally:
                     if metadata_callback is not None:
                         metadata_callback(metadata_stream)
@@ -3250,23 +3282,52 @@ class EzvizClient:
                     else stream
                 )
                 try:
-                    copy_local_stream_to_mpegts(
-                        metadata_stream,
-                        output,
-                        ffmpeg_path=ffmpeg_path,
-                        max_packets=max_packets,
-                        duration_seconds=duration_seconds,
-                        h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
-                        h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
-                        h264_clean_idr_preroll_seconds=(
-                            h264_clean_idr_preroll_seconds
-                        ),
-                        h264_clean_idr_max_windows=h264_clean_idr_max_windows,
-                        h264_wait_for_clean_idr_window=(
-                            h264_wait_for_clean_idr_window
-                        ),
-                        h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
-                    )
+                    if decrypt_video:
+                        assert media_key is not None
+                        copy_local_stream_to_decrypted_mpegts(
+                            metadata_stream,
+                            output,
+                            media_key,
+                            ffmpeg_path=ffmpeg_path,
+                            max_packets=max_packets,
+                            duration_seconds=duration_seconds,
+                            h264_skip_initial_idr_windows=(
+                                h264_skip_initial_idr_windows
+                            ),
+                            h264_trim_to_clean_idr_window=(
+                                h264_trim_to_clean_idr_window
+                            ),
+                            h264_clean_idr_preroll_seconds=(
+                                h264_clean_idr_preroll_seconds
+                            ),
+                            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                            h264_wait_for_clean_idr_window=(
+                                h264_wait_for_clean_idr_window
+                            ),
+                            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                        )
+                    else:
+                        copy_local_stream_to_mpegts(
+                            metadata_stream,
+                            output,
+                            ffmpeg_path=ffmpeg_path,
+                            max_packets=max_packets,
+                            duration_seconds=duration_seconds,
+                            h264_skip_initial_idr_windows=(
+                                h264_skip_initial_idr_windows
+                            ),
+                            h264_trim_to_clean_idr_window=(
+                                h264_trim_to_clean_idr_window
+                            ),
+                            h264_clean_idr_preroll_seconds=(
+                                h264_clean_idr_preroll_seconds
+                            ),
+                            h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                            h264_wait_for_clean_idr_window=(
+                                h264_wait_for_clean_idr_window
+                            ),
+                            h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                        )
                 finally:
                     if metadata_callback is not None:
                         metadata_callback(metadata_stream)

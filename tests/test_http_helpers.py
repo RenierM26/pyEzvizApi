@@ -2726,6 +2726,82 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
     }
 
 
+def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front-decrypted.ts"
+    calls: list[dict[str, Any]] = []
+
+    class FakeCommandPortStream:
+        def __enter__(self) -> FakeCommandPortStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open_hcnetsdk_command_port_stream(
+        endpoint: Any,
+        command_frames: tuple[bytes, ...],
+        **kwargs: Any,
+    ) -> FakeCommandPortStream:
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "command_frames": command_frames,
+                **kwargs,
+            }
+        )
+        return FakeCommandPortStream()
+
+    def fake_copy_local_stream_to_decrypted_mpegts(
+        stream: Any,
+        output: BinaryIO,
+        media_key: str | bytes,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"stream": stream, "media_key": media_key, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.open_hcnetsdk_command_port_stream",
+        fake_open_hcnetsdk_command_port_stream,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_stream_to_decrypted_mpegts",
+        fake_copy_local_stream_to_decrypted_mpegts,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="hcnetsdk-command-port",
+        host="192.0.2.10",
+        command_port=8000,
+        hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+        hcnetsdk_h264_skip_initial_idr_windows=1,
+        hcnetsdk_h264_trim_to_clean_idr_window=True,
+        hcnetsdk_h264_clean_idr_max_windows=HCNETSDK_CLEAN_IDR_MAX_WINDOWS,
+        duration_seconds=HCNETSDK_SAVE_DURATION,
+        max_packets=4,
+    )
+
+    assert calls[1]["media_key"] == "MEDIAKEY"
+    assert calls[1]["ffmpeg_path"] == "ffmpeg"
+    assert calls[1]["max_packets"] == 4
+    assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
+    assert calls[1]["h264_skip_initial_idr_windows"] == 1
+    assert calls[1]["h264_trim_to_clean_idr_window"] is True
+    assert (
+        calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
+    )
+    assert result.get("source") == "hcnetsdk-command-port"
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
 def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(
     monkeypatch,
     tmp_path,
@@ -2796,8 +2872,8 @@ def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(
     assert calls[0]["timeout"] == DEFAULT_SAVE_TIMEOUT
     assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
-    assert result["source"] == "hcnetsdk-command-port"
-    assert result["command_port"] == 8000
+    assert result.get("source") == "hcnetsdk-command-port"
+    assert result.get("command_port") == 8000
 
 
 def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:

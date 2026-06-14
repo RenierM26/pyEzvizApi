@@ -694,6 +694,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Video codec transform for --decrypt-video (default: encrypted-header)",
     )
     parser_save_clip.add_argument(
+        "--media-key",
+        help=(
+            "Camera media decrypt key, or EZVIZ_LOCAL_MEDIA_KEY. This is used "
+            "when --decrypt-video is set."
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--media-key-hex",
+        help=(
+            "Hex-encoded binary media decrypt key, or EZVIZ_LOCAL_MEDIA_KEY_HEX. "
+            "Use this when the native local media key is not printable text."
+        ),
+    )
+    parser_save_clip.add_argument(
         "--cas-serial",
         help="Device serial to send to cloud CAS when it differs from --serial",
     )
@@ -2215,6 +2229,10 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
                 "cloud_refresh_vtm": not args.no_refresh_vtm,
             }
         )
+    if args.decrypt_video and (
+        args.source == "hcnetsdk-command-port" or _local_sdk_has_static_media_key(args)
+    ):
+        save_kwargs["media_key"] = _local_sdk_media_key(args, client)
     result = client.save_clip(args.serial, args.output, **save_kwargs)
     _write_save_result(args, result)
     return 0
@@ -3604,7 +3622,15 @@ def _local_sdk_media_key(
         serial = str(
             _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
         )
-        cloud_key = client.get_cam_key(serial, max_retries=1)
+        sms_code = getattr(args, "sms_code", None)
+        if sms_code is None:
+            cloud_key = client.get_cam_key(serial, max_retries=1)
+        else:
+            cloud_key = client.get_cam_key(
+                serial,
+                smscode=sms_code,
+                max_retries=1,
+            )
         if cloud_key:
             return str(cloud_key)
     raise PyEzvizError(
@@ -4809,6 +4835,7 @@ def _save_clip_can_run_without_cloud_credentials(args: argparse.Namespace) -> bo
         args.action == "save"
         and getattr(args, "save_action", None) == "clip"
         and getattr(args, "source", None) == "hcnetsdk-command-port"
+        and (not args.decrypt_video or _local_sdk_has_static_media_key(args))
     )
 
 

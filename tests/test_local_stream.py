@@ -2093,7 +2093,7 @@ def test_copy_local_stream_to_mpegts_preserves_default_h264_idmx_codec(
     fake_ffmpeg.chmod(0o755)
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
     sps = b"\x67\x4d\x00"
-    h264_p_slice_with_hevc_shape = b"\x41\x89p"
+    h264_p_slice_with_hevc_shape = b"\x41\x01p"
 
     def idmx_frame(body: bytes) -> bytes:
         frame = idmx_header + body

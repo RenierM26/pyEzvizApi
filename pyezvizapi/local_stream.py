@@ -1675,9 +1675,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
     )
     if _local_stream_packets_are_idmx(packets):
         annexb = _decrypt_idmx_local_packets_to_annexb(packets, media_key)
-        if _annexb_looks_like_hevc(annexb):
-            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
-        elif _annexb_looks_like_h264(annexb):
+        if _annexb_has_h264_vcl(annexb):
             annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
                 h264_skip_initial_idr_windows,
@@ -1688,6 +1686,10 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
                     ffmpeg_path=ffmpeg_path,
                     max_windows=h264_clean_idr_max_windows,
                 )
+            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        elif _annexb_looks_like_hevc(annexb):
+            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+        elif _annexb_looks_like_h264(annexb):
             process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         else:
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")

@@ -1585,6 +1585,43 @@ def test_copy_local_stream_to_decrypted_mpegts_applies_h264_startup_trim(
     assert output.getvalue() == b"ts:\x00\x00\x00\x01" + second_idr
 
 
+def test_copy_local_stream_to_decrypted_mpegts_prefers_h264_vcl_before_hevc_probe(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    h264_non_idr = b"\x41\x01h264-slice"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(h264_non_idr))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == b"h264:\x00\x00\x00\x01" + h264_non_idr
+
+
 def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

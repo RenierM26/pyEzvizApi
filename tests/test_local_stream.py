@@ -1886,6 +1886,7 @@ def test_copy_local_stream_to_mpegts_prefers_hevc_idr_over_h264_sei_shape(
         output,
         ffmpeg_path=str(fake_ffmpeg),
         max_packets=1,
+        h264_skip_initial_idr_windows=1,
     )
 
     assert output.getvalue() == (

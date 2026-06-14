@@ -1803,11 +1803,10 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
             if _idmx_local_packets_have_direct_hevc_media(packets):
                 annexb = _idmx_local_packets_to_hevc_annexb(packets)
             elif is_h264_startup_options:
-                try:
-                    annexb = _idmx_local_packets_to_h264_annexb(packets)
-                    annexb_is_h264 = True
-                except PyEzvizError:
-                    annexb = _idmx_local_packets_to_annexb(packets)
+                annexb, annexb_codec = _idmx_local_packets_to_h264_annexb_with_codec(
+                    packets
+                )
+                annexb_is_h264 = annexb_codec == "h264"
             else:
                 annexb, annexb_codec = _idmx_local_packets_to_annexb_with_codec(
                     packets
@@ -3195,6 +3194,18 @@ def _idmx_local_packets_to_annexb_with_codec(
             if _annexb_looks_like_hevc(hevc_annexb):
                 return hevc_annexb, "hevc"
     return h264_annexb, "h264"
+
+
+def _idmx_local_packets_to_h264_annexb_with_codec(
+    packets: list[bytes],
+) -> tuple[bytes, str]:
+    try:
+        h264_annexb = _idmx_local_packets_to_h264_annexb(packets)
+    except PyEzvizError:
+        return _idmx_local_packets_to_annexb_with_codec(packets)
+    if _annexb_has_h264_vcl(h264_annexb):
+        return h264_annexb, "h264"
+    return _idmx_local_packets_to_annexb_with_codec(packets)
 
 
 def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:

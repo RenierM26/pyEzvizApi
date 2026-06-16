@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""Classify EZVIZ stream Frida binary dumps without printing raw media bytes."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from pyezvizapi.exceptions import PyEzvizError
+    from pyezvizapi.local_stream import (
+        _idmx_local_packets_to_annexb_with_codec,
+        _iter_idmx_local_frames,
+        _looks_like_idmx_local_payload,
+        summarize_h264_annexb_units,
+        summarize_hevc_annexb_irap_windows,
+        summarize_idmx_h264_local_packets,
+    )
+    from pyezvizapi.stream import MPEG_PS_START_CODE, rtp_payload
+except ModuleNotFoundError:
+    PyEzvizError = Exception  # type: ignore[misc,assignment]
+    MPEG_PS_START_CODE = b"\x00\x00\x01\xba"
+    _idmx_local_packets_to_annexb_with_codec = None
+    _iter_idmx_local_frames = None
+    _looks_like_idmx_local_payload = None
+    summarize_h264_annexb_units = None
+    summarize_hevc_annexb_irap_windows = None
+    summarize_idmx_h264_local_packets = None
+    rtp_payload = None
+
+DUMP_RE = re.compile(
+    r"^(?P<ts>\d+)-(?P<seq>\d+)-(?P<label>.+)-(?P<size>\d+)\.bin$"
+)
+ANNEX_B_LONG_START_CODE = b"\x00\x00\x00\x01"
+ANNEX_B_SHORT_START_CODE = b"\x00\x00\x01"
+RTP_VERSION_MASK = 0xC0
+RTP_VERSION_2 = 0x80
+IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("dump_dir", type=Path)
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of a text report.",
+    )
+    parser.add_argument(
+        "--max-files-per-label",
+        type=int,
+        default=12,
+        help="Maximum per-label file samples to include in detail output.",
+    )
+    return parser.parse_args()
+
+
+def _dump_metadata(path: Path) -> dict[str, Any]:
+    match = DUMP_RE.match(path.name)
+    if not match:
+        return {
+            "path": str(path),
+            "label": "<unknown>",
+            "timestamp": None,
+            "sequence": None,
+        }
+    return {
+        "path": str(path),
+        "label": match.group("label"),
+        "timestamp": match.group("ts"),
+        "sequence": int(match.group("seq")),
+        "declared_size": int(match.group("size")),
+    }
+
+
+def _looks_like_rtp(data: bytes) -> bool:
+    if len(data) < 12:
+        return False
+    return data[0] & RTP_VERSION_MASK == RTP_VERSION_2
+
+
+def _looks_like_idmx(data: bytes) -> bool:
+    if _looks_like_idmx_local_payload is not None:
+        return bool(_looks_like_idmx_local_payload(data))
+    return IDMX_LOCAL_FRAME_SENTINEL in data
+
+
+def _iter_idmx_frames(data: bytes) -> list[bytes]:
+    if _iter_idmx_local_frames is None:
+        return []
+    return list(_iter_idmx_local_frames(data))
+
+
+def _annexb_start_count(data: bytes) -> int:
+    return data.count(ANNEX_B_LONG_START_CODE) + data.count(ANNEX_B_SHORT_START_CODE)
+
+
+def _iter_annexb_nal_headers(data: bytes) -> list[bytes]:
+    headers: list[bytes] = []
+    offset = 0
+    while offset < len(data) and len(headers) < 256:
+        three = data.find(ANNEX_B_SHORT_START_CODE, offset)
+        four = data.find(ANNEX_B_LONG_START_CODE, offset)
+        if three < 0 and four < 0:
+            break
+        if four >= 0 and (three < 0 or four <= three):
+            start_code_offset = four
+            start_code_size = 4
+        else:
+            start_code_offset = three
+            start_code_size = 3
+        nal_offset = start_code_offset + start_code_size
+        if nal_offset < len(data):
+            headers.append(data[nal_offset : nal_offset + 2])
+        offset = nal_offset + 1
+    return headers
+
+
+def _detect_annexb_codec(data: bytes) -> str:
+    h264_score = 0
+    hevc_score = 0
+    for header in _iter_annexb_nal_headers(data):
+        if not header:
+            continue
+        h264_type = header[0] & 0x1F
+        hevc_type = (header[0] >> 1) & 0x3F
+        if h264_type in {1, 5, 6, 7, 8, 9}:
+            h264_score += 2 if h264_type in {5, 7, 8} else 1
+        if hevc_type in {32, 33, 34}:
+            hevc_score += 3
+        elif 16 <= hevc_type <= 23:
+            hevc_score += 2
+        elif 0 <= hevc_type <= 31:
+            hevc_score += 1
+    return "hevc" if hevc_score > h264_score else "h264"
+
+
+def _classify_bytes(data: bytes) -> dict[str, Any]:  # noqa: PLR0911, PLR0912
+    result: dict[str, Any] = {
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "kind": "unknown",
+        "annexb_start_codes": _annexb_start_count(data),
+        "idmx_frame_count": 0,
+    }
+    if not data:
+        result["kind"] = "empty"
+        return result
+    if data.startswith(MPEG_PS_START_CODE):
+        result["kind"] = "mpeg_ps"
+        return result
+    if data.startswith(b"IMKH"):
+        result["kind"] = "hcnetsdk_imkh_header"
+        return result
+    if _looks_like_idmx(data):
+        frames = _iter_idmx_frames(data)
+        result["kind"] = "idmx"
+        result["idmx_frame_count"] = len(frames)
+        if summarize_idmx_h264_local_packets is not None:
+            result["idmx_summary"] = summarize_idmx_h264_local_packets(
+                [data],
+                max_frames=8,
+            )
+        if _idmx_local_packets_to_annexb_with_codec is not None:
+            try:
+                annexb, codec = _idmx_local_packets_to_annexb_with_codec([data])
+            except PyEzvizError as err:
+                result["annexb_error"] = str(err)
+            else:
+                result["annexb_codec"] = codec
+                result["annexb_size"] = len(annexb)
+                result["annexb_sha256"] = hashlib.sha256(annexb).hexdigest()
+                if codec == "h264" and summarize_h264_annexb_units is not None:
+                    result["annexb_summary"] = summarize_h264_annexb_units(
+                        annexb,
+                        max_units=8,
+                    )
+                elif summarize_hevc_annexb_irap_windows is not None:
+                    result["annexb_summary"] = summarize_hevc_annexb_irap_windows(
+                        annexb,
+                        max_windows=8,
+                    )
+        return result
+    if _looks_like_rtp(data):
+        result["kind"] = "rtp"
+        if rtp_payload is None:
+            result["rtp_error"] = "pyezvizapi dependencies unavailable"
+            return result
+        try:
+            payload = rtp_payload(data)
+        except PyEzvizError as err:
+            result["rtp_error"] = str(err)
+            return result
+        result["rtp_payload_size"] = len(payload)
+        result["rtp_payload_sha256"] = hashlib.sha256(payload).hexdigest()
+        nested = _classify_bytes(payload)
+        result["rtp_payload_kind"] = nested["kind"]
+        if nested["kind"] in {"idmx", "mpeg_ps"}:
+            result["rtp_payload_summary"] = nested
+        return result
+    if _annexb_start_count(data):
+        result["kind"] = "annexb"
+        codec = _detect_annexb_codec(data)
+        result["annexb_codec"] = codec
+        result["annexb_size"] = len(data)
+        if codec == "h264" and summarize_h264_annexb_units is not None:
+            result["annexb_summary"] = summarize_h264_annexb_units(
+                data,
+                max_units=8,
+            )
+        elif codec == "hevc" and summarize_hevc_annexb_irap_windows is not None:
+            result["annexb_summary"] = summarize_hevc_annexb_irap_windows(
+                data,
+                max_windows=8,
+            )
+        return result
+    return result
+
+
+def _summarize_aes_frame_pairs(
+    labels: dict[str, list[dict[str, Any]]],
+    *,
+    max_samples: int,
+) -> dict[str, Any] | None:
+    before = labels.get("playctrl-idmx-aes-frame-before")
+    after = labels.get("playctrl-idmx-aes-frame-after")
+    if not before or not after:
+        return None
+
+    after_by_seq = {
+        entry.get("sequence"): entry
+        for entry in after
+        if isinstance(entry.get("sequence"), int)
+    }
+    matched = 0
+    same_size = 0
+    changed = 0
+    samples: list[dict[str, Any]] = []
+    for index, before_entry in enumerate(before):
+        sequence = before_entry.get("sequence")
+        after_entry = (
+            after_by_seq.get(sequence + 1)
+            if isinstance(sequence, int)
+            else None
+        )
+        if after_entry is None and index < len(after):
+            after_entry = after[index]
+        if after_entry is None:
+            continue
+        matched += 1
+        pair_same_size = before_entry.get("size") == after_entry.get("size")
+        pair_changed = before_entry.get("sha256") != after_entry.get("sha256")
+        same_size += int(pair_same_size)
+        changed += int(pair_changed)
+        if len(samples) < max_samples:
+            samples.append(
+                {
+                    "before_sequence": sequence,
+                    "after_sequence": after_entry.get("sequence"),
+                    "size": before_entry.get("size"),
+                    "same_size": pair_same_size,
+                    "changed": pair_changed,
+                    "before_kind": before_entry.get("kind"),
+                    "after_kind": after_entry.get("kind"),
+                    "before_codec": before_entry.get("annexb_codec"),
+                    "after_codec": after_entry.get("annexb_codec"),
+                    "before_sha256": str(before_entry.get("sha256", ""))[:16],
+                    "after_sha256": str(after_entry.get("sha256", ""))[:16],
+                }
+            )
+
+    return {
+        "before_count": len(before),
+        "after_count": len(after),
+        "matched_count": matched,
+        "same_size_count": same_size,
+        "changed_count": changed,
+        "samples": samples,
+        "truncated": matched > len(samples),
+    }
+
+
+def _analyze_dump_dir(dump_dir: Path, *, max_files_per_label: int) -> dict[str, Any]:
+    files = sorted(path for path in dump_dir.rglob("*.bin") if path.is_file())
+    labels: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    kind_counts: Counter[str] = Counter()
+    for path in files:
+        metadata = _dump_metadata(path)
+        data = path.read_bytes()
+        detail = {**metadata, **_classify_bytes(data)}
+        labels[str(metadata["label"])].append(detail)
+        kind_counts[str(detail["kind"])] += 1
+
+    label_summaries: dict[str, Any] = {}
+    for label, entries in sorted(labels.items()):
+        label_summaries[label] = {
+            "count": len(entries),
+            "kinds": dict(Counter(str(entry["kind"]) for entry in entries)),
+            "codecs": dict(
+                Counter(
+                    str(entry["annexb_codec"])
+                    for entry in entries
+                    if entry.get("annexb_codec")
+                )
+            ),
+            "samples": entries[:max_files_per_label],
+            "truncated": len(entries) > max_files_per_label,
+        }
+    report: dict[str, Any] = {
+        "dump_dir": str(dump_dir),
+        "file_count": len(files),
+        "kind_counts": dict(kind_counts),
+        "labels": label_summaries,
+    }
+    aes_frame_pairs = _summarize_aes_frame_pairs(
+        labels,
+        max_samples=max_files_per_label,
+    )
+    if aes_frame_pairs is not None:
+        report["aes_frame_pairs"] = aes_frame_pairs
+    return report
+
+
+def _print_text_report(report: dict[str, Any]) -> None:
+    print(f"dump_dir: {report['dump_dir']}")
+    print(f"file_count: {report['file_count']}")
+    print(f"kinds: {report['kind_counts']}")
+    if report.get("aes_frame_pairs"):
+        pairs = report["aes_frame_pairs"]
+        print(
+            "aes_frame_pairs: "
+            f"matched={pairs['matched_count']} "
+            f"same_size={pairs['same_size_count']} "
+            f"changed={pairs['changed_count']}"
+        )
+    print()
+    labels = report["labels"]
+    assert isinstance(labels, dict)
+    for label, label_report in labels.items():
+        codec_suffix = (
+            f", codecs={label_report['codecs']}"
+            if label_report.get("codecs")
+            else ""
+        )
+        print(
+            f"{label}: {label_report['count']} file(s), "
+            f"kinds={label_report['kinds']}{codec_suffix}"
+        )
+        for sample in label_report["samples"]:
+            parts = [
+                f"seq={sample.get('sequence')}",
+                f"kind={sample['kind']}",
+                f"size={sample['size']}",
+                f"sha256={sample['sha256'][:16]}",
+            ]
+            if sample.get("rtp_payload_kind"):
+                parts.append(f"rtp_payload={sample['rtp_payload_kind']}")
+            if sample.get("idmx_frame_count"):
+                parts.append(f"idmx_frames={sample['idmx_frame_count']}")
+            if sample.get("annexb_codec"):
+                parts.append(
+                    f"annexb={sample['annexb_codec']}:{sample.get('annexb_size')}"
+                )
+            if sample.get("annexb_error"):
+                parts.append(f"annexb_error={sample['annexb_error']}")
+            print("  " + " ".join(parts))
+        if label_report["truncated"]:
+            print("  ...")
+        print()
+
+
+def main() -> int:
+    args = _parse_args()
+    report = _analyze_dump_dir(
+        args.dump_dir,
+        max_files_per_label=args.max_files_per_label,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_text_report(report)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

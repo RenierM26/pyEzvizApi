@@ -249,6 +249,21 @@ The tool skips battery and out-of-use cameras by default, keeps passwords,
 camera serials, and encryption keys out of dry-run/report output and artifact
 filenames, and classifies common failure stages such as host resolution,
 bootstrap/login, missing media packets, unreadable media, or playable MPEG-TS.
+After FFprobe accepts a capture, the live-check wrapper also runs FFmpeg with
+error-level logging to catch decoder-visible corruption. A clean decode reports
+`playable_mpegts`; a nonzero decode exit reports `decode_failed`; zero-exit
+stderr on non-H.264 streams reports `decode_warnings`. Zero-exit H.264 stderr is
+kept as `playable_mpegts_with_h264_decode_warnings` because some H.264 command-
+port sessions can still produce nonfatal decoder chatter around otherwise
+playable output. Clean-window recovery should normally drive current H.264
+captures back to plain `playable_mpegts`.
+Add `--save-sampled-packets` when a matrix run should retain a bounded
+raw-dump-compatible `.sampled-packets.bin` sidecar next to each capture attempt.
+The sidecar is diagnostic context from packets observed by the metadata
+recorder, not a byte-for-byte source map for the final MPEG-TS. Clean-IDR/IRAP
+recovery, warning recovery, duration cutoffs, and trim/preroll options can make
+the sidecar include packets that are not present in the final remuxed clip, or
+omit packets after the configured sample byte/frame limits are reached.
 For offline Frida artifacts, the `hcnetsdk-command-dump-summary` stream helper
 can summarize dumped
 `ezviz-hcnetsdk-command-frame-*.bin` files and raw
@@ -336,6 +351,22 @@ pyezvizapi stream hcnetsdk-command-dump-summary \
   --playm4-input-dir native-dumps/playm4 \
   --decode-idr-windows
 ```
+
+Native stream-transform hook labels that already contain Annex-B chunks can be
+summarized through the same helper. For example, Gadget traces that include
+`PlayCtrl.IDMXAESDecryptFrame` before/after dumps can check the post-decrypt
+buffers without concatenating or printing media bytes:
+
+```bash
+pyezvizapi stream hcnetsdk-command-dump-summary \
+  --native-annexb-dir native-dumps/ezviz-hook \
+  --native-annexb-label playctrl-idmx-aes-frame-after \
+  --decode-idr-windows
+```
+
+The helper auto-detects H.264 vs HEVC for these native Annex-B chunks. It reports
+both aggregate IRAP/IDR windows and per-chunk decode samples, because some native
+Frida labels are snapshot buffers rather than one linear elementary stream.
 
 Command payload templates still vary by native call, so callers remain
 responsible for supplying the correct generated template plan.
@@ -491,6 +522,16 @@ a complete `0x63` control frame for callers that already know the command body
 tail. `hcnetsdk_command_port_control_template_from_frame()` extracts reusable
 control templates from captured/generated frames while dropping session-bound
 client IP and session-id fields.
+
+Native PlayCtrl traces can also show `IDMXAESDecryptFrame` decrypting complete
+assembled H.264 frames inside the app. That native AES boundary is currently a
+reverse-engineering parity target, not a requirement for the generated
+command-port capture path above: the cameras validated so far expose clear
+H.264 or HEVC IDMX payloads on the Python command-port path, and forcing AES
+there corrupts clear H.264. Keep PlayCtrl AES-boundary work scoped to future app
+parity or encrypted command-port evidence, with fresh Frida before/after dumps
+and packet sidecars as inputs, rather than mixing it into the clear remux
+recovery path.
 
 ### cloud_videos
 

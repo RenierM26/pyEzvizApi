@@ -86,6 +86,26 @@ def test_filtered_items_skip_unused_and_battery_by_default() -> None:
     assert [item.serial for item in selected] == ["A"]
 
 
+def test_ffmpeg_decode_uses_error_log_level(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    tool = _load_tool()
+    seen: dict[str, Any] = {}
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        seen["command"] = command
+        seen["cwd"] = cwd
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._ffmpeg_decode("ffmpeg", tmp_path / "capture.ts")  # noqa: SLF001
+
+    assert result.returncode == 0
+    assert seen["command"][:3] == ["ffmpeg", "-v", "error"]
+
+
 def test_dry_run_redacts_sensitive_camera_fields(tmp_path: Path) -> None:
     tool = _load_tool()
     args = argparse.Namespace(
@@ -100,11 +120,14 @@ def test_dry_run_redacts_sensitive_camera_fields(tmp_path: Path) -> None:
         decrypt_video=False,
         no_try_enc_key_password=False,
         no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
         dry_run=True,
     )
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
         enc_key="dummy-enc-key-03",
     )
@@ -122,7 +145,7 @@ def test_dry_run_redacts_sensitive_camera_fields(tmp_path: Path) -> None:
     assert result["ok"] is None
     assert "<redacted>" in rendered
     assert "dummy-camera-password-01" not in rendered
-    assert "SERIAL-GARAGE-01" not in rendered
+    assert "SERIAL-CAMERA-01" not in rendered
     assert "dummy-enc-key-03" not in rendered
     assert result["serial"] == "<redacted>"
     assert result["command"][result["command"].index("--serial") + 1] == "<redacted>"
@@ -134,10 +157,68 @@ def test_dry_run_redacts_sensitive_camera_fields(tmp_path: Path) -> None:
         command = attempt["command"]
         assert command[command.index("--hcnetsdk-command-password") + 1] == "<redacted>"
     assert any(
-        value.endswith("camera-01-Garage-encryption_key_password.ts")
+        value.endswith("camera-01-Camera-encryption_key_password.ts")
         for value in result["credential_attempts"][1]["command"]
     )
-    assert "camera-01-Garage" in result["artifacts"]["capture"]
+    assert "camera-01-Camera" in result["artifacts"]["capture"]
+
+
+def test_dry_run_includes_sampled_packet_sidecars_when_requested(
+    tmp_path: Path,
+) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=False,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=True,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
+        dry_run=True,
+        save_sampled_packets=True,
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+        enc_key="dummy-enc-key-03",
+    )
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    attempts = result["credential_attempts"]
+    assert len(attempts) == 2
+    first_command = attempts[0]["command"]
+    second_command = attempts[1]["command"]
+    assert (
+        first_command[
+            first_command.index("--hcnetsdk-command-sampled-packets-output") + 1
+        ]
+        == str(tmp_path / "camera-01-Camera-inventory_password.sampled-packets.bin")
+    )
+    assert (
+        second_command[
+            second_command.index("--hcnetsdk-command-sampled-packets-output") + 1
+        ]
+        == str(
+            tmp_path / "camera-01-Camera-encryption_key_password.sampled-packets.bin"
+        )
+    )
 
 
 def test_dry_run_redacts_media_key_when_decrypting(tmp_path: Path) -> None:
@@ -154,11 +235,14 @@ def test_dry_run_redacts_media_key_when_decrypting(tmp_path: Path) -> None:
         decrypt_video=True,
         no_try_enc_key_password=False,
         no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
         dry_run=True,
     )
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
         enc_key="dummy-enc-key-03",
     )
@@ -179,6 +263,49 @@ def test_dry_run_redacts_media_key_when_decrypting(tmp_path: Path) -> None:
     assert "dummy-enc-key-03" not in rendered
 
 
+def test_save_command_can_wait_for_clean_idr_window(tmp_path: Path) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=True,
+        clean_idr_wait_seconds="20",
+        clean_idr_max_windows="8",
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+    )
+
+    command = tool._save_command(  # noqa: SLF001
+        args=args,
+        item=item,
+        command_password=item.password,
+        host="192.0.2.10",
+        capture_path=tmp_path / "capture.ts",
+        metadata_path=tmp_path / "metadata.json",
+    )
+
+    assert "--hcnetsdk-h264-skip-initial-idr-windows" not in command
+    assert "--hcnetsdk-h264-wait-for-clean-idr-window" in command
+    assert command[
+        command.index("--hcnetsdk-h264-clean-idr-wait-seconds") + 1
+    ] == "20"
+    assert command[
+        command.index("--hcnetsdk-h264-clean-idr-max-windows") + 1
+    ] == "8"
+
+
 def test_decrypt_video_without_encryption_key_is_untestable(tmp_path: Path) -> None:
     tool = _load_tool()
     args = argparse.Namespace(
@@ -193,11 +320,14 @@ def test_decrypt_video_without_encryption_key_is_untestable(tmp_path: Path) -> N
         decrypt_video=True,
         no_try_enc_key_password=False,
         no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
         dry_run=True,
     )
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
     )
 
@@ -216,7 +346,7 @@ def test_decrypt_video_without_encryption_key_is_untestable(tmp_path: Path) -> N
     assert result["diagnosis"] == "missing_encryption_key"
     assert result["credential_attempts"] == []
     assert "command" not in result
-    assert "SERIAL-GARAGE-01" not in rendered
+    assert "SERIAL-CAMERA-01" not in rendered
     assert "dummy-camera-password-01" not in rendered
 
 
@@ -234,6 +364,9 @@ def test_dotted_camera_name_preserves_retry_suffix_artifact_paths(tmp_path: Path
         decrypt_video=False,
         no_try_enc_key_password=False,
         no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
         dry_run=True,
     )
     item = tool.CameraInventoryItem(
@@ -291,11 +424,14 @@ def test_relative_output_dir_resolves_before_child_commands(
         decrypt_video=False,
         no_try_enc_key_password=True,
         no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
         dry_run=True,
     )
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
     )
 
@@ -313,8 +449,8 @@ def test_relative_output_dir_resolves_before_child_commands(
     capture = result["artifacts"]["capture"]
     metadata = result["artifacts"]["metadata"]
     command = result["command"]
-    assert capture == str(caller_cwd / "matrix-out" / "camera-01-Garage.ts")
-    assert metadata == str(caller_cwd / "matrix-out" / "camera-01-Garage.metadata.json")
+    assert capture == str(caller_cwd / "matrix-out" / "camera-01-Camera.ts")
+    assert metadata == str(caller_cwd / "matrix-out" / "camera-01-Camera.metadata.json")
     assert command[command.index("--output") + 1] == capture
     assert command[command.index("--hcnetsdk-command-metadata-output") + 1] == metadata
 
@@ -336,11 +472,14 @@ def test_success_artifacts_redact_child_save_artifacts(
         decrypt_video=True,
         no_try_enc_key_password=True,
         no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
         dry_run=False,
     )
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
         enc_key="dummy-enc-key-03",
     )
@@ -357,6 +496,8 @@ def test_success_artifacts_redact_child_save_artifacts(
                 ),
                 stderr=b"",
             )
+        if command[0] == "ffmpeg":
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
         capture_path = Path(command[command.index("--output") + 1])
         metadata_path = Path(
             command[command.index("--hcnetsdk-command-metadata-output") + 1]
@@ -366,7 +507,7 @@ def test_success_artifacts_redact_child_save_artifacts(
             json.dumps(
                 {
                     "bootstrap_complete": True,
-                    "serial": "SERIAL-GARAGE-01",
+                    "serial": "SERIAL-CAMERA-01",
                     "password_hint": "dummy-camera-password-01",
                     "media_key_hint": "dummy-enc-key-03",
                 }
@@ -377,10 +518,10 @@ def test_success_artifacts_redact_child_save_artifacts(
             command,
             0,
             stdout=(
-                b'{"ok":true,"serial":"SERIAL-GARAGE-01",'
+                b'{"ok":true,"serial":"SERIAL-CAMERA-01",'
                 b'"media_key":"dummy-enc-key-03"}\n'
             ),
-            stderr=b"connected SERIAL-GARAGE-01 with dummy-camera-password-01\n",
+            stderr=b"connected SERIAL-CAMERA-01 with dummy-camera-password-01\n",
         )
 
     monkeypatch.setattr(tool, "_run", fake_run)
@@ -395,12 +536,17 @@ def test_success_artifacts_redact_child_save_artifacts(
     )
 
     assert result["ok"] is True
+    assert result["diagnosis"] == "playable_mpegts"
+    assert result["stderr_tail"] == ""
     stdout_text = Path(result["artifacts"]["save_stdout"]).read_text(encoding="utf-8")
     stderr_text = Path(result["artifacts"]["save_stderr"]).read_text(encoding="utf-8")
     metadata_text = Path(result["artifacts"]["metadata"]).read_text(encoding="utf-8")
+    decode_stderr_text = Path(result["artifacts"]["decode_stderr"]).read_text(
+        encoding="utf-8"
+    )
     rendered = json.dumps(result)
-    for text in (stdout_text, stderr_text, metadata_text, rendered):
-        assert "SERIAL-GARAGE-01" not in text
+    for text in (stdout_text, stderr_text, metadata_text, decode_stderr_text, rendered):
+        assert "SERIAL-CAMERA-01" not in text
         assert "dummy-camera-password-01" not in text
         assert "dummy-enc-key-03" not in text
     assert stdout_text.count("<redacted>") == 2
@@ -408,12 +554,232 @@ def test_success_artifacts_redact_child_save_artifacts(
     assert metadata_text.count("<redacted>") == 3
 
 
+def test_decode_warnings_fail_successful_capture(tmp_path: Path, monkeypatch: Any) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
+        dry_run=False,
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+    )
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    b'{"streams":[{"index":0,"codec_type":"video",'
+                    b'"codec_name":"hevc","width":1920,"height":1080}],'
+                    b'"format":{"duration":"5.0"}}'
+                ),
+                stderr=b"",
+            )
+        if command[0] == "ffmpeg":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=b"",
+                stderr=b"[hevc] Skipping invalid undecodable NALU: 19\n",
+            )
+        capture_path = Path(command[command.index("--output") + 1])
+        metadata_path = Path(
+            command[command.index("--hcnetsdk-command-metadata-output") + 1]
+        )
+        capture_path.write_bytes(b"mpegts")
+        metadata_path.write_text('{"bootstrap_complete": true}', encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout=b"{}", stderr=b"")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert result["ok"] is False
+    assert result["stage"] == "decode"
+    assert result["diagnosis"] == "decode_warnings"
+    assert result["streams"][0]["codec_name"] == "hevc"
+    assert "Skipping invalid undecodable NALU" in result["stderr_tail"]
+    assert Path(result["artifacts"]["decode_stderr"]).read_text(encoding="utf-8")
+
+
+def test_h264_decode_failure_fails_successful_capture(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
+        dry_run=False,
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+    )
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    b'{"streams":[{"index":0,"codec_type":"video",'
+                    b'"codec_name":"h264","width":1920,"height":1080}],'
+                    b'"format":{"duration":"5.0"}}'
+                ),
+                stderr=b"",
+            )
+        if command[0] == "ffmpeg":
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=b"",
+                stderr=b"[h264] error while decoding MB 0 0\n",
+            )
+        capture_path = Path(command[command.index("--output") + 1])
+        metadata_path = Path(
+            command[command.index("--hcnetsdk-command-metadata-output") + 1]
+        )
+        capture_path.write_bytes(b"mpegts")
+        metadata_path.write_text('{"bootstrap_complete": true}', encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout=b"{}", stderr=b"")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert result["ok"] is False
+    assert result["stage"] == "decode"
+    assert result["diagnosis"] == "decode_failed"
+    assert result["streams"][0]["codec_name"] == "h264"
+    assert "error while decoding" in result["stderr_tail"]
+
+
+def test_h264_decode_warnings_pass_successful_capture(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
+        dry_run=False,
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+    )
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    b'{"streams":[{"index":0,"codec_type":"video",'
+                    b'"codec_name":"h264","width":1920,"height":1080}],'
+                    b'"format":{"duration":"5.0"}}'
+                ),
+                stderr=b"",
+            )
+        if command[0] == "ffmpeg":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=b"",
+                stderr=b"[h264] corrupt decoded frame in stream 0\n",
+            )
+        capture_path = Path(command[command.index("--output") + 1])
+        metadata_path = Path(
+            command[command.index("--hcnetsdk-command-metadata-output") + 1]
+        )
+        capture_path.write_bytes(b"mpegts")
+        metadata_path.write_text('{"bootstrap_complete": true}', encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout=b"{}", stderr=b"")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert result["ok"] is True
+    assert result["stage"] == "complete"
+    assert result["diagnosis"] == "playable_mpegts_with_h264_decode_warnings"
+    assert result["streams"][0]["codec_name"] == "h264"
+    assert "corrupt decoded frame" in result["stderr_tail"]
+
+
 def test_credential_attempts_can_skip_encryption_key_password() -> None:
     tool = _load_tool()
     args = argparse.Namespace(no_try_enc_key_password=True)
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
         enc_key="dummy-enc-key-03",
     )
@@ -426,22 +792,22 @@ def test_credential_attempts_can_skip_encryption_key_password() -> None:
 def test_recursive_redaction_covers_serial_password_and_enc_key() -> None:
     tool = _load_tool()
     item = tool.CameraInventoryItem(
-        name="Garage",
-        serial="SERIAL-GARAGE-01",
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
         password="dummy-camera-password-01",
         enc_key="dummy-enc-key-03",
     )
 
     redacted = tool._redact_sensitive(  # noqa: SLF001
         {
-            "stderr": "SERIAL-GARAGE-01 dummy-camera-password-01 dummy-enc-key-03",
-            "nested": ["prefix-SERIAL-GARAGE-01"],
+            "stderr": "SERIAL-CAMERA-01 dummy-camera-password-01 dummy-enc-key-03",
+            "nested": ["prefix-SERIAL-CAMERA-01"],
         },
         item,
     )
 
     rendered = json.dumps(redacted)
-    assert "SERIAL-GARAGE-01" not in rendered
+    assert "SERIAL-CAMERA-01" not in rendered
     assert "dummy-camera-password-01" not in rendered
     assert "dummy-enc-key-03" not in rendered
     assert rendered.count("<redacted>") == 4
@@ -450,7 +816,7 @@ def test_recursive_redaction_covers_serial_password_and_enc_key() -> None:
 def test_redaction_handles_overlapping_sensitive_values() -> None:
     tool = _load_tool()
     item = tool.CameraInventoryItem(
-        name="Garage",
+        name="Camera",
         serial="dummy-secret",
         password="dummy-secret-password",
         enc_key="dummy-secret-password-key",

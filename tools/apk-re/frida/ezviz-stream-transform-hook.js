@@ -304,7 +304,13 @@ function hookExport(moduleName, exportName, callbacks) {
   if (ptr === null) {
     return;
   }
-  Interceptor.attach(ptr, callbacks);
+  try {
+    Interceptor.attach(ptr, callbacks);
+  } catch (err) {
+    console.log(`[warn] hook failed ${key} @ ${ptr}: ${err}`);
+    installed.add(key);
+    return;
+  }
   installed.add(key);
   console.log(`[hook] ${key} @ ${ptr}`);
 }
@@ -357,6 +363,47 @@ function hookCallbackPointer(label, cbPtr, dumpArgIndex, lenArgIndex) {
   }
 }
 
+function hookPointerDataFunction(moduleName, exportName, label, dumpArgIndex, lenArgIndex, logLimit) {
+  hookExport(moduleName, exportName, {
+    onEnter(args) {
+      this.label = label;
+      if (!shouldLog(`[native] ${label}`, logLimit || 128)) {
+        return;
+      }
+      const parts = [`this=${args[0]}`];
+      if (label.indexOf("ProcessLostPacket") !== -1) {
+        parts.push(`lost=${args[1].toInt32()}`);
+      }
+      if (dumpArgIndex !== null && dumpArgIndex !== undefined) {
+        let len = 256;
+        if (lenArgIndex !== null && lenArgIndex !== undefined) {
+          try {
+            len = Math.max(args[lenArgIndex].toInt32(), 0);
+          } catch (_) {
+            len = 256;
+          }
+        }
+        parts.push(`arg${dumpArgIndex}=${args[dumpArgIndex]}`);
+        parts.push(`len=${len}`);
+        if (!args[dumpArgIndex].isNull() && len > 0) {
+          parts.push(`head=${bytesToHex(args[dumpArgIndex], len)}`);
+          dumpBytes(
+            label.replace(/[^A-Za-z0-9_.-]+/g, "-"),
+            args[dumpArgIndex],
+            Math.min(len, CALLBACK_DUMP_LIMIT),
+          );
+        }
+      }
+      console.log(`[native] ${label} ${parts.join(" ")}`);
+    },
+    onLeave(retval) {
+      if (shouldLog(`[native] ${label}:ret`, logLimit || 128)) {
+        console.log(`[native] ${label} ret=${retval.toInt32()}`);
+      }
+    },
+  });
+}
+
 function describeDecodedFrameSize(len) {
   const commonYuv420Sizes = {
     460800: "640x480-yuv420",
@@ -402,6 +449,64 @@ function installNativeHooks() {
     onLeave(retval) {
       console.log(`[key] PlayM4_SetSecretKey ret=${retval.toInt32()}`);
     },
+  });
+
+  hookExport("libPlayCtrl.so", "PlayM4_SetStreamOpenMode", {
+    onEnter(args) {
+      // long port, unsigned int mode. Live preview uses this before raw InputData.
+      console.log(`[playm4] PlayM4_SetStreamOpenMode port=${args[0].toInt32()} mode=${args[1].toInt32()}`);
+    },
+    onLeave(retval) {
+      console.log(`[playm4] PlayM4_SetStreamOpenMode ret=${retval.toInt32()}`);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "PlayM4_OpenStream", {
+    onEnter(args) {
+      // long port, unsigned char *fileHeadBuf, unsigned int size, unsigned int poolSize.
+      const len = args[2].toInt32();
+      console.log(
+        `[playm4] PlayM4_OpenStream port=${args[0].toInt32()} len=${len} pool=${args[3].toInt32()} head=${bytesToHex(args[1], len)}`,
+      );
+      dumpBytes("playm4-open-stream-head", args[1], len);
+    },
+    onLeave(retval) {
+      console.log(`[playm4] PlayM4_OpenStream ret=${retval.toInt32()}`);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "PlayM4_CloseStream", {
+    onEnter(args) {
+      console.log(`[playm4] PlayM4_CloseStream port=${args[0].toInt32()}`);
+    },
+    onLeave(retval) {
+      console.log(`[playm4] PlayM4_CloseStream ret=${retval.toInt32()}`);
+    },
+  });
+
+  hookExport("libPlayCtrl.so", "PlayM4_SkipErrorData", {
+    onEnter(args) {
+      console.log(`[playm4] PlayM4_SkipErrorData port=${args[0].toInt32()} skip=${args[1].toInt32()}`);
+    },
+    onLeave(retval) {
+      console.log(`[playm4] PlayM4_SkipErrorData ret=${retval.toInt32()}`);
+    },
+  });
+
+  [
+    ["_ZN13ez_stream_sdk11EZMediaBase11startPlayerEv", "EZMediaBase::startPlayer"],
+    ["_ZN13ez_stream_sdk14EZMediaPreview11startPlayerEv", "EZMediaPreview::startPlayer"],
+    ["_ZN13ez_stream_sdk15EZMediaPlayback11startPlayerEv", "EZMediaPlayback::startPlayer"],
+    ["_ZN13ez_stream_sdk17EZMediaPlaybackEx11startPlayerEv", "EZMediaPlaybackEx::startPlayer"],
+  ].forEach(([name, label]) => {
+    hookExport("libezstreamclient.so", name, {
+      onEnter(args) {
+        console.log(`[player] ${label} this=${args[0]}`);
+      },
+      onLeave(retval) {
+        console.log(`[player] ${label} ret=${retval.toInt32()}`);
+      },
+    });
   });
 
   hookExport("libPlayCtrl.so", "IDMX_SetDecrptKey", {
@@ -566,6 +671,64 @@ function installNativeHooks() {
       console.log(`[in] PlayM4_InputData port=${args[0].toInt32()} len=${len} head=${bytesToHex(args[1], len)}`);
       dumpBytes("playm4-input", args[1], len);
     },
+  });
+
+  [
+    ["_ZN12IDMXRTPDemux9InputDataEPhjPj", "IDMXRTPDemux::InputData", 1, 2],
+    ["_ZN12IDMXRTPDemux14ProcessPayloadEP18_RTP_DEMUX_OUTPUT_", "IDMXRTPDemux::ProcessPayload", 1, null],
+    ["_ZN12IDMXRTPDemux10OutputDataEP18_IDMX_PACKET_INFO_", "IDMXRTPDemux::OutputData", 1, null],
+    ["_ZN12IDMXRTPDemux11AddFuPacketEPhjS0_j", "IDMXRTPDemux::AddFuPacket", 1, 2],
+    ["_ZN12IDMXRTPDemux17ProcessLostPacketEj", "IDMXRTPDemux::ProcessLostPacket", null, null],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libPlayCtrl.so", name, `PlayCtrl.${label}`, dumpArgIndex, lenArgIndex);
+    hookPointerDataFunction("libSystemTransform.so", name, `SystemTransform.${label}`, dumpArgIndex, lenArgIndex);
+  });
+
+  [
+    ["_ZN12CIDMXManager9InputDataEPhjPj", "CIDMXManager::InputData", 1, 2],
+    ["_ZN12CIDMXManager10OutputDataEP16_IDMX_FRMAE_INFO", "CIDMXManager::OutputData", 1, null],
+    ["_ZN12CIDMXManager17ProcessCodecFrameEPhjj", "CIDMXManager::ProcessCodecFrame", 1, 2],
+    ["_ZN12CIDMXManager17GetVideoFrameInfoEP18_IDMX_PACKET_INFO_", "CIDMXManager::GetVideoFrameInfo", 1, null],
+    ["_ZN11CDMXManager9InputDataE9DATA_TYPEPhj", "CDMXManager::InputData", 2, 3],
+    ["_ZN11CDMXManager14ParseRtpPacketEPhj", "CDMXManager::ParseRtpPacket", 1, 2],
+    ["_ZN11CDMXManager17ProcessVideoFrameEP16_IDMX_FRMAE_INFO", "CDMXManager::ProcessVideoFrame", 1, null],
+    ["_ZN11CDMXManager12ProcessFrameEP16_IDMX_FRMAE_INFO", "CDMXManager::ProcessFrame", 1, null],
+    ["_ZN11CDMXManager13SkipErrorDataEi", "CDMXManager::SkipErrorData", null, null],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libSystemTransform.so", name, `SystemTransform.${label}`, dumpArgIndex, lenArgIndex);
+  });
+
+  [
+    ["_ZN6NetSDK13CGetTCPStream17ProRTPOverTCPDataEPvPKvjj", "CGetTCPStream::ProRTPOverTCPData", 2, 3],
+    ["_ZN6NetSDK14CGetRTSPStream14ProcessRTPDataEPviPKvjj", "CGetRTSPStream::ProcessRTPData", 3, 4],
+    ["_ZN6NetSDK14CGetRTSPStream19ProcessRTPDataNoNpqEPviPKvjj", "CGetRTSPStream::ProcessRTPDataNoNpq", 3, 4],
+    ["_ZN6NetSDK14CPreviewPlayer15PlayerGetStreamEPKvjjPv", "CPreviewPlayer::PlayerGetStream", 1, 2],
+    ["_ZN6NetSDK14CPreviewPlayer17InputDataToPlayerEPvj", "CPreviewPlayer::InputDataToPlayer", 1, 2],
+    ["_ZN6NetSDK14CPreviewPlayer14ProccessStreamEPKvjj", "CPreviewPlayer::ProccessStream", 1, 2],
+    ["_ZN6NetSDK15CGetHRUDPStream17CallbackVedioDataEPKhjjj", "CGetHRUDPStream::CallbackVedioData", 1, 2],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libHCPreview.so", name, `HCPreview.${label}`, dumpArgIndex, lenArgIndex);
+  });
+
+  [
+    ["COM_StartRealPlay", "COM_StartRealPlay"],
+    ["COM_StopRealPlay", "COM_StopRealPlay"],
+    ["COM_GetRealPlaySock", "COM_GetRealPlaySock"],
+    ["COM_SetESRealPlayCallBack", "COM_SetESRealPlayCallBack"],
+    ["COM_SetRealPlaySecretKey", "COM_SetRealPlaySecretKey"],
+  ].forEach(([name, label]) => {
+    hookExport("libHCPreview.so", name, {
+      onEnter(args) {
+        if (shouldLog(`[hcpreview] ${label}`, 64)) {
+          console.log(`[hcpreview] ${label} args=${args[0]} ${args[1]} ${args[2]} ${args[3]}`);
+        }
+      },
+      onLeave(retval) {
+        if (shouldLog(`[hcpreview] ${label}:ret`, 64)) {
+          console.log(`[hcpreview] ${label} ret=${retval.toInt32()}`);
+        }
+      },
+    });
   });
 
   hookExport("libPlayCtrl.so", "PlayM4_SetDecodeCallBack", {
@@ -795,6 +958,70 @@ function installJavaHooks() {
       console.log("[hook] Java org.MediaPlayer.PlayM4.Player.SetSecretKey");
     } catch (err) {
       console.log(`[warn] Java PlayM4 hook unavailable: ${err}`);
+    }
+
+    try {
+      const Player = Java.use("org.MediaPlayer.PlayM4.Player");
+      if (Player.setStreamOpenMode !== undefined) {
+        for (const overload of Player.setStreamOpenMode.overloads) {
+          overload.implementation = function () {
+            console.log(`[java-playm4] Player.setStreamOpenMode port=${arguments[0]} mode=${arguments[1]}`);
+            const ret = overload.apply(this, arguments);
+            console.log(`[java-playm4] Player.setStreamOpenMode ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.openStream !== undefined) {
+        for (const overload of Player.openStream.overloads) {
+          overload.implementation = function () {
+            const data = arguments[1];
+            const len = Number(arguments[2]) || (data ? data.length : 0);
+            console.log(
+              `[java-playm4] Player.openStream port=${arguments[0]} len=${len} pool=${arguments[3]} dataLen=${data ? data.length : 0}`,
+            );
+            dumpJavaByteArray("java-playm4-open-stream-head", data, len);
+            const ret = overload.apply(this, arguments);
+            console.log(`[java-playm4] Player.openStream ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.openStreamAdvanced !== undefined) {
+        for (const overload of Player.openStreamAdvanced.overloads) {
+          overload.implementation = function () {
+            const data = arguments[3];
+            const len = data ? data.length : 0;
+            console.log(
+              `[java-playm4] Player.openStreamAdvanced port=${arguments[0]} mode=${arguments[1]} session=${safeJavaValue(arguments[2])} dataLen=${len} pool=${arguments[4]}`,
+            );
+            dumpJavaByteArray("java-playm4-open-stream-advanced-head", data, len);
+            const ret = overload.apply(this, arguments);
+            console.log(`[java-playm4] Player.openStreamAdvanced ret=${ret}`);
+            return ret;
+          };
+        }
+      }
+      if (Player.inputData !== undefined) {
+        for (const overload of Player.inputData.overloads) {
+          overload.implementation = function () {
+            const data = arguments[1];
+            const len = Number(arguments[2]) || (data ? data.length : 0);
+            if (shouldLog("[java-playm4] Player.inputData", 256)) {
+              console.log(`[java-playm4] Player.inputData port=${arguments[0]} len=${len} dataLen=${data ? data.length : 0}`);
+              dumpJavaByteArray("java-playm4-input", data, len);
+            }
+            const ret = overload.apply(this, arguments);
+            if (shouldLog("[java-playm4] Player.inputData:ret", 256)) {
+              console.log(`[java-playm4] Player.inputData ret=${ret}`);
+            }
+            return ret;
+          };
+        }
+      }
+      console.log("[hook] Java org.MediaPlayer.PlayM4.Player stream input/open methods");
+    } catch (err) {
+      console.log(`[warn] Java PlayM4 stream input hooks unavailable: ${err}`);
     }
 
     function hookJavaDecodeCallbackClass(className) {

@@ -3636,6 +3636,58 @@ def test_hcnetsdk_command_dump_summary_runs_without_credentials(tmp_path, capsys
     assert output["playm4_input"]["decode_idr_windows"][0]["decode_clean"] is True
 
 
+def test_hcnetsdk_command_dump_summary_reports_hevc_playm4_input(
+    tmp_path,
+    capsys,
+) -> None:
+    dump_dir = tmp_path / "dumps"
+    dump_dir.mkdir()
+    rtp_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    hevc_frames = [
+        rtp_header + b"\x40\x01vps",
+        rtp_header + b"\x42\x01sps",
+        rtp_header + b"\x44\x01pps",
+        rtp_header + b"\x26\x01idr",
+    ]
+    for index, idmx_frame in enumerate(hevc_frames):
+        (dump_dir / f"20260613070000-{index:04d}-playm4-input-16.bin").write_bytes(
+            idmx_frame
+        )
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(tmp_path / "missing.json"),
+                "stream",
+                "hcnetsdk-command-dump-summary",
+                "--playm4-input-dir",
+                str(dump_dir),
+                "--max-frames",
+                "8",
+                "--decode-idr-windows",
+                "--ffmpeg-path",
+                str(fake_ffmpeg),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["playm4_input"]["annexb_codec"] == "hevc"
+    assert output["playm4_input"]["idmx_h264"]["hevc"]["media"] == 3
+    assert output["playm4_input"]["annexb_irap_windows"]["irap_count"] == 1
+    assert output["playm4_input"]["decode_irap_windows"][0]["decode_clean"] is True
+
+
 def test_local_sdk_dump_can_fetch_cas_tuple_with_auth(monkeypatch, tmp_path) -> None:
     fake_client = _install_fake_client(monkeypatch)
     output_path = tmp_path / "local.ps"

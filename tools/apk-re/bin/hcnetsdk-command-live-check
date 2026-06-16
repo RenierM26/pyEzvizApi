@@ -140,6 +140,30 @@ def _parse_args() -> argparse.Namespace:
         help="Do not pass --hcnetsdk-h264-skip-initial-idr-windows 1",
     )
     parser.add_argument(
+        "--wait-for-clean-idr-window",
+        action="store_true",
+        help=(
+            "Pass --hcnetsdk-h264-wait-for-clean-idr-window so H.264 command-port "
+            "captures start remuxing after the first acceptable IDR window"
+        ),
+    )
+    parser.add_argument(
+        "--clean-idr-wait-seconds",
+        default="60",
+        help=(
+            "Value for --hcnetsdk-h264-clean-idr-wait-seconds when "
+            "--wait-for-clean-idr-window is used (default: 60)"
+        ),
+    )
+    parser.add_argument(
+        "--clean-idr-max-windows",
+        default="32",
+        help=(
+            "Value for --hcnetsdk-h264-clean-idr-max-windows when "
+            "--wait-for-clean-idr-window is used (default: 32)"
+        ),
+    )
+    parser.add_argument(
         "--decrypt-video",
         action="store_true",
         help="Pass the inventory encryption key to decrypt encrypted IDMX video payloads",
@@ -161,6 +185,16 @@ def _parse_args() -> argparse.Namespace:
         "--include-metadata-in-stdout",
         action="store_true",
         help="Include full packet metadata in stdout. The report file always keeps full metadata.",
+    )
+    parser.add_argument(
+        "--save-sampled-packets",
+        action="store_true",
+        help=(
+            "Save the bounded HCNetSDK command-port media packet sample used by "
+            "metadata summaries as a raw-dump-compatible .sampled-packets.bin sidecar. "
+            "The sidecar is sampled diagnostic packet context and may include packets "
+            "outside the final clean suffix selected for the MPEG-TS output."
+        ),
     )
     return parser.parse_args()
 
@@ -318,6 +352,22 @@ def _ffprobe(ffprobe_path: str, capture_path: Path) -> subprocess.CompletedProce
     )
 
 
+def _ffmpeg_decode(ffmpeg_path: str, capture_path: Path) -> subprocess.CompletedProcess[bytes]:
+    return _run(
+        [
+            ffmpeg_path,
+            "-v",
+            "error",
+            "-i",
+            str(capture_path),
+            "-f",
+            "null",
+            "-",
+        ],
+        cwd=REPO_ROOT,
+    )
+
+
 def _stream_summary(ffprobe_stdout: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(ffprobe_stdout.decode("utf-8"))
@@ -341,6 +391,18 @@ def _stream_summary(ffprobe_stdout: bytes) -> dict[str, Any]:
         "streams": streams,
         "format_duration": (payload.get("format") or {}).get("duration"),
     }
+
+
+def _has_h264_video_stream(stream_summary: dict[str, Any]) -> bool:
+    streams = stream_summary.get("streams")
+    if not isinstance(streams, list):
+        return False
+    return any(
+        isinstance(stream, dict)
+        and stream.get("codec_type") == "video"
+        and stream.get("codec_name") == "h264"
+        for stream in streams
+    )
 
 
 def _diagnose_save_failure(stderr_tail: str, metadata_path: Path) -> str:
@@ -390,6 +452,7 @@ def _save_command(
     host: str,
     capture_path: Path,
     metadata_path: Path,
+    sampled_packets_path: Path | None = None,
 ) -> list[str]:
     command = [
         args.python,
@@ -425,6 +488,13 @@ def _save_command(
         "--hcnetsdk-command-metadata-output",
         str(metadata_path),
     ]
+    if sampled_packets_path is not None:
+        command.extend(
+            [
+                "--hcnetsdk-command-sampled-packets-output",
+                str(sampled_packets_path),
+            ]
+        )
     if args.local_ip:
         command.extend(["--hcnetsdk-local-ip", args.local_ip])
     if args.decrypt_video and item.enc_key:
@@ -432,6 +502,16 @@ def _save_command(
         command.extend(["--media-key", item.enc_key])
     if not args.no_skip_initial_idr:
         command.extend(["--hcnetsdk-h264-skip-initial-idr-windows", "1"])
+    if args.wait_for_clean_idr_window:
+        command.append("--hcnetsdk-h264-wait-for-clean-idr-window")
+        command.extend(
+            [
+                "--hcnetsdk-h264-clean-idr-wait-seconds",
+                args.clean_idr_wait_seconds,
+                "--hcnetsdk-h264-clean-idr-max-windows",
+                args.clean_idr_max_windows,
+            ]
+        )
     return command
 
 
@@ -497,7 +577,7 @@ def _redact_existing_artifact(path: Path, item: CameraInventoryItem) -> None:
     _write_redacted_artifact(path, path.read_bytes(), item)
 
 
-def _check_item(
+def _check_item(  # noqa: PLR0915
     *,
     args: argparse.Namespace,
     item: CameraInventoryItem,
@@ -509,6 +589,7 @@ def _check_item(
     base = output_dir / f"camera-{camera_index:02d}-{_safe_name(item.name)}"
     credential_attempts = _credential_attempts(args, item)
     include_attempt_suffix = len(credential_attempts) > 1
+    save_sampled_packets = bool(getattr(args, "save_sampled_packets", False))
     result: dict[str, Any] = {
         "name": item.name,
         "serial": _public_serial(),
@@ -550,6 +631,11 @@ def _check_item(
                             host=host,
                             capture_path=_artifact_path(attempt_base, ".ts"),
                             metadata_path=_artifact_path(attempt_base, ".metadata.json"),
+                            sampled_packets_path=(
+                                _artifact_path(attempt_base, ".sampled-packets.bin")
+                                if save_sampled_packets
+                                else None
+                            ),
                         )
                     ),
                 }
@@ -577,6 +663,11 @@ def _check_item(
         attempt_base = _attempt_base(base, credential_source, include_suffix=include_attempt_suffix)
         capture_path = _artifact_path(attempt_base, ".ts")
         metadata_path = _artifact_path(attempt_base, ".metadata.json")
+        sampled_packets_path = (
+            _artifact_path(attempt_base, ".sampled-packets.bin")
+            if save_sampled_packets
+            else None
+        )
         stderr_path = _artifact_path(attempt_base, ".save.stderr.txt")
         stdout_path = _artifact_path(attempt_base, ".save.stdout.json")
         command = _save_command(
@@ -586,6 +677,7 @@ def _check_item(
             host=host,
             capture_path=capture_path,
             metadata_path=metadata_path,
+            sampled_packets_path=sampled_packets_path,
         )
         artifacts = {
             "capture": str(capture_path),
@@ -593,6 +685,8 @@ def _check_item(
             "save_stdout": str(stdout_path),
             "save_stderr": str(stderr_path),
         }
+        if sampled_packets_path is not None:
+            artifacts["sampled_packets"] = str(sampled_packets_path)
         save = _run(command, cwd=REPO_ROOT)
         _write_redacted_artifact(stdout_path, save.stdout, item)
         _write_redacted_artifact(stderr_path, save.stderr, item)
@@ -658,17 +752,68 @@ def _check_item(
         )
         return result
 
+    decode = _ffmpeg_decode(args.ffmpeg_path, capture_path)
+    decode_stderr_path = _artifact_path(attempt_base, ".decode.stderr.txt")
+    decode_stdout_path = _artifact_path(attempt_base, ".decode.stdout.txt")
+    decode_stderr_path.write_bytes(decode.stderr)
+    decode_stdout_path.write_bytes(decode.stdout)
+    artifacts.update(
+        {
+            "decode_stdout": str(decode_stdout_path),
+            "decode_stderr": str(decode_stderr_path),
+        }
+    )
+    decode_stderr_tail = _tail_text(decode.stderr)
+    stream_summary = _stream_summary(probe.stdout)
+    h264_decode_warnings_are_nonfatal = (
+        decode.returncode == 0
+        and bool(decode_stderr_tail.strip())
+        and _has_h264_video_stream(stream_summary)
+    )
+    if (
+        decode.returncode != 0
+        or (decode_stderr_tail.strip() and not h264_decode_warnings_are_nonfatal)
+    ):
+        result.update(
+            {
+                "ok": False,
+                "stage": "decode",
+                "credential_source": credential_source,
+                "credential_attempts": failed_attempts,
+                "returncode": decode.returncode,
+                "diagnosis": (
+                    "decode_failed" if decode.returncode != 0 else "decode_warnings"
+                ),
+                "stderr_tail": _redact_text(decode_stderr_tail, item),
+                "capture_size": capture_path.stat().st_size if capture_path.exists() else 0,
+                "metadata": _redact_sensitive(_read_metadata(metadata_path), item),
+                "artifacts": artifacts,
+                **stream_summary,
+            }
+        )
+        return result
+
     result.update(
         {
             "ok": True,
             "stage": "complete",
             "credential_source": credential_source,
             "credential_attempts": failed_attempts,
-            "diagnosis": "playable_mpegts",
+            "returncode": decode.returncode,
+            "diagnosis": (
+                "playable_mpegts_with_h264_decode_warnings"
+                if h264_decode_warnings_are_nonfatal
+                else "playable_mpegts"
+            ),
+            "stderr_tail": (
+                _redact_text(decode_stderr_tail, item)
+                if h264_decode_warnings_are_nonfatal
+                else ""
+            ),
             "capture_size": capture_path.stat().st_size,
             "metadata": _redact_sensitive(_read_metadata(metadata_path), item),
             "artifacts": artifacts,
-            **_stream_summary(probe.stdout),
+            **stream_summary,
         }
     )
     return result

@@ -2785,12 +2785,14 @@ def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
         hcnetsdk_h264_skip_initial_idr_windows=1,
         hcnetsdk_h264_trim_to_clean_idr_window=True,
         hcnetsdk_h264_clean_idr_max_windows=HCNETSDK_CLEAN_IDR_MAX_WINDOWS,
+        nalu_header_size=0,
         duration_seconds=HCNETSDK_SAVE_DURATION,
         max_packets=4,
     )
 
     assert calls[1]["media_key"] == "MEDIAKEY"
     assert calls[1]["ffmpeg_path"] == "ffmpeg"
+    assert calls[1]["nalu_header_size"] == 0
     assert calls[1]["max_packets"] == 4
     assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
     assert calls[1]["h264_skip_initial_idr_windows"] == 1

@@ -36,7 +36,10 @@ from pyezvizapi.local_stream import (
     HcNetSdkCommandPortMultiSocketMediaStream,
     HcNetSdkCommandPortMultiSocketPlan,
     HcNetSdkCommandPortSocketStep,
+    _ffmpeg_h264_decode_errors,
+    collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
     collect_h264_idmx_annexb_after_first_clean_idr_window,
+    collect_idmx_annexb_after_first_clean_video_window,
     collect_local_stream_mpegps,
     copy_hcnetsdk_real_data_to_mpegts,
     copy_local_sdk_stream_from_client,
@@ -53,9 +56,13 @@ from pyezvizapi.local_stream import (
     skip_h264_annexb_initial_idr_windows,
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
+    summarize_hevc_annexb_irap_windows,
     summarize_idmx_h264_local_packets,
     time as local_stream_time,
     trim_h264_annexb_to_first_clean_idr_window,
+    trim_h264_annexb_to_first_error_free_suffix,
+    trim_hevc_annexb_to_first_clean_irap_window,
+    trim_hevc_annexb_to_first_error_free_suffix,
 )
 
 FIRST_PREFIX = b"preface"
@@ -1542,6 +1549,346 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     )
 
 
+def test_copy_local_stream_to_decrypted_mpegts_decrypts_direct_hevc_idmx_payload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_hevc_nal_prefix(nal: bytes, _aes_key: bytes) -> bytes:
+        decrypted_nals.append(nal)
+        return nal
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        fake_decrypt_hevc_nal_prefix,
+    )
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def idmx_frame(body: bytes, *, sequence: int) -> bytes:
+        idmx_header = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    vps = b"\x40\x01vps"
+    first_fu = b"\x62\x01\x93slice-"
+    last_fu = b"\x62\x01\x53payload"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 3
+            return [
+                SimpleNamespace(body=idmx_frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=idmx_frame(first_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=idmx_frame(last_fu, sequence=sequence_base + 2)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=3,
+    )
+
+    assert decrypted_nals == [b"\x26\x01slice-payload"]
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01\x26\x01slice-payload"
+    )
+
+
+def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_idmx_payload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_h264_nal_prefix(
+        nal: bytes,
+        _aes_key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        assert nalu_header_size == 1
+        decrypted_nals.append(nal)
+        return nal[:1] + b"plain-" + nal[1:]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        fake_decrypt_h264_nal_prefix,
+    )
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    sps = b"\x67\x4d\x00"
+    pps = b"\x68\xee\x38"
+    non_idr = b"\x41cipher"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 3
+            return [
+                SimpleNamespace(body=idmx_frame(body))
+                for body in (sps, pps, non_idr)
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=3,
+    )
+
+    assert decrypted_nals == [non_idr]
+    assert output.getvalue() == (
+        b"h264:\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + b"\x41plain-cipher"
+    )
+
+
+def test_copy_local_stream_to_decrypted_mpegts_decrypts_fragmented_h264_idmx_payload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_h264_nal_prefix(
+        nal: bytes,
+        _aes_key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        assert nalu_header_size == 1
+        decrypted_nals.append(nal)
+        return nal[:1] + b"plain-" + nal[1:]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        fake_decrypt_h264_nal_prefix,
+    )
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def idmx_frame(body: bytes, *, sequence: int) -> bytes:
+        idmx_header = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    first_fu = b"\x7c\x85cipher-"
+    last_fu = b"\x7c\x45payload"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 2
+            return [
+                SimpleNamespace(body=idmx_frame(first_fu, sequence=sequence_base)),
+                SimpleNamespace(body=idmx_frame(last_fu, sequence=sequence_base + 1)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=2,
+    )
+
+    expected_output = b"h264:\x00\x00\x00\x01\x65plain-cipher-payload"
+    assert decrypted_nals == [b"\x65cipher-payload"]
+    assert output.getvalue() == expected_output
+
+
+def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_encrypted_header_idmx_payload(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_h264_nal_prefix(
+        nal: bytes,
+        _aes_key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        assert nalu_header_size == 0
+        decrypted_nals.append(nal)
+        return b"\x65plain-" + nal[1:]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        fake_decrypt_h264_nal_prefix,
+    )
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    encrypted_idr = b"\xaecipher"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(encrypted_idr))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+        nalu_header_size=0,
+    )
+
+    expected_output = b"h264:\x00\x00\x00\x01\x65plain-cipher"
+    assert decrypted_nals == [encrypted_idr]
+    assert output.getvalue() == expected_output
+
+
+def test_copy_local_stream_to_decrypted_mpegts_handles_direct_hevc_fu_without_continuation_headers(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_hevc_nal_prefix(nal: bytes, _aes_key: bytes) -> bytes:
+        decrypted_nals.append(nal)
+        return nal
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        fake_decrypt_hevc_nal_prefix,
+    )
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def idmx_frame(
+        body: bytes,
+        *,
+        sequence: int,
+        marker: bool = False,
+    ) -> bytes:
+        marker_payload_type = (0x80 if marker else 0x00) | 0x60
+        idmx_header = (
+            bytes([0x80, marker_payload_type])
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    vps = b"\x40\x01vps"
+    first_fu = b"\x62\x01\x93slice-"
+    middle_fu = b"\x62\x01payload-"
+    last_fu = b"\x62\x01tail"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=idmx_frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=idmx_frame(first_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=idmx_frame(middle_fu, sequence=sequence_base + 2)),
+                SimpleNamespace(
+                    body=idmx_frame(
+                        last_fu,
+                        sequence=sequence_base + 3,
+                        marker=True,
+                    )
+                ),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+    )
+
+    assert decrypted_nals == [b"\x26\x01slice-payload-tail"]
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01\x26\x01slice-payload-tail"
+    )
+
+
 def test_copy_local_stream_to_decrypted_mpegts_applies_h264_startup_trim(
     tmp_path,
 ) -> None:
@@ -1633,6 +1980,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         "data = sys.stdin.buffer.read()\n"
         "if b'bad' in data:\n"
         "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n"
         "elif '-f' in sys.argv and sys.argv[sys.argv.index('-f') + 1] == 'null':\n"
         "    pass\n"
         "else:\n"
@@ -1678,6 +2026,20 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         "pyezvizapi.local_stream._iter_local_stream_payloads",
         fake_iter_payloads,
     )
+    decrypt_probe_calls: list[list[bytes]] = []
+
+    def fake_decrypt_idmx_local_packets_to_annexb(
+        probe_packets: list[bytes],
+        *args: Any,
+        **kwargs: Any,
+    ) -> bytes:
+        decrypt_probe_calls.append(list(probe_packets))
+        return b"\x00\x00\x00\x01\x65bad"
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        fake_decrypt_idmx_local_packets_to_annexb,
+    )
 
     output = io.BytesIO()
     stream = object()
@@ -1698,6 +2060,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
     assert seen["stream"] is stream
     assert seen["max_packets"] is None
     assert seen["duration_seconds"] == requested_duration + wait_seconds
+    assert [len(call) for call in decrypt_probe_calls] == [1, 2, 3, 4]
     assert output.getvalue() == (
         b"ts:\x00\x00\x00\x01"
         + sps
@@ -1739,16 +2102,20 @@ def test_copy_local_stream_to_mpegts_remuxes_direct_idmx_hevc_payload(
     pps = b"\x44\x01pps"
     first_fu = b"\x62\x01\x93slice-"
     last_fu = b"\x62\x01\x53payload"
+    second_vps = b"\x40\x01vps2"
+    second_fu = b"\x26\x01clean"
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
-            assert max_packets == 5
+            assert max_packets == 7
             return [
                 SimpleNamespace(body=frame(vps, sequence=sequence_base)),
                 SimpleNamespace(body=frame(sps, sequence=sequence_base + 1)),
                 SimpleNamespace(body=frame(pps, sequence=sequence_base + 2)),
                 SimpleNamespace(body=frame(first_fu, sequence=sequence_base + 3)),
                 SimpleNamespace(body=frame(last_fu, sequence=sequence_base + 4)),
+                SimpleNamespace(body=frame(second_vps, sequence=sequence_base + 5)),
+                SimpleNamespace(body=frame(second_fu, sequence=sequence_base + 6)),
             ]
 
     output = io.BytesIO()
@@ -1757,19 +2124,74 @@ def test_copy_local_stream_to_mpegts_remuxes_direct_idmx_hevc_payload(
         FakeStream(),
         output,
         ffmpeg_path=str(fake_ffmpeg),
-        max_packets=5,
+        max_packets=7,
         h264_skip_initial_idr_windows=1,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + second_vps
+        + b"\x00\x00\x00\x01"
+        + second_fu
+    )
+
+
+def test_copy_local_stream_to_mpegts_skips_ezviz_hevc_fu_pseudo_headers(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int, marker: bool = False) -> bytes:
+        marker_payload_type = (0x80 if marker else 0x00) | 0x60
+        return (
+            bytes([0x80, marker_payload_type])
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    first_fu = b"\x62\x01\x93slice-"
+    middle_fu = b"\x62\x01\x26payload-"
+    last_fu = b"\x62\x01\x66tail"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(first_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(middle_fu, sequence=sequence_base + 2)),
+                SimpleNamespace(
+                    body=frame(last_fu, sequence=sequence_base + 3, marker=True)
+                ),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
     )
 
     assert output.getvalue() == (
         b"hevc:\x00\x00\x00\x01"
         + vps
         + b"\x00\x00\x00\x01"
-        + sps
-        + b"\x00\x00\x00\x01"
-        + pps
-        + b"\x00\x00\x00\x01"
-        + b"\x26\x01slice-payload"
+        + b"\x26\x01slice-payload-tail"
     )
 
 
@@ -1828,6 +2250,186 @@ def test_copy_local_stream_to_mpegts_drops_hevc_fu_until_start(
         + vps
         + b"\x00\x00\x00\x01"
         + b"\x26\x01slice-payload"
+    )
+
+
+def test_copy_local_stream_to_mpegts_drops_hevc_fu_on_sequence_gap(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    broken_start_fu = b"\x62\x01\x93broken-"
+    broken_end_fu = b"\x62\x01\x53tail"
+    valid_start_fu = b"\x62\x01\x93slice-"
+    valid_end_fu = b"\x62\x01\x53payload"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 5
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(broken_start_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(broken_end_fu, sequence=sequence_base + 3)),
+                SimpleNamespace(body=frame(valid_start_fu, sequence=sequence_base + 4)),
+                SimpleNamespace(body=frame(valid_end_fu, sequence=sequence_base + 5)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=5,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + b"\x26\x01slice-payload"
+    )
+
+
+def test_copy_local_stream_to_mpegts_handles_direct_hevc_fu_without_continuation_headers(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(
+        body: bytes,
+        *,
+        sequence: int,
+        marker: bool = False,
+    ) -> bytes:
+        marker_payload_type = (0x80 if marker else 0x00) | 0x60
+        return (
+            bytes([0x80, marker_payload_type])
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    start_fu = b"\x62\x01\x93slice-"
+    middle_fu = b"\x62\x01payload-"
+    end_fu = b"\x62\x01tail"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(start_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(middle_fu, sequence=sequence_base + 2)),
+                SimpleNamespace(
+                    body=frame(end_fu, sequence=sequence_base + 3, marker=True)
+                ),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + b"\x26\x01slice-payload-tail"
+    )
+
+
+def test_copy_local_stream_to_mpegts_drops_invalid_hevc_type_zero(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    invalid_type_zero = b"\x00\x01invalid"
+    vps = b"\x40\x01vps"
+    sps = b"\x42\x01sps"
+    idr = b"\x26\x01idr"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=frame(invalid_type_zero, sequence=sequence_base)),
+                SimpleNamespace(body=frame(vps, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(sps, sequence=sequence_base + 2)),
+                SimpleNamespace(body=frame(idr, sequence=sequence_base + 3)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + idr
     )
 
 
@@ -2268,6 +2870,7 @@ def test_copy_local_stream_to_mpegts_can_wait_for_clean_idr_before_duration(
         "data = sys.stdin.buffer.read()\n"
         "if b'bad' in data:\n"
         "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n"
         "else:\n"
         "    sys.stdout.buffer.write(data)\n",
         encoding="utf-8",
@@ -2375,12 +2978,12 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
         ffmpeg_path: str,
         max_windows: int,
         wait_seconds: float,
-    ) -> bytes:
+    ) -> tuple[bytes, str]:
         seen["collect_packets"] = list(packets)
         seen["collect_duration_seconds"] = duration_seconds
         seen["collect_wait_seconds"] = wait_seconds
         seen["collect_max_windows"] = max_windows
-        return clean_annexb
+        return clean_annexb, "h264"
 
     monkeypatch.setattr(
         "pyezvizapi.local_stream._iter_local_stream_payloads",
@@ -2391,7 +2994,7 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
         lambda payload: True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream.collect_h264_idmx_annexb_after_first_clean_idr_window",
+        "pyezvizapi.local_stream.collect_idmx_annexb_after_first_clean_video_window",
         fake_collect,
     )
     output = io.BytesIO()
@@ -2420,6 +3023,58 @@ def test_copy_local_stream_to_mpegts_wait_for_clean_idr_bounds_payloads(
     assert seen["collect_max_windows"] == 11
 
 
+def test_copy_local_stream_to_mpegts_wait_for_clean_irap_uses_hevc_remux(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    clean_annexb = b"\x00\x00\x00\x01\x40\x01vps\x00\x00\x00\x01\x26\x01clean"
+
+    def fake_collect(
+        packets: Iterator[bytes],
+        *,
+        duration_seconds: float | None,
+        monotonic: Any,
+        ffmpeg_path: str,
+        max_windows: int,
+        wait_seconds: float,
+    ) -> tuple[bytes, str]:
+        assert list(packets) == [b"idmx-payload"]
+        return clean_annexb, "hevc"
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        lambda *args, **kwargs: iter([b"idmx-payload"]),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._looks_like_idmx_local_payload",
+        lambda payload: True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.collect_idmx_annexb_after_first_clean_video_window",
+        fake_collect,
+    )
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        object(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        duration_seconds=2.0,
+        h264_wait_for_clean_idr_window=True,
+    )
+
+    assert output.getvalue() == b"hevc:" + clean_annexb
+
+
 def test_collect_h264_idmx_annexb_after_clean_idr_excludes_deadline_packet(
     tmp_path,
 ) -> None:
@@ -2430,6 +3085,7 @@ def test_collect_h264_idmx_annexb_after_clean_idr_excludes_deadline_packet(
         "data = sys.stdin.buffer.read()\n"
         "if b'bad' in data:\n"
         "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n"
         "else:\n"
         "    sys.stdout.buffer.write(data)\n",
         encoding="utf-8",
@@ -2472,13 +3128,117 @@ def test_collect_h264_idmx_annexb_after_clean_idr_excludes_deadline_packet(
     assert post_deadline_body not in annexb
 
 
+def test_collect_idmx_annexb_after_clean_video_window_selects_hevc_irap(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if codec == 'h264' or b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    sys.stdout.buffer.write(data)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    bad_vps = b"\x40\x01bad-vps"
+    bad_irap = b"\x26\x01bad-irap"
+    clean_vps = b"\x40\x01clean-vps"
+    clean_irap = b"\x26\x01clean-irap"
+    clean_delta = b"\x02\x01clean-delta"
+    next_irap = b"\x26\x01next-irap"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
+        (
+            idmx_frame(body)
+            for body in (
+                bad_vps,
+                bad_irap,
+                clean_vps,
+                clean_irap,
+                clean_delta,
+                next_irap,
+            )
+        ),
+        duration_seconds=1.0,
+        monotonic=iter([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5]).__next__,
+        ffmpeg_path=str(fake_ffmpeg),
+        wait_seconds=10.0,
+    )
+
+    assert codec == "hevc"
+    assert annexb == (
+        b"\x00\x00\x00\x01"
+        + clean_vps
+        + b"\x00\x00\x00\x01"
+        + clean_irap
+        + b"\x00\x00\x00\x01"
+        + clean_delta
+        + b"\x00\x00\x00\x01"
+        + next_irap
+    )
+
+
+def test_h264_decode_probe_accepts_success_with_warnings(tmp_path) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n"
+        "sys.stderr.write('corrupt decoded frame\\n')\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    assert _ffmpeg_h264_decode_errors(
+        b"\x00\x00\x00\x01\x65frame",
+        ffmpeg_path=str(fake_ffmpeg),
+    ) == []
+    assert _ffmpeg_h264_decode_errors(
+        b"\x00\x00\x00\x01\x65frame",
+        ffmpeg_path=str(fake_ffmpeg),
+        accept_success_with_stderr=False,
+    ) == ["corrupt decoded frame"]
+
+
+def test_summarize_hevc_irap_window_keeps_aud_with_parameter_sets() -> None:
+    vps = b"\x40\x01vps"
+    aud = b"\x46\x01aud"
+    irap = b"\x26\x01irap"
+    annexb = (
+        b"\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + aud
+        + b"\x00\x00\x00\x01"
+        + irap
+    )
+
+    summary = summarize_hevc_annexb_irap_windows(annexb)
+    samples = summary["samples"]
+    assert isinstance(samples, list)
+
+    assert samples[0]["start_code_offset"] == 0
+    assert samples[0]["leading_nal_types"] == [32, 35]
+
+
 def test_collect_h264_idmx_annexb_after_clean_idr_times_out(tmp_path) -> None:
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
     fake_ffmpeg.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "sys.stdin.buffer.read()\n"
-        "sys.stderr.write('decode failed\\n')\n",
+        "sys.stderr.write('decode failed\\n')\n"
+        "sys.exit(1)\n",
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
@@ -2632,6 +3392,69 @@ def test_copy_local_stream_to_mpegts_passes_clean_idr_max_windows(
     assert output.getvalue() == b"\x00\x00\x00\x01" + idr
 
 
+def test_copy_local_stream_to_mpegts_passes_clean_irap_max_windows_for_hevc(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+    irap = b"\x26\x01clean"
+    calls: list[dict[str, Any]] = []
+
+    def idmx_frame(body: bytes, *, sequence: int) -> bytes:
+        frame = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(frame).to_bytes(4, "little") + frame
+
+    def fake_trim(data: bytes, *, ffmpeg_path: str, max_windows: int) -> bytes:
+        calls.append(
+            {
+                "data": data,
+                "ffmpeg_path": ffmpeg_path,
+                "max_windows": max_windows,
+            }
+        )
+        return data
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(irap, sequence=sequence_base))]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_hevc_annexb_to_first_clean_irap_window",
+        fake_trim,
+    )
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+        h264_trim_to_clean_idr_window=True,
+        h264_clean_idr_max_windows=64,
+    )
+
+    assert calls[0]["ffmpeg_path"] == str(fake_ffmpeg)
+    assert calls[0]["max_windows"] == 64
+    assert output.getvalue() == b"hevc:\x00\x00\x00\x01" + irap
+
+
 def test_copy_local_stream_to_mpegts_rejects_invalid_clean_idr_max_windows() -> None:
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -2659,7 +3482,8 @@ def test_trim_h264_annexb_to_first_clean_idr_window_uses_ffmpeg(
         "import sys\n"
         "data = sys.stdin.buffer.read()\n"
         "if b'bad' in data:\n"
-        "    sys.stderr.write('decode failed\\n')\n",
+        "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n",
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
@@ -2686,6 +3510,543 @@ def test_trim_h264_annexb_to_first_clean_idr_window_uses_ffmpeg(
     assert trimmed == clean_window
 
 
+def test_trim_h264_annexb_requires_warning_free_decode(tmp_path) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'warn' in data:\n"
+        "    sys.stderr.write('corrupt decoded frame\\n')\n"
+        "elif b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    data = (
+        b"\x00\x00\x00\x01\x67sps"
+        b"\x00\x00\x00\x01\x68pps"
+        b"\x00\x00\x00\x01\x65warn"
+        b"\x00\x00\x00\x01\x41delta"
+        b"\x00\x00\x00\x01\x67sps2"
+        b"\x00\x00\x00\x01\x68pps2"
+        b"\x00\x00\x00\x01\x65good"
+    )
+
+    trimmed = trim_h264_annexb_to_first_clean_idr_window(
+        data,
+        ffmpeg_path=str(fake_ffmpeg),
+    )
+
+    expected_trimmed = (
+        b"\x00\x00\x00\x01\x67sps2"
+        b"\x00\x00\x00\x01\x68pps2"
+        b"\x00\x00\x00\x01\x65good"
+    )
+    assert trimmed == expected_trimmed
+
+
+def test_trim_h264_annexb_to_first_error_free_suffix_recovers_at_later_idr(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad-tail' in data:\n"
+        "    sys.stderr.write('error while decoding MB 22 34\\n')\n"
+        "    sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    first = (
+        b"\x00\x00\x00\x01\x67sps"
+        b"\x00\x00\x00\x01\x68pps"
+        b"\x00\x00\x00\x01\x65first-idr"
+        b"\x00\x00\x00\x01\x41bad-tail"
+    )
+    second = (
+        b"\x00\x00\x00\x01\x67sps2"
+        b"\x00\x00\x00\x01\x68pps2"
+        b"\x00\x00\x00\x01\x65second-idr"
+        b"\x00\x00\x00\x01\x41good-tail"
+    )
+
+    trimmed = trim_h264_annexb_to_first_error_free_suffix(
+        first + second,
+        ffmpeg_path=str(fake_ffmpeg),
+    )
+
+    assert trimmed == second
+
+
+def test_h264_strict_decode_probe_ignores_missing_picture_probe_artifact(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n"
+        "sys.stderr.write('[h264] missing picture in access unit with size 36\\n')\n"
+        "sys.stderr.write('[h264] no frame!\\n')\n"
+        "sys.stderr.write('Decoding error: Invalid data found when processing input\\n')\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    assert _ffmpeg_h264_decode_errors(
+        b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x65idr",
+        ffmpeg_path=str(fake_ffmpeg),
+        accept_success_with_stderr=False,
+    ) == []
+
+
+def test_trim_hevc_annexb_to_first_clean_irap_window_uses_ffmpeg(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad' in data:\n"
+        "    sys.stderr.write('decode failed\\n')\n"
+        "    sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    data = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01bad"
+        b"\x00\x00\x00\x01\x02\x01delta"
+        b"\x00\x00\x00\x01\x40\x01vps2"
+        b"\x00\x00\x00\x01\x42\x01sps2"
+        b"\x00\x00\x00\x01\x44\x01pps2"
+        b"\x00\x00\x00\x01\x26\x01good"
+    )
+    clean_window = (
+        b"\x00\x00\x00\x01\x40\x01vps2"
+        b"\x00\x00\x00\x01\x42\x01sps2"
+        b"\x00\x00\x00\x01\x44\x01pps2"
+        b"\x00\x00\x00\x01\x26\x01good"
+    )
+
+    trimmed = trim_hevc_annexb_to_first_clean_irap_window(
+        data,
+        ffmpeg_path=str(fake_ffmpeg),
+    )
+
+    assert trimmed == clean_window
+
+
+def test_trim_hevc_annexb_accepts_successful_ffmpeg_with_stderr(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n"
+        "sys.stderr.write('non-fatal slice warning\\n')\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    data = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01irap"
+    )
+
+    trimmed = trim_hevc_annexb_to_first_clean_irap_window(
+        data,
+        ffmpeg_path=str(fake_ffmpeg),
+    )
+
+    assert trimmed == data
+
+
+def test_trim_hevc_annexb_to_first_error_free_suffix_recovers_at_later_irap(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "if b'bad-tail' in data:\n"
+        "    sys.stderr.write('cu_qp_delta outside valid range\\n')\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    first = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01first-irap"
+        b"\x00\x00\x00\x01\x02\x01bad-tail"
+    )
+    second = (
+        b"\x00\x00\x00\x01\x40\x01vps2"
+        b"\x00\x00\x00\x01\x42\x01sps2"
+        b"\x00\x00\x00\x01\x44\x01pps2"
+        b"\x00\x00\x00\x01\x26\x01second-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+
+    trimmed = trim_hevc_annexb_to_first_error_free_suffix(
+        first + second,
+        ffmpeg_path=str(fake_ffmpeg),
+    )
+
+    assert trimmed == second
+
+
+def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
+    monkeypatch,
+) -> None:
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    packets = [
+        idmx_frame(b"\x40\x01vps"),
+        idmx_frame(b"\x42\x01sps"),
+        idmx_frame(b"\x44\x01pps"),
+        idmx_frame(b"\x26\x01first-irap"),
+        idmx_frame(b"\x02\x01bad-tail"),
+        idmx_frame(b"\x40\x01vps2"),
+        idmx_frame(b"\x42\x01sps2"),
+        idmx_frame(b"\x44\x01pps2"),
+        idmx_frame(b"\x26\x01second-irap"),
+        idmx_frame(b"\x02\x01good-tail"),
+    ]
+    times = iter([0.0, 0.01, 0.02, 0.03, 0.04, 0.10, 0.11, 0.12, 0.13, 0.14])
+
+    def fake_monotonic() -> float:
+        return next(times, 0.14)
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        first_irap_marker = b"first-irap"
+        if first_irap_marker in data and not accept_success_with_stderr:
+            return ["cu_qp_delta outside valid range"]
+        return []
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        lambda *_args, **_kwargs: (0, "hevc", None, SimpleNamespace()),
+    )
+
+    annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
+        packets,
+        duration_seconds=0.05,
+        monotonic=fake_monotonic,
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert codec == "hevc"
+    expected_annexb = (
+        b"\x00\x00\x00\x01\x40\x01vps2"
+        b"\x00\x00\x00\x01\x42\x01sps2"
+        b"\x00\x00\x00\x01\x44\x01pps2"
+        b"\x00\x00\x00\x01\x26\x01second-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+    assert annexb == expected_annexb
+
+
+def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    packets = [idmx_frame(b"\x65first-idr")] + [
+        idmx_frame(b"\x41tail-%02d" % index) for index in range(34)
+    ]
+    times = iter([0.0, 0.02, *([0.05] * 33)])
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            start_offset=0,
+            idr_start_offset=0,
+            first_decode_error=None,
+        ),
+    )
+    trim_calls = 0
+
+    def fake_trim(data: bytes, *, ffmpeg_path: str, max_windows: int) -> bytes:
+        nonlocal trim_calls
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert max_windows == 7
+        trim_calls += 1
+        if trim_calls == 1:
+            raise PyEzvizError("first suffix still corrupt")
+        return data
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        fake_trim,
+    )
+
+    annexb = collect_h264_idmx_annexb_after_first_clean_idr_window(
+        packets,
+        duration_seconds=0.01,
+        monotonic=lambda: next(times, 0.03),
+        ffmpeg_path="fake-ffmpeg",
+        max_windows=7,
+    )
+
+    assert trim_calls == 2
+    expected_tail_marker = b"tail-31"
+    assert expected_tail_marker in annexb
+
+
+def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"packet-%02d" % index for index in range(35)]
+    times = iter([0.0, 0.02, *([0.05] * 33)])
+    annexb_by_count: list[int] = []
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            start_offset=0,
+            idr_start_offset=0,
+            first_decode_error=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._h264_annexb_packet_index_for_offset",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def fake_packets_to_annexb(collected: list[bytes]) -> bytes:
+        annexb_by_count.append(len(collected))
+        return b"annexb-count-%d" % len(collected)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        fake_packets_to_annexb,
+    )
+    trim_calls = 0
+
+    def fake_trim(data: bytes, *, ffmpeg_path: str, max_windows: int) -> bytes:
+        nonlocal trim_calls
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert max_windows == 5
+        trim_calls += 1
+        if trim_calls == 1:
+            raise PyEzvizError("deadline suffix still corrupt")
+        return data
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        fake_trim,
+    )
+
+    annexb = collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+        packets,
+        IDMX_MEDIA_KEY,
+        duration_seconds=0.01,
+        monotonic=lambda: next(times, 0.03),
+        ffmpeg_path="fake-ffmpeg",
+        max_windows=5,
+    )
+
+    assert trim_calls == 2
+    expected_annexb = b"annexb-count-33"
+    assert annexb == expected_annexb
+    assert annexb_by_count[:2] == [1, 33]
+
+
+def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    packets = [idmx_frame(b"\x65first-idr")] + [
+        idmx_frame(b"\x41tail-%02d" % index) for index in range(34)
+    ]
+    times = iter([0.0, 0.02, *([0.03] * 33)])
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            start_offset=0,
+            idr_start_offset=0,
+            first_decode_error=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PyEzvizError("still dirty")
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="still dirty"):
+        collect_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            duration_seconds=0.0,
+            monotonic=lambda: next(times, 0.05),
+            ffmpeg_path="fake-ffmpeg",
+            wait_seconds=0.03,
+        )
+
+
+def test_collect_idmx_after_clean_video_times_out_on_dirty_final_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"packet-%02d" % index for index in range(35)]
+    times = iter([0.0, 0.02, *([0.05] * 33)])
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        lambda *_args, **_kwargs: (
+            0,
+            "h264",
+            None,
+            SimpleNamespace(start_offset=0, first_decode_error=None),
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        lambda collected: b"annexb-count-%d" % len(collected),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PyEzvizError("still dirty")
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="clean final H264 suffix"):
+        collect_idmx_annexb_after_first_clean_video_window(
+            packets,
+            duration_seconds=0.0,
+            monotonic=lambda: next(times, 0.05),
+            ffmpeg_path="fake-ffmpeg",
+            wait_seconds=0.03,
+        )
+
+
+def test_collect_decrypted_h264_after_clean_idr_times_out_on_dirty_final_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"packet-%02d" % index for index in range(35)]
+    times = iter([0.0, 0.02, *([0.05] * 33)])
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            start_offset=0,
+            idr_start_offset=0,
+            first_decode_error=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._h264_annexb_packet_index_for_offset",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        lambda collected: b"annexb-count-%d" % len(collected),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PyEzvizError("still dirty")
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match=r"clean final H\.264 suffix"):
+        collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            IDMX_MEDIA_KEY,
+            duration_seconds=0.0,
+            monotonic=lambda: next(times, 0.05),
+            ffmpeg_path="fake-ffmpeg",
+            wait_seconds=0.03,
+        )
+
+
+def test_clean_video_collectors_validate_window_settings() -> None:
+    packets = [b"packet"]
+
+    with pytest.raises(PyEzvizError, match="duration_seconds is required"):
+        collect_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            duration_seconds=None,
+        )
+    with pytest.raises(PyEzvizError, match="wait_seconds cannot be negative"):
+        collect_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            duration_seconds=1.0,
+            wait_seconds=-1.0,
+        )
+    with pytest.raises(PyEzvizError, match="max_windows must be positive"):
+        collect_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            duration_seconds=1.0,
+            max_windows=0,
+        )
+    with pytest.raises(PyEzvizError, match="duration_seconds is required"):
+        collect_idmx_annexb_after_first_clean_video_window(
+            packets,
+            duration_seconds=None,
+        )
+    with pytest.raises(PyEzvizError, match="wait_seconds cannot be negative"):
+        collect_idmx_annexb_after_first_clean_video_window(
+            packets,
+            duration_seconds=1.0,
+            wait_seconds=-1.0,
+        )
+    with pytest.raises(PyEzvizError, match="duration_seconds is required"):
+        collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            IDMX_MEDIA_KEY,
+            duration_seconds=None,
+        )
+    with pytest.raises(PyEzvizError, match="wait_seconds cannot be negative"):
+        collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            IDMX_MEDIA_KEY,
+            duration_seconds=1.0,
+            wait_seconds=-1.0,
+        )
+    with pytest.raises(PyEzvizError, match="max_windows must be positive"):
+        collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            packets,
+            IDMX_MEDIA_KEY,
+            duration_seconds=1.0,
+            max_windows=0,
+        )
+
+
 def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> None:
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
     fake_ffmpeg.write_text(
@@ -2695,12 +4056,19 @@ def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> 
         encoding="utf-8",
     )
     fake_ffmpeg.chmod(0o755)
-    idmx_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    rtp_timestamp = 0x7D522A3E
+    sequence_base = 0x5D5C
     first_fu = b"\x7c\x85\x88\x80\x00\x00\x1a\x48native-first"
     next_fu = b"\x7c\x05native-middle"
     last_fu = b"\x7c\x45native-last"
 
-    def idmx_frame(body: bytes) -> bytes:
+    def idmx_frame(body: bytes, *, sequence: int) -> bytes:
+        idmx_header = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
         frame = idmx_header + body
         return len(frame).to_bytes(4, "little") + frame
 
@@ -2709,9 +4077,9 @@ def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> 
             assert max_packets == 1
             return [
                 SimpleNamespace(
-                    body=idmx_frame(first_fu)
-                    + idmx_frame(next_fu)
-                    + idmx_frame(last_fu)
+                    body=idmx_frame(first_fu, sequence=sequence_base)
+                    + idmx_frame(next_fu, sequence=sequence_base + 1)
+                    + idmx_frame(last_fu, sequence=sequence_base + 2)
                 )
             ]
 
@@ -2733,6 +4101,64 @@ def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> 
     )
 
 
+def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x7D522A3E
+    sequence_base = 0x5D5C
+
+    def idmx_frame(body: bytes, *, sequence: int) -> bytes:
+        idmx_header = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    broken_start_fu = b"\x7c\x85broken-first"
+    broken_end_fu = b"\x7c\x45broken-last"
+    valid_start_fu = b"\x7c\x85native-first"
+    valid_end_fu = b"\x7c\x45native-last"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [
+                SimpleNamespace(
+                    body=idmx_frame(broken_start_fu, sequence=sequence_base)
+                    + idmx_frame(broken_end_fu, sequence=sequence_base + 2)
+                    + idmx_frame(valid_start_fu, sequence=sequence_base + 3)
+                    + idmx_frame(valid_end_fu, sequence=sequence_base + 4)
+                )
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01"
+        b"\x65"
+        + valid_start_fu[2:]
+        + valid_end_fu[2:]
+    )
+
+
 def test_copy_local_stream_to_mpegts_flattens_command_port_idmx_aggregates(
     tmp_path,
 ) -> None:
@@ -2745,22 +4171,29 @@ def test_copy_local_stream_to_mpegts_flattens_command_port_idmx_aggregates(
     )
     fake_ffmpeg.chmod(0o755)
     outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
-    inner_header = b"\xa0\x60\xb7\x12\x16\x54\x77\xeb\x55\x66\x77\x88"
+    rtp_timestamp = 0x165477EB
+    sequence_base = 0xB712
     sps = b"\x67\x4d\x00\x29"
     pps = b"\x68\xee\x38\x80"
     first_fu = b"\x7c\x85aggregate-first"
     last_fu = b"\x7c\x45aggregate-last"
 
-    def inner_frame(body: bytes) -> bytes:
+    def inner_frame(body: bytes, *, sequence: int) -> bytes:
+        inner_header = (
+            b"\xa0\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
         frame = inner_header + body
         return len(frame).to_bytes(4, "little") + frame
 
     aggregate_body = (
         b"\x00\x10aggregate-sidecar"
-        + inner_frame(sps)
-        + inner_frame(pps)
-        + inner_frame(first_fu)
-        + inner_frame(last_fu)
+        + inner_frame(sps, sequence=sequence_base)
+        + inner_frame(pps, sequence=sequence_base + 1)
+        + inner_frame(first_fu, sequence=sequence_base + 2)
+        + inner_frame(last_fu, sequence=sequence_base + 3)
     )
     outer_frame = outer_header + aggregate_body
     packet = len(outer_frame).to_bytes(4, "little") + outer_frame
@@ -2888,6 +4321,11 @@ def test_summarize_idmx_h264_local_packets_reports_sanitized_frame_shapes() -> N
             },
         ],
         "truncated": False,
+        "incomplete_fu_a": 0,
+        "discarded_fu_a_fragments": 0,
+        "sequence_gap_count": 0,
+        "timestamp_change_count": 0,
+        "restart_count": 0,
     }
 
 

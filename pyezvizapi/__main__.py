@@ -51,7 +51,7 @@ from .local_stream import (
     HcNetSdkCommandPortGeneratedSocketStep,
     HcNetSdkCommandPortMultiSocketPlan,
     HcNetSdkCommandPortSocketStep,
-    _idmx_local_packets_to_h264_annexb,
+    _idmx_local_packets_to_annexb_with_codec,
     copy_local_stream_to_decrypted_mpegps,
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegps,
@@ -62,6 +62,7 @@ from .local_stream import (
     open_local_sdk_stream,
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
+    summarize_hevc_annexb_irap_windows,
     summarize_idmx_h264_local_packets,
 )
 from .stream import (
@@ -792,6 +793,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser_save_clip.add_argument(
+        "--hcnetsdk-command-sampled-packets-output",
+        help=(
+            "Optional binary file for the bounded HCNetSDK command-port media "
+            "packet sample used by metadata summaries. The file uses the same "
+            "little-endian $ framing as raw command-port dump artifacts. This "
+            "diagnostic sidecar records sampled packets observed before final "
+            "clean-window trimming/recovery, so it is not an exact byte source "
+            "map for the remuxed clip."
+        ),
+    )
+    parser_save_clip.add_argument(
         "--hcnetsdk-h264-skip-initial-idr-windows",
         type=int,
         default=0,
@@ -1395,8 +1407,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--decode-idr-windows",
         action="store_true",
         help=(
-            "Run ffmpeg decode checks for reconstructed H.264 IDR windows from "
-            "inbound media and PlayM4 input dumps"
+            "Run ffmpeg decode checks for reconstructed H.264 IDR or HEVC IRAP "
+            "windows from inbound media and PlayM4 input dumps"
         ),
     )
     parser_stream_command_dump_summary.add_argument(
@@ -2173,11 +2185,15 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
             lambda stream: _write_local_sdk_metadata_output(
                 args.hcnetsdk_command_metadata_output,
                 stream,
+                packet_output_path=args.hcnetsdk_command_sampled_packets_output,
             )
         )
         if (
             args.source == "hcnetsdk-command-port"
-            and args.hcnetsdk_command_metadata_output
+            and (
+                args.hcnetsdk_command_metadata_output
+                or args.hcnetsdk_command_sampled_packets_output
+            )
         )
         else None
     )
@@ -3191,7 +3207,7 @@ def _codec_nalu_header_size(codec: str) -> int | None:
         return 2
     if codec in {"h264", "h264-clear-header"}:
         return 1
-    if codec in {"hevc-encrypted-header", "encrypted-header"}:
+    if codec in {"hevc-encrypted-header", "h264-encrypted-header", "encrypted-header"}:
         return 0
     return 0
 
@@ -4143,10 +4159,26 @@ def _add_hcnetsdk_annexb_dump_summary(
     """Attach sanitized reconstructed Annex-B metadata to a dump summary."""
 
     try:
-        annexb = _idmx_local_packets_to_h264_annexb(packets)
+        annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
     except PyEzvizError as err:
         summary["annexb_error"] = str(err)
         return
+    summary["annexb_codec"] = codec
+    if codec == "hevc":
+        irap_windows = summarize_hevc_annexb_irap_windows(
+            annexb,
+            max_windows=max_frames,
+        )
+        summary["annexb_irap_windows"] = irap_windows
+        if decode_idr_windows:
+            summary["decode_irap_windows"] = _decode_annexb_windows(
+                annexb,
+                irap_windows,
+                ffmpeg_path=ffmpeg_path,
+                input_format="hevc",
+            )
+        return
+
     idr_windows = summarize_h264_annexb_idr_windows(
         annexb,
         max_windows=max_frames,
@@ -4157,10 +4189,11 @@ def _add_hcnetsdk_annexb_dump_summary(
     )
     summary["annexb_idr_windows"] = idr_windows
     if decode_idr_windows:
-        summary["decode_idr_windows"] = _decode_h264_annexb_idr_windows(
+        summary["decode_idr_windows"] = _decode_annexb_windows(
             annexb,
             idr_windows,
             ffmpeg_path=ffmpeg_path,
+            input_format="h264",
         )
 
 
@@ -4332,16 +4365,17 @@ def _hcnetsdk_command_template_to_json(
     return value
 
 
-def _decode_h264_annexb_idr_windows(
+def _decode_annexb_windows(
     data: bytes,
-    idr_summary: Mapping[str, Any],
+    window_summary: Mapping[str, Any],
     *,
     ffmpeg_path: str,
+    input_format: str,
 ) -> list[dict[str, Any]]:
-    """Return bounded ffmpeg decode results for sampled IDR windows."""
+    """Return bounded ffmpeg decode results for sampled Annex-B windows."""
 
     results: list[dict[str, Any]] = []
-    samples = idr_summary.get("samples")
+    samples = window_summary.get("samples")
     if not isinstance(samples, list):
         return results
     for sample in samples:
@@ -4363,7 +4397,7 @@ def _decode_h264_annexb_idr_windows(
                     "-v",
                     "error",
                     "-f",
-                    "h264",
+                    input_format,
                     "-i",
                     "pipe:0",
                     "-f",
@@ -4393,15 +4427,57 @@ def _decode_h264_annexb_idr_windows(
     return results
 
 
-def _write_local_sdk_metadata_output(path: str | None, stream: Any) -> None:
-    """Write a safe JSON summary for a completed direct-local SDK stream."""
+def _decode_h264_annexb_idr_windows(
+    data: bytes,
+    idr_summary: Mapping[str, Any],
+    *,
+    ffmpeg_path: str,
+) -> list[dict[str, Any]]:
+    """Return bounded ffmpeg decode results for sampled H.264 IDR windows."""
 
-    if not path:
-        return
+    return _decode_annexb_windows(
+        data,
+        idr_summary,
+        ffmpeg_path=ffmpeg_path,
+        input_format="h264",
+    )
+
+
+def _write_local_sdk_metadata_output(
+    path: str | None,
+    stream: Any,
+    *,
+    packet_output_path: str | None = None,
+) -> None:
+    """Write safe stream metadata and optional bounded packet samples."""
+
     metadata = _local_sdk_stream_metadata(stream)
+    if packet_output_path:
+        _write_hcnetsdk_sampled_packet_output(packet_output_path, stream)
+    if path:
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+
+def _write_hcnetsdk_sampled_packet_output(path: str, stream: Any) -> None:
+    """Write bounded sampled command-port packets as raw dump-compatible frames."""
+
+    packets = getattr(stream, "_idmx_summary_packets", None)
+    if not isinstance(packets, list):
+        return
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with output_path.open("wb") as output:
+        for packet in packets:
+            if not isinstance(packet, bytes):
+                continue
+            output.write(b"$\0")
+            output.write((len(packet) + 4).to_bytes(2, "little"))
+            output.write(packet)
 
 
 def _local_sdk_stream_metadata(stream: Any) -> dict[str, Any]:

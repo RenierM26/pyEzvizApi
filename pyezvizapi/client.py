@@ -3004,6 +3004,7 @@ class EzvizClient:
                 ffmpeg_path=ffmpeg_path,
                 decrypt_video=decrypt_video,
                 media_key=media_key,
+                nalu_header_size=nalu_header_size,
                 timeout=timeout,
                 host=host,
                 command_port=command_port,
@@ -3140,6 +3141,7 @@ class EzvizClient:
         ffmpeg_path: str,
         decrypt_video: bool,
         media_key: str | bytes | None,
+        nalu_header_size: int | None,
         timeout: float | None,
         host: str | None,
         command_port: int | None,
@@ -3221,6 +3223,7 @@ class EzvizClient:
                             output_file,
                             media_key,
                             ffmpeg_path=ffmpeg_path,
+                            nalu_header_size=nalu_header_size,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
                             h264_skip_initial_idr_windows=(
@@ -3289,6 +3292,7 @@ class EzvizClient:
                             output,
                             media_key,
                             ffmpeg_path=ffmpeg_path,
+                            nalu_header_size=nalu_header_size,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
                             h264_skip_initial_idr_windows=(

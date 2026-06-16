@@ -114,6 +114,18 @@ Summarize native before/after transform pairs:
 ./tools/apk-re/frida/compare-idmx-dumps /tmp/ezviz-hook-dumps
 ```
 
+Classify all stream-hook binary samples by boundary and media shape:
+
+```bash
+./tools/apk-re/frida/analyze-stream-dumps /tmp/ezviz-hook-dumps
+./tools/apk-re/frida/analyze-stream-dumps --json /tmp/ezviz-hook-dumps
+```
+
+Use this after a live-view run to compare `java-playm4-open-stream-head`,
+`java-playm4-input`, `HCPreview.*`, and `PlayCtrl/SystemTransform.IDMX*`
+samples without printing raw video bytes. The report only includes sizes,
+hashes, RTP/IDMX/NAL metadata, and codec classification.
+
 Trigger a cloud-storage clip download through the gadget-loaded app:
 
 ```bash

@@ -1697,6 +1697,70 @@ def test_copy_local_stream_to_decrypted_mpegts_prefers_direct_hevc_before_h264_e
     )
 
 
+def test_copy_local_stream_to_decrypted_mpegts_honors_h264_encrypted_header_without_hevc_evidence(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_h264_nal_prefix(
+        nal: bytes,
+        _aes_key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        assert nalu_header_size == 0
+        decrypted_nals.append(nal)
+        return b"\x65plain-" + nal[1:]
+
+    def fail_hevc_decrypt(nal: bytes, _aes_key: bytes) -> bytes:
+        raise AssertionError(f"ambiguous H.264 encrypted-header hit HEVC: {nal!r}")
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        fake_decrypt_h264_nal_prefix,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        fail_hevc_decrypt,
+    )
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    ambiguous_encrypted_idr = b"\x02\x01cipher"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=idmx_frame(ambiguous_encrypted_idr))]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+        nalu_header_size=0,
+    )
+
+    expected_output = b"h264:\x00\x00\x00\x01\x65plain-\x01cipher"
+    assert decrypted_nals == [ambiguous_encrypted_idr]
+    assert output.getvalue() == expected_output
+
+
 def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_idmx_payload(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3917,6 +3981,47 @@ def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
         b"\x00\x00\x00\x01\x02\x01good-tail"
     )
     assert annexb == expected_annexb
+
+
+def test_collect_idmx_annexb_after_first_clean_video_window_starts_hevc_duration_at_irap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    first_irap_marker = b"first-irap"
+    second_irap_marker = b"second-irap"
+    late_tail_marker = b"late-tail"
+    packets = [
+        idmx_frame(b"\x40\x01vps"),
+        idmx_frame(b"\x42\x01sps"),
+        idmx_frame(b"\x44\x01pps"),
+        idmx_frame(b"\x26\x01" + first_irap_marker),
+        idmx_frame(b"\x02\x01first-tail"),
+        idmx_frame(b"\x26\x01" + second_irap_marker),
+        idmx_frame(b"\x02\x01" + late_tail_marker),
+    ]
+    times = iter([0.0, 0.01, 0.02, 0.03, 0.04, 0.13, 0.14])
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        lambda *_args, **_kwargs: [],
+    )
+
+    annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
+        packets,
+        duration_seconds=0.05,
+        monotonic=lambda: next(times, 0.14),
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert codec == "hevc"
+    assert first_irap_marker in annexb
+    assert second_irap_marker not in annexb
+    assert late_tail_marker not in annexb
 
 
 def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(

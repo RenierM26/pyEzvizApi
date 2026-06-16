@@ -2568,8 +2568,10 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
     wait_deadline = monotonic() + wait_seconds
     capture_deadline: float | None = None
     collected: list[bytes] = []
+    packet_times: list[float] = []
     clean_start_offset: int | None = None
     clean_codec: str | None = None
+    clean_window_time: float | None = None
     first_decode_error: str | None = None
     final_decode_error: str | None = None
     last_suffix_probe_packet_count = 0
@@ -2587,14 +2589,20 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
             clean_start_offset is not None
             and clean_codec is not None
             and capture_deadline is not None
+            and clean_window_time is not None
             and now >= capture_deadline
             and last_suffix_probe_packet_count == 0
         ):
+            deadline_packets = [
+                packet
+                for packet, packet_time in zip(collected, packet_times, strict=True)
+                if packet_time < capture_deadline or packet_time == clean_window_time
+            ]
             if clean_codec == "h264":
-                annexb = _idmx_local_packets_to_h264_annexb(collected)
+                annexb = _idmx_local_packets_to_h264_annexb(deadline_packets)
                 trim = trim_h264_annexb_to_first_error_free_suffix
             else:
-                annexb = _idmx_local_packets_to_hevc_annexb(collected)
+                annexb = _idmx_local_packets_to_hevc_annexb(deadline_packets)
                 trim = trim_hevc_annexb_to_first_error_free_suffix
             try:
                 return (
@@ -2609,6 +2617,7 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
                 final_decode_error = final_decode_error or str(err)
                 last_suffix_probe_packet_count = len(collected)
         collected.append(packet)
+        packet_times.append(now)
         if clean_start_offset is None:
             (
                 probe_start_offset,
@@ -2625,7 +2634,14 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
             if probe_start_offset is not None and probe_codec is not None:
                 clean_start_offset = probe_start_offset
                 clean_codec = probe_codec
-                capture_deadline = now + duration_seconds
+                clean_packet_index = _idmx_annexb_packet_index_for_offset(
+                    collected,
+                    codec=probe_codec,
+                    offset=getattr(last_probe, "idr_start_offset", None)
+                    or clean_start_offset,
+                )
+                clean_window_time = packet_times[clean_packet_index]
+                capture_deadline = clean_window_time + duration_seconds
             continue
 
         if (
@@ -3243,6 +3259,36 @@ def _h264_annexb_packet_index_for_offset(
             continue
         if len(annexb) > offset:
             return index
+    return max(len(packets) - 1, 0)
+
+
+def _hevc_annexb_packet_index_for_offset(
+    packets: list[bytes],
+    *,
+    offset: int,
+) -> int:
+    """Return the packet index that first contributes the clear HEVC Annex-B offset."""
+
+    for index in range(len(packets)):
+        try:
+            annexb = _idmx_local_packets_to_hevc_annexb(packets[: index + 1])
+        except PyEzvizError:
+            continue
+        if len(annexb) > offset:
+            return index
+    return max(len(packets) - 1, 0)
+
+
+def _idmx_annexb_packet_index_for_offset(
+    packets: list[bytes],
+    *,
+    codec: str,
+    offset: int,
+) -> int:
+    if codec == "h264":
+        return _h264_annexb_packet_index_for_offset(packets, offset=offset)
+    if codec == "hevc":
+        return _hevc_annexb_packet_index_for_offset(packets, offset=offset)
     return max(len(packets) - 1, 0)
 
 
@@ -3927,6 +3973,7 @@ def _decrypt_idmx_local_packets_to_annexb(
     output = bytearray()
     active_fu: _RtpFragmentedNal | None = None
     active_h264_fu: _RtpFragmentedNal | None = None
+    hevc_evidence_seen = False
     for frame in _iter_idmx_local_frames(b"".join(packets)):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
@@ -3938,6 +3985,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
             continue
         if _looks_like_idmx_hevc_media_frame(body):
+            hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(
                 output,
                 body[IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET:],
@@ -3948,7 +3996,11 @@ def _decrypt_idmx_local_packets_to_annexb(
                 rtp_marker=_idmx_local_frame_rtp_marker(frame, header_size),
             )
             continue
-        if h264_transport and _looks_like_idmx_h264_fu_a_frame(body):
+        if (
+            h264_transport
+            and not hevc_evidence_seen
+            and _looks_like_idmx_h264_fu_a_frame(body)
+        ):
             active_h264_fu = _append_idmx_h264_fu_a_payload(
                 output,
                 body,
@@ -3959,7 +4011,11 @@ def _decrypt_idmx_local_packets_to_annexb(
                 nalu_header_size=h264_nalu_header_size,
             )
             continue
-        if h264_transport and _looks_like_idmx_h264_clear_nal(body):
+        if (
+            h264_transport
+            and not hevc_evidence_seen
+            and _looks_like_idmx_h264_clear_nal(body)
+        ):
             active_h264_fu = None
             _append_decrypted_h264_nal(
                 output,
@@ -3968,7 +4024,11 @@ def _decrypt_idmx_local_packets_to_annexb(
                 nalu_header_size=h264_nalu_header_size,
             )
             continue
-        if h264_transport and _looks_like_idmx_hevc_direct_frame(body):
+        hevc_direct_evidence = _looks_like_idmx_hevc_evidence_frame(body)
+        if h264_transport and (
+            hevc_evidence_seen or hevc_direct_evidence
+        ) and _looks_like_idmx_hevc_direct_frame(body):
+            hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(
                 output,
                 body,

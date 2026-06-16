@@ -3963,15 +3963,6 @@ def _decrypt_idmx_local_packets_to_annexb(
                 nalu_header_size=h264_nalu_header_size,
             )
             continue
-        if h264_transport and h264_nalu_header_size == 0 and body:
-            active_h264_fu = None
-            _append_decrypted_h264_nal(
-                output,
-                body,
-                aes_key,
-                nalu_header_size=h264_nalu_header_size,
-            )
-            continue
         if h264_transport and _looks_like_idmx_hevc_direct_frame(body):
             active_fu = _append_idmx_hevc_media_payload(
                 output,
@@ -3983,6 +3974,16 @@ def _decrypt_idmx_local_packets_to_annexb(
                 rtp_marker=_idmx_local_frame_rtp_marker(frame, header_size),
                 decrypt_parameter_sets=False,
             )
+            continue
+        if h264_transport and h264_nalu_header_size == 0 and body:
+            active_h264_fu = None
+            _append_decrypted_h264_nal(
+                output,
+                body,
+                aes_key,
+                nalu_header_size=h264_nalu_header_size,
+            )
+            continue
     if active_fu is not None:
         _append_decrypted_hevc_nal(output, bytes(active_fu.data), aes_key)
     if not output:

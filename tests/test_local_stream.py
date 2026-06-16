@@ -1620,6 +1620,82 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_direct_hevc_idmx_payload
     )
 
 
+def test_copy_local_stream_to_decrypted_mpegts_prefers_direct_hevc_before_h264_encrypted_header_fallback(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_hevc_nals: list[bytes] = []
+
+    def fake_decrypt_hevc_nal_prefix(nal: bytes, _aes_key: bytes) -> bytes:
+        decrypted_hevc_nals.append(nal)
+        return nal
+
+    def fail_h264_decrypt(
+        _nal: bytes,
+        _aes_key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        raise AssertionError("direct HEVC should not hit H.264 fallback")
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        fake_decrypt_hevc_nal_prefix,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        fail_h264_decrypt,
+    )
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def idmx_frame(body: bytes, *, sequence: int) -> bytes:
+        idmx_header = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    vps = b"\x40\x01vps"
+    trail_r = b"\x02\x01trail"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 2
+            return [
+                SimpleNamespace(body=idmx_frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=idmx_frame(trail_r, sequence=sequence_base + 1)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=2,
+        nalu_header_size=0,
+    )
+
+    assert decrypted_hevc_nals == [trail_r]
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01" + vps + b"\x00\x00\x00\x01" + trail_r
+    )
+
+
 def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_idmx_payload(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

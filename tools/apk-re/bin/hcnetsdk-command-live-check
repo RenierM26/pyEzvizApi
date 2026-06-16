@@ -500,7 +500,7 @@ def _save_command(
     if args.decrypt_video and item.enc_key:
         command.append("--decrypt-video")
         command.extend(["--media-key", item.enc_key])
-    if not args.no_skip_initial_idr:
+    if not args.no_skip_initial_idr and not args.wait_for_clean_idr_window:
         command.extend(["--hcnetsdk-h264-skip-initial-idr-windows", "1"])
     if args.wait_for_clean_idr_window:
         command.append("--hcnetsdk-h264-wait-for-clean-idr-window")

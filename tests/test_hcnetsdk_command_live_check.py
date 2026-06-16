@@ -276,7 +276,7 @@ def test_save_command_can_wait_for_clean_idr_window(tmp_path: Path) -> None:
         local_ip=None,
         decrypt_video=False,
         no_try_enc_key_password=True,
-        no_skip_initial_idr=True,
+        no_skip_initial_idr=False,
         wait_for_clean_idr_window=True,
         clean_idr_wait_seconds="20",
         clean_idr_max_windows="8",

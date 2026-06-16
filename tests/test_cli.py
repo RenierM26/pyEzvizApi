@@ -3695,9 +3695,11 @@ def test_hcnetsdk_command_dump_summary_reports_native_annexb_label(
     dump_dir = tmp_path / "dumps"
     dump_dir.mkdir()
     chunks = [
-        b"\x00\x00\x00\x01\x67\x4d\x00\x29"
-        b"\x00\x00\x00\x01\x68\xee\x38\x80"
-        b"\x00\x00\x00\x01\x65idr",
+        (
+            b"\x00\x00\x00\x01\x67\x4d\x00\x29"
+            + b"\x00\x00\x00\x01\x68\xee\x38\x80"
+            + b"\x00\x00\x00\x01\x65idr"
+        ),
         b"\x00\x00\x00\x01\x61p",
     ]
     for index, chunk in enumerate(chunks):
@@ -3750,9 +3752,11 @@ def test_hcnetsdk_command_dump_summary_auto_detects_native_hevc(
     dump_dir = tmp_path / "dumps"
     dump_dir.mkdir()
     chunks = [
-        b"\x00\x00\x00\x01\x40\x01vps"
-        b"\x00\x00\x00\x01\x42\x01sps"
-        b"\x00\x00\x00\x01\x44\x01pps",
+        (
+            b"\x00\x00\x00\x01\x40\x01vps"
+            + b"\x00\x00\x00\x01\x42\x01sps"
+            + b"\x00\x00\x00\x01\x44\x01pps"
+        ),
         b"\x00\x00\x00\x01\x26\x01irap",
     ]
     for index, chunk in enumerate(chunks):

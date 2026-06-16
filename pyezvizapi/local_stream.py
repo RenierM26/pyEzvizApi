@@ -2427,7 +2427,10 @@ def skip_hevc_annexb_initial_irap_windows(data: bytes, count: int) -> bytes:
         index for index, nal_type in enumerate(nal_types) if 16 <= nal_type <= 21
     ]
     if count >= len(irap_indexes):
-        return data
+        raise PyEzvizError(
+            "HEVC stream did not contain enough IRAP windows to skip "
+            f"{count} startup window(s)"
+        )
     start_index = _hevc_annexb_irap_window_start_index(nal_types, irap_indexes[count])
     return data[spans[start_index][0] :]
 

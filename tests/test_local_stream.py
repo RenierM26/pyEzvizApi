@@ -59,6 +59,7 @@ from pyezvizapi.local_stream import (
     open_local_sdk_stream,
     open_local_sdk_stream_from_client,
     skip_h264_annexb_initial_idr_windows,
+    skip_hevc_annexb_initial_irap_windows,
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
     summarize_hevc_annexb_irap_windows,
@@ -2648,7 +2649,6 @@ def test_copy_local_stream_to_mpegts_prefers_direct_hevc_over_partial_h264(
         output,
         ffmpeg_path=str(fake_ffmpeg),
         max_packets=4,
-        h264_skip_initial_idr_windows=1,
     )
 
     assert output.getvalue() == (
@@ -2694,7 +2694,6 @@ def test_copy_local_stream_to_mpegts_prefers_hevc_idr_over_h264_sei_shape(
         output,
         ffmpeg_path=str(fake_ffmpeg),
         max_packets=1,
-        h264_skip_initial_idr_windows=1,
     )
 
     assert output.getvalue() == (
@@ -2977,6 +2976,22 @@ def test_copy_local_stream_to_mpegts_can_skip_initial_h264_idr_windows(
     )
 
     assert output.getvalue() == b"ts:\x00\x00\x00\x01" + idr_good
+
+
+def test_skip_hevc_annexb_initial_irap_windows_requires_requested_window() -> None:
+    data = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01irap"
+        b"\x00\x00\x00\x01\x02\x01trail"
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="HEVC stream did not contain enough IRAP windows",
+    ):
+        skip_hevc_annexb_initial_irap_windows(data, 1)
 
 
 def test_copy_local_stream_to_mpegts_can_preroll_before_clean_idr_trim(

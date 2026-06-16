@@ -3688,6 +3688,100 @@ def test_hcnetsdk_command_dump_summary_reports_hevc_playm4_input(
     assert output["playm4_input"]["decode_irap_windows"][0]["decode_clean"] is True
 
 
+def test_hcnetsdk_command_dump_summary_reports_native_annexb_label(
+    tmp_path,
+    capsys,
+) -> None:
+    dump_dir = tmp_path / "dumps"
+    dump_dir.mkdir()
+    chunks = [
+        b"\x00\x00\x00\x01\x67\x4d\x00\x29"
+        b"\x00\x00\x00\x01\x68\xee\x38\x80"
+        b"\x00\x00\x00\x01\x65idr",
+        b"\x00\x00\x00\x01\x61p",
+    ]
+    for index, chunk in enumerate(chunks):
+        (dump_dir / f"20260613070000-{index:04d}-playctrl-idmx-aes-frame-after-8.bin").write_bytes(
+            chunk
+        )
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(tmp_path / "missing.json"),
+                "stream",
+                "hcnetsdk-command-dump-summary",
+                "--native-annexb-dir",
+                str(dump_dir),
+                "--max-frames",
+                "8",
+                "--decode-idr-windows",
+                "--ffmpeg-path",
+                str(fake_ffmpeg),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["native_annexb"]["label"] == "playctrl-idmx-aes-frame-after"
+    assert output["native_annexb"]["codec"] == "h264"
+    assert output["native_annexb"]["requested_codec"] == "auto"
+    assert output["native_annexb"]["file_count"] == 2
+    assert output["native_annexb"]["annexb_units"]["h264"]["sps"] == 1
+    assert output["native_annexb"]["annexb_idr_windows"]["idr_count"] == 1
+    assert output["native_annexb"]["decode_idr_windows"][0]["decode_clean"] is True
+    assert output["native_annexb"]["decode_chunk_windows"][0]["decode_clean"] is True
+
+
+def test_hcnetsdk_command_dump_summary_auto_detects_native_hevc(
+    tmp_path,
+    capsys,
+) -> None:
+    dump_dir = tmp_path / "dumps"
+    dump_dir.mkdir()
+    chunks = [
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps",
+        b"\x00\x00\x00\x01\x26\x01irap",
+    ]
+    for index, chunk in enumerate(chunks):
+        (dump_dir / f"20260613070000-{index:04d}-playctrl-idmx-aes-frame-after-8.bin").write_bytes(
+            chunk
+        )
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(tmp_path / "missing.json"),
+                "stream",
+                "hcnetsdk-command-dump-summary",
+                "--native-annexb-dir",
+                str(dump_dir),
+                "--max-frames",
+                "8",
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["native_annexb"]["codec"] == "hevc"
+    assert output["native_annexb"]["requested_codec"] == "auto"
+    assert output["native_annexb"]["annexb_irap_windows"]["irap_count"] == 1
+
+
 def test_local_sdk_dump_can_fetch_cas_tuple_with_auth(monkeypatch, tmp_path) -> None:
     fake_client = _install_fake_client(monkeypatch)
     output_path = tmp_path / "local.ps"

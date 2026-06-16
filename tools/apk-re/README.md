@@ -89,6 +89,22 @@ network Frida server, pass the host:
 EZVIZ_FRIDA_HOST=192.0.2.56:27042 ./tools/apk-re/frida/run-ezviz-stream-hook
 ```
 
+If the production app blocks `frida -U -f`/PID attach but a Frida Gadget build
+is already listening, attach directly to Gadget:
+
+```bash
+frida -H 127.0.0.1:27046 -n Gadget -l tools/apk-re/frida/ezviz-stream-transform-hook.js
+```
+
+For fragile live-preview runs, create a temporary device flag before attaching
+to skip Java hooks and keep only the native stream/decrypt taps:
+
+```bash
+adb shell 'touch /data/local/tmp/ezviz-native-only.flag'
+frida -H 127.0.0.1:27046 -n Gadget -l tools/apk-re/frida/ezviz-stream-transform-hook.js
+adb shell 'rm -f /data/local/tmp/ezviz-native-only.flag'
+```
+
 Check target readiness before capture:
 
 ```bash
@@ -124,7 +140,10 @@ Classify all stream-hook binary samples by boundary and media shape:
 Use this after a live-view run to compare `java-playm4-open-stream-head`,
 `java-playm4-input`, `HCPreview.*`, and `PlayCtrl/SystemTransform.IDMX*`
 samples without printing raw video bytes. The report only includes sizes,
-hashes, RTP/IDMX/NAL metadata, and codec classification.
+hashes, RTP/IDMX/NAL metadata, and codec classification. When both
+`playctrl-idmx-aes-frame-before` and `playctrl-idmx-aes-frame-after` dumps are
+present, the JSON/text report also includes an `aes_frame_pairs` count for
+matched, same-size, and changed before/after buffers.
 
 Trigger a cloud-storage clip download through the gadget-loaded app:
 

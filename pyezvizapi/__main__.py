@@ -1398,6 +1398,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Directory containing *-playm4-input-*.bin dumps from the transform hook",
     )
     parser_stream_command_dump_summary.add_argument(
+        "--native-annexb-dir",
+        help=(
+            "Directory containing native Frida Annex-B dumps, such as "
+            "*-playctrl-idmx-aes-frame-after-*.bin"
+        ),
+    )
+    parser_stream_command_dump_summary.add_argument(
+        "--native-annexb-label",
+        default="playctrl-idmx-aes-frame-after",
+        help=(
+            "Native Annex-B dump label to summarize with --native-annexb-dir "
+            "(default: playctrl-idmx-aes-frame-after)"
+        ),
+    )
+    parser_stream_command_dump_summary.add_argument(
+        "--native-annexb-codec",
+        choices=("auto", "h264", "hevc"),
+        default="auto",
+        help="Codec for --native-annexb-dir decode-window checks (default: auto)",
+    )
+    parser_stream_command_dump_summary.add_argument(
         "--max-frames",
         type=int,
         default=64,
@@ -3977,10 +3998,15 @@ def _handle_h264_annexb_summary(args: argparse.Namespace) -> int:
 def _handle_hcnetsdk_command_dump_summary(args: argparse.Namespace) -> int:
     """Summarize offline HCNetSDK command-port dump artifacts."""
 
-    if not args.command_frame_dir and not args.inbound_media_file and not args.playm4_input_dir:
+    if (
+        not args.command_frame_dir
+        and not args.inbound_media_file
+        and not args.playm4_input_dir
+        and not args.native_annexb_dir
+    ):
         raise PyEzvizError(
             "hcnetsdk-command-dump-summary requires --command-frame-dir "
-            "or --inbound-media-file or --playm4-input-dir"
+            "or --inbound-media-file or --playm4-input-dir or --native-annexb-dir"
         )
     summary: dict[str, Any] = {}
     if args.command_frame_dir:
@@ -3998,6 +4024,15 @@ def _handle_hcnetsdk_command_dump_summary(args: argparse.Namespace) -> int:
     if args.playm4_input_dir:
         summary["playm4_input"] = _hcnetsdk_playm4_input_dump_summary(
             Path(args.playm4_input_dir),
+            max_frames=args.max_frames,
+            decode_idr_windows=args.decode_idr_windows,
+            ffmpeg_path=args.ffmpeg_path,
+        )
+    if args.native_annexb_dir:
+        summary["native_annexb"] = _hcnetsdk_native_annexb_dump_summary(
+            Path(args.native_annexb_dir),
+            label=args.native_annexb_label,
+            codec=args.native_annexb_codec,
             max_frames=args.max_frames,
             decode_idr_windows=args.decode_idr_windows,
             ffmpeg_path=args.ffmpeg_path,
@@ -4146,6 +4181,177 @@ def _hcnetsdk_playm4_input_dump_summary(
         ffmpeg_path=ffmpeg_path,
     )
     return summary
+
+
+def _hcnetsdk_native_annexb_dump_summary(
+    directory: Path,
+    *,
+    label: str,
+    codec: str,
+    max_frames: int,
+    decode_idr_windows: bool,
+    ffmpeg_path: str,
+) -> dict[str, Any]:
+    """Return sanitized metadata for native Annex-B Frida dump chunks."""
+
+    if max_frames <= 0:
+        raise PyEzvizError("--max-frames must be positive")
+    if not directory.is_dir():
+        raise PyEzvizError(f"Native Annex-B dump directory not found: {directory}")
+
+    paths = sorted(directory.rglob(f"*-{label}-*.bin"))
+    chunks = [path.read_bytes() for path in paths]
+    data = b"".join(chunks)
+    detected_codec = _detect_native_annexb_codec(data, requested=codec)
+    samples = [
+        {
+            "path": str(path),
+            "size": len(chunk),
+            "sha256": hashlib.sha256(chunk).hexdigest(),
+        }
+        for path, chunk in zip(paths[:max_frames], chunks[:max_frames], strict=False)
+    ]
+    summary: dict[str, Any] = {
+        "input": str(directory),
+        "label": label,
+        "codec": detected_codec,
+        "requested_codec": codec,
+        "file_count": len(paths),
+        "byte_count": len(data),
+        "sample_limit": max_frames,
+        "samples": samples,
+        "truncated": len(paths) > len(samples),
+    }
+    if detected_codec == "hevc":
+        irap_windows = summarize_hevc_annexb_irap_windows(
+            data,
+            max_windows=max_frames,
+        )
+        summary["annexb_irap_windows"] = irap_windows
+        if decode_idr_windows:
+            summary["decode_irap_windows"] = _decode_annexb_windows(
+                data,
+                irap_windows,
+                ffmpeg_path=ffmpeg_path,
+                input_format="hevc",
+            )
+            summary["decode_chunk_windows"] = _decode_native_annexb_chunk_windows(
+                paths,
+                codec="hevc",
+                max_windows=max_frames,
+                ffmpeg_path=ffmpeg_path,
+            )
+        return summary
+
+    idr_windows = summarize_h264_annexb_idr_windows(
+        data,
+        max_windows=max_frames,
+    )
+    summary["annexb_units"] = summarize_h264_annexb_units(
+        data,
+        max_units=max_frames,
+    )
+    summary["annexb_idr_windows"] = idr_windows
+    if decode_idr_windows:
+        summary["decode_idr_windows"] = _decode_annexb_windows(
+            data,
+            idr_windows,
+            ffmpeg_path=ffmpeg_path,
+            input_format="h264",
+        )
+        summary["decode_chunk_windows"] = _decode_native_annexb_chunk_windows(
+            paths,
+            codec="h264",
+            max_windows=max_frames,
+            ffmpeg_path=ffmpeg_path,
+        )
+    return summary
+
+
+def _decode_native_annexb_chunk_windows(
+    paths: list[Path],
+    *,
+    codec: str,
+    max_windows: int,
+    ffmpeg_path: str,
+) -> list[dict[str, Any]]:
+    """Decode sampled IDR/IRAP-bearing native dump chunks independently."""
+
+    results: list[dict[str, Any]] = []
+    for path in paths:
+        data = path.read_bytes()
+        if codec == "hevc":
+            windows = summarize_hevc_annexb_irap_windows(data, max_windows=1)
+            decoded = _decode_annexb_windows(
+                data,
+                windows,
+                ffmpeg_path=ffmpeg_path,
+                input_format="hevc",
+            )
+        else:
+            windows = summarize_h264_annexb_idr_windows(data, max_windows=1)
+            decoded = _decode_annexb_windows(
+                data,
+                windows,
+                ffmpeg_path=ffmpeg_path,
+                input_format="h264",
+            )
+        if not decoded:
+            continue
+        result = {
+            "path": str(path),
+            "size": len(data),
+            **decoded[0],
+        }
+        results.append(result)
+        if len(results) >= max_windows:
+            break
+    return results
+
+
+def _detect_native_annexb_codec(data: bytes, *, requested: str) -> str:
+    """Return the requested or likely codec for Annex-B dump bytes."""
+
+    if requested != "auto":
+        return requested
+
+    h264_score = 0
+    hevc_score = 0
+    for index, prefix in enumerate(_iter_annexb_nal_prefixes(data)):
+        if index >= 256:
+            break
+        h264_type = prefix[0] & 0x1F
+        hevc_type = (prefix[0] >> 1) & 0x3F
+        if h264_type in {1, 5, 6, 7, 8, 9}:
+            h264_score += 2 if h264_type in {5, 7, 8} else 1
+        if hevc_type in {32, 33, 34}:
+            hevc_score += 3
+        elif 16 <= hevc_type <= 23:
+            hevc_score += 2
+        elif 0 <= hevc_type <= 31:
+            hevc_score += 1
+    return "hevc" if hevc_score > h264_score else "h264"
+
+
+def _iter_annexb_nal_prefixes(data: bytes) -> Iterator[bytes]:
+    """Yield the first bytes after Annex-B start codes."""
+
+    offset = 0
+    while offset < len(data):
+        three = data.find(b"\x00\x00\x01", offset)
+        four = data.find(b"\x00\x00\x00\x01", offset)
+        if three < 0 and four < 0:
+            return
+        if four >= 0 and (three < 0 or four <= three):
+            start_code_offset = four
+            start_code_size = 4
+        else:
+            start_code_offset = three
+            start_code_size = 3
+        nal_offset = start_code_offset + start_code_size
+        if nal_offset < len(data):
+            yield data[nal_offset : nal_offset + 2]
+        offset = nal_offset + 1
 
 
 def _add_hcnetsdk_annexb_dump_summary(

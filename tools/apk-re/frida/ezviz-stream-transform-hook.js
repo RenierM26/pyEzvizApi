@@ -4,8 +4,11 @@
  * Usage:
  *   frida -U -f com.ezviz -l tools/apk-re/frida/ezviz-stream-transform-hook.js --no-pause
  *
- * This script is intentionally diagnostic-only. It logs stream secret-key calls
- * and dumps small samples around the native demux/decrypt boundary so an
+ * Device flags:
+ *   /data/local/tmp/ezviz-native-only.flag  skip Java hooks for fragile live-preview runs
+ *
+ * This script is intentionally diagnostic-only. It logs redacted secret-key
+ * call metadata and dumps small samples around the native demux/decrypt boundary so an
  * encrypted VTM/MPEG-PS packet can be compared with PlayCtrl/SystemTransform
  * output from the official SDK path.
  */
@@ -17,11 +20,15 @@ const CALLBACK_DUMP_LIMIT = 64 * 1024;
 const JAVA_DECODE_DUMP_LIMIT = 512 * 1024;
 const HEX_LIMIT = 64;
 const MAX_DUMPS_PER_LABEL = deviceFlagExists("/data/local/tmp/ezviz-deep-idmx-dump.flag") ? 512 : 24;
+const NATIVE_ONLY = deviceFlagExists("/data/local/tmp/ezviz-native-only.flag");
 const LOG_SECRET_VALUES = false;
-const DUMP_SECRET_KEYS_RAW = deviceFlagExists("/data/local/tmp/ezviz-dump-media-keys.flag");
 const installed = new Set();
 const installedJavaDecodeClasses = new Set();
+const installedJavaStreamClasses = new Set();
 let dumpDir = "/sdcard/Download/ezviz-hook";
+if (NATIVE_ONLY) {
+  dumpDir = "/storage/emulated/0/Android/data/com.ezviz/files/ezviz-hook";
+}
 let dumpSeq = 0;
 const dumpCounts = {};
 const logCounts = {};
@@ -60,34 +67,6 @@ function bytesToHex(ptr, len) {
   }
 }
 
-function fingerprintBytes(ptr, len) {
-  if (ptr.isNull() || len <= 0) {
-    return "<none>";
-  }
-  try {
-    const data = new Uint8Array(ptr.readByteArray(len));
-    let hash = 2166136261;
-    for (let i = 0; i < data.length; i++) {
-      hash ^= data[i];
-      hash = imul32(hash, 16777619) >>> 0;
-    }
-    return "fnv32=" + leftPad(hash.toString(16), 8, "0");
-  } catch (err) {
-    return "<fingerprint-failed " + err + ">";
-  }
-}
-
-function imul32(a, b) {
-  if (typeof Math.imul === "function") {
-    return Math.imul(a, b);
-  }
-  const ah = (a >>> 16) & 0xffff;
-  const al = a & 0xffff;
-  const bh = (b >>> 16) & 0xffff;
-  const bl = b & 0xffff;
-  return ((al * bl) + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
-}
-
 function leftPad(value, width, fill) {
   let text = String(value);
   while (text.length < width) {
@@ -101,9 +80,22 @@ function secretBytes(ptr, len) {
     return "<null>";
   }
   if (!LOG_SECRET_VALUES) {
-    return `<redacted len=${len} ${fingerprintBytes(ptr, len)}>`;
+    return `<redacted len=${len}>`;
   }
   return bytesToHex(ptr, len);
+}
+
+function nativeSecretBytes(ptr, lenArg) {
+  let len = 0;
+  try {
+    len = lenArg.toInt32();
+  } catch (_) {
+    return `<redacted ptr=${ptr} len=<invalid>>`;
+  }
+  if (len <= 0 || len > 4096) {
+    return `<redacted ptr=${ptr} len=${len}>`;
+  }
+  return secretBytes(ptr, len);
 }
 
 function secretCString(ptr) {
@@ -220,6 +212,56 @@ function dumpJavaByteArray(label, value, len) {
     console.log(`[dump] ${label} count=${dumpCounts[label]} len=${len} saved=${capped} path=${path}`);
   } catch (err) {
     console.log(`[dump-failed] ${label} len=${len} path=${path} err=${err}`);
+  }
+}
+
+function describeJavaMethodArg(value) {
+  if (value === null || value === undefined) {
+    return "<null>";
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return `<string len=${value.length}>`;
+  }
+  const className = safeJavaClassName(value);
+  if (className === "[B") {
+    return `byte[] len=${value.length || 0}`;
+  }
+  if (className === "java.lang.String") {
+    return `<java-string len=${safeJavaValue(value).length}>`;
+  }
+  if (className === "<null>") {
+    return "<null>";
+  }
+  return `<${className}>`;
+}
+
+function dumpFirstJavaByteArrayArg(label, argsLike) {
+  for (let i = 0; i < argsLike.length; i++) {
+    const value = argsLike[i];
+    if (value === null || value === undefined) {
+      continue;
+    }
+    let className = "";
+    try {
+      className = safeJavaClassName(value);
+    } catch (_) {
+      className = "";
+    }
+    if (className !== "[B") {
+      continue;
+    }
+    let len = value.length || 0;
+    if (i + 1 < argsLike.length) {
+      const nextLen = Number(argsLike[i + 1]);
+      if (Number.isFinite(nextLen) && nextLen > 0) {
+        len = Math.min(len, nextLen);
+      }
+    }
+    dumpJavaByteArray(label, value, len);
+    return;
   }
 }
 
@@ -404,6 +446,220 @@ function hookPointerDataFunction(moduleName, exportName, label, dumpArgIndex, le
   });
 }
 
+function retString(retval) {
+  try {
+    return `${retval} int=${retval.toInt32()}`;
+  } catch (_) {
+    return String(retval);
+  }
+}
+
+function hookArgTraceFunction(moduleName, exportName, label, argCount, logLimit) {
+  hookExport(moduleName, exportName, {
+    onEnter(args) {
+      if (!shouldLog(`[native] ${label}`, logLimit || 64)) {
+        return;
+      }
+      const parts = [];
+      for (let i = 0; i < argCount; i++) {
+        parts.push(`arg${i}=${args[i]}`);
+      }
+      console.log(`[native] ${label} ${parts.join(" ")}`);
+    },
+    onLeave(retval) {
+      if (shouldLog(`[native] ${label}:ret`, logLimit || 64)) {
+        console.log(`[native] ${label} ret=${retString(retval)}`);
+      }
+    },
+  });
+}
+
+function hookCallbackSetter(moduleName, exportName, label, cbIndex, dumpArgIndex, lenArgIndex, logLimit) {
+  hookExport(moduleName, exportName, {
+    onEnter(args) {
+      if (shouldLog(`[cb] ${label}`, logLimit || 64)) {
+        console.log(
+          `[cb] ${label} handle=${args[0]} cb=${args[cbIndex]} user=${args[2]} extra=${args[3]}`,
+        );
+      }
+      hookCallbackPointer(label, args[cbIndex], dumpArgIndex, lenArgIndex);
+    },
+    onLeave(retval) {
+      if (shouldLog(`[cb] ${label}:ret`, logLimit || 64)) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      }
+    },
+  });
+}
+
+function hookLoggingCallbackSetter(moduleName, exportName, label, cbIndex, logLimit) {
+  hookExport(moduleName, exportName, {
+    onEnter(args) {
+      if (shouldLog(`[cb] ${label}`, logLimit || 64)) {
+        console.log(
+          `[cb] ${label} handle=${args[0]} cb=${args[cbIndex]} user=${args[2]} extra=${args[3]}`,
+        );
+      }
+      hookLoggingCallbackPointer(label, args[cbIndex], logLimit || 64);
+    },
+    onLeave(retval) {
+      if (shouldLog(`[cb] ${label}:ret`, logLimit || 64)) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      }
+    },
+  });
+}
+
+function parseOutputDataInfoCandidate(infoPtr, offset, detail) {
+  const dataPtr = infoPtr.readPointer();
+  const len = infoPtr.add(offset).readU32();
+  if (dataPtr.isNull() || len <= 0 || len > 16 * 1024 * 1024) {
+    return null;
+  }
+  const result = {
+    dataPtr,
+    len,
+    layout: `ptr${offset}`,
+    type: detail ? infoPtr.add(offset + 4).readU16() : infoPtr.add(offset + 4).readU32(),
+  };
+  if (detail) {
+    result.frame = infoPtr.add(offset + 6).readU16();
+    result.ts = infoPtr.add(offset + 8).readU32();
+    result.mark = infoPtr.add(offset + 16).readU16();
+    result.ver = infoPtr.add(offset + 18).readU16();
+  } else {
+    result.flag = infoPtr.add(offset + 8).readU32();
+  }
+  return result;
+}
+
+function parseOutputDataInfo(infoPtr, detail) {
+  const offsets = [];
+  [Process.pointerSize, 4].forEach((offset) => {
+    if (!offsets.includes(offset)) {
+      offsets.push(offset);
+    }
+  });
+  for (const offset of offsets) {
+    try {
+      const candidate = parseOutputDataInfoCandidate(infoPtr, offset, detail);
+      if (candidate !== null) {
+        return candidate;
+      }
+    } catch (_) {
+      // Try the next ABI layout candidate.
+    }
+  }
+  return {
+    dataPtr: infoPtr.readPointer(),
+    len: 0,
+    layout: "unknown",
+    type: null,
+  };
+}
+
+function dumpOutputDataInfo(label, infoPtr, detail, logLimit) {
+  if (infoPtr === null || infoPtr === undefined || infoPtr.isNull()) {
+    return;
+  }
+  const logLabel = `[out] ${label}`;
+  if (!shouldLog(logLabel, logLimit || 128)) {
+    return;
+  }
+  try {
+    const parsed = parseOutputDataInfo(infoPtr, detail);
+    const dataPtr = parsed.dataPtr;
+    const len = parsed.len;
+    const fields = [`info=${infoPtr}`, `layout=${parsed.layout}`, `data=${dataPtr}`, `len=${len}`];
+    if (detail) {
+      fields.push(`type=${parsed.type}`);
+      fields.push(`frame=${parsed.frame}`);
+      fields.push(`ts=${parsed.ts}`);
+      fields.push(`mark=${parsed.mark}`);
+      fields.push(`ver=${parsed.ver}`);
+    } else {
+      fields.push(`type=${parsed.type}`);
+      fields.push(`flag=${parsed.flag}`);
+    }
+    if (!dataPtr.isNull() && len > 0) {
+      fields.push(`head=${bytesToHex(dataPtr, len)}`);
+      dumpBytes(
+        label.replace(/[^A-Za-z0-9_.-]+/g, "-"),
+        dataPtr,
+        Math.min(len, CALLBACK_DUMP_LIMIT),
+      );
+    }
+    console.log(`${logLabel} ${fields.join(" ")}`);
+  } catch (err) {
+    console.log(`${logLabel} parse-failed info=${infoPtr} err=${err}`);
+  }
+}
+
+function hookOutputDataInfoFunction(moduleName, exportName, label, detail, logLimit) {
+  hookExport(moduleName, exportName, {
+    onEnter(args) {
+      dumpOutputDataInfo(label, args[0], detail, logLimit);
+    },
+  });
+}
+
+function hookOutputDataInfoArgFunction(moduleName, exportName, label, infoArgIndex, detail, logLimit) {
+  hookExport(moduleName, exportName, {
+    onEnter(args) {
+      dumpOutputDataInfo(label, args[infoArgIndex], detail, logLimit);
+    },
+  });
+}
+
+function hookOutputDataInfoCallbackPointer(label, cbPtr, detail) {
+  if (cbPtr === null || cbPtr === undefined || cbPtr.isNull()) {
+    return;
+  }
+  const key = `output-info-callback:${label}:${cbPtr}`;
+  if (installed.has(key)) {
+    return;
+  }
+  try {
+    Interceptor.attach(cbPtr, {
+      onEnter(args) {
+        dumpOutputDataInfo(`callback-${label}`, args[0], detail, 128);
+      },
+    });
+    installed.add(key);
+    console.log(`[hook] output-info callback ${label} @ ${cbPtr}`);
+  } catch (err) {
+    console.log(`[warn] output-info callback hook failed label=${label} ptr=${cbPtr}: ${err}`);
+  }
+}
+
+function hookLoggingCallbackPointer(label, cbPtr, logLimit) {
+  if (cbPtr === null || cbPtr === undefined || cbPtr.isNull()) {
+    return;
+  }
+  const key = `logging-callback:${label}:${cbPtr}`;
+  if (installed.has(key)) {
+    return;
+  }
+  try {
+    Interceptor.attach(cbPtr, {
+      onEnter(args) {
+        if (!shouldLog(key, logLimit || 64)) {
+          return;
+        }
+        const parts = [];
+        for (let i = 0; i < 6; i++) {
+          parts.push(`arg${i}=${args[i]}`);
+        }
+        console.log(`[cb-call] ${label} ${parts.join(" ")}`);
+      },
+    });
+    installed.add(key);
+    console.log(`[hook] logging callback ${label} @ ${cbPtr}`);
+  } catch (err) {
+    console.log(`[warn] logging callback hook failed label=${label} ptr=${cbPtr}: ${err}`);
+  }
+}
+
 function describeDecodedFrameSize(len) {
   const commonYuv420Sizes = {
     460800: "640x480-yuv420",
@@ -436,12 +692,228 @@ function installNativeHooks() {
     },
   });
 
+  [
+    ["Java_com_ez_stream_NativeApi_createClient", "NativeApi.createClient", 3],
+    ["Java_com_ez_stream_NativeApi_createClientWithUrl", "NativeApi.createClientWithUrl", 3],
+    ["Java_com_ez_stream_NativeApi_createPreviewHandle", "NativeApi.createPreviewHandle", 3],
+    ["Java_com_ez_stream_NativeApi_createPreviewHandleWithUrl", "NativeApi.createPreviewHandleWithUrl", 3],
+    ["Java_com_ez_stream_NativeApi_destroyHandle", "NativeApi.destroyHandle", 3],
+    ["Java_com_ez_stream_NativeApi_setCallback", "NativeApi.setCallback", 4],
+    ["Java_com_ez_stream_NativeApi_setDataCallback2Java", "NativeApi.setDataCallback2Java", 4],
+    ["Java_com_ez_stream_NativeApi_startPreview", "NativeApi.startPreview", 8],
+    ["Java_com_ez_stream_NativeApi_start", "NativeApi.start", 5],
+    ["Java_com_ez_stream_NativeApi_startPlayback__JLjava_lang_String_2Ljava_lang_String_2Ljava_lang_String_2", "NativeApi.startPlayback(strings)", 6],
+    ["Java_com_ez_stream_NativeApi_startPlayback__JLjava_util_List_2", "NativeApi.startPlayback(list)", 4],
+    ["Java_com_ez_stream_NativeApi_startPreconnect", "NativeApi.startPreconnect", 3],
+    ["Java_com_ez_stream_NativeApi_stopPreview", "NativeApi.stopPreview", 4],
+    ["Java_com_ez_stream_NativeApi_setPlayPort", "NativeApi.setPlayPort", 4],
+    ["Java_com_ez_stream_NativeApi_setMediaCallback", "NativeApi.setMediaCallback", 5],
+    ["Java_com_ez_stream_NativeApi_setStreamDataCallback", "NativeApi.setStreamDataCallback", 5],
+    ["Java_com_ez_stream_NativeApi_setStreamSaveDebugPath", "NativeApi.setStreamSaveDebugPath", 5],
+    ["Java_com_ez_stream_NativeApi_setPlaybackConvert", "NativeApi.setPlaybackConvert", 6],
+    ["Java_com_ez_stream_NativeApi_setMediaPlaybackConvert", "NativeApi.setMediaPlaybackConvert", 6],
+    ["Java_com_ez_stream_NativeApi_inputData2Cloud", "NativeApi.inputData2Cloud", 5],
+    ["Java_com_ez_stream_NativeApi_inputVoiceTalkData", "NativeApi.inputVoiceTalkData", 6],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libezstreamclient.so", name, label, argCount, 64);
+  });
+
+  [
+    ["_Z27ezplayer_createPreviewMediaP10INIT_PARAM", "ezplayer_createPreviewMedia(INIT_PARAM*)", 1],
+    ["_Z27ezplayer_createPreviewMediaRKNSt6__ndk112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE", "ezplayer_createPreviewMedia(string)", 1],
+    ["_Z14ezplayer_startPv", "ezplayer_start", 1],
+    ["_Z21ezstream_startPreviewPv", "ezstream_startPreview", 1],
+    ["_Z31ezplayer_setStreamSaveDebugPathPvRKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE", "ezplayer_setStreamSaveDebugPath", 2],
+    ["_Z22ezplayer_refreshPlayerPvjb", "ezplayer_refreshPlayer", 3],
+    ["_Z34ezplayer_getHCNetSDKPlaybackHandlePv", "ezplayer_getHCNetSDKPlaybackHandle", 1],
+    ["_ZN2bp13BPMediaPlayer4PlayEPKc", "BPMediaPlayer::Play", 2],
+    ["_ZN2bp17BPMediaDecoder_FF9OpenInputEPKc", "BPMediaDecoder_FF::OpenInput", 2],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libezstreamclient.so", name, label, argCount, 64);
+    hookArgTraceFunction("libBPlayer.so", name, label, argCount, 64);
+  });
+
+  hookExport("libezstreamclient.so", "_Z24ezplayer_setDataCallbackPvPFviPciS_ES_", {
+    onEnter(args) {
+      console.log(`[cb] ezplayer_setDataCallback player=${args[0]} cb=${args[1]} user=${args[2]}`);
+      hookCallbackPointer("ezplayer-setDataCallback", args[1], 1, 2);
+    },
+    onLeave(retval) {
+      console.log(`[cb] ezplayer_setDataCallback ret=${retString(retval)}`);
+    },
+  });
+
+  hookExport("libezstreamclient.so", "_Z32ezplayer_setPLAYM4DecodeCallbackPvPFvPciP13EZ_FRAME_INFOP21EZ_PLAYM4_SYSTEM_TIMES_ES_", {
+    onEnter(args) {
+      console.log(`[cb] ezplayer_setPLAYM4DecodeCallback player=${args[0]} cb=${args[1]}`);
+      hookCallbackPointer("ezplayer-PLAYM4DecodeCallback", args[1], 0, 1);
+    },
+    onLeave(retval) {
+      console.log(`[cb] ezplayer_setPLAYM4DecodeCallback ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    ["_ZN13ez_stream_sdk11EZMediaBase15setDataCallbackEPFviPciPvES2_", "EZMediaBase::setDataCallback", 1, 1, 2],
+    ["_ZN13ez_stream_sdk11EZMediaBase17setDecodeCallbackEPFvPciP13EZ_FRAME_INFOP21EZ_PLAYM4_SYSTEM_TIMEPvES6_", "EZMediaBase::setDecodeCallback", 1, 0, 1],
+  ].forEach(([name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookExport("libezstreamclient.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} this=${args[0]} cb=${args[cbIndex]} user=${args[2]}`);
+        hookCallbackPointer(label, args[cbIndex], dumpArgIndex, lenArgIndex);
+      },
+      onLeave(retval) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  [
+    ["_ZN13ez_stream_sdk11EZMediaBase9inputDataEPhi", "EZMediaBase::inputData", 1, 2],
+    ["_ZN13ez_stream_sdk11EZMediaBase14saveDataHeaderEPKhj", "EZMediaBase::saveDataHeader", 1, 2],
+    ["_ZN13ez_stream_sdk11EZMediaBase14saveStreamDataEPKci", "EZMediaBase::saveStreamData", 1, 2],
+    ["_ZN13ez_stream_sdk11EZMediaBase19onDataCallbackMediaEPviPaii", "EZMediaBase::onDataCallbackMedia", 3, 4],
+    ["_ZN11CRecvClient13SetStreamHeadEPci", "CRecvClient::SetStreamHead", 1, 2],
+    ["_Z19onMediaDataCallbackiPciPv", "onMediaDataCallback", 1, 2],
+    ["_Z23onMediaDataSizeCallbackiPciPv", "onMediaDataSizeCallback", 1, 2],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libezstreamclient.so", name, `ezstreamclient.${label}`, dumpArgIndex, lenArgIndex);
+  });
+
+  hookExport("libezstreamclient.so", "_Z14eztrans_createPhjPKc17EZ_TRANSFORM_TYPEPPvPFvjS_jjS3_ES3_", {
+    onEnter(args) {
+      const len = args[1].toInt32();
+      console.log(`[eztrans] eztrans_create header=${args[0]} len=${len} type=${args[3].toInt32()} out=${args[4]} cb=${args[5]} user=${args[6]}`);
+      dumpBytes("eztrans-create-head", args[0], len);
+      hookCallbackPointer("eztrans-create-output", args[5], 1, 2);
+    },
+    onLeave(retval) {
+      console.log(`[eztrans] eztrans_create ret=${retString(retval)}`);
+    },
+  });
+
+  hookPointerDataFunction("libezstreamclient.so", "_Z13eztrans_inputPviPhj", "eztrans_input", 2, 3);
+
+  [
+    ["_Z17eztrans_create_exPKc17EZ_TRANSFORM_TYPEPPv", "eztrans_create_ex", 3],
+    ["_Z16eztrans_start_exPv", "eztrans_start_ex", 1],
+    ["_Z13eztrans_startPvPKcS1_", "eztrans_start", 3],
+    ["_Z14eztrans_setKeyPvNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE", "eztrans_setKey", 2],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libezstreamclient.so", name, label, argCount, 64);
+  });
+
+  [
+    ["Java_com_hikvision_packagetransform_PackageTransform_startTransform", "PackageTransform.startTransform", 9],
+    ["Java_com_hikvision_packagetransform_PackageTransform_startTransformSimple", "PackageTransform.startTransformSimple", 7],
+    ["Java_com_hikvision_packagetransform_PackageTransform_startRealTimeTransform", "PackageTransform.startRealTimeTransform", 8],
+    ["Java_com_hikvision_packagetransform_PackageTransform_startRealTimeTransformTS", "PackageTransform.startRealTimeTransformTS", 8],
+    ["CreateHandle", "PackageTransform.CreateHandle", 1],
+    ["ReadRtpPacket", "PackageTransform.ReadRtpPacket", 2],
+    ["ReadRawData", "PackageTransform.ReadRawData", 0],
+    ["TransLoop", "PackageTransform.TransLoop", 1],
+    ["TransLoopRealTime", "PackageTransform.TransLoopRealTime", 5],
+    ["TransLoopRealTimeTS", "PackageTransform.TransLoopRealTimeTS", 5],
+    ["SetCallback", "PackageTransform.SetCallback", 2],
+    ["SetGlobalTime", "PackageTransform.SetGlobalTime", 1],
+    ["SetOption", "PackageTransform.SetOption", 1],
+    ["WaitComplete", "PackageTransform.WaitComplete", 0],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libPackageTransform.so", name, label, argCount, 64);
+  });
+
+  hookExport("libPackageTransform.so", "Java_com_hikvision_packagetransform_PackageTransform_inputData", {
+    onEnter(args) {
+      console.log(`[package-transform] PackageTransform.inputData jbuf=${args[2]} len=${args[3].toInt32()}`);
+    },
+    onLeave(retval) {
+      console.log(`[package-transform] PackageTransform.inputData ret=${retString(retval)}`);
+    },
+  });
+
+  hookOutputDataInfoFunction("libPackageTransform.so", "STOutputCbf", "PackageTransform.STOutputCbf", false, 128);
+  hookOutputDataInfoFunction("libPackageTransform.so", "STOutputCbf2", "PackageTransform.STOutputCbf2", true, 128);
+  hookOutputDataInfoFunction("libPackageTransform.so", "STDetailCbf", "PackageTransform.STDetailCbf", true, 128);
+
+  [
+    ["NPQ_InputData", "NPQ_InputData", 1, 2],
+    ["NPQ_InputRawData", "NPQ_InputRawData", 1, 2],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libNPQos.so", name, label, dumpArgIndex, lenArgIndex, 128);
+  });
+
+  [
+    ["NPQ_Create", "NPQ_Create", 1],
+    ["NPQ_Start", "NPQ_Start", 1],
+    ["NPQ_Stop", "NPQ_Stop", 1],
+    ["NPQ_Destroy", "NPQ_Destroy", 1],
+    ["NPQ_SetNotifyParam", "NPQ_SetNotifyParam", 2],
+    ["NPQ_SetParam", "NPQ_SetParam", 3],
+    ["NPQ_SetMediaDelay", "NPQ_SetMediaDelay", 2],
+    ["NPQ_SetState", "NPQ_SetState", 2],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libNPQos.so", name, label, argCount, 64);
+  });
+
+  [
+    ["NPQ_RegisterDataCallBack", "NPQ_RegisterDataCallBack", 1, 2, 3],
+    ["NPQ_RegisterRecoveriedDataCallBack", "NPQ_RegisterRecoveriedDataCallBack", 1, 2, 3],
+    ["NPQ_RegisterDataInfoCallBack", "NPQ_RegisterDataInfoCallBack", 1, 2, 3],
+    ["NPQ_RegisterAudioDecFun", "NPQ_RegisterAudioDecFun", 1, 2, 3],
+  ].forEach(([name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookCallbackSetter("libNPQos.so", name, label, cbIndex, dumpArgIndex, lenArgIndex, 64);
+  });
+
+  [
+    ["NPC_InputData", "NPC_InputData", 2, 3],
+    ["_ZN8NPStream9InputDataE13NPC_DATA_TYPEPhj", "NPStream::InputData", 2, 3],
+    ["_ZN10INetStream9InputDataEjPhj", "INetStream::InputData", 2, 3],
+    ["_ZN10RTMPStream9InputDataEjPhj", "RTMPStream::InputData", 2, 3],
+    ["_ZN11RTMPSession9InputDataEPhj", "RTMPSession::InputData", 1, 2],
+    ["_ZN15RTMPPushSession9InputDataEPhj", "RTMPPushSession::InputData", 1, 2],
+    ["_ZN8MmshData9InputDataEPhj", "MmshData::InputData", 1, 2],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libNPClient.so", name, label, dumpArgIndex, lenArgIndex, 128);
+  });
+
+  [
+    ["NPC_SetMsgCallBack", "NPC_SetMsgCallBack", 1, 2, 3],
+    ["_ZN8NPStream14SetMsgCallBackEPFviiPhjPvES1_", "NPStream::SetMsgCallBack", 1, 2, 3],
+  ].forEach(([name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookCallbackSetter("libNPClient.so", name, label, cbIndex, dumpArgIndex, lenArgIndex, 64);
+  });
+
+  [
+    ["NPC_SetTransmitMode", "NPC_SetTransmitMode", 3],
+    ["NPC_SetTransmitMode_Ex", "NPC_SetTransmitMode_Ex", 2],
+    ["NPC_SetPullStreamType", "NPC_SetPullStreamType", 2],
+    ["NPC_SetStreamInfo", "NPC_SetStreamInfo", 2],
+    ["_ZN8NPStream4OpenEPFviiPhjPvES1_y", "NPStream::Open", 3],
+    ["_ZN8NPStream5CloseEv", "NPStream::Close", 1],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libNPClient.so", name, label, argCount, 64);
+  });
+
+  [
+    ["_Z14NPCMsgCallBackiiPhjPv", "HIK_NPCClient.NPCMsgCallBack", 2, 3],
+    ["_Z15NPCDataCallBackiiPhjPv", "HIK_NPCClient.NPCDataCallBack", 2, 3],
+  ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction("libHIK_NPCClient.so", name, label, dumpArgIndex, lenArgIndex, 128);
+  });
+
+  [
+    ["Java_org_hik_np_NPClient_NPCCreate", "NPClient.NPCCreate", 4],
+    ["Java_org_hik_np_NPClient_NPCOpen", "NPClient.NPCOpen", 5],
+    ["Java_org_hik_np_NPClient_NPCOpenEx", "NPClient.NPCOpenEx", 6],
+    ["Java_org_hik_np_NPClient_NPCSetMsgCallBack", "NPClient.NPCSetMsgCallBack", 5],
+    ["Java_org_hik_np_NPClient_NPCSetTransmitMode", "NPClient.NPCSetTransmitMode", 5],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libHIK_NPCClient.so", name, label, argCount, 64);
+  });
+
   hookExport("libPlayCtrl.so", "PlayM4_SetSecretKey", {
     onEnter(args) {
       // long port, long keyType, char *key, long keyLen.
-      if (DUMP_SECRET_KEYS_RAW) {
-        dumpBytes("secret-playm4-key", args[2], args[3].toInt32());
-      }
       console.log(
         `[key] PlayM4_SetSecretKey port=${args[0].toInt32()} type=${args[1].toInt32()} key=${secretBytes(args[2], args[3].toInt32())}`,
       );
@@ -521,9 +993,6 @@ function installNativeHooks() {
   hookExport("libPlayCtrl.so", "_ZN12CIDMXManager12SetDecrptKeyEPci15_IDMX_KEY_TYPE_", {
     onEnter(args) {
       const len = args[2].toInt32();
-      if (DUMP_SECRET_KEYS_RAW) {
-        dumpBytes("secret-playctrl-cidmx-key", args[1], len);
-      }
       console.log(
         `[key] PlayCtrl.CIDMXManager::SetDecrptKey this=${args[0]} key=${secretBytes(args[1], len)} type=${args[3].toInt32()}`,
       );
@@ -533,9 +1002,6 @@ function installNativeHooks() {
   hookExport("libSystemTransform.so", "SYSTRANS_SetEncryptKey", {
     onEnter(args) {
       // void *handle, enum encryptType, char *key, uint keyLen.
-      if (DUMP_SECRET_KEYS_RAW) {
-        dumpBytes("secret-systrans-key", args[2], args[3].toInt32());
-      }
       console.log(
         `[key] SYSTRANS_SetEncryptKey handle=${args[0]} type=${args[1].toInt32()} key=${secretBytes(args[2], args[3].toInt32())}`,
       );
@@ -545,12 +1011,130 @@ function installNativeHooks() {
     },
   });
 
+  hookExport("libSystemTransform.so", "_ZN15CTransformProxy13SetEncryptKeyE17_ST_ENCRYPT_TYPE_Pcj", {
+    onEnter(args) {
+      console.log(
+        `[key] CTransformProxy::SetEncryptKey this=${args[0]} type=${args[1].toInt32()} key=${secretBytes(args[2], args[3].toInt32())}`,
+      );
+    },
+    onLeave(retval) {
+      console.log(`[key] CTransformProxy::SetEncryptKey ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    ["SYSTRANS_Create", "SYSTRANS_Create", 1],
+    ["SYSTRANS_CreateEx", "SYSTRANS_CreateEx", 1],
+    ["SYSTRANS_OpenStreamAdvanced", "SYSTRANS_OpenStreamAdvanced", 4],
+    ["SYSTRANS_Start", "SYSTRANS_Start", 3],
+    ["SYSTRANS_Stop", "SYSTRANS_Stop", 1],
+    ["SYSTRANS_StreamEnd", "SYSTRANS_StreamEnd", 2],
+    ["SYSTRANS_SkipErrorData", "SYSTRANS_SkipErrorData", 2],
+    ["SYSTRANS_Release", "SYSTRANS_Release", 1],
+    ["SYSTRANS_InputCustomStream", "SYSTRANS_InputCustomStream", 2],
+    ["IDMX_CreateHandle", "IDMX_CreateHandle", 1],
+    ["IDMX_OutputData", "IDMX_OutputData", 2],
+  ].forEach(([name, label, argCount]) => {
+    hookArgTraceFunction("libSystemTransform.so", name, label, argCount, 64);
+  });
+
+  [
+    ["SYSTRANS_RegisterOutputDataCallBack", "SYSTRANS_RegisterOutputDataCallBack", false],
+    ["SYSTRANS_RegisterOutputDataCallBackEx", "SYSTRANS_RegisterOutputDataCallBackEx", false],
+    ["SYSTRANS_RegisterDetailDataCallBack", "SYSTRANS_RegisterDetailDataCallBack", true],
+  ].forEach(([name, label, detail]) => {
+    hookExport("libSystemTransform.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} handle=${args[0]} cb=${args[1]} user=${args[2]}`);
+        hookOutputDataInfoCallbackPointer(label, args[1], detail);
+      },
+      onLeave(retval) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  [
+    ["SYSTRANS_RegisterStreamInforCB", "SYSTRANS_RegisterStreamInforCB"],
+    ["SYSTRANS_RegisterPackInfoCallBack", "SYSTRANS_RegisterPackInfoCallBack"],
+  ].forEach(([name, label]) => {
+    hookExport("libSystemTransform.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} handle=${args[0]} cb=${args[1]} user=${args[2]}`);
+        hookLoggingCallbackPointer(label, args[1], 64);
+      },
+      onLeave(retval) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  [
+    ["_ZN15CTransformProxy26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOPvES2_", "CTransformProxy::RegisterOutputDataCallBack(output,void*)", false],
+    ["_ZN15CTransformProxy26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOmEm", "CTransformProxy::RegisterOutputDataCallBack(output,ulong)", false],
+    ["_ZN15CTransformProxy26RegisterOutputDataCallBackEPFvP18_DETAIL_DATA_INFO_PvES2_", "CTransformProxy::RegisterOutputDataCallBack(detail)", true],
+    ["_ZN10CMXManager26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOPvES2_", "CMXManager::RegisterOutputDataCallBack(output,void*)", false],
+    ["_ZN10CMXManager26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOmEm", "CMXManager::RegisterOutputDataCallBack(output,ulong)", false],
+    ["_ZN10CMXManager22RegisterDetailCallBackEPFvP18_DETAIL_DATA_INFO_PvES2_", "CMXManager::RegisterDetailCallBack", true],
+    ["_ZN11CDMXManager26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOPvES2_", "CDMXManager::RegisterOutputDataCallBack", false],
+    ["_ZN11CDMXManager22RegisterDetailCallBackEPFvP18_DETAIL_DATA_INFO_PvES2_", "CDMXManager::RegisterDetailCallBack", true],
+    ["_ZN6CError26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOPvES2_", "CError::RegisterOutputDataCallBack(output,void*)", false],
+    ["_ZN6CError26RegisterOutputDataCallBackEPFvP15OUTPUTDATA_INFOmEm", "CError::RegisterOutputDataCallBack(output,ulong)", false],
+    ["_ZN6CError22RegisterDetailCallBackEPFvP18_DETAIL_DATA_INFO_PvES2_", "CError::RegisterDetailCallBack", true],
+  ].forEach(([name, label, detail]) => {
+    hookExport("libSystemTransform.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} this=${args[0]} cb=${args[1]} user=${args[2]}`);
+        hookOutputDataInfoCallbackPointer(label, args[1], detail);
+      },
+    });
+  });
+
+  [
+    ["_ZN15CTransformProxy21RegisterStreamInforCBEPFvP15_ST_ERROR_INFO_PvES2_", "CTransformProxy::RegisterStreamInforCB"],
+    ["_ZN15CTransformProxy24RegisterPackInfoCallBackEPFvP12ST_PACK_INFOPvES2_", "CTransformProxy::RegisterPackInfoCallBack"],
+    ["_ZN10CMXManager24RegisterPackInfoCallBackEPFvP12ST_PACK_INFOPvES2_", "CMXManager::RegisterPackInfoCallBack"],
+    ["_ZN6CError21RegisterErrorCallBackEPFvP15_ST_ERROR_INFO_PvES2_", "CError::RegisterErrorCallBack"],
+  ].forEach(([name, label]) => {
+    hookExport("libSystemTransform.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} this=${args[0]} cb=${args[1]} user=${args[2]}`);
+        hookLoggingCallbackPointer(label, args[1], 64);
+      },
+    });
+  });
+
+  [
+    ["_ZN10CMXManager13SetEncryptKeyE17_ST_ENCRYPT_TYPE_Pcj", "CMXManager::SetEncryptKey", 2, 3],
+    ["_ZN11CDMXManager13SetDecryptKeyE17_ST_ENCRYPT_TYPE_Pcj", "CDMXManager::SetDecryptKey", 2, 3],
+    ["_ZN12CIMuxManager13SetEncryptKeyEPhj", "CIMuxManager::SetEncryptKey", 1, 2],
+  ].forEach(([name, label, keyArgIndex, lenArgIndex]) => {
+    hookExport("libSystemTransform.so", name, {
+      onEnter(args) {
+        const len = args[lenArgIndex].toInt32();
+        console.log(`[key] ${label} this=${args[0]} key=${secretBytes(args[keyArgIndex], len)}`);
+      },
+      onLeave(retval) {
+        console.log(`[key] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
   hookExport("libSystemTransform.so", "SYSTRANS_InputData", {
     onEnter(args) {
       // void *handle, DATA_TYPE type, unsigned char *data, uint len.
       const len = args[3].toInt32();
       console.log(`[in] SYSTRANS_InputData handle=${args[0]} type=${args[1].toInt32()} len=${len} head=${bytesToHex(args[2], len)}`);
       dumpBytes("systrans-input", args[2], len);
+    },
+  });
+
+  hookExport("libSystemTransform.so", "SYSTRANS_InputPrivateData", {
+    onEnter(args) {
+      // void *handle, uint type, uint subType, unsigned char *data, uint len.
+      const len = args[4].toInt32();
+      console.log(`[in] SYSTRANS_InputPrivateData handle=${args[0]} type=${args[1].toInt32()} subType=${args[2].toInt32()} len=${len} head=${bytesToHex(args[3], len)}`);
+      dumpBytes("systrans-private-input", args[3], len);
     },
   });
 
@@ -679,6 +1263,22 @@ function installNativeHooks() {
     ["_ZN12IDMXRTPDemux10OutputDataEP18_IDMX_PACKET_INFO_", "IDMXRTPDemux::OutputData", 1, null],
     ["_ZN12IDMXRTPDemux11AddFuPacketEPhjS0_j", "IDMXRTPDemux::AddFuPacket", 1, 2],
     ["_ZN12IDMXRTPDemux17ProcessLostPacketEj", "IDMXRTPDemux::ProcessLostPacket", null, null],
+    ["_ZN14IDMXRTPJTDemux9InputDataEPhjPj", "IDMXRTPJTDemux::InputData", 1, 2],
+    ["_ZN14IDMXRTPJTDemux14ProcessPayloadEP20_RTPJT_DEMUX_OUTPUT_", "IDMXRTPJTDemux::ProcessPayload", 1, null],
+    ["_ZN14IDMXRTPJTDemux10OutputDataEP18_IDMX_PACKET_INFO_", "IDMXRTPJTDemux::OutputData", 1, null],
+    ["_ZN14IDMXRTPJTDemux15AddToVideoFrameEPhj", "IDMXRTPJTDemux::AddToVideoFrame", 1, 2],
+    ["_ZN14IDMXRTPJTDemux15AddToAudioFrameEPhj", "IDMXRTPJTDemux::AddToAudioFrame", 1, 2],
+    ["_ZN12IDMXRawDemux9InputDataEPhjPj", "IDMXRawDemux::InputData", 1, 2],
+    ["_ZN12IDMXRawDemux12ProcessFrameEPhj", "IDMXRawDemux::ProcessFrame", 1, 2],
+    ["_ZN12IDMXRawDemux10OutputDataEP18_IDMX_PACKET_INFO_", "IDMXRawDemux::OutputData", 1, null],
+    ["_ZN12IDMXRawDemux15AddToVideoFrameEPhj", "IDMXRawDemux::AddToVideoFrame", 1, 2],
+    ["_ZN11IDMXTSDemux9InputDataEPhjPj", "IDMXTSDemux::InputData", 1, 2],
+    ["_ZN11IDMXTSDemux14ProcessPayloadEP20_MPEG2_DEMUX_OUTPUT_", "IDMXTSDemux::ProcessPayload", 1, null],
+    ["_ZN11IDMXTSDemux19ProcessPayloadMultiEP20_MPEG2_DEMUX_OUTPUT_", "IDMXTSDemux::ProcessPayloadMulti", 1, null],
+    ["_ZN11IDMXTSDemux10OutputDataEP18_IDMX_PACKET_INFO_", "IDMXTSDemux::OutputData", 1, null],
+    ["_ZN11IDMXTSDemux10AddToFrameEPhj", "IDMXTSDemux::AddToFrame", 1, 2],
+    ["_ZN11IDMXTSDemux12AddToAPFrameEPhj", "IDMXTSDemux::AddToAPFrame", 1, 2],
+    ["_ZN11IDMXTSDemux14AddToDataFrameEPhj", "IDMXTSDemux::AddToDataFrame", 1, 2],
   ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
     hookPointerDataFunction("libPlayCtrl.so", name, `PlayCtrl.${label}`, dumpArgIndex, lenArgIndex);
     hookPointerDataFunction("libSystemTransform.so", name, `SystemTransform.${label}`, dumpArgIndex, lenArgIndex);
@@ -693,29 +1293,172 @@ function installNativeHooks() {
     ["_ZN11CDMXManager14ParseRtpPacketEPhj", "CDMXManager::ParseRtpPacket", 1, 2],
     ["_ZN11CDMXManager17ProcessVideoFrameEP16_IDMX_FRMAE_INFO", "CDMXManager::ProcessVideoFrame", 1, null],
     ["_ZN11CDMXManager12ProcessFrameEP16_IDMX_FRMAE_INFO", "CDMXManager::ProcessFrame", 1, null],
+    ["_ZN11CDMXManager11ParseStreamEv", "CDMXManager::ParseStream", null, null],
+    ["_ZN11CDMXManager12PushFileDataEv", "CDMXManager::PushFileData", null, null],
+    ["_ZN10CMXManager9InputDataEPhjP13ST_FRAME_INFO", "CMXManager::InputData", 1, 2],
+    ["_ZN10CMXManager16InputPrivateDataEjjPhj", "CMXManager::InputPrivateData", 3, 4],
+    ["_ZN10CMXManager12ProcessFrameEPhjP13ST_FRAME_INFO", "CMXManager::ProcessFrame", 1, 2],
+    ["_ZN10CMXManager17InputCustomStreamEP21_ST_CUSTOM_DATA_INFO_", "CMXManager::InputCustomStream", 1, null],
+    ["_ZN10CMXManager10OutputDataEP15_MX_OUTPUT_BUF_P17_MX_OUTPUT_PARAM_P13ST_FRAME_INFO", "CMXManager::OutputData", null, null],
+    ["_ZN12CIMuxManager9InputDataEP16_MX_INPUT_PARAM_Phj", "CIMuxManager::InputData", 2, 3],
+    ["_ZN12CIMuxManager10OutputDataEP17_MX_OUTPUT_PARAM_PPhPj", "CIMuxManager::OutputData", null, null],
+    ["IMUX_InputData", "IMUX_InputData", 2, 3],
+    ["IMUX_OutputData", "IMUX_OutputData", null, null],
     ["_ZN11CDMXManager13SkipErrorDataEi", "CDMXManager::SkipErrorData", null, null],
+    ["_ZN11CDMXManager9StreamEndEj", "CDMXManager::StreamEnd", null, null],
+    ["_ZN15CTransformProxy9InputDataE9DATA_TYPEPhj", "CTransformProxy::InputData", 2, 3],
+    ["_ZN15CTransformProxy16InputPrivateDataEjjPhj", "CTransformProxy::InputPrivateData", 3, 4],
+    ["_ZN15CTransformProxy8RawDemuxE9DATA_TYPEPhj", "CTransformProxy::RawDemux", 2, 3],
+    ["_ZN15CTransformProxy17InputCustomStreamEP21_ST_CUSTOM_DATA_INFO_", "CTransformProxy::InputCustomStream", 1, null],
+    ["_ZN15CTransformProxy13SkipErrorDataEi", "CTransformProxy::SkipErrorData", null, null],
+    ["_ZN15CTransformProxy9StreamEndEj", "CTransformProxy::StreamEnd", null, null],
+    ["_ZN15CTransformProxy14AnalyzeSrcInfoEP14SYS_TRANS_PARA", "CTransformProxy::AnalyzeSrcInfo", null, null],
+    ["_ZN15CTransformProxy9InitDemuxEP14SYS_TRANS_PARA", "CTransformProxy::InitDemux", null, null],
   ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
     hookPointerDataFunction("libSystemTransform.so", name, `SystemTransform.${label}`, dumpArgIndex, lenArgIndex);
   });
 
   [
+    ["_ZN6NetSDK11CPreviewMgr6CreateEiPK19NET_DVR_PREVIEWINFOPFvijPhjPvES5_j", "CPreviewMgr::Create(preview)", 3, 2, 3],
+    ["_ZN6NetSDK11CPreviewMgr6CreateEiPK27NET_DVR_PREVIEWINFO_SPECIALPFvijPhjPvES5_", "CPreviewMgr::Create(special)", 3, 2, 3],
+    ["_ZN6NetSDK15CPreviewSession19SetRealDataCallBackEPFvijPhjjEj", "CPreviewSession::SetRealDataCallBack", 1, 2, 3],
+    ["_ZN6NetSDK15CPreviewSession21SetRealDataCallBackExEPFvijPhjPvES2_", "CPreviewSession::SetRealDataCallBackEx", 1, 2, 3],
+    ["_ZN6NetSDK15CPreviewSession23SetStandardDataCallBackEPFvijPhjjEj", "CPreviewSession::SetStandardDataCallBack", 1, 2, 3],
+    ["_ZN6NetSDK15CPreviewSession25SetStandardDataCallBackExEPFvijPhjPvES2_", "CPreviewSession::SetStandardDataCallBackEx", 1, 2, 3],
+    ["_ZN6NetSDK15CPreviewSession26SetTransparentDataCallBackEPFvijPhjPvES2_", "CPreviewSession::SetTransparentDataCallBack", 1, 2, 3],
+    ["_ZN6NetSDK15CPreviewSession13SetESCallBackEPFvijPhjPvES2_", "CPreviewSession::SetESCallBack", 1, 2, 3],
+  ].forEach(([name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookExport("libHCPreview.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} this=${args[0]} cb=${args[cbIndex]} user=${args[cbIndex + 1]}`);
+        hookCallbackPointer(label, args[cbIndex], dumpArgIndex, lenArgIndex);
+      },
+      onLeave(retval) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  hookExport("libHCPreview.so", "_ZN6NetSDK15CPreviewSession21SetESRealPlayCallBackEPFviP25tagNET_DVR_PACKET_INFO_EXPvES3_", {
+    onEnter(args) {
+      console.log(`[cb] CPreviewSession::SetESRealPlayCallBack this=${args[0]} cb=${args[1]} user=${args[2]}`);
+      hookLoggingCallbackPointer("CPreviewSession::SetESRealPlayCallBack", args[1], 64);
+    },
+    onLeave(retval) {
+      console.log(`[cb] CPreviewSession::SetESRealPlayCallBack ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    ["_ZN6NetSDK14CGetStreamBase13GetStreamDataEPvPKvjj", "CGetStreamBase::GetStreamData", 2, 3],
+    ["_ZN6NetSDK14CGetStreamBase11ProcTcpDataEPKvjj", "CGetStreamBase::ProcTcpData", 1, 2],
+    ["_ZN6NetSDK14CGetStreamBase15PushConvertDataEPKvjjj", "CGetStreamBase::PushConvertData", 1, 2],
+    ["_ZN6NetSDK14CGetStreamBase17GetStreamDataTypeEPKvjj", "CGetStreamBase::GetStreamDataType", 1, 2],
+    ["_ZN6NetSDK14CGetStreamBase16IsNeedUseConvertEj", "CGetStreamBase::IsNeedUseConvert", null, null],
+    ["_ZN6NetSDK13CUserCallBack25InputDefaultDataToConvertEPKvjj", "CUserCallBack::InputDefaultDataToConvert", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack12GetStreamHikEPKvjj", "CUserCallBack::GetStreamHik", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack12GetStreamSTDEPKvjj", "CUserCallBack::GetStreamSTD", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack15GetStreamV30HikEPKvjj", "CUserCallBack::GetStreamV30Hik", 1, 2],
     ["_ZN6NetSDK13CGetTCPStream17ProRTPOverTCPDataEPvPKvjj", "CGetTCPStream::ProRTPOverTCPData", 2, 3],
+    ["_ZNK11CQosOperate9AddPacketEiPhj", "CQosOperate::AddPacket", 2, 3],
+    ["_ZN6NetSDK15CGetHRUDPStream16ProcessTCPDataCBEPvPKvjj", "CGetHRUDPStream::ProcessTCPDataCB", 2, 3],
+    ["_ZN6NetSDK15CGetHRUDPStream16CopyTCPDataToBufEPKvj", "CGetHRUDPStream::CopyTCPDataToBuf", 1, 2],
+    ["_ZN6NetSDK15CGetHRUDPStream17SortAndSaveByNodeEPKhjjj", "CGetHRUDPStream::SortAndSaveByNode", 1, 2],
+    ["_ZN6NetSDK15CGetHRUDPStream11SortAndSaveEPKhjjj", "CGetHRUDPStream::SortAndSave", 1, 2],
+    ["_ZN6NetSDK15CGetHRUDPStream19InsertAtAllocatePosEPhPKhjjj", "CGetHRUDPStream::InsertAtAllocatePos", 2, 3],
+    ["_ZN6NetSDK13CGetNPQStream15NpqDataCallBackEiiPhjPv", "CGetNPQStream::NpqDataCallBack", 3, 4],
+    ["_ZN6NetSDK13CGetNPQStream14ProcStreamDataEPKvj", "CGetNPQStream::ProcStreamData", 1, 2],
+    ["_ZN6NetSDK14CGetPushStream13QosPacketSendEiPhjPv", "CGetPushStream::QosPacketSend", 2, 3],
+    ["_ZN6NetSDK14CGetPushStream12QosPacketRawEiPhjPv", "CGetPushStream::QosPacketRaw", 2, 3],
+    ["_ZN6NetSDK14CGetPushStream16RecvDataCallBackEPvPKvjj", "CGetPushStream::RecvDataCallBack", 2, 3],
+    ["_ZN6NetSDK14CGetPushStream11SendCommandEjPKvj", "CGetPushStream::SendCommand", 2, 3],
+    ["_ZN6NetSDK14CGetRTSPStream13ProcessRTPMsgEPvPKvj", "CGetRTSPStream::ProcessRTPMsg", 2, 3],
+    ["_ZN6NetSDK14CGetRTSPStream15ParseRecvExDataEPKhj", "CGetRTSPStream::ParseRecvExData", 1, 2],
+    ["_ZN6NetSDK14CGetRTSPStream11NpqCallbackEiiPhjPv", "CGetRTSPStream::NpqCallback", 3, 4],
     ["_ZN6NetSDK14CGetRTSPStream14ProcessRTPDataEPviPKvjj", "CGetRTSPStream::ProcessRTPData", 3, 4],
     ["_ZN6NetSDK14CGetRTSPStream19ProcessRTPDataNoNpqEPviPKvjj", "CGetRTSPStream::ProcessRTPDataNoNpq", 3, 4],
+    ["_ZN6NetSDK14CGetStreamBase13GetStreamDataEPvPKvjj", "CGetStreamBase::GetStreamData", 2, 3],
+    ["_ZN6NetSDK14CGetStreamBase11ProcTcpDataEPKvjj", "CGetStreamBase::ProcTcpData", 1, 2],
+    ["_ZN6NetSDK14CGetStreamBase15PushConvertDataEPKvjjj", "CGetStreamBase::PushConvertData", 1, 2],
     ["_ZN6NetSDK14CPreviewPlayer15PlayerGetStreamEPKvjjPv", "CPreviewPlayer::PlayerGetStream", 1, 2],
     ["_ZN6NetSDK14CPreviewPlayer17InputDataToPlayerEPvj", "CPreviewPlayer::InputDataToPlayer", 1, 2],
     ["_ZN6NetSDK14CPreviewPlayer14ProccessStreamEPKvjj", "CPreviewPlayer::ProccessStream", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack11GetStreamTPEPKvjj", "CUserCallBack::GetStreamTP", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack12GetStreamHikEPKvjj", "CUserCallBack::GetStreamHik", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack12GetStreamSTDEPKvjj", "CUserCallBack::GetStreamSTD", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack15GetStreamV30HikEPKvjj", "CUserCallBack::GetStreamV30Hik", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack11UserGetESCBEPKvjjPv", "CUserCallBack::UserGetESCB", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack15UserGetStreamTPEPKvjjPv", "CUserCallBack::UserGetStreamTP", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack16UserGetStreamHikEPKvjjPv", "CUserCallBack::UserGetStreamHik", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack16UserGetStreamSTDEPKvjjPv", "CUserCallBack::UserGetStreamSTD", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack19UserGetStreamV30HikEPKvjjPv", "CUserCallBack::UserGetStreamV30Hik", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack15InputDataToFileEPvjj", "CUserCallBack::InputDataToFile", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack25InputDefaultDataToConvertEPKvjj", "CUserCallBack::InputDefaultDataToConvert", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack15WriteDataToFileEPvj", "CUserCallBack::WriteDataToFile", 1, 2],
+    ["_ZN6NetSDK13CUserCallBack15UserWriteFileCBEPKvjjPv", "CUserCallBack::UserWriteFileCB", 1, 2],
     ["_ZN6NetSDK15CGetHRUDPStream17CallbackVedioDataEPKhjjj", "CGetHRUDPStream::CallbackVedioData", 1, 2],
+    ["_ZN6NetSDK14CGetStreamBase21PushDateToGetStreamCBEPKvjjj", "CGetStreamBase::PushDateToGetStreamCB", 1, 2],
+    ["_ZN6NetSDK14CGetStreamBase33PushDateToGetStreamCB_WithoutLockEPKvjjj", "CGetStreamBase::PushDateToGetStreamCB_WithoutLock", 1, 2],
+    ["_ZN6NetSDK15CGetHRUDPStream21PushDateToGetStreamCBEPKvjjj", "CGetHRUDPStream::PushDateToGetStreamCB", 1, 2],
+    ["_ZN6NetSDK13CGetNPQStream21PushDateToGetStreamCBEPKvjjj", "CGetNPQStream::PushDateToGetStreamCB", 1, 2],
   ].forEach(([name, label, dumpArgIndex, lenArgIndex]) => {
     hookPointerDataFunction("libHCPreview.so", name, `HCPreview.${label}`, dumpArgIndex, lenArgIndex);
+  });
+
+  hookExport("libHCPreview.so", "_ZNK11CQosOperate15SetCbForRawDataEiPFviPhjPvES1_", {
+    onEnter(args) {
+      console.log(`[cb] CQosOperate::SetCbForRawData this=${args[0]} type=${args[1].toInt32()} cb=${args[2]} user=${args[3]}`);
+      hookCallbackPointer("CQosOperate::SetCbForRawData", args[2], 1, 2);
+    },
+    onLeave(retval) {
+      console.log(`[cb] CQosOperate::SetCbForRawData ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    ["_ZN6NetSDK14CGetStreamBase20SysTransDataCallBackEPK15OUTPUTDATA_INFOPv", "CGetStreamBase::SysTransDataCallBack"],
+    ["_ZN6NetSDK13CUserCallBack20SysTransDataCallBackEPK15OUTPUTDATA_INFOPv", "CUserCallBack::SysTransDataCallBack"],
+  ].forEach(([name, label]) => {
+    hookExport("libHCPreview.so", name, {
+      onEnter(args) {
+        dumpOutputDataInfo(`HCPreview.${label}`, args[1], false, 128);
+      },
+    });
+  });
+
+  [
+    ["COM_SetRealDataCallBack", "COM_SetRealDataCallBack", 1, 2, 3],
+    ["COM_SetRealDataCallBackEx", "COM_SetRealDataCallBackEx", 1, 2, 3],
+    ["COM_SetStandardDataCallBack", "COM_SetStandardDataCallBack", 1, 2, 3],
+    ["COM_SetStandardDataCallBackEx", "COM_SetStandardDataCallBackEx", 1, 2, 3],
+    ["COM_SetTransparentDataCallBack", "COM_SetTransparentDataCallBack", 1, 2, 3],
+    ["COM_SetESCallBack", "COM_SetESCallBack", 1, 2, 3],
+  ].forEach(([name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookExport("libHCPreview.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} handle=${args[0]} cb=${args[cbIndex]} user=${args[2]} extra=${args[3]}`);
+        hookCallbackPointer(label, args[cbIndex], dumpArgIndex, lenArgIndex);
+      },
+      onLeave(retval) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  hookExport("libHCPreview.so", "COM_SetESRealPlayCallBack", {
+    onEnter(args) {
+      console.log(`[cb] COM_SetESRealPlayCallBack handle=${args[0]} cb=${args[1]} user=${args[2]} extra=${args[3]}`);
+      hookLoggingCallbackPointer("COM_SetESRealPlayCallBack", args[1], 64);
+    },
+    onLeave(retval) {
+      console.log(`[cb] COM_SetESRealPlayCallBack ret=${retString(retval)}`);
+    },
   });
 
   [
     ["COM_StartRealPlay", "COM_StartRealPlay"],
     ["COM_StopRealPlay", "COM_StopRealPlay"],
     ["COM_GetRealPlaySock", "COM_GetRealPlaySock"],
-    ["COM_SetESRealPlayCallBack", "COM_SetESRealPlayCallBack"],
-    ["COM_SetRealPlaySecretKey", "COM_SetRealPlaySecretKey"],
   ].forEach(([name, label]) => {
     hookExport("libHCPreview.so", name, {
       onEnter(args) {
@@ -729,6 +1472,222 @@ function installNativeHooks() {
         }
       },
     });
+  });
+
+  hookExport("libHCPreview.so", "COM_SetRealPlaySecretKey", {
+    onEnter(args) {
+      console.log(
+        `[key] COM_SetRealPlaySecretKey handle=${args[0]} type=${args[1].toInt32()} key=${nativeSecretBytes(args[2], args[3])}`,
+      );
+    },
+    onLeave(retval) {
+      console.log(`[key] COM_SetRealPlaySecretKey ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    ["NET_DVR_RealPlay", "NET_DVR_RealPlay", 3],
+    ["NET_DVR_RealPlay_V30", "NET_DVR_RealPlay_V30", 4],
+    ["NET_DVR_RealPlay_V40", "NET_DVR_RealPlay_V40", 4],
+    ["NET_DVR_MakeKeyFrame", "NET_DVR_MakeKeyFrame", 2],
+    ["NET_DVR_MakeKeyFrameSub", "NET_DVR_MakeKeyFrameSub", 3],
+    ["NET_DVR_ZeroMakeKeyFrame", "NET_DVR_ZeroMakeKeyFrame", 2],
+    ["NET_DVR_StartRecvNakedDataListen", "NET_DVR_StartRecvNakedDataListen", 2],
+    ["NET_DVR_StopRecvNakedDataListen", "NET_DVR_StopRecvNakedDataListen", 1],
+    ["NET_DVR_PicViewRequest", "NET_DVR_PicViewRequest", 2],
+    ["COM_StartRecvNakedDataListen", "COM_StartRecvNakedDataListen", 2],
+    ["COM_PicViewRequest", "COM_PicViewRequest", 2],
+  ].forEach(([name, label, argCount]) => {
+    const moduleName = name.startsWith("COM_") ? (name.indexOf("PicView") !== -1 ? "libHCDisplay.so" : "libHCAlarm.so") : "libhcnetsdk.so";
+    hookArgTraceFunction(moduleName, name, label, argCount, 64);
+  });
+
+  [
+    ["libhcnetsdk.so", "NET_DVR_MatrixSendData", "NET_DVR_MatrixSendData", 1, 2],
+    ["libhcnetsdk.so", "NET_DVR_TransCodeInputData", "NET_DVR_TransCodeInputData", 1, 2],
+    ["libHCDisplay.so", "COM_MatrixSendData", "COM_MatrixSendData", 1, 2],
+    ["libHCDisplay.so", "COM_TransCodeInputData", "COM_TransCodeInputData", 1, 2],
+    [
+      "libHCAlarm.so",
+      "_ZNK6NetSDK19CAlarmListenSession16ProcessNakedDataEPcjP10HPR_ADDR_Ti",
+      "CAlarmListenSession::ProcessNakedData",
+      1,
+      2,
+    ],
+    [
+      "libHCAlarm.so",
+      "_ZN6NetSDK19CAlarmListenSession21RecvNakedDataCallBackEP10HPR_ADDR_TPvPKvjjij",
+      "CAlarmListenSession::RecvNakedDataCallBack",
+      3,
+      4,
+    ],
+    ["libHCPlayBack.so", "_ZN6NetSDK14CFormatSession16RecvDataCallBackEPvPKvjj", "CFormatSession::RecvDataCallBack", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK11CVOD3GPFile20InputDataToSplitFileEPvjj", "CVOD3GPFile::InputDataToSplitFile", 1, 2],
+    ["libHCPlayBack.so", "_ZN6NetSDK12CVODFileBase15InputDataToFileEPvji", "CVODFileBase::InputDataToFile", 1, 2],
+    ["libHCPlayBack.so", "_ZN6NetSDK11CVOD3GPFile18StreamCallbackCoreEjPKvjPv", "CVOD3GPFile::StreamCallbackCore", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK8CVODFile20InputDataToSplitFileEPvjj", "CVODFile::InputDataToSplitFile", 1, 2],
+    ["libHCPlayBack.so", "_ZN6NetSDK8CVODFile18StreamCallbackCoreEjPKvjPv", "CVODFile::StreamCallbackCore", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK12CVODFileBase14StreamCallbackEjPKvjPv", "CVODFileBase::StreamCallback", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK10CVODPlayer17InputDataToPlayerEPvjj", "CVODPlayer::InputDataToPlayer", 1, 2],
+    ["libHCPlayBack.so", "_ZN6NetSDK10CVODPlayer14StreamCallbackEjPKvjPv", "CVODPlayer::StreamCallback", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK10CVODUserCB14StreamCallbackEjPKvjPv", "CVODUserCB::StreamCallback", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK20CVODHikClusterStream23ClusterRecvDataCallBackEPvPKvjj", "CVODHikClusterStream::ClusterRecvDataCallBack", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK14CVODStreamBase16RecvDataCallBackEPvPKvjj", "CVODStreamBase::RecvDataCallBack", 2, 3],
+    ["libHCPlayBack.so", "_ZN6NetSDK15CVODISAPIStream14ProcessRTPDataEPviPKvjj", "CVODISAPIStream::ProcessRTPData", 3, 4],
+    ["libHCPlayBack.so", "_ZN6NetSDK13CVODNPQStream15NpqDataCallBackEiiPhjPv", "CVODNPQStream::NpqDataCallBack", 3, 4],
+    ["libHCPlayBack.so", "_ZN6NetSDK13CVODNPQStream19UDPRecvDataCallBackEPvPKvjj", "CVODNPQStream::UDPRecvDataCallBack", 2, 3],
+    ["libHCDisplay.so", "_ZN6NetSDK21CPassiveDecodeSession15ParseRecvExDataEPhj", "CPassiveDecodeSession::ParseRecvExData", 1, 2],
+    ["libHCDisplay.so", "_ZN6NetSDK21CPassiveDecodeSession16RecvDataCallBackEPvPKvjj", "CPassiveDecodeSession::RecvDataCallBack", 2, 3],
+    ["libHCDisplay.so", "_ZN6NetSDK20CPassiveTransSession16RecvDataCallBackEPvPKvjj", "CPassiveTransSession::RecvDataCallBack", 2, 3],
+    ["libHCDisplay.so", "_ZN6NetSDK20CPassiveTransSession11ProcTcpDataEjPKvj", "CPassiveTransSession::ProcTcpData", 2, 3],
+    ["libHCDisplay.so", "_ZN6NetSDK20CPassiveTransSession19InputDataToCallBackEjPvj", "CPassiveTransSession::InputDataToCallBack", 2, 3],
+    ["libHCDisplay.so", "_ZN6NetSDK20CPassiveTransSession15UdpDataCallBackEPvPKvjj", "CPassiveTransSession::UdpDataCallBack", 2, 3],
+    ["libHCDisplay.so", "_ZN6NetSDK17CPicScreenSession21ScreenPicRecvCallBackEPvPKvjj", "CPicScreenSession::ScreenPicRecvCallBack", 2, 3],
+    ["libHCCore.so", "_ZN6NetSDK12CAnalyzeData9InputDataEPhj", "CAnalyzeData::InputData", 1, 2],
+    ["libHCCore.so", "_ZN6NetSDK13CNpqInterface9InputDataEiPhj", "CNpqInterface::InputData", 2, 3],
+    ["libHCCore.so", "_ZN17IHardDecodePlayer9InputDataEPvj", "IHardDecodePlayer::InputData", 1, 2],
+    ["libHCCore.so", "_ZN17ISoftDecodePlayer9InputDataEPvj", "ISoftDecodePlayer::InputData", 1, 2],
+    ["libHCCore.so", "_ZN17ISoftDecodePlayer11DecCallBackEiPciP9frameinfoii", "ISoftDecodePlayer::DecCallBack", 2, 3],
+    ["libHCCore.so", "_ZN17ISoftDecodePlayer15DisplayCallBackEiPciiiiii", "ISoftDecodePlayer::DisplayCallBack", 2, 3],
+    ["libHCCore.so", "_ZN6NetSDK14CStreamConvert9InputDataEPvj", "CStreamConvert::InputData", 1, 2],
+  ].forEach(([moduleName, name, label, dumpArgIndex, lenArgIndex]) => {
+    hookPointerDataFunction(moduleName, name, label, dumpArgIndex, lenArgIndex, 128);
+  });
+
+  [
+    ["libHCPlayBack.so", "_ZN6NetSDK11CVOD3GPFile20SysTransDataCallBackEPK15OUTPUTDATA_INFOPv", "CVOD3GPFile::SysTransDataCallBack"],
+    ["libHCPlayBack.so", "_ZN6NetSDK14CVODStreamBase20SysTransDataCallBackEPK15OUTPUTDATA_INFOPv", "CVODStreamBase::SysTransDataCallBack"],
+  ].forEach(([moduleName, name, label]) => {
+    hookOutputDataInfoArgFunction(moduleName, name, label, 1, false, 128);
+  });
+
+  hookExport("libHCCore.so", "_ZN6NetSDK14CStreamConvert15SetDataCallBackEPFvPK15OUTPUTDATA_INFOPvES4_", {
+    onEnter(args) {
+      console.log(`[cb] CStreamConvert::SetDataCallBack this=${args[0]} cb=${args[1]} user=${args[2]}`);
+      hookOutputDataInfoCallbackPointer("CStreamConvert::SetDataCallBack", args[1], false);
+    },
+    onLeave(retval) {
+      console.log(`[cb] CStreamConvert::SetDataCallBack ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    [
+      "libhcnetsdk.so",
+      "NET_DVR_SetNakedDataRecvCallBack",
+      "NET_DVR_SetNakedDataRecvCallBack",
+      1,
+      2,
+      3,
+    ],
+    ["libHCAlarm.so", "COM_SetNakedDataRecvCallBack", "COM_SetNakedDataRecvCallBack", 1, 2, 3],
+    ["libhcnetsdk.so", "NET_DVR_SetPicViewDataCallBack", "NET_DVR_SetPicViewDataCallBack", 1, 2, 3],
+    ["libHCDisplay.so", "COM_SetPicViewDataCallBack", "COM_SetPicViewDataCallBack", 1, 2, 3],
+    ["libhcnetsdk.so", "NET_DVR_SetPlayDataCallBack", "NET_DVR_SetPlayDataCallBack", 1, 2, 3],
+    ["libhcnetsdk.so", "NET_DVR_SetPlayDataCallBack_V40", "NET_DVR_SetPlayDataCallBack_V40", 1, 2, 3],
+    ["libHCPlayBack.so", "COM_SetPlayDataCallBack", "COM_SetPlayDataCallBack", 1, 2, 3],
+    ["libHCPlayBack.so", "COM_SetPlayDataCallBack_V40", "COM_SetPlayDataCallBack_V40", 1, 2, 3],
+    [
+      "libezstreamclient.so",
+      "_ZN13ez_stream_sdk30EZ_NET_DVR_SetPlayDataCallBackEiPFvijPhjjEj",
+      "ez_stream_sdk::EZ_NET_DVR_SetPlayDataCallBack",
+      1,
+      2,
+      3,
+    ],
+    [
+      "libezstreamclient.so",
+      "_ZN13ez_stream_sdk34EZ_NET_DVR_SetPlayDataCallBack_V40EiPFviiPhjPvES1_",
+      "ez_stream_sdk::EZ_NET_DVR_SetPlayDataCallBack_V40",
+      1,
+      2,
+      3,
+    ],
+  ].forEach(([moduleName, name, label, cbIndex, dumpArgIndex, lenArgIndex]) => {
+    hookCallbackSetter(moduleName, name, label, cbIndex, dumpArgIndex, lenArgIndex, 64);
+  });
+
+  [
+    ["libhcnetsdk.so", "NET_DVR_SetPreviewResponseCallBack", "NET_DVR_SetPreviewResponseCallBack", 1],
+    ["libhcnetsdk.so", "NET_DVR_SetPlaybackResponseCallBack", "NET_DVR_SetPlaybackResponseCallBack", 1],
+    ["libhcnetsdk.so", "NET_DVR_SetPicViewResponseCallBack", "NET_DVR_SetPicViewResponseCallBack", 1],
+    ["libHCCore.so", "COM_SetPreviewResponseCallBack", "COM_SetPreviewResponseCallBack", 1],
+    ["libHCCore.so", "COM_SetPlaybackResponseCallBack", "COM_SetPlaybackResponseCallBack", 1],
+    ["libHCCore.so", "COM_SetPicViewResponseCallBack", "COM_SetPicViewResponseCallBack", 1],
+    ["libhcnetsdk.so", "NET_DVR_SetPlayBackESCallBack", "NET_DVR_SetPlayBackESCallBack", 1],
+    ["libHCPlayBack.so", "COM_SetPlayESCallBack", "COM_SetPlayESCallBack", 1],
+  ].forEach(([moduleName, name, label, cbIndex]) => {
+    hookLoggingCallbackSetter(moduleName, name, label, cbIndex, 64);
+  });
+
+  [
+    ["libhcnetsdk.so", "NET_DVR_SetSDKSecretKey", "NET_DVR_SetSDKSecretKey"],
+    ["libHCCore.so", "COM_SetStreamSecretKey", "COM_SetStreamSecretKey"],
+  ].forEach(([moduleName, name, label]) => {
+    hookExport(moduleName, name, {
+      onEnter(args) {
+        console.log(`[key] ${label} handle=${args[0]} key=${secretBytes(args[1], 16)} extra=${args[2]} ${args[3]}`);
+      },
+      onLeave(retval) {
+        console.log(`[key] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  [
+    ["NET_DVR_SetRealPlaySecretKey", "NET_DVR_SetRealPlaySecretKey"],
+    ["NET_DVR_SetPlayBackSecretKey", "NET_DVR_SetPlayBackSecretKey"],
+  ].forEach(([name, label]) => {
+    hookExport("libhcnetsdk.so", name, {
+      onEnter(args) {
+        console.log(
+          `[key] ${label} handle=${args[0]} type=${args[1].toInt32()} key=${nativeSecretBytes(args[2], args[3])}`,
+        );
+      },
+      onLeave(retval) {
+        console.log(`[key] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  hookExport("libHCPlayBack.so", "COM_SetPlayBackSecretKey", {
+    onEnter(args) {
+      console.log(
+        `[key] COM_SetPlayBackSecretKey handle=${args[0]} type=${args[1].toInt32()} key=${nativeSecretBytes(args[2], args[3])}`,
+      );
+    },
+    onLeave(retval) {
+      console.log(`[key] COM_SetPlayBackSecretKey ret=${retString(retval)}`);
+    },
+  });
+
+  [
+    ["NET_DVR_SetRealDataCallBack", "NET_DVR_SetRealDataCallBack"],
+    ["NET_DVR_SetRealDataCallBackEx", "NET_DVR_SetRealDataCallBackEx"],
+    ["NET_DVR_SetStandardDataCallBack", "NET_DVR_SetStandardDataCallBack"],
+    ["NET_DVR_SetStandardDataCallBackEx", "NET_DVR_SetStandardDataCallBackEx"],
+    ["NET_DVR_SetTransparentDataCallBack", "NET_DVR_SetTransparentDataCallBack"],
+    ["NET_DVR_SetESCallBack", "NET_DVR_SetESCallBack"],
+  ].forEach(([name, label]) => {
+    hookExport("libhcnetsdk.so", name, {
+      onEnter(args) {
+        console.log(`[cb] ${label} handle=${args[0]} cb=${args[1]} user=${args[2]} extra=${args[3]}`);
+        hookCallbackPointer(label, args[1], 2, 3);
+      },
+      onLeave(retval) {
+        console.log(`[cb] ${label} ret=${retString(retval)}`);
+      },
+    });
+  });
+
+  hookExport("libhcnetsdk.so", "NET_DVR_SetESRealPlayCallBack", {
+    onEnter(args) {
+      console.log(`[cb] NET_DVR_SetESRealPlayCallBack handle=${args[0]} cb=${args[1]} user=${args[2]} extra=${args[3]}`);
+      hookLoggingCallbackPointer("NET_DVR_SetESRealPlayCallBack", args[1], 64);
+    },
+    onLeave(retval) {
+      console.log(`[cb] NET_DVR_SetESRealPlayCallBack ret=${retString(retval)}`);
+    },
   });
 
   hookExport("libPlayCtrl.so", "PlayM4_SetDecodeCallBack", {
@@ -848,6 +1807,231 @@ function installJavaHooks() {
       file.mkdirs();
       dumpDir = file.getAbsolutePath().toString();
       console.log(`[init] dumpDir=${dumpDir}`);
+    }
+
+    function hookJavaMethodGroup(className, classLabel, methodNames, dumpByteArrays) {
+      try {
+        const Klass = Java.use(className);
+        let hooked = 0;
+        for (const methodName of methodNames) {
+          if (Klass[methodName] === undefined) {
+            continue;
+          }
+          for (const overload of Klass[methodName].overloads) {
+            const argSig = overload.argumentTypes
+              ? overload.argumentTypes.map((type) => type.className).join(",")
+              : "?";
+            overload.implementation = function () {
+              const parts = [];
+              for (let i = 0; i < arguments.length; i++) {
+                parts.push(`arg${i}=${describeJavaMethodArg(arguments[i])}`);
+              }
+              console.log(`[java] ${classLabel}.${methodName}(${argSig}) ${parts.join(" ")}`);
+              if (dumpByteArrays) {
+                dumpFirstJavaByteArrayArg(`java-${classLabel}-${methodName}`.replace(/[^A-Za-z0-9_.-]+/g, "-"), arguments);
+              }
+              const ret = overload.apply(this, arguments);
+              console.log(`[java] ${classLabel}.${methodName} ret=${describeJavaMethodArg(ret)}`);
+              return ret;
+            };
+            hooked += 1;
+          }
+        }
+        if (hooked > 0) {
+          console.log(`[hook] Java ${classLabel} method-group overloads=${hooked}`);
+        }
+      } catch (err) {
+        console.log(`[warn] Java ${classLabel} method-group unavailable: ${err}`);
+      }
+    }
+
+    function hookJavaStreamCallbackClass(className, sourceLabel) {
+      if (!className || className.startsWith("<") || installedJavaStreamClasses.has(className)) {
+        return;
+      }
+      try {
+        const CallbackClass = Java.use(className);
+        let hooked = 0;
+        [
+          "onDataCallBack",
+          "onDataListener",
+          "onOutputData",
+          "onConvertData",
+          "onDataOutput",
+          "onRespData",
+          "onDataRefresh",
+          "onMessageCallBack",
+          "onStatisticsCallBack",
+          "onNPCData",
+          "onNPCMsg",
+        ].forEach((methodName) => {
+          if (CallbackClass[methodName] === undefined) {
+            return;
+          }
+          for (const overload of CallbackClass[methodName].overloads) {
+            const argSig = overload.argumentTypes
+              ? overload.argumentTypes.map((type) => type.className).join(",")
+              : "?";
+            overload.implementation = function () {
+              const parts = [];
+              for (let i = 0; i < arguments.length; i++) {
+                parts.push(`arg${i}=${describeJavaMethodArg(arguments[i])}`);
+              }
+              console.log(`[java-cb] ${className}.${methodName} source=${sourceLabel}(${argSig}) ${parts.join(" ")}`);
+              dumpFirstJavaByteArrayArg(`java-cb-${className}-${methodName}`.replace(/[^A-Za-z0-9_.-]+/g, "-"), arguments);
+              const ret = overload.apply(this, arguments);
+              console.log(`[java-cb] ${className}.${methodName} ret=${describeJavaMethodArg(ret)}`);
+              return ret;
+            };
+            hooked += 1;
+          }
+        });
+        if (hooked > 0) {
+          installedJavaStreamClasses.add(className);
+          console.log(`[hook] Java stream callback ${className} overloads=${hooked} source=${sourceLabel}`);
+        }
+      } catch (err) {
+        console.log(`[warn] Java stream callback hook unavailable class=${className}: ${err}`);
+      }
+    }
+
+    function hookJavaCallbackRegistration(Klass, classLabel, methodName, cbArgIndex) {
+      if (Klass[methodName] === undefined) {
+        return;
+      }
+      let hooked = 0;
+      for (const overload of Klass[methodName].overloads) {
+        const argSig = overload.argumentTypes
+          ? overload.argumentTypes.map((type) => type.className).join(",")
+          : "?";
+        overload.implementation = function () {
+          const callbackObj = arguments[cbArgIndex];
+          const callbackClass = safeJavaClassName(callbackObj);
+          console.log(`[java-cb-reg] ${classLabel}.${methodName}(${argSig}) cb=${callbackClass}`);
+          hookJavaStreamCallbackClass(callbackClass, `${classLabel}.${methodName}`);
+          dumpFirstJavaByteArrayArg(`java-reg-${classLabel}-${methodName}`.replace(/[^A-Za-z0-9_.-]+/g, "-"), arguments);
+          const ret = overload.apply(this, arguments);
+          console.log(`[java-cb-reg] ${classLabel}.${methodName} ret=${describeJavaMethodArg(ret)}`);
+          return ret;
+        };
+        hooked += 1;
+      }
+      if (hooked > 0) {
+        console.log(`[hook] Java callback registration ${classLabel}.${methodName} overloads=${hooked}`);
+      }
+    }
+
+    hookJavaMethodGroup("com.ez.stream.NativeApi", "NativeApi", [
+      "createClient",
+      "createClientWithUrl",
+      "createPreviewHandle",
+      "createPreviewHandleWithUrl",
+      "destroyHandle",
+      "setCallback",
+      "setDataCallback2Java",
+      "setPlayPort",
+      "setSecretKey",
+      "startPreview",
+      "start",
+      "startPlayback",
+      "startPreconnect",
+      "stopPreview",
+      "stop",
+      "setMediaCallback",
+      "setStreamDataCallback",
+      "setStreamSaveDebugPath",
+      "setPlaybackConvert",
+      "setMediaPlaybackConvert",
+      "refreshPlayer",
+      "forceIFrame",
+    ], false);
+
+    hookJavaMethodGroup("com.ez.stream.NativeApi", "NativeApi.byte-input", [
+      "inputData2Cloud",
+      "inputVoiceTalkData",
+    ], true);
+
+    hookJavaMethodGroup("com.hikvision.packagetransform.PackageTransform", "PackageTransform", [
+      "startTransform",
+      "startTransformSimple",
+      "startRealTimeTransform",
+      "startRealTimeTransformTS",
+      "inputData",
+    ], true);
+
+    hookJavaMethodGroup("com.ez.player.EZMediaPlayer", "EZMediaPlayer", [
+      "onDataListener",
+      "onDataRefresh",
+      "onDelayListener",
+      "onErrorListener",
+      "onInfoListener",
+      "setOnStreamDataListener",
+      "start",
+      "setSecretKey",
+    ], true);
+
+    hookJavaMethodGroup("com.ez.stream.EZStreamClient", "EZStreamClient", [
+      "setCallback",
+      "setDataCallback2Java",
+      "setPlaybackConvert",
+      "startPreview",
+      "startPlayback",
+    ], true);
+
+    hookJavaMethodGroup("com.ez.stream.SystemTransform", "SystemTransform", [
+      "create",
+      "createEx",
+      "inputData",
+      "setEncryptKey",
+      "start",
+      "startEx",
+      "stop",
+      "release",
+    ], true);
+
+    try {
+      const NativeApi = Java.use("com.ez.stream.NativeApi");
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setCallback", 1);
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setStreamDataCallback", 1);
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setMediaCallback", 1);
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setDownloadCallback", 1);
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setDisplayCallback", 1);
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setRenderCallback", 1);
+      hookJavaCallbackRegistration(NativeApi, "NativeApi", "setRenderFrameInfoCallback", 1);
+    } catch (err) {
+      console.log(`[warn] Java NativeApi callback registration hooks unavailable: ${err}`);
+    }
+
+    try {
+      const EZStreamClient = Java.use("com.ez.stream.EZStreamClient");
+      hookJavaCallbackRegistration(EZStreamClient, "EZStreamClient", "setCallback", 0);
+      hookJavaCallbackRegistration(EZStreamClient, "EZStreamClient", "setStreamDataCallback", 0);
+      hookJavaCallbackRegistration(EZStreamClient, "EZStreamClient", "setMediaCallback", 0);
+    } catch (err) {
+      console.log(`[warn] Java EZStreamClient callback registration hooks unavailable: ${err}`);
+    }
+
+    try {
+      const EZMediaPlayer = Java.use("com.ez.player.EZMediaPlayer");
+      hookJavaCallbackRegistration(EZMediaPlayer, "EZMediaPlayer", "setOnStreamDataListener", 0);
+    } catch (err) {
+      console.log(`[warn] Java EZMediaPlayer stream listener hook unavailable: ${err}`);
+    }
+
+    try {
+      const SystemTransform = Java.use("com.ez.stream.SystemTransform");
+      hookJavaCallbackRegistration(SystemTransform, "SystemTransform", "create", 4);
+    } catch (err) {
+      console.log(`[warn] Java SystemTransform callback registration hook unavailable: ${err}`);
+    }
+
+    try {
+      const NPClient = Java.use("org.hik.np.NPClient");
+      hookJavaCallbackRegistration(NPClient, "NPClient", "NPCOpen", 1);
+      hookJavaCallbackRegistration(NPClient, "NPClient", "NPCOpenEx", 1);
+      hookJavaCallbackRegistration(NPClient, "NPClient", "NPCSetMsgCallBack", 1);
+    } catch (err) {
+      console.log(`[warn] Java NPClient callback registration hooks unavailable: ${err}`);
     }
 
     try {
@@ -1261,5 +2445,9 @@ function installJavaHooks() {
 }
 
 installNativeHooks();
-setImmediate(installJavaHooks);
+if (NATIVE_ONLY) {
+  console.log(`[init] native-only mode enabled dumpDir=${dumpDir}`);
+} else {
+  setImmediate(installJavaHooks);
+}
 setInterval(installNativeHooks, 1000);

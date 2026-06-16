@@ -2459,7 +2459,9 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
     wait_deadline = monotonic() + wait_seconds
     capture_deadline: float | None = None
     collected: list[bytes] = []
+    packet_times: list[float] = []
     clean_start_offset: int | None = None
+    clean_idr_time: float | None = None
     first_decode_error: str | None = None
     final_decode_error: str | None = None
     last_suffix_probe_packet_count = 0
@@ -2478,20 +2480,35 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
         if (
             clean_start_offset is not None
             and capture_deadline is not None
+            and clean_idr_time is not None
             and now >= capture_deadline
             and last_suffix_probe_packet_count == 0
         ):
-            annexb = _idmx_local_packets_to_h264_annexb(collected)
+            deadline_packets = [
+                packet
+                for packet, packet_time in zip(collected, packet_times, strict=True)
+                if packet_time < capture_deadline or packet_time == clean_idr_time
+            ]
+            deadline_packet_times = packet_times[: len(deadline_packets)]
+            annexb = _idmx_local_packets_to_h264_annexb(deadline_packets)
             try:
                 return trim_h264_annexb_to_first_error_free_suffix(
                     annexb[clean_start_offset:],
                     ffmpeg_path=ffmpeg_path,
                     max_windows=max_windows,
+                    accept_start_offset=_requested_duration_h264_suffix_predicate(
+                        packets=deadline_packets,
+                        packet_times=deadline_packet_times,
+                        base_offset=clean_start_offset,
+                        now=capture_deadline,
+                        duration_seconds=duration_seconds,
+                    ),
                 )
             except PyEzvizError as err:
                 final_decode_error = final_decode_error or str(err)
                 last_suffix_probe_packet_count = len(collected)
         collected.append(packet)
+        packet_times.append(now)
         if clean_start_offset is None:
             probe = _try_first_clean_h264_annexb_idr_window_offset(
                 collected,
@@ -2503,7 +2520,13 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
             if first_decode_error is None and probe.first_decode_error is not None:
                 first_decode_error = probe.first_decode_error
             if clean_start_offset is not None:
-                capture_deadline = now + duration_seconds
+                clean_idr_packet_index = _h264_annexb_packet_index_for_offset(
+                    collected,
+                    offset=getattr(probe, "idr_start_offset", None)
+                    or clean_start_offset,
+                )
+                clean_idr_time = packet_times[clean_idr_packet_index]
+                capture_deadline = clean_idr_time + duration_seconds
             continue
         if (
             capture_deadline is not None
@@ -2516,6 +2539,13 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
                     annexb[clean_start_offset:],
                     ffmpeg_path=ffmpeg_path,
                     max_windows=max_windows,
+                    accept_start_offset=_requested_duration_h264_suffix_predicate(
+                        packets=collected,
+                        packet_times=packet_times,
+                        base_offset=clean_start_offset,
+                        now=now,
+                        duration_seconds=duration_seconds,
+                    ),
                 )
             except PyEzvizError as err:
                 final_decode_error = final_decode_error or str(err)
@@ -2540,6 +2570,13 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
             annexb[clean_start_offset:],
             ffmpeg_path=ffmpeg_path,
             max_windows=max_windows,
+            accept_start_offset=_requested_duration_h264_suffix_predicate(
+                packets=collected,
+                packet_times=packet_times,
+                base_offset=clean_start_offset,
+                now=packet_times[-1] if packet_times else 0.0,
+                duration_seconds=duration_seconds,
+            ),
         )
     except PyEzvizError as err:
         if final_decode_error:
@@ -2610,6 +2647,14 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
                         annexb[clean_start_offset:],
                         ffmpeg_path=ffmpeg_path,
                         max_windows=max_windows,
+                        accept_start_offset=_requested_duration_idmx_suffix_predicate(
+                            packets=deadline_packets,
+                            packet_times=packet_times[: len(deadline_packets)],
+                            codec=clean_codec,
+                            base_offset=clean_start_offset,
+                            now=capture_deadline,
+                            duration_seconds=duration_seconds,
+                        ),
                     ),
                     clean_codec,
                 )
@@ -2662,6 +2707,14 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
                         annexb[clean_start_offset:],
                         ffmpeg_path=ffmpeg_path,
                         max_windows=max_windows,
+                        accept_start_offset=_requested_duration_idmx_suffix_predicate(
+                            packets=collected,
+                            packet_times=packet_times,
+                            codec=clean_codec,
+                            base_offset=clean_start_offset,
+                            now=now,
+                            duration_seconds=duration_seconds,
+                        ),
                     ),
                     clean_codec,
                 )
@@ -2687,6 +2740,14 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
             annexb[clean_start_offset:],
             ffmpeg_path=ffmpeg_path,
             max_windows=max_windows,
+            accept_start_offset=_requested_duration_idmx_suffix_predicate(
+                packets=collected,
+                packet_times=packet_times,
+                codec="h264",
+                base_offset=clean_start_offset,
+                now=packet_times[-1] if packet_times else 0.0,
+                duration_seconds=duration_seconds,
+            ),
         )
         return annexb, clean_codec
     else:
@@ -2696,6 +2757,14 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
                 annexb[clean_start_offset:],
                 ffmpeg_path=ffmpeg_path,
                 max_windows=max_windows,
+                accept_start_offset=_requested_duration_idmx_suffix_predicate(
+                    packets=collected,
+                    packet_times=packet_times,
+                    codec="hevc",
+                    base_offset=clean_start_offset,
+                    now=packet_times[-1] if packet_times else 0.0,
+                    duration_seconds=duration_seconds,
+                ),
             )
         except PyEzvizError as err:
             if final_decode_error:
@@ -2803,6 +2872,16 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PL
                     annexb[clean_start_offset:],
                     ffmpeg_path=ffmpeg_path,
                     max_windows=max_windows,
+                    accept_start_offset=_requested_duration_decrypted_h264_suffix_predicate(
+                        packets=deadline_packets,
+                        packet_times=packet_times[: len(deadline_packets)],
+                        media_key=media_key,
+                        nalu_header_size=nalu_header_size,
+                        stream_is_clear=clean_stream_is_clear,
+                        base_offset=clean_start_offset,
+                        now=capture_deadline,
+                        duration_seconds=duration_seconds,
+                    ),
                 )
             except PyEzvizError as err:
                 final_decode_error = final_decode_error or str(err)
@@ -2873,6 +2952,16 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PL
                     annexb[clean_start_offset:],
                     ffmpeg_path=ffmpeg_path,
                     max_windows=max_windows,
+                    accept_start_offset=_requested_duration_decrypted_h264_suffix_predicate(
+                        packets=collected,
+                        packet_times=packet_times,
+                        media_key=media_key,
+                        nalu_header_size=nalu_header_size,
+                        stream_is_clear=clean_stream_is_clear,
+                        base_offset=clean_start_offset,
+                        now=now,
+                        duration_seconds=duration_seconds,
+                    ),
                 )
             except PyEzvizError as err:
                 final_decode_error = final_decode_error or str(err)
@@ -2904,6 +2993,16 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PL
             annexb[clean_start_offset:],
             ffmpeg_path=ffmpeg_path,
             max_windows=max_windows,
+            accept_start_offset=_requested_duration_decrypted_h264_suffix_predicate(
+                packets=collected,
+                packet_times=packet_times,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                stream_is_clear=clean_stream_is_clear,
+                base_offset=clean_start_offset,
+                now=packet_times[-1] if packet_times else 0.0,
+                duration_seconds=duration_seconds,
+            ),
         )
     except PyEzvizError as err:
         if final_decode_error:
@@ -2928,6 +3027,94 @@ def _h264_clean_idr_timeout_suffix(
     if probe.idr_count or probe.nal_count:
         return f": {details}"
     return ""
+
+
+def _requested_duration_h264_suffix_predicate(
+    *,
+    packets: list[bytes],
+    packet_times: list[float],
+    base_offset: int,
+    now: float,
+    duration_seconds: float,
+) -> Callable[[int], bool]:
+    """Return a suffix-start guard that preserves useful post-IDR duration."""
+
+    latest_start_time = now - duration_seconds
+
+    def accept_start_offset(start_offset: int) -> bool:
+        packet_index = _h264_annexb_packet_index_for_offset(
+            packets,
+            offset=base_offset + start_offset,
+        )
+        if not packet_times:
+            return False
+        packet_index = min(packet_index, len(packet_times) - 1)
+        return packet_times[packet_index] <= latest_start_time
+
+    return accept_start_offset
+
+
+def _requested_duration_idmx_suffix_predicate(
+    *,
+    packets: list[bytes],
+    packet_times: list[float],
+    codec: str,
+    base_offset: int,
+    now: float,
+    duration_seconds: float,
+) -> Callable[[int], bool]:
+    """Return a suffix-start guard for clear H.264/HEVC IDMX Annex-B."""
+
+    latest_start_time = now - duration_seconds
+
+    def accept_start_offset(start_offset: int) -> bool:
+        packet_index = _idmx_annexb_packet_index_for_offset(
+            packets,
+            codec=codec,
+            offset=base_offset + start_offset,
+        )
+        if not packet_times:
+            return False
+        packet_index = min(packet_index, len(packet_times) - 1)
+        return packet_times[packet_index] <= latest_start_time
+
+    return accept_start_offset
+
+
+def _requested_duration_decrypted_h264_suffix_predicate(
+    *,
+    packets: list[bytes],
+    packet_times: list[float],
+    media_key: str | bytes,
+    nalu_header_size: int | None,
+    stream_is_clear: bool,
+    base_offset: int,
+    now: float,
+    duration_seconds: float,
+) -> Callable[[int], bool]:
+    """Return a suffix-start guard for clear-first or encrypted H.264 IDMX."""
+
+    latest_start_time = now - duration_seconds
+
+    def accept_start_offset(start_offset: int) -> bool:
+        if stream_is_clear:
+            packet_index = _h264_annexb_packet_index_for_offset(
+                packets,
+                offset=base_offset + start_offset,
+            )
+        else:
+            packet_index = _decrypted_h264_annexb_packet_index_for_offset(
+                packets,
+                media_key,
+                nalu_header_size=nalu_header_size,
+                offset=base_offset + start_offset,
+            )
+        if not packet_times:
+            return False
+        packet_index = min(packet_index, len(packet_times) - 1)
+        return packet_times[packet_index] <= latest_start_time
+
+    return accept_start_offset
 
 
 def trim_h264_annexb_to_first_clean_idr_window(
@@ -2973,6 +3160,7 @@ def trim_h264_annexb_to_first_error_free_suffix(
     *,
     ffmpeg_path: str = "ffmpeg",
     max_windows: int = 32,
+    accept_start_offset: Callable[[int], bool] | None = None,
 ) -> bytes:
     """Return the earliest IDR-started suffix that decodes without errors."""
 
@@ -2983,7 +3171,9 @@ def trim_h264_annexb_to_first_error_free_suffix(
         ffmpeg_path=ffmpeg_path,
         accept_success_with_stderr=False,
     )
-    if not initial_errors:
+    if not initial_errors and (
+        accept_start_offset is None or accept_start_offset(0)
+    ):
         return data
 
     idr_summary = summarize_h264_annexb_idr_windows(data, max_windows=max_windows)
@@ -2991,14 +3181,24 @@ def trim_h264_annexb_to_first_error_free_suffix(
     if not isinstance(samples, list) or not samples:
         raise PyEzvizError(
             "H.264 stream did not contain a clean decodable suffix: "
-            + initial_errors[0]
+            + (
+                initial_errors[0]
+                if initial_errors
+                else "clean suffix starts too late for requested duration"
+            )
         )
-    first_error = initial_errors[0]
+    first_error = (
+        initial_errors[0]
+        if initial_errors
+        else "clean suffix starts too late for requested duration"
+    )
     for sample in samples[1:]:
         if not isinstance(sample, dict):
             continue
         start_offset = sample.get("start_code_offset")
         if not isinstance(start_offset, int):
+            continue
+        if accept_start_offset is not None and not accept_start_offset(start_offset):
             continue
         suffix = data[start_offset:]
         decode_errors = _ffmpeg_h264_decode_errors(
@@ -3058,6 +3258,7 @@ def trim_hevc_annexb_to_first_error_free_suffix(
     *,
     ffmpeg_path: str = "ffmpeg",
     max_windows: int = 32,
+    accept_start_offset: Callable[[int], bool] | None = None,
 ) -> bytes:
     """Return the earliest IRAP-started suffix that decodes without errors."""
 
@@ -3068,7 +3269,9 @@ def trim_hevc_annexb_to_first_error_free_suffix(
         ffmpeg_path=ffmpeg_path,
         accept_success_with_stderr=False,
     )
-    if not initial_errors:
+    if not initial_errors and (
+        accept_start_offset is None or accept_start_offset(0)
+    ):
         return data
 
     irap_summary = summarize_hevc_annexb_irap_windows(data, max_windows=max_windows)
@@ -3076,14 +3279,24 @@ def trim_hevc_annexb_to_first_error_free_suffix(
     if not isinstance(samples, list) or not samples:
         raise PyEzvizError(
             "HEVC stream did not contain a clean decodable suffix: "
-            + initial_errors[0]
+            + (
+                initial_errors[0]
+                if initial_errors
+                else "clean suffix starts too late for requested duration"
+            )
         )
-    first_error = initial_errors[0]
+    first_error = (
+        initial_errors[0]
+        if initial_errors
+        else "clean suffix starts too late for requested duration"
+    )
     for sample in samples[1:]:
         if not isinstance(sample, dict):
             continue
         start_offset = sample.get("start_code_offset")
         if not isinstance(start_offset, int):
+            continue
+        if accept_start_offset is not None and not accept_start_offset(start_offset):
             continue
         suffix = data[start_offset:]
         decode_errors = _ffmpeg_hevc_decode_errors(

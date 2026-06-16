@@ -352,6 +352,22 @@ pyezvizapi stream hcnetsdk-command-dump-summary \
   --decode-idr-windows
 ```
 
+Native stream-transform hook labels that already contain Annex-B chunks can be
+summarized through the same helper. For example, Gadget traces that include
+`PlayCtrl.IDMXAESDecryptFrame` before/after dumps can check the post-decrypt
+buffers without concatenating or printing media bytes:
+
+```bash
+pyezvizapi stream hcnetsdk-command-dump-summary \
+  --native-annexb-dir native-dumps/ezviz-hook \
+  --native-annexb-label playctrl-idmx-aes-frame-after \
+  --decode-idr-windows
+```
+
+The helper auto-detects H.264 vs HEVC for these native Annex-B chunks. It reports
+both aggregate IRAP/IDR windows and per-chunk decode samples, because some native
+Frida labels are snapshot buffers rather than one linear elementary stream.
+
 Command payload templates still vary by native call, so callers remain
 responsible for supplying the correct generated template plan.
 

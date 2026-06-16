@@ -3013,7 +3013,7 @@ def test_copy_local_stream_to_mpegts_can_preroll_before_clean_idr_trim(
         FakeStream(),
         output,
         ffmpeg_path=str(fake_ffmpeg),
-        duration_seconds=1.0,
+        duration_seconds=0.5,
         monotonic=lambda: next(times),
         h264_trim_to_clean_idr_window=True,
         h264_clean_idr_preroll_seconds=2.0,
@@ -3338,7 +3338,7 @@ def test_collect_idmx_annexb_after_clean_video_window_selects_hevc_irap(
                 next_irap,
             )
         ),
-        duration_seconds=1.0,
+        duration_seconds=0.5,
         monotonic=iter([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5]).__next__,
         ffmpeg_path=str(fake_ffmpeg),
         wait_seconds=10.0,
@@ -3960,14 +3960,19 @@ def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
         "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
         fake_errors,
     )
+    def fake_probe(packets: list[bytes], *_args: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        if len(packets) < 9:
+            return None, None, None, SimpleNamespace()
+        return 0, "hevc", None, SimpleNamespace()
+
     monkeypatch.setattr(
         "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
-        lambda *_args, **_kwargs: (0, "hevc", None, SimpleNamespace()),
+        fake_probe,
     )
 
     annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
         packets,
-        duration_seconds=0.05,
+        duration_seconds=0.02,
         monotonic=fake_monotonic,
         ffmpeg_path="fake-ffmpeg",
     )
@@ -4048,7 +4053,13 @@ def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
     )
     trim_calls = 0
 
-    def fake_trim(data: bytes, *, ffmpeg_path: str, max_windows: int) -> bytes:
+    def fake_trim(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        max_windows: int,
+        accept_start_offset: Any | None = None,
+    ) -> bytes:
         nonlocal trim_calls
         assert ffmpeg_path == "fake-ffmpeg"
         assert max_windows == 7
@@ -4105,7 +4116,13 @@ def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first
     )
     trim_calls = 0
 
-    def fake_trim(data: bytes, *, ffmpeg_path: str, max_windows: int) -> bytes:
+    def fake_trim(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        max_windows: int,
+        accept_start_offset: Any | None = None,
+    ) -> bytes:
         nonlocal trim_calls
         assert ffmpeg_path == "fake-ffmpeg"
         assert max_windows == 5

@@ -4122,7 +4122,7 @@ def _looks_like_idmx_hevc_direct_frame(body: bytes) -> bool:
     if len(body) < HEVC_NAL_HEADER_SIZE or body[0] & 0x80 or body[1] & 0x07 == 0:
         return False
     nal_type = _hevc_nal_type(body)
-    return 0 < nal_type <= 40 or nal_type == 49
+    return 0 <= nal_type <= 40 or nal_type == 49
 
 
 def _looks_like_idmx_hevc_evidence_frame(body: bytes) -> bool:
@@ -4381,7 +4381,7 @@ def _is_plausible_hevc_nal(nal: bytes) -> bool:
         len(nal) >= HEVC_NAL_HEADER_SIZE
         and not nal[0] & 0x80
         and nal[1] & 0x07 != 0
-        and 0 < nal_type <= 40
+        and 0 <= nal_type <= 40
     )
 
 
@@ -4483,7 +4483,9 @@ def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
     )
     decrypt_length -= decrypt_length % AES.block_size
     if decrypt_length > 0:
-        cipher = _hikvision_aes_ecb_cipher(aes_key)
+        cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+            aes_key
+        )
         decrypt_end = HEVC_NAL_HEADER_SIZE + decrypt_length
         frame[HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(
             bytes(frame[HEVC_NAL_HEADER_SIZE:decrypt_end])
@@ -4507,7 +4509,9 @@ def _decrypt_h264_nal_prefix(
     )
     decrypt_length -= decrypt_length % AES.block_size
     if decrypt_length > 0:
-        cipher = _hikvision_aes_ecb_cipher(aes_key)
+        cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+            aes_key
+        )
         decrypt_end = nalu_header_size + decrypt_length
         frame[nalu_header_size:decrypt_end] = cipher.decrypt(
             bytes(frame[nalu_header_size:decrypt_end])
@@ -4545,6 +4549,7 @@ def _copy_mpegps_payloads_to_mpegts(
         raise PyEzvizError("Could not open FFmpeg pipes")
 
     writer_errors: list[Exception] = []
+    stderr_chunks, stderr_reader = _start_ffmpeg_stderr_drain(process)
 
     def _write_input() -> None:
         try:
@@ -4578,30 +4583,53 @@ def _copy_mpegps_payloads_to_mpegts(
         except subprocess.TimeoutExpired:
             process.kill()
             return_code = process.wait()
+        if stderr_reader is not None:
+            stderr_reader.join(timeout=2)
 
     if writer_errors:
         raise writer_errors[0]
     if return_code not in (0, -15):
-        stderr_tail = _ffmpeg_process_stderr_tail(process)
+        stderr_tail = _ffmpeg_stderr_tail(stderr_chunks)
         message = f"FFmpeg exited with status {return_code}"
         if stderr_tail:
             message = f"{message}: {stderr_tail}"
         raise PyEzvizError(message)
 
 
-def _ffmpeg_process_stderr_tail(
+def _start_ffmpeg_stderr_drain(
     process: subprocess.Popen[bytes],
+    *,
+    max_bytes: int = 65536,
+) -> tuple[list[bytes], Thread | None]:
+    stderr = process.stderr
+    if stderr is None:
+        return [], None
+
+    chunks: list[bytes] = []
+
+    def _drain_stderr() -> None:
+        with suppress(OSError):
+            while True:
+                chunk = stderr.read(4096)
+                if not chunk:
+                    return
+                if max_bytes <= 0:
+                    continue
+                data = b"".join(chunks) + chunk
+                chunks[:] = [data[-max_bytes:]]
+
+    reader = Thread(target=_drain_stderr, daemon=True)
+    reader.start()
+    return chunks, reader
+
+
+def _ffmpeg_stderr_tail(
+    chunks: list[bytes],
     *,
     max_chars: int = 1200,
 ) -> str:
-    stderr = process.stderr
-    if stderr is None:
-        return ""
-    with suppress(OSError):
-        data = stderr.read()
-        text = data.decode("utf-8", errors="replace").strip()
-        return text[-max_chars:]
-    return ""
+    text = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    return text[-max_chars:]
 
 
 def _write_local_stream_payloads(

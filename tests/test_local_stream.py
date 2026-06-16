@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import date
 import io
+import subprocess
+import sys
 import time
 from types import SimpleNamespace
 from typing import Any, cast
@@ -37,6 +39,8 @@ from pyezvizapi.local_stream import (
     HcNetSdkCommandPortMultiSocketPlan,
     HcNetSdkCommandPortSocketStep,
     _ffmpeg_h264_decode_errors,
+    _ffmpeg_stderr_tail,
+    _start_ffmpeg_stderr_drain,
     collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
     collect_h264_idmx_annexb_after_first_clean_idr_window,
     collect_idmx_annexb_after_first_clean_video_window,
@@ -2375,7 +2379,7 @@ def test_copy_local_stream_to_mpegts_handles_direct_hevc_fu_without_continuation
     )
 
 
-def test_copy_local_stream_to_mpegts_drops_invalid_hevc_type_zero(
+def test_copy_local_stream_to_mpegts_keeps_hevc_trail_n(
     tmp_path,
 ) -> None:
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
@@ -2399,7 +2403,7 @@ def test_copy_local_stream_to_mpegts_drops_invalid_hevc_type_zero(
             + body
         )
 
-    invalid_type_zero = b"\x00\x01invalid"
+    trail_n = b"\x00\x01trail-n"
     vps = b"\x40\x01vps"
     sps = b"\x42\x01sps"
     idr = b"\x26\x01idr"
@@ -2408,7 +2412,7 @@ def test_copy_local_stream_to_mpegts_drops_invalid_hevc_type_zero(
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
             assert max_packets == 4
             return [
-                SimpleNamespace(body=frame(invalid_type_zero, sequence=sequence_base)),
+                SimpleNamespace(body=frame(trail_n, sequence=sequence_base)),
                 SimpleNamespace(body=frame(vps, sequence=sequence_base + 1)),
                 SimpleNamespace(body=frame(sps, sequence=sequence_base + 2)),
                 SimpleNamespace(body=frame(idr, sequence=sequence_base + 3)),
@@ -2425,12 +2429,36 @@ def test_copy_local_stream_to_mpegts_drops_invalid_hevc_type_zero(
 
     assert output.getvalue() == (
         b"hevc:\x00\x00\x00\x01"
+        + trail_n
+        + b"\x00\x00\x00\x01"
         + vps
         + b"\x00\x00\x00\x01"
         + sps
         + b"\x00\x00\x00\x01"
         + idr
     )
+
+
+def test_ffmpeg_stderr_drain_keeps_bounded_tail() -> None:
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys\n"
+                "sys.stderr.buffer.write(b'x' * 70000 + b'final-marker')\n"
+                "sys.stderr.flush()\n"
+            ),
+        ],
+        stderr=subprocess.PIPE,
+    )
+
+    chunks, reader = _start_ffmpeg_stderr_drain(process, max_bytes=128)
+    assert reader is not None
+    assert process.wait(timeout=5) == 0
+    reader.join(timeout=5)
+
+    assert _ffmpeg_stderr_tail(chunks, max_chars=64).endswith("final-marker")
 
 
 def test_copy_local_stream_to_mpegts_prefers_direct_hevc_over_partial_h264(

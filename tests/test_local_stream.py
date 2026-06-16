@@ -117,6 +117,24 @@ def _media(
     )
 
 
+def _raw_media(
+    payload: bytes,
+    *,
+    channel: int = 0,
+    prefix: bytes = b"",
+) -> EzvizInterleavedRtpFrameWithPrefix:
+    return EzvizInterleavedRtpFrameWithPrefix(
+        prefix=prefix,
+        frame=EzvizInterleavedRtpFrame(
+            header=EzvizInterleavedRtpFrameHeader(
+                channel=channel,
+                payload_length=len(payload),
+            ),
+            payload=payload,
+        ),
+    )
+
+
 def _preview_request() -> EzvizLocalPreviewRequest:
     return EzvizLocalPreviewRequest(
         operation_code="op",
@@ -933,6 +951,26 @@ def test_hcnetsdk_command_port_media_stream_strips_rtp_continuation_fragments() 
         b"def",
     ]
     assert command_client.read_prefix_limits == [128]
+
+
+def test_hcnetsdk_command_port_media_stream_keeps_malformed_rtp_like_payload() -> None:
+    payload = (
+        b"\x90\x60\x00\x01"
+        b"\x00\x00\x00\x01"
+        b"\x01\x02\x03\x04"
+        b"\xbe\xde\xff\xff"
+        b"raw-command-port-payload"
+    )
+    command_client = _FakeCommandPortClient(_raw_media(payload))
+    stream = HcNetSdkCommandPortMediaStream(
+        command_client,  # type: ignore[arg-type]
+        (b"preview-start",),
+        max_prefix_bytes=128,
+    )
+
+    packets = list(stream.iter_packets(max_packets=1))
+
+    assert packets[0].body == payload
 
 
 def test_local_sdk_media_stream_respects_zero_packet_limit() -> None:

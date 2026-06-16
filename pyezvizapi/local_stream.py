@@ -49,6 +49,16 @@ from .stream import (
 
 HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = "app-lan-live-view"
 
+_COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS = {
+    "Unsupported RTP version",
+    "RTP packet is too short",
+    "RTP CSRC header exceeds packet length",
+    "RTP extension header exceeds packet length",
+    "RTP extension payload exceeds packet length",
+    "RTP padding set without payload",
+    "Invalid RTP padding length",
+}
+
 _HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL = bytes.fromhex(
     "000000083c417564696f566964656f436f6d7072657373496e666f3e"
     "3c566964656f4368616e6e656c4e756d6265723e313c2f566964656f"
@@ -1992,7 +2002,7 @@ def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:
     try:
         unwrapped = rtp_payload(payload)
     except PyEzvizError as err:
-        if str(err) not in {"Unsupported RTP version", "RTP packet is too short"}:
+        if str(err) not in _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS:
             raise
         return payload
     if _looks_like_hcnetsdk_wrapped_media_payload(unwrapped):

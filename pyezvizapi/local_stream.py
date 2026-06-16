@@ -4487,7 +4487,7 @@ def _decrypt_hevc_nal_prefix(nal: bytes, aes_key: bytes) -> bytes:
             aes_key
         )
         decrypt_end = HEVC_NAL_HEADER_SIZE + decrypt_length
-        frame[HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(
+        frame[HEVC_NAL_HEADER_SIZE:decrypt_end] = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
             bytes(frame[HEVC_NAL_HEADER_SIZE:decrypt_end])
         )
     return bytes(frame)
@@ -4513,7 +4513,7 @@ def _decrypt_h264_nal_prefix(
             aes_key
         )
         decrypt_end = nalu_header_size + decrypt_length
-        frame[nalu_header_size:decrypt_end] = cipher.decrypt(
+        frame[nalu_header_size:decrypt_end] = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
             bytes(frame[nalu_header_size:decrypt_end])
         )
     return bytes(frame)

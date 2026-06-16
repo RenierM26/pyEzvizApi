@@ -3022,7 +3022,11 @@ def trim_hevc_annexb_to_first_clean_irap_window(
         if not isinstance(end_offset, int) or end_offset <= start_offset:
             continue
         window = data[start_offset:end_offset]
-        stderr_lines = _ffmpeg_hevc_decode_errors(window, ffmpeg_path=ffmpeg_path)
+        stderr_lines = _ffmpeg_hevc_decode_errors(
+            window,
+            ffmpeg_path=ffmpeg_path,
+            accept_success_with_stderr=False,
+        )
         if not stderr_lines:
             return data[start_offset:]
         if first_error is None and stderr_lines:
@@ -3174,6 +3178,7 @@ def _try_first_clean_hevc_annexb_irap_window_offset(
         decode_errors = _ffmpeg_hevc_decode_errors(
             annexb[start_offset:end_offset],
             ffmpeg_path=ffmpeg_path,
+            accept_success_with_stderr=False,
         )
         if not decode_errors:
             return _H264CleanIdrProbeResult(

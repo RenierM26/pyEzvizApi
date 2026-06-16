@@ -41,6 +41,7 @@ from pyezvizapi.local_stream import (
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
     _start_ffmpeg_stderr_drain,
+    _try_first_clean_hevc_annexb_irap_window_offset,
     collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
     collect_h264_idmx_annexb_after_first_clean_idr_window,
     collect_idmx_annexb_after_first_clean_video_window,
@@ -3748,7 +3749,7 @@ def test_trim_hevc_annexb_to_first_clean_irap_window_uses_ffmpeg(
     assert trimmed == clean_window
 
 
-def test_trim_hevc_annexb_accepts_successful_ffmpeg_with_stderr(
+def test_trim_hevc_annexb_rejects_successful_ffmpeg_with_stderr(
     tmp_path,
 ) -> None:
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
@@ -3767,12 +3768,54 @@ def test_trim_hevc_annexb_accepts_successful_ffmpeg_with_stderr(
         b"\x00\x00\x00\x01\x26\x01irap"
     )
 
-    trimmed = trim_hevc_annexb_to_first_clean_irap_window(
-        data,
-        ffmpeg_path=str(fake_ffmpeg),
+    with pytest.raises(
+        PyEzvizError,
+        match="HEVC stream did not contain a clean sampled IRAP window",
+    ):
+        trim_hevc_annexb_to_first_clean_irap_window(
+            data,
+            ffmpeg_path=str(fake_ffmpeg),
+        )
+
+def test_try_first_clean_hevc_irap_probe_rejects_successful_ffmpeg_with_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    annexb = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01irap"
+        b"\x00\x00\x00\x01\x02\x01tail"
+        b"\x00\x00\x00\x01\x26\x01next-irap"
     )
 
-    assert trimmed == data
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        return ["cu_qp_delta outside valid range"]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_hevc_annexb",
+        lambda packets: annexb,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    result = _try_first_clean_hevc_annexb_irap_window_offset(
+        [b"packet"],
+        ffmpeg_path="fake-ffmpeg",
+        max_windows=4,
+    )
+
+    assert result.start_offset is None
+    assert result.first_decode_error == "cu_qp_delta outside valid range"
 
 
 def test_trim_hevc_annexb_to_first_error_free_suffix_recovers_at_later_irap(

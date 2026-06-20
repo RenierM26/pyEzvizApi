@@ -2775,13 +2775,30 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
                     ) from err
 
     if clean_start_offset is None:
+        if collected and last_clean_probe_packet_count != len(collected):
+            probe = _try_first_clean_h264_annexb_idr_window_offset(
+                collected,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=max_windows,
+            )
+            last_probe = probe
+            clean_start_offset = probe.start_offset
+            if first_decode_error is None and probe.first_decode_error is not None:
+                first_decode_error = probe.first_decode_error
+            _raise_if_clean_window_probe_exhausted(
+                probe=probe,
+                max_windows=max_windows,
+                first_decode_error=first_decode_error,
+                message="H.264 stream did not contain a clean IDR window",
+            )
         suffix = _h264_clean_idr_timeout_suffix(
             first_decode_error=first_decode_error,
             probe=last_probe,
         )
-        raise PyEzvizError(
-            "H.264 stream ended before a clean IDR window was found" + suffix
-        )
+        if clean_start_offset is None:
+            raise PyEzvizError(
+                "H.264 stream ended before a clean IDR window was found" + suffix
+            )
     annexb = _idmx_local_packets_to_h264_annexb(collected)
     try:
         return trim_h264_annexb_to_first_error_free_suffix(
@@ -3012,11 +3029,39 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
                     ) from err
 
     if clean_start_offset is None or clean_codec is None:
+        if collected and last_clean_probe_packet_count != len(collected):
+            (
+                probe_start_offset,
+                probe_codec,
+                probe_decode_error,
+                last_probe,
+            ) = _probe_first_clean_idmx_video_window(
+                collected,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=max_windows,
+            )
+            if first_decode_error is None and probe_decode_error is not None:
+                first_decode_error = probe_decode_error
+            _raise_if_clean_window_probe_exhausted(
+                probe=last_probe,
+                max_windows=max_windows,
+                first_decode_error=first_decode_error,
+                message="IDMX stream did not contain a clean video window",
+            )
+            if probe_start_offset is not None and probe_codec is not None:
+                clean_start_offset = probe_start_offset
+                clean_codec = probe_codec
+                clean_prefix = (
+                    getattr(last_probe, "prefix", b"") if probe_codec == "hevc" else b""
+                )
         suffix = _h264_clean_idr_timeout_suffix(
             first_decode_error=first_decode_error,
             probe=last_probe,
         )
-        raise PyEzvizError("IDMX stream ended before a clean video window was found" + suffix)
+        if clean_start_offset is None or clean_codec is None:
+            raise PyEzvizError(
+                "IDMX stream ended before a clean video window was found" + suffix
+            )
 
     if clean_codec == "h264":
         annexb = _idmx_local_packets_to_h264_annexb(collected)
@@ -3276,13 +3321,49 @@ def collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PL
                     ) from err
 
     if clean_start_offset is None:
+        if collected and last_clean_probe_packet_count != len(collected):
+            clear_probe = _try_first_clean_h264_annexb_idr_window_offset(
+                collected,
+                ffmpeg_path=ffmpeg_path,
+                max_windows=max_windows,
+            )
+            if clear_probe.start_offset is not None:
+                probe = clear_probe
+                clean_stream_is_clear = True
+            else:
+                probe = _try_first_clean_decrypted_h264_annexb_idr_window_offset(
+                    collected,
+                    media_key,
+                    nalu_header_size=nalu_header_size,
+                    ffmpeg_path=ffmpeg_path,
+                    max_windows=max_windows,
+                )
+            if (
+                first_decode_error is None
+                and clear_probe.first_decode_error is not None
+            ):
+                first_decode_error = clear_probe.first_decode_error
+            if (
+                first_decode_error is None
+                and probe.first_decode_error is not None
+            ):
+                first_decode_error = probe.first_decode_error
+            _raise_if_clean_window_probe_exhausted(
+                probe=probe,
+                max_windows=max_windows,
+                first_decode_error=first_decode_error,
+                message="H.264 stream did not contain a clean IDR window",
+            )
+            last_probe = probe
+            clean_start_offset = probe.start_offset
         suffix = _h264_clean_idr_timeout_suffix(
             first_decode_error=first_decode_error,
             probe=last_probe,
         )
-        raise PyEzvizError(
-            "H.264 stream ended before a clean IDR window was found" + suffix
-        )
+        if clean_start_offset is None:
+            raise PyEzvizError(
+                "H.264 stream ended before a clean IDR window was found" + suffix
+            )
     if clean_stream_is_clear:
         annexb = _idmx_local_packets_to_h264_annexb(collected)
     else:
@@ -3695,20 +3776,24 @@ def _hevc_annexb_parameter_prefix_for_suffix(
     """Return prior VPS/SPS/PPS when a recovered IRAP lacks local parameters."""
 
     required_types = {32, 33, 34}
-    if isinstance(leading_nal_types, list) and required_types.issubset(
+    local_types = (
         {item for item in leading_nal_types if isinstance(item, int)}
-    ):
+        if isinstance(leading_nal_types, list)
+        else set()
+    )
+    missing_types = required_types - local_types
+    if not missing_types:
         return b""
     latest: dict[int, bytes] = {}
     for start_code_offset, nal_start, end in _h264_annexb_nal_spans(
         data[:start_offset]
     ):
         nal_type = _hevc_nal_type(data[nal_start:end])
-        if nal_type in required_types:
+        if nal_type in missing_types:
             latest[nal_type] = data[start_code_offset:end]
-    if not required_types.issubset(latest):
+    if not missing_types.issubset(latest):
         return b""
-    return b"".join(latest[nal_type] for nal_type in (32, 33, 34))
+    return b"".join(latest[nal_type] for nal_type in (32, 33, 34) if nal_type in latest)
 
 
 def _try_first_clean_h264_annexb_idr_window_offset(

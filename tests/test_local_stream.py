@@ -3606,6 +3606,7 @@ def test_collect_idmx_annexb_after_clean_video_window_selects_hevc_irap(
         + next_irap
     )
 
+
 def test_collect_idmx_annexb_after_clean_video_window_keeps_hevc_probe_prefix(
     tmp_path,
 ) -> None:
@@ -4332,6 +4333,58 @@ def test_probe_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None
     assert probe.window_name == "IRAP"
 
 
+def test_probe_hevc_clean_irap_prefixes_only_missing_parameter_sets(
+    monkeypatch,
+) -> None:
+    prior_vps = b"\x00\x00\x00\x01\x40\x01vps"
+    first = (
+        prior_vps
+        + b"\x00\x00\x00\x01\x26\x01bad-irap"
+        + b"\x00\x00\x00\x01\x02\x01bad-tail"
+    )
+    second = (
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01good-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+    third = b"\x00\x00\x00\x01\x26\x01next-irap"
+
+    def join_packets(packets: list[bytes]) -> bytes:
+        return b"".join(packets)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_hevc_annexb",
+        join_packets,
+    )
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        if data == prior_vps + second:
+            return []
+        return ["VPS 0 does not exist"]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    probe = _try_first_clean_hevc_annexb_irap_window_offset(
+        [first + second + third],
+        ffmpeg_path="fake-ffmpeg",
+        max_windows=4,
+    )
+
+    assert probe.start_offset == len(first)
+    assert probe.prefix == prior_vps
+
+
 def test_trim_hevc_annexb_rejects_successful_ffmpeg_with_stderr(
     tmp_path,
 ) -> None:
@@ -4985,6 +5038,75 @@ def test_collect_idmx_after_dirty_complete_window_throttles_repeated_probes(
             max_windows=4,
         )
 
+    assert calls == 17
+
+
+def test_collect_idmx_after_clean_video_probes_final_buffer_after_throttle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"packet-%02d" % index for index in range(20)]
+    calls = 0
+
+    def fake_probe(collected: list[bytes], *_args: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        nonlocal calls
+        calls += 1
+        if len(collected) == len(packets):
+            return (
+                0,
+                "h264",
+                "earlier decode failed",
+                SimpleNamespace(
+                    start_offset=0,
+                    idr_start_offset=0,
+                    first_decode_error="earlier decode failed",
+                    complete_window_count=1,
+                    idr_count=1,
+                    nal_count=2,
+                    codec_name="H.264",
+                    window_name="IDR",
+                ),
+            )
+        return (
+            None,
+            None,
+            "earlier decode failed",
+            SimpleNamespace(
+                start_offset=None,
+                first_decode_error="earlier decode failed",
+                complete_window_count=0,
+                idr_count=0,
+                nal_count=0,
+                codec_name="H.264",
+                window_name="IDR",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        fake_probe,
+    )
+
+    def join_packets(collected: list[bytes]) -> bytes:
+        return b"".join(collected)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        join_packets,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.trim_h264_annexb_to_first_error_free_suffix",
+        lambda data, **_kwargs: data,
+    )
+
+    annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
+        packets,
+        duration_seconds=1.0,
+        monotonic=lambda: 0.0,
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert codec == "h264"
+    assert annexb == b"".join(packets)
     assert calls == 16
 
 

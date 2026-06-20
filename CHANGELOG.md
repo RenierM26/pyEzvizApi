@@ -33,6 +33,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added `--hcnetsdk-h264-clean-idr-preroll-seconds` to overcapture before clean-IDR trimming so generated command-port clips can keep more requested clean duration after startup corruption is discarded.
 - Added `--hcnetsdk-h264-clean-idr-max-windows` to raise the clean-IDR decode-check search limit for long unstable command-port startups.
 - Added `--hcnetsdk-h264-wait-for-clean-idr-window` and `--hcnetsdk-h264-clean-idr-wait-seconds` to discard corrupt H.264 IDMX startup media before starting the requested capture duration.
+- Added generic `--hcnetsdk-video-*` clean-window aliases so H.264 and HEVC command-port captures can use the same recovery options.
 - Added regression coverage for RTP dump decryption when `--decrypt-video` is used with explicit encrypted-header codec modes.
 
 ### Changed
@@ -56,6 +57,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Improved HCNetSDK command-port multi-socket errors with socket-step, frame, command id, and first-media context.
 - Preserved partial HCNetSDK command-port bootstrap metadata when the media socket resets before the first packet.
 - Fixed partial CAS probe writes and base64 local-SDK CAS key handling.
+- Fixed HCNetSDK command-port HEVC remuxing by preserving IDMX packet boundaries, handling direct/RTP/HRUDP media wrappers, carrying HEVC parameter sets into clean IRAP probes, and remuxing raw HEVC with an explicit input rate.
 - Fixed `ptz_control_coordinates()` to use the app-matched `PTZManualCtrl/CtrlPTZ3DPosition` IoT action endpoint with `positionPoint.x/y`, restoring y-axis tilt coordinate moves.
 - Fixed PTZ coordinate validation to reject negative coordinate values and omitted zoom hints from point moves so focus/zoom metadata is left unchanged.
 

@@ -2005,7 +2005,10 @@ def _hcnetsdk_command_port_media_packet(
 
 
 def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:
-    if _idmx_local_frame_header_size(payload) is not None:
+    if (
+        _idmx_local_frame_header_size(payload) is not None
+        or _looks_like_length_prefixed_idmx_local_payload(payload)
+    ):
         return payload
     hrudp_payload = _hcnetsdk_hrudp_video_payload(payload)
     if hrudp_payload is not None:
@@ -4356,6 +4359,20 @@ def _append_idmx_h264_nal_unit_sample(
 def _looks_like_idmx_local_payload(payload: bytes) -> bool:
     return _idmx_local_frame_header_size(payload) is not None or any(
         _iter_idmx_local_frames(payload)
+    )
+
+
+def _looks_like_length_prefixed_idmx_local_payload(payload: bytes) -> bool:
+    if len(payload) < 4:
+        return False
+    prefixed_length = int.from_bytes(payload[:4], "little")
+    frame = payload[4:]
+    header_size = _idmx_local_frame_header_size(frame)
+    return (
+        header_size is not None
+        and prefixed_length >= header_size
+        and prefixed_length <= len(frame)
+        and _idmx_local_frame_header_score(frame, header_size) is not None
     )
 
 

@@ -41,6 +41,7 @@ from pyezvizapi.local_stream import (
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
     _hcnetsdk_command_port_media_packet,
+    _hcnetsdk_command_port_media_payload,
     _start_ffmpeg_stderr_drain,
     _try_first_clean_hevc_annexb_irap_window_offset,
     collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
@@ -2369,6 +2370,21 @@ def test_copy_local_stream_to_mpegts_strips_direct_hevc_command_trailer(
     assert output.getvalue() == (
         b"hevc:\x00\x00\x00\x01" + vps + b"\x00\x00\x00\x01" + irap
     )
+
+
+def test_hcnetsdk_command_port_preserves_length_prefixed_idmx_before_rtp() -> None:
+    idmx_frame = (
+        b"\x80\x60"
+        + (0x7000).to_bytes(2, "big")
+        + b"\x36\x01\xd1\xef"
+        + b"\x55\x66\x77\x88"
+        + b"\x67"
+        + (b"x" * 115)
+    )
+    assert len(idmx_frame) == 0x80
+    payload = len(idmx_frame).to_bytes(4, "little") + idmx_frame
+
+    assert _hcnetsdk_command_port_media_payload(payload) == payload
 
 
 def test_copy_local_stream_to_mpegts_trims_trailing_hevc_parameter_sets(

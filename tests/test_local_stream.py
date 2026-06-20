@@ -5391,6 +5391,55 @@ def test_copy_local_stream_to_mpegts_flattens_command_port_idmx_aggregates(
     )
 
 
+def test_copy_local_stream_to_mpegts_splits_offset_zero_idmx_aggregates(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'ts:' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x165477EB
+    sequence_base = 0xB712
+    sps = b"\x67\x4d\x00\x29"
+    pps = b"\x68\xee\x38\x80"
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    packet = frame(sps, sequence=sequence_base) + frame(
+        pps,
+        sequence=sequence_base + 1,
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=packet)]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == (
+        b"ts:\x00\x00\x00\x01" + sps + b"\x00\x00\x00\x01" + pps
+    )
+
+
 def test_summarize_idmx_h264_local_packets_reports_sanitized_frame_shapes() -> None:
     sequence_base = 0xB712
     rtp_timestamp = 0x165477EB

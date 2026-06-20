@@ -4650,9 +4650,38 @@ def _iter_idmx_local_packet_frame(packet: bytes) -> Iterator[bytes]:
         header_size is not None
         and _idmx_local_frame_header_score(packet, header_size) is not None
     ):
+        if _idmx_local_packet_contains_aggregate_media_frame(packet):
+            yield from _iter_idmx_local_frames(packet)
+            return
         yield from _iter_idmx_local_frame_or_nested(packet)
         return
     yield from _iter_idmx_local_frames(packet)
+
+
+def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes) -> bool:
+    frames = tuple(_iter_idmx_local_frames(packet))
+    if len(frames) <= 1:
+        return False
+    previous_sequence = _idmx_local_packet_frame_sequence_number(frames[0])
+    for frame in frames[1:]:
+        sequence = _idmx_local_packet_frame_sequence_number(frame)
+        if (
+            previous_sequence is None
+            or sequence is None
+            or sequence != ((previous_sequence + 1) & 0xFFFF)
+        ):
+            return False
+        if _idmx_local_frame_contains_media(frame):
+            return True
+        previous_sequence = sequence
+    return False
+
+
+def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
+    header_size = _idmx_local_frame_header_size(frame)
+    if header_size is None:
+        return None
+    return _idmx_local_frame_sequence_number(frame, header_size)
 
 
 def _iter_idmx_local_packet_frames(packets: list[bytes]) -> Iterator[bytes]:

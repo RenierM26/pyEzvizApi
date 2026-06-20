@@ -2387,6 +2387,34 @@ def test_hcnetsdk_command_port_preserves_length_prefixed_idmx_before_rtp() -> No
     assert _hcnetsdk_command_port_media_payload(payload) == payload
 
 
+def test_hcnetsdk_command_port_preserves_length_prefixed_idmx_before_header_strip() -> None:
+    idmx_frame = (
+        b"\x80\x60"
+        + (0x7000).to_bytes(2, "big")
+        + b"\x36\x01\xd1\xef"
+        + b"\x55\x66\x77\x88"
+        + b"\x67"
+        + (b"x" * 15)
+    )
+    assert len(idmx_frame) == 0x1C
+    payload = len(idmx_frame).to_bytes(4, "little") + idmx_frame
+    media = EzvizInterleavedRtpFrameWithPrefix(
+        prefix=b"",
+        frame=EzvizInterleavedRtpFrame(
+            header=EzvizInterleavedRtpFrameHeader(
+                channel=1,
+                payload_length=len(payload),
+            ),
+            payload=payload,
+        ),
+    )
+
+    packet = _hcnetsdk_command_port_media_packet(media)
+
+    assert packet.body == payload
+    assert packet.encrypted is True
+
+
 def test_copy_local_stream_to_mpegts_trims_trailing_hevc_parameter_sets(
     tmp_path,
 ) -> None:

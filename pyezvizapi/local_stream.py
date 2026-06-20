@@ -1993,7 +1993,7 @@ def _local_media_packet(
 def _hcnetsdk_command_port_media_packet(
     media: EzvizInterleavedRtpFrameWithPrefix,
 ) -> EzvizLocalStreamPacket:
-    body = _strip_local_sdk_payload_header(
+    body = _strip_hcnetsdk_command_port_media_payload_header(
         _hcnetsdk_command_port_media_payload(media.frame.payload)
     )
     return EzvizLocalStreamPacket(
@@ -2003,6 +2003,15 @@ def _hcnetsdk_command_port_media_packet(
         encrypted=_looks_like_idmx_local_payload(body),
         prefix=media.prefix,
     )
+
+
+def _strip_hcnetsdk_command_port_media_payload_header(payload: bytes) -> bytes:
+    if (
+        _idmx_local_frame_header_size(payload) is not None
+        or _looks_like_length_prefixed_idmx_local_payload(payload)
+    ):
+        return payload
+    return _strip_local_sdk_payload_header(payload)
 
 
 def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:

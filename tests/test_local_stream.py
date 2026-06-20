@@ -3606,6 +3606,64 @@ def test_collect_idmx_annexb_after_clean_video_window_selects_hevc_irap(
         + next_irap
     )
 
+def test_collect_idmx_annexb_after_clean_video_window_keeps_hevc_probe_prefix(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "data = sys.stdin.buffer.read()\n"
+        "prefix = (\n"
+        "    b'\\x00\\x00\\x00\\x01\\x40\\x01vps'\n"
+        "    b'\\x00\\x00\\x00\\x01\\x42\\x01sps'\n"
+        "    b'\\x00\\x00\\x00\\x01\\x44\\x01pps'\n"
+        ")\n"
+        "if codec == 'h264' or b'bad' in data or not data.startswith(prefix):\n"
+        "    sys.stderr.write('PPS id out of range\\n')\n"
+        "    sys.exit(1)\n"
+        "sys.stdout.buffer.write(data)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
+    parameter_sets = (
+        b"\x40\x01vps",
+        b"\x42\x01sps",
+        b"\x44\x01pps",
+    )
+    bad_irap = b"\x26\x01bad-irap"
+    clean_irap = b"\x26\x01clean-irap"
+    clean_delta = b"\x02\x01clean-delta"
+    next_irap = b"\x26\x01next-irap"
+    expected_annexb = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01clean-irap"
+        b"\x00\x00\x00\x01\x02\x01clean-delta"
+        b"\x00\x00\x00\x01\x26\x01next-irap"
+    )
+
+    def idmx_frame(body: bytes) -> bytes:
+        frame = idmx_header + body
+        return len(frame).to_bytes(4, "little") + frame
+
+    annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
+        (
+            idmx_frame(body)
+            for body in (*parameter_sets, bad_irap, clean_irap, clean_delta, next_irap)
+        ),
+        duration_seconds=0.25,
+        monotonic=iter([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75]).__next__,
+        ffmpeg_path=str(fake_ffmpeg),
+        wait_seconds=10.0,
+    )
+
+    assert codec == "hevc"
+    assert annexb == expected_annexb
+
 
 def test_h264_decode_probe_accepts_success_with_warnings(tmp_path) -> None:
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
@@ -4269,6 +4327,7 @@ def test_probe_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None
     )
 
     assert probe.start_offset == len(first)
+    assert probe.prefix == parameter_sets
     assert probe.codec_name == "HEVC"
     assert probe.window_name == "IRAP"
 

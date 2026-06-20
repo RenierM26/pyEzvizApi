@@ -111,6 +111,7 @@ class _H264CleanIdrProbeResult:
 
     start_offset: int | None
     idr_start_offset: int | None = None
+    prefix: bytes = b""
     first_decode_error: str | None = None
     idr_count: int = 0
     sampled_window_count: int = 0
@@ -2801,6 +2802,22 @@ def collect_h264_idmx_annexb_after_first_clean_idr_window(  # noqa: PLR0912, PLR
         raise
 
 
+def _hevc_prefixed_suffix_accept_start_offset(
+    accept_start_offset: Callable[[int], bool],
+    *,
+    prefix_length: int,
+) -> Callable[[int], bool]:
+    """Map offsets in a parameter-prefixed HEVC suffix back to the original suffix."""
+
+    if prefix_length <= 0:
+        return accept_start_offset
+
+    def accepts(offset: int) -> bool:
+        return accept_start_offset(max(0, offset - prefix_length))
+
+    return accepts
+
+
 def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR0915
     packets: Iterable[bytes],
     *,
@@ -2825,6 +2842,7 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
     packet_times: list[float] = []
     clean_start_offset: int | None = None
     clean_codec: str | None = None
+    clean_prefix = b""
     clean_window_time: float | None = None
     first_decode_error: str | None = None
     final_decode_error: str | None = None
@@ -2859,20 +2877,35 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
             else:
                 annexb = _idmx_local_packets_to_hevc_annexb(deadline_packets)
                 trim = trim_hevc_annexb_to_first_error_free_suffix
+                annexb = clean_prefix + annexb[clean_start_offset:]
+                accept_start_offset = _hevc_prefixed_suffix_accept_start_offset(
+                    _requested_duration_idmx_suffix_predicate(
+                        packets=deadline_packets,
+                        packet_times=packet_times[: len(deadline_packets)],
+                        codec=clean_codec,
+                        base_offset=clean_start_offset,
+                        now=capture_deadline,
+                        duration_seconds=duration_seconds,
+                    ),
+                    prefix_length=len(clean_prefix),
+                )
+            if clean_codec == "h264":
+                annexb = annexb[clean_start_offset:]
+                accept_start_offset = _requested_duration_idmx_suffix_predicate(
+                    packets=deadline_packets,
+                    packet_times=packet_times[: len(deadline_packets)],
+                    codec=clean_codec,
+                    base_offset=clean_start_offset,
+                    now=capture_deadline,
+                    duration_seconds=duration_seconds,
+                )
             try:
                 return (
                     trim(
-                        annexb[clean_start_offset:],
+                        annexb,
                         ffmpeg_path=ffmpeg_path,
                         max_windows=max_windows,
-                        accept_start_offset=_requested_duration_idmx_suffix_predicate(
-                            packets=deadline_packets,
-                            packet_times=packet_times[: len(deadline_packets)],
-                            codec=clean_codec,
-                            base_offset=clean_start_offset,
-                            now=capture_deadline,
-                            duration_seconds=duration_seconds,
-                        ),
+                        accept_start_offset=accept_start_offset,
                     ),
                     clean_codec,
                 )
@@ -2909,6 +2942,9 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
             if probe_start_offset is not None and probe_codec is not None:
                 clean_start_offset = probe_start_offset
                 clean_codec = probe_codec
+                clean_prefix = (
+                    getattr(last_probe, "prefix", b"") if probe_codec == "hevc" else b""
+                )
                 clean_packet_index = _idmx_annexb_packet_index_for_offset(
                     collected,
                     codec=probe_codec,
@@ -2934,20 +2970,35 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
             else:
                 annexb = _idmx_local_packets_to_hevc_annexb(collected)
                 trim = trim_hevc_annexb_to_first_error_free_suffix
+                annexb = clean_prefix + annexb[clean_start_offset:]
+                accept_start_offset = _hevc_prefixed_suffix_accept_start_offset(
+                    _requested_duration_idmx_suffix_predicate(
+                        packets=collected,
+                        packet_times=packet_times,
+                        codec=clean_codec,
+                        base_offset=clean_start_offset,
+                        now=now,
+                        duration_seconds=duration_seconds,
+                    ),
+                    prefix_length=len(clean_prefix),
+                )
+            if clean_codec == "h264":
+                annexb = annexb[clean_start_offset:]
+                accept_start_offset = _requested_duration_idmx_suffix_predicate(
+                    packets=collected,
+                    packet_times=packet_times,
+                    codec=clean_codec,
+                    base_offset=clean_start_offset,
+                    now=now,
+                    duration_seconds=duration_seconds,
+                )
             try:
                 return (
                     trim(
-                        annexb[clean_start_offset:],
+                        annexb,
                         ffmpeg_path=ffmpeg_path,
                         max_windows=max_windows,
-                        accept_start_offset=_requested_duration_idmx_suffix_predicate(
-                            packets=collected,
-                            packet_times=packet_times,
-                            codec=clean_codec,
-                            base_offset=clean_start_offset,
-                            now=now,
-                            duration_seconds=duration_seconds,
-                        ),
+                        accept_start_offset=accept_start_offset,
                     ),
                     clean_codec,
                 )
@@ -2987,16 +3038,19 @@ def collect_idmx_annexb_after_first_clean_video_window(  # noqa: PLR0912, PLR091
         annexb = _idmx_local_packets_to_hevc_annexb(collected)
         try:
             annexb = trim_hevc_annexb_to_first_error_free_suffix(
-                annexb[clean_start_offset:],
+                clean_prefix + annexb[clean_start_offset:],
                 ffmpeg_path=ffmpeg_path,
                 max_windows=max_windows,
-                accept_start_offset=_requested_duration_idmx_suffix_predicate(
-                    packets=collected,
-                    packet_times=packet_times,
-                    codec="hevc",
-                    base_offset=clean_start_offset,
-                    now=packet_times[-1] if packet_times else 0.0,
-                    duration_seconds=duration_seconds,
+                accept_start_offset=_hevc_prefixed_suffix_accept_start_offset(
+                    _requested_duration_idmx_suffix_predicate(
+                        packets=collected,
+                        packet_times=packet_times,
+                        codec="hevc",
+                        base_offset=clean_start_offset,
+                        now=packet_times[-1] if packet_times else 0.0,
+                        duration_seconds=duration_seconds,
+                    ),
+                    prefix_length=len(clean_prefix),
                 ),
             )
         except PyEzvizError as err:
@@ -3762,6 +3816,7 @@ def _try_first_clean_hevc_annexb_irap_window_offset(
             return _H264CleanIdrProbeResult(
                 start_offset=start_offset,
                 idr_start_offset=int(sample["irap_start_code_offset"]),
+                prefix=prefix,
                 first_decode_error=first_decode_error,
                 idr_count=int(irap_summary.get("irap_count", 0)),
                 sampled_window_count=len(samples),

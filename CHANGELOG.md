@@ -6,6 +6,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+## v1.0.5.0 - 2026-06-20
+
 ### Added
 
 - Added direct-local SDK streaming support for cached local-SDK credentials, including CAS probing, stream bootstrap, and FFmpeg remuxing for local live-view captures.

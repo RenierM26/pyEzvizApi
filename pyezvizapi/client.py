@@ -8,6 +8,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import time
 from typing import Any, BinaryIO, ClassVar, Literal, NotRequired, TypedDict, cast
@@ -316,6 +317,19 @@ def _bytes_written_to_output(
     return max(0, end_position - start_position)
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    """Return a positive integer env override, or the supplied default."""
+
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 class _LocalStreamPacketMetadataRecorder:
     """Wrap a local media stream and record sanitized packet metadata."""
 
@@ -324,16 +338,37 @@ class _LocalStreamPacketMetadataRecorder:
         stream: Any,
         *,
         max_samples: int = 32,
-        max_idmx_summary_frames: int = 256,
-        max_idmx_summary_packets: int = 512,
-        max_idmx_summary_bytes: int = 2_000_000,
+        max_idmx_summary_frames: int | None = None,
+        max_idmx_summary_packets: int | None = None,
+        max_idmx_summary_bytes: int | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._stream = stream
         self._max_samples = max_samples
-        self._max_idmx_summary_frames = max_idmx_summary_frames
-        self._max_idmx_summary_packets = max_idmx_summary_packets
-        self._max_idmx_summary_bytes = max_idmx_summary_bytes
+        self._max_idmx_summary_frames = (
+            max_idmx_summary_frames
+            if max_idmx_summary_frames is not None
+            else _positive_int_env(
+                "PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_FRAMES",
+                256,
+            )
+        )
+        self._max_idmx_summary_packets = (
+            max_idmx_summary_packets
+            if max_idmx_summary_packets is not None
+            else _positive_int_env(
+                "PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_PACKETS",
+                512,
+            )
+        )
+        self._max_idmx_summary_bytes = (
+            max_idmx_summary_bytes
+            if max_idmx_summary_bytes is not None
+            else _positive_int_env(
+                "PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_BYTES",
+                2_000_000,
+            )
+        )
         self._monotonic = monotonic
         self._first_packet_time: float | None = None
         self._idmx_summary_packets: list[bytes] = []
@@ -2964,6 +2999,11 @@ class EzvizClient:
         hcnetsdk_h264_clean_idr_max_windows: int = 32,
         hcnetsdk_h264_wait_for_clean_idr_window: bool = False,
         hcnetsdk_h264_clean_idr_wait_seconds: float = 60.0,
+        hcnetsdk_video_trim_to_clean_window: bool | None = None,
+        hcnetsdk_video_clean_window_preroll_seconds: float | None = None,
+        hcnetsdk_video_clean_window_max_windows: int | None = None,
+        hcnetsdk_video_wait_for_clean_window: bool | None = None,
+        hcnetsdk_video_clean_window_wait_seconds: float | None = None,
         cloud_client_type: int = 9,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
@@ -2994,6 +3034,31 @@ class EzvizClient:
                 smscode=smscode,
             )
         if source == "hcnetsdk-command-port":
+            trim_to_clean_window = (
+                hcnetsdk_h264_trim_to_clean_idr_window
+                if hcnetsdk_video_trim_to_clean_window is None
+                else hcnetsdk_video_trim_to_clean_window
+            )
+            clean_window_preroll_seconds = (
+                hcnetsdk_h264_clean_idr_preroll_seconds
+                if hcnetsdk_video_clean_window_preroll_seconds is None
+                else hcnetsdk_video_clean_window_preroll_seconds
+            )
+            clean_window_max_windows = (
+                hcnetsdk_h264_clean_idr_max_windows
+                if hcnetsdk_video_clean_window_max_windows is None
+                else hcnetsdk_video_clean_window_max_windows
+            )
+            wait_for_clean_window = (
+                hcnetsdk_h264_wait_for_clean_idr_window
+                if hcnetsdk_video_wait_for_clean_window is None
+                else hcnetsdk_video_wait_for_clean_window
+            )
+            clean_window_wait_seconds = (
+                hcnetsdk_h264_clean_idr_wait_seconds
+                if hcnetsdk_video_clean_window_wait_seconds is None
+                else hcnetsdk_video_clean_window_wait_seconds
+            )
             return self._save_hcnetsdk_command_port_clip(
                 serial,
                 output,
@@ -3018,21 +3083,11 @@ class EzvizClient:
                 h264_skip_initial_idr_windows=(
                     hcnetsdk_h264_skip_initial_idr_windows
                 ),
-                h264_trim_to_clean_idr_window=(
-                    hcnetsdk_h264_trim_to_clean_idr_window
-                ),
-                h264_clean_idr_preroll_seconds=(
-                    hcnetsdk_h264_clean_idr_preroll_seconds
-                ),
-                h264_clean_idr_max_windows=(
-                    hcnetsdk_h264_clean_idr_max_windows
-                ),
-                h264_wait_for_clean_idr_window=(
-                    hcnetsdk_h264_wait_for_clean_idr_window
-                ),
-                h264_clean_idr_wait_seconds=(
-                    hcnetsdk_h264_clean_idr_wait_seconds
-                ),
+                h264_trim_to_clean_idr_window=trim_to_clean_window,
+                h264_clean_idr_preroll_seconds=clean_window_preroll_seconds,
+                h264_clean_idr_max_windows=clean_window_max_windows,
+                h264_wait_for_clean_idr_window=wait_for_clean_window,
+                h264_clean_idr_wait_seconds=clean_window_wait_seconds,
             )
         if source == "cloud":
             return self._save_cloud_clip(

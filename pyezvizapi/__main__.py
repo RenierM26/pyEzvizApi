@@ -814,46 +814,56 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-trim-to-clean-idr-window",
+        "--hcnetsdk-video-trim-to-clean-window",
+        dest="hcnetsdk_h264_trim_to_clean_idr_window",
         action="store_true",
         help=(
-            "For clear H.264 IDMX command-port streams, decode-check sampled "
-            "IDR windows and remux from the first clean one."
+            "For clear IDMX command-port streams, decode-check sampled video "
+            "windows and remux from the first clean one."
         ),
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-clean-idr-preroll-seconds",
+        "--hcnetsdk-video-clean-window-preroll-seconds",
+        dest="hcnetsdk_h264_clean_idr_preroll_seconds",
         type=float,
         default=0.0,
         help=(
-            "Extra capture seconds to allow before clean-IDR trimming, so "
+            "Extra capture seconds to allow before clean-window trimming, so "
             "generated command-port streams can stabilize before the requested "
             "clip window is kept (default: 0)."
         ),
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-clean-idr-max-windows",
+        "--hcnetsdk-video-clean-window-max-windows",
+        dest="hcnetsdk_h264_clean_idr_max_windows",
         type=int,
         default=32,
         help=(
-            "Maximum sampled IDR windows to decode-check when using "
-            "--hcnetsdk-h264-trim-to-clean-idr-window (default: 32)."
+            "Maximum sampled video windows to decode-check when using "
+            "clean-window trimming or waiting (default: 32)."
         ),
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-wait-for-clean-idr-window",
+        "--hcnetsdk-video-wait-for-clean-window",
+        dest="hcnetsdk_h264_wait_for_clean_idr_window",
         action="store_true",
         help=(
-            "For clear H.264 IDMX command-port streams, discard startup media "
-            "until a decodable IDR window is found, then start the requested "
+            "For clear IDMX command-port streams, discard startup media until "
+            "a decodable H.264 IDR or HEVC IRAP window is found, then start the requested "
             "duration window."
         ),
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-clean-idr-wait-seconds",
+        "--hcnetsdk-video-clean-window-wait-seconds",
+        dest="hcnetsdk_h264_clean_idr_wait_seconds",
         type=float,
         default=60.0,
         help=(
-            "Maximum seconds to wait for --hcnetsdk-h264-wait-for-clean-idr-window "
+            "Maximum seconds to wait for a clean video window "
             "before failing (default: 60)."
         ),
     )

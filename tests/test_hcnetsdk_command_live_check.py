@@ -106,6 +106,23 @@ def test_ffmpeg_decode_uses_error_log_level(
     assert seen["command"][:3] == ["ffmpeg", "-v", "error"]
 
 
+def test_save_command_env_sets_sample_limits(monkeypatch: Any) -> None:
+    tool = _load_tool()
+    monkeypatch.setenv("PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_PACKETS", "512")
+    args = argparse.Namespace(
+        sampled_packet_limit=4096,
+        sampled_byte_limit=8000000,
+        sampled_frame_limit=1024,
+    )
+
+    env = tool._save_command_env(args)  # noqa: SLF001
+
+    assert env is not None
+    assert env["PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_PACKETS"] == "4096"
+    assert env["PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_BYTES"] == "8000000"
+    assert env["PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_FRAMES"] == "1024"
+
+
 def test_dry_run_redacts_sensitive_camera_fields(tmp_path: Path) -> None:
     tool = _load_tool()
     args = argparse.Namespace(
@@ -297,12 +314,12 @@ def test_save_command_can_wait_for_clean_idr_window(tmp_path: Path) -> None:
     )
 
     assert "--hcnetsdk-h264-skip-initial-idr-windows" not in command
-    assert "--hcnetsdk-h264-wait-for-clean-idr-window" in command
+    assert "--hcnetsdk-video-wait-for-clean-window" in command
     assert command[
-        command.index("--hcnetsdk-h264-clean-idr-wait-seconds") + 1
+        command.index("--hcnetsdk-video-clean-window-wait-seconds") + 1
     ] == "20"
     assert command[
-        command.index("--hcnetsdk-h264-clean-idr-max-windows") + 1
+        command.index("--hcnetsdk-video-clean-window-max-windows") + 1
     ] == "8"
 
 
@@ -552,6 +569,161 @@ def test_success_artifacts_redact_child_save_artifacts(
     assert stdout_text.count("<redacted>") == 2
     assert stderr_text.count("<redacted>") == 2
     assert metadata_text.count("<redacted>") == 3
+
+
+def test_transient_media_socket_close_retries_same_credential(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="1",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=False,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
+        dry_run=False,
+        save_retries=1,
+        save_retry_delay=0.0,
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+    )
+    save_commands: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    b'{"streams":[{"index":0,"codec_type":"video",'
+                    b'"codec_name":"hevc","width":1920,"height":1080}],'
+                    b'"format":{"duration":"5.0"}}'
+                ),
+                stderr=b"",
+            )
+        if command[0] == "ffmpeg":
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        save_commands.append(command)
+        metadata_path = Path(
+            command[command.index("--hcnetsdk-command-metadata-output") + 1]
+        )
+        if len(save_commands) == 1:
+            metadata_path.write_text(
+                '{"bootstrap_complete": false}',
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=b"{}",
+                stderr=(
+                    b"ERROR: HCNetSDK command-port step 9 'media' first media "
+                    b"read failed: Socket closed before expected EZVIZ frame bytes\n"
+                ),
+            )
+
+        capture_path = Path(command[command.index("--output") + 1])
+        capture_path.write_bytes(b"mpegts")
+        metadata_path.write_text('{"bootstrap_complete": true}', encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout=b"{}", stderr=b"")
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert len(save_commands) == 2
+    assert result["ok"] is True
+    assert result["diagnosis"] == "playable_mpegts"
+    assert result["credential_attempts"][0]["diagnosis"] == "bootstrap_failed"
+    assert result["credential_attempts"][0]["save_attempt"] == 1
+    assert result["artifacts"]["capture"].endswith("camera-01-Camera-try2.ts")
+
+
+def test_clean_window_failure_does_not_retry_save(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    tool = _load_tool()
+    args = argparse.Namespace(
+        python="python",
+        command_port="8000",
+        channel="1",
+        native_plan="app-lan-live-view",
+        duration="5s",
+        timeout="12",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        local_ip=None,
+        decrypt_video=False,
+        no_try_enc_key_password=True,
+        no_skip_initial_idr=False,
+        wait_for_clean_idr_window=True,
+        clean_idr_wait_seconds="60",
+        clean_idr_max_windows="32",
+        dry_run=False,
+        save_retries=2,
+        save_retry_delay=0.0,
+    )
+    item = tool.CameraInventoryItem(
+        name="Camera",
+        serial="SERIAL-CAMERA-01",
+        password="dummy-camera-password-01",
+    )
+    save_calls = 0
+
+    def fake_run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[bytes]:
+        nonlocal save_calls
+        save_calls += 1
+        metadata_path = Path(
+            command[command.index("--hcnetsdk-command-metadata-output") + 1]
+        )
+        metadata_path.write_text('{"bootstrap_complete": true}', encoding="utf-8")
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=b"{}",
+            stderr=(
+                b"ERROR: Timed out waiting for a clean video window: "
+                b"checked 2 complete sampled IRAP windows\n"
+            ),
+        )
+
+    monkeypatch.setattr(tool, "_run", fake_run)
+
+    result = tool._check_item(  # noqa: SLF001
+        args=args,
+        item=item,
+        output_dir=tmp_path,
+        host="192.0.2.10",
+        host_source="override",
+        camera_index=1,
+    )
+
+    assert save_calls == 1
+    assert result["ok"] is False
+    assert result["diagnosis"] == "save_clip_failed"
 
 
 def test_decode_warnings_fail_successful_capture(tmp_path: Path, monkeypatch: Any) -> None:
@@ -878,6 +1050,11 @@ def test_stdout_summary_compacts_packet_metadata() -> None:
                         "samples": [{"body_sha256": "x"}],
                         "idmx_h264": {
                             "packet_count": 2,
+                            "packet_shapes": {
+                                "contains_idmx": 2,
+                                "possible_hrudp_video": 0,
+                                "samples": [{"sha256": "z"}],
+                            },
                             "nal_type_counts": {"1": 1},
                             "rtp_payload_type_counts": {"96": 2},
                             "sequence_gap_count": 0,
@@ -897,6 +1074,7 @@ def test_stdout_summary_compacts_packet_metadata() -> None:
     assert metadata["packets"]["packet_count"] == 2
     assert "samples" not in metadata["packets"]
     assert "samples" not in metadata["packets"]["idmx_h264"]
+    assert "samples" not in metadata["packets"]["idmx_h264"]["packet_shapes"]
 
 
 def sh_single_quote(value: str) -> str:

@@ -40,6 +40,7 @@ from pyezvizapi.local_stream import (
     HcNetSdkCommandPortSocketStep,
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
+    _hcnetsdk_command_port_media_packet,
     _start_ffmpeg_stderr_drain,
     _try_first_clean_hevc_annexb_irap_window_offset,
     collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
@@ -1540,6 +1541,8 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "assert sys.argv[sys.argv.index('-r') + 1] == '25'\n"
+        "assert sys.argv.index('-r') < sys.argv.index('-i')\n"
         "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
         encoding="utf-8",
     )
@@ -2320,6 +2323,117 @@ def test_copy_local_stream_to_mpegts_remuxes_direct_idmx_hevc_payload(
     )
 
 
+def test_copy_local_stream_to_mpegts_strips_direct_hevc_command_trailer(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x36\x01\xd1\xef"
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    irap = b"\x26\x01clean"
+    trailer = b"\x24\x00x"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 2
+            return [
+                SimpleNamespace(body=frame(vps + trailer, sequence=0x7000)),
+                SimpleNamespace(body=frame(irap + trailer, sequence=0x7001)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=2,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01" + vps + b"\x00\x00\x00\x01" + irap
+    )
+
+
+def test_copy_local_stream_to_mpegts_trims_trailing_hevc_parameter_sets(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    sps = b"\x42\x01sps"
+    pps = b"\x44\x01pps"
+    idr = b"\x26\x01idr"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 7
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(sps, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(pps, sequence=sequence_base + 2)),
+                SimpleNamespace(body=frame(idr, sequence=sequence_base + 3)),
+                SimpleNamespace(body=frame(vps, sequence=sequence_base + 4)),
+                SimpleNamespace(body=frame(sps, sequence=sequence_base + 5)),
+                SimpleNamespace(body=frame(pps, sequence=sequence_base + 6)),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=7,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + sps
+        + b"\x00\x00\x00\x01"
+        + pps
+        + b"\x00\x00\x00\x01"
+        + idr
+    )
+
+
 def test_copy_local_stream_to_mpegts_skips_ezviz_hevc_fu_pseudo_headers(
     tmp_path,
 ) -> None:
@@ -2556,6 +2670,73 @@ def test_copy_local_stream_to_mpegts_handles_direct_hevc_fu_without_continuation
         + vps
         + b"\x00\x00\x00\x01"
         + b"\x26\x01slice-payload-tail"
+    )
+
+
+def test_copy_local_stream_to_mpegts_preserves_hevc_payload_sentinel_bytes(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def frame(
+        body: bytes,
+        *,
+        sequence: int,
+        marker: bool = False,
+    ) -> bytes:
+        marker_payload_type = (0x80 if marker else 0x00) | 0x60
+        return (
+            bytes([0x80, marker_payload_type])
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    vps = b"\x40\x01vps"
+    start_fu = b"\x62\x01\x93slice-"
+    sentinel_payload = b"aa\x80xxxxxxx\x55\x66\x77\x88bbbb"
+    middle_fu = b"\x62\x01" + sentinel_payload
+    end_fu = b"\x62\x01tail"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 4
+            return [
+                SimpleNamespace(body=frame(vps, sequence=sequence_base)),
+                SimpleNamespace(body=frame(start_fu, sequence=sequence_base + 1)),
+                SimpleNamespace(body=frame(middle_fu, sequence=sequence_base + 2)),
+                SimpleNamespace(
+                    body=frame(end_fu, sequence=sequence_base + 3, marker=True)
+                ),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=4,
+    )
+
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01"
+        + b"\x26\x01slice-"
+        + sentinel_payload
+        + b"tail"
     )
 
 
@@ -3432,6 +3613,28 @@ def test_h264_decode_probe_accepts_success_with_warnings(tmp_path) -> None:
     ) == ["corrupt decoded frame"]
 
 
+def test_h264_decode_probe_reports_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    timeouts: list[int] = []
+
+    def fake_run(*_args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        timeouts.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("pyezvizapi.local_stream.subprocess.run", fake_run)
+
+    assert _ffmpeg_h264_decode_errors(
+        b"\x00\x00\x00\x01\x65frame",
+        ffmpeg_path="fake-ffmpeg",
+        accept_success_with_stderr=False,
+    ) == ["ffmpeg video decode check timed out after 1s"]
+    assert _ffmpeg_h264_decode_errors(
+        b"\x00\x00\x00\x01\x65" + (b"frame" * 500_000),
+        ffmpeg_path="fake-ffmpeg",
+        accept_success_with_stderr=False,
+    ) == ["ffmpeg video decode check timed out after 2s"]
+    assert timeouts == [1, 2]
+
+
 def test_summarize_hevc_irap_window_keeps_aud_with_parameter_sets() -> None:
     vps = b"\x40\x01vps"
     aud = b"\x46\x01aud"
@@ -3451,6 +3654,44 @@ def test_summarize_hevc_irap_window_keeps_aud_with_parameter_sets() -> None:
 
     assert samples[0]["start_code_offset"] == 0
     assert samples[0]["leading_nal_types"] == [32, 35]
+
+
+def test_summarize_hevc_irap_windows_excludes_next_window_parameters() -> None:
+    vps = b"\x40\x01vps"
+    sps = b"\x42\x01sps"
+    pps = b"\x44\x01pps"
+    irap = b"\x26\x01irap"
+    delta = b"\x02\x01p"
+    next_vps = b"\x40\x01vps2"
+    next_sps = b"\x42\x01sps2"
+    next_pps = b"\x44\x01pps2"
+    next_irap = b"\x26\x01irap2"
+    start_code = b"\x00\x00\x00\x01"
+    annexb = b"".join(
+        start_code + nal
+        for nal in (
+            vps,
+            sps,
+            pps,
+            irap,
+            delta,
+            next_vps,
+            next_sps,
+            next_pps,
+            next_irap,
+        )
+    )
+    next_window_offset = annexb.find(start_code + next_vps)
+
+    summary = summarize_hevc_annexb_irap_windows(annexb)
+    samples = summary["samples"]
+    assert isinstance(samples, list)
+
+    assert samples[0]["end_nal_index"] == 5
+    assert samples[0]["end_offset"] == next_window_offset
+    assert samples[0]["window_bytes"] == next_window_offset
+    assert samples[1]["start_code_offset"] == next_window_offset
+    assert samples[1]["leading_nal_types"] == [32, 33, 34]
 
 
 def test_collect_h264_idmx_annexb_after_clean_idr_times_out(tmp_path) -> None:
@@ -3866,6 +4107,156 @@ def test_trim_hevc_annexb_to_first_clean_irap_window_uses_ffmpeg(
     assert trimmed == clean_window
 
 
+def test_trim_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None:
+    parameter_sets = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+    )
+    first = (
+        parameter_sets
+        + b"\x00\x00\x00\x01\x26\x01bad-irap"
+        + b"\x00\x00\x00\x01\x02\x01bad-tail"
+    )
+    second = (
+        b"\x00\x00\x00\x01\x26\x01good-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        if data == parameter_sets + second:
+            return []
+        return ["PPS id out of range: 0"]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    trimmed = trim_hevc_annexb_to_first_clean_irap_window(
+        first + second,
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert trimmed == parameter_sets + second
+
+
+def test_trim_hevc_clean_irap_rejects_dirty_returned_suffix(monkeypatch) -> None:
+    bad_tail = b"bad-tail"
+    first = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+        b"\x00\x00\x00\x01\x26\x01clean-early-irap"
+        b"\x00\x00\x00\x01\x02\x01clean-early-tail"
+    )
+    dirty_later = (
+        b"\x00\x00\x00\x01\x40\x01vps2"
+        b"\x00\x00\x00\x01\x42\x01sps2"
+        b"\x00\x00\x00\x01\x44\x01pps2"
+        b"\x00\x00\x00\x01\x26\x01dirty-later-irap"
+        b"\x00\x00\x00\x01\x02\x01" + bad_tail
+    )
+    clean_later = (
+        b"\x00\x00\x00\x01\x40\x01vps3"
+        b"\x00\x00\x00\x01\x42\x01sps3"
+        b"\x00\x00\x00\x01\x44\x01pps3"
+        b"\x00\x00\x00\x01\x26\x01clean-later-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        if data in (dirty_later, clean_later):
+            return []
+        if bad_tail in data:
+            return ["cu_qp_delta outside valid range"]
+        return []
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    trimmed = trim_hevc_annexb_to_first_clean_irap_window(
+        first + dirty_later + clean_later,
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert trimmed == clean_later
+
+
+def test_probe_hevc_clean_irap_carries_prior_parameter_sets(monkeypatch) -> None:
+    parameter_sets = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+    )
+    first = (
+        parameter_sets
+        + b"\x00\x00\x00\x01\x26\x01bad-irap"
+        + b"\x00\x00\x00\x01\x02\x01bad-tail"
+    )
+    second = (
+        b"\x00\x00\x00\x01\x26\x01good-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+    third = (
+        b"\x00\x00\x00\x01\x40\x01vps-next"
+        b"\x00\x00\x00\x01\x42\x01sps-next"
+        b"\x00\x00\x00\x01\x44\x01pps-next"
+        b"\x00\x00\x00\x01\x26\x01next-irap"
+    )
+
+    def join_packets(packets: list[bytes]) -> bytes:
+        return b"".join(packets)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_hevc_annexb",
+        join_packets,
+    )
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        if data == parameter_sets + second:
+            return []
+        return ["PPS id out of range: 0"]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    probe = _try_first_clean_hevc_annexb_irap_window_offset(
+        [first + second + third],
+        ffmpeg_path="fake-ffmpeg",
+        max_windows=4,
+    )
+
+    assert probe.start_offset == len(first)
+    assert probe.codec_name == "HEVC"
+    assert probe.window_name == "IRAP"
+
+
 def test_trim_hevc_annexb_rejects_successful_ffmpeg_with_stderr(
     tmp_path,
 ) -> None:
@@ -3969,6 +4360,91 @@ def test_trim_hevc_annexb_to_first_error_free_suffix_recovers_at_later_irap(
     )
 
     assert trimmed == second
+
+
+def test_trim_hevc_suffix_carries_prior_parameter_sets(monkeypatch) -> None:
+    parameter_sets = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+    )
+    first = (
+        parameter_sets
+        + b"\x00\x00\x00\x01\x26\x01first-irap"
+        + b"\x00\x00\x00\x01\x02\x01bad-tail"
+    )
+    second = (
+        b"\x00\x00\x00\x01\x26\x01second-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        if data == parameter_sets + second:
+            return []
+        return ["PPS id out of range: 0"]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    trimmed = trim_hevc_annexb_to_first_error_free_suffix(
+        first + second,
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert trimmed == parameter_sets + second
+
+
+def test_trim_hevc_suffix_probes_recent_acceptable_candidates(monkeypatch) -> None:
+    parameter_sets = (
+        b"\x00\x00\x00\x01\x40\x01vps"
+        b"\x00\x00\x00\x01\x42\x01sps"
+        b"\x00\x00\x00\x01\x44\x01pps"
+    )
+    dirty_windows = [
+        b"\x00\x00\x00\x01\x26\x01dirty-irap-%02d"
+        b"\x00\x00\x00\x01\x02\x01bad-tail" % index
+        for index in range(10)
+    ]
+    clean_window = (
+        b"\x00\x00\x00\x01\x26\x01clean-irap"
+        b"\x00\x00\x00\x01\x02\x01good-tail"
+    )
+    calls: list[bytes] = []
+
+    def fake_errors(
+        data: bytes,
+        *,
+        ffmpeg_path: str,
+        accept_success_with_stderr: bool = True,
+    ) -> list[str]:
+        assert ffmpeg_path == "fake-ffmpeg"
+        assert accept_success_with_stderr is False
+        calls.append(data)
+        if data == parameter_sets + clean_window:
+            return []
+        return ["cu_qp_delta outside valid range"]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._ffmpeg_hevc_decode_errors",
+        fake_errors,
+    )
+
+    trimmed = trim_hevc_annexb_to_first_error_free_suffix(
+        parameter_sets + b"".join(dirty_windows) + clean_window,
+        ffmpeg_path="fake-ffmpeg",
+    )
+
+    assert trimmed == parameter_sets + clean_window
+    assert len(calls) == 9
 
 
 def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
@@ -4092,9 +4568,9 @@ def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
         return len(frame).to_bytes(4, "little") + frame
 
     packets = [idmx_frame(b"\x65first-idr")] + [
-        idmx_frame(b"\x41tail-%02d" % index) for index in range(34)
+        idmx_frame(b"\x41tail-%03d" % index) for index in range(258)
     ]
-    times = iter([0.0, 0.02, *([0.05] * 33)])
+    times = iter([0.0, 0.02, *([0.05] * 257)])
 
     monkeypatch.setattr(
         "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
@@ -4135,15 +4611,15 @@ def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
     )
 
     assert trim_calls == 2
-    expected_tail_marker = b"tail-31"
+    expected_tail_marker = b"tail-255"
     assert expected_tail_marker in annexb
 
 
 def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    packets = [b"packet-%02d" % index for index in range(35)]
-    times = iter([0.0, 0.02, *([0.05] * 33)])
+    packets = [b"packet-%03d" % index for index in range(259)]
+    times = iter([0.0, 0.02, *([0.05] * 257)])
     annexb_by_count: list[int] = []
 
     monkeypatch.setattr(
@@ -4199,9 +4675,9 @@ def test_collect_decrypted_h264_after_clean_idr_retries_final_suffix_clear_first
     )
 
     assert trim_calls == 2
-    expected_annexb = b"annexb-count-33"
+    expected_annexb = b"annexb-count-257"
     assert annexb == expected_annexb
-    assert annexb_by_count[:2] == [1, 33]
+    assert annexb_by_count[:2] == [1, 257]
 
 
 def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
@@ -4214,9 +4690,9 @@ def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
         return len(frame).to_bytes(4, "little") + frame
 
     packets = [idmx_frame(b"\x65first-idr")] + [
-        idmx_frame(b"\x41tail-%02d" % index) for index in range(34)
+        idmx_frame(b"\x41tail-%03d" % index) for index in range(258)
     ]
-    times = iter([0.0, 0.02, *([0.03] * 33)])
+    times = iter([0.0, 0.02, *([0.03] * 257)])
     monkeypatch.setattr(
         "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -4245,8 +4721,8 @@ def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
 def test_collect_idmx_after_clean_video_times_out_on_dirty_final_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    packets = [b"packet-%02d" % index for index in range(35)]
-    times = iter([0.0, 0.02, *([0.05] * 33)])
+    packets = [b"packet-%03d" % index for index in range(259)]
+    times = iter([0.0, 0.02, *([0.05] * 257)])
     monkeypatch.setattr(
         "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
         lambda *_args, **_kwargs: (
@@ -4280,8 +4756,8 @@ def test_collect_idmx_after_clean_video_times_out_on_dirty_final_suffix(
 def test_collect_decrypted_h264_after_clean_idr_times_out_on_dirty_final_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    packets = [b"packet-%02d" % index for index in range(35)]
-    times = iter([0.0, 0.02, *([0.05] * 33)])
+    packets = [b"packet-%03d" % index for index in range(259)]
+    times = iter([0.0, 0.02, *([0.05] * 257)])
     monkeypatch.setattr(
         "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -4314,6 +4790,179 @@ def test_collect_decrypted_h264_after_clean_idr_times_out_on_dirty_final_suffix(
             ffmpeg_path="fake-ffmpeg",
             wait_seconds=0.03,
         )
+
+
+def test_collect_h264_after_clean_idr_stops_after_max_dirty_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_probe(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(
+            start_offset=None,
+            first_decode_error="slice header decode failed",
+            complete_window_count=3,
+            idr_count=4,
+            nal_count=12,
+            codec_name="H.264",
+            window_name="IDR",
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        fake_probe,
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match=r"did not contain a clean IDR window: checked 3 complete sampled IDR windows",
+    ):
+        collect_h264_idmx_annexb_after_first_clean_idr_window(
+            [b"packet-0", b"packet-1"],
+            duration_seconds=1.0,
+            monotonic=lambda: 0.0,
+            ffmpeg_path="fake-ffmpeg",
+            max_windows=3,
+        )
+
+    assert calls == 1
+
+
+def test_collect_idmx_after_clean_video_stops_after_max_dirty_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        nonlocal calls
+        calls += 1
+        return (
+            None,
+            None,
+            "CABAC_MAX_BIN",
+            SimpleNamespace(
+                start_offset=None,
+                first_decode_error="CABAC_MAX_BIN",
+                complete_window_count=4,
+                idr_count=5,
+                nal_count=24,
+                codec_name="HEVC",
+                window_name="IRAP",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        fake_probe,
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match=r"did not contain a clean video window: checked 4 complete sampled IRAP windows",
+    ):
+        collect_idmx_annexb_after_first_clean_video_window(
+            [b"packet-0", b"packet-1"],
+            duration_seconds=1.0,
+            monotonic=lambda: 0.0,
+            ffmpeg_path="fake-ffmpeg",
+            max_windows=4,
+        )
+
+    assert calls == 1
+
+
+def test_collect_idmx_after_dirty_complete_window_throttles_repeated_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        nonlocal calls
+        calls += 1
+        return (
+            None,
+            None,
+            "CABAC_MAX_BIN",
+            SimpleNamespace(
+                start_offset=None,
+                first_decode_error="CABAC_MAX_BIN",
+                complete_window_count=1,
+                idr_count=2,
+                nal_count=8,
+                codec_name="HEVC",
+                window_name="IRAP",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._probe_first_clean_idmx_video_window",
+        fake_probe,
+    )
+
+    with pytest.raises(PyEzvizError, match="ended before a clean video window"):
+        collect_idmx_annexb_after_first_clean_video_window(
+            [b"packet-%02d" % index for index in range(50)],
+            duration_seconds=1.0,
+            monotonic=lambda: 0.0,
+            ffmpeg_path="fake-ffmpeg",
+            max_windows=4,
+        )
+
+    assert calls == 16
+
+
+def test_collect_decrypted_h264_after_clean_idr_stops_after_max_dirty_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_h264_annexb_idr_window_offset",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            start_offset=None,
+            first_decode_error=None,
+            complete_window_count=0,
+            idr_count=0,
+            nal_count=0,
+            codec_name="H.264",
+            window_name="IDR",
+        ),
+    )
+
+    def fake_decrypted_probe(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(
+            start_offset=None,
+            first_decode_error="slice header decode failed",
+            complete_window_count=2,
+            idr_count=3,
+            nal_count=9,
+            codec_name="H.264",
+            window_name="IDR",
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._try_first_clean_decrypted_h264_annexb_idr_window_offset",
+        fake_decrypted_probe,
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match=r"did not contain a clean IDR window: checked 2 complete sampled IDR windows",
+    ):
+        collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
+            [b"packet-0", b"packet-1"],
+            IDMX_MEDIA_KEY,
+            duration_seconds=1.0,
+            monotonic=lambda: 0.0,
+            ffmpeg_path="fake-ffmpeg",
+            max_windows=2,
+        )
+
+    assert calls == 1
 
 
 def test_clean_video_collectors_validate_window_settings() -> None:
@@ -4586,6 +5235,11 @@ def test_summarize_idmx_h264_local_packets_reports_sanitized_frame_shapes() -> N
     assert summary["samples"][0]["sequence_number"] == sequence_base
     assert summary["samples"][0]["rtp_timestamp"] == rtp_timestamp
     assert summary["samples"][0]["body_sha256"]
+    assert summary["packet_shapes"]["length_prefixed_idmx"] == 4
+    assert summary["packet_shapes"]["contains_idmx"] == 4
+    assert summary["packet_shapes"]["samples"][0]["length_prefix"] == len(
+        frame(sps, sequence=sequence_base)
+    ) - 4
     assert summary["h264"] == {
         "clear_nal": 2,
         "fu_a": 2,
@@ -4651,6 +5305,114 @@ def test_summarize_idmx_h264_local_packets_reports_sanitized_frame_shapes() -> N
     }
 
 
+def test_summarize_idmx_h264_local_packets_reports_possible_hrudp_wrappers() -> None:
+    sequence_base = 0xB712
+    rtp_timestamp = 0x165477EB
+    idmx_frame = (
+        b"\x80\x60"
+        + sequence_base.to_bytes(2, "big")
+        + rtp_timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88"
+        + b"\x65idr"
+    )
+    hrdp_header = (
+        len(idmx_frame).to_bytes(4, "little")
+        + (3).to_bytes(4, "little")
+        + (0x2A).to_bytes(4, "little")
+    )
+
+    summary = summarize_idmx_h264_local_packets([hrdp_header + idmx_frame])
+
+    assert summary["frame_count"] == 1
+    assert summary["packet_shapes"]["possible_hrudp_wrapped"] == 1
+    assert summary["packet_shapes"]["possible_hrudp_video"] == 1
+    sample = summary["packet_shapes"]["samples"][0]
+    assert sample["idmx_offset"] == 12
+    assert sample["possible_hrudp"] == {
+        "byte_order": "little",
+        "payload_length": len(idmx_frame),
+        "frame_type": 3,
+        "sequence": 0x2A,
+        "payload_starts_with_idmx": True,
+        "payload_contains_idmx": True,
+    }
+
+
+def test_summarize_idmx_h264_local_packets_reports_rtp_wrapped_hrudp() -> None:
+    idmx_frame = (
+        b"\x80\x60\xb7\x12\x16\x54\x77\xeb\x55\x66\x77\x88"
+        b"\x65idr"
+    )
+    hrdp_header = (
+        len(idmx_frame).to_bytes(4, "little")
+        + (3).to_bytes(4, "little")
+        + (0x2A).to_bytes(4, "little")
+    )
+
+    summary = summarize_idmx_h264_local_packets(
+        [_rtp_packet(hrdp_header + idmx_frame)]
+    )
+
+    assert summary["packet_shapes"]["possible_hrudp_wrapped"] == 1
+    assert summary["packet_shapes"]["possible_hrudp_video"] == 1
+    sample = summary["packet_shapes"]["samples"][0]
+    assert sample["possible_hrudp"]["rtp_wrapped"] is True
+    assert sample["possible_hrudp"]["payload_starts_with_idmx"] is True
+
+
+def test_hcnetsdk_command_port_media_packet_unwraps_raw_hrudp_idmx_video() -> None:
+    idmx_frame = (
+        b"\x80\x60\xb7\x12\x16\x54\x77\xeb\x55\x66\x77\x88"
+        b"\x65idr"
+    )
+    hrdp_header = (
+        len(idmx_frame).to_bytes(4, "little")
+        + (3).to_bytes(4, "little")
+        + (0x2A).to_bytes(4, "little")
+    )
+
+    packet = _hcnetsdk_command_port_media_packet(
+        _raw_media(hrdp_header + idmx_frame),
+    )
+
+    assert packet.body == idmx_frame
+    assert packet.encrypted is True
+
+
+def test_hcnetsdk_command_port_media_packet_unwraps_hrudp_idmx_video() -> None:
+    idmx_frame = (
+        b"\x80\x60\xb7\x12\x16\x54\x77\xeb\x55\x66\x77\x88"
+        b"\x65idr"
+    )
+    hrdp_header = (
+        len(idmx_frame).to_bytes(4, "little")
+        + (3).to_bytes(4, "little")
+        + (0x2A).to_bytes(4, "little")
+    )
+
+    packet = _hcnetsdk_command_port_media_packet(
+        _media(hrdp_header + idmx_frame),
+    )
+
+    assert packet.body == idmx_frame
+    assert packet.encrypted is True
+
+
+def test_hcnetsdk_command_port_media_packet_unwraps_hrudp_mpegps_video() -> None:
+    hrdp_header = (
+        len(MPEG_PS_PAYLOAD).to_bytes(4, "little")
+        + (3).to_bytes(4, "little")
+        + (0x2A).to_bytes(4, "little")
+    )
+
+    packet = _hcnetsdk_command_port_media_packet(
+        _media(hrdp_header + MPEG_PS_PAYLOAD),
+    )
+
+    assert packet.body == MPEG_PS_PAYLOAD
+    assert packet.encrypted is False
+
+
 def test_summarize_idmx_h264_local_packets_labels_direct_hevc_frames() -> None:
     sequence_base = 0xB712
     rtp_timestamp = 0x165477EB
@@ -4680,6 +5442,41 @@ def test_summarize_idmx_h264_local_packets_labels_direct_hevc_frames() -> None:
     assert summary["samples"][0]["hevc_nal_type"] == 32
     assert summary["samples"][1]["hevc_nal_type"] == 49
     assert summary["hevc"] == {"parameter": 0, "media": 2}
+
+
+def test_summarize_idmx_h264_local_packets_preserves_packet_boundaries() -> None:
+    sequence_base = 0xB712
+    rtp_timestamp = 0x165477EB
+
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        return (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+
+    embedded_idmx_lookalike = (
+        b"\x02\x01real"
+        + b"\x80\x60\x12\x34\x56\x78\x9a\xbc\x55\x66\x77\x88"
+        + b"\x02\x01not-a-frame"
+    )
+
+    summary = summarize_idmx_h264_local_packets(
+        [
+            frame(embedded_idmx_lookalike, sequence=sequence_base),
+            frame(b"\x02\x01second-real", sequence=sequence_base + 1),
+        ],
+        max_frames=4,
+    )
+
+    assert summary["frame_count"] == 2
+    assert [sample["kind"] for sample in summary["samples"]] == [
+        "hevc_media",
+        "hevc_media",
+    ]
+    assert summary["samples"][0]["body_length"] == len(embedded_idmx_lookalike)
 
 
 def test_summarize_h264_annexb_units_reports_sanitized_nal_shapes() -> None:
@@ -4820,6 +5617,32 @@ def test_summarize_h264_annexb_idr_windows_reports_sanitized_gops() -> None:
         ],
         "truncated": True,
     }
+
+
+def test_summarize_h264_idr_windows_excludes_next_window_parameters() -> None:
+    sps = b"\x67\x4d\x00\x29"
+    pps = b"\x68\xee\x38\x80"
+    idr = b"\x65idr"
+    non_idr = b"\x41p"
+    next_sps = b"\x67next"
+    next_pps = b"\x68next"
+    next_idr = b"\x65idr2"
+    start_code = b"\x00\x00\x00\x01"
+    data = b"".join(
+        start_code + nal
+        for nal in (sps, pps, idr, non_idr, next_sps, next_pps, next_idr)
+    )
+    next_window_offset = data.find(start_code + next_sps)
+
+    summary = summarize_h264_annexb_idr_windows(data)
+    samples = summary["samples"]
+    assert isinstance(samples, list)
+
+    assert samples[0]["end_nal_index"] == 4
+    assert samples[0]["end_offset"] == next_window_offset
+    assert samples[0]["window_bytes"] == next_window_offset
+    assert samples[1]["start_code_offset"] == next_window_offset
+    assert samples[1]["leading_nal_types"] == [7, 8]
 
 
 def test_copy_hcnetsdk_real_data_to_mpegts_filters_and_pipes_payloads(tmp_path) -> None:

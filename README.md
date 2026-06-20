@@ -291,7 +291,7 @@ LAN-device-list diagnostics,
 `EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN=1` can additionally route a successful
 LAN login into the native preview activity so command-port media and PlayM4
 input hooks fire without manual tablet interaction.
-If a command-port camera emits corrupt startup IDR refreshes before stabilizing,
+If a command-port camera emits corrupt startup video refreshes before stabilizing,
 `--hcnetsdk-h264-skip-initial-idr-windows N` can drop the first `N`
 IDR-started H.264 windows before remuxing clear IDMX media. Native HCNetSDK
 startup traces can include non-video IDMX prelude records on RTP payload types
@@ -300,23 +300,25 @@ explicit keyframe request. When FFmpeg reports warnings only in that first real
 IDR window, `--hcnetsdk-h264-skip-initial-idr-windows 1` mirrors the practical
 native-player tolerance and yields a warning-free remux once a later IDR is
 available. For a more robust startup workaround,
-`--hcnetsdk-h264-trim-to-clean-idr-window` samples IDR
-windows with FFmpeg and remuxes from the first one that decodes without H.264
-errors. Because the output begins at the selected clean window, the resulting
-clip can be shorter than the requested capture duration. Add
-`--hcnetsdk-h264-clean-idr-preroll-seconds N` with the trim option to overcapture
-for up to `N` extra seconds before trimming; this gives generated command-port
-sessions time to stabilize while preserving more of the requested clean clip.
-Use `--hcnetsdk-h264-clean-idr-max-windows N` when long unstable starts need
-more than the default 32 IDR windows checked.
+`--hcnetsdk-video-trim-to-clean-window` samples H.264 IDR or HEVC IRAP windows
+with FFmpeg and remuxes from the first one that decodes without video errors.
+Because the output begins at the selected clean window, the resulting clip can
+be shorter than the requested capture duration. Add
+`--hcnetsdk-video-clean-window-preroll-seconds N` with the trim option to
+overcapture for up to `N` extra seconds before trimming; this gives generated
+command-port sessions time to stabilize while preserving more of the requested
+clean clip. Use `--hcnetsdk-video-clean-window-max-windows N` when long
+unstable starts need more than the default 32 video windows checked.
 If you need to preserve the requested clip duration instead of trimming after
-capture, use `--hcnetsdk-h264-wait-for-clean-idr-window`; this discards startup
-media until a decodable IDR window is found, then starts the requested duration
-window. Bound that pre-capture wait with
-`--hcnetsdk-h264-clean-idr-wait-seconds N`. Some cameras expose very sparse or
-persistently corrupt IDR refreshes on generated command-port sessions even
-after the media socket remains stable; in that case use the native-prefix media
-plan above for a playable remux and keep clean-IDR wait as a diagnostic.
+capture, use `--hcnetsdk-video-wait-for-clean-window`; this discards startup
+media until a decodable H.264 IDR or HEVC IRAP window is found, then starts the
+requested duration window. Bound that pre-capture wait with
+`--hcnetsdk-video-clean-window-wait-seconds N`. The older
+`--hcnetsdk-h264-*clean-idr*` names remain accepted as compatibility aliases.
+Some cameras expose very sparse or persistently corrupt refresh windows on
+generated command-port sessions even after the media socket remains stable; in
+that case use the native-prefix media plan above for a playable remux and keep
+clean-window wait as a diagnostic.
 Experimental plan JSON can set
 `read_first_media_immediately` on the media socket step to drain one media
 packet before later short command sockets, which is useful when comparing native

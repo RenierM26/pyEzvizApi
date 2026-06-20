@@ -12,7 +12,7 @@ import pytest
 import requests
 
 from pyezvizapi.api_endpoints import API_ENDPOINT_IOT_ACTION
-from pyezvizapi.client import EzvizClient
+from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
 from pyezvizapi.constants import (
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
@@ -67,11 +67,46 @@ def _binary_response(content: bytes) -> requests.Response:
     return resp
 
 
+class _PacketStream:
+    def __init__(self, bodies: list[bytes]) -> None:
+        self.bodies = bodies
+
+    def iter_packets(self, *, max_packets: int | None = None) -> Iterator[Any]:
+        for index, body in enumerate(self.bodies):
+            if max_packets is not None and index >= max_packets:
+                return
+            yield SimpleNamespace(
+                body=body,
+                prefix=b"",
+                channel=0,
+                length=len(body),
+            )
+
+
 def test_parse_json_returns_decoded_payload() -> None:
     assert EzvizClient._parse_json(_response(text='{"resultCode": "0", "value": 1}')) == {
         "resultCode": "0",
         "value": 1,
     }
+
+
+def test_local_stream_metadata_recorder_honors_env_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_PACKETS", "2")
+    monkeypatch.setenv("PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_BYTES", "64")
+    monkeypatch.setenv("PYEZVIZAPI_HCNETSDK_IDMX_SUMMARY_FRAMES", "3")
+    stream = _PacketStream([b"packet-1", b"packet-2", b"packet-3"])
+    recorder = _LocalStreamPacketMetadataRecorder(stream)
+
+    assert len(list(recorder.iter_packets())) == 3
+    recorder.finalize_packet_summary()
+
+    summary = recorder.packet_summary["idmx_h264"]
+    assert summary["capture_packet_limit"] == 2
+    assert summary["capture_byte_limit"] == 64
+    assert summary["capture_truncated"] is True
+    assert summary["sample_limit"] == 3
 
 
 def test_parse_json_raises_contextual_error_for_invalid_json() -> None:
@@ -2675,11 +2710,11 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
         hcnetsdk_read_response_after_each=(False,),
         hcnetsdk_command_metadata_callback=metadata_calls.append,
         hcnetsdk_h264_skip_initial_idr_windows=2,
-        hcnetsdk_h264_trim_to_clean_idr_window=True,
-        hcnetsdk_h264_clean_idr_preroll_seconds=(
+        hcnetsdk_video_trim_to_clean_window=True,
+        hcnetsdk_video_clean_window_preroll_seconds=(
             HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
         ),
-        hcnetsdk_h264_clean_idr_max_windows=HCNETSDK_CLEAN_IDR_MAX_WINDOWS,
+        hcnetsdk_video_clean_window_max_windows=HCNETSDK_CLEAN_IDR_MAX_WINDOWS,
         duration_seconds=HCNETSDK_SAVE_DURATION,
         max_packets=4,
     )

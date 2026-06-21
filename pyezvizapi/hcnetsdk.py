@@ -71,6 +71,7 @@ HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID = 0x117000
 HCNETSDK_STDXML_COMMAND_PORT_EXTRA_RESERVED_SIZE = 8
 HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE = 12
 HCNETSDK_STDXML_COMMAND_PORT_FLAGS = b"\x01\x00\x00\x00"
+HCNETSDK_XML_MARKER = b"<"
 HCNETSDK_EZVIZ_SERVICES_SWITCH_GET = (
     "GET /ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json\r\n"
 )
@@ -4113,7 +4114,11 @@ def hcnetsdk_stdxml_response_json(
     if isinstance(response, Mapping):
         return dict(response)
     try:
-        text = response.decode("utf-8") if isinstance(response, bytes) else response
+        if isinstance(response, bytes):
+            response = response.split(b"\x00", 1)[0]
+            text = response.decode("utf-8")
+        else:
+            text = response.split("\x00", 1)[0]
         parsed = json.loads(text)
     except (UnicodeDecodeError, ValueError) as err:
         raise PyEzvizError("Invalid HCNetSDK STDXML response JSON") from err
@@ -7624,10 +7629,26 @@ def hcnetsdk_command_port_response_payload(
     body = response.body if isinstance(response, HcNetSdkTcpFrame) else response
     if not body:
         return b""
-    for marker in (b"<?xml", b"<", b"{", b"["):
+    candidates: list[tuple[int, bytes]] = []
+    for marker in (b"<?xml", b"{", b"[", HCNETSDK_XML_MARKER):
         offset = body.find(marker)
         if offset >= 0:
-            return body[offset:].split(b"\x00", 1)[0].strip()
+            candidates.append((offset, body[offset:].split(b"\x00", 1)[0].strip()))
+    for _offset, candidate in sorted(candidates, key=lambda item: item[0]):
+        if not candidate:
+            continue
+        if candidate[:1] in {b"{", b"["}:
+            try:
+                json.loads(candidate.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                continue
+            return candidate
+        if candidate.startswith(b"<?xml") or (
+            candidate[:1] == HCNETSDK_XML_MARKER
+            and len(candidate) > 1
+            and candidate[1:2].isalpha()
+        ):
+            return candidate
     return body.split(b"\x00", 1)[0].strip()
 
 

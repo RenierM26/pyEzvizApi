@@ -454,6 +454,7 @@ STDXML_TEST_STATUS = b'{"statusCode":1}'
 COMMAND_PORT_DEFAULT_TIMEOUT = 10.0
 COMMAND_PORT_EMPTY_OUTPUT = b""
 COMMAND_PORT_JSON_STATUS_OUTPUT = b'{"statusCode":1}'
+COMMAND_PORT_JSON_WITH_XML_MARKER_OUTPUT = b'{"status":"value with < marker"}'
 COMMAND_PORT_BASIC_ABILITY_OUTPUT = b"<BasicCapability/>"
 COMMAND_PORT_RECORD_ABILITY_OUTPUT = b"<RecordAbility/>"
 COMMAND_PORT_HD_CONFIG_OUTPUT = b"\x00\x00\x12\x98"
@@ -2794,6 +2795,12 @@ def test_hcnetsdk_command_port_response_payload_strips_text_padding() -> None:
     empty_response = build_hcnetsdk_tcp_frame(b"\x00\x00ignored\x00")
     json_response = build_hcnetsdk_tcp_frame(b"\x00\x00{\"statusCode\":1}\x00tail")
     xml_response = build_hcnetsdk_tcp_frame(b"\x00\xff<BasicCapability/>\x00")
+    json_before_xml_marker_response = build_hcnetsdk_tcp_frame(
+        b"\x00" + COMMAND_PORT_JSON_WITH_XML_MARKER_OUTPUT + b"\x00tail"
+    )
+    json_after_binary_xml_marker_response = build_hcnetsdk_tcp_frame(
+        b"\x00<\xff\x00{\"statusCode\":1}\x00tail"
+    )
 
     assert hcnetsdk_command_port_response_payload(empty_response) == (
         COMMAND_PORT_EMPTY_OUTPUT
@@ -2804,6 +2811,12 @@ def test_hcnetsdk_command_port_response_payload_strips_text_padding() -> None:
     assert hcnetsdk_command_port_response_payload(xml_response) == (
         COMMAND_PORT_BASIC_ABILITY_OUTPUT
     )
+    assert hcnetsdk_command_port_response_payload(
+        json_before_xml_marker_response
+    ) == COMMAND_PORT_JSON_WITH_XML_MARKER_OUTPUT
+    assert hcnetsdk_command_port_response_payload(
+        json_after_binary_xml_marker_response
+    ) == COMMAND_PORT_JSON_STATUS_OUTPUT
 
 
 def test_hcnetsdk_command_port_execute_template_uses_fresh_control_socket() -> None:
@@ -3721,6 +3734,12 @@ def test_hcnetsdk_stdxml_response_json_accepts_mapping_text_and_bytes() -> None:
     assert hcnetsdk_stdxml_response_json({"statusCode": 1}) == {"statusCode": 1}
     assert hcnetsdk_stdxml_response_json('{"statusCode":1}') == {"statusCode": 1}
     assert hcnetsdk_stdxml_response_json(b'{"statusCode":1}') == {"statusCode": 1}
+    assert hcnetsdk_stdxml_response_json(b'{"statusCode":1}\x00\x00') == {
+        "statusCode": 1
+    }
+    assert hcnetsdk_stdxml_response_json('{"statusCode":1}\x00\x00') == {
+        "statusCode": 1
+    }
 
 
 def test_hcnetsdk_stdxml_response_json_rejects_invalid_payload() -> None:

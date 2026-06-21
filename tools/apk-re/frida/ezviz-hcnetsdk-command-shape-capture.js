@@ -1797,6 +1797,7 @@ function parseDvrConfigProbeList(value) {
 }
 
 function scheduleDvrConfigProbes(loginId) {
+  if (Number(loginId) < 0) return;
   if (dvrConfigProbesStarted) return;
   const target = targetConfig();
   const probes = parseDvrConfigProbeList(target.dvrConfigProbes);

@@ -2349,17 +2349,21 @@ class HcNetSdkSetConnectTimeRequest:
     """Native ``NET_DVR_SetConnectTime`` call shape used by the APK."""
 
     connect_time_ms: int = 5000
+    retry_count: int = 3
     api: str = HCNETSDK_SET_CONNECT_TIME
 
     def to_native_args_hint(self) -> dict[str, Any]:
         """Return native argument names for setting SDK connect timeout."""
         if self.connect_time_ms < 0:
             raise PyEzvizError("HCNetSDK connect time must be non-negative")
+        if self.retry_count < 0:
+            raise PyEzvizError("HCNetSDK connect retry count must be non-negative")
         if self.api != HCNETSDK_SET_CONNECT_TIME:
             raise PyEzvizError("HCNetSDK connect-time API is unsupported")
         return {
             "api": self.api,
             "dwWaitTime": self.connect_time_ms,
+            "dwTryTimes": self.retry_count,
         }
 
 
@@ -3651,9 +3655,13 @@ def hcnetsdk_cleanup_request() -> HcNetSdkNoArgRequest:
 
 def hcnetsdk_set_connect_time_request(
     connect_time_ms: int = 5000,
+    retry_count: int = 3,
 ) -> HcNetSdkSetConnectTimeRequest:
     """Return the APK-style ``NET_DVR_SetConnectTime`` request shape."""
-    return HcNetSdkSetConnectTimeRequest(connect_time_ms=connect_time_ms)
+    return HcNetSdkSetConnectTimeRequest(
+        connect_time_ms=connect_time_ms,
+        retry_count=retry_count,
+    )
 
 
 def hcnetsdk_get_last_error_request() -> HcNetSdkNoArgRequest:
@@ -4618,6 +4626,14 @@ def ezviz_lan_wifi_ap_info_list(
     count = int.from_bytes(raw[4:8], "big")
     if declared_size and declared_size > len(raw):
         raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is truncated")
+    effective_size = declared_size or len(raw)
+    required_size = (
+        HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE
+        + count * HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE
+    )
+    if required_size > effective_size:
+        raise PyEzvizError("EZVIZ LAN Wi-Fi AP list count exceeds response size")
+    raw = raw[:effective_size]
 
     entries: list[EzvizLanWifiApInfo] = []
     offset = HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE
@@ -4823,7 +4839,7 @@ def ezviz_lan_video_coding_update_request(
             "struNormHighRecordPara.dwVideoFrameRate": _byte_value(
                 "video frame rate", video_frame_rate
             ),
-            "struNormHighRecordPara.dwVideoBitrate": _byte_value(
+            "struNormHighRecordPara.dwVideoBitrate": _dword_value(
                 "video bitrate", video_bitrate
             ),
         },
@@ -8394,6 +8410,12 @@ def _byte_value(label: str, value: int) -> int:
 def _word_value(label: str, value: int) -> int:
     if not 0 <= value <= 0xFFFF:
         raise PyEzvizError(f"EZVIZ LAN {label} must fit in one unsigned word")
+    return value
+
+
+def _dword_value(label: str, value: int) -> int:
+    if not 0 <= value <= 0xFFFFFFFF:
+        raise PyEzvizError(f"EZVIZ LAN {label} must fit in one unsigned dword")
     return value
 
 

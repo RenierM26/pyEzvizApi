@@ -160,6 +160,7 @@ from pyezvizapi.hcnetsdk import (
     SADP_STOP,
     EzvizCasDeviceInfo,
     EzvizLanSdFormatProgress,
+    EzvizLanWifiApInfo,
     EzvizLocalPreviewRequest,
     EzvizLocalReceiverInfo,
     EzvizLocalReceiverInfoEx,
@@ -746,10 +747,14 @@ def test_hcnetsdk_lifecycle_error_and_version_request_shapes() -> None:
     }
     assert cleanup == HcNetSdkNoArgRequest(api=HCNETSDK_CLEANUP)
     assert cleanup.to_native_args_hint() == {"api": HCNETSDK_CLEANUP}
-    assert connect == HcNetSdkSetConnectTimeRequest(connect_time_ms=5000)
+    assert connect == HcNetSdkSetConnectTimeRequest(
+        connect_time_ms=5000,
+        retry_count=3,
+    )
     assert connect.to_native_args_hint() == {
         "api": HCNETSDK_SET_CONNECT_TIME,
         "dwWaitTime": 5000,
+        "dwTryTimes": 3,
     }
     assert last_error.to_native_args_hint() == {"api": HCNETSDK_GET_LAST_ERROR}
     assert error_msg == HcNetSdkGetErrorMsgRequest(error_code=23)
@@ -772,6 +777,8 @@ def test_hcnetsdk_lifecycle_error_and_version_request_shapes() -> None:
         hcnetsdk_init_request("\x00").to_native_args_hint()
     with pytest.raises(PyEzvizError, match="connect time"):
         hcnetsdk_set_connect_time_request(-1).to_native_args_hint()
+    with pytest.raises(PyEzvizError, match="retry count"):
+        hcnetsdk_set_connect_time_request(retry_count=-1).to_native_args_hint()
     with pytest.raises(PyEzvizError, match="error code"):
         hcnetsdk_get_error_msg_request(-1).to_native_args_hint()
     with pytest.raises(PyEzvizError, match="successful login"):
@@ -4121,6 +4128,33 @@ def test_ezviz_lan_wifi_ap_info_list_parses_native_buffer() -> None:
     assert entries[0].extra == 150
 
 
+def test_ezviz_lan_wifi_ap_info_list_respects_declared_size() -> None:
+    entry = (
+        b"HomeWifi-2G".ljust(36, b"\x00")
+        + (4).to_bytes(4, "big")
+        + (11).to_bytes(4, "big")
+        + (84).to_bytes(4, "big")
+        + (150).to_bytes(4, "big")
+    )
+    payload = (60).to_bytes(4, "big") + (1).to_bytes(4, "big") + entry
+
+    assert len(payload) == 60
+    assert ezviz_lan_wifi_ap_info_list(payload + b"\x00" * 32) == (
+        EzvizLanWifiApInfo(
+            ssid="HomeWifi-2G",
+            security=4,
+            channel=11,
+            signal_strength=84,
+            extra=150,
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="count exceeds response size"):
+        ezviz_lan_wifi_ap_info_list(
+            (60).to_bytes(4, "big") + (2).to_bytes(4, "big") + entry + b"\x00" * 52
+        )
+
+
 def test_ezviz_lan_wifi_request_rejects_overlong_or_invalid_inputs() -> None:
     with pytest.raises(PyEzvizError, match="password"):
         ezviz_lan_wifi_station_patch(ssid="ssid", password=b"x" * 64)
@@ -4177,7 +4211,7 @@ def test_ezviz_lan_audio_video_and_picture_request_shapes() -> None:
         2,
         video_encoding_type=1,
         video_frame_rate=25,
-        video_bitrate=96,
+        video_bitrate=1024,
     )
     pic_get = ezviz_lan_pic_config_get_request(42, 3)
     pic_set = ezviz_lan_pic_config_update_request(
@@ -4197,7 +4231,7 @@ def test_ezviz_lan_audio_video_and_picture_request_shapes() -> None:
     assert video_set.to_native_args_hint()["fieldUpdates"] == {
         "struNormHighRecordPara.byVideoEncType": 1,
         "struNormHighRecordPara.dwVideoFrameRate": 25,
-        "struNormHighRecordPara.dwVideoBitrate": 96,
+        "struNormHighRecordPara.dwVideoBitrate": 1024,
     }
     assert pic_get.to_native_args_hint()["dwCommand"] == 6179
     assert pic_set.to_native_args_hint()["fieldUpdates"] == {

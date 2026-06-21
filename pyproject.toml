@@ -112,7 +112,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 [tool.codespell]
-ignore-words-list = "adss,aliase,anull,enull,hass,hassio,hybernate"
+ignore-words-list = "adss,aliase,anull,enull,hass,hassio,hybernate,proxys"
 skip = "*.egg-info,build,dist,tests/fixtures/*.json"
 
 [tool.coverage.run]

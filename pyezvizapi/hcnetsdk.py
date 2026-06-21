@@ -649,11 +649,46 @@ HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS: Mapping[int, int] = {
     # Native trace: NET_DVR_GetDVRConfig(login, 305, -1, NET_DVR_AP_INFO_LIST)
     # dispatches as an empty 0x20140 command and returns NET_DVR_AP_INFO_LIST.
     HcNetSdkDvrCommand.GET_AP_INFO_LIST: 0x20140,
+    # Native trace: NET_DVR_GetDVRConfig(login, 1067, 1, NET_DVR_CAMERAPARAMCFG)
+    # dispatches as an empty 0x111096 command and returns NET_DVR_CAMERAPARAMCFG.
+    HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG: 0x111096,
+    # Native trace: NET_DVR_GetDVRConfig(login, 310, 0,
+    # NET_DVR_WIFI_CONNECT_STATUS) dispatches as 0x20145 with a channel tail.
+    HcNetSdkDvrCommand.GET_WIFI_CONNECT_STATUS: 0x20145,
+    # Native trace: NET_DVR_GetDVRConfig(login, 3201, 1,
+    # NET_DVR_AUDIO_INPUT_PARAM) dispatches as 0x113201 with a channel tail.
+    HcNetSdkDvrCommand.GET_AUDIO_INPUT_PARAM: 0x113201,
+    # Native trace: NET_DVR_GetDVRConfig(login, 3237, 1,
+    # NET_DVR_AUDIOOUT_VOLUME) dispatches as 0x113026 with a channel tail.
+    HcNetSdkDvrCommand.GET_AUDIOOUT_VOLUME: 0x113026,
+    # Native trace: NET_DVR_GetDVRConfig(login, 1040, 1,
+    # NET_DVR_COMPRESSIONCFG_V30) dispatches as 0x110040 with a channel tail.
+    HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30: 0x110040,
+    # Native trace: NET_DVR_GetDVRConfig(login, 6179, 1, NET_DVR_PICCFG_V40)
+    # dispatches as 0x110010 with a channel tail.
+    HcNetSdkDvrCommand.GET_PIC_CFG_V40: 0x110010,
 }
 
+HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS: frozenset[int] = frozenset(
+    {
+        HcNetSdkDvrCommand.GET_WIFI_CONNECT_STATUS,
+        HcNetSdkDvrCommand.GET_AUDIO_INPUT_PARAM,
+        HcNetSdkDvrCommand.GET_AUDIOOUT_VOLUME,
+        HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30,
+        HcNetSdkDvrCommand.GET_PIC_CFG_V40,
+    }
+)
+HCNETSDK_HD_CFG_MIN_SIZE = 4
 HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE = 8
 HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE = 52
 HCNETSDK_WIFI_AP_INFO_SSID_SIZE = 36
+HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE = 12
+HCNETSDK_WIFI_CONNECT_STATUS_MIN_SIZE = 8
+HCNETSDK_AUDIO_INPUT_PARAM_SIZE = 8
+HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE = 5
+HCNETSDK_COMPRESSION_CFG_MIN_SIZE = 32
+HCNETSDK_PIC_CFG_MIN_SIZE = 36
+HCNETSDK_PIC_CFG_CHANNEL_NAME_SIZE = 32
 
 
 class HcNetSdkAbility(IntEnum):
@@ -995,6 +1030,84 @@ class EzvizLanWifiApInfo:
     channel: int
     signal_strength: int
     extra: int
+
+
+@dataclass(frozen=True)
+class EzvizLanHdConfig:
+    """Envelope for a traced ``NET_DVR_HDCFG`` response."""
+
+    declared_size: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanCameraParamConfig:
+    """Known fields from a ``NET_DVR_CAMERAPARAMCFG`` response."""
+
+    declared_size: int
+    brightness: int
+    contrast: int
+    sharpness: int
+    saturation: int
+    hue: int
+    video_effect_enabled: int
+    light_inhibit_level: int
+    gray_level: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanWifiConnectStatus:
+    """Known fields from a ``NET_DVR_WIFI_CONNECT_STATUS`` response."""
+
+    declared_size: int
+    current_status: int
+    error_code: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioInputParam:
+    """Known fields from a ``NET_DVR_AUDIO_INPUT_PARAM`` response."""
+
+    audio_input_type: int
+    volume: int
+    noise_filter_enabled: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioOutputVolume:
+    """Known fields from a ``NET_DVR_AUDIOOUT_VOLUME`` response."""
+
+    declared_size: int
+    volume: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanCompressionConfig:
+    """Known fields from a ``NET_DVR_COMPRESSIONCFG_V30`` response."""
+
+    declared_size: int
+    stream_type: int
+    resolution: int
+    bitrate_type: int
+    picture_quality: int
+    video_bitrate: int
+    video_frame_rate: int
+    i_frame_interval: int
+    video_encoding_type: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanPictureConfig:
+    """Known fields from a ``NET_DVR_PICCFG_V40`` response."""
+
+    declared_size: int
+    channel_name: str
+    raw: bytes
 
 
 @dataclass(frozen=True)
@@ -4686,6 +4799,161 @@ def ezviz_lan_wifi_ap_info_list(
     return tuple(entries)
 
 
+def ezviz_lan_hd_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanHdConfig:
+    """Parse the native-sized ``NET_DVR_HDCFG`` command-port envelope."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_HD_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN HD config response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN HD config response is truncated")
+    effective_size = declared_size or len(raw)
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_HD_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN HD config declared size is too small")
+    return EzvizLanHdConfig(declared_size=effective_size, raw=raw)
+
+
+def ezviz_lan_camera_param_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanCameraParamConfig:
+    """Parse known ``NET_DVR_CAMERAPARAMCFG`` fields from command-port output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN camera-param response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN camera-param response is truncated")
+    effective_size = declared_size or len(raw)
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN camera-param declared size is too small")
+
+    return EzvizLanCameraParamConfig(
+        declared_size=effective_size,
+        brightness=raw[4],
+        contrast=raw[5],
+        sharpness=raw[6],
+        saturation=raw[7],
+        hue=raw[8],
+        video_effect_enabled=raw[9],
+        light_inhibit_level=raw[10],
+        gray_level=raw[11],
+        raw=raw,
+    )
+
+
+def ezviz_lan_wifi_connect_status(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanWifiConnectStatus:
+    """Parse known ``NET_DVR_WIFI_CONNECT_STATUS`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_WIFI_CONNECT_STATUS_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN Wi-Fi status response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN Wi-Fi status response is truncated")
+    effective_size = declared_size or len(raw)
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_WIFI_CONNECT_STATUS_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN Wi-Fi status declared size is too small")
+    return EzvizLanWifiConnectStatus(
+        declared_size=effective_size,
+        current_status=raw[4],
+        error_code=int.from_bytes(raw[8:12], "big") if len(raw) >= 12 else 0,
+        raw=raw,
+    )
+
+
+def ezviz_lan_audio_input_param(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanAudioInputParam:
+    """Parse known ``NET_DVR_AUDIO_INPUT_PARAM`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_AUDIO_INPUT_PARAM_SIZE:
+        raise PyEzvizError("EZVIZ LAN audio-input response is too short")
+    return EzvizLanAudioInputParam(
+        audio_input_type=raw[0],
+        volume=raw[1],
+        noise_filter_enabled=raw[2],
+        raw=raw[:HCNETSDK_AUDIO_INPUT_PARAM_SIZE],
+    )
+
+
+def ezviz_lan_audio_output_volume(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanAudioOutputVolume:
+    """Parse known ``NET_DVR_AUDIOOUT_VOLUME`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN audio-output response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN audio-output response is truncated")
+    effective_size = declared_size or len(raw)
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN audio-output declared size is too small")
+    return EzvizLanAudioOutputVolume(
+        declared_size=effective_size,
+        volume=raw[4],
+        raw=raw,
+    )
+
+
+def ezviz_lan_compression_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanCompressionConfig:
+    """Parse known ``NET_DVR_COMPRESSIONCFG_V30`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_COMPRESSION_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN compression response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN compression response is truncated")
+    effective_size = declared_size or len(raw)
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_COMPRESSION_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN compression declared size is too small")
+    return EzvizLanCompressionConfig(
+        declared_size=effective_size,
+        stream_type=raw[4],
+        resolution=raw[5],
+        bitrate_type=raw[6],
+        picture_quality=raw[7],
+        video_bitrate=int.from_bytes(raw[8:12], "big"),
+        video_frame_rate=int.from_bytes(raw[12:16], "big"),
+        i_frame_interval=int.from_bytes(raw[16:18], "big"),
+        video_encoding_type=raw[20],
+        raw=raw,
+    )
+
+
+def ezviz_lan_picture_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanPictureConfig:
+    """Parse known ``NET_DVR_PICCFG_V40`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_PIC_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN picture response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN picture response is truncated")
+    effective_size = declared_size or len(raw)
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_PIC_CFG_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN picture declared size is too small")
+    return EzvizLanPictureConfig(
+        declared_size=effective_size,
+        channel_name=_nul_stripped_text(
+            raw[4 : 4 + HCNETSDK_PIC_CFG_CHANNEL_NAME_SIZE]
+        ),
+        raw=raw,
+    )
+
+
 def ezviz_lan_wifi_connect_status_request(
     login_id: int,
     *,
@@ -5087,11 +5355,13 @@ def ezviz_lan_user_password_update_request(
 
 def ezviz_lan_video_effect_get_config_request(
     login_id: int,
+    channel: int = 1,
 ) -> HcNetSdkDvrConfigRequest:
     """Return the local camera video-effect config read request shape."""
     return hcnetsdk_dvr_config_get_request(
         login_id,
         HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG,
+        channel=channel,
         structure="NET_DVR_CAMERAPARAMCFG",
     )
 
@@ -5129,9 +5399,10 @@ def ezviz_lan_video_effect_update_request(
 
 def ezviz_lan_backlight_wdr_get_config_request(
     login_id: int,
+    channel: int = 1,
 ) -> HcNetSdkDvrConfigRequest:
     """Return the local WDR/backlight config read request shape."""
-    return ezviz_lan_video_effect_get_config_request(login_id)
+    return ezviz_lan_video_effect_get_config_request(login_id, channel=channel)
 
 
 def ezviz_lan_backlight_wdr_update_request(
@@ -5157,9 +5428,10 @@ def ezviz_lan_backlight_wdr_update_request(
 
 def ezviz_lan_day_night_get_config_request(
     login_id: int,
+    channel: int = 1,
 ) -> HcNetSdkDvrConfigRequest:
     """Return the local day/night config read request shape."""
-    return ezviz_lan_video_effect_get_config_request(login_id)
+    return ezviz_lan_video_effect_get_config_request(login_id, channel=channel)
 
 
 def ezviz_lan_day_night_update_request(
@@ -7709,14 +7981,38 @@ def hcnetsdk_dvr_config_command_port_template(
         )
     if protocol_command < 0:
         raise PyEzvizError("HCNetSDK DVR config command-port id must be non-negative")
+    command_tail = body_tail
+    if command_tail is None:
+        command_tail = hcnetsdk_dvr_config_command_port_body_tail(request)
 
     return HcNetSdkCommandPortControlTemplate(
         command_id=protocol_command,
-        body_tail=b"" if body_tail is None else body_tail,
+        body_tail=command_tail,
         addend=addend,
         addend_delta=addend_delta,
         name=name or f"{HCNETSDK_GET_DVR_CONFIG}:{int(request.command)}",
     )
+
+
+def hcnetsdk_dvr_config_command_port_body_tail(
+    request: HcNetSdkDvrConfigRequest,
+) -> bytes:
+    """Return the traced command-port body tail for a DVR config request."""
+    if int(request.command) == HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG:
+        if request.channel != 1:
+            raise PyEzvizError(
+                "HCNetSDK camera-param command-port read is traced for channel 1"
+            )
+        return b""
+    if int(request.command) not in HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS:
+        return b""
+    if request.channel < 0:
+        raise PyEzvizError(
+            "HCNetSDK DVR config command-port channel tail requires a channel"
+        )
+    if request.channel > 0xFFFFFFFF:
+        raise PyEzvizError("HCNetSDK DVR config command-port channel is too large")
+    return int(request.channel).to_bytes(4, "big")
 
 
 def hcnetsdk_stdxml_config_command_port_body_tail(
@@ -8080,6 +8376,56 @@ class HcNetSdkPurePythonClient:
             timeout=self.timeout,
             socket_factory=self.socket_factory,
             rsa_key=self.rsa_key,
+        )
+
+    def wifi_ap_info_list(self) -> tuple[EzvizLanWifiApInfo, ...]:
+        """Read and parse traced ``NET_DVR_AP_INFO_LIST`` output."""
+        return ezviz_lan_wifi_ap_info_list(
+            self.dvr_config(ezviz_lan_wifi_ap_info_list_request(1))
+        )
+
+    def hd_config(self) -> EzvizLanHdConfig:
+        """Read and parse traced ``NET_DVR_HDCFG`` output."""
+        return ezviz_lan_hd_config(self.dvr_config(ezviz_lan_hd_config_request(1)))
+
+    def camera_param_config(self, channel: int = 1) -> EzvizLanCameraParamConfig:
+        """Read and parse traced ``NET_DVR_CAMERAPARAMCFG`` output."""
+        if channel != 1:
+            raise PyEzvizError(
+                "EZVIZ LAN camera-param pure read is traced for channel 1"
+            )
+        return ezviz_lan_camera_param_config(
+            self.dvr_config(ezviz_lan_video_effect_get_config_request(1, channel))
+        )
+
+    def wifi_connect_status(self, channel: int = 0) -> EzvizLanWifiConnectStatus:
+        """Read and parse traced ``NET_DVR_WIFI_CONNECT_STATUS`` output."""
+        return ezviz_lan_wifi_connect_status(
+            self.dvr_config(ezviz_lan_wifi_connect_status_request(1, channel=channel))
+        )
+
+    def audio_input_param(self, channel: int = 1) -> EzvizLanAudioInputParam:
+        """Read and parse traced ``NET_DVR_AUDIO_INPUT_PARAM`` output."""
+        return ezviz_lan_audio_input_param(
+            self.dvr_config(ezviz_lan_audio_input_get_config_request(1, channel))
+        )
+
+    def audioout_volume(self, channel: int = 1) -> EzvizLanAudioOutputVolume:
+        """Read and parse traced ``NET_DVR_AUDIOOUT_VOLUME`` output."""
+        return ezviz_lan_audio_output_volume(
+            self.dvr_config(ezviz_lan_audioout_volume_get_config_request(1, channel))
+        )
+
+    def compression_config(self, channel: int = 1) -> EzvizLanCompressionConfig:
+        """Read and parse traced ``NET_DVR_COMPRESSIONCFG_V30`` output."""
+        return ezviz_lan_compression_config(
+            self.dvr_config(ezviz_lan_video_coding_get_config_request(1, channel))
+        )
+
+    def picture_config(self, channel: int = 1) -> EzvizLanPictureConfig:
+        """Read and parse traced ``NET_DVR_PICCFG_V40`` output."""
+        return ezviz_lan_picture_config(
+            self.dvr_config(ezviz_lan_pic_config_get_request(1, channel))
         )
 
     def stdxml_config(

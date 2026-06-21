@@ -7998,6 +7998,12 @@ def hcnetsdk_dvr_config_command_port_body_tail(
     request: HcNetSdkDvrConfigRequest,
 ) -> bytes:
     """Return the traced command-port body tail for a DVR config request."""
+    if int(request.command) == HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG:
+        if request.channel != 1:
+            raise PyEzvizError(
+                "HCNetSDK camera-param command-port read is traced for channel 1"
+            )
+        return b""
     if int(request.command) not in HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS:
         return b""
     if request.channel < 0:

@@ -37,6 +37,7 @@ const hookedSemanticLabels = {};
 const missingExportLabels = {};
 let commandFrameDumpSeq = 0;
 let latestTargetLoginId = null;
+let dvrConfigProbesStarted = false;
 
 const HCCORE_SEND_PRO_DATA_OFFSET = 0x0006bb4d;
 const HCCORE_PRO_SEND_PRO_DATA_WITH_RECV_OFFSET = 0x0006bef3;
@@ -1775,7 +1776,80 @@ function targetConfig() {
     ip: latest.targetIp || TARGET_IP,
     port: latest.targetPort || TARGET_PORT,
     password: latest.targetPassword,
+    dvrConfigProbes: latest.dvrConfigProbes || "",
   };
+}
+
+function parseDvrConfigProbeList(value) {
+  if (typeof value !== "string" || value.length === 0) return [];
+  return value.split(",").map(function(item) {
+    const parts = item.split(":");
+    const command = parseInt(parts[0], 10);
+    const channel = parts.length > 1 && parts[1] !== "" ? parseInt(parts[1], 10) : -1;
+    const outSize = parts.length > 2 && parts[2] !== "" ? parseInt(parts[2], 10) : 65536;
+    if (!Number.isFinite(command) || command < 0) return null;
+    if (!Number.isFinite(channel)) return null;
+    if (!Number.isFinite(outSize) || outSize <= 0 || outSize > 1048576) return null;
+    return { command: command, channel: channel, outSize: outSize };
+  }).filter(function(item) {
+    return item !== null;
+  });
+}
+
+function scheduleDvrConfigProbes(loginId) {
+  if (Number(loginId) < 0) return;
+  if (dvrConfigProbesStarted) return;
+  const target = targetConfig();
+  const probes = parseDvrConfigProbeList(target.dvrConfigProbes);
+  if (probes.length === 0) return;
+  dvrConfigProbesStarted = true;
+  setTimeout(function() {
+    runDvrConfigProbes(loginId, probes);
+  }, 750);
+}
+
+function runDvrConfigProbes(loginId, probes) {
+  const ptr = findExport("NET_DVR_GetDVRConfig");
+  if (!ptr) {
+    console.log("[hcnetsdk-probe] NET_DVR_GetDVRConfig export unavailable");
+    return;
+  }
+  const getDvrConfig = new NativeFunction(
+    ptr,
+    "int",
+    ["int", "uint", "int", "pointer", "uint", "pointer"]
+  );
+  probes.forEach(function(probe) {
+    const out = Memory.alloc(probe.outSize);
+    const returned = Memory.alloc(4);
+    returned.writeU32(0);
+    console.log("[hcnetsdk-probe] NET_DVR_GetDVRConfig enter"
+      + " loginId=" + loginId
+      + " command=" + probe.command
+      + " channel=" + probe.channel
+      + " outSize=" + probe.outSize);
+    let ret = 0;
+    try {
+      ret = getDvrConfig(loginId, probe.command, probe.channel, out, probe.outSize, returned);
+    } catch (e) {
+      console.log("[hcnetsdk-probe] NET_DVR_GetDVRConfig threw"
+        + " command=" + probe.command
+        + " error=" + e);
+      return;
+    }
+    let returnedSize = 0;
+    try {
+      returnedSize = returned.readU32();
+    } catch (e) {
+      returnedSize = 0;
+    }
+    console.log("[hcnetsdk-probe] NET_DVR_GetDVRConfig leave"
+      + " command=" + probe.command
+      + " channel=" + probe.channel
+      + " ret=" + ret
+      + " returned=" + returnedSize
+      + ptrLenShape("out", out, Math.min(returnedSize, 256)));
+  });
 }
 
 function triggerLanLogin(activity) {
@@ -1956,6 +2030,7 @@ function installJavaSemanticHooks() {
         if (String(args[0]) === String(target.ip) && Number(args[1]) === Number(target.port)) {
           latestTargetLoginId = ret;
           console.log("[hcnetsdk-command] remembered target loginId=" + ret);
+          scheduleDvrConfigProbes(ret);
         }
         console.log("[hcnetsdk-semantic] HCNETUtil.s leave ret=" + ret);
         return ret;

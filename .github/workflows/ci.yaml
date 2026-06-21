@@ -81,7 +81,10 @@ jobs:
             tools/apk-re/apk-re-decompile \
             tools/apk-re/apk-re-shell \
             tools/apk-re/bin/decompile-apk \
-            tools/apk-re/bin/inspect-so
+            tools/apk-re/bin/inspect-so \
+            tools/apk-re/frida/run-ezviz-hcnetsdk-command-shape-hook \
+            tools/apk-re/frida/run-ezviz-lan-settings-hook \
+            tools/apk-re/frida/run-ezviz-stream-hook
           python -m py_compile \
             tools/apk-re/bin/cloud-video-native-download \
             tools/apk-re/bin/extract-retrofit-endpoints

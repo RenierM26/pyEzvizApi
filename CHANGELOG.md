@@ -6,6 +6,24 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Added
+
+- Added HCNetSDK `NET_DVR_STDXMLConfig` request-shape helpers and local EZVIZ ISAPI builders for `servicesSwitch`, `connectMode`, and `netConfigAndVoiceFileUpload`.
+- Added HCNetSDK local PTZ and preset request-shape helpers based on the EZVIZ Android `ptzControlLan` mappings.
+- Added HCNetSDK `NET_DVR_GetDeviceAbility` request-shape helpers, EZVIZ LAN ability XML builders, and PTZ ability parsing.
+- Added HCNetSDK local device soft/hardware and playback-conversion ability request/parsing helpers.
+- Added HCNetSDK `NET_DVR_GetDVRConfig` / `NET_DVR_SetDVRConfig` request-shape helpers for local Wi-Fi, EZVIZ access-domain, audio, video-coding, video-effect, WDR/backlight, day/night, image/OSD, disk, and user-password settings.
+- Added HCNetSDK `NET_DVR_FormatDisk`, `NET_DVR_GetFormatProgress`, and `NET_DVR_CloseFormatHandle` request-shape helpers for local SD-card format flows.
+- Added offline SADP activation and network-parameter request/result helpers for EZVIZ LAN batch flows.
+- Added HCNetSDK `NET_DVR_SetupAlarmChan_V30` / `V41`, `NET_DVR_CloseAlarmChan_V30`, and `NET_DVR_SetSDKLocalCfg` request-shape helpers.
+- Added offline HCNetSDK lifecycle/error/version/logout helpers and SADP discovery/logging/V40 network-edit request-shape helpers.
+- Added offline HCNetSDK `NET_DVR_FindFile_V30`, `NET_DVR_FindNextFile_V30`, and `NET_DVR_FindClose_V30` request-shape helpers for LAN playback file search.
+- Added offline HCNetSDK playback-by-time, playback-control, capture, and local file-download request-shape helpers for LAN playback flows.
+- Added offline HCNetSDK playback callback and playback secret-key request-shape helpers for LAN playback flows.
+- Added direct EZVIZ LAN `servicesSwitch` setter helpers for changing individual local switches such as `web` while preserving the rest of the current state.
+- Added a pure-Python HCNetSDK command-port control client for generated login/control calls, including `NET_DVR_GetDeviceAbility` execution without native HCNetSDK libraries, trace-backed `NET_DVR_STDXMLConfig` execution, and `servicesSwitch` GET/state/SET helpers that preserve existing switch fields before PUT.
+- Added trace-backed pure-Python `NET_DVR_GetDVRConfig` command-port helpers for binary config reads, starting with the app-observed `GET_HD_CFG`/`NET_DVR_HDCFG` and Wi-Fi AP-list paths.
+
 ## v1.0.5.0 - 2026-06-20
 
 ### Added

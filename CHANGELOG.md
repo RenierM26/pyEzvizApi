@@ -21,9 +21,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added offline HCNetSDK playback-by-time, playback-control, capture, and local file-download request-shape helpers for LAN playback flows.
 - Added offline HCNetSDK playback callback and playback secret-key request-shape helpers for LAN playback flows.
 - Added direct EZVIZ LAN `servicesSwitch` setter helpers for changing individual local switches such as `web` while preserving the rest of the current state.
-- Added optional native-Python HCNetSDK `ctypes` helpers for SDK load/init/login/logout, `NET_DVR_STDXMLConfig`, and native `servicesSwitch` get/set flows.
 - Added a pure-Python HCNetSDK command-port control client for generated login/control calls, including `NET_DVR_GetDeviceAbility` execution without native HCNetSDK libraries, trace-backed `NET_DVR_STDXMLConfig` execution, and `servicesSwitch` GET/state/SET helpers that preserve existing switch fields before PUT.
-- Added trace-backed pure-Python `NET_DVR_GetDVRConfig` command-port helpers for binary config reads, starting with the app-observed `GET_HD_CFG`/`NET_DVR_HDCFG` path.
+- Added trace-backed pure-Python `NET_DVR_GetDVRConfig` command-port helpers for binary config reads, starting with the app-observed `GET_HD_CFG`/`NET_DVR_HDCFG` and Wi-Fi AP-list paths.
 
 ## v1.0.5.0 - 2026-06-20
 

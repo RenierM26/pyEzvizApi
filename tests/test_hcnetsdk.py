@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
-import ctypes
 from datetime import date, datetime
 import hashlib
 import hmac
-from typing import Any
+from pathlib import Path
 
 from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
@@ -191,8 +191,6 @@ from pyezvizapi.hcnetsdk import (
     HcNetSdkLanEndpoint,
     HcNetSdkLocalCfgType,
     HcNetSdkLogoutRequest,
-    HcNetSdkNativeLoginSession,
-    HcNetSdkNativeStdXmlClient,
     HcNetSdkNoArgRequest,
     HcNetSdkPlayBackByTimeRequest,
     HcNetSdkPlaybackCallbackRequest,
@@ -303,18 +301,15 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_sd_format_start_request,
     ezviz_lan_services_switch_get_command_port,
     ezviz_lan_services_switch_get_config,
-    ezviz_lan_services_switch_get_native,
     ezviz_lan_services_switch_get_request,
     ezviz_lan_services_switch_payload,
     ezviz_lan_services_switch_put_config,
     ezviz_lan_services_switch_put_request,
     ezviz_lan_services_switch_set_command_port,
     ezviz_lan_services_switch_set_config,
-    ezviz_lan_services_switch_set_native,
     ezviz_lan_services_switch_set_payload,
     ezviz_lan_services_switch_state,
     ezviz_lan_services_switch_state_command_port,
-    ezviz_lan_services_switch_state_native,
     ezviz_lan_services_switch_succeeded,
     ezviz_lan_services_switch_update_config,
     ezviz_lan_settings_channel_number,
@@ -334,6 +329,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_video_pic_ability_input,
     ezviz_lan_video_pic_ability_request,
     ezviz_lan_video_qualities,
+    ezviz_lan_wifi_ap_info_list,
     ezviz_lan_wifi_ap_info_list_request,
     ezviz_lan_wifi_connect_status_request,
     ezviz_lan_wifi_get_config_request,
@@ -343,7 +339,6 @@ from pyezvizapi.hcnetsdk import (
     ezviz_local_sdk_iv,
     ezviz_local_sdk_ssl_iv,
     ezviz_native_video_level,
-    hcnetsdk_cleanup_native,
     hcnetsdk_cleanup_request,
     hcnetsdk_close_alarm_request,
     hcnetsdk_command_candidate_role,
@@ -378,10 +373,7 @@ from pyezvizapi.hcnetsdk import (
     hcnetsdk_get_last_error_request,
     hcnetsdk_get_sdk_build_version_request,
     hcnetsdk_get_sdk_version_request,
-    hcnetsdk_init_native,
     hcnetsdk_init_request,
-    hcnetsdk_login_v40_native,
-    hcnetsdk_logout_native,
     hcnetsdk_logout_v30_request,
     hcnetsdk_playback_by_time_v40_request,
     hcnetsdk_playback_capture_file_request,
@@ -401,7 +393,6 @@ from pyezvizapi.hcnetsdk import (
     hcnetsdk_stdxml_config_command_port_body_tail,
     hcnetsdk_stdxml_config_command_port_from_trace,
     hcnetsdk_stdxml_config_command_port_template,
-    hcnetsdk_stdxml_config_native,
     hcnetsdk_stdxml_config_request,
     hcnetsdk_stdxml_isapi_command_port,
     hcnetsdk_stdxml_isapi_request,
@@ -556,112 +547,6 @@ EXPECTED_STREAM_SETUP_XML = (
     b"\t<Mode>1</Mode>\n"
     b"</Request>\n"
 )
-
-
-def _ctypes_array_text(array: Any) -> str:
-    return bytes(array).split(b"\x00", 1)[0].decode("utf-8")
-
-
-class _FakeNativeHcNetSdk:
-    def __init__(
-        self,
-        outputs: list[bytes] | None = None,
-        *,
-        stdxml_succeeds: bool = True,
-        login_id: int = 42,
-        last_error: int = 0,
-    ) -> None:
-        self.outputs = list(outputs or [])
-        self.stdxml_succeeds = stdxml_succeeds
-        self.login_id = login_id
-        self.last_error = last_error
-        self.initialized = False
-        self.cleaned_up = False
-        self.logged_out: list[int] = []
-        self.logins: list[dict[str, object]] = []
-        self.requests: list[bytes] = []
-        self.input_buffers: list[bytes] = []
-
-    def NET_DVR_Init(self) -> bool:
-        self.initialized = True
-        return True
-
-    def NET_DVR_Cleanup(self) -> bool:
-        self.cleaned_up = True
-        return True
-
-    def NET_DVR_GetLastError(self) -> int:
-        return self.last_error
-
-    def NET_DVR_Login_V40(self, login_info_ptr: Any, device_info_ptr: Any) -> int:
-        login_info = login_info_ptr.contents
-        device_info = device_info_ptr.contents
-        self.logins.append(
-            {
-                "host": _ctypes_array_text(login_info.sDeviceAddress),
-                "username": _ctypes_array_text(login_info.sUserName),
-                "password": _ctypes_array_text(login_info.sPassword),
-                "port": login_info.wPort,
-                "https": login_info.byHttps,
-            }
-        )
-        if self.login_id < 0:
-            return self.login_id
-        serial = b"SN123456789"
-        for index, value in enumerate(serial):
-            device_info.struDeviceV30.sSerialNumber[index] = value
-        return self.login_id
-
-    def NET_DVR_Logout_V30(self, login_id: int) -> bool:
-        self.logged_out.append(login_id)
-        return True
-
-    def NET_DVR_STDXMLConfig(
-        self,
-        login_id: int,
-        input_ptr: Any,
-        output_ptr: Any,
-    ) -> bool:
-        assert login_id == 42
-        input_struct = input_ptr.contents
-        output_struct = output_ptr.contents
-        self.requests.append(
-            ctypes.string_at(
-                input_struct.lpRequestUrl,
-                input_struct.dwRequestUrlLen,
-            )
-        )
-        if input_struct.lpInBuffer:
-            self.input_buffers.append(
-                ctypes.string_at(
-                    input_struct.lpInBuffer,
-                    input_struct.dwInBufferSize,
-                )
-            )
-        else:
-            self.input_buffers.append(b"")
-        if not self.stdxml_succeeds:
-            return False
-
-        output = self.outputs.pop(0) if self.outputs else STDXML_TEST_STATUS
-        if output_struct.lpOutBuffer:
-            ctypes.memmove(
-                output_struct.lpOutBuffer,
-                output,
-                min(len(output), output_struct.dwOutBufferSize),
-            )
-            output_struct.dwReturnedXMLSize = min(
-                len(output),
-                output_struct.dwOutBufferSize,
-            )
-        status = STDXML_TEST_STATUS
-        if output_struct.lpStatusBuffer:
-            ctypes.memmove(
-                output_struct.lpStatusBuffer,
-                status,
-                min(len(status), output_struct.dwStatusSize),
-            )
-        return True
 
 
 def test_lan_endpoint_from_connection_uses_ezviz_ports() -> None:
@@ -3838,90 +3723,36 @@ def test_hcnetsdk_stdxml_response_json_rejects_invalid_payload() -> None:
         hcnetsdk_stdxml_response_json("[1]")
 
 
-def test_hcnetsdk_native_lifecycle_login_and_logout_use_v40_shape() -> None:
-    sdk = _FakeNativeHcNetSdk()
+def test_hcnetsdk_runtime_code_does_not_import_or_load_native_libraries() -> None:
+    source = Path("pyezvizapi/hcnetsdk.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    forbidden_imports: set[str] = set()
+    forbidden_calls: set[str] = set()
 
-    assert hcnetsdk_init_native(sdk) is True
-    session = hcnetsdk_login_v40_native(
-        sdk,
-        "192.0.2.10",
-        "secret",
-        username=HCNETSDK_EZVIZ_DEFAULT_USERNAME,
-        port=HCNETSDK_DEFAULT_TLS_PORT,
-        https=True,
-    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            forbidden_imports.update(
+                alias.name for alias in node.names if alias.name in {"ctypes", "cffi"}
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module in {"ctypes", "cffi"}:
+            forbidden_imports.add(node.module)
+        elif isinstance(node, ast.Call):
+            function = node.func
+            if isinstance(function, ast.Attribute) and function.attr in {
+                "CDLL",
+                "LoadLibrary",
+                "WinDLL",
+            }:
+                forbidden_calls.add(function.attr)
+            elif isinstance(function, ast.Name) and function.id in {
+                "CDLL",
+                "LoadLibrary",
+                "WinDLL",
+            }:
+                forbidden_calls.add(function.id)
 
-    assert sdk.initialized is True
-    assert session == HcNetSdkNativeLoginSession(
-        login_id=42,
-        serial="SN123456789",
-        last_error=None,
-    )
-    assert session.succeeded is True
-    assert sdk.logins == [
-        {
-            "host": "192.0.2.10",
-            "username": HCNETSDK_EZVIZ_DEFAULT_USERNAME,
-            "password": "secret",
-            "port": HCNETSDK_DEFAULT_TLS_PORT,
-            "https": 1,
-        }
-    ]
-    assert hcnetsdk_logout_native(sdk, 42) is True
-    assert sdk.logged_out == [42]
-    assert hcnetsdk_cleanup_native(sdk) is True
-    assert sdk.cleaned_up is True
-
-
-def test_hcnetsdk_native_login_failure_keeps_last_error() -> None:
-    sdk = _FakeNativeHcNetSdk(login_id=-1, last_error=29)
-
-    session = hcnetsdk_login_v40_native(sdk, "192.0.2.10", "secret")
-
-    assert session == HcNetSdkNativeLoginSession(
-        login_id=-1,
-        serial=None,
-        last_error=29,
-    )
-    assert session.succeeded is False
-
-
-def test_hcnetsdk_stdxml_config_native_passes_buffers_and_returns_json() -> None:
-    sdk = _FakeNativeHcNetSdk([STDXML_TEST_OUTPUT])
-    request = hcnetsdk_stdxml_config_request(
-        STDXML_TEST_REQUEST,
-        in_buffer=STDXML_TEST_INPUT_BUFFER,
-        output_buffer_size=256,
-        status_buffer_size=128,
-    )
-
-    response = hcnetsdk_stdxml_config_native(sdk, 42, request)
-
-    assert isinstance(response, HcNetSdkStdXmlConfigResponse)
-    assert response.succeeded is True
-    assert response.output == STDXML_TEST_OUTPUT
-    assert response.text == '{"servicesSwitch":{"web":1}}'
-    assert response.status == STDXML_TEST_STATUS
-    assert response.status_text == '{"statusCode":1}'
-    assert response.returned_xml_size == len(response.output)
-    assert response.last_error is None
-    assert response.json() == {"servicesSwitch": {"web": 1}}
-    assert sdk.requests == [STDXML_TEST_REQUEST]
-    assert sdk.input_buffers == [STDXML_TEST_INPUT_BUFFER]
-
-
-def test_hcnetsdk_stdxml_config_native_failure_keeps_last_error() -> None:
-    sdk = _FakeNativeHcNetSdk(stdxml_succeeds=False, last_error=23)
-
-    response = hcnetsdk_stdxml_config_native(sdk, 42, STDXML_TEST_REQUEST)
-
-    assert response == HcNetSdkStdXmlConfigResponse(
-        succeeded=False,
-        output=b"",
-        status=b"",
-        returned_xml_size=0,
-        last_error=23,
-    )
+    assert forbidden_imports == set()
+    assert forbidden_calls == set()
 
 
 def test_ezviz_lan_services_switch_payload_matches_settings_checkbox() -> None:
@@ -4031,54 +3862,6 @@ def test_ezviz_lan_services_switch_succeeded_matches_hcnetutil(
 def test_ezviz_lan_services_switch_succeeded_rejects_invalid_json() -> None:
     with pytest.raises(PyEzvizError):
         ezviz_lan_services_switch_succeeded("not-json")
-
-
-def test_ezviz_lan_services_switch_native_get_state_and_set_preserves_values() -> None:
-    current = b'{"servicesSwitch":{"rtsp":1,"upnp":1,"web":0,"hiksdk":1}}'
-    sdk = _FakeNativeHcNetSdk([current, current, current, b'{"statusCode":1}'])
-
-    raw_response = ezviz_lan_services_switch_get_native(sdk, 42)
-    state = ezviz_lan_services_switch_state_native(sdk, 42)
-    set_response = ezviz_lan_services_switch_set_native(sdk, 42, web=True)
-
-    assert raw_response.output == current
-    assert state.web == 0
-    assert state.rtsp == 1
-    assert state.raw == {
-        "servicesSwitch": {"rtsp": 1, "upnp": 1, "web": 0, "hiksdk": 1}
-    }
-    assert set_response.succeeded is True
-    assert set_response.json() == {"statusCode": 1}
-    assert sdk.requests == [
-        HCNETSDK_EZVIZ_SERVICES_SWITCH_GET.encode(),
-        HCNETSDK_EZVIZ_SERVICES_SWITCH_GET.encode(),
-        HCNETSDK_EZVIZ_SERVICES_SWITCH_GET.encode(),
-        (
-            HCNETSDK_EZVIZ_SERVICES_SWITCH_PUT
-            + '{"servicesSwitch":{"rtsp":1,"upnp":1,"web":1,"hiksdk":1}}'
-            + "\r\n"
-        ).encode(),
-    ]
-
-
-def test_hcnetsdk_native_stdxml_client_wraps_common_calls() -> None:
-    current = {"servicesSwitch": {"rtsp": 1, "upnp": 1, "web": 0, "hiksdk": 1}}
-    sdk = _FakeNativeHcNetSdk([b'{"statusCode":1}'])
-    client = HcNetSdkNativeStdXmlClient(sdk)
-
-    assert client.init() is True
-    assert client.login_v40("192.0.2.10", "secret").login_id == 42
-    response = client.services_switch_set(42, current, web=True)
-    assert response.succeeded is True
-    assert client.logout(42) is True
-    assert client.cleanup() is True
-    assert sdk.requests == [
-        (
-            HCNETSDK_EZVIZ_SERVICES_SWITCH_PUT
-            + '{"servicesSwitch":{"rtsp":1,"upnp":1,"web":1,"hiksdk":1}}'
-            + "\r\n"
-        ).encode()
-    ]
 
 
 def test_ezviz_lan_connect_mode_put_request_matches_leave_local_connect() -> None:
@@ -4194,8 +3977,11 @@ def test_hcnetsdk_dvr_config_request_models_get_and_set_shapes() -> None:
 def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> None:
     request = ezviz_lan_hd_config_request(42)
     template = hcnetsdk_dvr_config_command_port_template(request)
+    ap_template = hcnetsdk_dvr_config_command_port_template(
+        ezviz_lan_wifi_ap_info_list_request(42)
+    )
     explicit = hcnetsdk_dvr_config_command_port_template(
-        ezviz_lan_wifi_ap_info_list_request(42),
+        request,
         command_id=0x123456,
         body_tail=COMMAND_PORT_TRACE_BODY_TAIL,
     )
@@ -4203,6 +3989,9 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
     assert template.command_id == 0x111050
     assert template.body_tail == COMMAND_PORT_EMPTY_BODY_TAIL
     assert template.name == "NET_DVR_GetDVRConfig:1054"
+    assert ap_template.command_id == 0x20140
+    assert ap_template.body_tail == COMMAND_PORT_EMPTY_BODY_TAIL
+    assert ap_template.name == "NET_DVR_GetDVRConfig:305"
     assert explicit.command_id == 0x123456
     assert explicit.body_tail == COMMAND_PORT_TRACE_BODY_TAIL
 
@@ -4210,7 +3999,7 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
 def test_hcnetsdk_dvr_config_command_port_template_rejects_untraced_or_set() -> None:
     with pytest.raises(PyEzvizError, match="command-port id is unknown"):
         hcnetsdk_dvr_config_command_port_template(
-            ezviz_lan_wifi_ap_info_list_request(42)
+            ezviz_lan_wifi_get_config_request(42)
         )
 
     with pytest.raises(PyEzvizError, match="GET only"):
@@ -4304,6 +4093,32 @@ def test_ezviz_lan_wifi_request_shapes_match_apk_setters() -> None:
     assert ezviz_lan_wifi_work_mode_update_request(42, 1).to_native_args_hint()[
         "fieldUpdates"
     ] == {"dwMode": 1}
+
+
+def test_ezviz_lan_wifi_ap_info_list_parses_native_buffer() -> None:
+    entry_1 = (
+        b"HomeWifi-2G".ljust(36, b"\x00")
+        + (4).to_bytes(4, "big")
+        + (11).to_bytes(4, "big")
+        + (84).to_bytes(4, "big")
+        + (150).to_bytes(4, "big")
+    )
+    entry_2 = (
+        b"Guest".ljust(36, b"\x00")
+        + (0).to_bytes(4, "big")
+        + (6).to_bytes(4, "big")
+        + (42).to_bytes(4, "big")
+        + (150).to_bytes(4, "big")
+    )
+    payload = (112).to_bytes(4, "big") + (2).to_bytes(4, "big") + entry_1 + entry_2
+
+    entries = ezviz_lan_wifi_ap_info_list(payload)
+
+    assert [entry.ssid for entry in entries] == ["HomeWifi-2G", "Guest"]
+    assert entries[0].security == 4
+    assert entries[0].channel == 11
+    assert entries[0].signal_strength == 84
+    assert entries[0].extra == 150
 
 
 def test_ezviz_lan_wifi_request_rejects_overlong_or_invalid_inputs() -> None:

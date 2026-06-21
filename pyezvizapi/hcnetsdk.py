@@ -17,8 +17,6 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import suppress
-import ctypes
-import ctypes.util
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import IntEnum
@@ -647,7 +645,14 @@ HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS: Mapping[int, int] = {
     # Native trace: NET_DVR_GetDVRConfig(login, 1054, -1, NET_DVR_HDCFG)
     # dispatches through Core_SimpleCommandToDvr as an empty 0x111050 command.
     HcNetSdkDvrCommand.GET_HD_CFG: 0x111050,
+    # Native trace: NET_DVR_GetDVRConfig(login, 305, -1, NET_DVR_AP_INFO_LIST)
+    # dispatches as an empty 0x20140 command and returns NET_DVR_AP_INFO_LIST.
+    HcNetSdkDvrCommand.GET_AP_INFO_LIST: 0x20140,
 }
+
+HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE = 8
+HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE = 52
+HCNETSDK_WIFI_AP_INFO_SSID_SIZE = 36
 
 
 class HcNetSdkAbility(IntEnum):
@@ -843,7 +848,8 @@ class HcNetSdkStdXmlConfigRequest:
 
     EZVIZ's Android helpers put the full ISAPI method/path/body text in
     ``lpRequestUrl`` and leave ``lpInBuffer`` empty. This model keeps that
-    native boundary explicit while avoiding a hard dependency on JNA/ctypes.
+    native boundary explicit while avoiding a hard dependency on host-native
+    bindings.
     """
 
     request: str | bytes
@@ -960,20 +966,6 @@ class HcNetSdkStdXmlConfigResponse:
 
 
 @dataclass(frozen=True)
-class HcNetSdkNativeLoginSession:
-    """Result returned by native ``NET_DVR_Login_V40``."""
-
-    login_id: int
-    serial: str | None = None
-    last_error: int | None = None
-
-    @property
-    def succeeded(self) -> bool:
-        """Return whether the native login produced a usable user id."""
-        return self.login_id >= 0
-
-
-@dataclass(frozen=True)
 class EzvizLanServicesSwitchState:
     """Parsed ``servicesSwitch`` values returned by EZVIZ local ISAPI."""
 
@@ -993,98 +985,15 @@ class EzvizLanServicesSwitchState:
         return None if self.web is None else bool(self.web)
 
 
-class _HcNetSdkNativeStdXmlInput(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.c_uint32),
-        ("lpRequestUrl", ctypes.c_void_p),
-        ("dwRequestUrlLen", ctypes.c_uint32),
-        ("lpInBuffer", ctypes.c_void_p),
-        ("dwInBufferSize", ctypes.c_uint32),
-        ("dwRecvTimeOut", ctypes.c_uint32),
-        ("byForceEncrpt", ctypes.c_ubyte),
-        ("byNumOfMultiPart", ctypes.c_ubyte),
-        ("byRes", ctypes.c_ubyte * 30),
-    ]
+@dataclass(frozen=True)
+class EzvizLanWifiApInfo:
+    """One Wi-Fi access point entry returned by ``NET_DVR_AP_INFO_LIST``."""
 
-
-class _HcNetSdkNativeStdXmlOutput(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.c_uint32),
-        ("lpOutBuffer", ctypes.c_void_p),
-        ("dwOutBufferSize", ctypes.c_uint32),
-        ("dwReturnedXMLSize", ctypes.c_uint32),
-        ("lpStatusBuffer", ctypes.c_void_p),
-        ("dwStatusSize", ctypes.c_uint32),
-        ("byRes", ctypes.c_ubyte * 32),
-    ]
-
-
-class _HcNetSdkNativeUserLoginInfo(ctypes.Structure):
-    _fields_ = [
-        ("sDeviceAddress", ctypes.c_ubyte * 129),
-        ("byUseTransport", ctypes.c_ubyte),
-        ("wPort", ctypes.c_uint16),
-        ("sUserName", ctypes.c_ubyte * 64),
-        ("sPassword", ctypes.c_ubyte * 64),
-        ("cbLoginResult", ctypes.c_void_p),
-        ("pUser", ctypes.c_void_p),
-        ("bUseAsynLogin", ctypes.c_int32),
-        ("byProxyType", ctypes.c_ubyte),
-        ("byUseUTCTime", ctypes.c_ubyte),
-        ("byLoginMode", ctypes.c_ubyte),
-        ("byHttps", ctypes.c_ubyte),
-        ("iProxyID", ctypes.c_int32),
-        ("byRes3", ctypes.c_ubyte * 120),
-    ]
-
-
-class _HcNetSdkNativeDeviceInfoV30(ctypes.Structure):
-    _fields_ = [
-        ("sSerialNumber", ctypes.c_ubyte * 48),
-        ("byAlarmInPortNum", ctypes.c_ubyte),
-        ("byAlarmOutPortNum", ctypes.c_ubyte),
-        ("byDiskNum", ctypes.c_ubyte),
-        ("byDVRType", ctypes.c_ubyte),
-        ("byChanNum", ctypes.c_ubyte),
-        ("byStartChan", ctypes.c_ubyte),
-        ("byAudioChanNum", ctypes.c_ubyte),
-        ("byIPChanNum", ctypes.c_ubyte),
-        ("byZeroChanNum", ctypes.c_ubyte),
-        ("byMainProto", ctypes.c_ubyte),
-        ("bySubProto", ctypes.c_ubyte),
-        ("bySupport", ctypes.c_ubyte),
-        ("bySupport1", ctypes.c_ubyte),
-        ("bySupport2", ctypes.c_ubyte),
-        ("wDevType", ctypes.c_uint16),
-        ("bySupport3", ctypes.c_ubyte),
-        ("byMultiStreamProto", ctypes.c_ubyte),
-        ("byStartDChan", ctypes.c_ubyte),
-        ("byStartDTalkChan", ctypes.c_ubyte),
-        ("byHighDChanNum", ctypes.c_ubyte),
-        ("bySupport4", ctypes.c_ubyte),
-        ("byLanguageType", ctypes.c_ubyte),
-        ("byVoiceInChanNum", ctypes.c_ubyte),
-        ("byStartVoiceInChanNo", ctypes.c_ubyte),
-        ("byRes3", ctypes.c_ubyte * 2),
-        ("byMirrorChanNum", ctypes.c_ubyte),
-        ("wStartMirrorChanNo", ctypes.c_uint16),
-        ("byRes2", ctypes.c_ubyte * 2),
-    ]
-
-
-class _HcNetSdkNativeDeviceInfoV40(ctypes.Structure):
-    _fields_ = [
-        ("struDeviceV30", _HcNetSdkNativeDeviceInfoV30),
-        ("bySupportLock", ctypes.c_ubyte),
-        ("byRetryLoginTime", ctypes.c_ubyte),
-        ("byPasswordLevel", ctypes.c_ubyte),
-        ("byProxyType", ctypes.c_ubyte),
-        ("dwSurplusLockTime", ctypes.c_uint32),
-        ("byCharEncodeType", ctypes.c_ubyte),
-        ("bySupportDev5", ctypes.c_ubyte),
-        ("byLoginMode", ctypes.c_ubyte),
-        ("byRes2", ctypes.c_ubyte * 253),
-    ]
+    ssid: str
+    security: int
+    channel: int
+    signal_strength: int
+    extra: int
 
 
 @dataclass(frozen=True)
@@ -1954,7 +1863,7 @@ class HcNetSdkRealPlayRequest:
     api: str = HCNETSDK_REALPLAY_V30
 
     def to_native_args_hint(self) -> dict[str, int | str | dict[str, int | str]]:
-        """Return a serializable hint for a future ctypes/native backend."""
+        """Return a serializable hint for HCNetSDK-compatible real-play calls."""
         if self.login_id < 0:
             raise PyEzvizError("HCNetSDK real-play requires a successful login id")
         return {
@@ -4143,113 +4052,6 @@ def ezviz_lan_sadp_edit_net_param_batch_result(
     )
 
 
-def hcnetsdk_load_native_library(library_path: str | None = None) -> Any:
-    """Load a host-native HCNetSDK shared library for ctypes calls."""
-    if library_path is not None:
-        candidates: list[str | None] = [library_path]
-    else:
-        candidates = [
-            ctypes.util.find_library("hcnetsdk"),
-            ctypes.util.find_library("HCNetSDK"),
-            "libhcnetsdk.so",
-            "libHCNetSDK.so",
-            "HCNetSDK.dll",
-            "libHCNetSDK.dylib",
-        ]
-
-    errors: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            library = ctypes.CDLL(candidate)
-        except OSError as err:
-            errors.append(f"{candidate}: {err}")
-            continue
-        _configure_hcnetsdk_native_library(library)
-        return library
-
-    detail = "; ".join(errors) if errors else "no candidate library names"
-    raise PyEzvizError(f"Unable to load HCNetSDK native library ({detail})")
-
-
-def hcnetsdk_init_native(library: Any) -> bool:
-    """Call native ``NET_DVR_Init`` on an already loaded HCNetSDK library."""
-    return bool(_native_function(library, HCNETSDK_INIT)())
-
-
-def hcnetsdk_cleanup_native(library: Any) -> bool:
-    """Call native ``NET_DVR_Cleanup`` on an already loaded HCNetSDK library."""
-    return bool(_native_function(library, HCNETSDK_CLEANUP)())
-
-
-def hcnetsdk_login_v40_native(
-    library: Any,
-    host: str,
-    password: str,
-    *,
-    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
-    port: int = HCNETSDK_DEFAULT_SERVER_PORT,
-    https: bool = False,
-    use_transport: int = 0,
-    login_mode: int = 0,
-) -> HcNetSdkNativeLoginSession:
-    """Call native ``NET_DVR_Login_V40`` and return the login session id."""
-    if not 0 <= port <= 0xFFFF:
-        raise PyEzvizError("HCNetSDK login port must fit in one word")
-    for label, value in (
-        ("use_transport", use_transport),
-        ("login_mode", login_mode),
-    ):
-        if not 0 <= value <= 0xFF:
-            raise PyEzvizError(f"HCNetSDK login {label} must fit in one byte")
-
-    login_info = _HcNetSdkNativeUserLoginInfo()
-    _assign_ctypes_byte_array(
-        login_info.sDeviceAddress,
-        _native_string_bytes("device address", host),
-        "device address",
-    )
-    _assign_ctypes_byte_array(
-        login_info.sUserName,
-        _native_string_bytes("username", username),
-        "username",
-    )
-    _assign_ctypes_byte_array(
-        login_info.sPassword,
-        _native_string_bytes("password", password),
-        "password",
-    )
-    login_info.byUseTransport = use_transport
-    login_info.wPort = port
-    login_info.byLoginMode = login_mode
-    login_info.byHttps = 1 if https else 0
-
-    device_info = _HcNetSdkNativeDeviceInfoV40()
-    login_id = int(
-        _native_function(library, HCNETSDK_LOGIN_V40)(
-            ctypes.pointer(login_info),
-            ctypes.pointer(device_info),
-        )
-    )
-    return HcNetSdkNativeLoginSession(
-        login_id=login_id,
-        serial=_ctypes_c_string_from_array(
-            device_info.struDeviceV30.sSerialNumber
-        ),
-        last_error=None if login_id >= 0 else _hcnetsdk_native_last_error(library),
-    )
-
-
-def hcnetsdk_logout_native(library: Any, login_id: int) -> bool:
-    """Call native ``NET_DVR_Logout_V30`` for a login id."""
-    if login_id < 0:
-        raise PyEzvizError("HCNetSDK logout requires a successful login id")
-    return bool(_native_function(library, HCNETSDK_LOGOUT_V30)(int(login_id)))
-
-
 def hcnetsdk_stdxml_config_request(
     request: str | bytes,
     *,
@@ -4269,81 +4071,6 @@ def hcnetsdk_stdxml_config_request(
         num_of_multi_part=num_of_multi_part,
         output_buffer_size=output_buffer_size,
         status_buffer_size=status_buffer_size,
-    )
-
-
-def hcnetsdk_stdxml_config_native(
-    library: Any,
-    login_id: int,
-    request: HcNetSdkStdXmlConfigRequest | str | bytes,
-) -> HcNetSdkStdXmlConfigResponse:
-    """Execute ``NET_DVR_STDXMLConfig`` through a loaded native HCNetSDK."""
-    if login_id < 0:
-        raise PyEzvizError("HCNetSDK STDXML requires a successful login id")
-
-    config = (
-        request
-        if isinstance(request, HcNetSdkStdXmlConfigRequest)
-        else hcnetsdk_stdxml_config_request(request)
-    )
-    request_bytes = config.request_bytes
-    if not request_bytes:
-        raise PyEzvizError("HCNetSDK STDXML request must not be empty")
-    in_buffer_bytes = config.in_buffer_bytes
-
-    request_buffer = ctypes.create_string_buffer(request_bytes)
-    in_buffer = (
-        ctypes.create_string_buffer(in_buffer_bytes) if in_buffer_bytes else None
-    )
-    output_buffer = (
-        ctypes.create_string_buffer(config.output_buffer_size)
-        if config.output_buffer_size
-        else None
-    )
-    status_buffer = (
-        ctypes.create_string_buffer(config.status_buffer_size)
-        if config.status_buffer_size
-        else None
-    )
-
-    input_struct = _HcNetSdkNativeStdXmlInput()
-    input_struct.dwSize = ctypes.sizeof(_HcNetSdkNativeStdXmlInput)
-    input_struct.lpRequestUrl = ctypes.addressof(request_buffer)
-    input_struct.dwRequestUrlLen = len(request_bytes)
-    input_struct.lpInBuffer = ctypes.addressof(in_buffer) if in_buffer else None
-    input_struct.dwInBufferSize = len(in_buffer_bytes)
-    input_struct.dwRecvTimeOut = config.recv_timeout
-    input_struct.byForceEncrpt = config.force_encrypt
-    input_struct.byNumOfMultiPart = config.num_of_multi_part
-
-    output_struct = _HcNetSdkNativeStdXmlOutput()
-    output_struct.dwSize = ctypes.sizeof(_HcNetSdkNativeStdXmlOutput)
-    output_struct.lpOutBuffer = (
-        ctypes.addressof(output_buffer) if output_buffer else None
-    )
-    output_struct.dwOutBufferSize = config.output_buffer_size
-    output_struct.lpStatusBuffer = (
-        ctypes.addressof(status_buffer) if status_buffer else None
-    )
-    output_struct.dwStatusSize = config.status_buffer_size
-
-    succeeded = bool(
-        _native_function(library, HCNETSDK_STDXML_CONFIG)(
-            int(login_id),
-            ctypes.pointer(input_struct),
-            ctypes.pointer(output_struct),
-        )
-    )
-    return HcNetSdkStdXmlConfigResponse(
-        succeeded=succeeded,
-        output=_ctypes_output_buffer_bytes(
-            output_buffer,
-            returned_size=output_struct.dwReturnedXMLSize,
-            buffer_size=config.output_buffer_size,
-        ),
-        status=_ctypes_c_string_buffer_bytes(status_buffer),
-        returned_xml_size=int(output_struct.dwReturnedXMLSize),
-        last_error=None if succeeded else _hcnetsdk_native_last_error(library),
     )
 
 
@@ -4512,68 +4239,6 @@ def ezviz_lan_services_switch_succeeded(
     return data.get("statusCode") == 1
 
 
-def ezviz_lan_services_switch_get_native(
-    library: Any,
-    login_id: int,
-) -> HcNetSdkStdXmlConfigResponse:
-    """Read ``servicesSwitch`` through native ``NET_DVR_STDXMLConfig``."""
-    return hcnetsdk_stdxml_config_native(
-        library,
-        login_id,
-        ezviz_lan_services_switch_get_config(),
-    )
-
-
-def ezviz_lan_services_switch_state_native(
-    library: Any,
-    login_id: int,
-) -> EzvizLanServicesSwitchState:
-    """Read and parse ``servicesSwitch`` through native HCNetSDK."""
-    response = ezviz_lan_services_switch_get_native(library, login_id)
-    if not response.succeeded:
-        raise PyEzvizError(
-            f"HCNetSDK servicesSwitch GET failed: {response.last_error}"
-        )
-    return ezviz_lan_services_switch_state(response.output)
-
-
-def ezviz_lan_services_switch_set_native(
-    library: Any,
-    login_id: int,
-    current_payload: Mapping[str, Any] | None = None,
-    *,
-    hiksdk: int | bool | None = None,
-    web: int | bool | None = None,
-    rtsp: int | bool | None = None,
-    upnp: int | bool | None = None,
-) -> HcNetSdkStdXmlConfigResponse:
-    """Set named ``servicesSwitch`` values through native HCNetSDK.
-
-    When ``current_payload`` is omitted, the device is read first so unspecified
-    switches are preserved before the PUT request is sent.
-    """
-    payload = current_payload
-    if payload is None:
-        get_response = ezviz_lan_services_switch_get_native(library, login_id)
-        if not get_response.succeeded:
-            raise PyEzvizError(
-                f"HCNetSDK servicesSwitch GET failed: {get_response.last_error}"
-            )
-        payload = hcnetsdk_stdxml_response_json(get_response.output)
-
-    return hcnetsdk_stdxml_config_native(
-        library,
-        login_id,
-        ezviz_lan_services_switch_set_config(
-            payload,
-            hiksdk=hiksdk,
-            web=web,
-            rtsp=rtsp,
-            upnp=upnp,
-        ),
-    )
-
-
 def ezviz_lan_services_switch_get_command_port(  # noqa: PLR0913
     endpoint: HcNetSdkLanEndpoint,
     password: str | bytes,
@@ -4703,100 +4368,6 @@ def ezviz_lan_services_switch_set_command_port(  # noqa: PLR0913
         socket_factory=socket_factory,
         rsa_key=rsa_key,
     )
-
-
-class HcNetSdkNativeStdXmlClient:
-    """Small ctypes wrapper around native HCNetSDK STDXML operations."""
-
-    def __init__(
-        self,
-        library: Any | None = None,
-        *,
-        library_path: str | None = None,
-    ) -> None:
-        self.library = (
-            library
-            if library is not None
-            else hcnetsdk_load_native_library(library_path)
-        )
-
-    def init(self) -> bool:
-        """Initialize the underlying native HCNetSDK library."""
-        return hcnetsdk_init_native(self.library)
-
-    def cleanup(self) -> bool:
-        """Clean up the underlying native HCNetSDK library."""
-        return hcnetsdk_cleanup_native(self.library)
-
-    def login_v40(
-        self,
-        host: str,
-        password: str,
-        *,
-        username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
-        port: int = HCNETSDK_DEFAULT_SERVER_PORT,
-        https: bool = False,
-        use_transport: int = 0,
-        login_mode: int = 0,
-    ) -> HcNetSdkNativeLoginSession:
-        """Log in with native ``NET_DVR_Login_V40``."""
-        return hcnetsdk_login_v40_native(
-            self.library,
-            host,
-            password,
-            username=username,
-            port=port,
-            https=https,
-            use_transport=use_transport,
-            login_mode=login_mode,
-        )
-
-    def logout(self, login_id: int) -> bool:
-        """Log out a native HCNetSDK login id."""
-        return hcnetsdk_logout_native(self.library, login_id)
-
-    def stdxml_config(
-        self,
-        login_id: int,
-        request: HcNetSdkStdXmlConfigRequest | str | bytes,
-    ) -> HcNetSdkStdXmlConfigResponse:
-        """Execute one native ``NET_DVR_STDXMLConfig`` request."""
-        return hcnetsdk_stdxml_config_native(self.library, login_id, request)
-
-    def services_switch_get(
-        self,
-        login_id: int,
-    ) -> HcNetSdkStdXmlConfigResponse:
-        """Read raw ``servicesSwitch`` JSON through native HCNetSDK."""
-        return ezviz_lan_services_switch_get_native(self.library, login_id)
-
-    def services_switch_state(
-        self,
-        login_id: int,
-    ) -> EzvizLanServicesSwitchState:
-        """Read and parse ``servicesSwitch`` through native HCNetSDK."""
-        return ezviz_lan_services_switch_state_native(self.library, login_id)
-
-    def services_switch_set(
-        self,
-        login_id: int,
-        current_payload: Mapping[str, Any] | None = None,
-        *,
-        hiksdk: int | bool | None = None,
-        web: int | bool | None = None,
-        rtsp: int | bool | None = None,
-        upnp: int | bool | None = None,
-    ) -> HcNetSdkStdXmlConfigResponse:
-        """Set named ``servicesSwitch`` values through native HCNetSDK."""
-        return ezviz_lan_services_switch_set_native(
-            self.library,
-            login_id,
-            current_payload,
-            hiksdk=hiksdk,
-            web=web,
-            rtsp=rtsp,
-            upnp=upnp,
-        )
 
 
 def ezviz_lan_connect_mode_payload(mode: int = 1) -> dict[str, Any]:
@@ -5034,6 +4605,64 @@ def ezviz_lan_wifi_ap_info_list_request(
         HcNetSdkDvrCommand.GET_AP_INFO_LIST,
         structure="NET_DVR_AP_INFO_LIST",
     )
+
+
+def ezviz_lan_wifi_ap_info_list(
+    data: bytes | bytearray | memoryview,
+) -> tuple[EzvizLanWifiApInfo, ...]:
+    """Parse a ``NET_DVR_AP_INFO_LIST`` buffer returned by the command port."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE:
+        raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is too short")
+    declared_size = int.from_bytes(raw[0:4], "big")
+    count = int.from_bytes(raw[4:8], "big")
+    if declared_size and declared_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is truncated")
+
+    entries: list[EzvizLanWifiApInfo] = []
+    offset = HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE
+    for _ in range(count):
+        end = offset + HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE
+        if end > len(raw):
+            raise PyEzvizError("EZVIZ LAN Wi-Fi AP entry is truncated")
+        entry = raw[offset:end]
+        entries.append(
+            EzvizLanWifiApInfo(
+                ssid=_nul_stripped_text(
+                    entry[:HCNETSDK_WIFI_AP_INFO_SSID_SIZE]
+                ),
+                security=int.from_bytes(
+                    entry[
+                        HCNETSDK_WIFI_AP_INFO_SSID_SIZE
+                        : HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 4
+                    ],
+                    "big",
+                ),
+                channel=int.from_bytes(
+                    entry[
+                        HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 4
+                        : HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 8
+                    ],
+                    "big",
+                ),
+                signal_strength=int.from_bytes(
+                    entry[
+                        HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 8
+                        : HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 12
+                    ],
+                    "big",
+                ),
+                extra=int.from_bytes(
+                    entry[
+                        HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 12
+                        : HCNETSDK_WIFI_AP_INFO_SSID_SIZE + 16
+                    ],
+                    "big",
+                ),
+            )
+        )
+        offset = end
+    return tuple(entries)
 
 
 def ezviz_lan_wifi_connect_status_request(
@@ -8647,115 +8276,12 @@ def _stdxml_bytes(label: str, value: str | bytes) -> bytes:
     return value.encode("utf-8")
 
 
-def _configure_hcnetsdk_native_library(library: Any) -> None:
-    _configure_native_function(library, HCNETSDK_INIT, restype=ctypes.c_bool)
-    _configure_native_function(library, HCNETSDK_CLEANUP, restype=ctypes.c_bool)
-    _configure_native_function(
-        library,
-        HCNETSDK_GET_LAST_ERROR,
-        restype=ctypes.c_uint32,
-    )
-    _configure_native_function(
-        library,
-        HCNETSDK_LOGIN_V40,
-        restype=ctypes.c_int,
-        argtypes=[
-            ctypes.POINTER(_HcNetSdkNativeUserLoginInfo),
-            ctypes.POINTER(_HcNetSdkNativeDeviceInfoV40),
-        ],
-    )
-    _configure_native_function(
-        library,
-        HCNETSDK_LOGOUT_V30,
-        restype=ctypes.c_bool,
-        argtypes=[ctypes.c_int],
-    )
-    _configure_native_function(
-        library,
-        HCNETSDK_STDXML_CONFIG,
-        restype=ctypes.c_bool,
-        argtypes=[
-            ctypes.c_int,
-            ctypes.POINTER(_HcNetSdkNativeStdXmlInput),
-            ctypes.POINTER(_HcNetSdkNativeStdXmlOutput),
-        ],
-    )
-
-
-def _configure_native_function(
-    library: Any,
-    name: str,
-    *,
-    restype: Any,
-    argtypes: list[Any] | None = None,
-) -> None:
-    with suppress(AttributeError, TypeError):
-        function = getattr(library, name)
-        function.restype = restype
-        if argtypes is not None:
-            function.argtypes = argtypes
-
-
-def _native_function(library: Any, name: str) -> Any:
-    try:
-        return getattr(library, name)
-    except AttributeError as err:
-        raise PyEzvizError(f"HCNetSDK library does not expose {name}") from err
-
-
-def _hcnetsdk_native_last_error(library: Any) -> int | None:
-    try:
-        function = getattr(library, HCNETSDK_GET_LAST_ERROR)
-    except AttributeError:
-        return None
-    try:
-        return int(function())
-    except Exception:
-        return None
-
-
 def _native_string_bytes(label: str, value: str) -> bytes:
     if not value:
         raise PyEzvizError(f"HCNetSDK {label} must not be empty")
     if "\x00" in value:
         raise PyEzvizError(f"HCNetSDK {label} must not contain NUL bytes")
     return value.encode("utf-8")
-
-
-def _assign_ctypes_byte_array(array: Any, value: bytes, label: str) -> None:
-    if len(value) >= len(array):
-        raise PyEzvizError(f"HCNetSDK {label} is too long")
-    for index in range(len(array)):
-        array[index] = 0
-    for index, byte in enumerate(value):
-        array[index] = byte
-
-
-def _ctypes_c_string_from_array(array: Any) -> str | None:
-    value = bytes(array).split(b"\x00", 1)[0]
-    if not value:
-        return None
-    return value.decode("utf-8", errors="ignore")
-
-
-def _ctypes_c_string_buffer_bytes(buffer: Any | None) -> bytes:
-    if buffer is None:
-        return b""
-    return bytes(buffer.raw).split(b"\x00", 1)[0]
-
-
-def _ctypes_output_buffer_bytes(
-    buffer: Any | None,
-    *,
-    returned_size: int,
-    buffer_size: int,
-) -> bytes:
-    if buffer is None or buffer_size <= 0:
-        return b""
-    size = min(int(returned_size), int(buffer_size))
-    if size <= 0:
-        return _ctypes_c_string_buffer_bytes(buffer)
-    return bytes(buffer.raw[:size]).split(b"\x00", 1)[0]
 
 
 def _services_switch_value(label: str, value: int | bool) -> int:

@@ -4166,6 +4166,10 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
                 structure="NET_DVR_COMPRESSIONCFG_V30",
             )
         )
+    with pytest.raises(PyEzvizError, match=r"camera-param.*channel 1"):
+        hcnetsdk_dvr_config_command_port_template(
+            ezviz_lan_video_effect_get_config_request(42, channel=2)
+        )
 
 
 def test_hcnetsdk_dvr_config_command_port_template_rejects_untraced_or_set() -> None:

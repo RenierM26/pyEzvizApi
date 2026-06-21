@@ -4926,7 +4926,7 @@ def ezviz_lan_compression_config(
         video_bitrate=int.from_bytes(raw[8:12], "big"),
         video_frame_rate=int.from_bytes(raw[12:16], "big"),
         i_frame_interval=int.from_bytes(raw[16:18], "big"),
-        video_encoding_type=raw[22],
+        video_encoding_type=raw[20],
         raw=raw,
     )
 

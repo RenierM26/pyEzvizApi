@@ -2995,7 +2995,7 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
         "00000017"
         "0000000e"
         "003c0200"
-        "01070100"
+        "01070900"
     ) + b"\x00" * 92
     outputs = {
         HcNetSdkDvrCommand.GET_HD_CFG: (4760).to_bytes(4, "big") + b"\x00" * 4756,
@@ -3036,7 +3036,9 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
     assert client.wifi_connect_status().error_code == 7
     assert client.audio_input_param().volume == 80
     assert client.audioout_volume().volume == 80
-    assert client.compression_config().video_bitrate == 23
+    parsed_compression = client.compression_config()
+    assert parsed_compression.video_bitrate == 23
+    assert parsed_compression.video_encoding_type == 1
     assert client.picture_config().channel_name == "Front"
     assert [request.command for request in requests] == [
         HcNetSdkDvrCommand.GET_HD_CFG,
@@ -4407,7 +4409,7 @@ def test_ezviz_lan_dvr_config_parsers_use_traced_native_offsets() -> None:
         "00000017"
         "0000000e"
         "003c0200"
-        "01070100"
+        "01070900"
     ) + b"\x00" * 92
     picture = (
         (1968).to_bytes(4, "big")

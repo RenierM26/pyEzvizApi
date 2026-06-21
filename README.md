@@ -291,6 +291,13 @@ LAN-device-list diagnostics,
 `EZVIZ_HCNETSDK_FORCE_PREVIEW_AFTER_LOGIN=1` can additionally route a successful
 LAN login into the native preview activity so command-port media and PlayM4
 input hooks fire without manual tablet interaction.
+For read-only local settings diagnostics, set
+`EZVIZ_HCNETSDK_DVR_CONFIG_PROBES` to a comma-separated list of
+`dwCommand:channel:outSize` entries such as `305:-1:65536,1067:1:65536`. After
+the target LAN login succeeds, the hook calls native `NET_DVR_GetDVRConfig` for
+each entry so the existing command-frame dump can capture the real command-port
+shape. Only use this for GET-style probes; setter flows should be traced through
+manual app actions.
 If a command-port camera emits corrupt startup video refreshes before stabilizing,
 `--hcnetsdk-h264-skip-initial-idr-windows N` can drop the first `N`
 IDR-started H.264 windows before remuxing clear IDMX media. Native HCNetSDK

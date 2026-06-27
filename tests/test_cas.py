@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import ipaddress
 import ssl
 from typing import Any
 
@@ -27,16 +27,123 @@ DEV_SERIAL_XML = b"<DevSerial>CAM123</DevSerial>"
 CLIENT_SESSION_XML = b'ClientSession="session-id"'
 LOCAL_RESPONSE = b"local-response"
 OPERATION_CODE_XML = b"<OperationCode>0123456</OperationCode>"
-FAKE_CERT = b"fake cas certificate"
-FAKE_CERT_SHA256 = hashlib.sha256(FAKE_CERT).hexdigest()
+
+
+def _der_length(size: int) -> bytes:
+    if size < 0x80:
+        return bytes([size])
+    encoded = size.to_bytes((size.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(encoded)]) + encoded
+
+
+def _der_tlv(tag: int, value: bytes) -> bytes:
+    return bytes([tag]) + _der_length(len(value)) + value
+
+
+def _der_sequence(*values: bytes) -> bytes:
+    return _der_tlv(0x30, b"".join(values))
+
+
+def _der_set(*values: bytes) -> bytes:
+    return _der_tlv(0x31, b"".join(values))
+
+
+def _der_oid(value: str) -> bytes:
+    parts = [int(part) for part in value.split(".")]
+    encoded = bytearray([40 * parts[0] + parts[1]])
+    for part in parts[2:]:
+        current = part
+        stack = [current & 0x7F]
+        current >>= 7
+        while current:
+            stack.append(0x80 | (current & 0x7F))
+            current >>= 7
+        encoded.extend(reversed(stack))
+    return _der_tlv(0x06, bytes(encoded))
+
+
+def _der_integer(value: int) -> bytes:
+    encoded = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
+    if encoded[0] & 0x80:
+        encoded = b"\0" + encoded
+    return _der_tlv(0x02, encoded)
+
+
+def _der_utf8(value: str) -> bytes:
+    return _der_tlv(0x0C, value.encode())
+
+
+def _der_octet_string(value: bytes) -> bytes:
+    return _der_tlv(0x04, value)
+
+
+def _der_context(tag_number: int, value: bytes, *, constructed: bool = True) -> bytes:
+    tag = 0x80 | tag_number
+    if constructed:
+        tag |= 0x20
+    return _der_tlv(tag, value)
+
+
+def _test_certificate(
+    *,
+    dns_names: tuple[str, ...] = ("cas.example.test",),
+    ip_addresses: tuple[str, ...] = (),
+    common_names: tuple[str, ...] = (),
+) -> bytes:
+    subject = _der_sequence(
+        *[
+            _der_set(_der_sequence(_der_oid("2.5.4.3"), _der_utf8(common_name)))
+            for common_name in common_names
+        ]
+    )
+    extensions: list[bytes] = []
+    if dns_names or ip_addresses:
+        general_names = _der_sequence(
+            *[
+                _der_context(2, dns_name.encode("ascii"), constructed=False)
+                for dns_name in dns_names
+            ],
+            *[
+                _der_context(
+                    7,
+                    ipaddress.ip_address(ip_address).packed,
+                    constructed=False,
+                )
+                for ip_address in ip_addresses
+            ],
+        )
+        extensions.append(
+            _der_context(
+                3,
+                _der_sequence(
+                    _der_sequence(
+                        _der_oid("2.5.29.17"),
+                        _der_octet_string(general_names),
+                    )
+                ),
+            )
+        )
+    tbs_certificate = _der_sequence(
+        _der_context(0, _der_integer(2)),
+        _der_integer(1),
+        _der_sequence(),
+        _der_sequence(),
+        _der_sequence(),
+        subject,
+        _der_sequence(),
+        *extensions,
+    )
+    return _der_sequence(tbs_certificate, _der_sequence(), _der_tlv(0x03, b"\0"))
 
 
 class FakeSocket:
-    def __init__(self, response: bytes = b"") -> None:
+    def __init__(self, response: bytes = b"", cert: bytes | None = None) -> None:
         self.response = response
+        self.cert = cert if cert is not None else _test_certificate()
         self.sent: list[bytes] = []
         self.closed = False
         self.ssl_context: FakeSSLContext | None = None
+        self.server_hostname: str | None = None
 
     def send(self, payload: bytes) -> int:
         self.sent.append(payload)
@@ -47,7 +154,7 @@ class FakeSocket:
 
     def getpeercert(self, binary_form: bool = False) -> bytes | dict[str, Any]:
         if binary_form:
-            return FAKE_CERT
+            return self.cert
         return {}
 
     def close(self) -> None:
@@ -69,23 +176,20 @@ class FakeSSLContext:
         self.ciphers = ciphers
 
     def wrap_socket(self, sock: FakeSocket, *, server_hostname: str) -> FakeSocket:
-        assert server_hostname == "cas.example.test"
         sock.ssl_context = self
+        sock.server_hostname = server_hostname
         return sock
 
 
-def _token() -> dict[str, Any]:
+def _token(host: str = "cas.example.test") -> dict[str, Any]:
     sys_conf: list[Any] = [None] * 17
-    sys_conf[15] = "cas.example.test"
+    sys_conf[15] = host
     sys_conf[16] = 443
     return {"session_id": "session-id", "service_urls": {"sysConf": sys_conf}}
 
 
 def _cas_client() -> EzvizCAS:
-    return EzvizCAS(
-        _token(),
-        trusted_cert_fingerprints={"cas.example.test": {FAKE_CERT_SHA256}},
-    )
+    return EzvizCAS(_token())
 
 
 def test_xor_enc_dec_round_trips_payload() -> None:
@@ -122,6 +226,7 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     result = _cas_client().cas_get_encryption("CAM123")
 
     assert connect_calls == [("cas.example.test", 443)]
+    assert fake_socket.server_hostname == "cas.example.test"
     assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
     assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
     device_session = CasDeviceSession.from_response(result)
@@ -173,10 +278,66 @@ def test_cas_get_encryption_can_require_tls_certificate_validation(
     assert fake_socket.ssl_context.verify_mode == ssl.CERT_REQUIRED
 
 
-def test_cas_get_encryption_rejects_unpinned_tls_certificate(
+def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
     monkeypatch,
 ) -> None:
-    fake_socket = FakeSocket((b"h" * 32) + b"<Response />" + (b"t" * 32))
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = FakeSocket(
+        (b"h" * 32) + body + (b"t" * 32),
+        cert=_test_certificate(dns_names=("*.ezvizlife.com",)),
+    )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = EzvizCAS(_token("eucas.ezvizlife.com")).cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
+    assert fake_socket.server_hostname == "eucas.ezvizlife.com"
+    assert fake_socket.closed is True
+
+
+def test_cas_get_encryption_accepts_common_name_hostname_fallback(
+    monkeypatch,
+) -> None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = FakeSocket(
+        (b"h" * 32) + body + (b"t" * 32),
+        cert=_test_certificate(dns_names=(), common_names=("cas.example.test",)),
+    )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = _cas_client().cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
+    assert fake_socket.closed is True
+
+
+def test_cas_get_encryption_rejects_mismatched_certificate_hostname(
+    monkeypatch,
+) -> None:
+    fake_socket = FakeSocket(
+        (b"h" * 32) + b"<Response />" + (b"t" * 32),
+        cert=_test_certificate(dns_names=("other.example.test",)),
+    )
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
@@ -184,11 +345,8 @@ def test_cas_get_encryption_rejects_unpinned_tls_certificate(
     )
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
-    with pytest.raises(PyEzvizError, match="fingerprint mismatch"):
-        EzvizCAS(
-            _token(),
-            trusted_cert_fingerprints={"cas.example.test": {"0" * 64}},
-        ).cas_get_encryption("CAM123")
+    with pytest.raises(PyEzvizError, match="hostname mismatch"):
+        _cas_client().cas_get_encryption("CAM123")
 
     assert fake_socket.closed is True
 

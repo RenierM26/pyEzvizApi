@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-import hashlib
 from io import BytesIO
+import ipaddress
 from itertools import cycle
 import logging
 import random
@@ -16,6 +15,7 @@ from typing import Any, cast
 from xml.parsers.expat import ExpatError
 
 from Crypto.Cipher import AES
+from urllib3.util.ssl_match_hostname import CertificateError, match_hostname
 import xmltodict
 
 from .constants import FEATURE_CODE, XOR_KEY
@@ -37,14 +37,9 @@ CAS_COMMAND_DEVICE_MESSAGE = 0x300F
 CAS_TLS_CIPHERS = (
     "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
 )
-CAS_PINNED_CERT_SHA256: Mapping[str, frozenset[str]] = {
-    "*.ezvizlife.com": frozenset(
-        {
-            # subject: *.ezvizlife.com, expires 2026-06-27
-            "863ee6baeb6a12de8c904c2d0b02235fd35b6b31162d9e936524adae4c42cb12",
-        }
-    ),
-}
+
+CAS_CERT_SUBJECT_ALT_NAME_OID = "2.5.29.17"
+CAS_CERT_COMMON_NAME_OID = "2.5.4.3"
 
 
 @dataclass(frozen=True)
@@ -121,54 +116,197 @@ def _cas_tls_context(*, verify_certificate: bool = False) -> ssl.SSLContext:
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(CAS_TLS_CIPHERS)
     if not verify_certificate:
-        # EZVIZ app clients pin the CAS endpoint instead of relying on WebPKI.
-        # The CAS endpoint has been observed serving an expired certificate, so
-        # ignore certificate validation only for this CAS socket path.
+        # EZVIZ app clients tolerate expired CAS WebPKI certificates. Python's
+        # SSL layer cannot ignore only expiry, so use a scoped relaxed context
+        # and verify the peer certificate hostname manually after the handshake.
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     return context
 
 
-def _normalize_sha256_fingerprint(value: str) -> str:
-    """Normalize SHA-256 certificate fingerprints for comparisons."""
-    return value.replace(":", "").lower()
+def _read_der_tlv(data: bytes, offset: int = 0) -> tuple[int, bytes, int]:
+    """Read one definite-length DER TLV item."""
+    if offset >= len(data):
+        raise ValueError("DER item is truncated")
+    tag = data[offset]
+    offset += 1
+    if offset >= len(data):
+        raise ValueError("DER length is truncated")
+    first_length = data[offset]
+    offset += 1
+    if first_length & 0x80:
+        length_size = first_length & 0x7F
+        if length_size == 0:
+            raise ValueError("DER indefinite lengths are not supported")
+        if offset + length_size > len(data):
+            raise ValueError("DER long-form length is truncated")
+        length = int.from_bytes(data[offset : offset + length_size], "big")
+        offset += length_size
+    else:
+        length = first_length
+    end = offset + length
+    if end > len(data):
+        raise ValueError("DER value is truncated")
+    return tag, data[offset:end], end
 
 
-def _cas_pinned_fingerprints(
-    host: str,
-    trusted_cert_fingerprints: Mapping[str, Collection[str]],
-) -> frozenset[str]:
-    """Return exact or wildcard SHA-256 certificate pins for a CAS host."""
-    normalized_host = host.lower().rstrip(".")
-    pins: set[str] = set()
-    for name, values in trusted_cert_fingerprints.items():
-        normalized_name = name.lower().rstrip(".")
-        if normalized_name.startswith("*."):
-            suffix = normalized_name[1:]
-            if not normalized_host.endswith(suffix):
-                continue
-        elif normalized_name != normalized_host:
+def _iter_der(data: bytes) -> list[tuple[int, bytes]]:
+    """Return all DER TLV children from a constructed value."""
+    children: list[tuple[int, bytes]] = []
+    offset = 0
+    while offset < len(data):
+        tag, value, offset = _read_der_tlv(data, offset)
+        children.append((tag, value))
+    return children
+
+
+def _decode_der_oid(value: bytes) -> str:
+    """Decode a DER object identifier."""
+    if not value:
+        raise ValueError("DER object identifier is empty")
+    subidentifiers: list[int] = []
+    current = 0
+    for byte in value:
+        current = (current << 7) | (byte & 0x7F)
+        if not byte & 0x80:
+            subidentifiers.append(current)
+            current = 0
+    if current:
+        raise ValueError("DER object identifier is truncated")
+    first = subidentifiers[0]
+    if first < 40:
+        parts = [0, first]
+    elif first < 80:
+        parts = [1, first - 40]
+    else:
+        parts = [2, first - 80]
+    parts.extend(subidentifiers[1:])
+    return ".".join(str(part) for part in parts)
+
+
+def _decode_der_string(tag: int, value: bytes) -> str | None:
+    """Decode common X.509 name string encodings."""
+    if tag in {0x12, 0x13, 0x16}:
+        return value.decode("ascii", errors="strict")
+    if tag == 0x0C:
+        return value.decode("utf-8", errors="strict")
+    if tag == 0x14:
+        return value.decode("latin1", errors="strict")
+    if tag == 0x1E:
+        return value.decode("utf-16-be", errors="strict")
+    if tag == 0x1C:
+        return value.decode("utf-32-be", errors="strict")
+    return None
+
+
+@dataclass(frozen=True)
+class _CertificateNames:
+    dns_names: tuple[str, ...]
+    ip_addresses: tuple[str, ...]
+    common_names: tuple[str, ...]
+
+
+def _cas_certificate_names(cert_der: bytes) -> _CertificateNames:
+    """Extract X.509 DNS/IP subjectAltName values and CN fallback names."""
+    cert_tag, cert_value, cert_end = _read_der_tlv(cert_der)
+    if cert_tag != 0x30 or cert_end != len(cert_der):
+        raise ValueError("CAS TLS peer certificate is not a DER sequence")
+    tbs_tag, tbs_value, _ = _read_der_tlv(cert_value)
+    if tbs_tag != 0x30:
+        raise ValueError("CAS TLS peer certificate has no TBSCertificate sequence")
+
+    tbs_fields = _iter_der(tbs_value)
+    field_index = 1 if tbs_fields and tbs_fields[0][0] == 0xA0 else 0
+    if len(tbs_fields) < field_index + 6:
+        raise ValueError("CAS TLS peer certificate TBSCertificate is incomplete")
+
+    subject = tbs_fields[field_index + 4][1]
+    common_names = _x509_common_names(subject)
+    dns_names: list[str] = []
+    ip_addresses: list[str] = []
+    for tag, value in tbs_fields[field_index + 6 :]:
+        if tag != 0xA3:
             continue
-        pins.update(_normalize_sha256_fingerprint(value) for value in values)
-    return frozenset(pins)
+        dns_names, ip_addresses = _x509_subject_alt_names(value)
+        break
+    return _CertificateNames(
+        dns_names=tuple(dns_names),
+        ip_addresses=tuple(ip_addresses),
+        common_names=tuple(common_names),
+    )
 
 
-def _verify_cas_pinned_certificate(
-    sock: ssl.SSLSocket,
-    *,
-    host: str,
-    trusted_cert_fingerprints: Mapping[str, Collection[str]],
-) -> None:
-    """Verify the CAS peer certificate against known EZVIZ certificate pins."""
+def _x509_common_names(subject: bytes) -> list[str]:
+    """Return subject commonName values from an X.509 Name."""
+    common_names: list[str] = []
+    for rdn_tag, rdn_value in _iter_der(subject):
+        if rdn_tag != 0x31:
+            continue
+        for attr_tag, attr_value in _iter_der(rdn_value):
+            if attr_tag != 0x30:
+                continue
+            attr_offset = 0
+            oid_tag, oid_value, attr_offset = _read_der_tlv(attr_value, attr_offset)
+            if oid_tag != 0x06 or _decode_der_oid(oid_value) != CAS_CERT_COMMON_NAME_OID:
+                continue
+            value_tag, value, _ = _read_der_tlv(attr_value, attr_offset)
+            decoded = _decode_der_string(value_tag, value)
+            if decoded:
+                common_names.append(decoded)
+    return common_names
+
+
+def _x509_subject_alt_names(extension_wrapper: bytes) -> tuple[list[str], list[str]]:
+    """Return DNS and IP SAN values from an X.509 extensions wrapper."""
+    extensions_tag, extensions_value, extensions_end = _read_der_tlv(extension_wrapper)
+    if extensions_tag != 0x30 or extensions_end != len(extension_wrapper):
+        return [], []
+    for extension_tag, extension_value in _iter_der(extensions_value):
+        if extension_tag != 0x30:
+            continue
+        fields = _iter_der(extension_value)
+        if len(fields) < 2 or fields[0][0] != 0x06:
+            continue
+        if _decode_der_oid(fields[0][1]) != CAS_CERT_SUBJECT_ALT_NAME_OID:
+            continue
+        value_fields = fields[2:] if len(fields) > 2 and fields[1][0] == 0x01 else fields[1:]
+        if not value_fields or value_fields[0][0] != 0x04:
+            continue
+        names_tag, names_value, names_end = _read_der_tlv(value_fields[0][1])
+        if names_tag != 0x30 or names_end != len(value_fields[0][1]):
+            continue
+        dns_names: list[str] = []
+        ip_addresses: list[str] = []
+        for name_tag, name_value in _iter_der(names_value):
+            if name_tag == 0x82:
+                dns_names.append(name_value.decode("ascii", errors="strict"))
+            elif name_tag == 0x87:
+                ip_addresses.append(str(ipaddress.ip_address(name_value)))
+        return dns_names, ip_addresses
+    return [], []
+
+
+def _verify_cas_certificate_hostname(sock: ssl.SSLSocket, *, host: str) -> None:
+    """Verify the CAS peer certificate names against the selected host."""
     cert = sock.getpeercert(binary_form=True)
     if not cert:
         raise PyEzvizError("CAS TLS peer did not present a certificate")
-    fingerprint = hashlib.sha256(cert).hexdigest()
-    pins = _cas_pinned_fingerprints(host, trusted_cert_fingerprints)
-    if not pins:
-        raise PyEzvizError(f"No pinned CAS TLS certificate fingerprint for {host}")
-    if fingerprint not in pins:
-        raise PyEzvizError(f"CAS TLS certificate fingerprint mismatch for {host}")
+    try:
+        names = _cas_certificate_names(cert)
+    except ValueError as err:
+        raise PyEzvizError("Could not parse CAS TLS peer certificate") from err
+
+    decoded_cert: dict[str, Any] = {
+        "subjectAltName": tuple(
+            [("DNS", dns_name) for dns_name in names.dns_names]
+            + [("IP Address", ip_address) for ip_address in names.ip_addresses]
+        ),
+        "subject": tuple((("commonName", common_name),) for common_name in names.common_names),
+    }
+    try:
+        match_hostname(cast(Any, decoded_cert), host, hostname_checks_common_name=True)
+    except (CertificateError, ValueError) as err:
+        raise PyEzvizError(f"CAS TLS certificate hostname mismatch for {host}") from err
 
 
 def _send_all(sock: Any, payload: bytes) -> None:
@@ -344,14 +482,10 @@ class EzvizCAS:
         token: dict[str, Any] | None,
         *,
         verify_tls_certificate: bool = False,
-        trusted_cert_fingerprints: Mapping[str, Collection[str]] | None = None,
     ) -> None:
         """Initialize the client object."""
         self._session = None
         self._verify_tls_certificate = verify_tls_certificate
-        self._trusted_cert_fingerprints = (
-            trusted_cert_fingerprints or CAS_PINNED_CERT_SHA256
-        )
         self._token: dict[str, Any] = token or {
             "session_id": None,
             "rf_session_id": None,
@@ -400,11 +534,7 @@ class EzvizCAS:
                     verify_certificate=self._verify_tls_certificate
                 ).wrap_socket(sock, server_hostname=host)
                 if not self._verify_tls_certificate:
-                    _verify_cas_pinned_certificate(
-                        sock,
-                        host=host,
-                        trusted_cert_fingerprints=self._trusted_cert_fingerprints,
-                    )
+                    _verify_cas_certificate_hostname(sock, host=host)
                 if hasattr(sock, "settimeout"):
                     sock.settimeout(CAS_SOCKET_TIMEOUT)
 

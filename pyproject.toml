@@ -29,6 +29,7 @@ classifiers = [
 ]
 dependencies = [
   "requests",
+  "urllib3",
   "xmltodict",
   "pycryptodome",
   "paho-mqtt"

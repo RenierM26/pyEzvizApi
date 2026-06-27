@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
 from itertools import cycle
 import logging
@@ -35,6 +37,14 @@ CAS_COMMAND_DEVICE_MESSAGE = 0x300F
 CAS_TLS_CIPHERS = (
     "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
 )
+CAS_PINNED_CERT_SHA256: Mapping[str, frozenset[str]] = {
+    "*.ezvizlife.com": frozenset(
+        {
+            # subject: *.ezvizlife.com, expires 2026-06-27
+            "863ee6baeb6a12de8c904c2d0b02235fd35b6b31162d9e936524adae4c42cb12",
+        }
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -117,6 +127,48 @@ def _cas_tls_context(*, verify_certificate: bool = False) -> ssl.SSLContext:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
     return context
+
+
+def _normalize_sha256_fingerprint(value: str) -> str:
+    """Normalize SHA-256 certificate fingerprints for comparisons."""
+    return value.replace(":", "").lower()
+
+
+def _cas_pinned_fingerprints(
+    host: str,
+    trusted_cert_fingerprints: Mapping[str, Collection[str]],
+) -> frozenset[str]:
+    """Return exact or wildcard SHA-256 certificate pins for a CAS host."""
+    normalized_host = host.lower().rstrip(".")
+    pins: set[str] = set()
+    for name, values in trusted_cert_fingerprints.items():
+        normalized_name = name.lower().rstrip(".")
+        if normalized_name.startswith("*."):
+            suffix = normalized_name[1:]
+            if not normalized_host.endswith(suffix):
+                continue
+        elif normalized_name != normalized_host:
+            continue
+        pins.update(_normalize_sha256_fingerprint(value) for value in values)
+    return frozenset(pins)
+
+
+def _verify_cas_pinned_certificate(
+    sock: ssl.SSLSocket,
+    *,
+    host: str,
+    trusted_cert_fingerprints: Mapping[str, Collection[str]],
+) -> None:
+    """Verify the CAS peer certificate against known EZVIZ certificate pins."""
+    cert = sock.getpeercert(binary_form=True)
+    if not cert:
+        raise PyEzvizError("CAS TLS peer did not present a certificate")
+    fingerprint = hashlib.sha256(cert).hexdigest()
+    pins = _cas_pinned_fingerprints(host, trusted_cert_fingerprints)
+    if not pins:
+        raise PyEzvizError(f"No pinned CAS TLS certificate fingerprint for {host}")
+    if fingerprint not in pins:
+        raise PyEzvizError(f"CAS TLS certificate fingerprint mismatch for {host}")
 
 
 def _send_all(sock: Any, payload: bytes) -> None:
@@ -292,10 +344,14 @@ class EzvizCAS:
         token: dict[str, Any] | None,
         *,
         verify_tls_certificate: bool = False,
+        trusted_cert_fingerprints: Mapping[str, Collection[str]] | None = None,
     ) -> None:
         """Initialize the client object."""
         self._session = None
         self._verify_tls_certificate = verify_tls_certificate
+        self._trusted_cert_fingerprints = (
+            trusted_cert_fingerprints or CAS_PINNED_CERT_SHA256
+        )
         self._token: dict[str, Any] = token or {
             "session_id": None,
             "rf_session_id": None,
@@ -334,17 +390,24 @@ class EzvizCAS:
         recv_size: int = 1024,
     ) -> CasTransportResult:
         """Send raw CAS bytes over either the cloud TLS or experimental LAN path."""
-        sock = socket.create_connection((host, port))
-        if hasattr(sock, "settimeout"):
-            sock.settimeout(CAS_SOCKET_TIMEOUT)
-        if use_tls:
-            sock = _cas_tls_context(
-                verify_certificate=self._verify_tls_certificate
-            ).wrap_socket(sock, server_hostname=host)
+        sock: Any | None = None
+        try:
+            sock = socket.create_connection((host, port))
             if hasattr(sock, "settimeout"):
                 sock.settimeout(CAS_SOCKET_TIMEOUT)
+            if use_tls:
+                sock = _cas_tls_context(
+                    verify_certificate=self._verify_tls_certificate
+                ).wrap_socket(sock, server_hostname=host)
+                if not self._verify_tls_certificate:
+                    _verify_cas_pinned_certificate(
+                        sock,
+                        host=host,
+                        trusted_cert_fingerprints=self._trusted_cert_fingerprints,
+                    )
+                if hasattr(sock, "settimeout"):
+                    sock.settimeout(CAS_SOCKET_TIMEOUT)
 
-        try:
             _send_all(sock, payload)
             response_bytes = sock.recv(recv_size)
         except TimeoutError as err:
@@ -353,8 +416,11 @@ class EzvizCAS:
             raise PyEzvizError("CAS transport connection was reset") from err
         except (socket.gaierror, ConnectionRefusedError) as err:
             raise InvalidHost("Invalid IP or Hostname") from err
+        except ssl.SSLError as err:
+            raise PyEzvizError("CAS TLS handshake failed") from err
         finally:
-            sock.close()
+            if sock is not None:
+                sock.close()
 
         return CasTransportResult(
             host=host,

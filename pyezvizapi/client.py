@@ -634,7 +634,6 @@ class EzvizClient:
         params: JsonDict | None = None,
         data: JsonDict | str | None = None,
         json_body: JsonDict | None = None,
-        headers: Mapping[str, str] | None = None,
         retry_401: bool = True,
         max_retries: int = 0,
     ) -> requests.Response:
@@ -660,7 +659,6 @@ class EzvizClient:
                 params=params,
                 data=data,
                 json=json_body,
-                headers=headers,
                 timeout=self._timeout,
             )
             req.raise_for_status()
@@ -680,7 +678,6 @@ class EzvizClient:
                     params=params,
                     data=data,
                     json_body=json_body,
-                    headers=headers,
                     retry_401=retry_401,
                     max_retries=max_retries + 1,
                 )
@@ -881,7 +878,6 @@ class EzvizClient:
         params: JsonDict | None = None,
         data: JsonDict | str | None = None,
         json_body: JsonDict | None = None,
-        headers: Mapping[str, str] | None = None,
         retry_401: bool = True,
         max_retries: int = 0,
     ) -> JsonDict:
@@ -892,7 +888,6 @@ class EzvizClient:
             params=params,
             data=data,
             json_body=json_body,
-            headers=headers,
             retry_401=retry_401,
             max_retries=max_retries,
         )
@@ -5470,12 +5465,6 @@ class EzvizClient:
                 "POST",
                 API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
                 data={"sessionId": str(selected_session_id)},
-                headers={
-                    "appId": "ys7",
-                    "clientType": "1",
-                    "netType": "WIFI",
-                    "User-Agent": "EZVIZ/CloudClient",
-                },
                 retry_401=False,
             )
         except HTTPError as err:
@@ -5483,7 +5472,6 @@ class EzvizClient:
                 raise
             self.login()
             return self.register_p2p_session(
-                session_id=session_id,
                 max_retries=max_retries + 1,
             )
         self._ensure_ok(json_output, "Could not register P2P session")

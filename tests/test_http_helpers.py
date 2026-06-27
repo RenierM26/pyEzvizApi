@@ -3402,12 +3402,6 @@ def test_register_p2p_session_builds_app_style_request(monkeypatch) -> None:
             "method": "POST",
             "path": API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
             "data": {"sessionId": "session"},
-            "headers": {
-                "appId": "ys7",
-                "clientType": "1",
-                "netType": "WIFI",
-                "User-Agent": "EZVIZ/CloudClient",
-            },
             "retry_401": False,
         }
     ]
@@ -3435,11 +3429,11 @@ def test_register_p2p_session_refreshes_session_id_on_401(monkeypatch) -> None:
     monkeypatch.setattr(client, "_request_json", fake_request_json)
     monkeypatch.setattr(client, "login", fake_login)
 
-    assert client.register_p2p_session()["meta"]["code"] == 200
+    assert client.register_p2p_session(session_id="stale-session")["meta"]["code"] == 200
 
     assert login_calls == [None]
     assert [call["data"] for call in calls] == [
-        {"sessionId": "session"},
+        {"sessionId": "stale-session"},
         {"sessionId": "fresh-session"},
     ]
 

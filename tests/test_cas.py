@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ssl
 from typing import Any
 
@@ -26,6 +27,8 @@ DEV_SERIAL_XML = b"<DevSerial>CAM123</DevSerial>"
 CLIENT_SESSION_XML = b'ClientSession="session-id"'
 LOCAL_RESPONSE = b"local-response"
 OPERATION_CODE_XML = b"<OperationCode>0123456</OperationCode>"
+FAKE_CERT = b"fake cas certificate"
+FAKE_CERT_SHA256 = hashlib.sha256(FAKE_CERT).hexdigest()
 
 
 class FakeSocket:
@@ -41,6 +44,11 @@ class FakeSocket:
 
     def recv(self, size: int = 1024) -> bytes:
         return self.response
+
+    def getpeercert(self, binary_form: bool = False) -> bytes | dict[str, Any]:
+        if binary_form:
+            return FAKE_CERT
+        return {}
 
     def close(self) -> None:
         self.closed = True
@@ -71,6 +79,13 @@ def _token() -> dict[str, Any]:
     sys_conf[15] = "cas.example.test"
     sys_conf[16] = 443
     return {"session_id": "session-id", "service_urls": {"sysConf": sys_conf}}
+
+
+def _cas_client() -> EzvizCAS:
+    return EzvizCAS(
+        _token(),
+        trusted_cert_fingerprints={"cas.example.test": {FAKE_CERT_SHA256}},
+    )
 
 
 def test_xor_enc_dec_round_trips_payload() -> None:
@@ -104,7 +119,7 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
     monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
 
-    result = EzvizCAS(_token()).cas_get_encryption("CAM123")
+    result = _cas_client().cas_get_encryption("CAM123")
 
     assert connect_calls == [("cas.example.test", 443)]
     assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
@@ -158,6 +173,26 @@ def test_cas_get_encryption_can_require_tls_certificate_validation(
     assert fake_socket.ssl_context.verify_mode == ssl.CERT_REQUIRED
 
 
+def test_cas_get_encryption_rejects_unpinned_tls_certificate(
+    monkeypatch,
+) -> None:
+    fake_socket = FakeSocket((b"h" * 32) + b"<Response />" + (b"t" * 32))
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+
+    with pytest.raises(PyEzvizError, match="fingerprint mismatch"):
+        EzvizCAS(
+            _token(),
+            trusted_cert_fingerprints={"cas.example.test": {"0" * 64}},
+        ).cas_get_encryption("CAM123")
+
+    assert fake_socket.closed is True
+
+
 def test_cas_device_session_infers_aes128_encrypt_type() -> None:
     response = {
         "Response": {
@@ -194,7 +229,7 @@ def test_cas_get_encryption_rejects_empty_xml_body(monkeypatch) -> None:
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="did not contain an XML body"):
-        EzvizCAS(_token()).cas_get_encryption("CAM123")
+        _cas_client().cas_get_encryption("CAM123")
 
     assert fake_socket.closed is True
 
@@ -209,7 +244,7 @@ def test_cas_get_encryption_rejects_malformed_xml_body(monkeypatch) -> None:
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
     with pytest.raises(PyEzvizError, match="Could not parse CAS"):
-        EzvizCAS(_token()).cas_get_encryption("CAM123")
+        _cas_client().cas_get_encryption("CAM123")
 
     assert fake_socket.closed is True
 
@@ -321,7 +356,7 @@ def test_set_camera_defence_state_sends_encrypted_payload(monkeypatch) -> None:
         },
     )
 
-    assert EzvizCAS(_token()).set_camera_defence_state("CAM123456", enable=0) is True
+    assert _cas_client().set_camera_defence_state("CAM123456", enable=0) is True
 
     assert connect_calls == [("cas.example.test", 443)]
     assert len(fake_socket.sent) == 1

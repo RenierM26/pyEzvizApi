@@ -47,8 +47,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
   app-style P2P session registration before local-sdk CAS lookups, with opt-out
   switches for diagnostics.
 - Fixed direct-local SDK CAS lookups against EZVIZ CAS endpoints that present
-  expired public TLS certificates by matching the app's pinned-certificate
-  behavior for the CAS socket only.
+  expired public TLS certificates by pinning the CAS certificate fingerprint
+  for the CAS socket only.
 
 - Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
 

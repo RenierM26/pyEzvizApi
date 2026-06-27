@@ -232,6 +232,8 @@ def _recv_cas_frame(sock: Any) -> bytes:
         header = CasFrameHeader.parse(header_bytes)
     except ValueError as err:
         raise PyEzvizError("CAS response frame header is invalid") from err
+    # Android's native reader consumes body length + a 32 byte tail even when
+    # the response header leaves the tail-size field as zero.
     tail_size = header.tail_size_hint or CAS_RESPONSE_DIGEST_SIZE
     return header_bytes + _recv_exact(sock, header.body_size_hint + tail_size)
 

@@ -21,6 +21,7 @@ from pyezvizapi.cas import (
     CAS_FRAME_MAGIC,
     CAS_OPERATION_CODE_RANDOM_TRAILER_SIZE,
     CAS_RANDOM_TRAILER_SIZE,
+    CAS_RESPONSE_DIGEST_SIZE,
     CAS_VERSION_MARKER,
     CasDeviceSession,
     CasFrameHeader,
@@ -51,6 +52,7 @@ def _cas_response(
     *,
     command: int = CAS_COMMAND_GET_OPERATION_CODE,
     tail: bytes = b"t" * 32,
+    tail_size_hint: int | None = None,
 ) -> bytes:
     return (
         CAS_FRAME_MAGIC
@@ -60,7 +62,7 @@ def _cas_response(
         + _u32(command)
         + _u32(0)
         + _u32(len(body))
-        + _u32(len(tail))
+        + _u32(len(tail) if tail_size_hint is None else tail_size_hint)
         + body
         + tail
     )
@@ -190,12 +192,14 @@ class FakeSocket:
         self.closed = False
         self.ssl_context: FakeSSLContext | None = None
         self.server_hostname: str | None = None
+        self.recv_sizes: list[int] = []
 
     def send(self, payload: bytes) -> int:
         self.sent.append(payload)
         return len(payload)
 
     def recv(self, size: int = 1024) -> bytes:
+        self.recv_sizes.append(size)
         chunk = self.response[:size]
         self.response = self.response[size:]
         return chunk
@@ -356,6 +360,30 @@ def test_cas_get_encryption_reads_chunked_framed_response(monkeypatch) -> None:
     result = _cas_client().cas_get_encryption("CAM123")
 
     assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
+
+
+def test_cas_get_encryption_reads_native_zero_tail_hint_response(monkeypatch) -> None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = FakeSocket(_cas_response(body, tail_size_hint=0))
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = _cas_client().cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
+    assert fake_socket.recv_sizes == [
+        CAS_FRAME_HEADER_SIZE,
+        len(body) + CAS_RESPONSE_DIGEST_SIZE,
+    ]
 
 
 def test_cas_get_encryption_can_require_tls_certificate_validation(

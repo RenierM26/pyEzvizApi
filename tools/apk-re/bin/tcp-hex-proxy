@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Small TCP proxy that logs bounded hex heads for command-port trace work."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+from pathlib import Path
+import select
+import socket
+
+
+def _timestamp() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def _log(path: Path, message: str) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{_timestamp()}] {message}\n")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--listen-host", default="127.0.0.1")
+    parser.add_argument("--listen-port", type=int, required=True)
+    parser.add_argument("--target-host", required=True)
+    parser.add_argument("--target-port", type=int, required=True)
+    parser.add_argument("--log", required=True)
+    parser.add_argument("--head-bytes", type=int, default=96)
+    parser.add_argument(
+        "--log-directions",
+        choices=("both", "c2s", "s2c"),
+        default="both",
+        help="Which traffic directions to log. Forwarding still remains bidirectional.",
+    )
+    return parser.parse_args()
+
+
+def _pipe(
+    client: socket.socket,
+    upstream: socket.socket,
+    log_path: Path,
+    head_bytes: int,
+    log_directions: str,
+) -> None:
+    sockets = {client: ("c2s", upstream), upstream: ("s2c", client)}
+    while sockets:
+        readable, _, _ = select.select(list(sockets), [], [], 30)
+        if not readable:
+            _log(log_path, "idle timeout")
+            return
+        for source in readable:
+            label, destination = sockets[source]
+            data = source.recv(65536)
+            if not data:
+                return
+            if log_directions in ("both", label):
+                _log(log_path, f"{label} len={len(data)} head={data[:head_bytes].hex()}")
+            destination.sendall(data)
+
+
+def main() -> int:
+    args = _parse_args()
+    log_path = Path(args.log)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    _log(
+        log_path,
+        f"listen={args.listen_host}:{args.listen_port} target={args.target_host}:{args.target_port}",
+    )
+    with socket.create_server((args.listen_host, args.listen_port), reuse_port=False) as server:
+        while True:
+            client, addr = server.accept()
+            with client:
+                _log(log_path, f"accept addr={addr}")
+                with socket.create_connection((args.target_host, args.target_port), timeout=10) as upstream:
+                    _pipe(client, upstream, log_path, args.head_bytes, args.log_directions)
+                _log(log_path, "close")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

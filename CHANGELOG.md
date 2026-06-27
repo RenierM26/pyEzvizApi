@@ -24,9 +24,26 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added a pure-Python HCNetSDK command-port control client for generated login/control calls, including `NET_DVR_GetDeviceAbility` execution without native HCNetSDK libraries, trace-backed `NET_DVR_STDXMLConfig` execution, and `servicesSwitch` GET/state/SET helpers that preserve existing switch fields before PUT.
 - Added trace-backed pure-Python `NET_DVR_GetDVRConfig` command-port helpers for binary config reads, including the app-observed `GET_HD_CFG`/`NET_DVR_HDCFG`, Wi-Fi AP-list, and camera-parameter `NET_DVR_CAMERAPARAMCFG` paths.
 - Added trace-backed pure-Python DVR config reads/parsers for Wi-Fi connection status, audio input, audio output volume, video compression, and image/OSD picture config.
+- Added compatibility-preserving native accessors for all traced `NET_DVR_COMPRESSION_INFO_V30` blocks and `NET_DVR_PICCFG` video/image/OSD fields.
+- Added the sidecar-traced read-only `NET_DVR_PICCFG_V30` command-port alias and a legacy picture-config client convenience method.
 - Added pure-Python client convenience methods for trace-backed DVR config reads that return typed parser results directly.
 - Added a typed pure-Python `NET_DVR_HDCFG` parser and client convenience method for traced local storage config reads.
+- Expanded the traced `NET_DVR_HDCFG` parser with decoded disk-table entries and malformed table validation.
+- Accepted live command-port size-word variants across traced size-prefixed DVR config parsers, and decoded binary IPv4 fields in traced `NET_DVR_NETCFG_V30` responses.
 - Expanded the traced `NET_DVR_CAMERAPARAMCFG` parser with the remaining video-effect bytes exposed by the native structure.
+- Added compatibility-preserving `NET_DVR_CAMERAPARAMCFG` accessors for traced WDR, day/night, and backlight fields.
+- Added the trace-backed command-port mapping for read-only `NET_DVR_WIFI_CFG` reads, plus a non-secret summary helper that avoids decoding credential-bearing fields.
+- Added trace-backed command-port mappings for read-only network and record-schedule DVR config reads.
+- Added trace-backed command-port mappings for read-only time, NTP, and device V40 DVR config reads.
+- Added typed pure-Python parsers and convenience reads for traced DVR time, NTP, and device V40 config.
+- Added a typed pure-Python parser and convenience read for traced DVR network config.
+- Added a typed pure-Python parser and convenience read for traced DVR record schedule config.
+- Added a trace-backed command-port mapping for read-only EZVIZ access DVR config reads, plus a non-secret summary helper that avoids decoding access/security strings.
+- Added binary-confirmed command-port mapping plus decoded and summary helpers for `NET_DVR_USER_V30` user/password/right-table reads; decoded password bytes are hidden from default object reprs.
+
+### Fixed
+
+- Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
 
 ## v1.0.5.0 - 2026-06-20
 

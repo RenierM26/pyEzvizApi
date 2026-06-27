@@ -15,6 +15,7 @@ from cli_fakes import (
 )
 
 import pyezvizapi.__main__ as cli_module
+from pyezvizapi.constants import MAX_RETRIES
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     HcNetSdkCommandPortExchange,
@@ -3942,7 +3943,7 @@ def test_local_sdk_dump_fetch_cas_registers_p2p_before_cas(
     )
 
     assert calls[:3] == [
-        {"p2p_register": 0},
+        {"p2p_register": MAX_RETRIES},
         {"token": {"session_id": "new-session", "api_url": "apiieu.ezvizlife.com"}},
         {"cas_serial": "CAM123456"},
     ]

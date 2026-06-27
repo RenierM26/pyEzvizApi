@@ -28,7 +28,12 @@ from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
 from .cloud_stream import open_cloud_stream
-from .constants import BatteryCameraWorkMode, DefenseModeType, DeviceSwitchType
+from .constants import (
+    MAX_RETRIES,
+    BatteryCameraWorkMode,
+    DefenseModeType,
+    DeviceSwitchType,
+)
 from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 from .hcnetsdk import (
     HCNETSDK_COMMAND_PORT_CONTROL_FAMILY,
@@ -3739,7 +3744,7 @@ def _local_sdk_cas_device_info(
         if not args.no_p2p_register:
             register = getattr(client, "register_p2p_session", None)
             if callable(register):
-                register()
+                register(max_retries=MAX_RETRIES)
         session = CasDeviceSession.from_response(
             EzvizCAS(client.export_token()).cas_get_encryption(cas_serial)
         )

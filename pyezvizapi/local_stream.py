@@ -17,6 +17,7 @@ from typing import Any, BinaryIO, Literal, cast
 from Crypto.Cipher import AES
 
 from .cas import CasDeviceSession, EzvizCAS
+from .constants import MAX_RETRIES
 from .exceptions import PyEzvizError
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
@@ -1279,7 +1280,7 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     channel: int = 1,
     cas_serial: str | None = None,
     register_p2p_session: bool = True,
-    p2p_register_max_retries: int = 0,
+    p2p_register_max_retries: int = MAX_RETRIES,
     timeout: float | None = 10.0,
     socket_factory: SocketFactory | None = None,
     receiver_port: int = 10101,
@@ -1356,7 +1357,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     channel: int = 1,
     cas_serial: str | None = None,
     register_p2p_session: bool = True,
-    p2p_register_max_retries: int = 0,
+    p2p_register_max_retries: int = MAX_RETRIES,
     timeout: float | None = 10.0,
     socket_factory: SocketFactory | None = None,
     receiver_port: int = 10101,
@@ -1487,7 +1488,7 @@ def get_local_sdk_stream_credentials_from_client(
     cas_serial: str | None = None,
     fetch_media_key: bool = True,
     register_p2p_session: bool = True,
-    p2p_register_max_retries: int = 0,
+    p2p_register_max_retries: int = MAX_RETRIES,
     smscode: str | int | None = None,
     cam_key_max_retries: int = 1,
 ) -> EzvizLocalSdkCredentials:
@@ -1529,7 +1530,7 @@ def get_local_sdk_stream_credentials_from_client(
 def _register_p2p_session_for_client(
     client: Any,
     *,
-    max_retries: int = 0,
+    max_retries: int = MAX_RETRIES,
 ) -> None:
     """Call an EzvizClient-style P2P registration hook when available."""
 

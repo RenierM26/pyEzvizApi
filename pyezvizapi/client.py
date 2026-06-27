@@ -2992,7 +2992,7 @@ class EzvizClient:
         nalu_header_size: int | None = 0,
         cas_serial: str | None = None,
         register_p2p_session: bool = True,
-        p2p_register_max_retries: int = 0,
+        p2p_register_max_retries: int = MAX_RETRIES,
         timeout: float | None = 10.0,
         smscode: str | int | None = None,
         host: str | None = None,
@@ -5448,7 +5448,7 @@ class EzvizClient:
         self,
         *,
         session_id: str | None = None,
-        max_retries: int = 0,
+        max_retries: int = MAX_RETRIES,
     ) -> JsonDict:
         """Authorize the current cloud session for EZVIZ LAN/P2P operations.
 
@@ -5456,26 +5456,29 @@ class EzvizClient:
         P2P registration endpoint has seen the current user ``sessionId``.
         """
 
-        selected_session_id = session_id or self._token.get("session_id")
-        if not selected_session_id:
-            raise PyEzvizError("P2P session registration requires a session_id")
+        selected_session_id = session_id
+        attempts = 0
+        while True:
+            current_session_id = selected_session_id or self._token.get("session_id")
+            if not current_session_id:
+                raise PyEzvizError("P2P session registration requires a session_id")
 
-        try:
-            json_output = self._request_json(
-                "POST",
-                API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
-                data={"sessionId": str(selected_session_id)},
-                retry_401=False,
-            )
-        except HTTPError as err:
-            if self._http_error_status(err) != 401 or max_retries >= MAX_RETRIES:
-                raise
-            self.login()
-            return self.register_p2p_session(
-                max_retries=max_retries + 1,
-            )
-        self._ensure_ok(json_output, "Could not register P2P session")
-        return json_output
+            try:
+                json_output = self._request_json(
+                    "POST",
+                    API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
+                    data={"sessionId": str(current_session_id)},
+                    retry_401=False,
+                )
+            except HTTPError as err:
+                if self._http_error_status(err) != 401 or attempts >= max_retries:
+                    raise
+                attempts += 1
+                selected_session_id = None
+                self.login()
+                continue
+            self._ensure_ok(json_output, "Could not register P2P session")
+            return json_output
 
     def check_device_upgrade_rule(
         self,

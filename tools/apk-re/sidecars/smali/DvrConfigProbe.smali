@@ -245,7 +245,7 @@
 
     invoke-virtual {v0, v1}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
 
-    if-ltz v8, :jna_login_ok
+    if-gez v8, :jna_login_ok
 
     const/4 v0, 0x1
 

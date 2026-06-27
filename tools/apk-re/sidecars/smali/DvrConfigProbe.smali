@@ -192,6 +192,47 @@
 
     invoke-virtual {v0, v1}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
 
+    if-nez v14, :neutral_get_ok
+
+    invoke-static {}, Lcom/videogo/hcnetsdk/HCNetSDKManage;->a()Lcom/neutral/netsdk/HCNetSDK;
+
+    move-result-object v1
+
+    invoke-virtual {v1, v13}, Lcom/neutral/netsdk/HCNetSDK;->NET_DVR_Logout_V30(I)Z
+
+    move-result v6
+
+    sget-object v1, Ljava/lang/System;->out:Ljava/io/PrintStream;
+
+    new-instance v2, Ljava/lang/StringBuilder;
+
+    const-string v3, "[dvr-config-sidecar] logout="
+
+    invoke-direct {v2, v3}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v2, v6}, Ljava/lang/StringBuilder;->append(Z)Ljava/lang/StringBuilder;
+
+    move-result-object v2
+
+    invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v2
+
+    invoke-virtual {v1, v2}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
+
+    sget-object v1, Ljava/lang/System;->out:Ljava/io/PrintStream;
+
+    const-string v2, "[dvr-config-sidecar] done"
+
+    invoke-virtual {v1, v2}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
+
+    const/4 v0, 0x1
+
+    invoke-static {v0}, Ljava/lang/System;->exit(I)V
+
+    return-void
+
+    :neutral_get_ok
     sget-object v1, Ljava/lang/System;->out:Ljava/io/PrintStream;
 
     const-string v2, "[dvr-config-sidecar] outDump=disabled"
@@ -391,6 +432,47 @@
 
     invoke-virtual {v0, v1}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
 
+    if-nez v14, :jna_get_ok
+
+    invoke-static {}, Lcom/videogo/add/hcnetsdk/jna/HCNetSDKJNAInstance;->getInstance()Lcom/videogo/add/hcnetsdk/jna/HCNetSDKByJNA;
+
+    move-result-object v1
+
+    invoke-interface {v1, v8}, Lcom/videogo/add/hcnetsdk/jna/HCNetSDKByJNA;->NET_DVR_Logout(I)Z
+
+    move-result v6
+
+    sget-object v1, Ljava/lang/System;->out:Ljava/io/PrintStream;
+
+    new-instance v2, Ljava/lang/StringBuilder;
+
+    const-string v3, "[dvr-config-sidecar] logout="
+
+    invoke-direct {v2, v3}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v2, v6}, Ljava/lang/StringBuilder;->append(Z)Ljava/lang/StringBuilder;
+
+    move-result-object v2
+
+    invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v2
+
+    invoke-virtual {v1, v2}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
+
+    sget-object v1, Ljava/lang/System;->out:Ljava/io/PrintStream;
+
+    const-string v2, "[dvr-config-sidecar] done"
+
+    invoke-virtual {v1, v2}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
+
+    const/4 v0, 0x1
+
+    invoke-static {v0}, Ljava/lang/System;->exit(I)V
+
+    return-void
+
+    :jna_get_ok
     if-nez v3, :do_dump
 
     sget-object v1, Ljava/lang/System;->out:Ljava/io/PrintStream;

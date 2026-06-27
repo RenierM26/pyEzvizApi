@@ -77,6 +77,13 @@ public final class DvrConfigProbe {
                     + " object=NET_DVR_USER_V30"
                     + " lastError=" + lastError
             );
+            if (!ok) {
+                boolean neutralLogout = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_Logout_V30(neutralLoginId);
+                System.out.println("[dvr-config-sidecar] logout=" + neutralLogout);
+                System.out.println("[dvr-config-sidecar] done");
+                System.exit(1);
+                return;
+            }
             System.out.println("[dvr-config-sidecar] outDump=disabled");
             boolean neutralLogout = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_Logout_V30(neutralLoginId);
             System.out.println("[dvr-config-sidecar] logout=" + neutralLogout);
@@ -93,6 +100,7 @@ public final class DvrConfigProbe {
             return;
         }
 
+        boolean ok = false;
         try {
             Memory out = new Memory(outSize);
             out.clear(outSize);
@@ -101,7 +109,7 @@ public final class DvrConfigProbe {
             }
             IntByReference bytesReturned = new IntByReference();
             Pointer pointer = out;
-            boolean ok = com.videogo.hcnetsdk.jna.HCNetSDKJNAInstance.getInstance().NET_DVR_GetDVRConfig(
+            ok = com.videogo.hcnetsdk.jna.HCNetSDKJNAInstance.getInstance().NET_DVR_GetDVRConfig(
                 loginId,
                 command,
                 channel,
@@ -119,6 +127,9 @@ public final class DvrConfigProbe {
                     + " bytesReturned=" + returned
                     + " lastError=" + lastError
             );
+            if (!ok) {
+                return;
+            }
             if (dumpOutput) {
                 int dumpLength = Math.max(0, Math.min(outSize, returned > 0 ? returned : outSize));
                 byte[] bytes = out.getByteArray(0, dumpLength);
@@ -130,6 +141,9 @@ public final class DvrConfigProbe {
             boolean logout = com.videogo.add.hcnetsdk.jna.HCNetSDKJNAInstance.getInstance().NET_DVR_Logout(loginId);
             System.out.println("[dvr-config-sidecar] logout=" + logout);
             System.out.println("[dvr-config-sidecar] done");
+            if (!ok) {
+                System.exit(1);
+            }
         }
     }
 }

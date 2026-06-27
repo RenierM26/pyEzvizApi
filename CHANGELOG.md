@@ -41,6 +41,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added a trace-backed command-port mapping for read-only EZVIZ access DVR config reads, plus a non-secret summary helper that avoids decoding access/security strings.
 - Added binary-confirmed command-port mapping plus decoded and summary helpers for `NET_DVR_USER_V30` user/password/right-table reads; decoded password bytes are hidden from default object reprs.
 
+### Fixed
+
+- Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
+
 ## v1.0.5.0 - 2026-06-20
 
 ### Added

@@ -33,6 +33,7 @@ class FakeSocket:
         self.response = response
         self.sent: list[bytes] = []
         self.closed = False
+        self.ssl_context: FakeSSLContext | None = None
 
     def send(self, payload: bytes) -> int:
         self.sent.append(payload)
@@ -49,6 +50,8 @@ class FakeSSLContext:
     def __init__(self, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> None:
         self.purpose = purpose
         self.ciphers: str | None = None
+        self.check_hostname = True
+        self.verify_mode = ssl.CERT_REQUIRED
         self.default_cert_purpose: ssl.Purpose | None = None
 
     def load_default_certs(self, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> None:
@@ -59,6 +62,7 @@ class FakeSSLContext:
 
     def wrap_socket(self, sock: FakeSocket, *, server_hostname: str) -> FakeSocket:
         assert server_hostname == "cas.example.test"
+        sock.ssl_context = self
         return sock
 
 
@@ -110,6 +114,9 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     assert device_session.operation_code == "0123456789"
     assert device_session.encrypt_type == 2
     assert DEV_SERIAL_XML in fake_socket.sent[0]
+    assert fake_socket.ssl_context is not None
+    assert fake_socket.ssl_context.check_hostname is False
+    assert fake_socket.ssl_context.verify_mode == ssl.CERT_NONE
     header = CasFrameHeader.parse(fake_socket.sent[0])
     assert header.version_marker == CAS_VERSION_MARKER
     assert header.sequence == 5
@@ -121,6 +128,34 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     )
     assert len(fake_socket.sent[0][-CAS_OPERATION_CODE_RANDOM_TRAILER_SIZE:]) == 32
     assert fake_socket.closed is True
+
+
+def test_cas_get_encryption_can_require_tls_certificate_validation(
+    monkeypatch,
+) -> None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = FakeSocket((b"h" * 32) + body + (b"t" * 32))
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = EzvizCAS(
+        _token(),
+        verify_tls_certificate=True,
+    ).cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
+    assert fake_socket.ssl_context is not None
+    assert fake_socket.ssl_context.check_hostname is True
+    assert fake_socket.ssl_context.verify_mode == ssl.CERT_REQUIRED
 
 
 def test_cas_device_session_infers_aes128_encrypt_type() -> None:

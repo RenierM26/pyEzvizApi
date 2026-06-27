@@ -105,11 +105,17 @@ def _random_hex_trailer(size: int = CAS_RANDOM_TRAILER_SIZE) -> bytes:
     return rand_hex_str.encode("latin1")
 
 
-def _cas_tls_context() -> ssl.SSLContext:
+def _cas_tls_context(*, verify_certificate: bool = False) -> ssl.SSLContext:
     """Return the legacy TLS context accepted by the CAS cloud endpoint."""
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(CAS_TLS_CIPHERS)
+    if not verify_certificate:
+        # EZVIZ app clients pin the CAS endpoint instead of relying on WebPKI.
+        # The CAS endpoint has been observed serving an expired certificate, so
+        # ignore certificate validation only for this CAS socket path.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     return context
 
 
@@ -281,9 +287,15 @@ def _build_defence_request(
 class EzvizCAS:
     """Ezviz CAS server client."""
 
-    def __init__(self, token: dict[str, Any] | None) -> None:
+    def __init__(
+        self,
+        token: dict[str, Any] | None,
+        *,
+        verify_tls_certificate: bool = False,
+    ) -> None:
         """Initialize the client object."""
         self._session = None
+        self._verify_tls_certificate = verify_tls_certificate
         self._token: dict[str, Any] = token or {
             "session_id": None,
             "rf_session_id": None,
@@ -326,7 +338,9 @@ class EzvizCAS:
         if hasattr(sock, "settimeout"):
             sock.settimeout(CAS_SOCKET_TIMEOUT)
         if use_tls:
-            sock = _cas_tls_context().wrap_socket(sock, server_hostname=host)
+            sock = _cas_tls_context(
+                verify_certificate=self._verify_tls_certificate
+            ).wrap_socket(sock, server_hostname=host)
             if hasattr(sock, "settimeout"):
                 sock.settimeout(CAS_SOCKET_TIMEOUT)
 

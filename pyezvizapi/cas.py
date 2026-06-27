@@ -35,6 +35,7 @@ CAS_VERSION_MARKER = b"\x01\x00\x00\x00"
 CAS_COMMAND_GET_OPERATION_CODE = 0x2001
 CAS_COMMAND_VERIFY = 0x2005
 CAS_COMMAND_DEVICE_MESSAGE = 0x300F
+CAS_ANDROID_CLIENT_TYPE = 3
 CAS_TLS_CIPHERS = (
     "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
 )
@@ -211,6 +212,44 @@ def _send_all(sock: Any, payload: bytes) -> None:
         sent += count
 
 
+def _recv_exact(sock: Any, size: int) -> bytes:
+    """Read exactly size bytes from a socket-like transport."""
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise PyEzvizError("Socket closed before CAS response was complete")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _recv_cas_frame(sock: Any) -> bytes:
+    """Read one complete framed CAS response."""
+    header_bytes = _recv_exact(sock, CAS_FRAME_HEADER_SIZE)
+    try:
+        header = CasFrameHeader.parse(header_bytes)
+    except ValueError as err:
+        raise PyEzvizError("CAS response frame header is invalid") from err
+    tail_size = header.tail_size_hint or CAS_RESPONSE_DIGEST_SIZE
+    return header_bytes + _recv_exact(sock, header.body_size_hint + tail_size)
+
+
+def _cas_response_body(response_bytes: bytes, *, context: str) -> bytes:
+    """Return the body declared by a CAS response frame header."""
+    try:
+        header = CasFrameHeader.parse(response_bytes)
+    except ValueError as err:
+        raise PyEzvizError(f"CAS {context} response frame header is invalid") from err
+    body_start = CAS_FRAME_HEADER_SIZE
+    body_end = body_start + header.body_size_hint
+    body = response_bytes[body_start:body_end]
+    if len(body) != header.body_size_hint:
+        raise PyEzvizError(f"CAS {context} response frame body is incomplete")
+    return body
+
+
 def xor_enc_dec(msg: bytes, xor_key: bytes = XOR_KEY) -> bytes:
     """XOR encode/decode bytes with the given key."""
     with BytesIO(msg) as stream:
@@ -273,6 +312,7 @@ def _build_operation_code_request(
     session_id: str | None,
     devserial: str,
     hardware_code: str = FEATURE_CODE,
+    client_type: int = CAS_ANDROID_CLIENT_TYPE,
 ) -> bytes:
     """Build the observed get-operation-code CAS request."""
     body = (
@@ -281,7 +321,7 @@ def _build_operation_code_request(
             f"<ClientID>{session_id}</ClientID>"
             f"\n\t<Sign>{hardware_code}</Sign>\n\t"
             f"<DevSerial>{devserial}</DevSerial>"
-            f"\n\t<ClientType>0</ClientType>\n</Request>\n"
+            f"\n\t<ClientType>{client_type}</ClientType>\n</Request>\n"
         ).encode("latin1")
     )
     return (
@@ -320,6 +360,7 @@ def _build_defence_request(
     serial: str,
     device_session: CasDeviceSession,
     enable: int,
+    client_type: int = CAS_ANDROID_CLIENT_TYPE,
 ) -> bytes:
     """Build the observed devDefence CAS request."""
     payload = (
@@ -332,7 +373,7 @@ def _build_defence_request(
         + b'<?xml version="1.0" encoding="utf-8"?>\n<Request>\n\t'
         + (
             f'<Verify ClientSession="{session_id}" '
-            f'ToDevice="{serial}" ClientType="0" />\n\t'
+            f'ToDevice="{serial}" ClientType="{client_type}" />\n\t'
             f'<Message Length="240" />\n</Request>\n'
         ).encode("latin1")
         + _cas_frame_header(
@@ -368,10 +409,12 @@ class EzvizCAS:
         self,
         token: dict[str, Any] | None,
         *,
+        client_type: int = CAS_ANDROID_CLIENT_TYPE,
         verify_tls_certificate: bool = False,
     ) -> None:
         """Initialize the client object."""
         self._session = None
+        self._client_type = client_type
         self._verify_tls_certificate = verify_tls_certificate
         self._token: dict[str, Any] = token or {
             "session_id": None,
@@ -409,6 +452,7 @@ class EzvizCAS:
         port: int,
         use_tls: bool,
         recv_size: int = 1024,
+        expect_frame: bool = True,
     ) -> CasTransportResult:
         """Send raw CAS bytes over either the cloud TLS or experimental LAN path."""
         sock: Any | None = None
@@ -440,7 +484,9 @@ class EzvizCAS:
                     sock.settimeout(CAS_SOCKET_TIMEOUT)
 
             _send_all(sock, payload)
-            response_bytes = sock.recv(recv_size)
+            response_bytes = (
+                _recv_cas_frame(sock) if expect_frame else sock.recv(recv_size)
+            )
         except TimeoutError as err:
             raise PyEzvizError("Timed out waiting for CAS response") from err
         except ConnectionResetError as err:
@@ -468,6 +514,7 @@ class EzvizCAS:
                 session_id=cast(str | None, self._token["session_id"]),
                 devserial=devserial,
                 hardware_code=self._hardware_code(),
+                client_type=self._client_type,
             ),
             host=host,
             port=port,
@@ -476,8 +523,8 @@ class EzvizCAS:
         response_bytes = result.response
         _LOGGER.debug("Get Encryption Key: %r", response_bytes)
 
-        # Trim header, digest and convert xml to dict.
-        body = response_bytes[CAS_FRAME_HEADER_SIZE:-CAS_RESPONSE_DIGEST_SIZE]
+        # Trim the framed header/tail and convert XML to dict.
+        body = _cas_response_body(response_bytes, context="get-encryption")
         if not body:
             raise PyEzvizError("CAS get-encryption response did not contain an XML body")
         try:
@@ -499,10 +546,12 @@ class EzvizCAS:
                 session_id=cast(str | None, self._token["session_id"]),
                 devserial=devserial,
                 hardware_code=self._hardware_code(),
+                client_type=self._client_type,
             ),
             host=host,
             port=port,
             use_tls=False,
+            expect_frame=False,
         )
 
     def set_camera_defence_state(self, serial: str, enable: int = 1) -> bool:
@@ -515,6 +564,7 @@ class EzvizCAS:
                 serial=serial,
                 device_session=device_session,
                 enable=enable,
+                client_type=self._client_type,
             ),
             host=host,
             port=port,

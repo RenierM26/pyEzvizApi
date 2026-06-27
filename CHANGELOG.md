@@ -49,7 +49,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
   sessions.
 - Fixed direct-local SDK CAS lookups against EZVIZ CAS endpoints that present
   expired public TLS certificates by tolerating WebPKI expiry for the CAS socket
-  while still verifying the peer certificate hostname.
+  while still verifying the peer certificate against normal CA trust and the CAS
+  hostname.
 
 - Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
 

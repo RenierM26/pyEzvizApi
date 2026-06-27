@@ -32,6 +32,7 @@ dependencies = [
   "urllib3",
   "xmltodict",
   "pycryptodome",
+  "cryptography",
   "paho-mqtt"
 ]
 

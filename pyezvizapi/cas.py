@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+import datetime as dt
+from functools import lru_cache
 from io import BytesIO
 import ipaddress
 from itertools import cycle
@@ -15,6 +18,13 @@ from typing import Any, cast
 from xml.parsers.expat import ExpatError
 
 from Crypto.Cipher import AES
+from cryptography import x509
+from cryptography.x509 import DNSName, IPAddress
+from cryptography.x509.verification import (
+    PolicyBuilder,
+    Store,
+    VerificationError,
+)
 from urllib3.util.ssl_match_hostname import CertificateError, match_hostname
 import xmltodict
 
@@ -40,6 +50,17 @@ CAS_TLS_CIPHERS = (
 
 CAS_CERT_SUBJECT_ALT_NAME_OID = "2.5.29.17"
 CAS_CERT_COMMON_NAME_OID = "2.5.4.3"
+
+
+@lru_cache(maxsize=1)
+def _cas_trust_store() -> Store:
+    """Return the default CA trust store used for CAS certificate checks."""
+    ca_certs = ssl.create_default_context(ssl.Purpose.SERVER_AUTH).get_ca_certs(
+        binary_form=True
+    )
+    if not ca_certs:
+        raise PyEzvizError("CAS TLS trust store is empty")
+    return Store([x509.load_der_x509_certificate(cert) for cert in ca_certs])
 
 
 @dataclass(frozen=True)
@@ -309,6 +330,54 @@ def _verify_cas_certificate_hostname(sock: ssl.SSLSocket, *, host: str) -> None:
         raise PyEzvizError(f"CAS TLS certificate hostname mismatch for {host}") from err
 
 
+def _cas_certificate_validation_time(leaf: x509.Certificate) -> dt.datetime:
+    """Return a time inside the leaf certificate validity window."""
+    if leaf.not_valid_after_utc <= leaf.not_valid_before_utc:
+        raise PyEzvizError("CAS TLS peer certificate validity window is invalid")
+
+    now = dt.datetime.now(dt.UTC)
+    if now < leaf.not_valid_before_utc:
+        return leaf.not_valid_before_utc + dt.timedelta(seconds=1)
+    if now >= leaf.not_valid_after_utc:
+        return leaf.not_valid_after_utc - dt.timedelta(seconds=1)
+    return now
+
+
+def _cas_verification_subject(host: str) -> DNSName | IPAddress:
+    """Return the cryptography verifier subject for a DNS or IP CAS host."""
+    try:
+        return IPAddress(ipaddress.ip_address(host))
+    except ValueError:
+        return DNSName(host)
+
+
+def _verify_cas_certificate_chain(sock: ssl.SSLSocket, *, host: str) -> None:
+    """Verify the CAS peer chain while tolerating an expired leaf certificate."""
+    get_chain = getattr(sock, "get_unverified_chain", None)
+    if callable(get_chain):
+        chain_der = cast(Callable[[], list[bytes]], get_chain)()
+    else:  # pragma: no cover - Python versions with no chain API.
+        cert = sock.getpeercert(binary_form=True)
+        chain_der = [cert] if cert else []
+    if not chain_der:
+        raise PyEzvizError("CAS TLS peer did not present a certificate")
+
+    try:
+        chain = [x509.load_der_x509_certificate(cert) for cert in chain_der]
+        leaf = chain[0]
+        verifier = (
+            PolicyBuilder()
+            .store(_cas_trust_store())
+            .time(_cas_certificate_validation_time(leaf))
+            .build_server_verifier(_cas_verification_subject(host))
+        )
+        verifier.verify(leaf, chain[1:])
+    except (TypeError, ValueError, VerificationError) as err:
+        raise PyEzvizError(
+            f"CAS TLS certificate is not trusted for {host}"
+        ) from err
+
+
 def _send_all(sock: Any, payload: bytes) -> None:
     """Send the complete CAS frame over socket-like transports."""
     sendall = getattr(sock, "sendall", None)
@@ -534,7 +603,7 @@ class EzvizCAS:
                     verify_certificate=self._verify_tls_certificate
                 ).wrap_socket(sock, server_hostname=host)
                 if not self._verify_tls_certificate:
-                    _verify_cas_certificate_hostname(sock, host=host)
+                    _verify_cas_certificate_chain(sock, host=host)
                 if hasattr(sock, "settimeout"):
                     sock.settimeout(CAS_SOCKET_TIMEOUT)
 

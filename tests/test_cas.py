@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import datetime as dt
 import ipaddress
 import ssl
 from typing import Any
 
 from Crypto.Cipher import AES
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from cryptography.x509.verification import Store
 import pytest
 
 from pyezvizapi.cas import (
@@ -29,59 +35,47 @@ LOCAL_RESPONSE = b"local-response"
 OPERATION_CODE_XML = b"<OperationCode>0123456</OperationCode>"
 
 
-def _der_length(size: int) -> bytes:
-    if size < 0x80:
-        return bytes([size])
-    encoded = size.to_bytes((size.bit_length() + 7) // 8, "big")
-    return bytes([0x80 | len(encoded)]) + encoded
+_TEST_CA_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_TEST_CA_SUBJECT = x509.Name(
+    [x509.NameAttribute(NameOID.COMMON_NAME, "pyezvizapi test CA")]
+)
+_TEST_CA_CERT = (
+    x509.CertificateBuilder()
+    .subject_name(_TEST_CA_SUBJECT)
+    .issuer_name(_TEST_CA_SUBJECT)
+    .public_key(_TEST_CA_KEY.public_key())
+    .serial_number(x509.random_serial_number())
+    .not_valid_before(dt.datetime(2026, 1, 1, tzinfo=dt.UTC))
+    .not_valid_after(dt.datetime(2036, 1, 1, tzinfo=dt.UTC))
+    .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+    .add_extension(
+        x509.SubjectKeyIdentifier.from_public_key(_TEST_CA_KEY.public_key()),
+        critical=False,
+    )
+    .add_extension(
+        x509.AuthorityKeyIdentifier.from_issuer_public_key(_TEST_CA_KEY.public_key()),
+        critical=False,
+    )
+    .add_extension(
+        x509.KeyUsage(
+            digital_signature=True,
+            content_commitment=False,
+            key_encipherment=False,
+            data_encipherment=False,
+            key_agreement=False,
+            key_cert_sign=True,
+            crl_sign=True,
+            encipher_only=False,
+            decipher_only=False,
+        ),
+        critical=True,
+    )
+    .sign(_TEST_CA_KEY, hashes.SHA256())
+)
 
 
-def _der_tlv(tag: int, value: bytes) -> bytes:
-    return bytes([tag]) + _der_length(len(value)) + value
-
-
-def _der_sequence(*values: bytes) -> bytes:
-    return _der_tlv(0x30, b"".join(values))
-
-
-def _der_set(*values: bytes) -> bytes:
-    return _der_tlv(0x31, b"".join(values))
-
-
-def _der_oid(value: str) -> bytes:
-    parts = [int(part) for part in value.split(".")]
-    encoded = bytearray([40 * parts[0] + parts[1]])
-    for part in parts[2:]:
-        current = part
-        stack = [current & 0x7F]
-        current >>= 7
-        while current:
-            stack.append(0x80 | (current & 0x7F))
-            current >>= 7
-        encoded.extend(reversed(stack))
-    return _der_tlv(0x06, bytes(encoded))
-
-
-def _der_integer(value: int) -> bytes:
-    encoded = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
-    if encoded[0] & 0x80:
-        encoded = b"\0" + encoded
-    return _der_tlv(0x02, encoded)
-
-
-def _der_utf8(value: str) -> bytes:
-    return _der_tlv(0x0C, value.encode())
-
-
-def _der_octet_string(value: bytes) -> bytes:
-    return _der_tlv(0x04, value)
-
-
-def _der_context(tag_number: int, value: bytes, *, constructed: bool = True) -> bytes:
-    tag = 0x80 | tag_number
-    if constructed:
-        tag |= 0x20
-    return _der_tlv(tag, value)
+def _test_trust_store() -> Store:
+    return Store([_TEST_CA_CERT])
 
 
 def _test_certificate(
@@ -89,51 +83,70 @@ def _test_certificate(
     dns_names: tuple[str, ...] = ("cas.example.test",),
     ip_addresses: tuple[str, ...] = (),
     common_names: tuple[str, ...] = (),
+    issuer_key: rsa.RSAPrivateKey = _TEST_CA_KEY,
+    issuer_cert: x509.Certificate = _TEST_CA_CERT,
+    expired: bool = True,
 ) -> bytes:
-    subject = _der_sequence(
-        *[
-            _der_set(_der_sequence(_der_oid("2.5.4.3"), _der_utf8(common_name)))
-            for common_name in common_names
-        ]
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject_name = common_names[0] if common_names else (dns_names[0] if dns_names else "cas")
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_name)]))
+        .issuer_name(issuer_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(dt.datetime(2026, 1, 1, tzinfo=dt.UTC))
+        .not_valid_after(
+            dt.datetime(2026, 6, 27, tzinfo=dt.UTC)
+            if expired
+            else dt.datetime(2036, 1, 1, tzinfo=dt.UTC)
+        )
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                issuer_key.public_key()
+            ),
+            critical=False,
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=True,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
     )
-    extensions: list[bytes] = []
     if dns_names or ip_addresses:
-        general_names = _der_sequence(
-            *[
-                _der_context(2, dns_name.encode("ascii"), constructed=False)
-                for dns_name in dns_names
-            ],
-            *[
-                _der_context(
-                    7,
-                    ipaddress.ip_address(ip_address).packed,
-                    constructed=False,
-                )
-                for ip_address in ip_addresses
-            ],
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    *[x509.DNSName(dns_name) for dns_name in dns_names],
+                    *[
+                        x509.IPAddress(ipaddress.ip_address(ip_address))
+                        for ip_address in ip_addresses
+                    ],
+                ]
+            ),
+            critical=False,
         )
-        extensions.append(
-            _der_context(
-                3,
-                _der_sequence(
-                    _der_sequence(
-                        _der_oid("2.5.29.17"),
-                        _der_octet_string(general_names),
-                    )
-                ),
-            )
-        )
-    tbs_certificate = _der_sequence(
-        _der_context(0, _der_integer(2)),
-        _der_integer(1),
-        _der_sequence(),
-        _der_sequence(),
-        _der_sequence(),
-        subject,
-        _der_sequence(),
-        *extensions,
+    return builder.sign(issuer_key, hashes.SHA256()).public_bytes(
+        serialization.Encoding.DER
     )
-    return _der_sequence(tbs_certificate, _der_sequence(), _der_tlv(0x03, b"\0"))
 
 
 class FakeSocket:
@@ -156,6 +169,9 @@ class FakeSocket:
         if binary_form:
             return self.cert
         return {}
+
+    def get_unverified_chain(self) -> list[bytes]:
+        return [self.cert]
 
     def close(self) -> None:
         self.closed = True
@@ -190,6 +206,11 @@ def _token(host: str = "cas.example.test") -> dict[str, Any]:
 
 def _cas_client() -> EzvizCAS:
     return EzvizCAS(_token())
+
+
+@pytest.fixture(autouse=True)
+def _patch_cas_trust_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("pyezvizapi.cas._cas_trust_store", _test_trust_store)
 
 
 def test_xor_enc_dec_round_trips_payload() -> None:
@@ -305,16 +326,11 @@ def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
     assert fake_socket.closed is True
 
 
-def test_cas_get_encryption_accepts_common_name_hostname_fallback(
+def test_cas_get_encryption_rejects_common_name_only_certificate(
     monkeypatch,
 ) -> None:
-    body = (
-        b'<?xml version="1.0" encoding="utf-8"?>'
-        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
-        b'EncryptType="2" /></Response>'
-    )
     fake_socket = FakeSocket(
-        (b"h" * 32) + body + (b"t" * 32),
+        (b"h" * 32) + b"<Response />" + (b"t" * 32),
         cert=_test_certificate(dns_names=(), common_names=("cas.example.test",)),
     )
 
@@ -323,11 +339,9 @@ def test_cas_get_encryption_accepts_common_name_hostname_fallback(
         lambda _address: fake_socket,
     )
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
-    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
 
-    result = _cas_client().cas_get_encryption("CAM123")
-
-    assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
+    with pytest.raises(PyEzvizError, match="not trusted"):
+        _cas_client().cas_get_encryption("CAM123")
     assert fake_socket.closed is True
 
 
@@ -345,7 +359,7 @@ def test_cas_get_encryption_rejects_mismatched_certificate_hostname(
     )
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
-    with pytest.raises(PyEzvizError, match="hostname mismatch"):
+    with pytest.raises(PyEzvizError, match="not trusted"):
         _cas_client().cas_get_encryption("CAM123")
 
     assert fake_socket.closed is True

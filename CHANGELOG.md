@@ -51,6 +51,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
   expired public TLS certificates by tolerating WebPKI expiry for the CAS socket
   only after normal TLS verification fails specifically for expiry, while still
   requiring the expired peer certificate to match the CAS hostname.
+- Fixed CAS cloud request compatibility with the Android app by defaulting CAS
+  XML requests to `ClientType=3`, exposing an explicit `EzvizCAS` client type
+  override, and reading complete framed CAS socket responses instead of relying
+  on a single partial `recv()`.
 
 - Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
 

@@ -13,6 +13,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 import pytest
 
 from pyezvizapi.cas import (
+    CAS_ANDROID_CLIENT_TYPE,
     CAS_COMMAND_DEVICE_MESSAGE,
     CAS_COMMAND_GET_OPERATION_CODE,
     CAS_COMMAND_VERIFY,
@@ -20,6 +21,7 @@ from pyezvizapi.cas import (
     CAS_FRAME_MAGIC,
     CAS_OPERATION_CODE_RANDOM_TRAILER_SIZE,
     CAS_RANDOM_TRAILER_SIZE,
+    CAS_RESPONSE_DIGEST_SIZE,
     CAS_VERSION_MARKER,
     CasDeviceSession,
     CasFrameHeader,
@@ -30,8 +32,40 @@ from pyezvizapi.exceptions import PyEzvizError
 
 DEV_SERIAL_XML = b"<DevSerial>CAM123</DevSerial>"
 CLIENT_SESSION_XML = b'ClientSession="session-id"'
+ANDROID_CLIENT_TYPE_XML = (
+    f"<ClientType>{CAS_ANDROID_CLIENT_TYPE}</ClientType>".encode("latin1")
+)
+ANDROID_DEFENCE_CLIENT_TYPE_XML = (
+    f'ClientType="{CAS_ANDROID_CLIENT_TYPE}"'.encode("latin1")
+)
+CUSTOM_CLIENT_TYPE_XML = b"<ClientType>1</ClientType>"
 LOCAL_RESPONSE = b"local-response"
 OPERATION_CODE_XML = b"<OperationCode>0123456</OperationCode>"
+
+
+def _u32(value: int) -> bytes:
+    return value.to_bytes(4, "big")
+
+
+def _cas_response(
+    body: bytes,
+    *,
+    command: int = CAS_COMMAND_GET_OPERATION_CODE,
+    tail: bytes = b"t" * 32,
+    tail_size_hint: int | None = None,
+) -> bytes:
+    return (
+        CAS_FRAME_MAGIC
+        + CAS_VERSION_MARKER
+        + _u32(5)
+        + _u32(0)
+        + _u32(command)
+        + _u32(0)
+        + _u32(len(body))
+        + _u32(len(tail) if tail_size_hint is None else tail_size_hint)
+        + body
+        + tail
+    )
 
 
 _TEST_CA_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -158,13 +192,17 @@ class FakeSocket:
         self.closed = False
         self.ssl_context: FakeSSLContext | None = None
         self.server_hostname: str | None = None
+        self.recv_sizes: list[int] = []
 
     def send(self, payload: bytes) -> int:
         self.sent.append(payload)
         return len(payload)
 
     def recv(self, size: int = 1024) -> bytes:
-        return self.response
+        self.recv_sizes.append(size)
+        chunk = self.response[:size]
+        self.response = self.response[size:]
+        return chunk
 
     def getpeercert(self, binary_form: bool = False) -> bytes | dict[str, Any]:
         if binary_form:
@@ -239,7 +277,7 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
         b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
         b'EncryptType="2" /></Response>'
     )
-    fake_socket = FakeSocket((b"h" * 32) + body + (b"t" * 32))
+    fake_socket = FakeSocket(_cas_response(body))
     connect_calls: list[tuple[str, int]] = []
 
     def fake_create_connection(address: tuple[str, int]) -> FakeSocket:
@@ -261,6 +299,7 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     assert device_session.operation_code == "0123456789"
     assert device_session.encrypt_type == 2
     assert DEV_SERIAL_XML in fake_socket.sent[0]
+    assert ANDROID_CLIENT_TYPE_XML in fake_socket.sent[0]
     assert fake_socket.ssl_context is not None
     assert fake_socket.ssl_context.check_hostname is True
     assert fake_socket.ssl_context.verify_mode == ssl.CERT_REQUIRED
@@ -277,6 +316,76 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     assert fake_socket.closed is True
 
 
+def test_cas_get_encryption_allows_custom_client_type(monkeypatch) -> None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = FakeSocket(_cas_response(body))
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = EzvizCAS(_token(), client_type=1).cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
+    assert CUSTOM_CLIENT_TYPE_XML in fake_socket.sent[0]
+    assert ANDROID_CLIENT_TYPE_XML not in fake_socket.sent[0]
+
+
+def test_cas_get_encryption_reads_chunked_framed_response(monkeypatch) -> None:
+    class ChunkedSocket(FakeSocket):
+        def recv(self, size: int = 1024) -> bytes:
+            return super().recv(min(size, 7))
+
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = ChunkedSocket(_cas_response(body))
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = _cas_client().cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
+
+
+def test_cas_get_encryption_reads_native_zero_tail_hint_response(monkeypatch) -> None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    fake_socket = FakeSocket(_cas_response(body, tail_size_hint=0))
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = _cas_client().cas_get_encryption("CAM123")
+
+    assert result["Response"]["Session"]["@OperationCode"] == "0123456789"
+    assert fake_socket.recv_sizes == [
+        CAS_FRAME_HEADER_SIZE,
+        len(body) + CAS_RESPONSE_DIGEST_SIZE,
+    ]
+
+
 def test_cas_get_encryption_can_require_tls_certificate_validation(
     monkeypatch,
 ) -> None:
@@ -285,7 +394,7 @@ def test_cas_get_encryption_can_require_tls_certificate_validation(
         b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
         b'EncryptType="2" /></Response>'
     )
-    fake_socket = FakeSocket((b"h" * 32) + body + (b"t" * 32))
+    fake_socket = FakeSocket(_cas_response(body))
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
@@ -314,7 +423,7 @@ def test_cas_get_encryption_tolerates_only_expired_tls_certificate(
         b'EncryptType="2" /></Response>'
     )
     verified_socket = FakeSocket(verify_error=_certificate_expired_error())
-    relaxed_socket = FakeSocket((b"h" * 32) + body + (b"t" * 32))
+    relaxed_socket = FakeSocket(_cas_response(body))
     sockets = [verified_socket, relaxed_socket]
     connect_calls: list[tuple[str, int]] = []
 
@@ -387,7 +496,7 @@ def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
     )
     verified_socket = FakeSocket(verify_error=_certificate_expired_error())
     relaxed_socket = FakeSocket(
-        (b"h" * 32) + body + (b"t" * 32),
+        _cas_response(body),
         cert=_test_certificate(dns_names=("*.ezvizlife.com",)),
     )
     sockets = [verified_socket, relaxed_socket]
@@ -411,7 +520,7 @@ def test_cas_get_encryption_rejects_common_name_only_certificate(
 ) -> None:
     verified_socket = FakeSocket(verify_error=_certificate_expired_error())
     relaxed_socket = FakeSocket(
-        (b"h" * 32) + b"<Response />" + (b"t" * 32),
+        _cas_response(b"<Response />"),
         cert=_test_certificate(dns_names=(), common_names=("cas.example.test",)),
     )
     sockets = [verified_socket, relaxed_socket]
@@ -432,7 +541,7 @@ def test_cas_get_encryption_rejects_mismatched_certificate_hostname(
 ) -> None:
     verified_socket = FakeSocket(verify_error=_certificate_expired_error())
     relaxed_socket = FakeSocket(
-        (b"h" * 32) + b"<Response />" + (b"t" * 32),
+        _cas_response(b"<Response />"),
         cert=_test_certificate(dns_names=("other.example.test",)),
     )
     sockets = [verified_socket, relaxed_socket]
@@ -476,7 +585,7 @@ def test_cas_device_session_rejects_non_session_response() -> None:
 
 
 def test_cas_get_encryption_rejects_empty_xml_body(monkeypatch) -> None:
-    fake_socket = FakeSocket((b"h" * 32) + (b"t" * 32))
+    fake_socket = FakeSocket(_cas_response(b""))
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
@@ -491,7 +600,7 @@ def test_cas_get_encryption_rejects_empty_xml_body(monkeypatch) -> None:
 
 
 def test_cas_get_encryption_rejects_malformed_xml_body(monkeypatch) -> None:
-    fake_socket = FakeSocket((b"h" * 32) + b"<Response>" + (b"t" * 32))
+    fake_socket = FakeSocket(_cas_response(b"<Response>"))
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
@@ -589,7 +698,7 @@ def test_probe_local_operation_code_reports_connection_reset(monkeypatch) -> Non
 
 
 def test_set_camera_defence_state_sends_encrypted_payload(monkeypatch) -> None:
-    fake_socket = FakeSocket(b"ok")
+    fake_socket = FakeSocket(_cas_response(b"ok", command=CAS_COMMAND_VERIFY))
     connect_calls: list[tuple[str, int]] = []
 
     def fake_create_connection(address: tuple[str, int]) -> FakeSocket:
@@ -617,6 +726,7 @@ def test_set_camera_defence_state_sends_encrypted_payload(monkeypatch) -> None:
     assert connect_calls == [("cas.example.test", 443)]
     assert len(fake_socket.sent) == 1
     assert CLIENT_SESSION_XML in fake_socket.sent[0]
+    assert ANDROID_DEFENCE_CLIENT_TYPE_XML in fake_socket.sent[0]
     assert fake_socket.sent[0].endswith(f"{1:064x}"[:64].encode("latin1"))
 
     verify_header = CasFrameHeader.parse(fake_socket.sent[0])

@@ -493,9 +493,11 @@ explicit `EzvizClient.register_p2p_session()` helper is available for
 integrations that want to control this step themselves. EZVIZ CAS endpoints can
 serve expired public TLS certificates while app clients continue to use the
 endpoint, so this library tolerates WebPKI expiry for the low-level CAS socket
-but still verifies the peer certificate against the normal CA trust store and
-the CAS hostname. Use `EzvizCAS(..., verify_tls_certificate=True)` when
-diagnosing strict TLS verification against the CAS endpoint. The default
+only after a normal verified TLS handshake fails specifically because the
+certificate has expired, and it still checks that the expired peer certificate
+is valid for the CAS hostname before sending CAS data. Use
+`EzvizCAS(..., verify_tls_certificate=True)` when diagnosing strict TLS
+verification against the CAS endpoint. The default
 `--receiver-shape app` uses the self-closing attribute XML seen in normal EZVIZ
 live-view traces; use `--receiver-shape structured` when you need the older
 nested `NatAddress`/`InnerAddress` receiver XML shape.

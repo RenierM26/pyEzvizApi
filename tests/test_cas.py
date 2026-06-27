@@ -10,7 +10,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from cryptography.x509.verification import Store
 import pytest
 
 from pyezvizapi.cas import (
@@ -72,10 +71,6 @@ _TEST_CA_CERT = (
     )
     .sign(_TEST_CA_KEY, hashes.SHA256())
 )
-
-
-def _test_trust_store() -> Store:
-    return Store([_TEST_CA_CERT])
 
 
 def _test_certificate(
@@ -150,9 +145,15 @@ def _test_certificate(
 
 
 class FakeSocket:
-    def __init__(self, response: bytes = b"", cert: bytes | None = None) -> None:
+    def __init__(
+        self,
+        response: bytes = b"",
+        cert: bytes | None = None,
+        verify_error: ssl.SSLCertVerificationError | None = None,
+    ) -> None:
         self.response = response
         self.cert = cert if cert is not None else _test_certificate()
+        self.verify_error = verify_error
         self.sent: list[bytes] = []
         self.closed = False
         self.ssl_context: FakeSSLContext | None = None
@@ -192,6 +193,8 @@ class FakeSSLContext:
         self.ciphers = ciphers
 
     def wrap_socket(self, sock: FakeSocket, *, server_hostname: str) -> FakeSocket:
+        if self.verify_mode == ssl.CERT_REQUIRED and sock.verify_error is not None:
+            raise sock.verify_error
         sock.ssl_context = self
         sock.server_hostname = server_hostname
         return sock
@@ -208,9 +211,12 @@ def _cas_client() -> EzvizCAS:
     return EzvizCAS(_token())
 
 
-@pytest.fixture(autouse=True)
-def _patch_cas_trust_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("pyezvizapi.cas._cas_trust_store", _test_trust_store)
+def _certificate_expired_error() -> ssl.SSLCertVerificationError:
+    return ssl.SSLCertVerificationError("certificate has expired")
+
+
+def _self_signed_error() -> ssl.SSLCertVerificationError:
+    return ssl.SSLCertVerificationError("self-signed certificate")
 
 
 def test_xor_enc_dec_round_trips_payload() -> None:
@@ -256,8 +262,8 @@ def test_cas_get_encryption_parses_xml_response(monkeypatch) -> None:
     assert device_session.encrypt_type == 2
     assert DEV_SERIAL_XML in fake_socket.sent[0]
     assert fake_socket.ssl_context is not None
-    assert fake_socket.ssl_context.check_hostname is False
-    assert fake_socket.ssl_context.verify_mode == ssl.CERT_NONE
+    assert fake_socket.ssl_context.check_hostname is True
+    assert fake_socket.ssl_context.verify_mode == ssl.CERT_REQUIRED
     header = CasFrameHeader.parse(fake_socket.sent[0])
     assert header.version_marker == CAS_VERSION_MARKER
     assert header.sequence == 5
@@ -299,6 +305,78 @@ def test_cas_get_encryption_can_require_tls_certificate_validation(
     assert fake_socket.ssl_context.verify_mode == ssl.CERT_REQUIRED
 
 
+def test_cas_get_encryption_tolerates_only_expired_tls_certificate(
+    monkeypatch,
+) -> None:
+    body = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
+        b'EncryptType="2" /></Response>'
+    )
+    verified_socket = FakeSocket(verify_error=_certificate_expired_error())
+    relaxed_socket = FakeSocket((b"h" * 32) + body + (b"t" * 32))
+    sockets = [verified_socket, relaxed_socket]
+    connect_calls: list[tuple[str, int]] = []
+
+    def fake_create_connection(address: tuple[str, int]) -> FakeSocket:
+        connect_calls.append(address)
+        return sockets.pop(0)
+
+    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+    monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
+
+    result = _cas_client().cas_get_encryption("CAM123")
+
+    assert connect_calls == [("cas.example.test", 443), ("cas.example.test", 443)]
+    assert verified_socket.closed is True
+    assert relaxed_socket.ssl_context is not None
+    assert relaxed_socket.ssl_context.check_hostname is False
+    assert relaxed_socket.ssl_context.verify_mode == ssl.CERT_NONE
+    assert relaxed_socket.server_hostname == "cas.example.test"
+    assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
+
+
+def test_cas_get_encryption_strict_tls_rejects_expired_certificate(
+    monkeypatch,
+) -> None:
+    fake_socket = FakeSocket(verify_error=_certificate_expired_error())
+
+    monkeypatch.setattr(
+        "pyezvizapi.cas.socket.create_connection",
+        lambda _address: fake_socket,
+    )
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+
+    with pytest.raises(PyEzvizError, match="CAS TLS handshake failed"):
+        EzvizCAS(
+            _token(),
+            verify_tls_certificate=True,
+        ).cas_get_encryption("CAM123")
+
+    assert fake_socket.closed is True
+
+
+def test_cas_get_encryption_rejects_non_expiry_tls_errors(
+    monkeypatch,
+) -> None:
+    fake_socket = FakeSocket(verify_error=_self_signed_error())
+    connect_calls: list[tuple[str, int]] = []
+
+    def fake_create_connection(address: tuple[str, int]) -> FakeSocket:
+        connect_calls.append(address)
+        return fake_socket
+
+    monkeypatch.setattr("pyezvizapi.cas.socket.create_connection", fake_create_connection)
+    monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
+
+    with pytest.raises(PyEzvizError, match="CAS TLS handshake failed"):
+        _cas_client().cas_get_encryption("CAM123")
+
+    assert connect_calls == [("cas.example.test", 443)]
+    assert fake_socket.closed is True
+
+
 def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
     monkeypatch,
 ) -> None:
@@ -307,14 +385,16 @@ def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
         b'<Response><Session Key="1234567890abcdef" OperationCode="0123456789" '
         b'EncryptType="2" /></Response>'
     )
-    fake_socket = FakeSocket(
+    verified_socket = FakeSocket(verify_error=_certificate_expired_error())
+    relaxed_socket = FakeSocket(
         (b"h" * 32) + body + (b"t" * 32),
         cert=_test_certificate(dns_names=("*.ezvizlife.com",)),
     )
+    sockets = [verified_socket, relaxed_socket]
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
-        lambda _address: fake_socket,
+        lambda _address: sockets.pop(0),
     )
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
     monkeypatch.setattr("pyezvizapi.cas.random.randrange", lambda value: 1)
@@ -322,47 +402,51 @@ def test_cas_get_encryption_accepts_wildcard_certificate_hostname(
     result = EzvizCAS(_token("eucas.ezvizlife.com")).cas_get_encryption("CAM123")
 
     assert result["Response"]["Session"]["@Key"] == "1234567890abcdef"
-    assert fake_socket.server_hostname == "eucas.ezvizlife.com"
-    assert fake_socket.closed is True
+    assert relaxed_socket.server_hostname == "eucas.ezvizlife.com"
+    assert relaxed_socket.closed is True
 
 
 def test_cas_get_encryption_rejects_common_name_only_certificate(
     monkeypatch,
 ) -> None:
-    fake_socket = FakeSocket(
+    verified_socket = FakeSocket(verify_error=_certificate_expired_error())
+    relaxed_socket = FakeSocket(
         (b"h" * 32) + b"<Response />" + (b"t" * 32),
         cert=_test_certificate(dns_names=(), common_names=("cas.example.test",)),
     )
+    sockets = [verified_socket, relaxed_socket]
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
-        lambda _address: fake_socket,
+        lambda _address: sockets.pop(0),
     )
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
-    with pytest.raises(PyEzvizError, match="not trusted"):
+    with pytest.raises(PyEzvizError, match="not valid"):
         _cas_client().cas_get_encryption("CAM123")
-    assert fake_socket.closed is True
+    assert relaxed_socket.closed is True
 
 
 def test_cas_get_encryption_rejects_mismatched_certificate_hostname(
     monkeypatch,
 ) -> None:
-    fake_socket = FakeSocket(
+    verified_socket = FakeSocket(verify_error=_certificate_expired_error())
+    relaxed_socket = FakeSocket(
         (b"h" * 32) + b"<Response />" + (b"t" * 32),
         cert=_test_certificate(dns_names=("other.example.test",)),
     )
+    sockets = [verified_socket, relaxed_socket]
 
     monkeypatch.setattr(
         "pyezvizapi.cas.socket.create_connection",
-        lambda _address: fake_socket,
+        lambda _address: sockets.pop(0),
     )
     monkeypatch.setattr("pyezvizapi.cas.ssl.create_default_context", FakeSSLContext)
 
-    with pytest.raises(PyEzvizError, match="not trusted"):
+    with pytest.raises(PyEzvizError, match="not valid"):
         _cas_client().cas_get_encryption("CAM123")
 
-    assert fake_socket.closed is True
+    assert relaxed_socket.closed is True
 
 
 def test_cas_device_session_infers_aes128_encrypt_type() -> None:

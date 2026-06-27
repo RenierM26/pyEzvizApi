@@ -31,6 +31,7 @@ dependencies = [
   "requests",
   "xmltodict",
   "pycryptodome",
+  "cryptography",
   "paho-mqtt"
 ]
 

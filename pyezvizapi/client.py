@@ -75,6 +75,7 @@ from .api_endpoints import (
     API_ENDPOINT_MANAGED_DEVICE_BASE,
     API_ENDPOINT_OFFLINE_NOTIFY,
     API_ENDPOINT_OSD,
+    API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
     API_ENDPOINT_PAGELIST,
     API_ENDPOINT_PTZCONTROL,
     API_ENDPOINT_REFRESH_SESSION_ID,
@@ -769,6 +770,15 @@ class EzvizClient:
             return payload.get("resultCode")
         if "status" in payload:
             return payload.get("status")
+        return None
+
+    @staticmethod
+    def _http_error_status(err: HTTPError) -> int | None:
+        """Return the wrapped requests HTTP status when available."""
+
+        cause = err.__cause__
+        if isinstance(cause, requests.HTTPError) and cause.response is not None:
+            return cause.response.status_code
         return None
 
     @staticmethod
@@ -2981,6 +2991,8 @@ class EzvizClient:
         media_key: str | bytes | None = None,
         nalu_header_size: int | None = 0,
         cas_serial: str | None = None,
+        register_p2p_session: bool = True,
+        p2p_register_max_retries: int = MAX_RETRIES,
         timeout: float | None = 10.0,
         smscode: str | int | None = None,
         host: str | None = None,
@@ -3030,6 +3042,8 @@ class EzvizClient:
                 media_key=media_key,
                 nalu_header_size=nalu_header_size,
                 cas_serial=cas_serial,
+                register_p2p_session=register_p2p_session,
+                p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
                 smscode=smscode,
             )
@@ -3123,6 +3137,8 @@ class EzvizClient:
         media_key: str | bytes | None,
         nalu_header_size: int | None,
         cas_serial: str | None,
+        register_p2p_session: bool,
+        p2p_register_max_retries: int,
         timeout: float | None,
         smscode: str | int | None,
     ) -> SaveMediaResult:
@@ -3143,6 +3159,8 @@ class EzvizClient:
                     nalu_header_size=nalu_header_size,
                     channel=channel,
                     cas_serial=cas_serial,
+                    register_p2p_session=register_p2p_session,
+                    p2p_register_max_retries=p2p_register_max_retries,
                     timeout=timeout,
                     max_packets=max_packets,
                     duration_seconds=duration_seconds,
@@ -3161,6 +3179,8 @@ class EzvizClient:
                 nalu_header_size=nalu_header_size,
                 channel=channel,
                 cas_serial=cas_serial,
+                register_p2p_session=register_p2p_session,
+                p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
@@ -5423,6 +5443,42 @@ class EzvizClient:
         )
         self._ensure_ok(json_output, "Could not get P2P server info")
         return json_output
+
+    def register_p2p_session(
+        self,
+        *,
+        session_id: str | None = None,
+        max_retries: int = MAX_RETRIES,
+    ) -> JsonDict:
+        """Authorize the current cloud session for EZVIZ LAN/P2P operations.
+
+        Some devices reject CAS ``getDevOperationCode`` lookups until the app-style
+        P2P registration endpoint has seen the current user ``sessionId``.
+        """
+
+        selected_session_id = session_id
+        attempts = 0
+        while True:
+            current_session_id = selected_session_id or self._token.get("session_id")
+            if not current_session_id:
+                raise PyEzvizError("P2P session registration requires a session_id")
+
+            try:
+                json_output = self._request_json(
+                    "POST",
+                    API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
+                    data={"sessionId": str(current_session_id)},
+                    retry_401=False,
+                )
+            except HTTPError as err:
+                if self._http_error_status(err) != 401 or attempts >= max_retries:
+                    raise
+                attempts += 1
+                selected_session_id = None
+                self.login()
+                continue
+            self._ensure_ok(json_output, "Could not register P2P session")
+            return json_output
 
     def check_device_upgrade_rule(
         self,

@@ -11,11 +11,15 @@ from typing import Any, BinaryIO, cast
 import pytest
 import requests
 
-from pyezvizapi.api_endpoints import API_ENDPOINT_IOT_ACTION
+from pyezvizapi.api_endpoints import (
+    API_ENDPOINT_IOT_ACTION,
+    API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
+)
 from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
 from pyezvizapi.constants import (
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
+    MAX_RETRIES,
     DefenseModeType,
     DeviceSwitchType,
     UnifiedMessageSubtype,
@@ -2624,6 +2628,8 @@ def test_save_clip_uses_local_sdk_convenience(monkeypatch, tmp_path) -> None:
             "nalu_header_size": 0,
             "channel": 2,
             "cas_serial": None,
+            "register_p2p_session": True,
+            "p2p_register_max_retries": MAX_RETRIES,
             "timeout": DEFAULT_SAVE_TIMEOUT,
             "max_packets": None,
             "duration_seconds": 5.0,
@@ -3378,6 +3384,126 @@ def test_p2p_and_upgrade_helpers_build_requests(monkeypatch) -> None:
     assert calls[4]["method"] == "PUT"
     assert calls[4]["data"] == {"autoUpgrade": 1, "timeType": 2}
     assert calls[4]["max_retries"] == 3
+
+
+def test_register_p2p_session_builds_app_style_request(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"meta": {"code": 200}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.register_p2p_session()["meta"]["code"] == 200
+
+    assert calls == [
+        {
+            "method": "POST",
+            "path": API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
+            "data": {"sessionId": "session"},
+            "retry_401": False,
+        }
+    ]
+
+
+def test_register_p2p_session_refreshes_session_id_on_401(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    login_calls: list[None] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if len(calls) == 1:
+            response = requests.Response()
+            response.status_code = 401
+            requests_error = requests.HTTPError(response=response)
+            raise HTTPError from requests_error
+        return {"meta": {"code": 200}}
+
+    def fake_login() -> dict[str, Any]:
+        login_calls.append(None)
+        client._token["session_id"] = "fresh-session"
+        return client.export_token()
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    monkeypatch.setattr(client, "login", fake_login)
+
+    assert client.register_p2p_session(session_id="stale-session")["meta"]["code"] == 200
+
+    assert login_calls == [None]
+    assert [call["data"] for call in calls] == [
+        {"sessionId": "stale-session"},
+        {"sessionId": "fresh-session"},
+    ]
+
+
+def test_register_p2p_session_treats_max_retries_as_retry_limit(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+    login_calls: list[None] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, **kwargs})
+        if len(calls) <= 2:
+            response = requests.Response()
+            response.status_code = 401
+            requests_error = requests.HTTPError(response=response)
+            raise HTTPError from requests_error
+        return {"meta": {"code": 200}}
+
+    def fake_login() -> dict[str, Any]:
+        login_calls.append(None)
+        client._token["session_id"] = f"fresh-session-{len(login_calls)}"
+        return client.export_token()
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    monkeypatch.setattr(client, "login", fake_login)
+
+    assert (
+        client.register_p2p_session(session_id="stale-session", max_retries=2)["meta"][
+            "code"
+        ]
+        == 200
+    )
+
+    assert login_calls == [None, None]
+    assert [call["data"] for call in calls] == [
+        {"sessionId": "stale-session"},
+        {"sessionId": "fresh-session-1"},
+        {"sessionId": "fresh-session-2"},
+    ]
+
+
+def test_register_p2p_session_respects_zero_retry_limit(monkeypatch) -> None:
+    client = _client()
+    login_calls: list[None] = []
+
+    def fake_request_json(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        response = requests.Response()
+        response.status_code = 401
+        requests_error = requests.HTTPError(response=response)
+        raise HTTPError from requests_error
+
+    def fake_login() -> dict[str, Any]:
+        login_calls.append(None)
+        return client.export_token()
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+    monkeypatch.setattr(client, "login", fake_login)
+
+    with pytest.raises(HTTPError):
+        client.register_p2p_session(max_retries=0)
+
+    assert login_calls == []
+
+
+def test_register_p2p_session_requires_session_id() -> None:
+    client = EzvizClient(token={"api_url": "apiieu.ezvizlife.com"}, timeout=1)
+
+    with pytest.raises(PyEzvizError, match="requires a session_id"):
+        client.register_p2p_session()
 
 
 def test_device_encrypt_key_list_builds_prepared_form_request(monkeypatch) -> None:

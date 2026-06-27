@@ -43,6 +43,15 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Fixed direct-local SDK CAS bootstrapping for HP7/CP7-style devices by adding
+  app-style P2P session registration before local-sdk CAS lookups, with opt-out
+  switches for diagnostics and normal retry-limit handling for refreshed
+  sessions.
+- Fixed direct-local SDK CAS lookups against EZVIZ CAS endpoints that present
+  expired public TLS certificates by tolerating WebPKI expiry for the CAS socket
+  only after normal TLS verification fails specifically for expiry, while still
+  requiring the expired peer certificate to match the CAS hostname.
+
 - Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
 
 ## v1.0.5.0 - 2026-06-20

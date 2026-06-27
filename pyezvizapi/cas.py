@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import datetime as dt
 from io import BytesIO
+import ipaddress
 from itertools import cycle
 import logging
 import random
@@ -14,6 +16,7 @@ from typing import Any, cast
 from xml.parsers.expat import ExpatError
 
 from Crypto.Cipher import AES
+from cryptography import x509
 import xmltodict
 
 from .constants import FEATURE_CODE, XOR_KEY
@@ -35,6 +38,7 @@ CAS_COMMAND_DEVICE_MESSAGE = 0x300F
 CAS_TLS_CIPHERS = (
     "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
 )
+CAS_CERT_HAS_EXPIRED_VERIFY_CODE = 10
 
 
 @dataclass(frozen=True)
@@ -105,12 +109,91 @@ def _random_hex_trailer(size: int = CAS_RANDOM_TRAILER_SIZE) -> bytes:
     return rand_hex_str.encode("latin1")
 
 
-def _cas_tls_context() -> ssl.SSLContext:
+def _cas_tls_context(*, verify_certificate: bool = True) -> ssl.SSLContext:
     """Return the legacy TLS context accepted by the CAS cloud endpoint."""
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(CAS_TLS_CIPHERS)
+    if not verify_certificate:
+        # EZVIZ app clients tolerate expired CAS WebPKI certificates. Python's
+        # SSL layer cannot ignore only expiry, so this context is used only after
+        # a normal verified handshake has failed specifically for expiry.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     return context
+
+
+def _is_certificate_expired_error(err: ssl.SSLCertVerificationError) -> bool:
+    """Return True when OpenSSL rejected the peer only for expiry."""
+    verify_code = getattr(err, "verify_code", None)
+    if verify_code == CAS_CERT_HAS_EXPIRED_VERIFY_CODE:
+        return True
+    verify_message = str(getattr(err, "verify_message", "") or err)
+    return "certificate has expired" in verify_message.lower()
+
+
+def _certificate_not_valid_after(cert: x509.Certificate) -> dt.datetime:
+    """Return the certificate notAfter timestamp as timezone-aware UTC."""
+    not_valid_after_utc = getattr(cert, "not_valid_after_utc", None)
+    if isinstance(not_valid_after_utc, dt.datetime):
+        return not_valid_after_utc
+    return cert.not_valid_after.replace(tzinfo=dt.UTC)
+
+
+def _normalize_dns_name(host: str) -> str:
+    """Return an ASCII DNS name suitable for certificate matching."""
+    return host.rstrip(".").encode("idna").decode("ascii").lower()
+
+
+def _dns_name_matches(pattern: str, host: str) -> bool:
+    """Return True when a certificate DNS SAN matches a host."""
+    pattern = _normalize_dns_name(pattern)
+    host = _normalize_dns_name(host)
+    if "*" not in pattern:
+        return pattern == host
+    if pattern.count("*") != 1 or not pattern.startswith("*."):
+        return False
+    suffix = pattern[1:]
+    return host.endswith(suffix) and host.count(".") == pattern.count(".")
+
+
+def _certificate_matches_host(cert: x509.Certificate, host: str) -> bool:
+    """Return True when the certificate SAN matches the requested host."""
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    try:
+        host_ip = ipaddress.ip_address(host)
+    except ValueError:
+        host_ip = None
+    if host_ip is not None:
+        return any(
+            ip_address == host_ip for ip_address in san.get_values_for_type(x509.IPAddress)
+        )
+    return any(
+        _dns_name_matches(dns_name, host)
+        for dns_name in san.get_values_for_type(x509.DNSName)
+    )
+
+
+def _verify_expired_cas_certificate_hostname(sock: ssl.SSLSocket, *, host: str) -> None:
+    """Verify the expired CAS peer certificate is issued for the requested host."""
+    cert_der = sock.getpeercert(binary_form=True)
+    if not cert_der:
+        raise PyEzvizError("CAS TLS peer did not present a certificate")
+
+    try:
+        cert = x509.load_der_x509_certificate(cert_der)
+        if _certificate_not_valid_after(cert) >= dt.datetime.now(dt.UTC):
+            raise PyEzvizError(
+                "CAS TLS expiry fallback received a non-expired certificate"
+            )
+        if not _certificate_matches_host(cert, host):
+            raise ssl.CertificateError("CAS TLS certificate hostname mismatch")
+    except PyEzvizError:
+        raise
+    except (UnicodeError, ssl.CertificateError, ValueError, x509.ExtensionNotFound) as err:
+        raise PyEzvizError(
+            f"CAS TLS certificate is not valid for {host}"
+        ) from err
 
 
 def _send_all(sock: Any, payload: bytes) -> None:
@@ -281,9 +364,15 @@ def _build_defence_request(
 class EzvizCAS:
     """Ezviz CAS server client."""
 
-    def __init__(self, token: dict[str, Any] | None) -> None:
+    def __init__(
+        self,
+        token: dict[str, Any] | None,
+        *,
+        verify_tls_certificate: bool = False,
+    ) -> None:
         """Initialize the client object."""
         self._session = None
+        self._verify_tls_certificate = verify_tls_certificate
         self._token: dict[str, Any] = token or {
             "session_id": None,
             "rf_session_id": None,
@@ -322,15 +411,34 @@ class EzvizCAS:
         recv_size: int = 1024,
     ) -> CasTransportResult:
         """Send raw CAS bytes over either the cloud TLS or experimental LAN path."""
-        sock = socket.create_connection((host, port))
-        if hasattr(sock, "settimeout"):
-            sock.settimeout(CAS_SOCKET_TIMEOUT)
-        if use_tls:
-            sock = _cas_tls_context().wrap_socket(sock, server_hostname=host)
+        sock: Any | None = None
+        try:
+            sock = socket.create_connection((host, port))
             if hasattr(sock, "settimeout"):
                 sock.settimeout(CAS_SOCKET_TIMEOUT)
+            if use_tls:
+                try:
+                    sock = _cas_tls_context().wrap_socket(
+                        sock,
+                        server_hostname=host,
+                    )
+                except ssl.SSLCertVerificationError as err:
+                    if self._verify_tls_certificate or not _is_certificate_expired_error(
+                        err
+                    ):
+                        raise
+                    sock.close()
+                    sock = socket.create_connection((host, port))
+                    if hasattr(sock, "settimeout"):
+                        sock.settimeout(CAS_SOCKET_TIMEOUT)
+                    sock = _cas_tls_context(verify_certificate=False).wrap_socket(
+                        sock,
+                        server_hostname=host,
+                    )
+                    _verify_expired_cas_certificate_hostname(sock, host=host)
+                if hasattr(sock, "settimeout"):
+                    sock.settimeout(CAS_SOCKET_TIMEOUT)
 
-        try:
             _send_all(sock, payload)
             response_bytes = sock.recv(recv_size)
         except TimeoutError as err:
@@ -339,8 +447,11 @@ class EzvizCAS:
             raise PyEzvizError("CAS transport connection was reset") from err
         except (socket.gaierror, ConnectionRefusedError) as err:
             raise InvalidHost("Invalid IP or Hostname") from err
+        except ssl.SSLError as err:
+            raise PyEzvizError("CAS TLS handshake failed") from err
         finally:
-            sock.close()
+            if sock is not None:
+                sock.close()
 
         return CasTransportResult(
             host=host,

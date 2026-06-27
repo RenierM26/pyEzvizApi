@@ -484,6 +484,20 @@ pyezvizapi --token-file ezviz_token.json stream local-sdk-dump \
 
 Use `--cas-serial` when the cloud CAS lookup needs a different serial form
 than the local SDK IV/device serial used for the stream setup. The default
+local-sdk helpers also perform the app-style P2P session registration before
+querying CAS, which is required by some doorbell devices before
+`getDevOperationCode` returns a session. Use `--no-p2p-register`, or pass
+`register_p2p_session=False` to the library helpers, only when you have already
+registered the session or are intentionally testing the raw CAS behavior. The
+explicit `EzvizClient.register_p2p_session()` helper is available for
+integrations that want to control this step themselves. EZVIZ CAS endpoints can
+serve expired public TLS certificates while app clients continue to use the
+endpoint, so this library tolerates WebPKI expiry for the low-level CAS socket
+only after a normal verified TLS handshake fails specifically because the
+certificate has expired, and it still checks that the expired peer certificate
+is valid for the CAS hostname before sending CAS data. Use
+`EzvizCAS(..., verify_tls_certificate=True)` when diagnosing strict TLS
+verification against the CAS endpoint. The default
 `--receiver-shape app` uses the self-closing attribute XML seen in normal EZVIZ
 live-view traces; use `--receiver-shape structured` when you need the older
 nested `NatAddress`/`InnerAddress` receiver XML shape.

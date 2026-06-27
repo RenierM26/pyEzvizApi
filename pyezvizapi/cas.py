@@ -171,7 +171,7 @@ def _decode_der_oid(value: bytes) -> str:
         if not byte & 0x80:
             subidentifiers.append(current)
             current = 0
-    if current:
+    if current or value[-1] & 0x80:
         raise ValueError("DER object identifier is truncated")
     first = subidentifiers[0]
     if first < 40:

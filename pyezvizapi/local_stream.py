@@ -1278,6 +1278,8 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     *,
     channel: int = 1,
     cas_serial: str | None = None,
+    register_p2p_session: bool = True,
+    p2p_register_max_retries: int = 0,
     timeout: float | None = 10.0,
     socket_factory: SocketFactory | None = None,
     receiver_port: int = 10101,
@@ -1309,6 +1311,8 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
         serial,
         cas_serial=cas_serial,
         fetch_media_key=False,
+        register_p2p_session=register_p2p_session,
+        p2p_register_max_retries=p2p_register_max_retries,
     )
     preview_request = _local_sdk_preview_request_from_credentials(
         credentials,
@@ -1351,6 +1355,8 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     nalu_header_size: int | None = 0,
     channel: int = 1,
     cas_serial: str | None = None,
+    register_p2p_session: bool = True,
+    p2p_register_max_retries: int = 0,
     timeout: float | None = 10.0,
     socket_factory: SocketFactory | None = None,
     receiver_port: int = 10101,
@@ -1395,6 +1401,8 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
         serial,
         cas_serial=cas_serial,
         fetch_media_key=decrypt_video and media_key is None,
+        register_p2p_session=register_p2p_session,
+        p2p_register_max_retries=p2p_register_max_retries,
         smscode=smscode,
         cam_key_max_retries=cam_key_max_retries,
     )
@@ -1478,11 +1486,18 @@ def get_local_sdk_stream_credentials_from_client(
     *,
     cas_serial: str | None = None,
     fetch_media_key: bool = True,
+    register_p2p_session: bool = True,
+    p2p_register_max_retries: int = 0,
     smscode: str | int | None = None,
     cam_key_max_retries: int = 1,
 ) -> EzvizLocalSdkCredentials:
     """Fetch LAN endpoint, CAS tuple and optional media key from EZVIZ services."""
     endpoint = _local_sdk_endpoint_from_client(client, serial)
+    if register_p2p_session:
+        _register_p2p_session_for_client(
+            client,
+            max_retries=p2p_register_max_retries,
+        )
     cas_session = CasDeviceSession.from_response(
         EzvizCAS(client.export_token()).cas_get_encryption(cas_serial or serial)
     )
@@ -1509,6 +1524,18 @@ def get_local_sdk_stream_credentials_from_client(
         ),
         media_key=media_key,
     )
+
+
+def _register_p2p_session_for_client(
+    client: Any,
+    *,
+    max_retries: int = 0,
+) -> None:
+    """Call an EzvizClient-style P2P registration hook when available."""
+
+    register = getattr(client, "register_p2p_session", None)
+    if callable(register):
+        register(max_retries=max_retries)
 
 
 def _local_sdk_preview_request_from_credentials(  # noqa: PLR0913

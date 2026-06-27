@@ -713,6 +713,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Device serial to send to cloud CAS when it differs from --serial",
     )
     parser_save_clip.add_argument(
+        "--no-p2p-register",
+        action="store_true",
+        help="Skip app-style P2P session registration before local-sdk CAS lookup",
+    )
+    parser_save_clip.add_argument(
         "--timeout",
         type=float,
         default=10.0,
@@ -1205,6 +1210,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(default: --serial)"
         ),
     )
+    parser_stream_local_dump.add_argument(
+        "--no-p2p-register",
+        action="store_true",
+        help="Skip app-style P2P session registration before --fetch-cas lookup",
+    )
     parser_stream_local_dump.add_argument("--encrypt-type", type=int, default=1)
     parser_stream_local_dump.add_argument("--uuid", help="or EZVIZ_LOCAL_UUID")
     parser_stream_local_dump.add_argument("--timestamp", help="or EZVIZ_LOCAL_TIMESTAMP")
@@ -1355,6 +1365,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-media-key",
         action="store_true",
         help="Only fetch the LAN endpoint and CAS tuple",
+    )
+    parser_stream_local_keys.add_argument(
+        "--no-p2p-register",
+        action="store_true",
+        help="Skip app-style P2P session registration before cloud CAS lookup",
     )
     parser_stream_local_keys.add_argument(
         "--sms-code",
@@ -2268,6 +2283,8 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
             args.hcnetsdk_h264_clean_idr_wait_seconds
         ),
     }
+    if args.source == "local-sdk":
+        save_kwargs["register_p2p_session"] = not args.no_p2p_register
     if args.source == "cloud":
         save_kwargs.update(
             {
@@ -3719,6 +3736,10 @@ def _local_sdk_cas_device_info(
             _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
         )
         cas_serial = args.cas_serial or serial
+        if not args.no_p2p_register:
+            register = getattr(client, "register_p2p_session", None)
+            if callable(register):
+                register()
         session = CasDeviceSession.from_response(
             EzvizCAS(client.export_token()).cas_get_encryption(cas_serial)
         )
@@ -3976,6 +3997,7 @@ def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int
         args.serial,
         cas_serial=args.cas_serial,
         fetch_media_key=not args.no_media_key,
+        register_p2p_session=not args.no_p2p_register,
         smscode=args.sms_code,
     )
     _write_json(credentials.as_dict(include_media_key=not args.no_media_key))

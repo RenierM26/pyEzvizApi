@@ -43,6 +43,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Fixed direct-local SDK CAS bootstrapping for HP7/CP7-style devices by adding
+  app-style P2P session registration before local-sdk CAS lookups, with opt-out
+  switches for diagnostics.
+
 - Fixed the DVR config sidecar to exit nonzero on failed `NET_DVR_GetDVRConfig` reads before emitting output buffers.
 
 ## v1.0.5.0 - 2026-06-20

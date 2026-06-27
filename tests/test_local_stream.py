@@ -1205,6 +1205,117 @@ def test_get_local_sdk_stream_credentials_from_client_fetches_media_key(monkeypa
     assert "media-secret" not in repr(credentials)
 
 
+def test_get_local_sdk_stream_credentials_registers_p2p_before_cas(
+    monkeypatch,
+) -> None:
+    calls: list[Any] = []
+
+    class FakeClient:
+        def get_device_infos(self, serial: str) -> dict[str, Any]:
+            calls.append(("infos", serial))
+            return {
+                "CAM123456": {
+                    "CONNECTION": {
+                        "localIp": "192.0.2.10",
+                        "localCmdPort": 9010,
+                        "localStreamPort": 9020,
+                    }
+                }
+            }
+
+        def register_p2p_session(self, *, max_retries: int = 0) -> dict[str, Any]:
+            calls.append(("p2p-register", max_retries))
+            return {"meta": {"code": 200}}
+
+        def export_token(self) -> dict[str, str]:
+            calls.append(("token",))
+            return {"session_id": "session"}
+
+    class FakeCas:
+        def __init__(self, token: dict[str, str]) -> None:
+            calls.append(("cas-init", token))
+
+        def cas_get_encryption(self, serial: str) -> dict[str, Any]:
+            calls.append(("cas", serial))
+            return {
+                "Response": {
+                    "Session": {
+                        "@Key": "1234567890abcdef",
+                        "@OperationCode": "0123456",
+                        "@EncryptType": "1",
+                    }
+                }
+            }
+
+    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+
+    get_local_sdk_stream_credentials_from_client(
+        FakeClient(),
+        "CAM123456",
+        cas_serial="FULLCAM123456",
+        fetch_media_key=False,
+        p2p_register_max_retries=2,
+    )
+
+    assert calls == [
+        ("infos", "CAM123456"),
+        ("p2p-register", 2),
+        ("token",),
+        ("cas-init", {"session_id": "session"}),
+        ("cas", "FULLCAM123456"),
+    ]
+
+
+def test_get_local_sdk_stream_credentials_can_skip_p2p_register(
+    monkeypatch,
+) -> None:
+    calls: list[Any] = []
+
+    class FakeClient:
+        def get_device_infos(self, serial: str) -> dict[str, Any]:
+            return {
+                serial: {
+                    "CONNECTION": {
+                        "localIp": "192.0.2.10",
+                        "localCmdPort": 9010,
+                        "localStreamPort": 9020,
+                    }
+                }
+            }
+
+        def register_p2p_session(self, *, max_retries: int = 0) -> dict[str, Any]:
+            calls.append(("p2p-register", max_retries))
+            return {"meta": {"code": 200}}
+
+        def export_token(self) -> dict[str, str]:
+            return {"session_id": "session"}
+
+    class FakeCas:
+        def __init__(self, _token: dict[str, str]) -> None:
+            return None
+
+        def cas_get_encryption(self, _serial: str) -> dict[str, Any]:
+            return {
+                "Response": {
+                    "Session": {
+                        "@Key": "1234567890abcdef",
+                        "@OperationCode": "0123456",
+                    }
+                }
+            }
+
+    monkeypatch.setattr("pyezvizapi.local_stream.EzvizCAS", FakeCas)
+
+    get_local_sdk_stream_credentials_from_client(
+        FakeClient(),
+        "CAM123456",
+        fetch_media_key=False,
+        register_p2p_session=False,
+    )
+
+    assert calls == []
+
+
 def test_copy_local_sdk_stream_from_client_copies_decrypted_mpegps(monkeypatch) -> None:
     calls: list[Any] = []
 

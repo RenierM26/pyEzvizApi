@@ -226,7 +226,35 @@ if [[ "$stage_libs" == "1" ]]; then
     lib/armeabi-v7a/libhcnetsdk.so
     lib/armeabi-v7a/libjnidispatch.so
   )
-  unzip -q "$split_apk" "${needed_libs[@]}" -d "$tmpdir"
+  present_libs=()
+  missing_optional_libs=()
+  missing_required_libs=()
+  for lib in "${needed_libs[@]}"; do
+    if unzip -Z1 "$split_apk" "$lib" >/dev/null 2>&1; then
+      present_libs+=("$lib")
+      continue
+    fi
+    case "$lib" in
+      lib/armeabi-v7a/libc++_shared.so|\
+      lib/armeabi-v7a/libgnustl_shared.so|\
+      lib/armeabi-v7a/libstlport_shared.so)
+        missing_optional_libs+=("$lib")
+        ;;
+      *)
+        missing_required_libs+=("$lib")
+        ;;
+    esac
+  done
+  if ((${#missing_required_libs[@]})); then
+    printf 'ERROR: required native library missing from %s: %s\n' \
+      "$split_apk" "${missing_required_libs[*]}" >&2
+    exit 2
+  fi
+  if ((${#missing_optional_libs[@]})); then
+    printf '[sidecar] optional native libraries not present in split APK: %s\n' \
+      "${missing_optional_libs[*]}" >&2
+  fi
+  unzip -q "$split_apk" "${present_libs[@]}" -d "$tmpdir"
   run_adb push "$tmpdir/lib/armeabi-v7a/." "$device_dir/lib/" >/dev/null
 else
   trap 'if [[ -n "${proxy_pid:-}" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi' EXIT

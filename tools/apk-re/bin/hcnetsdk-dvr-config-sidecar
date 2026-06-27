@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  hcnetsdk-dvr-config-sidecar --target-ip IP --password PASSWORD --command N --channel N [options]
+
+Runs the read-only Android app_process32 HCNetSDK DVR-config probe on a paired
+Android device. This is intended for owner-run command-port tracing against a
+local camera.
+
+Options:
+  --adb-serial SERIAL       adb device serial, e.g. 192.0.2.56:36191
+  --package PACKAGE         Android package to use for classpath (default: com.ezviz)
+  --target-port PORT        Camera SDK command port (default: 8000)
+  --user USER               Login user (default: admin)
+  --out-size BYTES          Raw output buffer size (default: 8192)
+  --probe-dex PATH          Sidecar DEX path. Defaults to tools/apk-re/sidecars/
+                            dvr-config-sidecar.dex, then tmp/dvr-config-probe-outs8-fixed.dex.
+                            Build the generic DEX with tools/apk-re/bin/build-dvr-config-sidecar.
+  --apk-dir DIR             APK/split source dir for native libs (default: discovery/apk/in/com.ezviz,
+                            falling back to tmp/device-apk)
+  --base-apk PATH           Base APK for fallback classpath if package paths are unavailable
+  --split-apk PATH          armeabi-v7a split APK containing native libs
+  --device-dir PATH         Device staging dir (default: /data/local/tmp/ezviz-dvr-config-sidecar)
+  --proxy-target IP:PORT    Start a local TCP capture proxy to the real camera and make the sidecar
+                            connect through adb reverse.
+  --reverse-port PORT       Host/device reverse port for --proxy-target (default: 18000)
+  --proxy-log PATH          Proxy log path (default: tmp/dvr-config-sidecar-proxy-<timestamp>.log)
+  --proxy-log-directions D  Proxy directions to log: both, c2s, or s2c (default: both)
+  --no-stage-libs           Do not push native libs; use the app/device library path only.
+  --no-dump-output          Do not print the returned config buffer. Useful for commands whose
+                            response may contain credentials or private cloud/device config.
+  -h, --help                Show this help.
+
+Example:
+  tools/apk-re/bin/hcnetsdk-dvr-config-sidecar \
+    --adb-serial 192.0.2.56:36191 \
+    --target-ip 192.0.2.30 --password "$EZVIZ_PASSWORD" \
+    --command 1067 --channel 1 --out-size 512
+
+Trace through a capture proxy:
+  tools/apk-re/bin/hcnetsdk-dvr-config-sidecar \
+    --adb-serial 192.0.2.56:36191 \
+    --target-ip 192.0.2.30 --password "$EZVIZ_PASSWORD" \
+    --command 1067 --channel 1 \
+    --proxy-target 192.0.2.30:8000
+EOF
+}
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+adb_bin="${ADB:-adb}"
+adb_serial=""
+package="com.ezviz"
+target_ip=""
+target_port="8000"
+user="admin"
+password=""
+command_id=""
+channel=""
+out_size="8192"
+probe_dex=""
+apk_dir=""
+base_apk=""
+split_apk=""
+device_dir="/data/local/tmp/ezviz-dvr-config-sidecar"
+stage_libs=1
+dump_output=1
+proxy_target=""
+reverse_port="18000"
+proxy_log=""
+proxy_log_directions="both"
+
+while (($#)); do
+  case "$1" in
+    --adb-serial) adb_serial="${2:?}"; shift 2 ;;
+    --package) package="${2:?}"; shift 2 ;;
+    --target-ip) target_ip="${2:?}"; shift 2 ;;
+    --target-port) target_port="${2:?}"; shift 2 ;;
+    --user) user="${2:?}"; shift 2 ;;
+    --password) password="${2:?}"; shift 2 ;;
+    --command) command_id="${2:?}"; shift 2 ;;
+    --channel) channel="${2:?}"; shift 2 ;;
+    --out-size) out_size="${2:?}"; shift 2 ;;
+    --probe-dex) probe_dex="${2:?}"; shift 2 ;;
+    --apk-dir) apk_dir="${2:?}"; shift 2 ;;
+    --base-apk) base_apk="${2:?}"; shift 2 ;;
+    --split-apk) split_apk="${2:?}"; shift 2 ;;
+    --device-dir) device_dir="${2:?}"; shift 2 ;;
+    --proxy-target) proxy_target="${2:?}"; shift 2 ;;
+    --reverse-port) reverse_port="${2:?}"; shift 2 ;;
+    --proxy-log) proxy_log="${2:?}"; shift 2 ;;
+    --proxy-log-directions) proxy_log_directions="${2:?}"; shift 2 ;;
+    --no-stage-libs) stage_libs=0; shift ;;
+    --no-dump-output) dump_output=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$target_ip" || -z "$password" || -z "$command_id" || -z "$channel" ]]; then
+  echo "ERROR: --target-ip, --password, --command, and --channel are required" >&2
+  usage >&2
+  exit 2
+fi
+
+require_unsigned_int() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: $name must be an unsigned integer: $value" >&2
+    exit 2
+  fi
+}
+
+require_signed_int() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
+    echo "ERROR: $name must be an integer: $value" >&2
+    exit 2
+  fi
+}
+
+require_unsigned_int "--target-port" "$target_port"
+require_unsigned_int "--command" "$command_id"
+require_signed_int "--channel" "$channel"
+require_unsigned_int "--out-size" "$out_size"
+require_unsigned_int "--reverse-port" "$reverse_port"
+case "$proxy_log_directions" in
+  both|c2s|s2c) ;;
+  *)
+    echo "ERROR: --proxy-log-directions must be one of: both, c2s, s2c" >&2
+    exit 2
+    ;;
+esac
+
+adb_args=()
+if [[ -n "$adb_serial" ]]; then
+  adb_args=(-s "$adb_serial")
+fi
+
+run_adb() {
+  "$adb_bin" "${adb_args[@]}" "$@"
+}
+
+remote_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+if [[ -z "$probe_dex" ]]; then
+  if [[ -f "$repo_root/tools/apk-re/sidecars/dvr-config-sidecar.dex" ]]; then
+    probe_dex="$repo_root/tools/apk-re/sidecars/dvr-config-sidecar.dex"
+  elif [[ -f "$repo_root/tmp/dvr-config-probe-outs8-fixed.dex" ]]; then
+    probe_dex="$repo_root/tmp/dvr-config-probe-outs8-fixed.dex"
+  else
+    echo "ERROR: no sidecar DEX found. Pass --probe-dex or build tools/apk-re/sidecars/dvr-config-sidecar.dex." >&2
+    exit 2
+  fi
+fi
+
+if [[ ! -f "$probe_dex" ]]; then
+  echo "ERROR: sidecar DEX not found: $probe_dex" >&2
+  exit 2
+fi
+
+legacy_ap_list_dex=0
+if strings "$probe_dex" | grep -q 'usage: <ip> <port> <password> <command> <channel>'; then
+  legacy_ap_list_dex=1
+fi
+
+if [[ -z "$apk_dir" ]]; then
+  if [[ -d "$repo_root/discovery/apk/in/com.ezviz" ]]; then
+    apk_dir="$repo_root/discovery/apk/in/com.ezviz"
+  elif [[ -d "$repo_root/tmp/device-apk" ]]; then
+    apk_dir="$repo_root/tmp/device-apk"
+  fi
+fi
+
+if [[ -z "$base_apk" && -n "$apk_dir" ]]; then
+  for candidate in "$apk_dir/com.ezviz.apk" "$apk_dir/base.apk"; do
+    if [[ -f "$candidate" ]]; then
+      base_apk="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$split_apk" && -n "$apk_dir" ]]; then
+  for candidate in "$apk_dir/config.armeabi_v7a.apk" "$apk_dir/split_config.armeabi_v7a.apk"; do
+    if [[ -f "$candidate" ]]; then
+      split_apk="$candidate"
+      break
+    fi
+  done
+fi
+
+device_count="$(run_adb devices | awk 'NR > 1 && $2 == "device" { count++ } END { print count + 0 }')"
+if [[ "$device_count" == "0" ]]; then
+  echo "ERROR: no adb device is connected. Pair/connect the tablet first, then retry." >&2
+  run_adb devices -l >&2 || true
+  exit 1
+fi
+
+run_adb shell "mkdir -p $(remote_quote "$device_dir") $(remote_quote "$device_dir/lib")"
+run_adb push "$probe_dex" "$device_dir/dvr-config-sidecar.dex" >/dev/null
+
+if [[ "$stage_libs" == "1" ]]; then
+  if [[ -z "$split_apk" || ! -f "$split_apk" ]]; then
+    echo "ERROR: armeabi-v7a split APK not found. Pass --split-apk or --no-stage-libs." >&2
+    exit 2
+  fi
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"; if [[ -n "${proxy_pid:-}" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi' EXIT
+  needed_libs=(
+    lib/armeabi-v7a/libc++_shared.so
+    lib/armeabi-v7a/libgnustl_shared.so
+    lib/armeabi-v7a/libstlport_shared.so
+    lib/armeabi-v7a/libcrypto.so
+    lib/armeabi-v7a/libssl.so
+    lib/armeabi-v7a/libhpr.so
+    lib/armeabi-v7a/libHCCore.so
+    lib/armeabi-v7a/libHCCoreDevCfg.so
+    lib/armeabi-v7a/libHCGeneralCfgMgr.so
+    lib/armeabi-v7a/libhcnetsdk.so
+    lib/armeabi-v7a/libjnidispatch.so
+  )
+  unzip -q "$split_apk" "${needed_libs[@]}" -d "$tmpdir"
+  run_adb push "$tmpdir/lib/armeabi-v7a/." "$device_dir/lib/" >/dev/null
+else
+  trap 'if [[ -n "${proxy_pid:-}" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi' EXIT
+fi
+
+mapfile -t package_paths < <(run_adb shell "pm path $(remote_quote "$package")" 2>/dev/null | sed -e 's/\r$//' -e 's/^package://')
+classpath="$device_dir/dvr-config-sidecar.dex"
+if ((${#package_paths[@]})); then
+  for path in "${package_paths[@]}"; do
+    [[ -n "$path" ]] && classpath="$classpath:$path"
+  done
+elif [[ -n "$base_apk" && -f "$base_apk" ]]; then
+  run_adb push "$base_apk" "$device_dir/base.apk" >/dev/null
+  classpath="$classpath:$device_dir/base.apk"
+else
+  echo "ERROR: could not resolve installed package paths for $package and no --base-apk fallback was found" >&2
+  exit 2
+fi
+
+if [[ -n "$proxy_target" ]]; then
+  if [[ "$proxy_target" != *:* ]]; then
+    echo "ERROR: --proxy-target must be IP:PORT" >&2
+    exit 2
+  fi
+  proxy_host="${proxy_target%:*}"
+  proxy_port="${proxy_target##*:}"
+  if [[ -z "$proxy_log" ]]; then
+    mkdir -p "$repo_root/tmp"
+    proxy_log="$repo_root/tmp/dvr-config-sidecar-proxy-$(date -u +%Y%m%dT%H%M%SZ).log"
+  fi
+  "$repo_root/tools/apk-re/bin/tcp-hex-proxy" \
+    --listen-host 127.0.0.1 \
+    --listen-port "$reverse_port" \
+    --target-host "$proxy_host" \
+    --target-port "$proxy_port" \
+    --log "$proxy_log" \
+    --log-directions "$proxy_log_directions" &
+  proxy_pid=$!
+  sleep 0.2
+  run_adb reverse "tcp:$reverse_port" "tcp:$reverse_port" >/dev/null
+  echo "[sidecar] proxy log: $proxy_log" >&2
+  target_ip="127.0.0.1"
+  target_port="$reverse_port"
+fi
+
+remote_cmd="CLASSPATH=$(remote_quote "$classpath")"
+remote_cmd="$remote_cmd LD_LIBRARY_PATH=$(remote_quote "$device_dir/lib")"
+remote_cmd="$remote_cmd /system/bin/app_process32"
+remote_cmd="$remote_cmd -Djava.library.path=$(remote_quote "$device_dir/lib")"
+remote_cmd="$remote_cmd -Djna.library.path=$(remote_quote "$device_dir/lib")"
+remote_cmd="$remote_cmd -Djna.tmpdir=$(remote_quote "$device_dir")"
+remote_cmd="$remote_cmd /system/bin DvrConfigProbe"
+remote_cmd="$remote_cmd $(remote_quote "$target_ip") $(remote_quote "$target_port")"
+if [[ "$legacy_ap_list_dex" == "1" ]]; then
+  remote_cmd="$remote_cmd $(remote_quote "$password")"
+  remote_cmd="$remote_cmd $(remote_quote "$command_id") $(remote_quote "$channel")"
+else
+  remote_cmd="$remote_cmd $(remote_quote "$user") $(remote_quote "$password")"
+  remote_cmd="$remote_cmd $(remote_quote "$command_id") $(remote_quote "$channel") $(remote_quote "$out_size")"
+  if [[ "$dump_output" == "0" ]]; then
+    remote_cmd="$remote_cmd no-dump"
+  fi
+fi
+
+echo "[sidecar] command=$command_id channel=$channel out_size=$out_size target=$target_ip:$target_port" >&2
+if [[ "$dump_output" == "0" ]]; then
+  echo "[sidecar] output buffer dump disabled" >&2
+fi
+if [[ "$legacy_ap_list_dex" == "1" ]]; then
+  echo "[sidecar] detected legacy AP-list DEX argument shape" >&2
+fi
+run_adb shell "$remote_cmd"

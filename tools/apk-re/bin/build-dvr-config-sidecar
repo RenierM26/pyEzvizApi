@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+output="${1:-$repo_root/tools/apk-re/sidecars/dvr-config-sidecar.dex}"
+case "$output" in
+  "$repo_root"/*)
+    container_output="${output#"$repo_root"/}"
+    ;;
+  *)
+    container_output="$output"
+    ;;
+esac
+
+mkdir -p "$(dirname "$output")"
+"$repo_root/tools/apk-re/apk-re-shell" \
+  smali assemble \
+  tools/apk-re/sidecars/smali \
+  -o "$container_output"
+
+echo "Built $output"

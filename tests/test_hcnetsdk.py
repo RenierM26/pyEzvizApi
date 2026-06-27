@@ -163,9 +163,21 @@ from pyezvizapi.hcnetsdk import (
     EzvizLanAudioOutputVolume,
     EzvizLanCameraParamConfig,
     EzvizLanCompressionConfig,
+    EzvizLanCompressionInfoV30,
+    EzvizLanDeviceConfigV40,
+    EzvizLanDvrConfigSummary,
     EzvizLanHdConfig,
+    EzvizLanHdDiskConfig,
+    EzvizLanNetConfigV30,
+    EzvizLanNetInterfaceConfig,
+    EzvizLanNtpConfig,
     EzvizLanPictureConfig,
+    EzvizLanRecordConfigV30,
+    EzvizLanRecordDayConfig,
+    EzvizLanRecordScheduleSegment,
     EzvizLanSdFormatProgress,
+    EzvizLanUserConfigV30,
+    EzvizLanUserConfigV30Entry,
     EzvizLanWifiApInfo,
     EzvizLanWifiConnectStatus,
     EzvizLocalPreviewRequest,
@@ -269,6 +281,10 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_connect_mode_put_request,
     ezviz_lan_day_night_get_config_request,
     ezviz_lan_day_night_update_request,
+    ezviz_lan_device_config_v40,
+    ezviz_lan_device_config_v40_request,
+    ezviz_lan_dvr_config_summary,
+    ezviz_lan_ezviz_access_config_summary,
     ezviz_lan_ezviz_access_get_config_request,
     ezviz_lan_ezviz_access_replacement_domain,
     ezviz_lan_ezviz_access_replacement_domain_request,
@@ -284,10 +300,15 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_net_config_and_voice_upload_payload,
     ezviz_lan_net_config_and_voice_upload_put_config,
     ezviz_lan_net_config_and_voice_upload_put_request,
+    ezviz_lan_net_config_v30,
+    ezviz_lan_net_config_v30_request,
+    ezviz_lan_ntp_config,
+    ezviz_lan_ntp_get_config_request,
     ezviz_lan_password_store_key,
     ezviz_lan_password_store_name,
     ezviz_lan_pic_config_get_request,
     ezviz_lan_pic_config_update_request,
+    ezviz_lan_pic_config_v30_get_request,
     ezviz_lan_picture_config,
     ezviz_lan_play_device_login,
     ezviz_lan_play_device_login_succeeded,
@@ -306,6 +327,8 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_ptz_preset_request,
     ezviz_lan_ptz_request,
     ezviz_lan_record_ability_request,
+    ezviz_lan_record_config_v30,
+    ezviz_lan_record_config_v30_request,
     ezviz_lan_rn_device_ability_request,
     ezviz_lan_sadp_activate_batch_result,
     ezviz_lan_sadp_edit_net_param_batch_result,
@@ -334,6 +357,10 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_settings_updates_services_switch,
     ezviz_lan_soft_hardware_ability,
     ezviz_lan_soft_hardware_ability_request,
+    ezviz_lan_time_config,
+    ezviz_lan_time_get_config_request,
+    ezviz_lan_user_config_v30,
+    ezviz_lan_user_config_v30_summary,
     ezviz_lan_user_password_get_config_request,
     ezviz_lan_user_password_update_request,
     ezviz_lan_video_coding_get_config_request,
@@ -345,6 +372,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_video_qualities,
     ezviz_lan_wifi_ap_info_list,
     ezviz_lan_wifi_ap_info_list_request,
+    ezviz_lan_wifi_config_summary,
     ezviz_lan_wifi_connect_status,
     ezviz_lan_wifi_connect_status_request,
     ezviz_lan_wifi_get_config_request,
@@ -503,6 +531,187 @@ EXPECTED_PLAYBACK_CONTROL_IN_BUFFER = b"\x00\x00\x00\x00"
 EXPECTED_PLAYBACK_CAPTURE_FILE_NAME = b"/tmp/snap.jpg"
 EXPECTED_PLAYBACK_SECRET_KEY = b"playback-secret"
 STREAM_SETUP_BODY = b"<Request><Session>1</Session></Request>"
+
+
+def _record_config_v30_payload() -> bytes:
+    payload = bytearray(508)
+    payload[0:4] = (508).to_bytes(4, "big")
+    payload[4:8] = (1).to_bytes(4, "big")
+    payload[8:12] = (1).to_bytes(2, "big") + b"\x02\x00"
+    day_3_segment_2 = 36 + (3 * 8 + 2) * 8
+    payload[36:44] = bytes([8, 30, 9, 45, 3, 0, 0, 0])
+    payload[day_3_segment_2 : day_3_segment_2 + 8] = bytes(
+        [22, 0, 23, 30, 4, 0, 0, 0]
+    )
+    payload[484:488] = (7).to_bytes(4, "big")
+    payload[488:492] = (5).to_bytes(4, "big")
+    payload[492:496] = (30).to_bytes(4, "big")
+    payload[496:500] = bytes([1, 1, 0, 1])
+    payload[500:502] = (15).to_bytes(2, "big")
+    payload[502:504] = bytes([1, 2])
+    return bytes(payload)
+
+
+def _net_config_v30_payload() -> bytes:
+    payload = bytearray(492)
+    payload[0:4] = (492).to_bytes(4, "big")
+    payload[4:20] = b"192.0.2.10\x00".ljust(16, b"\x00")
+    payload[20:36] = b"255.255.255.0\x00".ljust(16, b"\x00")
+    payload[36:40] = (1).to_bytes(4, "big")
+    payload[40:42] = (8000).to_bytes(2, "big")
+    payload[42:44] = (1500).to_bytes(2, "big")
+    payload[44:50] = b"\x00\x11\x22\x33\x44\x55"
+    payload[52:68] = b"198.51.100.20\x00".ljust(16, b"\x00")
+    payload[68:84] = b"255.255.0.0\x00".ljust(16, b"\x00")
+    payload[84:88] = (2).to_bytes(4, "big")
+    payload[88:90] = (9000).to_bytes(2, "big")
+    payload[90:92] = (1400).to_bytes(2, "big")
+    payload[92:98] = b"\xaa\xbb\xcc\xdd\xee\xff"
+    payload[100:116] = b"203.0.113.10\x00".ljust(16, b"\x00")
+    payload[116:118] = (7300).to_bytes(2, "big")
+    payload[120:136] = b"203.0.113.11\x00".ljust(16, b"\x00")
+    payload[136:152] = b"239.0.0.1\x00".ljust(16, b"\x00")
+    payload[152:168] = b"192.0.2.1\x00".ljust(16, b"\x00")
+    payload[168:184] = b"192.0.2.200\x00".ljust(16, b"\x00")
+    return bytes(payload)
+
+
+def _compression_info_v30_payload(**overrides: int) -> bytes:
+    fields = {
+        "stream_type": 3,
+        "resolution": 27,
+        "bitrate_type": 0,
+        "picture_quality": 2,
+        "video_bitrate": 23,
+        "video_frame_rate": 14,
+        "i_frame_interval": 60,
+        "interval_bp_frame": 2,
+        "reserved1": 0,
+        "video_encoding_type": 1,
+        "audio_encoding_type": 7,
+        "video_encoding_complexity": 9,
+        "svc_enabled": 0,
+        "format_type": 0,
+        "audio_bitrate": 0,
+        "stream_smoothing": 0,
+        "audio_sampling_rate": 0,
+        "smart_codec": 0,
+        "depth_map_enabled": 0,
+        "average_video_bitrate": 0,
+    } | overrides
+    return (
+        bytes(
+            [
+                fields["stream_type"],
+                fields["resolution"],
+                fields["bitrate_type"],
+                fields["picture_quality"],
+            ]
+        )
+        + fields["video_bitrate"].to_bytes(4, "big")
+        + fields["video_frame_rate"].to_bytes(4, "big")
+        + fields["i_frame_interval"].to_bytes(2, "big")
+        + bytes(
+            [
+                fields["interval_bp_frame"],
+                fields["reserved1"],
+                fields["video_encoding_type"],
+                fields["audio_encoding_type"],
+                fields["video_encoding_complexity"],
+                fields["svc_enabled"],
+                fields["format_type"],
+                fields["audio_bitrate"],
+                fields["stream_smoothing"],
+                fields["audio_sampling_rate"],
+                fields["smart_codec"],
+                fields["depth_map_enabled"],
+            ]
+        )
+        + fields["average_video_bitrate"].to_bytes(2, "big")
+    )
+
+
+def _compression_config_v30_payload() -> bytes:
+    return (
+        (116).to_bytes(4, "big")
+        + _compression_info_v30_payload()
+        + _compression_info_v30_payload(
+            stream_type=4,
+            resolution=28,
+            video_bitrate=24,
+            video_frame_rate=12,
+            i_frame_interval=45,
+            video_encoding_type=2,
+            audio_encoding_type=3,
+            average_video_bitrate=21,
+        )
+        + _compression_info_v30_payload(
+            stream_type=5,
+            resolution=29,
+            video_bitrate=25,
+            video_frame_rate=10,
+            i_frame_interval=30,
+            video_encoding_type=3,
+            audio_encoding_type=4,
+            smart_codec=1,
+        )
+        + _compression_info_v30_payload(
+            stream_type=6,
+            resolution=30,
+            video_bitrate=26,
+            video_frame_rate=8,
+            i_frame_interval=15,
+            video_encoding_type=4,
+            audio_encoding_type=5,
+            depth_map_enabled=1,
+        )
+    )
+
+
+def _picture_config_v40_payload(channel_name: bytes = b"EZVIZ") -> bytes:
+    payload = bytearray(1968)
+    payload[0:4] = (1968).to_bytes(4, "big")
+    payload[4:36] = channel_name.ljust(32, b"\x00")
+    payload[36:40] = (1).to_bytes(4, "big")
+    payload[40:44] = bytes([51, 52, 53, 54])
+    payload[104:108] = (1).to_bytes(4, "big")
+    payload[108:110] = (32).to_bytes(2, "big")
+    payload[110:112] = (48).to_bytes(2, "big")
+    payload[112:116] = (0).to_bytes(4, "big")
+    payload[148:152] = (1).to_bytes(4, "big")
+    payload[152:154] = (16).to_bytes(2, "big")
+    payload[154:156] = (24).to_bytes(2, "big")
+    payload[156:164] = bytes([2, 1, 3, 1, 4, 5, 6, 1])
+    return bytes(payload)
+
+
+def _user_config_v30_payload() -> bytes:
+    user_count = 2
+    entry_size = 792
+    payload = bytearray(4 + user_count * entry_size)
+    payload[0:4] = len(payload).to_bytes(4, "big")
+    entry = memoryview(payload)[4 : 4 + entry_size]
+    entry[0:32] = b"admin".ljust(32, b"\x00")
+    entry[32:48] = b"fixture-pass".ljust(16, b"\x00")
+    entry[48] = 1
+    entry[51] = 1
+    entry[80] = 1
+    entry[112] = 1
+    entry[176] = 1
+    entry[240] = 1
+    entry[304] = 1
+    entry[368] = 1
+    entry[432] = 1
+    entry[496] = 1
+    entry[560] = 1
+    entry[624:640] = b"192.0.2.50\x00".ljust(16, b"\x00")
+    entry[640:768] = b"2001:db8::50\x00".ljust(128, b"\x00")
+    entry[768:774] = b"\x02\x00\x00\x00\x00\x50"
+    entry[774] = 3
+    entry[775:792] = b"reserved".ljust(17, b"\x00")
+    return bytes(payload)
+
+
 EXPECTED_PREVIEW_XML = (
     b'<?xml version="1.0" encoding="utf-8"?>\n'
     b"<Request>\n"
@@ -2971,7 +3180,7 @@ def test_hcnetsdk_pure_python_client_wraps_device_ability_and_stdxml() -> None:
     assert stdxml_response.json() == {"servicesSwitch": {"web": 1}}
 
 
-def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
+def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  # noqa: PLR0915
     client = HcNetSdkPurePythonClient(
         HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
         b"123456",
@@ -2989,19 +3198,51 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
         + b"\x33"
         + b"\x00" * 143
     )
-    compression = bytes.fromhex(
-        "00000074"
-        "031b0002"
-        "00000017"
-        "0000000e"
-        "003c0200"
-        "01070900"
-    ) + b"\x00" * 92
+    compression = _compression_config_v30_payload()
+    time_config = b"".join(
+        value.to_bytes(4, "big")
+        for value in (2026, 6, 21, 15, 47, 8)
+    )
+    ntp_config = (
+        b"time.example.net".ljust(64, b"\x00")
+        + (60).to_bytes(2, "big")
+        + b"\x01\x02\x1e\x00"
+        + (123).to_bytes(2, "big")
+        + b"\x00" * 8
+    )
+    device_config = bytearray(180)
+    device_config[0:4] = (180).to_bytes(4, "big")
+    device_config[4:36] = b"ExampleCam".ljust(32, b"\x00")
+    device_config[36:40] = (88).to_bytes(4, "big")
+    device_config[40:44] = (1).to_bytes(4, "big")
+    device_config[44:92] = b"SERIAL123".ljust(48, b"\x00")
+    device_config[92:96] = (84082688).to_bytes(4, "big")
+    device_config[96:100] = (1575691).to_bytes(4, "big")
+    device_config[100:104] = (458752).to_bytes(4, "big")
+    device_config[104:108] = (132319761).to_bytes(4, "big")
+    device_config[112:116] = (2).to_bytes(4, "big")
+    device_config[120] = 1
+    device_config[122] = 1
+    device_config[124] = 1
+    device_config[125] = 1
+    device_config[130] = 1
+    device_config[138:140] = (31).to_bytes(2, "big")
+    device_config[140:164] = b"IPC".ljust(24, b"\x00")
+    record_config = _record_config_v30_payload()
+    net_config = _net_config_v30_payload()
+    wifi_config = (236).to_bytes(4, "big") + bytes(range(1, 236))
+    access_config = (516).to_bytes(4, "big") + bytes([1, 2, 3]) + b"\x00" * 509
+    user_config = _user_config_v30_payload()
     outputs = {
         HcNetSdkDvrCommand.GET_HD_CFG: (4760).to_bytes(4, "big") + b"\x00" * 4756,
         HcNetSdkDvrCommand.GET_AP_INFO_LIST: (
             (60).to_bytes(4, "big") + (1).to_bytes(4, "big") + ap_entry
         ),
+        HcNetSdkDvrCommand.GET_TIME_CFG: time_config,
+        HcNetSdkDvrCommand.GET_NTP_CFG: ntp_config,
+        HcNetSdkDvrCommand.GET_DEVICE_CFG_V40: bytes(device_config),
+        HcNetSdkDvrCommand.GET_NET_CFG: net_config,
+        HcNetSdkDvrCommand.GET_RECORD_CFG_V30: record_config,
         HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG: camera_param,
         HcNetSdkDvrCommand.GET_WIFI_CONNECT_STATUS: (
             (12).to_bytes(4, "big") + b"\x01\x00\x00\x00" + (7).to_bytes(4, "big")
@@ -3011,9 +3252,11 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
             (8).to_bytes(4, "big") + b"\x50\x00\x00\x00"
         ),
         HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30: compression,
-        HcNetSdkDvrCommand.GET_PIC_CFG_V40: (
-            (40).to_bytes(4, "big") + b"Front".ljust(32, b"\x00") + b"\x00" * 4
-        ),
+        HcNetSdkDvrCommand.GET_PIC_CFG_V30: _picture_config_v40_payload(b"Legacy"),
+        HcNetSdkDvrCommand.GET_PIC_CFG_V40: _picture_config_v40_payload(b"Front"),
+        HcNetSdkDvrCommand.GET_WIFI_CFG: wifi_config,
+        HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG: access_config,
+        HcNetSdkDvrCommand.GET_USER_CFG_V30: user_config,
     }
     requests: list[HcNetSdkDvrConfigRequest] = []
 
@@ -3032,6 +3275,11 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
 
     assert client.hd_config().declared_size == 4760
     assert client.wifi_ap_info_list()[0].ssid == "HomeWifi-2G"
+    assert client.time_config() == HcNetSdkTime(2026, 6, 21, 15, 47, 8)
+    assert client.ntp_config().ntp_port == 123
+    assert client.device_config_v40().channel_count == 1
+    assert client.net_config_v30().ethernet[0].ip_address == "192.0.2.10"
+    assert client.record_config_v30().schedule[0][0].start_hour == 8
     assert client.camera_param_config().brightness == 50
     assert client.wifi_connect_status().error_code == 7
     assert client.audio_input_param().volume == 80
@@ -3039,16 +3287,42 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:
     parsed_compression = client.compression_config()
     assert parsed_compression.video_bitrate == 23
     assert parsed_compression.video_encoding_type == 1
-    assert client.picture_config().channel_name == "Front"
+    assert parsed_compression.network is not None
+    assert parsed_compression.network.video_bitrate == 26
+    parsed_picture = client.picture_config()
+    assert parsed_picture.channel_name == "Front"
+    assert parsed_picture.show_osd == 1
+    parsed_picture_v30 = client.picture_config_v30()
+    assert parsed_picture_v30.channel_name == "Legacy"
+    assert parsed_picture_v30.show_osd == 1
+    assert client.wifi_config_summary().structure == "NET_DVR_WIFI_CFG"
+    assert (
+        client.ezviz_access_config_summary().structure
+        == "NET_DVR_EZVIZ_ACCESS_CFG"
+    )
+    assert client.user_config_v30_summary().structure == "NET_DVR_USER_V30"
+    decoded_user_config = client.user_config_v30()
+    assert decoded_user_config.active_users[0].username == "admin"
+    assert decoded_user_config.active_users[0].password == "fixture-pass"
     assert [request.command for request in requests] == [
         HcNetSdkDvrCommand.GET_HD_CFG,
         HcNetSdkDvrCommand.GET_AP_INFO_LIST,
+        HcNetSdkDvrCommand.GET_TIME_CFG,
+        HcNetSdkDvrCommand.GET_NTP_CFG,
+        HcNetSdkDvrCommand.GET_DEVICE_CFG_V40,
+        HcNetSdkDvrCommand.GET_NET_CFG,
+        HcNetSdkDvrCommand.GET_RECORD_CFG_V30,
         HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG,
         HcNetSdkDvrCommand.GET_WIFI_CONNECT_STATUS,
         HcNetSdkDvrCommand.GET_AUDIO_INPUT_PARAM,
         HcNetSdkDvrCommand.GET_AUDIOOUT_VOLUME,
         HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30,
         HcNetSdkDvrCommand.GET_PIC_CFG_V40,
+        HcNetSdkDvrCommand.GET_PIC_CFG_V30,
+        HcNetSdkDvrCommand.GET_WIFI_CFG,
+        HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
+        HcNetSdkDvrCommand.GET_USER_CFG_V30,
+        HcNetSdkDvrCommand.GET_USER_CFG_V30,
     ]
     with pytest.raises(PyEzvizError, match="channel 1"):
         client.camera_param_config(channel=2)
@@ -4103,6 +4377,9 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
     ap_template = hcnetsdk_dvr_config_command_port_template(
         ezviz_lan_wifi_ap_info_list_request(42)
     )
+    wifi_template = hcnetsdk_dvr_config_command_port_template(
+        ezviz_lan_wifi_get_config_request(42)
+    )
     camera_param_template = hcnetsdk_dvr_config_command_port_template(
         ezviz_lan_video_effect_get_config_request(42)
     )
@@ -4117,6 +4394,9 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
     )
     compression_template = hcnetsdk_dvr_config_command_port_template(
         ezviz_lan_video_coding_get_config_request(42, 1)
+    )
+    pic_v30_template = hcnetsdk_dvr_config_command_port_template(
+        ezviz_lan_pic_config_v30_get_request(42, 1)
     )
     pic_template = hcnetsdk_dvr_config_command_port_template(
         ezviz_lan_pic_config_get_request(42, 1)
@@ -4133,6 +4413,9 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
     assert ap_template.command_id == 0x20140
     assert ap_template.body_tail == COMMAND_PORT_EMPTY_BODY_TAIL
     assert ap_template.name == "NET_DVR_GetDVRConfig:305"
+    assert wifi_template.command_id == 0x20141
+    assert wifi_template.body_tail == COMMAND_PORT_EMPTY_BODY_TAIL
+    assert wifi_template.name == "NET_DVR_GetDVRConfig:307"
     assert camera_param_template.command_id == 0x111096
     assert camera_param_template.body_tail == COMMAND_PORT_EMPTY_BODY_TAIL
     assert camera_param_template.name == "NET_DVR_GetDVRConfig:1067"
@@ -4144,8 +4427,17 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
     assert audio_output_template.body_tail == (1).to_bytes(4, "big")
     assert compression_template.command_id == 0x110040
     assert compression_template.body_tail == (1).to_bytes(4, "big")
+    assert pic_v30_template.command_id == 0x110010
+    assert pic_v30_template.body_tail == (1).to_bytes(4, "big")
+    assert pic_v30_template.name == "NET_DVR_GetDVRConfig:1002"
     assert pic_template.command_id == 0x110010
     assert pic_template.body_tail == (1).to_bytes(4, "big")
+    access_template = hcnetsdk_dvr_config_command_port_template(
+        ezviz_lan_ezviz_access_get_config_request(42)
+    )
+    assert access_template.command_id == 0x113420
+    assert access_template.body_tail == COMMAND_PORT_EMPTY_BODY_TAIL
+    assert access_template.name == "NET_DVR_GetDVRConfig:3398"
     assert explicit.command_id == 0x123456
     assert explicit.body_tail == COMMAND_PORT_TRACE_BODY_TAIL
 
@@ -4172,10 +4464,112 @@ def test_hcnetsdk_dvr_config_command_port_template_uses_traced_hd_config() -> No
         )
 
 
+@pytest.mark.parametrize(
+    ("command", "channel", "structure", "command_id", "body_tail"),
+    [
+        (
+            HcNetSdkDvrCommand.GET_NET_CFG,
+            -1,
+            "NET_DVR_NETCFG_V30",
+            0x110000,
+            COMMAND_PORT_EMPTY_BODY_TAIL,
+        ),
+        (
+            HcNetSdkDvrCommand.GET_RECORD_CFG_V30,
+            1,
+            "NET_DVR_RECORD_V30",
+            0x110020,
+            (1).to_bytes(4, "big"),
+        ),
+        (
+            HcNetSdkDvrCommand.GET_USER_CFG_V30,
+            -1,
+            "NET_DVR_USER_V30",
+            0x110030,
+            COMMAND_PORT_EMPTY_BODY_TAIL,
+        ),
+        (
+            HcNetSdkDvrCommand.GET_TIME_CFG,
+            -1,
+            "NET_DVR_TIME",
+            0x20500,
+            COMMAND_PORT_EMPTY_BODY_TAIL,
+        ),
+        (
+            HcNetSdkDvrCommand.GET_NTP_CFG,
+            -1,
+            "NET_DVR_NTPPARA",
+            0x20112,
+            COMMAND_PORT_EMPTY_BODY_TAIL,
+        ),
+        (
+            HcNetSdkDvrCommand.GET_PIC_CFG_V30,
+            1,
+            "NET_DVR_PICCFG_V30",
+            0x110010,
+            (1).to_bytes(4, "big"),
+        ),
+        (
+            HcNetSdkDvrCommand.GET_DEVICE_CFG_V40,
+            -1,
+            "NET_DVR_DEVICECFG_V40",
+            0x1110C2,
+            COMMAND_PORT_EMPTY_BODY_TAIL,
+        ),
+    ],
+)
+def test_hcnetsdk_dvr_config_command_port_template_uses_raw_traced_mappings(
+    command: HcNetSdkDvrCommand,
+    channel: int,
+    structure: str,
+    command_id: int,
+    body_tail: bytes,
+) -> None:
+    template = hcnetsdk_dvr_config_command_port_template(
+        hcnetsdk_dvr_config_get_request(
+            42,
+            command,
+            channel=channel,
+            structure=structure,
+        )
+    )
+
+    assert template.command_id == command_id
+    assert template.body_tail == body_tail
+    assert template.name == f"NET_DVR_GetDVRConfig:{int(command)}"
+
+
+def test_ezviz_lan_time_ntp_and_device_config_request_shapes() -> None:
+    time_request = ezviz_lan_time_get_config_request(42)
+    ntp_request = ezviz_lan_ntp_get_config_request(42)
+    device_request = ezviz_lan_device_config_v40_request(42)
+    net_request = ezviz_lan_net_config_v30_request(42)
+    record_request = ezviz_lan_record_config_v30_request(42)
+
+    assert time_request.to_native_args_hint()["dwCommand"] == 118
+    assert time_request.to_native_args_hint()["structure"] == "NET_DVR_TIME"
+    assert ntp_request.to_native_args_hint()["dwCommand"] == 224
+    assert ntp_request.to_native_args_hint()["structure"] == "NET_DVR_NTPPARA"
+    assert device_request.to_native_args_hint()["dwCommand"] == 1100
+    assert (
+        device_request.to_native_args_hint()["structure"]
+        == "NET_DVR_DEVICECFG_V40"
+    )
+    assert net_request.to_native_args_hint()["dwCommand"] == 1000
+    assert net_request.to_native_args_hint()["structure"] == "NET_DVR_NETCFG_V30"
+    assert record_request.to_native_args_hint()["dwCommand"] == 1004
+    assert record_request.to_native_args_hint()["lChannel"] == 1
+    assert record_request.to_native_args_hint()["structure"] == "NET_DVR_RECORD_V30"
+
+
 def test_hcnetsdk_dvr_config_command_port_template_rejects_untraced_or_set() -> None:
     with pytest.raises(PyEzvizError, match="command-port id is unknown"):
         hcnetsdk_dvr_config_command_port_template(
-            ezviz_lan_wifi_get_config_request(42)
+            hcnetsdk_dvr_config_get_request(
+                42,
+                HcNetSdkDvrCommand.GET_DEVICE_CFG,
+                structure="NET_DVR_DEVICECFG",
+            )
         )
 
     with pytest.raises(PyEzvizError, match="GET only"):
@@ -4330,6 +4724,8 @@ def test_ezviz_lan_hd_config_respects_traced_native_size() -> None:
     assert ezviz_lan_hd_config(payload + b"\xff" * 8) == EzvizLanHdConfig(
         declared_size=4760,
         raw=payload,
+        disk_count=0,
+        disks=(),
     )
 
     with pytest.raises(PyEzvizError, match="truncated"):
@@ -4337,6 +4733,66 @@ def test_ezviz_lan_hd_config_respects_traced_native_size() -> None:
 
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_hd_config(b"\x00\x00\x00")
+
+
+def test_ezviz_lan_hd_config_parses_disk_table() -> None:
+    disk = bytearray(144)
+    disk[0:4] = (1).to_bytes(4, "big")
+    disk[4:8] = (128000).to_bytes(4, "big")
+    disk[8:12] = (64000).to_bytes(4, "big")
+    disk[12:16] = (2).to_bytes(4, "big")
+    disk[16] = 3
+    disk[17] = 4
+    disk[18] = 5
+    disk[20:24] = (6).to_bytes(4, "big")
+    disk[24] = 1
+    disk[28:32] = (7).to_bytes(4, "big")
+    disk[32:36] = (8000).to_bytes(4, "big")
+    disk[36:40] = (4000).to_bytes(4, "big")
+    payload = (
+        (4760).to_bytes(4, "big")
+        + (1).to_bytes(4, "big")
+        + bytes(disk)
+        + b"\x00" * (4760 - 8 - 144)
+    )
+
+    parsed = ezviz_lan_hd_config(payload)
+
+    assert parsed == EzvizLanHdConfig(
+        declared_size=4760,
+        raw=payload,
+        disk_count=1,
+        disks=(
+            EzvizLanHdDiskConfig(
+                hd_no=1,
+                capacity=128000,
+                free_space=64000,
+                status=2,
+                attribute=3,
+                hd_type=4,
+                disk_driver=5,
+                group=6,
+                recycling=1,
+                storage_type=7,
+                picture_capacity=8000,
+                free_picture_space=4000,
+            ),
+        ),
+    )
+
+
+def test_ezviz_lan_hd_config_rejects_malformed_disk_tables() -> None:
+    with pytest.raises(PyEzvizError, match="disk count"):
+        ezviz_lan_hd_config(
+            (4760).to_bytes(4, "big")
+            + (34).to_bytes(4, "big")
+            + b"\x00" * (4760 - 8)
+        )
+
+    with pytest.raises(PyEzvizError, match="disk table"):
+        ezviz_lan_hd_config(
+            (152).to_bytes(4, "big") + (2).to_bytes(4, "big") + b"\x00" * 144
+        )
 
 
 def test_ezviz_lan_camera_param_config_parses_traced_native_buffer() -> None:
@@ -4395,6 +4851,25 @@ def test_ezviz_lan_camera_param_config_parses_traced_native_buffer() -> None:
         gray_level=3,
         raw=payload,
     )
+    assert parsed.wdr_enabled == 0
+    assert parsed.wdr_level_1 == 50
+    assert parsed.wdr_level_2 == 0
+    assert parsed.wdr_contrast_level == 0
+    assert parsed.day_night_filter_type == 2
+    assert parsed.day_night_schedule_enabled == 0
+    assert parsed.day_night_begin_time == (0, 0, 0)
+    assert parsed.day_night_end_time == (0, 0, 0)
+    assert parsed.day_to_night_filter_level == 0
+    assert parsed.night_to_day_filter_level == 2
+    assert parsed.day_night_filter_time == 3
+    assert parsed.day_night_alarm_trigger_state == 0
+    assert parsed.backlight_mode == 0
+    assert parsed.backlight_level == 0
+
+    subset = ezviz_lan_camera_param_config((12).to_bytes(4, "big") + b"\x00" * 8)
+    assert subset.wdr_enabled is None
+    assert subset.day_night_begin_time is None
+    assert subset.backlight_mode is None
 
     with pytest.raises(PyEzvizError, match="truncated"):
         ezviz_lan_camera_param_config((152).to_bytes(4, "big") + b"\x00" * 32)
@@ -4403,23 +4878,348 @@ def test_ezviz_lan_camera_param_config_parses_traced_native_buffer() -> None:
         ezviz_lan_camera_param_config(b"\x00\x00\x00")
 
 
+def test_ezviz_lan_time_ntp_and_device_config_parsers() -> None:
+    time_payload = b"".join(
+        value.to_bytes(4, "big")
+        for value in (2026, 6, 21, 15, 47, 8)
+    )
+    ntp_payload = (
+        b"time.example.net".ljust(64, b"\x00")
+        + (60).to_bytes(2, "big")
+        + b"\x01\x02\x1e\x00"
+        + (123).to_bytes(2, "big")
+        + b"\x00" * 8
+    )
+    device_payload = bytearray(180)
+    device_payload[0:4] = (180).to_bytes(4, "big")
+    device_payload[4:36] = b"ExampleCam".ljust(32, b"\x00")
+    device_payload[36:40] = (88).to_bytes(4, "big")
+    device_payload[40:44] = (1).to_bytes(4, "big")
+    device_payload[44:92] = b"SERIAL123".ljust(48, b"\x00")
+    device_payload[92:96] = (84082688).to_bytes(4, "big")
+    device_payload[96:100] = (1575691).to_bytes(4, "big")
+    device_payload[100:104] = (458752).to_bytes(4, "big")
+    device_payload[104:108] = (132319761).to_bytes(4, "big")
+    device_payload[108:112] = (3).to_bytes(4, "big")
+    device_payload[112:116] = (2).to_bytes(4, "big")
+    device_payload[116] = 4
+    device_payload[117] = 5
+    device_payload[118] = 6
+    device_payload[119] = 7
+    device_payload[120] = 1
+    device_payload[121] = 8
+    device_payload[122] = 1
+    device_payload[123] = 9
+    device_payload[124] = 1
+    device_payload[125] = 1
+    device_payload[130] = 1
+    device_payload[131] = 2
+    device_payload[138:140] = (31).to_bytes(2, "big")
+    device_payload[140:164] = b"IPC".ljust(24, b"\x00")
+    device = bytes(device_payload)
+
+    assert ezviz_lan_time_config(time_payload + b"\xff") == HcNetSdkTime(
+        2026,
+        6,
+        21,
+        15,
+        47,
+        8,
+    )
+    assert ezviz_lan_ntp_config(ntp_payload + b"\xff") == EzvizLanNtpConfig(
+        ntp_server="time.example.net",
+        interval_minutes=60,
+        enabled=1,
+        time_difference_hours=2,
+        time_difference_minutes=30,
+        ntp_port=123,
+        raw=ntp_payload,
+    )
+    assert ezviz_lan_device_config_v40(device + b"\xff") == (
+        EzvizLanDeviceConfigV40(
+            declared_size=180,
+            device_name="ExampleCam",
+            dvr_id=88,
+            recycle_record=1,
+            serial_number="SERIAL123",
+            software_version=84082688,
+            software_build_date=1575691,
+            dsp_software_version=458752,
+            dsp_software_build_date=132319761,
+            panel_version=3,
+            hardware_version=2,
+            alarm_in_port_count=4,
+            alarm_out_port_count=5,
+            rs232_count=6,
+            rs485_count=7,
+            network_port_count=1,
+            disk_control_count=8,
+            disk_count=1,
+            dvr_type=9,
+            channel_count=1,
+            start_channel=1,
+            audio_count=1,
+            ip_channel_count=2,
+            device_type=31,
+            device_type_name="IPC",
+            raw=device,
+        )
+    )
+
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_time_config(b"\x00")
+    with pytest.raises(PyEzvizError, match="month"):
+        ezviz_lan_time_config(
+            b"".join(
+                value.to_bytes(4, "big")
+                for value in (2026, 13, 21, 15, 47, 8)
+            )
+        )
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_ntp_config(b"\x00")
+    with pytest.raises(PyEzvizError, match="truncated"):
+        ezviz_lan_device_config_v40((180).to_bytes(4, "big") + b"\x00" * 32)
+    with pytest.raises(PyEzvizError, match="too small"):
+        ezviz_lan_device_config_v40((12).to_bytes(4, "big") + b"\x00" * 160)
+
+
+def test_ezviz_lan_net_config_v30_parser_matches_traced_layout() -> None:
+    raw = _net_config_v30_payload()
+
+    parsed = ezviz_lan_net_config_v30(raw + b"\xff")
+
+    assert parsed == EzvizLanNetConfigV30(
+        declared_size=492,
+        ethernet=(
+            EzvizLanNetInterfaceConfig(
+                ip_address="192.0.2.10",
+                subnet_mask="255.255.255.0",
+                net_interface=1,
+                port=8000,
+                mtu=1500,
+                mac_address="00:11:22:33:44:55",
+            ),
+            EzvizLanNetInterfaceConfig(
+                ip_address="198.51.100.20",
+                subnet_mask="255.255.0.0",
+                net_interface=2,
+                port=9000,
+                mtu=1400,
+                mac_address="aa:bb:cc:dd:ee:ff",
+            ),
+        ),
+        manage_host_ip="203.0.113.10",
+        manage_host_port=7300,
+        ip_server_ip="203.0.113.11",
+        multicast_ip="239.0.0.1",
+        gateway_ip="192.0.2.1",
+        nfs_ip="192.0.2.200",
+        raw=raw,
+    )
+
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_net_config_v30(b"\x00")
+    with pytest.raises(PyEzvizError, match="truncated"):
+        ezviz_lan_net_config_v30((492).to_bytes(4, "big") + b"\x00" * 32)
+    with pytest.raises(PyEzvizError, match="too small"):
+        ezviz_lan_net_config_v30((12).to_bytes(4, "big") + b"\x00" * 180)
+
+
+def test_ezviz_lan_net_config_v30_parser_accepts_binary_ipv4_fields() -> None:
+    payload = bytearray(_net_config_v30_payload())
+    payload[4:20] = b"\xfa\x02\x00\xc0" + b"\x00" * 12
+    payload[20:36] = b"\x00\xff\xff\xff" + b"\x00" * 12
+    payload[100:116] = b"\x01\x02\x00\xc0" + b"\x00" * 12
+
+    parsed = ezviz_lan_net_config_v30(bytes(payload))
+
+    assert parsed.ethernet[0].ip_address == "192.0.2.250"
+    assert parsed.ethernet[0].subnet_mask == "255.255.255.0"
+    assert parsed.manage_host_ip == "192.0.2.1"
+
+
+def test_ezviz_lan_sensitive_dvr_config_summaries_do_not_decode_values() -> None:
+    wifi = (236).to_bytes(4, "big") + bytes(range(1, 236)) + b"\xff\xff"
+    access = (516).to_bytes(4, "big") + b"\x01\x02\x03" + b"\x00" * 509
+    shifted_access = bytes.fromhex("02040000") + b"\x01\x02\x03" + b"\x00" * 509
+    user = _user_config_v30_payload()
+    user_declared_size = int.from_bytes(user[0:4], "big")
+
+    assert ezviz_lan_wifi_config_summary(wifi) == EzvizLanDvrConfigSummary(
+        command=HcNetSdkDvrCommand.GET_WIFI_CFG,
+        structure="NET_DVR_WIFI_CFG",
+        declared_size=236,
+        effective_size=236,
+        raw_length=241,
+        trailing_bytes=5,
+        nonzero_bytes=233,
+    )
+    assert ezviz_lan_ezviz_access_config_summary(access) == EzvizLanDvrConfigSummary(
+        command=HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
+        structure="NET_DVR_EZVIZ_ACCESS_CFG",
+        declared_size=516,
+        effective_size=516,
+        raw_length=516,
+        trailing_bytes=0,
+        nonzero_bytes=5,
+    )
+    assert ezviz_lan_ezviz_access_config_summary(
+        shifted_access
+    ) == EzvizLanDvrConfigSummary(
+        command=HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
+        structure="NET_DVR_EZVIZ_ACCESS_CFG",
+        declared_size=516,
+        effective_size=516,
+        raw_length=516,
+        trailing_bytes=0,
+        nonzero_bytes=5,
+    )
+    assert ezviz_lan_user_config_v30_summary(user) == EzvizLanDvrConfigSummary(
+        command=HcNetSdkDvrCommand.GET_USER_CFG_V30,
+        structure="NET_DVR_USER_V30",
+        declared_size=user_declared_size,
+        effective_size=user_declared_size,
+        raw_length=len(user),
+        trailing_bytes=0,
+        nonzero_bytes=sum(1 for value in user if value),
+    )
+    assert ezviz_lan_dvr_config_summary(
+        b"\x00\x00\x00\x00\x01\x00",
+        command=123,
+        structure="GENERIC_CFG",
+    ) == EzvizLanDvrConfigSummary(
+        command=123,
+        structure="GENERIC_CFG",
+        declared_size=0,
+        effective_size=6,
+        raw_length=6,
+        trailing_bytes=0,
+        nonzero_bytes=1,
+    )
+
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_wifi_config_summary(b"\x00")
+    with pytest.raises(PyEzvizError, match="truncated"):
+        ezviz_lan_ezviz_access_config_summary(
+            (516).to_bytes(4, "big") + b"\x00" * 32
+        )
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_user_config_v30_summary(b"\x00")
+
+
+def test_ezviz_lan_user_config_v30_parser_decodes_sensitive_values() -> None:
+    raw = _user_config_v30_payload()
+
+    parsed = ezviz_lan_user_config_v30(raw + b"\xff")
+    active = parsed.active_users
+
+    assert isinstance(parsed, EzvizLanUserConfigV30)
+    assert parsed.declared_size == len(raw)
+    assert parsed.raw_length == len(raw) + 1
+    assert parsed.trailing_bytes == 1
+    assert len(parsed.users) == 2
+    assert len(active) == 1
+    assert active[0] == EzvizLanUserConfigV30Entry(
+        index=0,
+        username="admin",
+        password="fixture-pass",
+        password_bytes=b"fixture-pass",
+        local_rights=(1, 0, 0, 1) + (0,) * 28,
+        remote_rights=(1,) + (0,) * 31,
+        net_preview_rights=(1,) + (0,) * 63,
+        local_playback_rights=(1,) + (0,) * 63,
+        net_playback_rights=(1,) + (0,) * 63,
+        local_record_rights=(1,) + (0,) * 63,
+        net_record_rights=(1,) + (0,) * 63,
+        local_ptz_rights=(1,) + (0,) * 63,
+        net_ptz_rights=(1,) + (0,) * 63,
+        local_backup_rights=(1,) + (0,) * 63,
+        user_ipv4="192.0.2.50",
+        user_ipv6="2001:db8::50",
+        mac_address="02:00:00:00:00:50",
+        priority=3,
+        reserved=b"reserved".ljust(17, b"\x00"),
+    )
+    assert "fixture-pass" not in repr(active[0])
+    assert parsed.users[1].is_active is False
+
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_user_config_v30(b"\x00")
+    with pytest.raises(PyEzvizError, match="truncated"):
+        ezviz_lan_user_config_v30(len(raw).to_bytes(4, "big") + b"\x00" * 64)
+    with pytest.raises(PyEzvizError, match="misaligned"):
+        ezviz_lan_user_config_v30(
+            (len(raw) + 1).to_bytes(4, "big") + raw[4:] + b"\x00"
+        )
+
+
+def test_ezviz_lan_record_config_v30_parser_matches_traced_layout() -> None:
+    raw = _record_config_v30_payload()
+
+    parsed = ezviz_lan_record_config_v30(raw + b"\xff")
+
+    assert parsed == EzvizLanRecordConfigV30(
+        declared_size=508,
+        record_enabled=1,
+        all_day=(
+            EzvizLanRecordDayConfig(day_index=0, all_day_record=1, record_type=2),
+            *(
+                EzvizLanRecordDayConfig(
+                    day_index=index,
+                    all_day_record=0,
+                    record_type=0,
+                )
+                for index in range(1, 7)
+            ),
+        ),
+        schedule=parsed.schedule,
+        record_time=7,
+        pre_record_time=5,
+        recorder_duration=30,
+        redundancy_record=1,
+        audio_record=1,
+        stream_type=0,
+        passback_record=1,
+        lock_duration=15,
+        record_backup=1,
+        svc_level=2,
+        raw=raw,
+    )
+    assert len(parsed.schedule) == 7
+    assert all(len(day) == 8 for day in parsed.schedule)
+    assert parsed.schedule[0][0] == EzvizLanRecordScheduleSegment(
+        day_index=0,
+        segment_index=0,
+        start_hour=8,
+        start_minute=30,
+        stop_hour=9,
+        stop_minute=45,
+        record_type=3,
+    )
+    assert parsed.schedule[3][2] == EzvizLanRecordScheduleSegment(
+        day_index=3,
+        segment_index=2,
+        start_hour=22,
+        start_minute=0,
+        stop_hour=23,
+        stop_minute=30,
+        record_type=4,
+    )
+
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_record_config_v30(b"\x00")
+    with pytest.raises(PyEzvizError, match="truncated"):
+        ezviz_lan_record_config_v30((508).to_bytes(4, "big") + b"\x00" * 32)
+    with pytest.raises(PyEzvizError, match="too small"):
+        ezviz_lan_record_config_v30((12).to_bytes(4, "big") + b"\x00" * 500)
+
+
 def test_ezviz_lan_dvr_config_parsers_use_traced_native_offsets() -> None:
     wifi_status = bytes.fromhex("000001000100000000000000") + b"\x00" * 244
     audio_input = bytes.fromhex("0050000000000000")
     audio_output = bytes.fromhex("0000004450000000") + b"\x00" * 60
-    compression = bytes.fromhex(
-        "00000074"
-        "031b0002"
-        "00000017"
-        "0000000e"
-        "003c0200"
-        "01070900"
-    ) + b"\x00" * 92
-    picture = (
-        (1968).to_bytes(4, "big")
-        + b"EZVIZ".ljust(32, b"\x00")
-        + b"\x00" * (1968 - 36)
-    )
+    compression = _compression_config_v30_payload()
+    picture = _picture_config_v40_payload()
 
     assert ezviz_lan_wifi_connect_status(wifi_status + b"\xff") == (
         EzvizLanWifiConnectStatus(
@@ -4458,11 +5258,72 @@ def test_ezviz_lan_dvr_config_parsers_use_traced_native_offsets() -> None:
             raw=compression,
         )
     )
-    assert ezviz_lan_picture_config(picture + b"\xff") == EzvizLanPictureConfig(
+    parsed_compression = ezviz_lan_compression_config(compression + b"\xff")
+    assert parsed_compression.normal_record == EzvizLanCompressionInfoV30(
+        stream_type=3,
+        resolution=27,
+        bitrate_type=0,
+        picture_quality=2,
+        video_bitrate=23,
+        video_frame_rate=14,
+        i_frame_interval=60,
+        interval_bp_frame=2,
+        reserved1=0,
+        video_encoding_type=1,
+        audio_encoding_type=7,
+        video_encoding_complexity=9,
+        svc_enabled=0,
+        format_type=0,
+        audio_bitrate=0,
+        stream_smoothing=0,
+        audio_sampling_rate=0,
+        smart_codec=0,
+        depth_map_enabled=0,
+        average_video_bitrate=0,
+        raw=compression[4:32],
+    )
+    assert parsed_compression.reserved is not None
+    assert parsed_compression.reserved.video_bitrate == 24
+    assert parsed_compression.reserved.average_video_bitrate == 21
+    assert parsed_compression.event_record is not None
+    assert parsed_compression.event_record.smart_codec == 1
+    assert parsed_compression.network is not None
+    assert parsed_compression.network.depth_map_enabled == 1
+    assert parsed_compression.network.video_encoding_type == 4
+
+    parsed_picture = ezviz_lan_picture_config(picture + b"\xff")
+    assert parsed_picture == EzvizLanPictureConfig(
         declared_size=1968,
         channel_name="EZVIZ",
         raw=picture,
     )
+    assert parsed_picture.video_format == 1
+    assert (
+        parsed_picture.brightness,
+        parsed_picture.contrast,
+        parsed_picture.saturation,
+        parsed_picture.hue,
+    ) == (51, 52, 53, 54)
+    assert parsed_picture.show_channel_name == 1
+    assert parsed_picture.channel_name_position == (32, 48)
+    assert parsed_picture.hide_enabled == 0
+    assert parsed_picture.show_osd == 1
+    assert parsed_picture.osd_position == (16, 24)
+    assert parsed_picture.osd_type == 2
+    assert parsed_picture.display_week == 1
+    assert parsed_picture.osd_attribute == 3
+    assert parsed_picture.hour_osd_type == 1
+    assert parsed_picture.font_size == 4
+    assert parsed_picture.osd_color_type == 5
+    assert parsed_picture.alignment == 6
+    assert parsed_picture.osd_millisecond_enabled == 1
+
+    short_picture = ezviz_lan_picture_config(
+        (36).to_bytes(4, "big") + b"EZVIZ".ljust(32, b"\x00")
+    )
+    assert short_picture.video_format is None
+    assert short_picture.show_channel_name is None
+    assert short_picture.osd_position is None
 
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_audio_input_param(b"\x00")
@@ -4474,6 +5335,27 @@ def test_ezviz_lan_dvr_config_parsers_use_traced_native_offsets() -> None:
         ezviz_lan_audio_output_volume((68).to_bytes(4, "big") + b"\x00" * 8)
     with pytest.raises(PyEzvizError, match="declared size is too small"):
         ezviz_lan_compression_config((16).to_bytes(4, "big") + b"\x00" * 32)
+
+
+def test_ezviz_lan_dvr_config_parsers_accept_live_command_port_size_words() -> None:
+    wifi_status = bytes.fromhex("010000000100000000000000") + b"\x00" * 244
+    audio_output = bytes.fromhex("0044000054000000") + b"\x00" * 60
+
+    assert ezviz_lan_wifi_connect_status(wifi_status) == (
+        EzvizLanWifiConnectStatus(
+            declared_size=256,
+            current_status=1,
+            error_code=0,
+            raw=wifi_status,
+        )
+    )
+    assert ezviz_lan_audio_output_volume(audio_output) == (
+        EzvizLanAudioOutputVolume(
+            declared_size=68,
+            volume=84,
+            raw=audio_output,
+        )
+    )
 
 
 def test_ezviz_lan_wifi_request_rejects_overlong_or_invalid_inputs() -> None:
@@ -4534,6 +5416,7 @@ def test_ezviz_lan_audio_video_and_picture_request_shapes() -> None:
         video_frame_rate=25,
         video_bitrate=1024,
     )
+    pic_v30_get = ezviz_lan_pic_config_v30_get_request(42, 3)
     pic_get = ezviz_lan_pic_config_get_request(42, 3)
     pic_set = ezviz_lan_pic_config_update_request(
         42,
@@ -4554,6 +5437,9 @@ def test_ezviz_lan_audio_video_and_picture_request_shapes() -> None:
         "struNormHighRecordPara.dwVideoFrameRate": 25,
         "struNormHighRecordPara.dwVideoBitrate": 1024,
     }
+    assert pic_v30_get.to_native_args_hint()["dwCommand"] == 1002
+    assert pic_v30_get.to_native_args_hint()["structure"] == "NET_DVR_PICCFG_V30"
+    assert pic_v30_get.to_native_args_hint()["lChannel"] == 3
     assert pic_get.to_native_args_hint()["dwCommand"] == 6179
     assert pic_set.to_native_args_hint()["fieldUpdates"] == {
         "dwShowOsd": 1,

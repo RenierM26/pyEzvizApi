@@ -32,6 +32,10 @@
 
     invoke-virtual {v0, v1}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
 
+    const/4 v0, 0x2
+
+    invoke-static {v0}, Ljava/lang/System;->exit(I)V
+
     return-void
 
     :args_ok
@@ -109,9 +113,16 @@
 
     invoke-virtual {v0, v1}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
 
-    const/4 v14, 0x0
+    if-gez v13, :neutral_login_ok
 
-    if-ltz v13, :neutral_user_after_get
+    const/4 v0, 0x1
+
+    invoke-static {v0}, Ljava/lang/System;->exit(I)V
+
+    return-void
+
+    :neutral_login_ok
+    const/4 v14, 0x0
 
     new-instance v0, Lcom/neutral/netsdk/NET_DVR_USER_V30;
 
@@ -125,7 +136,6 @@
 
     move-result v14
 
-    :neutral_user_after_get
     invoke-static {}, Lcom/videogo/hcnetsdk/HCNetSDKManage;->a()Lcom/neutral/netsdk/HCNetSDK;
 
     move-result-object v1
@@ -187,8 +197,6 @@
     const-string v2, "[dvr-config-sidecar] outDump=disabled"
 
     invoke-virtual {v1, v2}, Ljava/io/PrintStream;->println(Ljava/lang/String;)V
-
-    if-ltz v13, :done
 
     invoke-static {}, Lcom/videogo/hcnetsdk/HCNetSDKManage;->a()Lcom/neutral/netsdk/HCNetSDK;
 

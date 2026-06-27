@@ -56,17 +56,19 @@ public final class DvrConfigProbe {
                 neutralDeviceInfo
             );
             System.out.println("[dvr-config-sidecar] loginId=" + neutralLoginId);
-            boolean ok = false;
-            if (neutralLoginId >= 0) {
-                com.neutral.netsdk.NET_DVR_USER_V30 userConfig =
-                    new com.neutral.netsdk.NET_DVR_USER_V30();
-                ok = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_GetDVRConfig(
-                    neutralLoginId,
-                    command,
-                    channel,
-                    userConfig
-                );
+            if (neutralLoginId < 0) {
+                System.exit(1);
+                return;
             }
+            boolean ok = false;
+            com.neutral.netsdk.NET_DVR_USER_V30 userConfig =
+                new com.neutral.netsdk.NET_DVR_USER_V30();
+            ok = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_GetDVRConfig(
+                neutralLoginId,
+                command,
+                channel,
+                userConfig
+            );
             int lastError = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_GetLastError();
             System.out.println(
                 "[dvr-config-sidecar] get ret=" + ok
@@ -76,10 +78,8 @@ public final class DvrConfigProbe {
                     + " lastError=" + lastError
             );
             System.out.println("[dvr-config-sidecar] outDump=disabled");
-            if (neutralLoginId >= 0) {
-                boolean neutralLogout = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_Logout_V30(neutralLoginId);
-                System.out.println("[dvr-config-sidecar] logout=" + neutralLogout);
-            }
+            boolean neutralLogout = com.videogo.hcnetsdk.HCNetSDKManage.a().NET_DVR_Logout_V30(neutralLoginId);
+            System.out.println("[dvr-config-sidecar] logout=" + neutralLogout);
             System.out.println("[dvr-config-sidecar] done");
             return;
         }

@@ -712,6 +712,12 @@ def _user_config_v30_payload() -> bytes:
     return bytes(payload)
 
 
+def _shifted_size_word_payload(raw: bytes) -> bytes:
+    size = len(raw)
+    assert 0 < size <= 0xFFFF
+    return size.to_bytes(2, "big") + b"\x00\x00" + raw[4:]
+
+
 EXPECTED_PREVIEW_XML = (
     b'<?xml version="1.0" encoding="utf-8"?>\n'
     b"<Request>\n"
@@ -5038,6 +5044,63 @@ def test_ezviz_lan_net_config_v30_parser_accepts_binary_ipv4_fields() -> None:
     assert parsed.manage_host_ip == "192.0.2.1"
 
 
+def test_ezviz_lan_size_prefixed_dvr_parsers_accept_shifted_size_words() -> None:
+    entry = (
+        b"LabWifi".ljust(36, b"\x00")
+        + (4).to_bytes(4, "big")
+        + (11).to_bytes(4, "big")
+        + (84).to_bytes(4, "big")
+        + (150).to_bytes(4, "big")
+    )
+    wifi_ap = (60).to_bytes(4, "big") + (1).to_bytes(4, "big") + entry
+    hd = (8).to_bytes(4, "big") + (0).to_bytes(4, "big")
+    camera = (12).to_bytes(4, "big") + bytes([10, 20, 30, 40, 50, 1, 2, 3])
+    device = bytearray(180)
+    device[0:4] = (180).to_bytes(4, "big")
+    device[4:36] = b"ShiftedCam".ljust(32, b"\x00")
+
+    assert ezviz_lan_wifi_ap_info_list(
+        _shifted_size_word_payload(wifi_ap)
+    )[0].ssid == "LabWifi"
+    assert (
+        ezviz_lan_net_config_v30(
+            _shifted_size_word_payload(_net_config_v30_payload())
+        ).declared_size
+        == 492
+    )
+    assert (
+        ezviz_lan_device_config_v40(
+            _shifted_size_word_payload(bytes(device))
+        ).device_name
+        == "ShiftedCam"
+    )
+    assert (
+        ezviz_lan_record_config_v30(
+            _shifted_size_word_payload(_record_config_v30_payload())
+        ).declared_size
+        == 508
+    )
+    assert ezviz_lan_hd_config(_shifted_size_word_payload(hd)).disk_count == 0
+    assert (
+        ezviz_lan_camera_param_config(
+            _shifted_size_word_payload(camera)
+        ).brightness
+        == 10
+    )
+    assert (
+        ezviz_lan_compression_config(
+            _shifted_size_word_payload(_compression_config_v30_payload())
+        ).declared_size
+        == 116
+    )
+    assert (
+        ezviz_lan_picture_config(
+            _shifted_size_word_payload(_picture_config_v40_payload())
+        ).channel_name
+        == "EZVIZ"
+    )
+
+
 def test_ezviz_lan_sensitive_dvr_config_summaries_do_not_decode_values() -> None:
     wifi = (236).to_bytes(4, "big") + bytes(range(1, 236)) + b"\xff\xff"
     access = (516).to_bytes(4, "big") + b"\x01\x02\x03" + b"\x00" * 509
@@ -5142,6 +5205,14 @@ def test_ezviz_lan_user_config_v30_parser_decodes_sensitive_values() -> None:
     )
     assert "fixture-pass" not in repr(active[0])
     assert parsed.users[1].is_active is False
+
+    shifted = ezviz_lan_user_config_v30(_shifted_size_word_payload(raw) + b"\xee")
+
+    assert shifted.declared_size == len(raw)
+    assert shifted.raw_length == len(raw) + 1
+    assert shifted.trailing_bytes == 1
+    assert shifted.active_users[0].username == "admin"
+    assert shifted.active_users[0].password == "fixture-pass"
 
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_user_config_v30(b"\x00")

@@ -29,7 +29,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added pure-Python client convenience methods for trace-backed DVR config reads that return typed parser results directly.
 - Added a typed pure-Python `NET_DVR_HDCFG` parser and client convenience method for traced local storage config reads.
 - Expanded the traced `NET_DVR_HDCFG` parser with decoded disk-table entries and malformed table validation.
-- Accepted live command-port size-word variants for traced Wi-Fi/audio/EZVIZ-access DVR config reads, and decoded binary IPv4 fields in traced `NET_DVR_NETCFG_V30` responses.
+- Accepted live command-port size-word variants across traced size-prefixed DVR config parsers, and decoded binary IPv4 fields in traced `NET_DVR_NETCFG_V30` responses.
 - Expanded the traced `NET_DVR_CAMERAPARAMCFG` parser with the remaining video-effect bytes exposed by the native structure.
 - Added compatibility-preserving `NET_DVR_CAMERAPARAMCFG` accessors for traced WDR, day/night, and backlight fields.
 - Added the trace-backed command-port mapping for read-only `NET_DVR_WIFI_CFG` reads, plus a non-secret summary helper that avoids decoding credential-bearing fields.

@@ -5412,11 +5412,10 @@ def ezviz_lan_wifi_ap_info_list(
     raw = bytes(data)
     if len(raw) < HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE:
         raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "Wi-Fi AP list"
+    )
     count = int.from_bytes(raw[4:8], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is truncated")
-    effective_size = declared_size or len(raw)
     required_size = (
         HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE
         + count * HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE
@@ -5532,10 +5531,9 @@ def ezviz_lan_net_config_v30(
     raw = bytes(data)
     if len(raw) < 4:
         raise PyEzvizError("EZVIZ LAN net config response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN net config response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "net config"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_NETCFG_V30_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN net config declared size is too small")
@@ -5723,10 +5721,9 @@ def ezviz_lan_user_config_v30(
     raw = bytes(data)
     if len(raw) < 4:
         raise PyEzvizError("EZVIZ LAN user config response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN user config response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "user config"
+    )
     if effective_size < HCNETSDK_USER_CFG_V30_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN user config declared size is too small")
     if effective_size > HCNETSDK_USER_CFG_V30_MAX_SIZE:
@@ -5831,10 +5828,9 @@ def ezviz_lan_device_config_v40(
     raw = bytes(data)
     if len(raw) < 4:
         raise PyEzvizError("EZVIZ LAN device V40 config response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN device V40 config response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "device V40 config"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_DEVICE_CFG_V40_MIN_SIZE:
         raise PyEzvizError(
@@ -5899,10 +5895,9 @@ def ezviz_lan_record_config_v30(
     raw = bytes(data)
     if len(raw) < 4:
         raise PyEzvizError("EZVIZ LAN record config response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN record config response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "record config"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_RECORD_CFG_V30_SIZE:
         raise PyEzvizError("EZVIZ LAN record config declared size is too small")
@@ -5967,10 +5962,9 @@ def ezviz_lan_hd_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_HD_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN HD config response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN HD config response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "HD config"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_HD_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN HD config declared size is too small")
@@ -6034,10 +6028,9 @@ def ezviz_lan_camera_param_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN camera-param response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN camera-param response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "camera-param"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN camera-param declared size is too small")
@@ -6151,10 +6144,9 @@ def ezviz_lan_compression_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_COMPRESSION_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN compression response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN compression response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "compression"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_COMPRESSION_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN compression declared size is too small")
@@ -6184,10 +6176,9 @@ def ezviz_lan_picture_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_PIC_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN picture response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN picture response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "picture"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_PIC_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN picture declared size is too small")

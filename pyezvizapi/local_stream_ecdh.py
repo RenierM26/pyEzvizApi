@@ -422,12 +422,17 @@ class EzvizLocalSdkEcdhMediaStream:
         *,
         max_packets: int | None = None,
         max_frames: int | None = None,
+        duration_seconds: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[EzvizLocalSdkEcdhStreamPacket]:
         """Yield decoded local SDK ECDH MPEG-PS payloads."""
         if max_packets is not None and max_packets <= 0:
             return
         if max_frames is not None and max_frames <= 0:
             return
+        if duration_seconds is not None and duration_seconds <= 0:
+            return
+        deadline = monotonic() + duration_seconds if duration_seconds is not None else None
         if self.bootstrap is None:
             self.start()
 
@@ -444,6 +449,8 @@ class EzvizLocalSdkEcdhMediaStream:
         while (max_packets is None or emitted < max_packets) and (
             max_frames is None or read_frames < max_frames
         ):
+            if deadline is not None and monotonic() >= deadline:
+                break
             media = self.sdk_client.read_stream_frame_after_prefix(
                 max_prefix_bytes=self.max_prefix_bytes,
             )
@@ -614,8 +621,10 @@ def copy_local_sdk_ecdh_stream_to_mpegps(
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Write decoded local SDK ECDH MPEG-PS payloads to ``output``."""
-    start = monotonic()
-    for packet in stream.iter_packets(max_packets=max_packets, max_frames=max_frames):
+    for packet in stream.iter_packets(
+        max_packets=max_packets,
+        max_frames=max_frames,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    ):
         output.write(packet.body)
-        if duration_seconds is not None and monotonic() - start >= duration_seconds:
-            break

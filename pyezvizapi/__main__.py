@@ -678,8 +678,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument(
         "--format",
         choices=("mpegts", "mpegps"),
-        default="mpegts",
-        help="Output container: MPEG-TS is easiest for FFmpeg/Home Assistant (default: mpegts)",
+        default=None,
+        help=(
+            "Output container: MPEG-TS is easiest for FFmpeg/Home Assistant; "
+            "defaults to mpegps for local-sdk-ecdh and mpegts otherwise"
+        ),
     )
     parser_save_clip.add_argument(
         "--ffmpeg-path",
@@ -2296,9 +2299,13 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
         )
         else None
     )
+    output_format = args.format
+    if output_format is None:
+        output_format = "mpegps" if args.source == "local-sdk-ecdh" else "mpegts"
+
     save_kwargs: dict[str, Any] = {
         "source": args.source,
-        "output_format": args.format,
+        "output_format": output_format,
         "duration_seconds": args.duration,
         "max_packets": args.max_packets,
         "channel": args.channel,

@@ -2720,6 +2720,39 @@ def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ps"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="local-sdk-ecdh",
+    )
+
+    assert calls[0]["client"] is client
+    assert calls[0]["serial"] == "CAM123"
+    assert output_path.read_bytes() == SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD
+    assert result["source"] == "local-sdk-ecdh"
+    assert result["format"] == "mpegps"
+    assert result["content_type"] == "video/mpeg"
+
+
 def test_save_clip_local_sdk_ecdh_rejects_mpegts(tmp_path) -> None:
     client = _client()
 

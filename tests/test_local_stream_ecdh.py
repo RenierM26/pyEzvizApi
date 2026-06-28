@@ -370,6 +370,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     )
 
     output = BytesIO()
+    duration_seconds = 0.5
     copy_local_sdk_ecdh_stream_from_client(
         object(),
         "CAM123",
@@ -381,7 +382,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
         p2p_register_max_retries=1,
         max_packets=1,
         max_frames=3,
-        duration_seconds=0.5,
+        duration_seconds=duration_seconds,
     )
 
     assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD
@@ -390,7 +391,10 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[0]["send_init"] is True
     assert copied[0]["register_p2p_session"] is False
     assert copied[0]["p2p_register_max_retries"] == 1
-    assert copied[1] == {"max_packets": 1, "max_frames": 3}
+    assert copied[1]["max_packets"] == 1
+    assert copied[1]["max_frames"] == 3
+    assert copied[1]["duration_seconds"] == duration_seconds
+    assert callable(copied[1]["monotonic"])
 
 
 def test_ezviz_local_sdk_ecdh_stream_iter_packets_can_bound_input_frames() -> None:
@@ -429,3 +433,65 @@ def test_ezviz_local_sdk_ecdh_stream_iter_packets_can_bound_input_frames() -> No
     )
 
     assert list(stream.iter_packets(max_packets=1, max_frames=1)) == []
+
+
+def test_ezviz_local_sdk_ecdh_stream_iter_packets_can_bound_suppressed_frames_by_duration() -> None:
+    class FakeSdkClient:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def bootstrap_preview_from_fields(self, **_kwargs: object) -> object:
+            return EzvizLocalSdkStreamBootstrap(
+                preview=cast(Any, object()),
+                stream_setup=cast(Any, object()),
+                first_media=EzvizInterleavedRtpFrameWithPrefix(
+                    prefix=b"",
+                    frame=EzvizInterleavedRtpFrame(
+                        header=EzvizInterleavedRtpFrameHeader(
+                            channel=1,
+                            payload_length=11,
+                        ),
+                        payload=b"not-local_sdk_ecdh",
+                    ),
+                ),
+            )
+
+        def read_stream_frame_after_prefix(self, **_kwargs: object) -> object:
+            self.reads += 1
+            return EzvizInterleavedRtpFrameWithPrefix(
+                prefix=b"",
+                frame=EzvizInterleavedRtpFrame(
+                    header=EzvizInterleavedRtpFrameHeader(
+                        channel=1,
+                        payload_length=11,
+                    ),
+                    payload=b"not-local_sdk_ecdh",
+                ),
+            )
+
+        def close(self) -> None:
+            return None
+
+    ticks = iter([0.0, 0.1, 0.4, 1.1])
+    sdk_client = FakeSdkClient()
+    stream = EzvizLocalSdkEcdhMediaStream(
+        cast(Any, sdk_client),
+        EzvizLocalPreviewRequest(
+            operation_code="0123456",
+            channel=1,
+            receiver_info="receiver",
+            receiver_info_ex="receiver-ex",
+        ),
+        generate_ezviz_local_sdk_ecdh_keypair(),
+    )
+
+    packets = list(
+        stream.iter_packets(
+            max_packets=1,
+            duration_seconds=1.0,
+            monotonic=lambda: next(ticks),
+        ),
+    )
+
+    assert packets == []
+    assert sdk_client.reads == 2

@@ -2986,7 +2986,7 @@ class EzvizClient:
         output: str | Path | BinaryIO,
         *,
         source: ClipSource = "local-sdk",
-        output_format: ClipOutputFormat = "mpegts",
+        output_format: ClipOutputFormat | None = None,
         duration_seconds: float | None = 10.0,
         max_packets: int | None = None,
         channel: int = 1,
@@ -3034,7 +3034,14 @@ class EzvizClient:
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
         port-8000 HCNetSDK bootstrap command frames, then remuxes the command
         port media stream to MPEG-TS.
+        When omitted, ``output_format`` defaults to MPEG-PS for
+        ``source="local-sdk-ecdh"`` and MPEG-TS for other sources.
         """
+
+        if output_format is None:
+            output_format = (
+                "mpegps" if source == "local-sdk-ecdh" else "mpegts"
+            )
 
         if source == "local-sdk":
             return self._save_local_sdk_clip(

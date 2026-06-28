@@ -1105,6 +1105,36 @@ def test_save_clip_can_use_local_sdk_ecdh_source(
     assert json.loads(capsys.readouterr().out)["source"] == "local-sdk-ecdh"
 
 
+def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ps"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--serial",
+                "CAM123",
+                "--source",
+                "local-sdk-ecdh",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    request = fake_client.instances[0].save_clip_request
+    assert request["source"] == "local-sdk-ecdh"
+    assert request["output_format"] == "mpegps"
+
+
 def test_save_clip_can_use_hcnetsdk_command_port_source(
     monkeypatch,
     tmp_path,

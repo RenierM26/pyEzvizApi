@@ -1138,6 +1138,76 @@ def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(
     assert request["output_format"] == "mpegps"
 
 
+def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class ClipClient(_FakeClient):
+        service_urls_calls: int
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.service_urls_calls = 0
+
+        def login(self, sms_code: int | None = None) -> None:
+            super().login(sms_code)
+            self.exported_token = cast(
+                dict[str, Any],
+                {
+                    "session_id": "new-session",
+                    "rf_session_id": "new-refresh",
+                    "api_url": "apiieu.ezvizlife.com",
+                    "service_urls": {"pushAddr": "push.example.test"},
+                },
+            )
+
+        def get_service_urls(self) -> dict[str, Any]:
+            self.service_urls_calls += 1
+            return {"sysConf": [None] * 15 + ["cas.example.test", 443]}
+
+    fake_client = _install_fake_client(monkeypatch, ClipClient)
+    token_path = tmp_path / "token.json"
+    token_path.write_text(
+        json.dumps(
+            {
+                "session_id": "saved-session",
+                "rf_session_id": "saved-refresh",
+                "api_url": "apiieu.ezvizlife.com",
+                "service_urls": {"pushAddr": "push.example.test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "www" / "front.ps"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                str(token_path),
+                "save",
+                "clip",
+                "--serial",
+                "CAM123",
+                "--source",
+                "local-sdk-ecdh",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    client = cast(ClipClient, fake_client.instances[0])
+    assert client.login_calls == [None]
+    assert client.service_urls_calls == 1
+    assert client.exported_token["service_urls"] == {
+        "sysConf": [None] * 15 + ["cas.example.test", 443]
+    }
+    assert client.save_clip_request["source"] == "local-sdk-ecdh"
+    assert client.save_clip_request["output_format"] == "mpegps"
+
+
 def test_save_clip_can_use_hcnetsdk_command_port_source(
     monkeypatch,
     tmp_path,

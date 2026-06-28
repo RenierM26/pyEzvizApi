@@ -1602,7 +1602,7 @@ def _action_requires_service_urls(args: argparse.Namespace) -> bool:
         or (
             args.action == "save"
             and getattr(args, "save_action", None) == "clip"
-            and getattr(args, "source", None) == "local-sdk"
+            and getattr(args, "source", None) in {"local-sdk", "local-sdk-ecdh"}
         )
     )
 

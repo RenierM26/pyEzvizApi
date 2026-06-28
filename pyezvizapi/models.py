@@ -4,7 +4,111 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import json
 from typing import Any
+
+
+def _optional_int(value: Any) -> int | None:
+    """Return an int for API values that may arrive as ints or numeric strings."""
+    result: int | None = None
+    if isinstance(value, bool):
+        result = int(value)
+    elif isinstance(value, int):
+        result = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                result = int(stripped)
+            except ValueError:
+                result = None
+    return result
+
+
+def _optional_bool(value: Any) -> bool | None:
+    """Return a bool for API enable flags that may be encoded as ints/strings."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        stripped = value.strip().lower()
+        if stripped in {"1", "true", "yes", "on"}:
+            return True
+        if stripped in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+@dataclass(frozen=True)
+class EzvizChimeMusic:
+    """Typed view of the APK-backed ``STATUS.optionals.ChimeMusic`` payload."""
+
+    doorbell: int | None = None
+    pir: int | None = None
+    volume: int | None = None
+    doorbell_enabled: bool | None = None
+    pir_enabled: bool | None = None
+    raw: Mapping[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, value: Any) -> EzvizChimeMusic | None:
+        """Parse the cloud ChimeMusic optional JSON into typed fields."""
+        if value is None or value == "":
+            return None
+        decoded: Any = value
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(decoded, Mapping):
+            return None
+
+        return cls(
+            doorbell=_optional_int(decoded.get("doorbell")),
+            pir=_optional_int(decoded.get("pir")),
+            volume=_optional_int(decoded.get("volume")),
+            doorbell_enabled=_optional_bool(decoded.get("doorbell_enable")),
+            pir_enabled=_optional_bool(decoded.get("pir_enable")),
+            raw=dict(decoded),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return non-empty parsed fields using API-shaped keys."""
+        values = {
+            "doorbell": self.doorbell,
+            "pir": self.pir,
+            "volume": self.volume,
+            "doorbell_enable": self.doorbell_enabled,
+            "pir_enable": self.pir_enabled,
+        }
+        return {key: value for key, value in values.items() if value is not None}
+
+
+@dataclass(frozen=True)
+class EzvizDeviceChimeInfo:
+    """Typed view of the APK-backed device chime configuration response."""
+
+    sound_type: int | None = None
+    duration: int | None = None
+    raw: Mapping[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, value: Mapping[str, Any]) -> EzvizDeviceChimeInfo:
+        """Parse ``/v3/alarms/device/chime`` response fields."""
+        return cls(
+            sound_type=_optional_int(value.get("type")),
+            duration=_optional_int(value.get("duration")),
+            raw=dict(value),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return non-empty parsed fields using API-shaped keys."""
+        values = {"type": self.sound_type, "duration": self.duration}
+        return {key: value for key, value in values.items() if value is not None}
 
 
 @dataclass(frozen=True)
@@ -38,6 +142,13 @@ class EzvizDeviceRecord:
 
     # Full unmodified mapping for anything not yet modeled
     raw: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def chime_music(self) -> EzvizChimeMusic | None:
+        """Return parsed chime music metadata from status optionals, when present."""
+        if not isinstance(self.optionals, Mapping):
+            return None
+        return EzvizChimeMusic.from_api(self.optionals.get("ChimeMusic"))
 
     @classmethod
     def from_api(cls, serial: str, data: Mapping[str, Any]) -> EzvizDeviceRecord:

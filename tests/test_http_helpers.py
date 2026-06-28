@@ -2686,6 +2686,7 @@ def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
         timeout=3.0,
         local_sdk_ecdh_receiver_port=10105,
         local_sdk_ecdh_send_init=True,
+        local_sdk_ecdh_max_prefix_bytes=8192,
         local_sdk_ecdh_max_frames=8,
     )
 
@@ -2700,6 +2701,7 @@ def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
             "register_p2p_session": False,
             "p2p_register_max_retries": 1,
             "timeout": 3.0,
+            "max_prefix_bytes": 8192,
             "max_packets": 2,
             "max_frames": 8,
             "duration_seconds": 5.0,

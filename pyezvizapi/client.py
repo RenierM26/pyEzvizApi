@@ -3025,6 +3025,7 @@ class EzvizClient:
         cloud_refresh_vtm: bool = True,
         local_sdk_ecdh_receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
         local_sdk_ecdh_send_init: bool = False,
+        local_sdk_ecdh_max_prefix_bytes: int = 4096,
         local_sdk_ecdh_max_frames: int | None = None,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
@@ -3080,6 +3081,7 @@ class EzvizClient:
                 timeout=timeout,
                 receiver_port=local_sdk_ecdh_receiver_port,
                 send_init=local_sdk_ecdh_send_init,
+                max_prefix_bytes=local_sdk_ecdh_max_prefix_bytes,
             )
         if source == "hcnetsdk-command-port":
             trim_to_clean_window = (
@@ -3173,6 +3175,7 @@ class EzvizClient:
         timeout: float | None,
         receiver_port: int,
         send_init: bool,
+        max_prefix_bytes: int,
     ) -> SaveMediaResult:
         """Save a clip through the local SDK ECDH stream path."""
 
@@ -3197,6 +3200,7 @@ class EzvizClient:
                     register_p2p_session=register_p2p_session,
                     p2p_register_max_retries=p2p_register_max_retries,
                     timeout=timeout,
+                    max_prefix_bytes=max_prefix_bytes,
                     max_packets=max_packets,
                     max_frames=max_frames,
                     duration_seconds=duration_seconds,
@@ -3214,6 +3218,7 @@ class EzvizClient:
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
+                max_prefix_bytes=max_prefix_bytes,
                 max_packets=max_packets,
                 max_frames=max_frames,
                 duration_seconds=duration_seconds,

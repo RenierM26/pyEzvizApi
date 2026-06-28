@@ -39,6 +39,7 @@ from pyezvizapi.local_stream_ecdh import (
     LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH,
     EzvizLocalSdkEcdhMediaStream,
     EzvizLocalSdkEcdhStreamDecoder,
+    EzvizLocalSdkEcdhStreamPacket,
     build_ezviz_local_sdk_ecdh_init_request_body,
     copy_local_sdk_ecdh_stream_from_client,
     decrypt_ezviz_local_sdk_ecdh_data_packet,
@@ -198,6 +199,32 @@ def test_parse_ezviz_local_sdk_ecdh_data_packet_accepts_outer_prefixed_payload()
     assert packet.trailer == b"T" * LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH
 
 
+def test_local_sdk_ecdh_packet_reprs_redact_raw_bytes() -> None:
+    encrypted_key = b"E" * 32
+    peer_public_key_der = _public_key_der(ec.generate_private_key(ec.SECP256R1()))
+    handshake = parse_ezviz_local_sdk_ecdh_handshake_packet(
+        _handshake_payload(
+            encrypted_key=encrypted_key,
+            peer_public_key_der=peer_public_key_der,
+            nonce=TEST_HANDSHAKE_NONCE,
+        )
+    )
+    data_packet = parse_ezviz_local_sdk_ecdh_data_packet(
+        _data_payload(nonce=TEST_NONCE, ciphertext=TEST_CIPHERTEXT)
+    )
+    stream_packet = EzvizLocalSdkEcdhStreamPacket(channel=1, body=b"media-bytes")
+
+    assert handshake is not None
+    assert data_packet is not None
+    combined_repr = repr((handshake, data_packet, stream_packet))
+
+    assert repr(encrypted_key) not in combined_repr
+    assert repr(TEST_HANDSHAKE_NONCE) not in combined_repr
+    assert repr(TEST_CIPHERTEXT) not in combined_repr
+    assert repr(TEST_OUTER_PREFIX) not in combined_repr
+    assert repr(b"media-bytes") not in combined_repr
+
+
 def test_parse_ezviz_local_sdk_ecdh_data_packet_rejects_truncated_length() -> None:
     payload = _data_payload(nonce=TEST_NONCE, ciphertext=TEST_CIPHERTEXT)
 
@@ -326,6 +353,7 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
         cas_serial="CAMALT",
         register_p2p_session=False,
         p2p_register_max_retries=1,
+        max_prefix_bytes=8192,
     )
 
     assert calls == [
@@ -340,6 +368,7 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
     ]
     assert stream.preview_request.public_key == stream.key_pair.public_key_b64
     assert stream.pre_start_body is None
+    assert stream.max_prefix_bytes == 8192
 
 
 def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
@@ -380,6 +409,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
         send_init=True,
         register_p2p_session=False,
         p2p_register_max_retries=1,
+        max_prefix_bytes=8192,
         max_packets=1,
         max_frames=3,
         duration_seconds=duration_seconds,
@@ -391,6 +421,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[0]["send_init"] is True
     assert copied[0]["register_p2p_session"] is False
     assert copied[0]["p2p_register_max_retries"] == 1
+    assert copied[0]["max_prefix_bytes"] == 8192
     assert copied[1]["max_packets"] == 1
     assert copied[1]["max_frames"] == 3
     assert copied[1]["duration_seconds"] == duration_seconds

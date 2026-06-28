@@ -89,9 +89,9 @@ class EzvizLocalSdkEcdhHandshakePacket:
     header_length: int
     payload_length: int
     subtype: int
-    nonce_raw: bytes
-    encrypted_key: bytes
-    peer_public_key_der: bytes
+    nonce_raw: bytes = field(repr=False)
+    encrypted_key: bytes = field(repr=False)
+    peer_public_key_der: bytes = field(repr=False)
     packet_offset: int
 
 
@@ -101,10 +101,10 @@ class EzvizLocalSdkEcdhDataPacket:
 
     payload_length: int
     subtype: int
-    nonce_raw: bytes
-    ciphertext: bytes
-    trailer: bytes
-    outer_prefix: bytes
+    nonce_raw: bytes = field(repr=False)
+    ciphertext: bytes = field(repr=False)
+    trailer: bytes = field(repr=False)
+    outer_prefix: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class EzvizLocalSdkEcdhStreamPacket:
     """Decoded local SDK ECDH stream payload."""
 
     channel: int
-    body: bytes
+    body: bytes = field(repr=False)
 
     @property
     def length(self) -> int:
@@ -486,6 +486,7 @@ def open_local_sdk_ecdh_stream(
     send_init: bool = False,
     timeout: float | None = 5.0,
     socket_factory: SocketFactory | None = None,
+    max_prefix_bytes: int = 4096,
 ) -> EzvizLocalSdkEcdhMediaStream:
     """Open a local SDK ECDH stream from caller-supplied LAN credentials.
 
@@ -534,6 +535,7 @@ def open_local_sdk_ecdh_stream(
         pre_start_sequence=1 if send_init else 0,
         preview_sequence=2 if send_init else 1,
         stream_setup_sequence=3 if send_init else 2,
+        max_prefix_bytes=max_prefix_bytes,
     )
 
 
@@ -550,6 +552,7 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     p2p_register_max_retries: int = MAX_RETRIES,
     timeout: float | None = 5.0,
     socket_factory: SocketFactory | None = None,
+    max_prefix_bytes: int = 4096,
 ) -> EzvizLocalSdkEcdhMediaStream:
     """Open a local SDK ECDH stream using an ``EzvizClient`` credential source."""
     credentials = get_local_sdk_stream_credentials_from_client(
@@ -569,6 +572,7 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         send_init=send_init,
         timeout=timeout,
         socket_factory=socket_factory,
+        max_prefix_bytes=max_prefix_bytes,
     )
 
 
@@ -585,6 +589,7 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     p2p_register_max_retries: int = MAX_RETRIES,
     timeout: float | None = 5.0,
     socket_factory: SocketFactory | None = None,
+    max_prefix_bytes: int = 4096,
     max_packets: int | None = None,
     max_frames: int | None = None,
     duration_seconds: float | None = None,
@@ -601,6 +606,7 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         p2p_register_max_retries=p2p_register_max_retries,
         timeout=timeout,
         socket_factory=socket_factory,
+        max_prefix_bytes=max_prefix_bytes,
     ) as stream:
         copy_local_sdk_ecdh_stream_to_mpegps(
             stream,

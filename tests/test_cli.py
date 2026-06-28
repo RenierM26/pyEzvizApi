@@ -3307,6 +3307,68 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 
+def test_local_sdk_dump_ecdh_preserves_auto_sequences_when_omitted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "local_sdk_ecdh.ps"
+    calls: list[dict[str, Any]] = []
+
+    class FakeLocalSdkEcdhStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalSdkEcdhStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open_local_sdk_ecdh_stream(
+        _endpoint: Any,
+        _device_info: Any,
+        **kwargs: Any,
+    ) -> FakeLocalSdkEcdhStream:
+        calls.append(kwargs)
+        return FakeLocalSdkEcdhStream()
+
+    def fake_copy(stream: FakeLocalSdkEcdhStream, output: BinaryIO, **kwargs: Any) -> None:
+        calls.append({"stream": stream, **kwargs})
+        output.write(LOCAL_SDK_TEST_PAYLOAD)
+
+    monkeypatch.setattr(
+        cli_module,
+        "open_local_sdk_ecdh_stream",
+        fake_open_local_sdk_ecdh_stream,
+    )
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--local-sdk-ecdh",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert calls[0]["pre_start_sequence"] is None
+    assert calls[0]["preview_sequence"] is None
+    assert calls[0]["stream_setup_sequence"] is None
+    assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
+
+
 def test_local_sdk_dump_accepts_credentials_file(monkeypatch, tmp_path) -> None:
     credentials_path = tmp_path / "local-sdk-credentials.json"
     output_path = tmp_path / "local.ps"
@@ -3596,9 +3658,9 @@ def test_local_sdk_dump_reads_secret_environment_fallbacks(monkeypatch, tmp_path
             setup_timeout=None,
             heartbeat_interval=None,
             pre_start_body_file=str(pre_start),
-            pre_start_sequence=27,
-            preview_sequence=28,
-            stream_sequence=29,
+            pre_start_sequence=None,
+            preview_sequence=None,
+            stream_sequence=None,
             stream_rate=1,
             stream_mode=-1,
             socket_timeout=5.0,
@@ -3610,6 +3672,9 @@ def test_local_sdk_dump_reads_secret_environment_fallbacks(monkeypatch, tmp_path
     assert stream.sdk_client.device_info.operation_code == "0123456"
     assert stream.sdk_client.device_info.key == "1234567890abcdef"
     assert stream.pre_start_body == LOCAL_SDK_PRE_START_BODY
+    assert stream.pre_start_sequence == 27
+    assert stream.preview_sequence == 28
+    assert stream.stream_setup_sequence == 29
     assert stream.max_prefix_bytes == 128
     assert stream.preview_request.receiver_info.port == 10101
 

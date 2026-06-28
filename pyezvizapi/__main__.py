@@ -1321,9 +1321,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--pre-start-body-file",
         help="Optional file containing caller-owned 0x2013 pre-start body bytes",
     )
-    parser_stream_local_dump.add_argument("--pre-start-sequence", type=int, default=27)
-    parser_stream_local_dump.add_argument("--preview-sequence", type=int, default=28)
-    parser_stream_local_dump.add_argument("--stream-sequence", type=int, default=29)
+    parser_stream_local_dump.add_argument("--pre-start-sequence", type=int)
+    parser_stream_local_dump.add_argument("--preview-sequence", type=int)
+    parser_stream_local_dump.add_argument("--stream-sequence", type=int)
     parser_stream_local_dump.add_argument("--stream-rate", default=1)
     parser_stream_local_dump.add_argument("--stream-mode", default=-1)
     parser_stream_local_dump.add_argument(
@@ -3917,15 +3917,18 @@ def _build_local_sdk_cli_stream(
         timeout=args.setup_timeout,
         heartbeat_interval=args.heartbeat_interval,
     )
+    pre_start_sequence = 27 if args.pre_start_sequence is None else args.pre_start_sequence
+    preview_sequence = 28 if args.preview_sequence is None else args.preview_sequence
+    stream_setup_sequence = 29 if args.stream_sequence is None else args.stream_sequence
     return open_local_sdk_stream(
         endpoint,
         device_info,
         preview_request,
         timeout=args.socket_timeout,
         pre_start_body=_read_optional_binary_file(args.pre_start_body_file),
-        pre_start_sequence=args.pre_start_sequence,
-        preview_sequence=args.preview_sequence,
-        stream_setup_sequence=args.stream_sequence,
+        pre_start_sequence=pre_start_sequence,
+        preview_sequence=preview_sequence,
+        stream_setup_sequence=stream_setup_sequence,
         stream_rate=args.stream_rate,
         stream_mode=args.stream_mode,
         max_prefix_bytes=args.max_prefix_bytes,

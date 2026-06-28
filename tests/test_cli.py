@@ -1087,6 +1087,8 @@ def test_save_clip_can_use_local_sdk_ecdh_source(
                 "--local-sdk-ecdh-send-init",
                 "--local-sdk-ecdh-max-frames",
                 "9",
+                "--local-sdk-ecdh-max-prefix-bytes",
+                "8192",
             ]
         )
         == 0
@@ -1100,6 +1102,7 @@ def test_save_clip_can_use_local_sdk_ecdh_source(
     assert client.save_clip_request["local_sdk_ecdh_receiver_port"] == 10105
     assert client.save_clip_request["local_sdk_ecdh_send_init"] is True
     assert client.save_clip_request["local_sdk_ecdh_max_frames"] == 9
+    assert client.save_clip_request["local_sdk_ecdh_max_prefix_bytes"] == 8192
     assert client.save_clip_request["max_packets"] == 3
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
     assert json.loads(capsys.readouterr().out)["source"] == "local-sdk-ecdh"

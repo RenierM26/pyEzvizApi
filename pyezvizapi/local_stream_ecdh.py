@@ -89,9 +89,9 @@ class EzvizLocalSdkEcdhHandshakePacket:
     header_length: int
     payload_length: int
     subtype: int
-    nonce_raw: bytes
-    encrypted_key: bytes
-    peer_public_key_der: bytes
+    nonce_raw: bytes = field(repr=False)
+    encrypted_key: bytes = field(repr=False)
+    peer_public_key_der: bytes = field(repr=False)
     packet_offset: int
 
 
@@ -101,10 +101,10 @@ class EzvizLocalSdkEcdhDataPacket:
 
     payload_length: int
     subtype: int
-    nonce_raw: bytes
-    ciphertext: bytes
-    trailer: bytes
-    outer_prefix: bytes
+    nonce_raw: bytes = field(repr=False)
+    ciphertext: bytes = field(repr=False)
+    trailer: bytes = field(repr=False)
+    outer_prefix: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class EzvizLocalSdkEcdhStreamPacket:
     """Decoded local SDK ECDH stream payload."""
 
     channel: int
-    body: bytes
+    body: bytes = field(repr=False)
 
     @property
     def length(self) -> int:

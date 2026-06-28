@@ -3142,6 +3142,57 @@ def test_local_sdk_dump_ecdh_uses_ecdh_stream_writer(monkeypatch, tmp_path) -> N
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 
+def test_local_sdk_dump_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "local_sdk_ecdh.ps"
+    calls: list[dict[str, Any]] = []
+
+    class FakeLocalSdkEcdhStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalSdkEcdhStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_build(args: Any, client: Any = None) -> FakeLocalSdkEcdhStream:
+        assert client is None
+        calls.append({"format": args.format})
+        return FakeLocalSdkEcdhStream()
+
+    def fake_copy(stream: FakeLocalSdkEcdhStream, output: BinaryIO, **kwargs: Any) -> None:
+        calls.append({"stream": stream, **kwargs})
+        output.write(LOCAL_SDK_TEST_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_ecdh_cli_stream", fake_build)
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--local-sdk-ecdh",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert calls[0] == {"format": "mpegps"}
+    assert calls[1]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
+    assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
+
+
 def test_local_sdk_dump_accepts_credentials_file(monkeypatch, tmp_path) -> None:
     credentials_path = tmp_path / "local-sdk-credentials.json"
     output_path = tmp_path / "local.ps"

@@ -3309,6 +3309,82 @@ def test_hcnetsdk_pure_python_client_wraps_ability_convenience_parsers() -> None
     )
 
 
+def test_hcnetsdk_pure_python_client_wraps_safe_ability_helpers() -> None:
+    rsa_key = RSA.generate(1024)
+    challenge = b"0123456789abcdef0123456789abcdef"
+    seed = b"s" * 64
+    first_login_response = build_hcnetsdk_tcp_frame(
+        PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed
+    )
+    second_login_response = build_hcnetsdk_tcp_frame(
+        HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00",
+        field_4=0x10A24BF1,
+    )
+    response_xmls = (
+        b"<DeviceAbility><SoftwareCapability>"
+        b"<MaxPreviewNum>4</MaxPreviewNum><PtzSupport>1</PtzSupport>"
+        b"</SoftwareCapability><HardwareCapability>"
+        b"<SDNum>1</SDNum><HardDiskNum>0</HardDiskNum>"
+        b"</HardwareCapability></DeviceAbility>",
+        b"<RecordAbility><PlayConvert><VideoResolutionList>"
+        b"<VideoResolutionEntry><Index>3</Index>"
+        b"<VideoFrameRate>15,25</VideoFrameRate>"
+        b"<VideoBitrate><Range>128,256,512</Range></VideoBitrate>"
+        b"</VideoResolutionEntry></VideoResolutionList></PlayConvert>"
+        b"</RecordAbility>",
+        b"<PTZAbility>"
+        b'<controlType opt="UP,DOWN,LEFT,RIGHT"/>'
+        b"<Mirror><Range>0,1</Range></Mirror>"
+        b"</PTZAbility>",
+    )
+    controls = tuple(
+        _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + xml)])
+        for xml in response_xmls
+    )
+    sockets: list[_FakeSocket] = []
+    for control in controls:
+        sockets.extend(
+            [
+                _FakeSocket([first_login_response, second_login_response]),
+                control,
+            ]
+        )
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == COMMAND_PORT_DEFAULT_TIMEOUT
+        return sockets.pop(0)
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+
+    soft_hardware = client.soft_hardware_ability()
+    playback = client.playback_convert_ability()
+    ptz = client.ptz_ability(channel=1)
+    requests = (
+        ezviz_lan_soft_hardware_ability_request(1),
+        ezviz_lan_record_ability_request(1),
+        ezviz_lan_ptz_ability_request(1, 1),
+    )
+    sent_bodies = tuple(
+        parse_hcnetsdk_tcp_frame(control.sent[0]).body for control in controls
+    )
+
+    assert soft_hardware.success is True
+    assert soft_hardware.max_preview_num == 4
+    assert playback.resolutions[0].frame_rates == (15, 25)
+    assert ptz.control_type_options == ("UP", "DOWN", "LEFT", "RIGHT")
+    assert all(
+        sent[16:] == hcnetsdk_device_ability_command_port_body_tail(request)
+        for sent, request in zip(sent_bodies, requests, strict=True)
+    )
+
+
 def test_hcnetsdk_pure_python_client_wraps_ipc_front_parameter_ability() -> None:
     rsa_key = RSA.generate(1024)
     challenge = b"0123456789abcdef0123456789abcdef"

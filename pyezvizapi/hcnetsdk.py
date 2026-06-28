@@ -10120,6 +10120,24 @@ class HcNetSdkPurePythonClient:
         """Read image-display ranges through the live-backed front-parameter path."""
         return self.ipc_front_parameter_ability()
 
+    def soft_hardware_ability(self) -> EzvizLanDeviceSoftHardwareAbility:
+        """Read and parse local device software/hardware ability output."""
+        return ezviz_lan_soft_hardware_ability(
+            self.device_ability(ezviz_lan_soft_hardware_ability_request(1))
+        )
+
+    def playback_convert_ability(self) -> EzvizLanPlaybackConvertAbility:
+        """Read and parse local playback conversion ability output."""
+        return ezviz_lan_playback_convert_ability(
+            self.device_ability(ezviz_lan_record_ability_request(1))
+        )
+
+    def ptz_ability(self, channel: int = 1) -> EzvizLanPtzAbility:
+        """Read and parse local PTZ ability output."""
+        return ezviz_lan_ptz_ability(
+            self.device_ability(ezviz_lan_ptz_ability_request(1, channel))
+        )
+
     def dvr_config(
         self,
         request: HcNetSdkDvrConfigRequest,

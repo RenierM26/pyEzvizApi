@@ -43,6 +43,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added typed pure-Python parsers and convenience reads for safe HCNetSDK `AccessProtocolAbility` and `VideoPicAbility` XML fields.
 - Added a typed pure-Python parser and convenience read for safe HCNetSDK `AudioVideoCompressInfo` stream/audio ability fields.
 - Added a typed pure-Python parser and convenience read for safe HCNetSDK `CAMERAPARA` image/front-parameter ability ranges.
+- Added pure-Python client convenience reads for safe HCNetSDK soft/hardware, playback-conversion, and PTZ ability fields.
 - Added binary-confirmed command-port mapping plus decoded and summary helpers for `NET_DVR_USER_V30` user/password/right-table reads; decoded password bytes are hidden from default object reprs.
 
 ### Fixed

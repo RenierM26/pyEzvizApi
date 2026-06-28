@@ -170,6 +170,8 @@ from pyezvizapi.hcnetsdk import (
     EzvizLanEzvizAccessConfig,
     EzvizLanHdConfig,
     EzvizLanHdDiskConfig,
+    EzvizLanIpcFrontParameterAbility,
+    EzvizLanIpcFrontParameterRange,
     EzvizLanNetConfigV30,
     EzvizLanNetInterfaceConfig,
     EzvizLanNtpConfig,
@@ -271,6 +273,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_audio_input_get_config_request,
     ezviz_lan_audio_input_param,
     ezviz_lan_audio_output_volume,
+    ezviz_lan_audio_video_compress_info,
     ezviz_lan_audio_video_compress_info_ability_request,
     ezviz_lan_audio_video_compress_info_input,
     ezviz_lan_audio_volume_update_requests,
@@ -298,6 +301,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_hd_config_request,
     ezviz_lan_image_display_param_ability_input,
     ezviz_lan_image_display_param_ability_request,
+    ezviz_lan_ipc_front_parameter_ability,
     ezviz_lan_ipc_front_parameter_ability_request,
     ezviz_lan_live_view_params,
     ezviz_lan_local_user_password,
@@ -3232,13 +3236,33 @@ def test_hcnetsdk_pure_python_client_wraps_ability_convenience_parsers() -> None
         b"<columnGranularity>22</columnGranularity>"
         b"</VideoFormatP></Grid></MotionDetection></VideoPicAbility>"
     )
+    audio_video_xml = (
+        b"<AudioVideoCompressInfo><VideoCompressInfo><ChannelList>"
+        b"<ChannelEntry><ChannelNumber>1</ChannelNumber><MainChannel>"
+        b"<VideoResolutionList><VideoResolutionEntry><Index>2</Index>"
+        b"<VideoFrameRate>25</VideoFrameRate>"
+        b"<VideoBitrate><Min>64</Min><Max>2048</Max></VideoBitrate>"
+        b"</VideoResolutionEntry></VideoResolutionList>"
+        b"</MainChannel><SubChannelList><SubChannelEntry><index>1</index>"
+        b"<VideoResolutionList><VideoResolutionEntry><Index>9</Index>"
+        b"<VideoFrameRate>15</VideoFrameRate>"
+        b"<VideoBitrate><Min>32</Min><Max>512</Max></VideoBitrate>"
+        b"</VideoResolutionEntry></VideoResolutionList>"
+        b"</SubChannelEntry></SubChannelList></ChannelEntry>"
+        b"</ChannelList></VideoCompressInfo></AudioVideoCompressInfo>"
+    )
     access_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + access_xml)])
     video_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + video_xml)])
+    audio_video_control = _FakeSocket(
+        [build_hcnetsdk_tcp_frame(b"\x00" + audio_video_xml)]
+    )
     sockets = [
         _FakeSocket([first_login_response, second_login_response]),
         access_control,
         _FakeSocket([first_login_response, second_login_response]),
         video_control,
+        _FakeSocket([first_login_response, second_login_response]),
+        audio_video_control,
     ]
 
     def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
@@ -3256,21 +3280,95 @@ def test_hcnetsdk_pure_python_client_wraps_ability_convenience_parsers() -> None
 
     access = client.access_protocol_ability(channel=1)
     video = client.video_pic_ability(channel=2)
+    audio_video = client.audio_video_compress_info(channel=1)
     access_request = ezviz_lan_access_protocol_ability_request(1, 1)
     video_request = ezviz_lan_video_pic_ability_request(1, 2)
+    audio_video_request = ezviz_lan_audio_video_compress_info_ability_request(1, 1)
     access_sent = parse_hcnetsdk_tcp_frame(access_control.sent[0])
     video_sent = parse_hcnetsdk_tcp_frame(video_control.sent[0])
+    audio_video_sent = parse_hcnetsdk_tcp_frame(audio_video_control.sent[0])
 
     assert access.domain_length_max == 32
     assert access.device_status_option_list == ("offline", "online")
     assert video.channel_no == "2"
     assert video.channel_name_enabled is True
     assert video.motion_grid_column_granularity == 22
+    assert audio_video.success is True
+    assert audio_video.supports_sub_stream is True
+    assert audio_video.video_channels[0].main_stream is not None
+    assert audio_video.video_channels[0].main_stream.resolution_indexes == (2,)
+    assert audio_video.video_channels[0].sub_streams[0].index == 1
     assert access_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
         access_request
     )
     assert video_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
         video_request
+    )
+    assert audio_video_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
+        audio_video_request
+    )
+
+
+def test_hcnetsdk_pure_python_client_wraps_ipc_front_parameter_ability() -> None:
+    rsa_key = RSA.generate(1024)
+    challenge = b"0123456789abcdef0123456789abcdef"
+    seed = b"s" * 64
+    first_login_response = build_hcnetsdk_tcp_frame(
+        PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed
+    )
+    second_login_response = build_hcnetsdk_tcp_frame(
+        HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00",
+        field_4=0x10A24BF1,
+    )
+    front_parameter_xml = (
+        b"<CAMERAPARA><BrightnessLevel><Min>0</Min><Max>100</Max>"
+        b"<Default>50</Default></BrightnessLevel>"
+        b"<ContrastLevel><Min>0</Min><Max>100</Max></ContrastLevel>"
+        b"<Mirror><Range>0,1,2,3</Range></Mirror></CAMERAPARA>"
+    )
+    front_parameter_control = _FakeSocket(
+        [build_hcnetsdk_tcp_frame(b"\x00" + front_parameter_xml)]
+    )
+    image_display_control = _FakeSocket(
+        [build_hcnetsdk_tcp_frame(b"\x00" + front_parameter_xml)]
+    )
+    sockets = [
+        _FakeSocket([first_login_response, second_login_response]),
+        front_parameter_control,
+        _FakeSocket([first_login_response, second_login_response]),
+        image_display_control,
+    ]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == COMMAND_PORT_DEFAULT_TIMEOUT
+        return sockets.pop(0)
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+
+    front_parameter = client.ipc_front_parameter_ability()
+    image_display = client.image_display_param_ability()
+    front_parameter_request = ezviz_lan_ipc_front_parameter_ability_request(1)
+    front_parameter_sent = parse_hcnetsdk_tcp_frame(front_parameter_control.sent[0])
+    image_display_sent = parse_hcnetsdk_tcp_frame(image_display_control.sent[0])
+
+    assert front_parameter.success is True
+    assert front_parameter.brightness_level.default == 50
+    assert front_parameter.mirror_options == ("0", "1", "2", "3")
+    assert image_display.contrast_level.maximum == 100
+    assert (
+        front_parameter_sent.body[16:]
+        == hcnetsdk_device_ability_command_port_body_tail(front_parameter_request)
+    )
+    assert (
+        image_display_sent.body[16:]
+        == hcnetsdk_device_ability_command_port_body_tail(front_parameter_request)
     )
 
 
@@ -6206,6 +6304,263 @@ def test_ezviz_lan_video_pic_ability_parses_safe_osd_and_grid_fields() -> None:
     assert ability.motion_region_type_option_list == ("grid", "polygon")
 
 
+def test_ezviz_lan_ipc_front_parameter_ability_parses_camera_para_ranges() -> None:
+    ability = ezviz_lan_ipc_front_parameter_ability(
+        b"<CAMERAPARA version=\"1.0\">"
+        b"<PowerLineFrequencyMode><Range>0,1</Range></PowerLineFrequencyMode>"
+        b"<WhiteBalance><WhiteBalanceMode><Range>1,3</Range>"
+        b"</WhiteBalanceMode></WhiteBalance>"
+        b"<Exposure><ExposureMode><Range>1</Range></ExposureMode>"
+        b"<ExposureSet><Range>4,5,6,7</Range></ExposureSet>"
+        b"<exposureUSERSET><Min>1</Min><Max>40000</Max></exposureUSERSET>"
+        b"</Exposure>"
+        b"<GainLevel><Min>0</Min><Max>100</Max><Default>100</Default></GainLevel>"
+        b"<BrightnessLevel><Min>0</Min><Max>100</Max><Default>50</Default>"
+        b"</BrightnessLevel>"
+        b"<ContrastLevel><Min>0</Min><Max>100</Max><Default>50</Default>"
+        b"</ContrastLevel>"
+        b"<SharpnessLevel><Min>0</Min><Max>100</Max><Default>50</Default>"
+        b"</SharpnessLevel>"
+        b"<SaturationLevel><Min>0</Min><Max>100</Max><Default>50</Default>"
+        b"</SaturationLevel>"
+        b"<DayNightFilter><DayNightFilterType><Range>0,1,2,3</Range>"
+        b"</DayNightFilterType><SwitchSchedule>"
+        b"<SwitchScheduleEnabled><Range>0,1</Range></SwitchScheduleEnabled>"
+        b"<DayToNightFilterLevel><Range>0,1,2,3</Range></DayToNightFilterLevel>"
+        b"<NightToDayFilterLevel><Range>4,5,6,7</Range>"
+        b"</NightToDayFilterLevel>"
+        b"<DayNightFilterTime><Min>0</Min><Max>120</Max></DayNightFilterTime>"
+        b"</SwitchSchedule></DayNightFilter>"
+        b"<Backlight><BacklightMode><Range>0,1,2,3,4,5</Range></BacklightMode>"
+        b"</Backlight>"
+        b"<Mirror><Range>0,1,2,3</Range></Mirror>"
+        b"<DigitalNoiseReduction>"
+        b"<DigitalNoiseReductionEnable><Range>0,1,2</Range>"
+        b"</DigitalNoiseReductionEnable>"
+        b"<DigitalNoiseReductionLevel><Min>0</Min><Max>100</Max>"
+        b"</DigitalNoiseReductionLevel>"
+        b"<DigitalNoiseSpectralLevel><Min>0</Min><Max>80</Max>"
+        b"</DigitalNoiseSpectralLevel>"
+        b"<DigitalNoiseTemporalLevel><Min>10</Min><Max>90</Max>"
+        b"</DigitalNoiseTemporalLevel>"
+        b"</DigitalNoiseReduction>"
+        b"</CAMERAPARA>"
+    )
+
+    assert ability == EzvizLanIpcFrontParameterAbility(
+        has_camera_para=True,
+        power_line_frequency_mode_range="0,1",
+        white_balance_mode_range="1,3",
+        exposure_mode_range="1",
+        exposure_set_range="4,5,6,7",
+        exposure_user_set=EzvizLanIpcFrontParameterRange(minimum=1, maximum=40000),
+        gain_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=100, default=100
+        ),
+        brightness_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=100, default=50
+        ),
+        contrast_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=100, default=50
+        ),
+        sharpness_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=100, default=50
+        ),
+        saturation_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=100, default=50
+        ),
+        day_night_filter_type_range="0,1,2,3",
+        switch_schedule_enabled_range="0,1",
+        day_to_night_filter_level_range="0,1,2,3",
+        night_to_day_filter_level_range="4,5,6,7",
+        day_night_filter_time=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=120
+        ),
+        backlight_mode_range="0,1,2,3,4,5",
+        mirror_range="0,1,2,3",
+        digital_noise_reduction_enable_range="0,1,2",
+        digital_noise_reduction_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=100
+        ),
+        digital_noise_spectral_level=EzvizLanIpcFrontParameterRange(
+            minimum=0, maximum=80
+        ),
+        digital_noise_temporal_level=EzvizLanIpcFrontParameterRange(
+            minimum=10, maximum=90
+        ),
+    )
+    assert ability.success is True
+    assert ability.brightness_level.supported is True
+    assert ability.mirror_options == ("0", "1", "2", "3")
+    assert ability.backlight_mode_options == ("0", "1", "2", "3", "4", "5")
+    assert ability.day_night_filter_type_options == ("0", "1", "2", "3")
+
+
+def test_ezviz_lan_ipc_front_parameter_ability_parses_channel_entry() -> None:
+    ability = ezviz_lan_ipc_front_parameter_ability(
+        b"<CAMERAPARA version=\"1.0\"><ChannelList><ChannelEntry>"
+        b"<PowerLineFrequencyMode><Range>0,1</Range></PowerLineFrequencyMode>"
+        b"<BrightnessLevel><Min>1</Min><Max>99</Max><Default>50</Default>"
+        b"</BrightnessLevel>"
+        b"<Mirror><Range>0,1,2,3</Range></Mirror>"
+        b"<Backlight><BacklightMode><Range>0,1</Range></BacklightMode>"
+        b"</Backlight>"
+        b"</ChannelEntry></ChannelList></CAMERAPARA>"
+    )
+
+    assert ability.success is True
+    assert ability.power_line_frequency_mode_range == "0,1"
+    assert ability.brightness_level == EzvizLanIpcFrontParameterRange(
+        minimum=1,
+        maximum=99,
+        default=50,
+    )
+    assert ability.mirror_options == ("0", "1", "2", "3")
+    assert ability.backlight_mode_options == ("0", "1")
+
+
+def test_ezviz_lan_audio_video_compress_info_parses_stream_fields() -> None:
+    ability = ezviz_lan_audio_video_compress_info(
+        b"<AudioVideoCompressInfo version=\"2.0\">"
+        b"<VideoCompressInfo><ChannelList><ChannelEntry>"
+        b"<ChannelNumber>1</ChannelNumber>"
+        b"<MainChannel>"
+        b"<VideoEncodeType><Range>H.264,H.265</Range></VideoEncodeType>"
+        b"<VideoEncodeEfficiency><Range>basic,smart</Range></VideoEncodeEfficiency>"
+        b"<IntervalBPFrame><Range>1,50</Range></IntervalBPFrame>"
+        b"<EFrame>1</EFrame>"
+        b"<VideoResolutionList>"
+        b"<VideoResolutionEntry>"
+        b"<Index>2</Index><Name>ignored</Name>"
+        b"<VideoFrameRate>10,15,25</VideoFrameRate>"
+        b"<VideoBitrate><Min>128</Min><Max>2048</Max></VideoBitrate>"
+        b"</VideoResolutionEntry>"
+        b"<VideoResolutionEntry>"
+        b"<Index>5</Index>"
+        b"<VideoFrameRate>25,30</VideoFrameRate>"
+        b"<VideoBitrate><Min>256</Min><Max>4096</Max></VideoBitrate>"
+        b"</VideoResolutionEntry>"
+        b"</VideoResolutionList>"
+        b"</MainChannel>"
+        b"<SubChannelList><SubChannelEntry>"
+        b"<index>1</index>"
+        b"<VideoEncodeType><Range>H.264</Range></VideoEncodeType>"
+        b"<VideoResolutionList><VideoResolutionEntry>"
+        b"<Index>9</Index><VideoFrameRate>10,bad,15</VideoFrameRate>"
+        b"<VideoBitrate><Min>64</Min><Max>512</Max></VideoBitrate>"
+        b"</VideoResolutionEntry></VideoResolutionList>"
+        b"</SubChannelEntry></SubChannelList>"
+        b"</ChannelEntry></ChannelList></VideoCompressInfo>"
+        b"<AudioCompressInfo>"
+        b"<Audio><ChannelList><ChannelEntry>"
+        b"<ChannelNumber>1</ChannelNumber>"
+        b"<MainAudioEncodeType><Range>G.711,G.722</Range></MainAudioEncodeType>"
+        b"<SubAudioEncodeType><Range>G.711</Range></SubAudioEncodeType>"
+        b"<AudioInType><Range>mic,line</Range></AudioInType>"
+        b"<AudioInVolume><Min>0</Min><Max>100</Max></AudioInVolume>"
+        b"</ChannelEntry></ChannelList></Audio>"
+        b"<VoiceTalk><ChannelList><ChannelEntry>"
+        b"<ChannelNumber>1</ChannelNumber>"
+        b"<VoiceTalkEncodeType><Range>G.711</Range></VoiceTalkEncodeType>"
+        b"<VoiceTalkInType><Range>mic</Range></VoiceTalkInType>"
+        b"</ChannelEntry></ChannelList></VoiceTalk>"
+        b"</AudioCompressInfo>"
+        b"</AudioVideoCompressInfo>"
+    )
+
+    assert ability.success is True
+    assert ability.supports_sub_stream is True
+    assert ability.has_video_compress_info is True
+    assert ability.has_audio_compress_info is True
+    assert len(ability.video_channels) == 1
+    video_channel = ability.video_channels[0]
+    assert video_channel.channel_number == 1
+    assert video_channel.supports_sub_stream is True
+    assert video_channel.main_stream is not None
+    assert video_channel.main_stream.index is None
+    assert video_channel.main_stream.video_encode_type_range == "H.264,H.265"
+    assert video_channel.main_stream.video_encode_efficiency_range == "basic,smart"
+    assert video_channel.main_stream.interval_bp_frame_range == "1,50"
+    assert video_channel.main_stream.e_frame == 1
+    assert video_channel.main_stream.resolution_indexes == (2, 5)
+    assert video_channel.main_stream.resolution_count == 2
+    assert video_channel.main_stream.frame_rates == (10, 15, 25, 30)
+    assert video_channel.main_stream.bitrate_min == 128
+    assert video_channel.main_stream.bitrate_max == 4096
+    assert len(video_channel.sub_streams) == 1
+    assert video_channel.sub_streams[0].index == 1
+    assert video_channel.sub_streams[0].video_encode_type_range == "H.264"
+    assert video_channel.sub_streams[0].resolution_indexes == (9,)
+    assert video_channel.sub_streams[0].frame_rates == (10, 15)
+    assert video_channel.sub_streams[0].bitrate_min == 64
+    assert video_channel.sub_streams[0].bitrate_max == 512
+    assert len(ability.audio_channels) == 1
+    assert ability.audio_channels[0].channel_number == 1
+    assert ability.audio_channels[0].main_audio_encode_type_range == "G.711,G.722"
+    assert ability.audio_channels[0].sub_audio_encode_type_range == "G.711"
+    assert ability.audio_channels[0].audio_in_type_range == "mic,line"
+    assert ability.audio_channels[0].audio_in_volume_min == 0
+    assert ability.audio_channels[0].audio_in_volume_max == 100
+    assert len(ability.voice_talk_channels) == 1
+    assert ability.voice_talk_channels[0].channel_number == 1
+    assert ability.voice_talk_channels[0].voice_talk_encode_type_range == "G.711"
+    assert ability.voice_talk_channels[0].voice_talk_in_type_range == "mic"
+
+
+def test_ezviz_lan_audio_video_compress_info_collects_v20_frame_rates() -> None:
+    ability = ezviz_lan_audio_video_compress_info(
+        b"<AudioVideoCompressInfo version=\"2.0\">"
+        b"<VideoCompressInfo><ChannelList><ChannelEntry>"
+        b"<ChannelNumber>1</ChannelNumber><MainChannel>"
+        b"<VideoFrameRateN>12,25</VideoFrameRateN>"
+        b"<VideoFrameRate50>50</VideoFrameRate50>"
+        b"<VideoFrameRate60>60,bad</VideoFrameRate60>"
+        b"<VideoResolutionList><VideoResolutionEntry>"
+        b"<Index>1</Index>"
+        b"<VideoFrameRate100>100</VideoFrameRate100>"
+        b"<VideoFrameRate120>120,25</VideoFrameRate120>"
+        b"</VideoResolutionEntry></VideoResolutionList>"
+        b"</MainChannel></ChannelEntry></ChannelList></VideoCompressInfo>"
+        b"</AudioVideoCompressInfo>"
+    )
+
+    assert ability.success is True
+    assert ability.video_channels[0].main_stream is not None
+    assert ability.video_channels[0].main_stream.frame_rates == (
+        12,
+        25,
+        50,
+        60,
+        100,
+        120,
+    )
+
+
+def test_ezviz_lan_audio_video_compress_info_uses_safe_defaults() -> None:
+    ability = ezviz_lan_audio_video_compress_info(
+        b"<AudioVideoCompressInfo><VideoCompressInfo><ChannelList>"
+        b"<ChannelEntry><ChannelNumber>bad</ChannelNumber><MainChannel>"
+        b"<VideoResolutionList><VideoResolutionEntry>"
+        b"<Index>bad</Index><VideoFrameRate>bad,20</VideoFrameRate>"
+        b"<VideoBitrate><Min>bad</Min><Max>300</Max></VideoBitrate>"
+        b"</VideoResolutionEntry></VideoResolutionList>"
+        b"</MainChannel></ChannelEntry></ChannelList></VideoCompressInfo>"
+        b"</AudioVideoCompressInfo>"
+    )
+
+    assert ability.success is True
+    assert ability.has_video_compress_info is True
+    assert ability.has_audio_compress_info is False
+    assert ability.video_channels[0].channel_number == 0
+    assert ability.video_channels[0].main_stream is not None
+    assert ability.video_channels[0].main_stream.resolution_indexes == (0,)
+    assert ability.video_channels[0].main_stream.frame_rates == (20,)
+    assert ability.video_channels[0].main_stream.bitrate_min == 0
+    assert ability.video_channels[0].main_stream.bitrate_max == 300
+    assert ability.audio_channels == ()
+    assert ability.voice_talk_channels == ()
+
+
 def test_ezviz_lan_ptz_ability_rejects_invalid_xml() -> None:
     with pytest.raises(PyEzvizError, match="XML"):
         ezviz_lan_ptz_ability("<PTZAbility>")
@@ -6213,6 +6568,10 @@ def test_ezviz_lan_ptz_ability_rejects_invalid_xml() -> None:
         ezviz_lan_access_protocol_ability("<AccessProtocolAbility>")
     with pytest.raises(PyEzvizError, match="video-picture"):
         ezviz_lan_video_pic_ability("<VideoPicAbility>")
+    with pytest.raises(PyEzvizError, match="front-parameter"):
+        ezviz_lan_ipc_front_parameter_ability("<CAMERAPARA>")
+    with pytest.raises(PyEzvizError, match="audio/video"):
+        ezviz_lan_audio_video_compress_info("<AudioVideoCompressInfo>")
     with pytest.raises(PyEzvizError, match="XML name"):
         hcnetsdk_device_ability_xml("Bad Root")
     with pytest.raises(PyEzvizError, match="retry buffer"):

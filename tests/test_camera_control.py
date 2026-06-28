@@ -43,8 +43,11 @@ class _FakeCameraClient:
     def detection_sensibility(self, serial: str, sensitivity: int, type_value: int) -> bool:
         return self._record("detection_sensibility", serial, sensitivity, type_value)
 
-    def switch_status(self, serial: str, switch_type: int, enable: int) -> bool:
-        return self._record("switch_status", serial, switch_type, enable)
+    def switch_status(
+        self, serial: str, switch_type: int, enable: int, channel_no: int = 0
+    ) -> bool:
+        kwargs = {"channel_no": channel_no} if channel_no else {}
+        return self._record("switch_status", serial, switch_type, enable, **kwargs)
 
     def sound_alarm(self, serial: str, enable: int) -> bool:
         return self._record("sound_alarm", serial, enable)
@@ -55,6 +58,22 @@ class _FakeCameraClient:
     def set_battery_camera_work_mode(self, serial: str, mode: int) -> bool:
         return self._record("set_battery_camera_work_mode", serial, mode)
 
+    def get_device_chime_info(self, serial: str, channel_no: int) -> dict[str, Any]:
+        self.calls.append(("get_device_chime_info", (serial, channel_no), {}))
+        return {"meta": {"code": 200}, "type": "5", "duration": 30}
+
+    def set_device_chime_info(
+        self, serial: str, channel_no: int, *, sound_type: int, duration: int
+    ) -> dict[str, Any]:
+        self.calls.append(
+            (
+                "set_device_chime_info",
+                (serial, channel_no),
+                {"sound_type": sound_type, "duration": duration},
+            )
+        )
+        return {"meta": {"code": 200}}
+
 
 def _camera(client: _FakeCameraClient | None = None) -> tuple[EzvizCamera, _FakeCameraClient]:
     fake_client = client or _FakeCameraClient()
@@ -63,7 +82,12 @@ def _camera(client: _FakeCameraClient | None = None) -> tuple[EzvizCamera, _Fake
         "CAM123",
         device_obj={
             "deviceInfos": {"name": "Front Door"},
-            "STATUS": {"optionals": {"timeZone": "UTC+02:00"}},
+            "STATUS": {
+                "optionals": {
+                    "timeZone": "UTC+02:00",
+                    "ChimeMusic": '{"doorbell": 0, "pir": 0, "volume": 90}',
+                }
+            },
             "resourceInfos": [
                 {
                     "resourceId": "DoorLock",
@@ -174,6 +198,7 @@ def test_camera_alarm_control_methods_forward_to_client() -> None:
 def test_camera_switch_helpers_forward_device_switch_values() -> None:
     camera, client = _camera()
 
+    assert DeviceSwitchType.REMOTE_UNLOCK.value == 458
     assert camera.set_switch(DeviceSwitchType.PRIVACY, True) is True
     assert camera.switch_device_audio(True) is True
     assert camera.switch_device_state_led(False) is True
@@ -181,6 +206,7 @@ def test_camera_switch_helpers_forward_device_switch_values() -> None:
     assert camera.switch_privacy_mode(False) is True
     assert camera.switch_sleep_mode(True) is True
     assert camera.switch_follow_move(True) is True
+    assert camera.switch_chime_indicator_light(True) is True
     assert camera.switch_sound_alarm(2) is True
 
     assert client.calls == [
@@ -191,7 +217,40 @@ def test_camera_switch_helpers_forward_device_switch_values() -> None:
         ("switch_status", ("CAM123", DeviceSwitchType.PRIVACY.value, 0), {}),
         ("switch_status", ("CAM123", DeviceSwitchType.SLEEP.value, 1), {}),
         ("switch_status", ("CAM123", DeviceSwitchType.MOBILE_TRACKING.value, 1), {}),
+        (
+            "switch_status",
+            ("CAM123", DeviceSwitchType.CHIME_INDICATOR_LIGHT.value, 1),
+            {"channel_no": 1},
+        ),
         ("sound_alarm", ("CAM123", 2), {}),
+    ]
+
+
+def test_camera_chime_music_uses_status_optionals() -> None:
+    camera, _client = _camera()
+
+    chime = camera.chime_music()
+    assert chime is not None
+    assert chime.doorbell == 0
+    assert chime.pir == 0
+    assert chime.volume == 90
+
+
+def test_camera_chime_info_helpers_use_apk_channel_default() -> None:
+    camera, client = _camera()
+
+    chime_info = camera.get_device_chime_info()
+    assert chime_info.sound_type == 5
+    assert chime_info.duration == 30
+    assert camera.set_device_chime_info(sound_type=2, duration=15) is True
+
+    assert client.calls == [
+        ("get_device_chime_info", ("CAM123", 1), {}),
+        (
+            "set_device_chime_info",
+            ("CAM123", 1),
+            {"sound_type": 2, "duration": 15},
+        ),
     ]
 
 

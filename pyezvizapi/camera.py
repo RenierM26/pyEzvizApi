@@ -8,7 +8,7 @@ from typing import Any, Literal, TypedDict, cast
 
 from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
-from .models import EzvizDeviceRecord
+from .models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
 from .utils import (
     compute_motion_from_alarm,
     fetch_nested_value,
@@ -229,6 +229,33 @@ class EzvizCamera:
                 lock_type = info["type"]
 
         return resource_id, local_index, stream_token, lock_type
+
+    def chime_music(self) -> EzvizChimeMusic | None:
+        """Return parsed chime music metadata from status optionals."""
+        if self._record:
+            return self._record.chime_music
+        optionals = self.fetch_key(["STATUS", "optionals"])
+        if isinstance(optionals, dict):
+            return EzvizChimeMusic.from_api(optionals.get("ChimeMusic"))
+        return None
+
+    def get_device_chime_info(self, channel_no: int = 1) -> EzvizDeviceChimeInfo:
+        """Return the doorbell chime type/duration configuration."""
+        return EzvizDeviceChimeInfo.from_api(
+            self._client.get_device_chime_info(self._serial, channel_no)
+        )
+
+    def set_device_chime_info(
+        self, sound_type: int, duration: int, channel_no: int = 1
+    ) -> bool:
+        """Set the doorbell chime type/duration configuration."""
+        self._client.set_device_chime_info(
+            self._serial,
+            channel_no,
+            sound_type=sound_type,
+            duration=duration,
+        )
+        return True
 
     def _motion_trigger(self) -> None:
         """Create motion sensor based on last alarm time.
@@ -715,6 +742,17 @@ class EzvizCamera:
             PyEzvizError, InvalidURL, HTTPError
         """
         return self.set_switch(DeviceSwitchType.MOBILE_TRACKING, enable)
+
+    def switch_chime_indicator_light(
+        self, enable: bool = False, channel_no: int = 1
+    ) -> bool:
+        """Switch the HP7/doorbell chime indicator light."""
+        return self._client.switch_status(
+            self._serial,
+            DeviceSwitchType.CHIME_INDICATOR_LIGHT.value,
+            int(enable),
+            channel_no=channel_no,
+        )
 
     def switch_sound_alarm(self, enable: int | bool = False) -> bool:
         """Sound alarm on a device.

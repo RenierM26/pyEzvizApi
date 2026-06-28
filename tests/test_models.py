@@ -1,6 +1,48 @@
 from __future__ import annotations
 
-from pyezvizapi.models import EzvizDeviceRecord, build_device_records_map
+from pyezvizapi.models import (
+    EzvizChimeMusic,
+    EzvizDeviceChimeInfo,
+    EzvizDeviceRecord,
+    build_device_records_map,
+)
+
+
+def test_chime_music_parses_apk_backed_optional_json() -> None:
+    chime = EzvizChimeMusic.from_api(
+        '{"doorbell": 2, "pir": "3", "volume": 90, '
+        '"doorbell_enable": 1, "pir_enable": "0"}'
+    )
+
+    assert chime is not None
+    assert chime.doorbell == 2
+    assert chime.pir == 3
+    assert chime.volume == 90
+    assert chime.doorbell_enabled is True
+    assert chime.pir_enabled is False
+    assert chime.as_dict() == {
+        "doorbell": 2,
+        "pir": 3,
+        "volume": 90,
+        "doorbell_enable": True,
+        "pir_enable": False,
+    }
+
+
+def test_chime_music_rejects_unparseable_payloads() -> None:
+    assert EzvizChimeMusic.from_api("") is None
+    assert EzvizChimeMusic.from_api("not json") is None
+    assert EzvizChimeMusic.from_api([1, 2, 3]) is None
+
+
+def test_device_chime_info_parses_apk_backed_response() -> None:
+    chime_info = EzvizDeviceChimeInfo.from_api(
+        {"meta": {"code": 200}, "type": "5", "duration": 30}
+    )
+
+    assert chime_info.sound_type == 5
+    assert chime_info.duration == 30
+    assert chime_info.as_dict() == {"type": 5, "duration": 30}
 
 
 def test_device_record_from_api_tolerates_mixed_shapes() -> None:
@@ -15,7 +57,13 @@ def test_device_record_from_api_tolerates_mixed_shapes() -> None:
                 "status": 1,
                 "supportExt": {"SupportExt": "1"},
             },
-            "STATUS": {"globalStatus": 0, "optionals": {"foo": "bar"}},
+            "STATUS": {
+                "globalStatus": 0,
+                "optionals": {
+                    "foo": "bar",
+                    "ChimeMusic": '{"doorbell": 0, "pir": 1, "volume": 84}',
+                },
+            },
             "SWITCH": [
                 {"type": 7, "enable": 1},
                 {"type": 21, "enable": False},
@@ -36,6 +84,9 @@ def test_device_record_from_api_tolerates_mixed_shapes() -> None:
     assert record.connection == {"localIp": "192.0.2.10"}
     assert record.vtm == {"battery": 88}
     assert record.cloud == {"cloud": True}
+    chime = record.chime_music
+    assert chime is not None
+    assert chime.volume == 84
 
 
 def test_build_device_records_map_wraps_payloads() -> None:

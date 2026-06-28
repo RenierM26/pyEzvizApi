@@ -632,7 +632,12 @@ if TYPE_CHECKING:
         summarize_idmx_h264_local_packets,
         trim_h264_annexb_to_first_clean_idr_window,
     )
-    from .models import EzvizDeviceRecord, build_device_records_map
+    from .models import (
+        EzvizChimeMusic,
+        EzvizDeviceChimeInfo,
+        EzvizDeviceRecord,
+        build_device_records_map,
+    )
     from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
     from .smart_plug import EzvizSmartPlug
     from .stream import (
@@ -687,7 +692,9 @@ _EXPORTS = {
     "EzvizAuthVerificationCode": "exceptions",
     "EzvizCAS": "cas",
     "EzvizCamera": "camera",
+    "EzvizChimeMusic": "models",
     "EzvizClient": "client",
+    "EzvizDeviceChimeInfo": "models",
     "EzvizDeviceRecord": "models",
     "EZVIZ_LAN_MAIN_STREAM_TYPE": "hcnetsdk",
     "EZVIZ_LAN_MAIN_VIDEO_LEVEL": "hcnetsdk",

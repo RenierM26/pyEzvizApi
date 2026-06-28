@@ -8,6 +8,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
+from pyezvizapi import (
+    EzvizLocalSdkEcdhStreamDecoder as PackageLocalSdkEcdhStreamDecoder,
+    generate_ezviz_local_sdk_ecdh_keypair as package_generate_local_sdk_ecdh_keypair,
+)
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.hcnetsdk import (
     EzvizCasDeviceInfo,
@@ -18,7 +22,11 @@ from pyezvizapi.hcnetsdk import (
     EzvizLocalSdkStreamBootstrap,
     HcNetSdkLanEndpoint,
 )
-from pyezvizapi.local_stream import EzvizLocalSdkCredentials
+from pyezvizapi.local_stream import (
+    EzvizLocalSdkCredentials,
+    EzvizLocalSdkEcdhStreamDecoder as LocalStreamEcdhStreamDecoder,
+    generate_ezviz_local_sdk_ecdh_keypair as local_stream_generate_ecdh_keypair,
+)
 from pyezvizapi.local_stream_ecdh import (
     LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET,
     LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH,
@@ -58,6 +66,13 @@ EXPECTED_LOCAL_SDK_ECDH_INIT_XML = (
     b"</Request>\n"
 )
 LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD = b"mpegps"
+
+
+def test_local_stream_namespace_reexports_ecdh_helpers() -> None:
+    assert LocalStreamEcdhStreamDecoder is EzvizLocalSdkEcdhStreamDecoder
+    assert PackageLocalSdkEcdhStreamDecoder is EzvizLocalSdkEcdhStreamDecoder
+    assert local_stream_generate_ecdh_keypair is generate_ezviz_local_sdk_ecdh_keypair
+    assert package_generate_local_sdk_ecdh_keypair is generate_ezviz_local_sdk_ecdh_keypair
 
 
 def _public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:

@@ -47,6 +47,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added binary-confirmed command-port mapping plus decoded and summary helpers for `NET_DVR_USER_V30` user/password/right-table reads; decoded password bytes are hidden from default object reprs.
 - Added APK-matched HP7/doorbell helpers for `REMOTE_UNLOCK`, parsed `ChimeMusic` status optionals, chime type/duration info, and the chime indicator-light switch.
 - Added local SDK ECDH public-key preview support, ChaCha20 stream decoder helpers, and client/CLI MPEG-PS dump paths for encrypted local LAN media paths.
+- Exposed local SDK ECDH stream helpers through the generic `local_stream` namespace while keeping the focused ECDH implementation module available.
 
 ### Fixed
 

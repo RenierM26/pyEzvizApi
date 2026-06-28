@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
 import hashlib
+from importlib import import_module
 import ipaddress
 from itertools import chain
 import subprocess
@@ -5600,3 +5601,45 @@ def _write_local_stream_payloads(
             break
         output.write(packet.body)
         output.flush()
+
+
+_LOCAL_STREAM_ECDH_EXPORTS = {
+    "LOCAL_SDK_ECDH_CONTROL_PORT",
+    "LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT",
+    "LOCAL_SDK_ECDH_STREAM_PORT",
+    "EzvizLocalSdkEcdhDataPacket",
+    "EzvizLocalSdkEcdhHandshakePacket",
+    "EzvizLocalSdkEcdhKeyPair",
+    "EzvizLocalSdkEcdhMediaStream",
+    "EzvizLocalSdkEcdhStreamDecoder",
+    "EzvizLocalSdkEcdhStreamPacket",
+    "build_ezviz_local_sdk_ecdh_init_request_body",
+    "copy_local_sdk_ecdh_stream_from_client",
+    "copy_local_sdk_ecdh_stream_to_mpegps",
+    "decrypt_ezviz_local_sdk_ecdh_data_packet",
+    "derive_ezviz_local_sdk_ecdh_chacha20_key",
+    "derive_ezviz_local_sdk_ecdh_shared_secret",
+    "ezviz_local_sdk_ecdh_chacha20_nonce",
+    "generate_ezviz_local_sdk_ecdh_keypair",
+    "open_local_sdk_ecdh_stream",
+    "open_local_sdk_ecdh_stream_from_client",
+    "parse_ezviz_local_sdk_ecdh_data_packet",
+    "parse_ezviz_local_sdk_ecdh_handshake_packet",
+    "transform_ezviz_local_sdk_ecdh_nonce",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily expose ECDH local-stream helpers from the generic stream namespace."""
+    if name not in _LOCAL_STREAM_ECDH_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module = import_module(".local_stream_ecdh", __package__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Return module attributes including lazy ECDH stream helpers."""
+    return sorted((*globals(), *_LOCAL_STREAM_ECDH_EXPORTS))

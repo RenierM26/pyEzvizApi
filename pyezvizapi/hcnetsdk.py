@@ -835,6 +835,15 @@ HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET = 112
 HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET = 148
 HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET = 152
 HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET = 156
+HCNETSDK_EZVIZ_ACCESS_CFG_SIZE = 516
+HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET = 4
+HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET = 5
+HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET = 6
+HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET = 7
+HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_SIZE = 64
+HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET = 72
+HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE = 32
+HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET = 104
 
 
 class HcNetSdkAbility(IntEnum):
@@ -1257,6 +1266,25 @@ class EzvizLanDvrConfigSummary:
     raw_length: int
     trailing_bytes: int
     nonzero_bytes: int
+
+
+@dataclass(frozen=True)
+class EzvizLanEzvizAccessConfig:
+    """Redacted fields from ``NET_DVR_EZVIZ_ACCESS_CFG``.
+
+    The native structure also contains a verification-code byte array. This
+    model intentionally exposes only whether that field is populated.
+    """
+
+    declared_size: int
+    enabled: int
+    device_status: int
+    allow_redirect: int
+    domain_name: str
+    verification_code_present: bool
+    net_mode: int
+    raw_length: int
+    trailing_bytes: int
 
 
 @dataclass(frozen=True)
@@ -5699,6 +5727,47 @@ def ezviz_lan_ezviz_access_config_summary(
     )
 
 
+def ezviz_lan_ezviz_access_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanEzvizAccessConfig:
+    """Parse redacted ``NET_DVR_EZVIZ_ACCESS_CFG`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN access config response is too short")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "EZVIZ access config"
+    )
+    if effective_size < HCNETSDK_EZVIZ_ACCESS_CFG_SIZE:
+        raise PyEzvizError("EZVIZ LAN access config declared size is too small")
+    effective_raw = raw[:effective_size]
+    verification = effective_raw[
+        HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET
+        : HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET
+        + HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE
+    ]
+    return EzvizLanEzvizAccessConfig(
+        declared_size=effective_size,
+        enabled=effective_raw[HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET],
+        device_status=effective_raw[
+            HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET
+        ],
+        allow_redirect=effective_raw[
+            HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET
+        ],
+        domain_name=_nul_stripped_text(
+            effective_raw[
+                HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET
+                : HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET
+                + HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_SIZE
+            ]
+        ),
+        verification_code_present=any(verification),
+        net_mode=effective_raw[HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET],
+        raw_length=len(raw),
+        trailing_bytes=len(raw) - effective_size,
+    )
+
+
 def ezviz_lan_user_config_v30_summary(
     data: bytes | bytearray | memoryview,
 ) -> EzvizLanDvrConfigSummary:
@@ -9723,6 +9792,12 @@ class HcNetSdkPurePythonClient:
     def ezviz_access_config_summary(self) -> EzvizLanDvrConfigSummary:
         """Read traced EZVIZ access config as a non-secret summary."""
         return ezviz_lan_ezviz_access_config_summary(
+            self.dvr_config(ezviz_lan_ezviz_access_get_config_request(1))
+        )
+
+    def ezviz_access_config(self) -> EzvizLanEzvizAccessConfig:
+        """Read and parse redacted traced ``NET_DVR_EZVIZ_ACCESS_CFG`` output."""
+        return ezviz_lan_ezviz_access_config(
             self.dvr_config(ezviz_lan_ezviz_access_get_config_request(1))
         )
 

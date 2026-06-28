@@ -10847,6 +10847,17 @@ def _xml_int_csv(value: str | None) -> tuple[int, ...]:
     return tuple(parsed)
 
 
+def _xml_child_int_csv_with_prefix(root: ET.Element, prefix: str) -> tuple[int, ...]:
+    parsed: list[int] = []
+    prefix_lower = prefix.lower()
+    for child in list(root):
+        if not _xml_local_name(child).lower().startswith(prefix_lower):
+            continue
+        text = child.text.strip() if child.text and child.text.strip() else None
+        parsed.extend(_xml_int_csv(text))
+    return tuple(parsed)
+
+
 def _xml_child_text(root: ET.Element, path: tuple[str, ...]) -> str | None:
     elements = [root]
     for name in path:
@@ -10933,11 +10944,12 @@ def _audio_video_compress_stream(
     bitrate_maxes: list[int] = []
     resolution_indexes: list[int] = []
     frame_rates: list[int] = []
+    frame_rates.extend(_xml_child_int_csv_with_prefix(root, "VideoFrameRate"))
     resolution_list = _xml_first_child(root, "VideoResolutionList")
     if resolution_list is not None:
         for entry in _xml_children(resolution_list, "VideoResolutionEntry"):
             resolution_indexes.append(_xml_child_int(entry, ("Index",)))
-            frame_rates.extend(_xml_int_csv(_xml_child_text(entry, ("VideoFrameRate",))))
+            frame_rates.extend(_xml_child_int_csv_with_prefix(entry, "VideoFrameRate"))
             bitrate_min = _xml_child_int(entry, ("VideoBitrate", "Min"))
             bitrate_max = _xml_child_int(entry, ("VideoBitrate", "Max"))
             if bitrate_min:

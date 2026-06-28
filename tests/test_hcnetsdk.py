@@ -6507,6 +6507,35 @@ def test_ezviz_lan_audio_video_compress_info_parses_stream_fields() -> None:
     assert ability.voice_talk_channels[0].voice_talk_in_type_range == "mic"
 
 
+def test_ezviz_lan_audio_video_compress_info_collects_v20_frame_rates() -> None:
+    ability = ezviz_lan_audio_video_compress_info(
+        b"<AudioVideoCompressInfo version=\"2.0\">"
+        b"<VideoCompressInfo><ChannelList><ChannelEntry>"
+        b"<ChannelNumber>1</ChannelNumber><MainChannel>"
+        b"<VideoFrameRateN>12,25</VideoFrameRateN>"
+        b"<VideoFrameRate50>50</VideoFrameRate50>"
+        b"<VideoFrameRate60>60,bad</VideoFrameRate60>"
+        b"<VideoResolutionList><VideoResolutionEntry>"
+        b"<Index>1</Index>"
+        b"<VideoFrameRate100>100</VideoFrameRate100>"
+        b"<VideoFrameRate120>120,25</VideoFrameRate120>"
+        b"</VideoResolutionEntry></VideoResolutionList>"
+        b"</MainChannel></ChannelEntry></ChannelList></VideoCompressInfo>"
+        b"</AudioVideoCompressInfo>"
+    )
+
+    assert ability.success is True
+    assert ability.video_channels[0].main_stream is not None
+    assert ability.video_channels[0].main_stream.frame_rates == (
+        12,
+        25,
+        50,
+        60,
+        100,
+        120,
+    )
+
+
 def test_ezviz_lan_audio_video_compress_info_uses_safe_defaults() -> None:
     ability = ezviz_lan_audio_video_compress_info(
         b"<AudioVideoCompressInfo><VideoCompressInfo><ChannelList>"

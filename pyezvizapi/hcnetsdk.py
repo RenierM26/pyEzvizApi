@@ -2155,6 +2155,164 @@ class EzvizLanVideoPicAbility:
 
 
 @dataclass(frozen=True)
+class EzvizLanIpcFrontParameterRange:
+    """One integer range advertised by ``CAMERAPARA`` ability XML."""
+
+    minimum: int = 0
+    maximum: int = 0
+    default: int | None = None
+
+    @property
+    def supported(self) -> bool:
+        """Return whether the range has a non-empty max/min span."""
+        return self.maximum > self.minimum
+
+
+@dataclass(frozen=True)
+class EzvizLanIpcFrontParameterAbility:
+    """Parsed safe image/front-parameter ranges from ``CAMERAPARA`` XML."""
+
+    has_camera_para: bool = False
+    power_line_frequency_mode_range: str | None = None
+    white_balance_mode_range: str | None = None
+    exposure_mode_range: str | None = None
+    exposure_set_range: str | None = None
+    exposure_user_set: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    gain_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    brightness_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    contrast_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    sharpness_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    saturation_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    day_night_filter_type_range: str | None = None
+    switch_schedule_enabled_range: str | None = None
+    day_to_night_filter_level_range: str | None = None
+    night_to_day_filter_level_range: str | None = None
+    day_night_filter_time: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    backlight_mode_range: str | None = None
+    mirror_range: str | None = None
+    digital_noise_reduction_enable_range: str | None = None
+    digital_noise_reduction_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    digital_noise_spectral_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    digital_noise_temporal_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+
+    @property
+    def success(self) -> bool:
+        """Return whether a camera-parameter ability root was parsed."""
+        return self.has_camera_para
+
+    @property
+    def mirror_options(self) -> tuple[str, ...]:
+        """Return comma-separated mirror options as a tuple."""
+        return _ability_option_tuple(self.mirror_range)
+
+    @property
+    def backlight_mode_options(self) -> tuple[str, ...]:
+        """Return comma-separated backlight mode options as a tuple."""
+        return _ability_option_tuple(self.backlight_mode_range)
+
+    @property
+    def day_night_filter_type_options(self) -> tuple[str, ...]:
+        """Return comma-separated day/night filter type options as a tuple."""
+        return _ability_option_tuple(self.day_night_filter_type_range)
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressStream:
+    """One video stream profile from ``AudioVideoCompressInfo`` XML."""
+
+    index: int | None = None
+    video_encode_type_range: str | None = None
+    video_encode_efficiency_range: str | None = None
+    interval_bp_frame_range: str | None = None
+    e_frame: int = 0
+    resolution_indexes: tuple[int, ...] = ()
+    frame_rates: tuple[int, ...] = ()
+    bitrate_min: int = 0
+    bitrate_max: int = 0
+
+    @property
+    def resolution_count(self) -> int:
+        """Return the number of advertised video resolutions."""
+        return len(self.resolution_indexes)
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressVideoChannel:
+    """One video channel from ``AudioVideoCompressInfo`` XML."""
+
+    channel_number: int = 0
+    main_stream: EzvizLanAudioVideoCompressStream | None = None
+    sub_streams: tuple[EzvizLanAudioVideoCompressStream, ...] = ()
+
+    @property
+    def supports_sub_stream(self) -> bool:
+        """Return whether at least one sub-stream profile was advertised."""
+        return bool(self.sub_streams)
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressAudioChannel:
+    """One audio channel from ``AudioVideoCompressInfo`` XML."""
+
+    channel_number: int = 0
+    main_audio_encode_type_range: str | None = None
+    sub_audio_encode_type_range: str | None = None
+    audio_in_type_range: str | None = None
+    audio_in_volume_min: int = 0
+    audio_in_volume_max: int = 0
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressVoiceTalkChannel:
+    """One voice-talk channel from ``AudioVideoCompressInfo`` XML."""
+
+    channel_number: int = 0
+    voice_talk_encode_type_range: str | None = None
+    voice_talk_in_type_range: str | None = None
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressInfo:
+    """Parsed safe fields from ``AudioVideoCompressInfo`` XML."""
+
+    video_channels: tuple[EzvizLanAudioVideoCompressVideoChannel, ...] = ()
+    audio_channels: tuple[EzvizLanAudioVideoCompressAudioChannel, ...] = ()
+    voice_talk_channels: tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...] = ()
+    has_video_compress_info: bool = False
+    has_audio_compress_info: bool = False
+
+    @property
+    def success(self) -> bool:
+        """Return whether any advertised audio or video ability section was parsed."""
+        return self.has_video_compress_info or self.has_audio_compress_info
+
+    @property
+    def supports_sub_stream(self) -> bool:
+        """Return whether any video channel advertises sub-stream support."""
+        return any(channel.supports_sub_stream for channel in self.video_channels)
+
+
+@dataclass(frozen=True)
 class EzvizLanDeviceSoftHardwareAbility:
     """Parsed software/hardware ability values used by ``DeviceAbilityHelper``."""
 
@@ -6925,7 +7083,11 @@ def ezviz_lan_ptz_ability_input(channel: int) -> bytes:
 
 
 def ezviz_lan_image_display_param_ability_input(channel: int) -> bytes:
-    """Return the image-display ability XML used by the RN LAN wrapper."""
+    """Return the image-display ability XML used by the RN LAN wrapper.
+
+    Live devices may acknowledge this request with an empty body. The image
+    parameter ranges used by the app are available through ``IPC_FRONT_PARAMETER``.
+    """
     return hcnetsdk_device_ability_xml("ImageDisplayParamAbility", channel=channel)
 
 
@@ -6973,7 +7135,11 @@ def ezviz_lan_image_display_param_ability_request(
     login_id: int,
     channel: int,
 ) -> HcNetSdkDeviceAbilityRequest:
-    """Return the RN LAN image-display ability request shape."""
+    """Return the RN LAN image-display ability request shape.
+
+    Prefer ``ezviz_lan_ipc_front_parameter_ability_request`` for a live
+    ``CAMERAPARA`` response containing image parameter ranges.
+    """
     return ezviz_lan_rn_device_ability_request(
         login_id,
         HcNetSdkAbility.DEVICE_ABILITY_INFO,
@@ -7116,6 +7282,121 @@ def ezviz_lan_video_pic_ability(response: str | bytes) -> EzvizLanVideoPicAbilit
         motion_grid_column_granularity=_xml_descendant_int(
             root, "columnGranularity", parent="VideoFormatP"
         ),
+    )
+
+
+def ezviz_lan_ipc_front_parameter_ability(
+    response: str | bytes,
+) -> EzvizLanIpcFrontParameterAbility:
+    """Parse safe image/front-parameter ranges from ``CAMERAPARA`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN IPC front-parameter XML") from err
+
+    return EzvizLanIpcFrontParameterAbility(
+        has_camera_para=_xml_local_name(root).lower() == "camerapara",
+        power_line_frequency_mode_range=_xml_child_text(
+            root, ("PowerLineFrequencyMode", "Range")
+        ),
+        white_balance_mode_range=_xml_child_text(
+            root, ("WhiteBalance", "WhiteBalanceMode", "Range")
+        ),
+        exposure_mode_range=_xml_child_text(root, ("Exposure", "ExposureMode", "Range")),
+        exposure_set_range=_xml_child_text(root, ("Exposure", "ExposureSet", "Range")),
+        exposure_user_set=_xml_child_int_range(root, ("Exposure", "exposureUSERSET")),
+        gain_level=_xml_child_int_range(root, ("GainLevel",)),
+        brightness_level=_xml_child_int_range(root, ("BrightnessLevel",)),
+        contrast_level=_xml_child_int_range(root, ("ContrastLevel",)),
+        sharpness_level=_xml_child_int_range(root, ("SharpnessLevel",)),
+        saturation_level=_xml_child_int_range(root, ("SaturationLevel",)),
+        day_night_filter_type_range=_xml_child_text(
+            root, ("DayNightFilter", "DayNightFilterType", "Range")
+        ),
+        switch_schedule_enabled_range=_xml_child_text(
+            root,
+            (
+                "DayNightFilter",
+                "SwitchSchedule",
+                "SwitchScheduleEnabled",
+                "Range",
+            ),
+        ),
+        day_to_night_filter_level_range=_xml_child_text(
+            root,
+            (
+                "DayNightFilter",
+                "SwitchSchedule",
+                "DayToNightFilterLevel",
+                "Range",
+            ),
+        ),
+        night_to_day_filter_level_range=_xml_child_text(
+            root,
+            (
+                "DayNightFilter",
+                "SwitchSchedule",
+                "NightToDayFilterLevel",
+                "Range",
+            ),
+        ),
+        day_night_filter_time=_xml_child_int_range(
+            root, ("DayNightFilter", "SwitchSchedule", "DayNightFilterTime")
+        ),
+        backlight_mode_range=_xml_child_text(
+            root, ("Backlight", "BacklightMode", "Range")
+        ),
+        mirror_range=_xml_child_text(root, ("Mirror", "Range")),
+        digital_noise_reduction_enable_range=_xml_child_text(
+            root,
+            ("DigitalNoiseReduction", "DigitalNoiseReductionEnable", "Range"),
+        ),
+        digital_noise_reduction_level=_xml_child_int_range(
+            root, ("DigitalNoiseReduction", "DigitalNoiseReductionLevel")
+        ),
+        digital_noise_spectral_level=_xml_child_int_range(
+            root, ("DigitalNoiseReduction", "DigitalNoiseSpectralLevel")
+        ),
+        digital_noise_temporal_level=_xml_child_int_range(
+            root, ("DigitalNoiseReduction", "DigitalNoiseTemporalLevel")
+        ),
+    )
+
+
+def ezviz_lan_audio_video_compress_info(
+    response: str | bytes,
+) -> EzvizLanAudioVideoCompressInfo:
+    """Parse safe stream/audio fields from ``AudioVideoCompressInfo`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN audio/video compress XML") from err
+
+    video_root = _xml_first_child(root, "VideoCompressInfo")
+    audio_root = _xml_first_child(root, "AudioCompressInfo")
+    video_channels = (
+        _audio_video_compress_video_channels(video_root)
+        if video_root is not None
+        else ()
+    )
+    audio_channels: tuple[EzvizLanAudioVideoCompressAudioChannel, ...] = ()
+    voice_talk_channels: tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...] = ()
+    if audio_root is not None:
+        audio_section = _xml_first_child(audio_root, "Audio")
+        voice_talk_section = _xml_first_child(audio_root, "VoiceTalk")
+        if audio_section is not None:
+            audio_channels = _audio_video_compress_audio_channels(audio_section)
+        if voice_talk_section is not None:
+            voice_talk_channels = _audio_video_compress_voice_talk_channels(
+                voice_talk_section
+            )
+
+    return EzvizLanAudioVideoCompressInfo(
+        video_channels=video_channels,
+        audio_channels=audio_channels,
+        voice_talk_channels=voice_talk_channels,
+        has_video_compress_info=video_root is not None,
+        has_audio_compress_info=audio_root is not None,
     )
 
 
@@ -9811,6 +10092,27 @@ class HcNetSdkPurePythonClient:
             self.device_ability(ezviz_lan_video_pic_ability_request(1, channel))
         )
 
+    def audio_video_compress_info(
+        self,
+        channel: int = 1,
+    ) -> EzvizLanAudioVideoCompressInfo:
+        """Read and parse local ``AudioVideoCompressInfo`` output."""
+        return ezviz_lan_audio_video_compress_info(
+            self.device_ability(
+                ezviz_lan_audio_video_compress_info_ability_request(1, channel)
+            )
+        )
+
+    def ipc_front_parameter_ability(self) -> EzvizLanIpcFrontParameterAbility:
+        """Read and parse local ``IPC_FRONT_PARAMETER`` image ranges."""
+        return ezviz_lan_ipc_front_parameter_ability(
+            self.device_ability(ezviz_lan_ipc_front_parameter_ability_request(1))
+        )
+
+    def image_display_param_ability(self) -> EzvizLanIpcFrontParameterAbility:
+        """Read image-display ranges through the live-backed front-parameter path."""
+        return self.ipc_front_parameter_ability()
+
     def dvr_config(
         self,
         request: HcNetSdkDvrConfigRequest,
@@ -10553,6 +10855,168 @@ def _xml_child_text(root: ET.Element, path: tuple[str, ...]) -> str | None:
             return None
     text = elements[0].text
     return text.strip() if text and text.strip() else None
+
+
+def _xml_children(root: ET.Element, name: str) -> tuple[ET.Element, ...]:
+    return tuple(
+        child
+        for child in list(root)
+        if _xml_local_name(child).lower() == name.lower()
+    )
+
+
+def _xml_first_child(root: ET.Element, name: str) -> ET.Element | None:
+    children = _xml_children(root, name)
+    return children[0] if children else None
+
+
+def _xml_child_int(
+    root: ET.Element,
+    path: tuple[str, ...],
+    *,
+    default: int = 0,
+) -> int:
+    value = _xml_child_text(root, path)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _xml_child_optional_int(
+    root: ET.Element,
+    path: tuple[str, ...],
+) -> int | None:
+    value = _xml_child_text(root, path)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _xml_child_int_range(
+    root: ET.Element,
+    path: tuple[str, ...],
+) -> EzvizLanIpcFrontParameterRange:
+    return EzvizLanIpcFrontParameterRange(
+        minimum=_xml_child_int(root, (*path, "Min")),
+        maximum=_xml_child_int(root, (*path, "Max")),
+        default=_xml_child_optional_int(root, (*path, "Default")),
+    )
+
+
+def _audio_video_compress_stream(
+    root: ET.Element,
+    *,
+    index: int | None = None,
+) -> EzvizLanAudioVideoCompressStream:
+    bitrate_mins: list[int] = []
+    bitrate_maxes: list[int] = []
+    resolution_indexes: list[int] = []
+    frame_rates: list[int] = []
+    resolution_list = _xml_first_child(root, "VideoResolutionList")
+    if resolution_list is not None:
+        for entry in _xml_children(resolution_list, "VideoResolutionEntry"):
+            resolution_indexes.append(_xml_child_int(entry, ("Index",)))
+            frame_rates.extend(_xml_int_csv(_xml_child_text(entry, ("VideoFrameRate",))))
+            bitrate_min = _xml_child_int(entry, ("VideoBitrate", "Min"))
+            bitrate_max = _xml_child_int(entry, ("VideoBitrate", "Max"))
+            if bitrate_min:
+                bitrate_mins.append(bitrate_min)
+            if bitrate_max:
+                bitrate_maxes.append(bitrate_max)
+
+    return EzvizLanAudioVideoCompressStream(
+        index=index,
+        video_encode_type_range=_xml_child_text(root, ("VideoEncodeType", "Range")),
+        video_encode_efficiency_range=_xml_child_text(
+            root, ("VideoEncodeEfficiency", "Range")
+        ),
+        interval_bp_frame_range=_xml_child_text(root, ("IntervalBPFrame", "Range")),
+        e_frame=_xml_child_int(root, ("EFrame",)),
+        resolution_indexes=tuple(resolution_indexes),
+        frame_rates=tuple(dict.fromkeys(frame_rates)),
+        bitrate_min=min(bitrate_mins) if bitrate_mins else 0,
+        bitrate_max=max(bitrate_maxes) if bitrate_maxes else 0,
+    )
+
+
+def _audio_video_compress_video_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressVideoChannel, ...]:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return ()
+    channels: list[EzvizLanAudioVideoCompressVideoChannel] = []
+    for entry in _xml_children(channel_list, "ChannelEntry"):
+        main = _xml_first_child(entry, "MainChannel")
+        sub_list = _xml_first_child(entry, "SubChannelList")
+        sub_streams: list[EzvizLanAudioVideoCompressStream] = []
+        if sub_list is not None:
+            for sub_entry in _xml_children(sub_list, "SubChannelEntry"):
+                sub_streams.append(
+                    _audio_video_compress_stream(
+                        sub_entry,
+                        index=_xml_child_optional_int(sub_entry, ("index",)),
+                    )
+                )
+        channels.append(
+            EzvizLanAudioVideoCompressVideoChannel(
+                channel_number=_xml_child_int(entry, ("ChannelNumber",)),
+                main_stream=(
+                    _audio_video_compress_stream(main) if main is not None else None
+                ),
+                sub_streams=tuple(sub_streams),
+            )
+        )
+    return tuple(channels)
+
+
+def _audio_video_compress_audio_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressAudioChannel, ...]:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return ()
+    return tuple(
+        EzvizLanAudioVideoCompressAudioChannel(
+            channel_number=_xml_child_int(entry, ("ChannelNumber",)),
+            main_audio_encode_type_range=_xml_child_text(
+                entry, ("MainAudioEncodeType", "Range")
+            ),
+            sub_audio_encode_type_range=_xml_child_text(
+                entry, ("SubAudioEncodeType", "Range")
+            ),
+            audio_in_type_range=_xml_child_text(entry, ("AudioInType", "Range")),
+            audio_in_volume_min=_xml_child_int(entry, ("AudioInVolume", "Min")),
+            audio_in_volume_max=_xml_child_int(entry, ("AudioInVolume", "Max")),
+        )
+        for entry in _xml_children(channel_list, "ChannelEntry")
+    )
+
+
+def _audio_video_compress_voice_talk_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...]:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return ()
+    return tuple(
+        EzvizLanAudioVideoCompressVoiceTalkChannel(
+            channel_number=_xml_child_int(entry, ("ChannelNumber",)),
+            voice_talk_encode_type_range=_xml_child_text(
+                entry, ("VoiceTalkEncodeType", "Range")
+            ),
+            voice_talk_in_type_range=_xml_child_text(
+                entry, ("VoiceTalkInType", "Range")
+            ),
+        )
+        for entry in _xml_children(channel_list, "ChannelEntry")
+    )
 
 
 def _xml_has_parent(root: ET.Element, child: ET.Element, parent: str) -> bool:

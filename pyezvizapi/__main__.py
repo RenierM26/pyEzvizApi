@@ -1356,8 +1356,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_stream_local_dump.add_argument(
         "--format",
         choices=("mpegps", "mpegts"),
-        default="mpegts",
-        help="Output container: raw MPEG-PS payloads or remuxed MPEG-TS (default: mpegts)",
+        default=None,
+        help=(
+            "Output container: raw MPEG-PS payloads or remuxed MPEG-TS "
+            "(default: mpegps for --local-sdk-ecdh, mpegts otherwise)"
+        ),
     )
     parser_stream_local_dump.add_argument(
         "--ffmpeg-path",
@@ -4016,6 +4019,9 @@ def _handle_local_sdk_stream_dump(
     client: EzvizClient | None = None,
 ) -> int:
     """Dump direct-local SDK media with caller-supplied local fields."""
+
+    if args.format is None:
+        args.format = "mpegps" if args.local_sdk_ecdh else "mpegts"
 
     if args.local_sdk_ecdh:
         if args.decrypt_video:

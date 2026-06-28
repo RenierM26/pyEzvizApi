@@ -166,6 +166,7 @@ from pyezvizapi.hcnetsdk import (
     EzvizLanCompressionInfoV30,
     EzvizLanDeviceConfigV40,
     EzvizLanDvrConfigSummary,
+    EzvizLanEzvizAccessConfig,
     EzvizLanHdConfig,
     EzvizLanHdDiskConfig,
     EzvizLanNetConfigV30,
@@ -284,6 +285,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_device_config_v40,
     ezviz_lan_device_config_v40_request,
     ezviz_lan_dvr_config_summary,
+    ezviz_lan_ezviz_access_config,
     ezviz_lan_ezviz_access_config_summary,
     ezviz_lan_ezviz_access_get_config_request,
     ezviz_lan_ezviz_access_replacement_domain,
@@ -682,6 +684,18 @@ def _picture_config_v40_payload(channel_name: bytes = b"EZVIZ") -> bytes:
     payload[152:154] = (16).to_bytes(2, "big")
     payload[154:156] = (24).to_bytes(2, "big")
     payload[156:164] = bytes([2, 1, 3, 1, 4, 5, 6, 1])
+    return bytes(payload)
+
+
+def _ezviz_access_config_payload() -> bytes:
+    payload = bytearray(516)
+    payload[0:4] = (516).to_bytes(4, "big")
+    payload[4] = 1
+    payload[5] = 2
+    payload[6] = 1
+    payload[7:71] = b"dev.ezvizlife.com".ljust(64, b"\x00")
+    payload[72:104] = b"\x01" * 32
+    payload[104] = 3
     return bytes(payload)
 
 
@@ -3237,7 +3251,7 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  
     record_config = _record_config_v30_payload()
     net_config = _net_config_v30_payload()
     wifi_config = (236).to_bytes(4, "big") + bytes(range(1, 236))
-    access_config = (516).to_bytes(4, "big") + bytes([1, 2, 3]) + b"\x00" * 509
+    access_config = _ezviz_access_config_payload()
     user_config = _user_config_v30_payload()
     outputs = {
         HcNetSdkDvrCommand.GET_HD_CFG: (4760).to_bytes(4, "big") + b"\x00" * 4756,
@@ -3306,6 +3320,7 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  
         client.ezviz_access_config_summary().structure
         == "NET_DVR_EZVIZ_ACCESS_CFG"
     )
+    assert client.ezviz_access_config().domain_name == "dev.ezvizlife.com"
     assert client.user_config_v30_summary().structure == "NET_DVR_USER_V30"
     decoded_user_config = client.user_config_v30()
     assert decoded_user_config.active_users[0].username == "admin"
@@ -3326,6 +3341,7 @@ def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  
         HcNetSdkDvrCommand.GET_PIC_CFG_V40,
         HcNetSdkDvrCommand.GET_PIC_CFG_V30,
         HcNetSdkDvrCommand.GET_WIFI_CFG,
+        HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
         HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
         HcNetSdkDvrCommand.GET_USER_CFG_V30,
         HcNetSdkDvrCommand.GET_USER_CFG_V30,
@@ -5168,6 +5184,52 @@ def test_ezviz_lan_sensitive_dvr_config_summaries_do_not_decode_values() -> None
         )
     with pytest.raises(PyEzvizError, match="too short"):
         ezviz_lan_user_config_v30_summary(b"\x00")
+
+
+def test_ezviz_lan_ezviz_access_config_parser_decodes_redacted_fields() -> None:
+    raw = _ezviz_access_config_payload()
+
+    assert ezviz_lan_ezviz_access_config(raw + b"\xff") == (
+        EzvizLanEzvizAccessConfig(
+            declared_size=516,
+            enabled=1,
+            device_status=2,
+            allow_redirect=1,
+            domain_name="dev.ezvizlife.com",
+            verification_code_present=True,
+            net_mode=3,
+            raw_length=517,
+            trailing_bytes=1,
+        )
+    )
+    assert ezviz_lan_ezviz_access_config(
+        _shifted_size_word_payload(raw)
+    ) == EzvizLanEzvizAccessConfig(
+        declared_size=516,
+        enabled=1,
+        device_status=2,
+        allow_redirect=1,
+        domain_name="dev.ezvizlife.com",
+        verification_code_present=True,
+        net_mode=3,
+        raw_length=516,
+        trailing_bytes=0,
+    )
+
+    empty_verification = bytearray(raw)
+    empty_verification[72:104] = b"\x00" * 32
+    assert (
+        ezviz_lan_ezviz_access_config(bytes(empty_verification))
+        .verification_code_present
+        is False
+    )
+
+    with pytest.raises(PyEzvizError, match="too short"):
+        ezviz_lan_ezviz_access_config(b"\x00")
+    with pytest.raises(PyEzvizError, match="truncated"):
+        ezviz_lan_ezviz_access_config((516).to_bytes(4, "big") + b"\x00" * 32)
+    with pytest.raises(PyEzvizError, match="declared size is too small"):
+        ezviz_lan_ezviz_access_config((104).to_bytes(4, "big") + b"\x00" * 512)
 
 
 def test_ezviz_lan_user_config_v30_parser_decodes_sensitive_values() -> None:

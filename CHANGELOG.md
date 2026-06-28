@@ -39,6 +39,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added a typed pure-Python parser and convenience read for traced DVR network config.
 - Added a typed pure-Python parser and convenience read for traced DVR record schedule config.
 - Added a trace-backed command-port mapping for read-only EZVIZ access DVR config reads, plus a non-secret summary helper that avoids decoding access/security strings.
+- Added a redacted typed pure-Python parser and convenience read for traced EZVIZ access DVR config flags, domain, and network mode.
 - Added binary-confirmed command-port mapping plus decoded and summary helpers for `NET_DVR_USER_V30` user/password/right-table reads; decoded password bytes are hidden from default object reprs.
 
 ### Fixed

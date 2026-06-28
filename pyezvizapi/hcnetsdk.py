@@ -2087,6 +2087,74 @@ class EzvizLanPtzAbility:
 
 
 @dataclass(frozen=True)
+class EzvizLanAccessProtocolAbility:
+    """Parsed safe fields from ``AccessProtocolAbility`` XML."""
+
+    channel_no: str | None = None
+    enable_options: str | None = None
+    device_status_options: str | None = None
+    allow_redirect_options: str | None = None
+    domain_length_min: int = 0
+    domain_length_max: int = 0
+    has_ezviz_param: bool = False
+
+    @property
+    def success(self) -> bool:
+        """Return whether the EZVIZ parameter section was present."""
+        return self.has_ezviz_param
+
+    @property
+    def enable_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated enable options as a tuple."""
+        return _ability_option_tuple(self.enable_options)
+
+    @property
+    def device_status_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated device-status options as a tuple."""
+        return _ability_option_tuple(self.device_status_options)
+
+    @property
+    def allow_redirect_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated redirect options as a tuple."""
+        return _ability_option_tuple(self.allow_redirect_options)
+
+
+@dataclass(frozen=True)
+class EzvizLanVideoPicAbility:
+    """Parsed safe fields from ``VideoPicAbility`` XML."""
+
+    channel_no: str | None = None
+    channel_name_enabled: bool = False
+    week_enabled: bool = False
+    osd_type_options: str | None = None
+    osd_attribute_options: str | None = None
+    osd_hour_type_options: str | None = None
+    motion_region_type_options: str | None = None
+    motion_grid_row_granularity: int = 0
+    motion_grid_column_granularity: int = 0
+
+    @property
+    def osd_type_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated OSD type options as a tuple."""
+        return _ability_option_tuple(self.osd_type_options)
+
+    @property
+    def osd_attribute_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated OSD attribute options as a tuple."""
+        return _ability_option_tuple(self.osd_attribute_options)
+
+    @property
+    def osd_hour_type_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated OSD hour-type options as a tuple."""
+        return _ability_option_tuple(self.osd_hour_type_options)
+
+    @property
+    def motion_region_type_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated motion region-type options as a tuple."""
+        return _ability_option_tuple(self.motion_region_type_options)
+
+
+@dataclass(frozen=True)
 class EzvizLanDeviceSoftHardwareAbility:
     """Parsed software/hardware ability values used by ``DeviceAbilityHelper``."""
 
@@ -6999,6 +7067,58 @@ def ezviz_lan_ptz_ability(response: str | bytes) -> EzvizLanPtzAbility:
     )
 
 
+def ezviz_lan_access_protocol_ability(
+    response: str | bytes,
+) -> EzvizLanAccessProtocolAbility:
+    """Parse safe local-add fields from ``AccessProtocolAbility`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN access-protocol ability XML") from err
+
+    return EzvizLanAccessProtocolAbility(
+        channel_no=_xml_descendant_text(root, "channelNO"),
+        enable_options=_xml_attr(root, "enable", "opt", parent="EzvizParam"),
+        device_status_options=_xml_attr(
+            root, "deviceStatus", "opt", parent="EzvizParam"
+        ),
+        allow_redirect_options=_xml_attr(
+            root, "allowRedirect", "opt", parent="EzvizParam"
+        ),
+        domain_length_min=_xml_attr_int(root, "domainLen", "min", parent="EzvizParam"),
+        domain_length_max=_xml_attr_int(root, "domainLen", "max", parent="EzvizParam"),
+        has_ezviz_param=_xml_has_descendant(root, "EzvizParam"),
+    )
+
+
+def ezviz_lan_video_pic_ability(response: str | bytes) -> EzvizLanVideoPicAbility:
+    """Parse safe OSD/motion fields from ``VideoPicAbility`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN video-picture ability XML") from err
+
+    return EzvizLanVideoPicAbility(
+        channel_no=_xml_descendant_text(root, "channelNO"),
+        channel_name_enabled=_xml_descendant_bool_text(
+            root, "enabled", parent="ChannelName", default=False
+        ),
+        week_enabled=_xml_descendant_bool_text(root, "enabled", parent="Week"),
+        osd_type_options=_xml_attr(root, "OSDType", "opt", parent="OSD"),
+        osd_attribute_options=_xml_attr(root, "OSDAttrib", "opt", parent="OSD"),
+        osd_hour_type_options=_xml_attr(root, "OSDHourType", "opt", parent="OSD"),
+        motion_region_type_options=_xml_attr(
+            root, "regionType", "opt", parent="MotionDetection"
+        ),
+        motion_grid_row_granularity=_xml_descendant_int(
+            root, "rowGranularity", parent="VideoFormatP"
+        ),
+        motion_grid_column_granularity=_xml_descendant_int(
+            root, "columnGranularity", parent="VideoFormatP"
+        ),
+    )
+
+
 def ezviz_lan_soft_hardware_ability(
     response: str | bytes,
 ) -> EzvizLanDeviceSoftHardwareAbility:
@@ -9676,6 +9796,21 @@ class HcNetSdkPurePythonClient:
             rsa_key=self.rsa_key,
         )
 
+    def access_protocol_ability(
+        self,
+        channel: int | str = "0xff",
+    ) -> EzvizLanAccessProtocolAbility:
+        """Read and parse local ``AccessProtocolAbility`` output."""
+        return ezviz_lan_access_protocol_ability(
+            self.device_ability(ezviz_lan_access_protocol_ability_request(1, channel))
+        )
+
+    def video_pic_ability(self, channel: int = 1) -> EzvizLanVideoPicAbility:
+        """Read and parse local ``VideoPicAbility`` output."""
+        return ezviz_lan_video_pic_ability(
+            self.device_ability(ezviz_lan_video_pic_ability_request(1, channel))
+        )
+
     def dvr_config(
         self,
         request: HcNetSdkDvrConfigRequest,
@@ -10299,14 +10434,41 @@ def _xml_opt_attr(
     *,
     parent: str | None = None,
 ) -> str | None:
+    return _xml_attr(root, name, "opt", parent=parent)
+
+
+def _xml_attr(
+    root: ET.Element,
+    name: str,
+    attr: str,
+    *,
+    parent: str | None = None,
+) -> str | None:
     for element in root.iter():
         if _xml_local_name(element).lower() != name.lower():
             continue
         if parent is not None and not _xml_has_parent(root, element, parent):
             continue
-        value = element.attrib.get("opt")
+        value = element.attrib.get(attr)
         return value if value else None
     return None
+
+
+def _xml_attr_int(
+    root: ET.Element,
+    name: str,
+    attr: str,
+    *,
+    parent: str | None = None,
+    default: int = 0,
+) -> int:
+    value = _xml_attr(root, name, attr, parent=parent)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _xml_bool_opt_attr(root: ET.Element, name: str) -> bool | None:

@@ -159,6 +159,7 @@ from pyezvizapi.hcnetsdk import (
     SADP_START_V40,
     SADP_STOP,
     EzvizCasDeviceInfo,
+    EzvizLanAccessProtocolAbility,
     EzvizLanAudioInputParam,
     EzvizLanAudioOutputVolume,
     EzvizLanCameraParamConfig,
@@ -179,6 +180,7 @@ from pyezvizapi.hcnetsdk import (
     EzvizLanSdFormatProgress,
     EzvizLanUserConfigV30,
     EzvizLanUserConfigV30Entry,
+    EzvizLanVideoPicAbility,
     EzvizLanWifiApInfo,
     EzvizLanWifiConnectStatus,
     EzvizLocalPreviewRequest,
@@ -263,6 +265,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_cas_ptz_command,
     ezviz_hcnetsdk_local_ability_parse_request,
     ezviz_hcnetsdk_local_ptz_without_recv_request,
+    ezviz_lan_access_protocol_ability,
     ezviz_lan_access_protocol_ability_input,
     ezviz_lan_access_protocol_ability_request,
     ezviz_lan_audio_input_get_config_request,
@@ -369,6 +372,7 @@ from pyezvizapi.hcnetsdk import (
     ezviz_lan_video_coding_update_request,
     ezviz_lan_video_effect_get_config_request,
     ezviz_lan_video_effect_update_request,
+    ezviz_lan_video_pic_ability,
     ezviz_lan_video_pic_ability_input,
     ezviz_lan_video_pic_ability_request,
     ezviz_lan_video_qualities,
@@ -3198,6 +3202,76 @@ def test_hcnetsdk_pure_python_client_wraps_device_ability_and_stdxml() -> None:
         returned_xml_size=len(b'{"servicesSwitch":{"web":1}}'),
     )
     assert stdxml_response.json() == {"servicesSwitch": {"web": 1}}
+
+
+def test_hcnetsdk_pure_python_client_wraps_ability_convenience_parsers() -> None:
+    rsa_key = RSA.generate(1024)
+    challenge = b"0123456789abcdef0123456789abcdef"
+    seed = b"s" * 64
+    first_login_response = build_hcnetsdk_tcp_frame(
+        PKCS1_v1_5.new(rsa_key.publickey()).encrypt(challenge) + seed
+    )
+    second_login_response = build_hcnetsdk_tcp_frame(
+        HCNETSDK_COMMAND_PORT_TEST_SESSION_ID + b"CAM123\x00",
+        field_4=0x10A24BF1,
+    )
+    access_xml = (
+        b"<AccessProtocolAbility><channelNO>1</channelNO><EzvizParam>"
+        b'<enable opt="true"/><deviceStatus opt="offline,online"/>'
+        b'<allowRedirect opt="1"/><domainLen min="3" max="32"/>'
+        b"</EzvizParam></AccessProtocolAbility>"
+    )
+    video_xml = (
+        b"<VideoPicAbility><channelNO>2</channelNO><OSD>"
+        b"<ChannelName><enabled>true</enabled></ChannelName>"
+        b"<Week><enabled>true</enabled></Week>"
+        b'<OSDType opt="YMD,MDY"/><OSDAttrib opt="1,2"/>'
+        b'<OSDHourType opt="24Hour"/></OSD>'
+        b"<MotionDetection><Grid><VideoFormatP>"
+        b"<rowGranularity>18</rowGranularity>"
+        b"<columnGranularity>22</columnGranularity>"
+        b"</VideoFormatP></Grid></MotionDetection></VideoPicAbility>"
+    )
+    access_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + access_xml)])
+    video_control = _FakeSocket([build_hcnetsdk_tcp_frame(b"\x00" + video_xml)])
+    sockets = [
+        _FakeSocket([first_login_response, second_login_response]),
+        access_control,
+        _FakeSocket([first_login_response, second_login_response]),
+        video_control,
+    ]
+
+    def socket_factory(address: tuple[str, int], timeout: float | None) -> _FakeSocket:
+        assert address == ("192.0.2.10", 8000)
+        assert timeout == COMMAND_PORT_DEFAULT_TIMEOUT
+        return sockets.pop(0)
+
+    client = HcNetSdkPurePythonClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        b"123456",
+        local_ip="192.0.2.56",
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+    )
+
+    access = client.access_protocol_ability(channel=1)
+    video = client.video_pic_ability(channel=2)
+    access_request = ezviz_lan_access_protocol_ability_request(1, 1)
+    video_request = ezviz_lan_video_pic_ability_request(1, 2)
+    access_sent = parse_hcnetsdk_tcp_frame(access_control.sent[0])
+    video_sent = parse_hcnetsdk_tcp_frame(video_control.sent[0])
+
+    assert access.domain_length_max == 32
+    assert access.device_status_option_list == ("offline", "online")
+    assert video.channel_no == "2"
+    assert video.channel_name_enabled is True
+    assert video.motion_grid_column_granularity == 22
+    assert access_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
+        access_request
+    )
+    assert video_sent.body[16:] == hcnetsdk_device_ability_command_port_body_tail(
+        video_request
+    )
 
 
 def test_hcnetsdk_pure_python_client_dvr_config_convenience_parsers() -> None:  # noqa: PLR0915
@@ -6063,9 +6137,82 @@ def test_ezviz_lan_ptz_ability_parses_handler_fields() -> None:
     assert ability.mirror_range == "0,1,2"
 
 
+def test_ezviz_lan_access_protocol_ability_parses_local_add_fields() -> None:
+    ability = ezviz_lan_access_protocol_ability(
+        b"\x00<AccessProtocolAbility version=\"2.0\">"
+        b"<channelNO>1</channelNO>"
+        b"<EzvizParam>"
+        b'<enable opt="true"/>'
+        b'<deviceStatus attri="readonly" opt="offline,online"/>'
+        b'<allowRedirect opt="0,1"/>'
+        b'<domainLen min="3" max="32"/>'
+        b"</EzvizParam>"
+        b"</AccessProtocolAbility>\x00"
+    )
+
+    assert ability == EzvizLanAccessProtocolAbility(
+        channel_no="1",
+        enable_options="true",
+        device_status_options="offline,online",
+        allow_redirect_options="0,1",
+        domain_length_min=3,
+        domain_length_max=32,
+        has_ezviz_param=True,
+    )
+    assert ability.success is True
+    assert ability.enable_option_list == ("true",)
+    assert ability.device_status_option_list == ("offline", "online")
+    assert ability.allow_redirect_option_list == ("0", "1")
+
+
+def test_ezviz_lan_video_pic_ability_parses_safe_osd_and_grid_fields() -> None:
+    ability = ezviz_lan_video_pic_ability(
+        b"<VideoPicAbility version=\"2.0\">"
+        b"<channelNO>1</channelNO>"
+        b"<OSD>"
+        b"<ChannelName><enabled>true</enabled></ChannelName>"
+        b"<Week><enabled>false</enabled></Week>"
+        b'<OSDType opt="xxxx-xx-xxYMD,xx-xx-xxxxMDY"/>'
+        b'<OSDAttrib opt="1,2,3,4"/>'
+        b'<OSDHourType opt="24Hour,12Hour"/>'
+        b"</OSD>"
+        b"<MotionDetection>"
+        b'<regionType opt="grid,polygon"/>'
+        b"<Grid><VideoFormatP>"
+        b"<rowGranularity>18</rowGranularity>"
+        b"<columnGranularity>22</columnGranularity>"
+        b"</VideoFormatP></Grid>"
+        b"</MotionDetection>"
+        b"</VideoPicAbility>"
+    )
+
+    assert ability == EzvizLanVideoPicAbility(
+        channel_no="1",
+        channel_name_enabled=True,
+        week_enabled=False,
+        osd_type_options="xxxx-xx-xxYMD,xx-xx-xxxxMDY",
+        osd_attribute_options="1,2,3,4",
+        osd_hour_type_options="24Hour,12Hour",
+        motion_region_type_options="grid,polygon",
+        motion_grid_row_granularity=18,
+        motion_grid_column_granularity=22,
+    )
+    assert ability.osd_type_option_list == (
+        "xxxx-xx-xxYMD",
+        "xx-xx-xxxxMDY",
+    )
+    assert ability.osd_attribute_option_list == ("1", "2", "3", "4")
+    assert ability.osd_hour_type_option_list == ("24Hour", "12Hour")
+    assert ability.motion_region_type_option_list == ("grid", "polygon")
+
+
 def test_ezviz_lan_ptz_ability_rejects_invalid_xml() -> None:
     with pytest.raises(PyEzvizError, match="XML"):
         ezviz_lan_ptz_ability("<PTZAbility>")
+    with pytest.raises(PyEzvizError, match="access-protocol"):
+        ezviz_lan_access_protocol_ability("<AccessProtocolAbility>")
+    with pytest.raises(PyEzvizError, match="video-picture"):
+        ezviz_lan_video_pic_ability("<VideoPicAbility>")
     with pytest.raises(PyEzvizError, match="XML name"):
         hcnetsdk_device_ability_xml("Bad Root")
     with pytest.raises(PyEzvizError, match="retry buffer"):

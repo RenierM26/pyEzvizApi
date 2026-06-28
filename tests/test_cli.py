@@ -3098,6 +3098,8 @@ def test_local_sdk_dump_ecdh_uses_ecdh_stream_writer(monkeypatch, tmp_path) -> N
                 "pre_start_sequence": args.pre_start_sequence,
                 "preview_sequence": args.preview_sequence,
                 "stream_sequence": args.stream_sequence,
+                "stream_rate": args.stream_rate,
+                "stream_mode": args.stream_mode,
                 "max_prefix_bytes": args.max_prefix_bytes,
             }
         )
@@ -3137,6 +3139,10 @@ def test_local_sdk_dump_ecdh_uses_ecdh_stream_writer(monkeypatch, tmp_path) -> N
                 "28",
                 "--stream-sequence",
                 "29",
+                "--stream-rate",
+                "3",
+                "--stream-mode",
+                "4",
                 "--max-prefix-bytes",
                 "8192",
                 "--output",
@@ -3154,9 +3160,12 @@ def test_local_sdk_dump_ecdh_uses_ecdh_stream_writer(monkeypatch, tmp_path) -> N
         "pre_start_sequence": 27,
         "preview_sequence": 28,
         "stream_sequence": 29,
+        "stream_rate": "3",
+        "stream_mode": "4",
         "max_prefix_bytes": 8192,
     }
     assert calls[1]["max_packets"] == 2
+    assert calls[1]["max_frames"] == 2
     assert calls[1]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
@@ -3271,6 +3280,10 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
                 "28",
                 "--stream-sequence",
                 "29",
+                "--stream-rate",
+                "3",
+                "--stream-mode",
+                "4",
                 "--max-prefix-bytes",
                 "8192",
                 "--output",
@@ -3286,7 +3299,10 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
     assert calls[0]["pre_start_sequence"] == 27
     assert calls[0]["preview_sequence"] == 28
     assert calls[0]["stream_setup_sequence"] == 29
+    assert calls[0]["stream_rate"] == "3"
+    assert calls[0]["stream_mode"] == "4"
     assert calls[0]["max_prefix_bytes"] == 8192
+    assert calls[1]["max_frames"] is None
     assert calls[1]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 

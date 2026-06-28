@@ -3972,6 +3972,8 @@ def _build_local_sdk_ecdh_cli_stream(
         pre_start_sequence=args.pre_start_sequence,
         preview_sequence=args.preview_sequence,
         stream_setup_sequence=args.stream_sequence,
+        stream_rate=args.stream_rate,
+        stream_mode=args.stream_mode,
         timeout=args.socket_timeout,
         max_prefix_bytes=args.max_prefix_bytes,
     )
@@ -4048,6 +4050,7 @@ def _handle_local_sdk_stream_dump(
                     stream,
                     sys.stdout.buffer,
                     max_packets=args.max_packets,
+                    max_frames=args.max_packets,
                     duration_seconds=args.duration,
                 )
             else:
@@ -4056,6 +4059,7 @@ def _handle_local_sdk_stream_dump(
                         stream,
                         output,
                         max_packets=args.max_packets,
+                        max_frames=args.max_packets,
                         duration_seconds=args.duration,
                     )
             _write_local_sdk_metadata_output(args.metadata_output, stream)

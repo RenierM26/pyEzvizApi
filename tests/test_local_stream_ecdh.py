@@ -356,6 +356,8 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
         pre_start_sequence=27,
         preview_sequence=28,
         stream_setup_sequence=29,
+        stream_rate=3,
+        stream_mode=4,
         max_prefix_bytes=8192,
     )
 
@@ -374,6 +376,8 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
     assert stream.pre_start_sequence == 27
     assert stream.preview_sequence == 28
     assert stream.stream_setup_sequence == 29
+    assert stream.stream_rate == 3
+    assert stream.stream_mode == 4
     assert stream.max_prefix_bytes == 8192
 
 
@@ -416,6 +420,8 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
         pre_start_sequence=27,
         preview_sequence=28,
         stream_setup_sequence=29,
+        stream_rate=3,
+        stream_mode=4,
         register_p2p_session=False,
         p2p_register_max_retries=1,
         max_prefix_bytes=8192,
@@ -431,6 +437,8 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[0]["pre_start_sequence"] == 27
     assert copied[0]["preview_sequence"] == 28
     assert copied[0]["stream_setup_sequence"] == 29
+    assert copied[0]["stream_rate"] == 3
+    assert copied[0]["stream_mode"] == 4
     assert copied[0]["register_p2p_session"] is False
     assert copied[0]["p2p_register_max_retries"] == 1
     assert copied[0]["max_prefix_bytes"] == 8192

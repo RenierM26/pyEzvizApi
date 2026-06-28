@@ -753,6 +753,19 @@ EXPECTED_PREVIEW_XML = (
     b"\t<Timestamp>123456</Timestamp>\n"
     b"</Request>\n"
 )
+EXPECTED_PREVIEW_PUBLIC_KEY_XML = (
+    b'<?xml version="1.0" encoding="utf-8"?>\n'
+    b"<Request>\n"
+    b"\t<OperationCode>op</OperationCode>\n"
+    b"\t<Channel>1</Channel>\n"
+    b"\t<ReceiverInfo>receiver</ReceiverInfo>\n"
+    b"\t<IsEncrypt>TRUE</IsEncrypt>\n"
+    b"\t<ReceiverInfoEx>receiver-ex</ReceiverInfoEx>\n"
+    b"\t<Uuid>uuid</Uuid>\n"
+    b"\t<Timestamp>123456</Timestamp>\n"
+    b"\t<PublicKey>MFkwEwYH&lt;key&gt;</PublicKey>\n"
+    b"</Request>\n"
+)
 EXPECTED_STRUCTURED_PREVIEW_XML = (
     b'<?xml version="1.0" encoding="utf-8"?>\n'
     b"<Request>\n"
@@ -1979,6 +1992,31 @@ def test_build_ezviz_local_preview_request_body_uses_observed_tag_order() -> Non
         "Authentication",
         "Uuid",
         "Timestamp",
+    )
+
+
+def test_build_ezviz_local_preview_request_body_supports_public_key() -> None:
+    body = build_ezviz_local_preview_request_body(
+        operation_code="op",
+        channel=1,
+        receiver_info="receiver",
+        receiver_info_ex="receiver-ex",
+        uuid="uuid",
+        timestamp=123456,
+        public_key="MFkwEwYH<key>",
+    )
+
+    assert body == EXPECTED_PREVIEW_PUBLIC_KEY_XML
+    assert classify_ezviz_local_sdk_body(body).xml_tags == (
+        "Request",
+        "OperationCode",
+        "Channel",
+        "ReceiverInfo",
+        "IsEncrypt",
+        "ReceiverInfoEx",
+        "Uuid",
+        "Timestamp",
+        "PublicKey",
     )
 
 

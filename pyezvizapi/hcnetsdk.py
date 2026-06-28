@@ -3262,6 +3262,7 @@ class EzvizLocalPreviewRequest:
     authentication: str | EzvizLocalAuthenticationAttrs | None = None
     uuid: str | None = None
     timestamp: str | int | None = None
+    public_key: str | None = None
 
     def to_xml(self) -> bytes:
         """Build a caller-owned XML body for the encrypted preview request."""
@@ -3280,6 +3281,7 @@ class EzvizLocalPreviewRequest:
             authentication=self.authentication,
             uuid=self.uuid,
             timestamp=self.timestamp,
+            public_key=self.public_key,
         )
 
 
@@ -8631,6 +8633,7 @@ def build_ezviz_local_preview_request_body(  # noqa: PLR0913
     authentication: str | EzvizLocalAuthenticationAttrs | None = None,
     uuid: str | None = None,
     timestamp: str | int | None = None,
+    public_key: str | None = None,
 ) -> bytes:
     """Build the plaintext XML body for the observed 0x2011 request.
 
@@ -8655,6 +8658,7 @@ def build_ezviz_local_preview_request_body(  # noqa: PLR0913
             ("Authentication", authentication),
             ("Uuid", uuid),
             ("Timestamp", timestamp),
+            ("PublicKey", public_key),
         )
     )
 

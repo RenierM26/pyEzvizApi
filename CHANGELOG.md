@@ -46,10 +46,11 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Added pure-Python client convenience reads for safe HCNetSDK soft/hardware, playback-conversion, and PTZ ability fields.
 - Added binary-confirmed command-port mapping plus decoded and summary helpers for `NET_DVR_USER_V30` user/password/right-table reads; decoded password bytes are hidden from default object reprs.
 - Added APK-matched HP7/doorbell helpers for `REMOTE_UNLOCK`, parsed `ChimeMusic` status optionals, chime type/duration info, and the chime indicator-light switch.
+- Added local SDK ECDH public-key preview support, ChaCha20 stream decoder helpers, and client/CLI MPEG-PS dump paths for encrypted local LAN media paths.
 
 ### Fixed
 
-- Fixed direct-local SDK CAS bootstrapping for HP7/CP7-style devices by adding
+- Fixed direct-local SDK CAS bootstrapping for local SDK ECDH devices by adding
   app-style P2P session registration before local-sdk CAS lookups, with opt-out
   switches for diagnostics and normal retry-limit handling for refreshed
   sessions.

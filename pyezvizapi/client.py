@@ -154,6 +154,10 @@ from .local_stream import (
     open_hcnetsdk_command_port_stream,
     summarize_idmx_h264_local_packets,
 )
+from .local_stream_ecdh import (
+    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    copy_local_sdk_ecdh_stream_from_client,
+)
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .utils import convert_to_dict, decrypt_image, deep_merge
@@ -164,7 +168,7 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
-ClipSource = Literal["local-sdk", "hcnetsdk-command-port", "cloud"]
+ClipSource = Literal["local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
 
 
@@ -3019,6 +3023,9 @@ class EzvizClient:
         cloud_client_type: int = 9,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
+        local_sdk_ecdh_receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        local_sdk_ecdh_send_init: bool = False,
+        local_sdk_ecdh_max_frames: int | None = None,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
@@ -3046,6 +3053,26 @@ class EzvizClient:
                 p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
                 smscode=smscode,
+            )
+        if source == "local-sdk-ecdh":
+            if decrypt_video:
+                raise PyEzvizError(
+                    "source='local-sdk-ecdh' does not support decrypt_video"
+                )
+            return self._save_local_sdk_ecdh_clip(
+                serial,
+                output,
+                output_format=output_format,
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+                max_frames=local_sdk_ecdh_max_frames,
+                channel=channel,
+                cas_serial=cas_serial,
+                register_p2p_session=register_p2p_session,
+                p2p_register_max_retries=p2p_register_max_retries,
+                timeout=timeout,
+                receiver_port=local_sdk_ecdh_receiver_port,
+                send_init=local_sdk_ecdh_send_init,
             )
         if source == "hcnetsdk-command-port":
             trim_to_clean_window = (
@@ -3122,6 +3149,84 @@ class EzvizClient:
                 smscode=smscode,
             )
         raise PyEzvizError(f"Unsupported clip source: {source}")
+
+    def _save_local_sdk_ecdh_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        output_format: ClipOutputFormat,
+        duration_seconds: float | None,
+        max_packets: int | None,
+        max_frames: int | None,
+        channel: int,
+        cas_serial: str | None,
+        register_p2p_session: bool,
+        p2p_register_max_retries: int,
+        timeout: float | None,
+        receiver_port: int,
+        send_init: bool,
+    ) -> SaveMediaResult:
+        """Save a clip through the local SDK ECDH stream path."""
+
+        if output_format != "mpegps":
+            raise PyEzvizError(
+                "source='local-sdk-ecdh' currently writes MPEG-PS only"
+            )
+
+        start_position = None
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("wb") as output_file:
+                copy_local_sdk_ecdh_stream_from_client(
+                    self,
+                    serial,
+                    output_file,
+                    cas_serial=cas_serial,
+                    channel=channel,
+                    receiver_port=receiver_port,
+                    send_init=send_init,
+                    register_p2p_session=register_p2p_session,
+                    p2p_register_max_retries=p2p_register_max_retries,
+                    timeout=timeout,
+                    max_packets=max_packets,
+                    max_frames=max_frames,
+                    duration_seconds=duration_seconds,
+                )
+        else:
+            start_position = _binary_position(output)
+            copy_local_sdk_ecdh_stream_from_client(
+                self,
+                serial,
+                output,
+                cas_serial=cas_serial,
+                channel=channel,
+                receiver_port=receiver_port,
+                send_init=send_init,
+                register_p2p_session=register_p2p_session,
+                p2p_register_max_retries=p2p_register_max_retries,
+                timeout=timeout,
+                max_packets=max_packets,
+                max_frames=max_frames,
+                duration_seconds=duration_seconds,
+            )
+
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "source": "local-sdk-ecdh",
+            "format": output_format,
+            "duration_seconds": duration_seconds,
+            "content_type": _content_type_for_output(
+                output,
+                default="video/mpeg",
+            ),
+        }
 
     def _save_local_sdk_clip(  # noqa: PLR0913
         self,

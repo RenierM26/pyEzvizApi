@@ -70,6 +70,11 @@ from .local_stream import (
     summarize_hevc_annexb_irap_windows,
     summarize_idmx_h264_local_packets,
 )
+from .local_stream_ecdh import (
+    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    copy_local_sdk_ecdh_stream_to_mpegps,
+    open_local_sdk_ecdh_stream,
+)
 from .stream import (
     StreamTransport,
     decrypt_hikvision_ps_video,
@@ -639,11 +644,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument("--serial", required=True, help="camera SERIAL")
     parser_save_clip.add_argument(
         "--source",
-        choices=("local-sdk", "cloud", "hcnetsdk-command-port"),
+        choices=("local-sdk", "local-sdk-ecdh", "cloud", "hcnetsdk-command-port"),
         default="local-sdk",
         help=(
-            "Source to use: direct 9010/9020 SDK, VTM cloud live stream, or "
-            "full HCNetSDK command-port media on port 8000 (default: local-sdk)"
+            "Source to use: direct 9010/9020 SDK, encrypted local SDK ECDH, "
+            "VTM cloud live stream, or full HCNetSDK command-port media on "
+            "port 8000 (default: local-sdk)"
         ),
     )
     parser_save_clip.add_argument(
@@ -720,7 +726,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument(
         "--no-p2p-register",
         action="store_true",
-        help="Skip app-style P2P session registration before local-sdk CAS lookup",
+        help="Skip app-style P2P session registration before local SDK CAS lookup",
     )
     parser_save_clip.add_argument(
         "--timeout",
@@ -731,6 +737,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument(
         "--sms-code",
         help="Optional MFA/elevation code for media key retrieval",
+    )
+    parser_save_clip.add_argument(
+        "--local-sdk-ecdh-send-init",
+        action="store_true",
+        help="Send the optional local SDK ECDH 0x2013 pre-start INIT before preview setup",
+    )
+    parser_save_clip.add_argument(
+        "--local-sdk-ecdh-receiver-port",
+        type=int,
+        default=LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        help=(
+            "Receiver port to include in local SDK ECDH preview XML "
+            f"(default: {LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT})"
+        ),
+    )
+    parser_save_clip.add_argument(
+        "--local-sdk-ecdh-max-frames",
+        type=int,
+        default=None,
+        help=(
+            "Stop local SDK ECDH capture after reading this many encrypted input frames "
+            "(default: unlimited)"
+        ),
     )
     parser_save_clip.add_argument(
         "--host",
@@ -1224,6 +1253,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_stream_local_dump.add_argument("--uuid", help="or EZVIZ_LOCAL_UUID")
     parser_stream_local_dump.add_argument("--timestamp", help="or EZVIZ_LOCAL_TIMESTAMP")
     parser_stream_local_dump.add_argument("--identifier")
+    parser_stream_local_dump.add_argument(
+        "--local-sdk-ecdh",
+        action="store_true",
+        help="Use the local SDK ECDH encrypted stream path instead of plain local SDK media",
+    )
+    parser_stream_local_dump.add_argument(
+        "--local-sdk-ecdh-send-init",
+        action="store_true",
+        help="Send the optional local SDK ECDH 0x2013 pre-start INIT before preview setup",
+    )
+    parser_stream_local_dump.add_argument(
+        "--local-sdk-ecdh-receiver-port",
+        type=int,
+        default=LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        help=(
+            "Receiver port to include in local SDK ECDH preview XML "
+            f"(default: {LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT})"
+        ),
+    )
     parser_stream_local_dump.add_argument("--nat-address", default="")
     parser_stream_local_dump.add_argument("--nat-port", type=int, default=0)
     parser_stream_local_dump.add_argument("--upnp-address", default="")
@@ -2288,8 +2336,16 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
             args.hcnetsdk_h264_clean_idr_wait_seconds
         ),
     }
-    if args.source == "local-sdk":
+    if args.source in {"local-sdk", "local-sdk-ecdh"}:
         save_kwargs["register_p2p_session"] = not args.no_p2p_register
+    if args.source == "local-sdk-ecdh":
+        save_kwargs.update(
+            {
+                "local_sdk_ecdh_receiver_port": args.local_sdk_ecdh_receiver_port,
+                "local_sdk_ecdh_send_init": args.local_sdk_ecdh_send_init,
+                "local_sdk_ecdh_max_frames": args.local_sdk_ecdh_max_frames,
+            }
+        )
     if args.source == "cloud":
         save_kwargs.update(
             {
@@ -3859,6 +3915,44 @@ def _build_local_sdk_cli_stream(
     )
 
 
+def _build_local_sdk_ecdh_cli_stream(
+    args: argparse.Namespace,
+    client: EzvizClient | None = None,
+) -> Any:
+    """Build an encrypted local SDK ECDH stream."""
+
+    device_info = _local_sdk_cas_device_info(args, client)
+    host = str(_required_local_sdk_arg_or_credentials(args, "host", ("endpoint", "host")))
+    endpoint = HcNetSdkLanEndpoint(
+        serial=device_info.serial,
+        host=host,
+        command_port=int(
+            _local_sdk_arg_or_credentials(
+                args,
+                "command_port",
+                ("endpoint", "command_port"),
+            )
+            or 9010
+        ),
+        stream_port=int(
+            _local_sdk_arg_or_credentials(
+                args,
+                "stream_port",
+                ("endpoint", "stream_port"),
+            )
+            or 9020
+        ),
+    )
+    return open_local_sdk_ecdh_stream(
+        endpoint,
+        device_info,
+        channel=args.channel,
+        receiver_port=args.local_sdk_ecdh_receiver_port,
+        send_init=args.local_sdk_ecdh_send_init,
+        timeout=args.socket_timeout,
+    )
+
+
 def _local_sdk_receiver_info_from_args(
     args: argparse.Namespace,
 ) -> EzvizLocalReceiverInfo | EzvizLocalReceiverInfoAttrs:
@@ -3915,6 +4009,30 @@ def _handle_local_sdk_stream_dump(
     client: EzvizClient | None = None,
 ) -> int:
     """Dump direct-local SDK media with caller-supplied local fields."""
+
+    if args.local_sdk_ecdh:
+        if args.decrypt_video:
+            raise PyEzvizError("--local-sdk-ecdh does not support --decrypt-video")
+        if args.format != "mpegps":
+            raise PyEzvizError("--local-sdk-ecdh currently supports --format mpegps only")
+        with _build_local_sdk_ecdh_cli_stream(args, client) as stream:
+            if args.output == "-":
+                copy_local_sdk_ecdh_stream_to_mpegps(
+                    stream,
+                    sys.stdout.buffer,
+                    max_packets=args.max_packets,
+                    duration_seconds=args.duration,
+                )
+            else:
+                with Path(args.output).open("wb") as output:
+                    copy_local_sdk_ecdh_stream_to_mpegps(
+                        stream,
+                        output,
+                        max_packets=args.max_packets,
+                        duration_seconds=args.duration,
+                    )
+            _write_local_sdk_metadata_output(args.metadata_output, stream)
+        return 0
 
     with _build_local_sdk_cli_stream(args, client) as stream:
         if args.output == "-":

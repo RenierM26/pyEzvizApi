@@ -7294,27 +7294,34 @@ def ezviz_lan_ipc_front_parameter_ability(
     except ET.ParseError as err:
         raise PyEzvizError("Invalid EZVIZ LAN IPC front-parameter XML") from err
 
+    field_root = _ipc_front_parameter_field_root(root)
     return EzvizLanIpcFrontParameterAbility(
         has_camera_para=_xml_local_name(root).lower() == "camerapara",
         power_line_frequency_mode_range=_xml_child_text(
-            root, ("PowerLineFrequencyMode", "Range")
+            field_root, ("PowerLineFrequencyMode", "Range")
         ),
         white_balance_mode_range=_xml_child_text(
-            root, ("WhiteBalance", "WhiteBalanceMode", "Range")
+            field_root, ("WhiteBalance", "WhiteBalanceMode", "Range")
         ),
-        exposure_mode_range=_xml_child_text(root, ("Exposure", "ExposureMode", "Range")),
-        exposure_set_range=_xml_child_text(root, ("Exposure", "ExposureSet", "Range")),
-        exposure_user_set=_xml_child_int_range(root, ("Exposure", "exposureUSERSET")),
-        gain_level=_xml_child_int_range(root, ("GainLevel",)),
-        brightness_level=_xml_child_int_range(root, ("BrightnessLevel",)),
-        contrast_level=_xml_child_int_range(root, ("ContrastLevel",)),
-        sharpness_level=_xml_child_int_range(root, ("SharpnessLevel",)),
-        saturation_level=_xml_child_int_range(root, ("SaturationLevel",)),
+        exposure_mode_range=_xml_child_text(
+            field_root, ("Exposure", "ExposureMode", "Range")
+        ),
+        exposure_set_range=_xml_child_text(
+            field_root, ("Exposure", "ExposureSet", "Range")
+        ),
+        exposure_user_set=_xml_child_int_range(
+            field_root, ("Exposure", "exposureUSERSET")
+        ),
+        gain_level=_xml_child_int_range(field_root, ("GainLevel",)),
+        brightness_level=_xml_child_int_range(field_root, ("BrightnessLevel",)),
+        contrast_level=_xml_child_int_range(field_root, ("ContrastLevel",)),
+        sharpness_level=_xml_child_int_range(field_root, ("SharpnessLevel",)),
+        saturation_level=_xml_child_int_range(field_root, ("SaturationLevel",)),
         day_night_filter_type_range=_xml_child_text(
-            root, ("DayNightFilter", "DayNightFilterType", "Range")
+            field_root, ("DayNightFilter", "DayNightFilterType", "Range")
         ),
         switch_schedule_enabled_range=_xml_child_text(
-            root,
+            field_root,
             (
                 "DayNightFilter",
                 "SwitchSchedule",
@@ -7323,7 +7330,7 @@ def ezviz_lan_ipc_front_parameter_ability(
             ),
         ),
         day_to_night_filter_level_range=_xml_child_text(
-            root,
+            field_root,
             (
                 "DayNightFilter",
                 "SwitchSchedule",
@@ -7332,7 +7339,7 @@ def ezviz_lan_ipc_front_parameter_ability(
             ),
         ),
         night_to_day_filter_level_range=_xml_child_text(
-            root,
+            field_root,
             (
                 "DayNightFilter",
                 "SwitchSchedule",
@@ -7341,24 +7348,24 @@ def ezviz_lan_ipc_front_parameter_ability(
             ),
         ),
         day_night_filter_time=_xml_child_int_range(
-            root, ("DayNightFilter", "SwitchSchedule", "DayNightFilterTime")
+            field_root, ("DayNightFilter", "SwitchSchedule", "DayNightFilterTime")
         ),
         backlight_mode_range=_xml_child_text(
-            root, ("Backlight", "BacklightMode", "Range")
+            field_root, ("Backlight", "BacklightMode", "Range")
         ),
-        mirror_range=_xml_child_text(root, ("Mirror", "Range")),
+        mirror_range=_xml_child_text(field_root, ("Mirror", "Range")),
         digital_noise_reduction_enable_range=_xml_child_text(
-            root,
+            field_root,
             ("DigitalNoiseReduction", "DigitalNoiseReductionEnable", "Range"),
         ),
         digital_noise_reduction_level=_xml_child_int_range(
-            root, ("DigitalNoiseReduction", "DigitalNoiseReductionLevel")
+            field_root, ("DigitalNoiseReduction", "DigitalNoiseReductionLevel")
         ),
         digital_noise_spectral_level=_xml_child_int_range(
-            root, ("DigitalNoiseReduction", "DigitalNoiseSpectralLevel")
+            field_root, ("DigitalNoiseReduction", "DigitalNoiseSpectralLevel")
         ),
         digital_noise_temporal_level=_xml_child_int_range(
-            root, ("DigitalNoiseReduction", "DigitalNoiseTemporalLevel")
+            field_root, ("DigitalNoiseReduction", "DigitalNoiseTemporalLevel")
         ),
     )
 
@@ -10868,6 +10875,14 @@ def _xml_children(root: ET.Element, name: str) -> tuple[ET.Element, ...]:
 def _xml_first_child(root: ET.Element, name: str) -> ET.Element | None:
     children = _xml_children(root, name)
     return children[0] if children else None
+
+
+def _ipc_front_parameter_field_root(root: ET.Element) -> ET.Element:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return root
+    channel_entry = _xml_first_child(channel_list, "ChannelEntry")
+    return channel_entry if channel_entry is not None else root
 
 
 def _xml_child_int(

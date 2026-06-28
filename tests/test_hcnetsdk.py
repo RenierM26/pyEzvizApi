@@ -6396,6 +6396,29 @@ def test_ezviz_lan_ipc_front_parameter_ability_parses_camera_para_ranges() -> No
     assert ability.day_night_filter_type_options == ("0", "1", "2", "3")
 
 
+def test_ezviz_lan_ipc_front_parameter_ability_parses_channel_entry() -> None:
+    ability = ezviz_lan_ipc_front_parameter_ability(
+        b"<CAMERAPARA version=\"1.0\"><ChannelList><ChannelEntry>"
+        b"<PowerLineFrequencyMode><Range>0,1</Range></PowerLineFrequencyMode>"
+        b"<BrightnessLevel><Min>1</Min><Max>99</Max><Default>50</Default>"
+        b"</BrightnessLevel>"
+        b"<Mirror><Range>0,1,2,3</Range></Mirror>"
+        b"<Backlight><BacklightMode><Range>0,1</Range></BacklightMode>"
+        b"</Backlight>"
+        b"</ChannelEntry></ChannelList></CAMERAPARA>"
+    )
+
+    assert ability.success is True
+    assert ability.power_line_frequency_mode_range == "0,1"
+    assert ability.brightness_level == EzvizLanIpcFrontParameterRange(
+        minimum=1,
+        maximum=99,
+        default=50,
+    )
+    assert ability.mirror_options == ("0", "1", "2", "3")
+    assert ability.backlight_mode_options == ("0", "1")
+
+
 def test_ezviz_lan_audio_video_compress_info_parses_stream_fields() -> None:
     ability = ezviz_lan_audio_video_compress_info(
         b"<AudioVideoCompressInfo version=\"2.0\">"

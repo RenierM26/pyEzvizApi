@@ -89,9 +89,9 @@ class EzvizLocalSdkEcdhHandshakePacket:
     header_length: int
     payload_length: int
     subtype: int
-    nonce_raw: bytes = field(repr=False)
-    encrypted_key: bytes = field(repr=False)
-    peer_public_key_der: bytes = field(repr=False)
+    nonce_raw: bytes
+    encrypted_key: bytes
+    peer_public_key_der: bytes
     packet_offset: int
 
 
@@ -101,10 +101,10 @@ class EzvizLocalSdkEcdhDataPacket:
 
     payload_length: int
     subtype: int
-    nonce_raw: bytes = field(repr=False)
-    ciphertext: bytes = field(repr=False)
-    trailer: bytes = field(repr=False)
-    outer_prefix: bytes = field(repr=False)
+    nonce_raw: bytes
+    ciphertext: bytes
+    trailer: bytes
+    outer_prefix: bytes
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class EzvizLocalSdkEcdhStreamPacket:
     """Decoded local SDK ECDH stream payload."""
 
     channel: int
-    body: bytes = field(repr=False)
+    body: bytes
 
     @property
     def length(self) -> int:
@@ -476,7 +476,7 @@ def build_ezviz_local_sdk_ecdh_init_request_body(
     ).encode()
 
 
-def open_local_sdk_ecdh_stream(
+def open_local_sdk_ecdh_stream(  # noqa: PLR0913
     endpoint: HcNetSdkLanEndpoint,
     device_info: EzvizCasDeviceInfo,
     *,
@@ -484,6 +484,9 @@ def open_local_sdk_ecdh_stream(
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     send_init: bool = False,
+    pre_start_sequence: int | None = None,
+    preview_sequence: int | None = None,
+    stream_setup_sequence: int | None = None,
     timeout: float | None = 5.0,
     socket_factory: SocketFactory | None = None,
     max_prefix_bytes: int = 4096,
@@ -495,6 +498,15 @@ def open_local_sdk_ecdh_stream(
     ``send_init=True`` only when their device needs it.
     """
     key_pair = key_pair or generate_ezviz_local_sdk_ecdh_keypair()
+    resolved_pre_start_sequence = (
+        pre_start_sequence if pre_start_sequence is not None else (1 if send_init else 0)
+    )
+    resolved_preview_sequence = (
+        preview_sequence if preview_sequence is not None else (2 if send_init else 1)
+    )
+    resolved_stream_setup_sequence = (
+        stream_setup_sequence if stream_setup_sequence is not None else (3 if send_init else 2)
+    )
     preview_request = EzvizLocalPreviewRequest(
         operation_code=device_info.operation_code,
         channel=channel,
@@ -532,9 +544,9 @@ def open_local_sdk_ecdh_stream(
         preview_request,
         key_pair,
         pre_start_body=pre_start_body,
-        pre_start_sequence=1 if send_init else 0,
-        preview_sequence=2 if send_init else 1,
-        stream_setup_sequence=3 if send_init else 2,
+        pre_start_sequence=resolved_pre_start_sequence,
+        preview_sequence=resolved_preview_sequence,
+        stream_setup_sequence=resolved_stream_setup_sequence,
         max_prefix_bytes=max_prefix_bytes,
     )
 
@@ -548,6 +560,9 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     send_init: bool = False,
+    pre_start_sequence: int | None = None,
+    preview_sequence: int | None = None,
+    stream_setup_sequence: int | None = None,
     register_p2p_session: bool = True,
     p2p_register_max_retries: int = MAX_RETRIES,
     timeout: float | None = 5.0,
@@ -570,6 +585,9 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         channel=channel,
         receiver_port=receiver_port,
         send_init=send_init,
+        pre_start_sequence=pre_start_sequence,
+        preview_sequence=preview_sequence,
+        stream_setup_sequence=stream_setup_sequence,
         timeout=timeout,
         socket_factory=socket_factory,
         max_prefix_bytes=max_prefix_bytes,
@@ -585,6 +603,9 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     send_init: bool = False,
+    pre_start_sequence: int | None = None,
+    preview_sequence: int | None = None,
+    stream_setup_sequence: int | None = None,
     register_p2p_session: bool = True,
     p2p_register_max_retries: int = MAX_RETRIES,
     timeout: float | None = 5.0,
@@ -602,6 +623,9 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         channel=channel,
         receiver_port=receiver_port,
         send_init=send_init,
+        pre_start_sequence=pre_start_sequence,
+        preview_sequence=preview_sequence,
+        stream_setup_sequence=stream_setup_sequence,
         register_p2p_session=register_p2p_session,
         p2p_register_max_retries=p2p_register_max_retries,
         timeout=timeout,

@@ -765,15 +765,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser_save_clip.add_argument(
-        "--local-sdk-ecdh-max-prefix-bytes",
-        type=int,
-        default=4096,
-        help=(
-            "Maximum pre-media prefix bytes to skip on the local SDK ECDH stream "
-            "(default: 4096)"
-        ),
-    )
-    parser_save_clip.add_argument(
         "--host",
         help="Camera LAN address for --source hcnetsdk-command-port",
     )
@@ -2362,7 +2353,6 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
             {
                 "local_sdk_ecdh_receiver_port": args.local_sdk_ecdh_receiver_port,
                 "local_sdk_ecdh_send_init": args.local_sdk_ecdh_send_init,
-                "local_sdk_ecdh_max_prefix_bytes": args.local_sdk_ecdh_max_prefix_bytes,
                 "local_sdk_ecdh_max_frames": args.local_sdk_ecdh_max_frames,
             }
         )
@@ -3969,6 +3959,9 @@ def _build_local_sdk_ecdh_cli_stream(
         channel=args.channel,
         receiver_port=args.local_sdk_ecdh_receiver_port,
         send_init=args.local_sdk_ecdh_send_init,
+        pre_start_sequence=args.pre_start_sequence,
+        preview_sequence=args.preview_sequence,
+        stream_setup_sequence=args.stream_sequence,
         timeout=args.socket_timeout,
         max_prefix_bytes=args.max_prefix_bytes,
     )

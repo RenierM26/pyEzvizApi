@@ -399,8 +399,12 @@ class EzvizLocalSdkEcdhMediaStream:
         """Close the underlying local SDK sockets."""
         self.sdk_client.close()
 
-    def start(self) -> EzvizLocalSdkStreamBootstrap:
-        """Bootstrap local SDK ECDH preview setup and read the first media frame."""
+    def start(
+        self,
+        *,
+        read_first_media: bool = True,
+    ) -> EzvizLocalSdkStreamBootstrap:
+        """Bootstrap local SDK ECDH preview setup."""
         self.bootstrap = self.sdk_client.bootstrap_preview_from_fields(
             preview_request=self.preview_request,
             pre_start_body=self.pre_start_body,
@@ -409,11 +413,11 @@ class EzvizLocalSdkEcdhMediaStream:
             stream_setup_sequence=self.stream_setup_sequence,
             stream_rate=self.stream_rate,
             stream_mode=self.stream_mode,
-            read_first_media=True,
+            read_first_media=read_first_media,
             max_prefix_bytes=self.max_prefix_bytes,
         )
-        self._first_media = self.bootstrap.first_media
-        if self._first_media is None:
+        self._first_media = self.bootstrap.first_media if read_first_media else None
+        if read_first_media and self._first_media is None:
             raise PyEzvizError("EZVIZ local SDK ECDH stream did not return a first media frame")
         return self.bootstrap
 
@@ -434,7 +438,7 @@ class EzvizLocalSdkEcdhMediaStream:
             return
         deadline = monotonic() + duration_seconds if duration_seconds is not None else None
         if self.bootstrap is None:
-            self.start()
+            self.start(read_first_media=deadline is None)
 
         emitted = 0
         read_frames = 0

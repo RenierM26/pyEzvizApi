@@ -546,3 +546,50 @@ def test_ezviz_local_sdk_ecdh_stream_iter_packets_can_bound_suppressed_frames_by
 
     assert packets == []
     assert sdk_client.reads == 2
+
+
+def test_ezviz_local_sdk_ecdh_stream_applies_duration_before_first_media_read() -> None:
+    class FakeSdkClient:
+        def __init__(self) -> None:
+            self.read_first_media: bool | None = None
+            self.reads = 0
+
+        def bootstrap_preview_from_fields(self, **kwargs: object) -> object:
+            self.read_first_media = cast(bool, kwargs["read_first_media"])
+            return EzvizLocalSdkStreamBootstrap(
+                preview=cast(Any, object()),
+                stream_setup=cast(Any, object()),
+                first_media=None,
+            )
+
+        def read_stream_frame_after_prefix(self, **_kwargs: object) -> object:
+            self.reads += 1
+            raise AssertionError("duration should stop before the first media read")
+
+        def close(self) -> None:
+            return None
+
+    ticks = iter([0.0, 1.1])
+    sdk_client = FakeSdkClient()
+    stream = EzvizLocalSdkEcdhMediaStream(
+        cast(Any, sdk_client),
+        EzvizLocalPreviewRequest(
+            operation_code="0123456",
+            channel=1,
+            receiver_info="receiver",
+            receiver_info_ex="receiver-ex",
+        ),
+        generate_ezviz_local_sdk_ecdh_keypair(),
+    )
+
+    packets = list(
+        stream.iter_packets(
+            max_packets=1,
+            duration_seconds=1.0,
+            monotonic=lambda: next(ticks),
+        ),
+    )
+
+    assert packets == []
+    assert sdk_client.read_first_media is False
+    assert sdk_client.reads == 0

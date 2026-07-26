@@ -40,6 +40,7 @@ HCNETSDK_SAVE_DURATION = 3.0
 HCNETSDK_CLEAN_IDR_PREROLL_SECONDS = 12.5
 HCNETSDK_CLEAN_IDR_MAX_WINDOWS = 64
 SAVE_CLIP_PAYLOAD = b"mpegts"
+SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD = b"mpegps"
 SAVE_IMAGE_PAYLOAD = b"jpeg-bytes"
 
 
@@ -2650,6 +2651,133 @@ def test_save_clip_uses_local_sdk_convenience(monkeypatch, tmp_path) -> None:
         "duration_seconds": 5.0,
         "content_type": "video/mp2t",
     }
+
+
+def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ps"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="local-sdk-ecdh",
+        output_format="mpegps",
+        duration_seconds=5.0,
+        max_packets=2,
+        channel=2,
+        cas_serial="CAMALT",
+        register_p2p_session=False,
+        p2p_register_max_retries=1,
+        timeout=3.0,
+        local_sdk_ecdh_receiver_port=10105,
+        local_sdk_ecdh_send_init=True,
+        local_sdk_ecdh_max_prefix_bytes=8192,
+        local_sdk_ecdh_max_frames=8,
+    )
+
+    assert calls == [
+        {
+            "client": client,
+            "serial": "CAM123",
+            "cas_serial": "CAMALT",
+            "channel": 2,
+            "receiver_port": 10105,
+            "send_init": True,
+            "register_p2p_session": False,
+            "p2p_register_max_retries": 1,
+            "timeout": 3.0,
+            "max_prefix_bytes": 8192,
+            "max_packets": 2,
+            "max_frames": 8,
+            "duration_seconds": 5.0,
+        }
+    ]
+    assert output_path.read_bytes() == SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD
+    assert result == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD),
+        "source": "local-sdk-ecdh",
+        "format": "mpegps",
+        "duration_seconds": 5.0,
+        "content_type": "video/mpeg",
+    }
+
+
+def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ps"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="local-sdk-ecdh",
+    )
+
+    assert calls[0]["client"] is client
+    assert calls[0]["serial"] == "CAM123"
+    assert output_path.read_bytes() == SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD
+    assert result["source"] == "local-sdk-ecdh"
+    assert result["format"] == "mpegps"
+    assert result["content_type"] == "video/mpeg"
+
+
+def test_save_clip_local_sdk_ecdh_rejects_mpegts(tmp_path) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="MPEG-PS only"):
+        client.save_clip(
+            "CAM123",
+            tmp_path / "front.ts",
+            source="local-sdk-ecdh",
+            output_format="mpegts",
+        )
+
+
+def test_save_clip_local_sdk_ecdh_rejects_decrypt_video(tmp_path) -> None:
+    client = _client()
+
+    with pytest.raises(PyEzvizError, match="does not support decrypt_video"):
+        client.save_clip(
+            "CAM123",
+            tmp_path / "front.ps",
+            source="local-sdk-ecdh",
+            output_format="mpegps",
+            decrypt_video=True,
+        )
 
 
 def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> None:

@@ -16,10 +16,11 @@ from urllib.parse import urlparse
 
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
-from .exceptions import HTTPError, PyEzvizError
+from .exceptions import DeviceException, HTTPError, PyEzvizError
 from .stream import (
     SocketFactory,
     VtmStreamClient,
+    build_vtm_playback_url,
     build_vtm_url,
     decrypt_hikvision_ps_video,
 )
@@ -221,6 +222,186 @@ def open_cloud_stream(
     )
 
 
+def get_cloud_playback_stream_info(
+    client: Any,
+    serial: str,
+    begin_time: str,
+    end_time: str,
+    *,
+    channel: int | None = None,
+    client_type: int = 3,
+    token_index: int = 0,
+    refresh_vtm: bool = True,
+    lid: str | None = None,
+) -> JsonDict:
+    """Build VTM playback bootstrap metadata for a camera SD-card range."""
+
+    info = get_cloud_stream_info(
+        client,
+        serial,
+        channel=channel,
+        client_type=client_type,
+        token_index=token_index,
+        refresh_vtm=refresh_vtm,
+    )
+    live_url = str(info["stream_url"])
+    parsed = urlparse(live_url)
+    host = parsed.hostname
+    port = parsed.port
+    if host is None or port is None:
+        raise PyEzvizError("VTM live URL is missing host or port")
+
+    resource = info.get("resource")
+    stream_biz_url = ""
+    playback_channel = channel or 1
+    if isinstance(resource, dict):
+        stream_biz_url = str(resource.get("streamBizUrl") or "")
+        local_index = resource.get("localIndex")
+        local_index_text = str(local_index)
+        if channel is None and local_index_text.isdigit():
+            playback_channel = int(local_index_text)
+
+    playback_url = build_vtm_playback_url(
+        host,
+        port,
+        serial,
+        stream_biz_url,
+        str(info["vtdu_token"]),
+        begin_time,
+        end_time,
+        channel=playback_channel,
+        client_type=client_type,
+        lid=lid,
+    )
+    return {**info, "stream_url": playback_url}
+
+
+def open_cloud_playback_stream(  # noqa: PLR0913
+    client: Any,
+    serial: str,
+    begin_time: str,
+    end_time: str,
+    *,
+    channel: int | None = None,
+    client_type: int = 3,
+    token_index: int = 0,
+    refresh_vtm: bool = True,
+    timeout: float | None = 10.0,
+    lid: str | None = None,
+    client_version: str = "v3.9.0.20251120",
+    stream_info_type: int | None = 10,
+    socket_factory: SocketFactory | None = None,
+) -> VtmStreamClient:
+    """Return a VTM TCP client bootstrapped for SD-card playback."""
+
+    info = get_cloud_playback_stream_info(
+        client,
+        serial,
+        begin_time,
+        end_time,
+        channel=channel,
+        client_type=client_type,
+        token_index=token_index,
+        refresh_vtm=refresh_vtm,
+        lid=lid,
+    )
+    if socket_factory is None:
+        return VtmStreamClient(
+            info["stream_url"],
+            timeout=timeout,
+            client_version=client_version,
+            stream_info_type=stream_info_type,
+        )
+    return VtmStreamClient(
+        info["stream_url"],
+        timeout=timeout,
+        client_version=client_version,
+        stream_info_type=stream_info_type,
+        socket_factory=socket_factory,
+    )
+
+
+def copy_cloud_playback_to_mpegps(  # noqa: PLR0913
+    client: Any,
+    serial: str,
+    output: BinaryIO,
+    begin_time: str,
+    end_time: str,
+    *,
+    channel: int | None = None,
+    client_type: int = 3,
+    token_index: int = 0,
+    refresh_vtm: bool = True,
+    timeout: float | None = 10.0,
+    lid: str | None = None,
+    max_packets: int | None = None,
+    duration_seconds: float | None = None,
+    decrypt_video: bool = False,
+    media_key: str | bytes | None = None,
+    nalu_header_size: int | None = None,
+    smscode: str | int | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Copy an SD-card playback VTM stream to MPEG-PS bytes."""
+
+    if decrypt_video:
+        if media_key is None and smscode is not None:
+            selected_key = client.get_cam_key(serial, smscode=smscode)
+        else:
+            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+        if selected_key is None:
+            raise PyEzvizError("decrypt_video requires a media_key or camera media key")
+        with open_cloud_playback_stream(
+            client,
+            serial,
+            begin_time,
+            end_time,
+            channel=channel,
+            client_type=client_type,
+            token_index=token_index,
+            refresh_vtm=refresh_vtm,
+            timeout=timeout,
+            lid=lid,
+        ) as stream:
+            stream.start()
+            payload = _collect_cloud_stream_payloads(
+                stream,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
+        output.write(
+            decrypt_hikvision_ps_video(
+                payload,
+                selected_key,
+                nalu_header_size=nalu_header_size,
+            )
+        )
+        output.flush()
+        return
+
+    with open_cloud_playback_stream(
+        client,
+        serial,
+        begin_time,
+        end_time,
+        channel=channel,
+        client_type=client_type,
+        token_index=token_index,
+        refresh_vtm=refresh_vtm,
+        timeout=timeout,
+        lid=lid,
+    ) as stream:
+        stream.start()
+        _write_cloud_playback_payloads(
+            stream,
+            output,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+
+
 def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     client: Any,
     serial: str,
@@ -417,6 +598,33 @@ def _write_cloud_stream_payloads(
     output.flush()
 
 
+def _write_cloud_playback_payloads(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    wrote_payload = False
+    deadline = None if duration_seconds is None else monotonic() + duration_seconds
+    try:
+        for packet in stream.iter_packets(max_packets=max_packets):
+            if deadline is not None and monotonic() >= deadline:
+                break
+            if packet.encrypted:
+                raise PyEzvizError(
+                    "Received encrypted VTM stream packet; media decryption is not implemented"
+                )
+            if packet.body:
+                output.write(packet.body)
+                wrote_payload = True
+    except DeviceException:
+        if not wrote_payload:
+            raise
+    output.flush()
+
+
 def _collect_cloud_stream_payloads(
     stream: Any,
     *,
@@ -428,14 +636,18 @@ def _collect_cloud_stream_payloads(
 
     chunks: list[bytes] = []
     deadline = None if duration_seconds is None else monotonic() + duration_seconds
-    for packet in stream.iter_packets(max_packets=max_packets):
-        if deadline is not None and monotonic() >= deadline:
-            break
-        if packet.encrypted:
-            raise PyEzvizError(
-                "Received encrypted VTM stream packet; media decryption is not implemented"
-            )
-        chunks.append(packet.body)
+    try:
+        for packet in stream.iter_packets(max_packets=max_packets):
+            if deadline is not None and monotonic() >= deadline:
+                break
+            if packet.encrypted:
+                raise PyEzvizError(
+                    "Received encrypted VTM stream packet; media decryption is not implemented"
+                )
+            chunks.append(packet.body)
+    except DeviceException:
+        if not chunks:
+            raise
     return b"".join(chunks)
 
 

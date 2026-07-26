@@ -121,7 +121,11 @@ from .api_endpoints import (
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
 from .cas import EzvizCAS
-from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
+from .cloud_stream import (
+    copy_cloud_playback_to_mpegps,
+    copy_cloud_stream_to_mpegps,
+    copy_cloud_stream_to_mpegts,
+)
 from .constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_UNIFIEDMSG_STYPE,
@@ -162,9 +166,10 @@ _LOGGER = logging.getLogger(__name__)
 
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
+DEFAULT_CLIP_DURATION_SECONDS = 10.0
 
 JsonDict = dict[str, Any]
-ClipSource = Literal["local-sdk", "hcnetsdk-command-port", "cloud"]
+ClipSource = Literal["local-sdk", "hcnetsdk-command-port", "cloud", "cloud-playback"]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
 
 
@@ -185,6 +190,8 @@ class SaveMediaResult(TypedDict, total=False):
     cloud_client_type: int
     cloud_token_index: int
     cloud_refresh_vtm: bool
+    begin_time: str
+    end_time: str
     image_url: str
     triggered_capture: bool
 
@@ -2983,7 +2990,7 @@ class EzvizClient:
         *,
         source: ClipSource = "local-sdk",
         output_format: ClipOutputFormat = "mpegts",
-        duration_seconds: float | None = 10.0,
+        duration_seconds: float | None = DEFAULT_CLIP_DURATION_SECONDS,
         max_packets: int | None = None,
         channel: int = 1,
         ffmpeg_path: str = "ffmpeg",
@@ -3019,11 +3026,15 @@ class EzvizClient:
         cloud_client_type: int = 9,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
+        cloud_playback_begin_time: str | None = None,
+        cloud_playback_end_time: str | None = None,
+        cloud_playback_lid: str | None = None,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
         ``source="local-sdk"`` uses the direct-local 9010/9020 SDK path.
         ``source="cloud"`` uses the EZVIZ VTM cloud live stream path.
+        ``source="cloud-playback"`` saves an EZVIZ VTM SD-card playback range.
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
         port-8000 HCNetSDK bootstrap command frames, then remuxes the command
         port media stream to MPEG-TS.
@@ -3119,6 +3130,36 @@ class EzvizClient:
                 client_type=cloud_client_type,
                 token_index=cloud_token_index,
                 refresh_vtm=cloud_refresh_vtm,
+                smscode=smscode,
+            )
+        if source == "cloud-playback":
+            if not cloud_playback_begin_time or not cloud_playback_end_time:
+                raise PyEzvizError(
+                    "cloud-playback requires cloud_playback_begin_time and "
+                    "cloud_playback_end_time"
+                )
+            return self._save_cloud_playback_clip(
+                serial,
+                output,
+                begin_time=cloud_playback_begin_time,
+                end_time=cloud_playback_end_time,
+                output_format=output_format,
+                max_packets=max_packets,
+                duration_seconds=(
+                    None
+                    if duration_seconds == DEFAULT_CLIP_DURATION_SECONDS
+                    and max_packets is None
+                    else duration_seconds
+                ),
+                channel=channel,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                timeout=timeout,
+                client_type=cloud_client_type,
+                token_index=cloud_token_index,
+                refresh_vtm=cloud_refresh_vtm,
+                lid=cloud_playback_lid,
                 smscode=smscode,
             )
         raise PyEzvizError(f"Unsupported clip source: {source}")
@@ -3547,6 +3588,82 @@ class EzvizClient:
             "cloud_client_type": client_type,
             "cloud_token_index": token_index,
             "cloud_refresh_vtm": refresh_vtm,
+        }
+
+    def _save_cloud_playback_clip(  # noqa: PLR0913
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        *,
+        begin_time: str,
+        end_time: str,
+        output_format: ClipOutputFormat,
+        duration_seconds: float | None,
+        max_packets: int | None,
+        channel: int,
+        decrypt_video: bool,
+        media_key: str | bytes | None,
+        nalu_header_size: int | None,
+        timeout: float | None,
+        client_type: int,
+        token_index: int,
+        refresh_vtm: bool,
+        lid: str | None,
+        smscode: str | int | None,
+    ) -> SaveMediaResult:
+        """Save an EZVIZ VTM SD-card playback range to MPEG-PS."""
+
+        if output_format != "mpegps":
+            raise PyEzvizError("cloud-playback only supports output_format='mpegps'")
+
+        start_position = None
+
+        def copy_playback(output_file: BinaryIO) -> None:
+            copy_cloud_playback_to_mpegps(
+                self,
+                serial,
+                output_file,
+                begin_time,
+                end_time,
+                channel=channel,
+                client_type=client_type,
+                token_index=token_index,
+                refresh_vtm=refresh_vtm,
+                timeout=timeout,
+                lid=lid,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                smscode=smscode,
+            )
+
+        if isinstance(output, str | Path):
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("wb") as output_file:
+                copy_playback(output_file)
+        else:
+            start_position = _binary_position(output)
+            copy_playback(output)
+
+        return {
+            "ok": True,
+            "kind": "clip",
+            "serial": serial,
+            "channel": channel,
+            "output": _output_name(output),
+            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "source": "cloud-playback",
+            "format": output_format,
+            "duration_seconds": duration_seconds,
+            "content_type": _content_type_for_output(output, default="video/mpeg"),
+            "cloud_client_type": client_type,
+            "cloud_token_index": token_index,
+            "cloud_refresh_vtm": refresh_vtm,
+            "begin_time": begin_time,
+            "end_time": end_time,
         }
 
     def _hcnetsdk_command_port_endpoint(

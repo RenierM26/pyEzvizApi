@@ -108,6 +108,13 @@ pyezvizapi --token-file ezviz_token.json --json save clip \
   --hcnetsdk-command-frames-file /config/ezviz/ABC123-port8000-frames.json \
   --duration 10s --output /config/www/ezviz/front.ts
 
+# Save an SD-card playback range through the VTM cloud playback path.
+pyezvizapi --token-file ezviz_token.json --json save clip \
+  --source cloud-playback --serial ABC123 --channel 1 \
+  --begin-time 20260709T222458Z --end-time 20260709T222531Z \
+  --format mpegps --decrypt-video \
+  --output /config/www/ezviz/front.ps
+
 # Trigger a snapshot and save the returned image locally.
 pyezvizapi --token-file ezviz_token.json --json save image \
   --serial ABC123 --channel 1 \
@@ -124,9 +131,15 @@ endpoint/CAS tuple from the authenticated client by default. Use
 `--source hcnetsdk-command-port` for the full local port-8000 media path when
 you have the complete HCNetSDK bootstrap command frames from a trusted local
 implementation; the release package consumes those frames and keeps APK/Frida
-tooling under `tools/apk-re`. `save image` triggers the camera capture endpoint
-unless `--image-url` is supplied, then downloads and decrypts EZVIZ encrypted
-image payloads when needed.
+tooling under `tools/apk-re`. Use `--source cloud-playback` to save an SD-card
+recording range through the authenticated EZVIZ VTM cloud playback path. This
+source requires `--begin-time`, `--end-time`, and `--format mpegps`; when
+`--duration` is omitted it saves the requested playback range. Add
+`--decrypt-video` for cameras that encrypt the MPEG-PS video payloads. For
+cloud playback, encrypted video uses automatic NAL-header detection by default;
+pass `--decrypt-codec` only for manual codec experiments. `save image` triggers
+the camera capture endpoint unless `--image-url` is supplied,
+then downloads and decrypts EZVIZ encrypted image payloads when needed.
 
 Integrations can use the same behavior directly from `client.py` without
 shelling out:
@@ -137,6 +150,16 @@ result = client.save_clip(
     "/config/www/ezviz/front.ts",
     duration_seconds=10,
     source="local-sdk",
+)
+
+playback = client.save_clip(
+    "ABC123",
+    "/config/www/ezviz/front.ps",
+    source="cloud-playback",
+    output_format="mpegps",
+    cloud_playback_begin_time="20260709T222458Z",
+    cloud_playback_end_time="20260709T222531Z",
+    decrypt_video=True,
 )
 
 image = client.save_image(
@@ -592,9 +615,23 @@ pyezvizapi sdcard_videos --serial ABC123 --channel 1 \
 # Try the app's common/intelligent record endpoints when the default v2 path is empty
 pyezvizapi --json sdcard_videos --serial ABC123 --source common \
   --start-time "2026-05-10T21:50:00" --stop-time "2026-05-10T21:55:00"
+
+# Save one returned record range through cloud playback
+pyezvizapi --token-file ezviz_token.json --json save clip \
+  --source cloud-playback --serial ABC123 --channel 1 \
+  --begin-time 20260510T215000Z --end-time 20260510T215010Z \
+  --format mpegps --output clip.ps
+
+# Optional: remux the MPEG-PS output to MP4 without transcoding
+ffmpeg -f mpeg -i clip.ps -map 0 -c copy -movflags +faststart clip.mp4
 ```
 
-SD-card records are descriptors for native playback/download. The public API does not currently expose a direct HTTP media URL for every record; use `stream dump` for live VTM capture or `cloud_video_download` when cloud `videoDetails` includes an HTTP(S) URL.
+SD-card records are descriptors for native playback/download. The public API does
+not expose a direct HTTP media URL for every record, but `save clip --source
+cloud-playback` can request a time-bounded SD-card playback range from the VTM
+cloud playback service and write the MPEG-PS payload locally. Use `stream dump`
+for live VTM capture or `cloud_video_download` when cloud `videoDetails` includes
+an HTTP(S) URL.
 
 ### camera
 

@@ -297,8 +297,16 @@ class FakeClient:
                     "cloud_client_type": kwargs.get("cloud_client_type", 9),
                     "cloud_token_index": kwargs.get("cloud_token_index", 0),
                     "cloud_refresh_vtm": kwargs.get("cloud_refresh_vtm", True),
+                    **(
+                        {
+                            "begin_time": kwargs.get("cloud_playback_begin_time"),
+                            "end_time": kwargs.get("cloud_playback_end_time"),
+                        }
+                        if kwargs.get("source") == "cloud-playback"
+                        else {}
+                    ),
                 }
-                if kwargs.get("source") == "cloud"
+                if kwargs.get("source") in {"cloud", "cloud-playback"}
                 else {}
             ),
         }

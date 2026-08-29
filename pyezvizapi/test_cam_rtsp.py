@@ -67,17 +67,17 @@ class TestRTSPAuth:
     ) -> str:
         """Generate the HTTP Digest Authorization header value."""
         m_1 = hashlib.md5(
-            f"{self._rtsp_details['defaultUsername']}:{realm.decode()}:{self._rtsp_details['defaultPassword']}".encode()
+            f"{self._rtsp_details['defaultUsername']}:{realm.decode(errors='replace')}:{self._rtsp_details['defaultPassword']}".encode()
         ).hexdigest()
         m_2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
-        response = hashlib.md5(f"{m_1}:{nonce.decode()}:{m_2}".encode()).hexdigest()
+        response = hashlib.md5(f"{m_1}:{nonce.decode(errors='replace')}:{m_2}".encode()).hexdigest()
 
         return (
             "Digest "
             f'username="{self._rtsp_details["defaultUsername"]}", '
-            f'realm="{realm.decode()}", '
+            f'realm="{realm.decode(errors="replace")}", '
             'algorithm="MD5", '
-            f'nonce="{nonce.decode()}", '
+            f'nonce="{nonce.decode(errors="replace")}", '
             f'uri="{uri}", '
             f'response="{response}"'
         )
@@ -122,7 +122,7 @@ class TestRTSPAuth:
         msg1: bytes = session.recv(self._rtsp_details["bufLen"])
         seq += 1
 
-        decoded = msg1.decode()
+        decoded = msg1.decode(errors="replace")
         if "200 OK" in decoded:
             _LOGGER.info("Basic auth result: %s", decoded)
             return
@@ -149,7 +149,7 @@ class TestRTSPAuth:
             _LOGGER.debug("RTSP DESCRIBE (digest) request prepared for %s", url)
             session.send(describe.encode())
             msg1 = session.recv(self._rtsp_details["bufLen"])
-            decoded = msg1.decode()
+            decoded = msg1.decode(errors="replace")
             _LOGGER.info("Digest auth result: %s", decoded)
 
             if "200 OK" in decoded:

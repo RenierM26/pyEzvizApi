@@ -98,3 +98,16 @@ def test_cli_surfaces_worker_failure_and_stops(tmp_path, monkeypatch):
                      str(tmp_path / "token.json"), "mqtt"]) == 1
     push.stop.assert_called_once()
     client.close_session.assert_called_once()
+
+
+def test_cli_shutdown_timeout_returns_failure_without_traceback(tmp_path, monkeypatch, caplog):
+    client = Mock()
+    push = client.get_mqtt_client.return_value
+    push.raise_if_failed.side_effect = KeyboardInterrupt
+    push.stop.side_effect = TimeoutError
+    monkeypatch.setattr(cli, "EzvizClient", Mock(return_value=client))
+    assert cli.main(["-u", "synthetic", "-p", "synthetic", "--token-file",
+                     str(tmp_path / "token.json"), "mqtt"]) == 1
+    assert "cancellation remains signalled" in caplog.text
+    assert "Traceback" not in caplog.text
+    client.close_session.assert_called_once()

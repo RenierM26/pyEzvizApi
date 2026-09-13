@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import Mock
 
 import pyezvizapi.test_mqtt as mqtt_demo
 
@@ -24,3 +25,16 @@ def test_standalone_listener_handles_mismatched_host_token(tmp_path, caplog):
     assert mqtt_demo.main(["--token-file", str(path)]) == 1
     assert "host feature code" in caplog.text
     assert "Traceback" not in caplog.text
+
+
+def test_standalone_shutdown_timeout_returns_failure_without_traceback(monkeypatch, caplog):
+    client = Mock()
+    push = client.get_mqtt_client.return_value
+    push.raise_if_failed.side_effect = KeyboardInterrupt
+    push.stop.side_effect = TimeoutError
+    monkeypatch.setattr(mqtt_demo, "EzvizClient", Mock(return_value=client))
+    monkeypatch.setattr(mqtt_demo, "_load_token_file", lambda path: None)
+    assert mqtt_demo.main(["-u", "synthetic", "-p", "synthetic"]) == 1
+    assert "cancellation remains signalled" in caplog.text
+    assert "Traceback" not in caplog.text
+    client.close_session.assert_called_once()

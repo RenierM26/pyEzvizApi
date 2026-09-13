@@ -2946,7 +2946,10 @@ def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
     except KeyboardInterrupt:
         return 0
     finally:
-        mqtt.stop()
+        try:
+            mqtt.stop()
+        except TimeoutError as error:
+            raise PyEzvizError("Push shutdown timed out; cancellation remains signalled") from error
 
 
 def _write_stream_payloads(

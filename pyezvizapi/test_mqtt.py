@@ -89,13 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     # If no token and missing username/password, prompt interactively
     if (not token or token.get("push_profile") != "android-channel99") and (not username or not password):
         _LOGGER.info("No token found. Please enter Ezviz credentials")
-        if not username:
-            username = input("Username: ")
-        if not password:
-            password = getpass("Password: ")
+        username = username or input("Username: ")
+        password = password or getpass("Password: ")
 
     client = None
     mqtt_client = None
+    shutdown_failed = False
     try:
         client = EzvizClient(
             username, password, args.region, token=token,
@@ -126,12 +125,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if mqtt_client is not None:
                 mqtt_client.stop()
+        except TimeoutError:
+            shutdown_failed = True
+            _LOGGER.error("Push shutdown timed out; cancellation remains signalled")
         finally:
             if client is not None:
                 client.close_session()
         _LOGGER.info("Listener stopped")
 
-    return 0
+    return 1 if shutdown_failed else 0
 
 
 if __name__ == "__main__":

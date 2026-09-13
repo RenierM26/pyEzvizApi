@@ -102,7 +102,7 @@ def test_failed_persistence_stops_before_redirect() -> None:
 @pytest.mark.parametrize("state", [{"phase": "creation_pending"}, {"identity": "different"}])
 def test_ambiguous_creation_or_wrong_account_stops_without_network(state: dict[str, Any]) -> None:
     peer = Peer()
-    with pytest.raises((ValueError, EzvizPushFatalError)):
+    with pytest.raises(EzvizPushFatalError):
         authenticate(peer, SERIAL, TOKEN, state, lambda value: None)
     assert peer.commands == []
 

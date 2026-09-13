@@ -48,7 +48,7 @@ def authenticate(
     """
     identity = hashlib.sha256(serial).hexdigest()
     if state.get("identity", identity) != identity:
-        raise ValueError("Push state belongs to a different client identity")
+        raise EzvizPushFatalError("Push state belongs to a different client identity; recovery required")
     session_hash = hashlib.sha256(session_token.encode()).hexdigest()
     device_hex = state.get("device_id")
     if device_hex:

@@ -416,3 +416,38 @@ def test_login_and_push_snapshots_are_serialized(monkeypatch):
     assert written[-1]["push_state"]["device_id"] == "new-device"
     session.state["unsaved"] = True
     assert "unsaved" not in client.export_token()["push_state"]
+
+
+def test_migrated_login_discards_old_discovery_and_recovers_after_restart(monkeypatch):
+    snapshots: list[dict[str, Any]] = []
+    client = EzvizClient(account="synthetic", password="synthetic", token={
+        "session_id": "legacy", "api_url": "apiieu.ezvizlife.com",
+        "service_urls": {"pushAddr": "legacy.invalid"},
+    }, on_token_updated=snapshots.append)
+    monkeypatch.setattr(client._session, "post", lambda **kwargs: response({
+        "meta": {"code": 200},
+        "loginSession": {"sessionId": "new-session", "rfSessionId": "new-refresh"},
+        "loginUser": {"username": "internal", "userId": "uid"},
+        "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+    }))
+    monkeypatch.setattr(client, "get_service_urls", Mock(side_effect=ConnectionError()))
+    with pytest.raises(ConnectionError):
+        client.enable_channel99()
+    assert snapshots[-1]["session_id"] == "new-session"
+    assert snapshots[-1]["push_profile"] == "android-channel99"
+    assert "service_urls" not in snapshots[-1]
+
+    resumed = EzvizClient(token=deepcopy(snapshots[-1]), on_token_updated=snapshots.append)
+    monkeypatch.setattr(resumed._session, "put", lambda **kwargs: response({
+        "meta": {"code": 200},
+        "sessionInfo": {"sessionId": "refreshed", "refreshSessionId": "refreshed-refresh"},
+    }))
+    discovery = Mock(return_value={"pushDasDomain": "current.invalid", "pushDasPort": 8777})
+    monkeypatch.setattr(resumed, "get_service_urls", discovery)
+    resumed.login()
+    discovery.assert_called_once()
+    assert snapshots[-1]["service_urls"]["pushDasDomain"] == "current.invalid"
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    push = resumed.get_mqtt_client()
+    push.connect()
+    assert push_session(push).endpoint == ("current.invalid", 8777)

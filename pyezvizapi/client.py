@@ -624,6 +624,9 @@ class EzvizClient:
                 "api_url": str(json_result["loginArea"]["apiDomain"]),
                 "feature_code": FEATURE_CODE,
             })
+            # A fresh login may change profile/region. Never persist old discovery
+            # alongside new credentials: a failed lookup must be retried on resume.
+            self._token.pop("service_urls", None)
             self._restore_push_login(cast(dict[str, Any], previous_push), json_result["loginUser"])
             self._notify_token_updated()
 

@@ -3,6 +3,7 @@
 
 from copy import deepcopy
 import json
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -90,7 +91,7 @@ def test_channel99_requires_persistence_callback():
 
 def test_background_start_and_full_token_snapshot(monkeypatch):
     saved = token()
-    snapshots = []
+    snapshots: list[dict[str, Any]] = []
     client = MQTTClient(saved, requests.Session(), on_state_changed=snapshots.append)
     worker = Mock()
     factory_holder = []
@@ -126,3 +127,76 @@ def test_decoded_callback_and_cache_unchanged():
     client._handle_payload(payload)
     callback.assert_called_once_with(expected)
     assert client.messages_by_device["2"] == expected
+
+
+def test_rotated_credentials_saved_before_service_discovery_failure(monkeypatch):
+    saved = token()
+    saved.pop("service_urls")
+    snapshots: list[dict[str, Any]] = []
+    client = EzvizClient(token=saved, on_token_updated=snapshots.append)
+    put = Mock(
+        return_value=response(
+            {
+                "meta": {"code": 200},
+                "sessionInfo": {"sessionId": "rotated", "refreshSessionId": "new-refresh"},
+            }
+        )
+    )
+    monkeypatch.setattr(client._session, "put", put)
+    monkeypatch.setattr(
+        client, "get_service_urls", Mock(side_effect=ConnectionError("discovery unavailable"))
+    )
+    with pytest.raises(ConnectionError):
+        client.login()
+    assert snapshots[0]["session_id"] == "rotated"
+    assert snapshots[0]["rf_session_id"] == "new-refresh"
+    saved["session_id"] = "later"
+    assert snapshots[0]["session_id"] == "rotated"
+
+
+def test_persistence_failure_aborts_before_service_discovery(monkeypatch):
+    saved = token()
+    saved.pop("service_urls")
+    persist = Mock(side_effect=OSError("storage unavailable"))
+    client = EzvizClient(token=saved, on_token_updated=persist)
+    monkeypatch.setattr(
+        client._session,
+        "put",
+        Mock(
+            return_value=response(
+                {
+                    "meta": {"code": 200},
+                    "sessionInfo": {"sessionId": "rotated", "refreshSessionId": "new-refresh"},
+                }
+            )
+        ),
+    )
+    discovery = Mock()
+    monkeypatch.setattr(client, "get_service_urls", discovery)
+    with pytest.raises(OSError):
+        client.login()
+    discovery.assert_not_called()
+    assert client.export_token()["rf_session_id"] == "new-refresh"
+
+
+def test_login_persistence_callback_is_reused_for_push():
+    client = EzvizClient(token=token(), on_token_updated=lambda snapshot: None)
+    push = client.get_mqtt_client()
+    assert push._on_state_changed is client._on_token_updated
+
+
+def test_unmigrated_push_never_calls_legacy_service():
+    http = Mock()
+    client = MQTTClient(
+        {
+            "username": "legacy-user",
+            "session_id": "legacy",
+            "service_urls": {"pushAddr": "old.invalid"},
+        },
+        http,
+    )
+    with pytest.raises(EzvizAuthTokenExpired, match="enable_channel99"):
+        client.connect()
+    client.stop()
+    http.post.assert_not_called()
+    http.put.assert_not_called()

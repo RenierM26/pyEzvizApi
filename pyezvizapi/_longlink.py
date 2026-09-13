@@ -182,6 +182,8 @@ def refresh_i(subserial: bytes, device_id: bytes, master: bytes, random_1: int) 
 
 
 def refresh_ii(payload: bytes, master: bytes, random_1: int) -> tuple[int, bytes]:
+    if len(payload) >= 4 and payload[:3] in (b"\x01\x01\x00", b"\x01\x00\x00") and payload[3]:
+        raise AuthenticationRejected(payload[3])
     if len(payload) != 36 or payload[:4] not in (b"\x01\x01\x00\x00", b"\x01\x00\x00\x00"):
         raise ValueError("Invalid refresh response")
     plain = decrypt(master, payload[4:])

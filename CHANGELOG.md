@@ -6,6 +6,11 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Changed
+
+- Replaced legacy push HTTP registration with Android channel-99 LBS/MQTT negotiation and reconnect handling. Existing push users must migrate with `EzvizClient.enable_channel99()` and provide a durable token persistence callback; see [the migration guide](docs/channel99.md).
+- Save rotated credentials through `on_token_updated` before service discovery and preserve the existing device ID during push-key renewal. Channel-99 requires Paho MQTT 2.0 or newer.
+
 ### Added
 
 - Added HCNetSDK `NET_DVR_STDXMLConfig` request-shape helpers and local EZVIZ ISAPI builders for `servicesSwitch`, `connectMode`, and `netConfigAndVoiceFileUpload`.

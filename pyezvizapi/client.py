@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from copy import deepcopy
 import datetime as dt
 import hashlib
 import json
@@ -518,8 +519,10 @@ class EzvizClient:
         url: str = "apiieu.ezvizlife.com",
         timeout: int = DEFAULT_TIMEOUT,
         token: JsonDict | None = None,
+        *, on_token_updated: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """Initialize the client object."""
+        self._on_token_updated = on_token_updated
         self.account = account
         self.password = _ezviz_password_digest(password) if password else None
         self._session = requests.session()
@@ -538,13 +541,21 @@ class EzvizClient:
         )
         if self._token.get("push_profile") == PUSH_PROFILE:
             self._session.headers.update(PUSH_HEADERS)
-            self._session.headers["featureCode"] = self._token["feature_code"]
+            feature_code = self._token.get("feature_code")
+            if not feature_code:
+                raise PyEzvizError("Channel-99 token is missing its persisted feature code")
+            self._session.headers["featureCode"] = feature_code
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
         self._smart_plugs: dict[str, Any] = {}
         self.mqtt_client: MQTTClient | None = None
         self._debug_request_counters: dict[str, int] = {}
+
+    def _notify_token_updated(self) -> None:
+        """Save rotating credentials before any subsequent discovery can fail."""
+        if self._on_token_updated is not None:
+            self._on_token_updated(deepcopy(dict(self._token)))
 
     def _restore_push_login(self, previous: dict[str, Any], user: dict[str, Any]) -> None:
         if previous.get("push_profile") != PUSH_PROFILE:
@@ -614,8 +625,10 @@ class EzvizClient:
                 "feature_code": feature_code,
             })
             self._restore_push_login(cast(dict[str, Any], previous_push), json_result["loginUser"])
+            self._notify_token_updated()
 
             self._token["service_urls"] = self.get_service_urls()
+            self._notify_token_updated()
 
             return cast(dict[Any, Any], self._token)
 
@@ -4116,7 +4129,7 @@ class EzvizClient:
         return json_output
 
     def enable_channel99(self, sms_code: int | None = None) -> JsonDict:
-        """Prepare an Android-profile login for the experimental push transport.
+        """Prepare an Android-profile login for channel-99 push.
 
         Legacy web-profile tokens require a fresh credential login (and MFA if
         required). Merely changing headers does not migrate an existing session.
@@ -4129,9 +4142,9 @@ class EzvizClient:
         if not self.account or not self.password:
             raise EzvizAuthTokenExpired("Channel-99 migration requires a fresh credential login")
         self._token["push_profile"] = PUSH_PROFILE
-        self._token.setdefault("feature_code", FEATURE_CODE)
+        feature_code = self._token.setdefault("feature_code", FEATURE_CODE)
         self._session.headers.update(PUSH_HEADERS)
-        self._session.headers["featureCode"] = self._token["feature_code"]
+        self._session.headers["featureCode"] = feature_code
         # Do not refresh a legacy session while presenting the new profile.
         self._token["session_id"] = None
         self._token["rf_session_id"] = None
@@ -4180,9 +4193,11 @@ class EzvizClient:
                     json_result["sessionInfo"]["refreshSessionId"]
                 )
                 self._token["feature_code"] = feature_code
+                self._notify_token_updated()
 
                 if not self._token.get("service_urls"):
                     self._token["service_urls"] = self.get_service_urls()
+                    self._notify_token_updated()
 
                 return cast(dict[Any, Any], self._token)
 
@@ -6258,7 +6273,7 @@ class EzvizClient:
                 session=self._session,
                 timeout=self._timeout,
                 on_message_callback=on_message_callback,
-                on_state_changed=on_state_changed,
+                on_state_changed=on_state_changed or self._on_token_updated,
             )
         return self.mqtt_client
 

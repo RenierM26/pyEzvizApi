@@ -104,3 +104,34 @@ def test_ambiguous_creation_or_wrong_account_stops_without_network(state: dict[s
     with pytest.raises(ValueError):
         authenticate(peer, SERIAL, TOKEN, state, lambda value: None)
     assert peer.commands == []
+
+
+@pytest.mark.parametrize("status", [10, 5])
+def test_only_invalid_master_key_selects_existing_device_reauthentication(status: int) -> None:
+    state: dict[str, Any] = {
+        "device_id": DEVICE.hex(),
+        "master_key": SESSION.hex(),
+        "session_hash": hashlib.sha256(TOKEN.encode()).hexdigest(),
+    }
+    saved: list[dict[str, Any]] = []
+
+    class RejectedPeer(Peer):
+        def exchange(self, frame: bytes) -> tuple[int, bytes]:
+            self.commands.append(frame[0] >> 4)
+            return 8, b"\x01\x00\x00" + bytes([status])
+
+    rejected = RejectedPeer()
+    with pytest.raises(wire.AuthenticationRejected):
+        authenticate(rejected, SERIAL, TOKEN, state, saved.append)
+    assert rejected.commands == [7]
+    assert state["device_id"] == DEVICE.hex()
+    if status == 10:
+        assert "master_key" not in state
+        assert saved[-1]["phase"] == "needs_reauthentication"
+        retry = Peer()
+        credentials = authenticate(retry, SERIAL, TOKEN, state, saved.append)
+        assert credentials.device_id == DEVICE
+        assert retry.commands == [1, 3, 10]
+    else:
+        assert state["master_key"] == SESSION.hex()
+        assert len(saved) == 1

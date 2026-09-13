@@ -2,6 +2,8 @@
 
 from threading import Event
 
+import pytest
+
 from pyezvizapi._longlink_worker import PushWorker
 
 
@@ -59,3 +61,25 @@ def test_stop_interrupts_retry_wait_and_restart_works() -> None:
     worker.start()
     assert second.running.wait(2)
     worker.stop()
+
+
+def test_stop_timeout_keeps_cancellation_and_prevents_overlapping_restart() -> None:
+    release = Event()
+
+    class SlowSession(Session):
+        def run(self, stopped: Event) -> None:
+            self.running.set()
+            release.wait(2)
+
+    session = SlowSession()
+    worker = PushWorker(lambda: session)
+    worker.start()
+    assert session.running.wait(2)
+    try:
+        with pytest.raises(TimeoutError):
+            worker.stop(timeout=0.001)
+        with pytest.raises(RuntimeError, match="still stopping"):
+            worker.start()
+    finally:
+        release.set()
+        worker.stop()

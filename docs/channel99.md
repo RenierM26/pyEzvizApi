@@ -1,13 +1,13 @@
-# Channel-99 push transport (validation preview)
+# Channel-99 push transport and migration
 
 This branch implements the Android channel-99 long-link transport. It still uses
 MQTT after an LBS authentication/key-negotiation exchange; it does not use FCM or
 require Android/Google services on the receiving Linux machine.
 
-The legacy transport remains selected for existing tokens during validation.
-This preview is not yet the default replacement. Short live runs and forced
-reconnects work, but sustained stability and all native event variants are not
-fully verified.
+The obsolete HTTP-registration push transport has been removed. This is a
+migration, not a drop-in change for existing Home Assistant storage code.
+Unmigrated tokens fail with a migration instruction; they are never sent to the
+old registration endpoint. Existing polling/API operations remain available.
 
 ## Migrating a login
 
@@ -16,6 +16,10 @@ Construct `EzvizClient` with the account credentials and call
 `enable_channel99()`. If EZVIZ requires MFA, handle the existing authentication
 exception/verification flow and retry with `sms_code`. Do not put passwords or
 verification codes in logs.
+
+Provide `on_token_updated=save_token` when constructing `EzvizClient`. This
+synchronous callback saves rotated credentials **before** subsequent service
+discovery, so a discovery outage cannot lose a successful token refresh.
 
 Persist the complete returned token securely. It contains the Android profile,
 stable feature code, user ID and refresh credentials. Subsequent starts can use
@@ -28,16 +32,15 @@ installation must use its own persisted identity.
 ## Receiving events
 
 ```python
-client = EzvizClient(token=saved_token)
-
 # This is an application-provided synchronous, durable save operation.
 # The supplied snapshot contains secrets; store it privately and atomically.
 def save_token(snapshot):
     application_token_store.save(snapshot)
 
+client = EzvizClient(token=saved_token, on_token_updated=save_token)
 push = client.get_mqtt_client(
     on_message_callback=handle_decoded_event,
-    on_state_changed=save_token,
+    # Defaults to the client's on_token_updated callback.
 )
 push.connect()
 # ... application continues polling independently ...
@@ -48,7 +51,7 @@ push.stop()
 the connection. Polling must remain independent of push availability. The
 callback payload and `messages_by_device` cache use the existing decoder.
 
-`on_state_changed` is mandatory for channel-99 and receives a deep snapshot of
+`on_state_changed` (or the client-level `on_token_updated`) is mandatory and receives a deep snapshot of
 the **whole token**, not just push fields. It runs on the worker thread and must
 not return until storage succeeds. In Home Assistant, marshal storage work onto
 the event loop and wait for completion from the worker; never block HA's event
@@ -75,8 +78,10 @@ allocated an identity. Preserve the pending state for recovery.
   does not join its own thread.
 - Binary mobile event variants are understood at the framing level but not yet
   exposed through the legacy decoded notification interface.
-- Cached-key rejection recovery without an HTTPS token change, phone coexistence,
-  and extended outage testing remain validation work before default replacement.
+- Server status10 (invalid master key) clears only that key, persists the recovery
+  state, and reauthenticates the existing device on the next connection. Other
+  errors do not trigger this fallback.
+- Phone coexistence and extended outage testing remain release-validation work.
 
 No Android binaries, account data, captured live payloads, or research emulator
 code are included in the library or its portable tests.

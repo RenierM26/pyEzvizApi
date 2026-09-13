@@ -17,6 +17,7 @@ import sys
 import time
 from typing import Any, cast
 
+from ._token_store import save_private_token
 from .client import EzvizClient
 from .exceptions import EzvizAuthVerificationCode, PyEzvizError
 from .mqtt import MQTTClient
@@ -88,13 +89,8 @@ def _load_token_file(path: str | None) -> dict[str, Any] | None:
 
 def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
     if not path:
-        return
-    p = Path(path)
-    try:
-        p.write_text(json.dumps(token, indent=2), encoding="utf-8")
-        _LOGGER.info("Saved token to %s", p)
-    except OSError:
-        _LOGGER.warning("Failed to save token file: %s", p)
+        raise ValueError("Channel-99 requires a token-file path")
+    save_private_token(path, token)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -118,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--save-token",
         action="store_true",
-        help="Save token to --token-file after successful login",
+        help="Compatibility flag: tokens are now always saved for channel-99",
     )
     args = parser.parse_args(argv)
 
@@ -128,26 +124,27 @@ def main(argv: list[str] | None = None) -> int:
     password = args.password
 
     # If no token and missing username/password, prompt interactively
-    if not token and (not username or not password):
+    if (not token or token.get("push_profile") != "android-channel99") and (not username or not password):
         _LOGGER.info("No token found. Please enter Ezviz credentials")
         if not username:
             username = input("Username: ")
         if not password:
             password = getpass("Password: ")
 
-    client = EzvizClient(username, password, args.region, token=token)
+    client = EzvizClient(username, password, args.region, token=token,
+                         on_token_updated=lambda snapshot: _save_token_file(args.token_file, snapshot))
 
     # Login if we have credentials (to refresh session and populate service URLs)
-    if username and password:
+    if token or (username and password):
         try:
-            client.login()
+            client.enable_channel99()
         except EzvizAuthVerificationCode:
             mfa_code = input("MFA code required, please input MFA code.\n")
             try:
                 code_int = int(mfa_code.strip())
             except ValueError:
                 code_int = None
-            client.login(sms_code=code_int)
+            client.enable_channel99(sms_code=code_int)
         except PyEzvizError as exp:
             _LOGGER.error("Login failed: %s", exp)
             return 1
@@ -155,7 +152,6 @@ def main(argv: list[str] | None = None) -> int:
     # Start MQTT client
     mqtt_client = client.get_mqtt_client(on_message_callback=message_handler)
     mqtt_client.connect()
-    _enable_raw_logging(mqtt_client)
 
     try:
         _LOGGER.info("Listening for MQTT messages... (Ctrl+C to quit)")

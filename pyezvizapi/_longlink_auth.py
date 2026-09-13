@@ -53,7 +53,16 @@ def authenticate(
         if state.get("session_hash") == session_hash and state.get("master_key"):
             master = bytes.fromhex(state["master_key"])
             save(dict(state))
-            return _cached(connection, serial, device, master)
+            try:
+                return _cached(connection, serial, device, master)
+            except wire.AuthenticationRejected as error:
+                if error.status == 10:  # Native platform_masterkey_invalid (10010).
+                    state.pop("master_key", None)
+                    state.pop("session_hash", None)
+                    state["phase"] = "needs_reauthentication"
+                    save(dict(state))
+                # Retry on a fresh connection, never on this failed socket.
+                raise
     elif state.get("phase") == "creation_pending":
         raise ValueError("Previous push-device creation is incomplete; recovery required")
     else:

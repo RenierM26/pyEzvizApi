@@ -24,6 +24,7 @@ import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
+from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
@@ -2924,13 +2925,23 @@ def _handle_home_defence_mode(args: argparse.Namespace, client: EzvizClient) -> 
     return 2
 
 
-def _handle_mqtt(_: argparse.Namespace, client: EzvizClient) -> int:
-    """Connect to MQTT push notifications using current session token."""
-    logging.getLogger().setLevel(logging.DEBUG)
-    client.login()
-    mqtt = client.get_mqtt_client()
+def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
+    """Migrate the login and listen with durable channel-99 token storage."""
+    path = args.token_file or "ezviz_token.json"
+    def save(snapshot: dict[str, Any]) -> None:
+        save_private_token(path, snapshot)
+    # The CLI already owns this client's credential/login lifecycle.
+    client._on_token_updated = save  # noqa: SLF001
+    client.enable_channel99()
+    mqtt = client.get_mqtt_client(on_message_callback=_write_json)
     mqtt.connect()
-    return 0
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        mqtt.stop()
 
 
 def _write_stream_payloads(

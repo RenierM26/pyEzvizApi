@@ -100,7 +100,8 @@ class Channel99Session:
     def _client(self, credentials: PushCredentials) -> mqtt.Client:
         client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id=credentials.device_id,
+            # Paho accepts bytes at runtime; native device IDs are binary.
+            client_id=credentials.device_id,  # type: ignore[arg-type]
             clean_session=True,
             protocol=mqtt.MQTTv311,
             reconnect_on_failure=False,

@@ -98,8 +98,12 @@ allocated an identity. Preserve the pending state for recovery.
   Paho with a stale session key.
 - HTTPS token rotation triggers existing-device authentication, retaining the
   saved push-device ID.
-- Direct notification acknowledgements are QoS 0. A local send is not proof the
-  server processed the acknowledgement; there is no PUBACK for QoS 0.
+- Direct JSON notifications (domain 9000, command 1) are delivered without an
+  application reply. Live testing found that publishing the native-style XML
+  reply to `/9000/2` causes an immediate broker disconnect. Paho still handles
+  MQTT-level acknowledgements according to the incoming message QoS.
+- Native binary-message acknowledgement helpers remain experimental; their live
+  broker behavior is not validated by the direct JSON notification tests.
 - `stop()` interrupts active socket reads and retry waits. Pending DNS/HTTP/TCP
   establishment can exceed the five-second join deadline; in that case it raises
   `TimeoutError` while cancellation remains signalled. Outside its own callback thread, it does not report successful shutdown

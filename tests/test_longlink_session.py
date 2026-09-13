@@ -1,5 +1,5 @@
 """MQTT wire profile and delivery semantics, with no external services."""
-# ruff: noqa: SLF001, PLR2004
+# ruff: noqa: SLF001
 
 import json
 from threading import Event
@@ -41,7 +41,7 @@ def test_native_connect_profile() -> None:
     assert will["SubSerial"] == SERIAL.decode()
 
 
-def test_direct_event_ack_and_callback() -> None:
+def test_direct_event_delivery_does_not_publish_application_reply() -> None:
     callback = Mock()
     client = Mock()
     body = b'{"ext":"synthetic,1,2,3,4","alert":"test"}'
@@ -52,13 +52,7 @@ def test_direct_event_ack_and_callback() -> None:
     )
     session(callback)._receive(client, message, KEY)
     callback.assert_called_once_with(body)
-    args, kwargs = client.publish.call_args
-    assert args[0] == "/9000/2"
-    assert kwargs == {"qos": 0}
-    ack = wire.decrypt(KEY, args[1])
-    meta_length = int.from_bytes(ack[:2], "big")
-    assert json.loads(ack[2 : 2 + meta_length])["Seq"] == 42
-    assert b"<Result>0</Result>" in ack[2 + meta_length :]
+    client.publish.assert_not_called()
 
 
 def test_control_message_changes_keepalive_without_callback() -> None:

@@ -8,6 +8,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Changed
 
+- Stop publishing application replies to direct channel-99 JSON notifications; those replies cause the live broker to disconnect immediately after event delivery.
+
 - Return independent token snapshots, retain the Android profile on HTTP-session reset, and install CLI persistence before authentication. CLI token writes are atomic/private and fail explicitly; MQTT migration handles MFA directly.
 - Add Python 3.14 to the CI test matrix.
 

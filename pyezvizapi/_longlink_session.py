@@ -180,11 +180,10 @@ class Channel99Session:
             body = event["body"].rstrip(b"\0")
             if not isinstance(json.loads(body), dict):
                 raise ValueError("Push event must be a JSON object")
-            ack = b'<?xml version="1.0" encoding="utf-8"?><Response><Result>0</Result></Response>'
-            topic, payload = wire.encode_application_ack(
-                key, domain, 2, event["sequence"], body=ack
-            )
-            client.publish(topic, payload, qos=0)
+            # The channel-99 broker closes the connection when a direct JSON
+            # notification is answered on /9000/2. The native mobile handler's
+            # queued XML response is not evidence that this login may publish it.
+            # Leave MQTT-level acknowledgements to Paho; deliver without a reply.
             self.on_message(body)
         elif domain == 9000 and 0x6000 <= command <= 0x6FFF:
             # These native mobile messages have not yet been observed live.

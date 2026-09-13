@@ -68,8 +68,8 @@ def authenticate(
                 raise EzvizPushFatalError(
                     f"Cached push credentials rejected (status {error.status}); recovery required"
                 ) from error
-    elif state.get("phase") in ("creation_pending", "authenticated", "needs_reauthentication"):
-        raise EzvizPushFatalError("Previous push-device creation is incomplete; recovery required")
+    elif state:
+        raise EzvizPushFatalError("Saved push state has no device identity; recovery required")
     else:
         device = None
 

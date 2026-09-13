@@ -81,24 +81,24 @@ def authenticate(
         n2 = wire.authentication_ii(
             _response(connection, wire.authentication_i(serial, shared, n1), 2), serial, shared, n1
         )
+        if device is None:
+            state.update(identity=identity, phase="creation_pending")
+            save(dict(state))
+            payload = _response(connection, wire.authentication_iii_create(serial, shared, n2, n3), 6)
+            device, master, session = wire.authentication_iv_create(
+                payload, serial, shared, bytes([n1, n2, n3])
+            )
+        else:
+            payload = _response(
+                connection, wire.authentication_iii_existing(serial, shared, device, n2, n3), 5
+            )
+            master, session = wire.authentication_iv_existing(
+                payload, serial, shared, bytes([n1, n2, n3])
+            )
     except wire.AuthenticationRejected as error:
         raise EzvizPushFatalError(
             f"Push authentication rejected (status {error.status}); reauthentication required"
         ) from error
-    if device is None:
-        state.update(identity=identity, phase="creation_pending")
-        save(dict(state))
-        payload = _response(connection, wire.authentication_iii_create(serial, shared, n2, n3), 6)
-        device, master, session = wire.authentication_iv_create(
-            payload, serial, shared, bytes([n1, n2, n3])
-        )
-    else:
-        payload = _response(
-            connection, wire.authentication_iii_existing(serial, shared, device, n2, n3), 5
-        )
-        master, session = wire.authentication_iv_existing(
-            payload, serial, shared, bytes([n1, n2, n3])
-        )
     state.update(
         identity=identity,
         device_id=device.hex(),

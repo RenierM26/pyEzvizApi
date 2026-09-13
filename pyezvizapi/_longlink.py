@@ -109,14 +109,19 @@ def authentication_iii_create(
     return header(4, len(payload)) + payload
 
 
+def _auth_iv_status(payload: bytes) -> None:
+    """Distinguish explicit rejection from malformed AUTH-IV responses."""
+    if len(payload) < 4 or payload[:3] not in (b"\x01\x01\x00", b"\x01\x00\x00"):
+        raise ValueError("Invalid AUTH-IV response header")
+    if payload[3]:
+        raise AuthenticationRejected(payload[3])
+
+
 def authentication_iv_create(
     payload: bytes, subserial: bytes, shared: bytes, random_123: bytes
 ) -> tuple[bytes, bytes, bytes]:
-    if (
-        len(random_123) != 3
-        or len(payload) != 119
-        or payload[:4] not in (b"\x01\x01\x00\x00", b"\x01\x00\x00\x00")
-    ):
+    _auth_iv_status(payload)
+    if len(random_123) != 3 or len(payload) != 119:
         raise ValueError("Invalid device-creation response")
     random_4 = payload[4]
     key = master_key(random_123 + bytes([random_4]), shared)
@@ -291,11 +296,8 @@ def authentication_iv_existing(
     payload: bytes, subserial: bytes, shared: bytes, random_123: bytes
 ) -> tuple[bytes, bytes]:
     """Verify the existing-device response and return rotated master/session keys."""
-    if (
-        len(random_123) != 3
-        or len(payload) != 70
-        or payload[:4] not in (b"\x01\x01\x00\x00", b"\x01\x00\x00\x00")
-    ):
+    _auth_iv_status(payload)
+    if len(random_123) != 3 or len(payload) != 70:
         raise ValueError("Invalid existing-device response")
     if payload[5] != 32:
         raise ValueError("Invalid encrypted session-key length")

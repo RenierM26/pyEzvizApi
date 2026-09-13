@@ -191,3 +191,30 @@ def test_rejected_https_based_handshake_is_fatal_without_allocating_identity(ver
     assert peer.commands == [1]
     assert state == {}
     assert saved == []
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("version", [b"\x01\x00\x00", b"\x01\x01\x00"])
+@pytest.mark.parametrize("extra", [b"", b"\x00", bytes(66), bytes(115)])
+def test_auth_iv_rejection_is_fatal_and_preserves_identity(existing, version, extra):
+    class RejectedPeer(Peer):
+        def exchange(self, frame):
+            command = frame[0] >> 4
+            if command in (3, 4):
+                self.commands.append(command)
+                return (5 if command == 3 else 6), version + b"\x05" + extra
+            return super().exchange(frame)
+
+    peer = RejectedPeer()
+    state = {"device_id": DEVICE.hex()} if existing else {}
+    saved: list[dict[str, Any]] = []
+    with pytest.raises(EzvizPushFatalError, match="status 5"):
+        authenticate(peer, SERIAL, TOKEN, state, saved.append)
+    assert peer.commands == [1, 3 if existing else 4]
+    if existing:
+        assert state == {"device_id": DEVICE.hex()}
+        assert saved == []
+    else:
+        assert state["phase"] == "creation_pending"
+        assert "device_id" not in state
+        assert saved == [state]

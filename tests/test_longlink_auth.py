@@ -136,3 +136,26 @@ def test_only_invalid_master_key_selects_existing_device_reauthentication(status
     else:
         assert state["master_key"] == SESSION.hex()
         assert len(saved) == 1
+
+
+@pytest.mark.parametrize("value", [None, "", "not-hex", "00", 123, "00" * 33])
+@pytest.mark.parametrize("field", ["device_id", "master_key"])
+def test_malformed_saved_credentials_are_fatal_before_network(field, value):
+    state = {
+        "device_id": DEVICE.hex(),
+        "master_key": SESSION.hex(),
+        "session_hash": hashlib.sha256(TOKEN.encode()).hexdigest(),
+    }
+    state[field] = value
+    peer = Peer()
+    with pytest.raises(EzvizPushFatalError, match="recovery required"):
+        authenticate(peer, SERIAL, TOKEN, state, lambda snapshot: None)
+    assert peer.commands == []
+
+
+@pytest.mark.parametrize("phase", ["authenticated", "needs_reauthentication"])
+def test_missing_device_in_existing_state_cannot_create_another_identity(phase):
+    peer = Peer()
+    with pytest.raises(EzvizPushFatalError):
+        authenticate(peer, SERIAL, TOKEN, {"phase": phase}, lambda snapshot: None)
+    assert peer.commands == []

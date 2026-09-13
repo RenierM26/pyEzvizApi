@@ -50,13 +50,10 @@ def authenticate(
     if state.get("identity", identity) != identity:
         raise EzvizPushFatalError("Push state belongs to a different client identity; recovery required")
     session_hash = hashlib.sha256(session_token.encode()).hexdigest()
-    device_hex = state.get("device_id")
-    if device_hex:
-        device = bytes.fromhex(device_hex)
-        if len(device) != 32:
-            raise ValueError("Invalid saved push identity")
-        if state.get("session_hash") == session_hash and state.get("master_key"):
-            master = bytes.fromhex(state["master_key"])
+    if "device_id" in state:
+        device = _saved_key(state["device_id"], 32, "device identity")
+        if state.get("session_hash") == session_hash and "master_key" in state:
+            master = _saved_key(state["master_key"], 16, "master key")
             save(dict(state))
             try:
                 return _cached(connection, serial, device, master)
@@ -68,7 +65,7 @@ def authenticate(
                     save(dict(state))
                 # Retry on a fresh connection, never on this failed socket.
                 raise
-    elif state.get("phase") == "creation_pending":
+    elif state.get("phase") in ("creation_pending", "authenticated", "needs_reauthentication"):
         raise EzvizPushFatalError("Previous push-device creation is incomplete; recovery required")
     else:
         device = None
@@ -103,6 +100,19 @@ def authenticate(
     )
     save(dict(state))
     return _redirect(connection, serial, device, master, session)
+
+
+def _saved_key(value: Any, size: int, label: str) -> bytes:
+    """Validate local credentials before attempting any remote handshake."""
+    if not isinstance(value, str):
+        raise EzvizPushFatalError(f"Invalid saved push {label}; recovery required")
+    try:
+        result = bytes.fromhex(value)
+    except ValueError as error:
+        raise EzvizPushFatalError(f"Invalid saved push {label}; recovery required") from error
+    if len(result) != size:
+        raise EzvizPushFatalError(f"Invalid saved push {label}; recovery required")
+    return result
 
 
 def _response(connection: Exchange, request: bytes, expected: int) -> bytes:

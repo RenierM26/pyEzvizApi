@@ -63,8 +63,11 @@ def authenticate(
                     state.pop("session_hash", None)
                     state["phase"] = "needs_reauthentication"
                     save(dict(state))
-                # Retry on a fresh connection, never on this failed socket.
-                raise
+                    # Retry on a fresh connection, never on this failed socket.
+                    raise
+                raise EzvizPushFatalError(
+                    f"Cached push credentials rejected (status {error.status}); recovery required"
+                ) from error
     elif state.get("phase") in ("creation_pending", "authenticated", "needs_reauthentication"):
         raise EzvizPushFatalError("Previous push-device creation is incomplete; recovery required")
     else:
@@ -74,9 +77,14 @@ def authenticate(
     # Changing the digest breaks compatibility with the remote authentication peer.
     shared = wire.share_key(hashlib.md5(session_token.encode()).hexdigest().encode(), serial)
     n1, n3 = secrets.token_bytes(2)
-    n2 = wire.authentication_ii(
-        _response(connection, wire.authentication_i(serial, shared, n1), 2), serial, shared, n1
-    )
+    try:
+        n2 = wire.authentication_ii(
+            _response(connection, wire.authentication_i(serial, shared, n1), 2), serial, shared, n1
+        )
+    except wire.AuthenticationRejected as error:
+        raise EzvizPushFatalError(
+            f"Push authentication rejected (status {error.status}); reauthentication required"
+        ) from error
     if device is None:
         state.update(identity=identity, phase="creation_pending")
         save(dict(state))

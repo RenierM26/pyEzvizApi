@@ -122,7 +122,8 @@ def test_only_invalid_master_key_selects_existing_device_reauthentication(status
             return 8, b"\x01\x00\x00" + bytes([status])
 
     rejected = RejectedPeer()
-    with pytest.raises(wire.AuthenticationRejected):
+    expected = wire.AuthenticationRejected if status == 10 else EzvizPushFatalError
+    with pytest.raises(expected):
         authenticate(rejected, SERIAL, TOKEN, state, saved.append)
     assert rejected.commands == [7]
     assert state["device_id"] == DEVICE.hex()
@@ -159,3 +160,19 @@ def test_missing_device_in_existing_state_cannot_create_another_identity(phase):
     with pytest.raises(EzvizPushFatalError):
         authenticate(peer, SERIAL, TOKEN, {"phase": phase}, lambda snapshot: None)
     assert peer.commands == []
+
+
+def test_rejected_https_based_handshake_is_fatal_without_allocating_identity():
+    class RejectedPeer(Peer):
+        def exchange(self, frame):
+            self.commands.append(frame[0] >> 4)
+            return 2, b"\x01\x00\x00\x05"
+
+    peer = RejectedPeer()
+    state: dict[str, Any] = {}
+    saved: list[dict[str, Any]] = []
+    with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
+        authenticate(peer, SERIAL, TOKEN, state, saved.append)
+    assert peer.commands == [1]
+    assert state == {}
+    assert saved == []

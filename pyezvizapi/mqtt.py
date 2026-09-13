@@ -331,6 +331,12 @@ class MQTTClient:
                 def current() -> bool:
                     return token.get("user_id") == user_id
 
+                def credentials_input() -> str:
+                    with self._token_lock:
+                        if not current():
+                            raise PyEzvizError("Push identity changed; reconnect required")
+                        return cast(str, token["session_id"])
+
                 def save(snapshot: dict[str, Any]) -> None:
                     with self._token_lock:
                         if not current():
@@ -341,7 +347,7 @@ class MQTTClient:
                 return Channel99Session(
                     _push_endpoint(token.get("service_urls", {})),
                     serial,
-                    lambda: token["session_id"],
+                    credentials_input,
                     state,
                     save,
                     self._handle_payload,

@@ -531,9 +531,16 @@ def test_identity_change_refreshes_factory_and_rejects_old_session_save(monkeypa
     client = MQTTClient(saved, requests.Session(), on_token_updated=snapshots.append)
     client.connect()
     old = push_session(client)
+    assert old.is_current()
+    assert old.credentials_input() == saved["session_id"]
+    saved["session_id"] = "same-account-refreshed"
+    assert old.credentials_input() == "same-account-refreshed"
     saved["user_id"] = "new-user"
+    saved["session_id"] = "new-account-session"
     saved.pop("push_state")
     assert not old.is_current()
+    with pytest.raises(PyEzvizError, match="identity changed"):
+        old.credentials_input()
     with pytest.raises(PyEzvizError, match="identity changed"):
         old.save({"device_id": "old-device"})
     assert "push_state" not in saved
@@ -542,6 +549,7 @@ def test_identity_change_refreshes_factory_and_rejects_old_session_save(monkeypa
     assert new.serial == f"MOBILE:ys7:new-user:{FEATURE_CODE}".encode()
     assert new.state == {}
     assert new.is_current()
+    assert new.credentials_input() == "new-account-session"
     new.save({"device_id": "new-device"})
     client.stop()
     client.connect()

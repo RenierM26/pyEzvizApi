@@ -59,6 +59,24 @@ Old push-device keys must not be reused with a changed host identity. This means
 a container MAC change requires reauthentication; no UUID or fallback identity
 is introduced.
 
+## Background failures and recovery
+
+Call `push.raise_if_failed()` periodically while listening (the bundled CLI
+listeners do this). Storage callback failures stop the worker permanently with
+`EzvizTokenPersistenceError`, a subclass of `EzvizPushFatalError`; incomplete
+first-device creation and unrecoverable authentication also stop with a fatal
+error. These failures are logged without credential-bearing exception details.
+Fix storage or reauthenticate/recover the saved state before constructing a new
+push client. A failed worker cannot silently be restarted, and `stop()` still
+cleans up normally. In Home Assistant, check this method from the integration's
+health/update path and surface the failure; do not block the event loop.
+
+A rejected push registration (HTTP or metadata 401/403) attempts one HTTPS
+refresh through an isolated client, durably saves the rotated token, and retries
+registration. This works for push-only clients without polling. Rejected refresh
+credentials require reauthentication rather than endless reconnect attempts.
+Transient network failures retain the normal reconnect behavior.
+
 ## Receiving events
 
 ```python

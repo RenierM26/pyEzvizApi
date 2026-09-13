@@ -13,11 +13,16 @@ import secrets
 from typing import Any, Protocol
 
 from . import _longlink as wire
+from .exceptions import EzvizPushFatalError
 
 
 class Exchange(Protocol):
-    def exchange(self, frame: bytes) -> tuple[int, bytes]: ...
-    def send(self, frame: bytes) -> None: ...
+    def exchange(self, frame: bytes) -> tuple[int, bytes]:
+        """Send a frame and read one response."""
+        raise NotImplementedError
+    def send(self, frame: bytes) -> None:
+        """Send a frame without waiting for a response."""
+        raise NotImplementedError
 
 
 @dataclass(repr=False)
@@ -64,10 +69,12 @@ def authenticate(
                 # Retry on a fresh connection, never on this failed socket.
                 raise
     elif state.get("phase") == "creation_pending":
-        raise ValueError("Previous push-device creation is incomplete; recovery required")
+        raise EzvizPushFatalError("Previous push-device creation is incomplete; recovery required")
     else:
         device = None
 
+    # EZVIZ protocol requires this MD5-derived input; it is not a storage hash.
+    # Changing the digest breaks compatibility with the remote authentication peer.
     shared = wire.share_key(hashlib.md5(session_token.encode()).hexdigest().encode(), serial)
     n1, n3 = secrets.token_bytes(2)
     n2 = wire.authentication_ii(

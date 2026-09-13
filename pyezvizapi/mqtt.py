@@ -26,7 +26,13 @@ from ._longlink_profile import (
 from ._longlink_session import Channel99Session
 from ._longlink_worker import PushWorker
 from .constants import DEFAULT_TIMEOUT, FEATURE_CODE
-from .exceptions import EzvizAuthTokenExpired, PyEzvizError
+from .exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizPushFatalError,
+    EzvizTokenPersistenceError,
+    HTTPError,
+    PyEzvizError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -218,6 +224,11 @@ class MQTTClient:
             )
         self._connect_channel99()
 
+    def raise_if_failed(self) -> None:
+        """Raise a fatal background error; call periodically while listening."""
+        if self._push_worker is not None:
+            self._push_worker.raise_if_failed()
+
     def stop(self) -> None:
         """Cancel push without calling the obsolete HTTP stop endpoint.
 
@@ -245,26 +256,17 @@ class MQTTClient:
         if not isinstance(state, dict):
             raise PyEzvizError("Invalid saved push state")
 
+        def save_token(snapshot: dict[str, Any]) -> None:
+            assert self._on_token_updated is not None
+            try:
+                self._on_token_updated(snapshot)
+            except Exception as error:
+                raise EzvizTokenPersistenceError("Failed to persist channel-99 credentials") from error
+
         def save(snapshot: dict[str, Any]) -> None:
             token["push_state"] = snapshot
-            assert self._on_token_updated is not None
-            self._on_token_updated(deepcopy(dict(token)))
+            save_token(deepcopy(dict(token)))
 
-        def prepare() -> None:
-            # Isolate requests state from the owner's concurrent polling requests.
-            with requests.Session() as session:
-                session.headers.update(self._session.headers)
-                session.headers["sessionId"] = token["session_id"]
-                session.headers["featureCode"] = FEATURE_CODE
-                response = session.put(
-                    f"https://{token['api_url']}/v3/push/token",
-                    params=PUSH_REGISTER,
-                    timeout=self._timeout,
-                    allow_redirects=False,
-                )
-                response.raise_for_status()
-                if response.json().get("meta", {}).get("code") != 200:
-                    raise PyEzvizError("Channel-99 registration rejected")
 
         if self._push_worker is None:
             self._push_worker = PushWorker(
@@ -275,10 +277,54 @@ class MQTTClient:
                     state,
                     save,
                     self._handle_payload,
-                    prepare=prepare,
+                    prepare=lambda: self._prepare_channel99(token, save_token),
                 )
             )
         self._push_worker.start()
+
+    def _prepare_channel99(
+        self, token: dict[str, Any], save_token: Callable[[dict[str, Any]], None]
+    ) -> None:
+        """Register push, refreshing rejected HTTPS credentials once per attempt."""
+        # Lazy import avoids the public client's MQTT factory import cycle.
+        from .client import EzvizClient  # noqa: PLC0415
+
+        # Isolate requests state from the owner's concurrent polling requests.
+        with requests.Session() as session:
+            session.headers.update(self._session.headers)
+            session.headers["featureCode"] = FEATURE_CODE
+            for attempt in range(2):
+                session.headers["sessionId"] = token["session_id"]
+                response = session.put(
+                    f"https://{token['api_url']}/v3/push/token",
+                    params=PUSH_REGISTER,
+                    timeout=self._timeout,
+                    allow_redirects=False,
+                )
+                expired = response.status_code in (401, 403)
+                if not expired:
+                    response.raise_for_status()
+                    code = response.json().get("meta", {}).get("code")
+                    if code == 200:
+                        return
+                    expired = code in (401, 403)
+                if not expired:
+                    raise PyEzvizError("Channel-99 registration rejected")
+                if attempt or not token.get("rf_session_id"):
+                    raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
+                refresh_client = EzvizClient(token=token, on_token_updated=save_token)
+                try:
+                    refresh_client.login()
+                except EzvizAuthTokenExpired as error:
+                    raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
+                except HTTPError as error:
+                    cause = error.__cause__
+                    if (isinstance(cause, requests.HTTPError) and cause.response is not None
+                            and cause.response.status_code in (401, 403)):
+                        raise EzvizPushFatalError("Channel-99 refresh rejected; reauthentication required") from error
+                    raise
+                finally:
+                    refresh_client.close_session()
 
     # ------------------------------------------------------------------
     # MQTT callbacks

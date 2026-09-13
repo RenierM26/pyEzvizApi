@@ -1,10 +1,12 @@
 """Reconnect, cancellation and callback teardown without cloud credentials."""
 
 from threading import Event
+from unittest.mock import Mock
 
 import pytest
 
 from pyezvizapi._longlink_worker import PushWorker
+from pyezvizapi.exceptions import EzvizTokenPersistenceError
 
 
 class Session:
@@ -83,3 +85,25 @@ def test_stop_timeout_keeps_cancellation_and_prevents_overlapping_restart() -> N
     finally:
         release.set()
         worker.stop()
+
+
+def test_fatal_persistence_failure_stops_and_is_observable_without_retry():
+
+
+    failure = EzvizTokenPersistenceError("Cannot persist credentials")
+
+    class FailedSession(Session):
+        def run(self, stopped):
+            raise failure
+
+    session = FailedSession()
+    factory = Mock(return_value=session)
+    worker = PushWorker(factory, retry_delay=0.01)
+    worker.start()
+    assert session.closed.wait(2)
+    worker.stop()
+    assert factory.call_count == 1
+    with pytest.raises(EzvizTokenPersistenceError):
+        worker.raise_if_failed()
+    with pytest.raises(EzvizTokenPersistenceError):
+        worker.start()

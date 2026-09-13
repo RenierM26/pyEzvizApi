@@ -9,6 +9,7 @@ from threading import Event, Lock
 from typing import Any
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 
 from . import _longlink as wire
 from ._longlink_auth import PushCredentials, authenticate
@@ -99,7 +100,7 @@ class Channel99Session:
 
     def _client(self, credentials: PushCredentials) -> mqtt.Client:
         client = mqtt.Client(
-            mqtt.CallbackAPIVersion.VERSION2,
+            CallbackAPIVersion.VERSION2,
             # Paho accepts bytes at runtime; native device IDs are binary.
             client_id=credentials.device_id,  # type: ignore[arg-type]
             clean_session=True,

@@ -7,14 +7,20 @@ import logging
 from threading import Event, Lock, Thread, current_thread
 from typing import Protocol
 
+from .exceptions import EzvizPushFatalError
+
 _LOGGER = logging.getLogger(__name__)
 
 
 class PushSession(Protocol):
     """One bounded, interruptible LBS/MQTT session owned by the worker."""
 
-    def run(self, stopped: Event) -> None: ...
-    def close(self) -> None: ...
+    def run(self, stopped: Event) -> None:
+        """Run until disconnected or cancelled."""
+        raise NotImplementedError
+    def close(self) -> None:
+        """Interrupt and release the session."""
+        raise NotImplementedError
 
 
 class PushWorker:
@@ -28,6 +34,7 @@ class PushWorker:
     def __init__(self, factory: Callable[[], PushSession], *, retry_delay: float = 30) -> None:
         if retry_delay <= 0:
             raise ValueError("Retry delay must be positive")
+        self.failure: EzvizPushFatalError | None = None
         self.factory = factory
         self.retry_delay = retry_delay
         self._lock = Lock()
@@ -37,6 +44,7 @@ class PushWorker:
 
     def start(self) -> None:
         with self._lock:
+            self.raise_if_failed()
             if self._thread is not None and self._thread.is_alive():
                 if self._stopped.is_set():
                     raise RuntimeError("Previous push worker is still stopping")
@@ -44,6 +52,11 @@ class PushWorker:
             self._stopped.clear()
             self._thread = Thread(target=self._run, name="ezviz-channel99", daemon=True)
             self._thread.start()
+
+    def raise_if_failed(self) -> None:
+        """Expose fatal background errors without logging credential-bearing causes."""
+        if self.failure is not None:
+            raise self.failure
 
     def stop(self, timeout: float = 5) -> None:
         """Signal stop and interrupt I/O; never join the callback's own thread."""
@@ -75,6 +88,10 @@ class PushWorker:
                     session = self.factory()
                     self._session = session
                 session.run(self._stopped)
+            except EzvizPushFatalError as error:
+                self.failure = error
+                self._stopped.set()
+                _LOGGER.error("Channel-99 stopped; caller intervention required (%s)", type(error).__name__)
             except Exception:
                 if not self._stopped.is_set():
                     _LOGGER.warning("Channel-99 connection interrupted; retry scheduled")

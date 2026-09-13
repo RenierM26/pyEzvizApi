@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 import pyezvizapi.__main__ as cli
-from pyezvizapi.exceptions import EzvizAuthVerificationCode
+from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizTokenPersistenceError
 
 
 def test_mqtt_installs_storage_before_login_and_handles_mfa(tmp_path, monkeypatch):
@@ -77,3 +77,24 @@ def test_token_write_failure_is_not_silenced(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "save_private_token", Mock(side_effect=OSError("disk full")))
     with pytest.raises(cli.PyEzvizError, match="Failed to save token file"):
         cli._save_token_file(str(tmp_path / "token.json"), {})  # noqa: SLF001
+
+
+def test_cli_invalid_host_token_returns_error_without_traceback(tmp_path, caplog):
+    path = tmp_path / "token.json"
+    path.write_text(json.dumps({"session_id": "old", "push_profile": "android-channel99",
+                                "feature_code": "different-host"}))
+    assert cli.main(["--token-file", str(path), "devices", "status"]) == 1
+    assert "host feature code" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_cli_surfaces_worker_failure_and_stops(tmp_path, monkeypatch):
+
+    client = Mock()
+    push = client.get_mqtt_client.return_value
+    push.raise_if_failed.side_effect = EzvizTokenPersistenceError("Storage failed")
+    monkeypatch.setattr(cli, "EzvizClient", Mock(return_value=client))
+    assert cli.main(["-u", "synthetic", "-p", "synthetic", "--token-file",
+                     str(tmp_path / "token.json"), "mqtt"]) == 1
+    push.stop.assert_called_once()
+    client.close_session.assert_called_once()

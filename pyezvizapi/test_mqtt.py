@@ -115,7 +115,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _LOGGER.info("Listening for MQTT messages... (Ctrl+C to quit)")
         while True:
+            mqtt_client.raise_if_failed()
             time.sleep(1)
+    except PyEzvizError as error:
+        _LOGGER.error("Push stopped: %s", error)
+        return 1
     except KeyboardInterrupt:
         _LOGGER.info("Stopping listener (keyboard interrupt)")
     finally:

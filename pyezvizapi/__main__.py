@@ -2941,6 +2941,7 @@ def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
     mqtt.connect()
     try:
         while True:
+            mqtt.raise_if_failed()
             time.sleep(1)
     except KeyboardInterrupt:
         return 0
@@ -5216,15 +5217,17 @@ def main(argv: list[str] | None = None) -> int:
             _LOGGER.error("%s", exp)
             return 1
 
+    client: EzvizClient | None = None
     if _save_clip_can_run_without_cloud_credentials(args):
-        client = EzvizClient(args.username, args.password, args.region, token=token)
         try:
+            client = EzvizClient(args.username, args.password, args.region, token=token)
             return _handle_save(args, client)
         except PyEzvizError as exp:
             _LOGGER.error("%s", exp)
             return 1
         finally:
-            client.close_session()
+            if client is not None:
+                client.close_session()
 
     if not has_session_token and (not args.username or not args.password):
         _LOGGER.error("Provide --token-file (existing) or --username/--password")
@@ -5237,11 +5240,11 @@ def main(argv: list[str] | None = None) -> int:
     def save(snapshot: dict[str, Any]) -> None:
         _save_token_file(args.token_file, snapshot)
 
-    client = EzvizClient(
-        args.username, args.password, args.region, token=token,
-        on_token_updated=save if persist else None,
-    )
     try:
+        client = EzvizClient(
+            args.username, args.password, args.region, token=token,
+            on_token_updated=save if persist else None,
+        )
         if args.action == "mqtt":
             return _handle_mqtt(args, client)
         _login(
@@ -5291,7 +5294,8 @@ def main(argv: list[str] | None = None) -> int:
         _LOGGER.error("Action not implemented: %s", args.action)
         return 2
     finally:
-        client.close_session()
+        if client is not None:
+            client.close_session()
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import pytest
 
 from pyezvizapi import _longlink as wire
 from pyezvizapi._longlink_auth import authenticate
+from pyezvizapi.exceptions import EzvizPushFatalError
 
 SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
 TOKEN = "synthetic-token"
@@ -101,7 +102,7 @@ def test_failed_persistence_stops_before_redirect() -> None:
 @pytest.mark.parametrize("state", [{"phase": "creation_pending"}, {"identity": "different"}])
 def test_ambiguous_creation_or_wrong_account_stops_without_network(state: dict[str, Any]) -> None:
     peer = Peer()
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, EzvizPushFatalError)):
         authenticate(peer, SERIAL, TOKEN, state, lambda value: None)
     assert peer.commands == []
 

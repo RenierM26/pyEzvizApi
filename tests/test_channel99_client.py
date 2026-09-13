@@ -9,9 +9,15 @@ from unittest.mock import Mock
 import pytest
 import requests
 
+from pyezvizapi._longlink_session import Channel99Session
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import FEATURE_CODE
-from pyezvizapi.exceptions import EzvizAuthTokenExpired, PyEzvizError
+from pyezvizapi.exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizPushFatalError,
+    EzvizTokenPersistenceError,
+    PyEzvizError,
+)
 from pyezvizapi.mqtt import MQTTClient
 
 
@@ -268,3 +274,96 @@ def test_close_session_preserves_android_profile_for_refresh(monkeypatch):
     client.login()
     assert captured["clientNo"] == "google"
     assert captured["featureCode"] == FEATURE_CODE
+
+
+@pytest.mark.parametrize("http_status,meta_code", [(401, None), (200, 403)])
+def test_push_registration_refreshes_expired_session_and_persists_before_retry(
+    monkeypatch, http_status, meta_code
+):
+    saved = token()
+    saved["push_state"] = {"device_id": "unchanged"}
+    snapshots: list[dict[str, Any]] = []
+    registrations = []
+
+    def put(session, url, **kwargs):
+        if url.endswith("/v3/push/token"):
+            registrations.append(session.headers["sessionId"])
+            if len(registrations) == 1:
+                result = response({"meta": {"code": meta_code}})
+                result.status_code = http_status
+                return result
+            assert snapshots[-1]["session_id"] == "rotated"
+            return response({"meta": {"code": 200}})
+        assert kwargs["data"]["refreshSessionId"] == "synthetic-refresh"
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=snapshots.append)
+    client.connect()
+    prepare_push(client)
+    assert registrations == ["synthetic-session", "rotated"]
+    assert saved["push_state"]["device_id"] == "unchanged"
+
+
+def test_push_refresh_persistence_failure_stops_before_registration_retry(monkeypatch):
+
+    registrations = []
+
+    def put(session, url, **kwargs):
+        if url.endswith("/v3/push/token"):
+            registrations.append(url)
+            result = response({})
+            result.status_code = 401
+            return result
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    saver = Mock(side_effect=OSError("private filesystem error"))
+    client = MQTTClient(token(), requests.Session(), on_token_updated=saver)
+    client.connect()
+    with pytest.raises(EzvizTokenPersistenceError, match="persist channel-99"):
+        prepare_push(client)
+    assert len(registrations) == 1
+
+
+def test_push_state_save_failure_is_fatal(monkeypatch):
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(token(), requests.Session(), on_token_updated=Mock(side_effect=OSError()))
+    client.connect()
+    with pytest.raises(EzvizTokenPersistenceError):
+        push_session(client).save({"phase": "creation_pending"})
+
+
+def push_session(client: MQTTClient) -> Channel99Session:
+    assert client._push_worker is not None
+    result = client._push_worker.factory()
+    assert isinstance(result, Channel99Session)
+    return result
+
+
+def prepare_push(client: MQTTClient) -> None:
+    result = push_session(client)
+    assert result.prepare is not None
+    result.prepare()
+
+
+@pytest.mark.parametrize("refresh_status", [401, 403])
+def test_rejected_refresh_requires_intervention(monkeypatch, refresh_status):
+    def put(session, url, **kwargs):
+        result = response({})
+        result.status_code = refresh_status
+        return result
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(token(), requests.Session(), on_token_updated=lambda snapshot: None)
+    client.connect()
+    with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
+        prepare_push(client)

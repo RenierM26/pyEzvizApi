@@ -85,13 +85,10 @@ def authentication_ii(payload: bytes, subserial: bytes, shared: bytes, random_1:
     """Validate the AUTH-II payload (outer command/header handled separately)."""
     if len(payload) < 4:
         raise ValueError("Truncated authentication response")
-    # Observed live short rejection uses 01 00 00, unlike successful AUTH-II.
-    if len(payload) == 4 and payload[:3] in (b"\x01\x00\x00", b"\x01\x03\x00") and payload[3]:
-        raise AuthenticationRejected(payload[3])
     if payload[:3] not in (b"\x01\x03\x00", b"\x01\x00\x00"):
         raise ValueError("Unexpected protocol version")
     if payload[3]:
-        raise ValueError(f"Authentication rejected: {payload[3]}")
+        raise AuthenticationRejected(payload[3])
     if len(payload) != 37:
         raise ValueError("Invalid authentication response length")
     random_2 = payload[4]

@@ -175,11 +175,13 @@ def test_missing_device_in_existing_state_cannot_create_another_identity(phase):
     assert peer.commands == []
 
 
-def test_rejected_https_based_handshake_is_fatal_without_allocating_identity():
+@pytest.mark.parametrize("version", [b"\x01\x00\x00", b"\x01\x03\x00"])
+@pytest.mark.parametrize("extra", [b"", b"\x00", bytes(33)])
+def test_rejected_https_based_handshake_is_fatal_without_allocating_identity(version, extra):
     class RejectedPeer(Peer):
         def exchange(self, frame):
             self.commands.append(frame[0] >> 4)
-            return 2, b"\x01\x00\x00\x05"
+            return 2, version + b"\x05" + extra
 
     peer = RejectedPeer()
     state: dict[str, Any] = {}

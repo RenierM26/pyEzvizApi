@@ -41,6 +41,8 @@ class Channel99Session:
         self._lock = Lock()
         self._closed = Event()
         self.ready = Event()
+        self.last_disconnect_reason: int | None = None
+        self.last_loop_result: int | None = None
         self._lbs: LbsConnection | None = None
         self._mqtt: mqtt.Client | None = None
 
@@ -75,7 +77,9 @@ class Channel99Session:
                 return
             client.connect(credentials.broker["Address"], credentials.broker["Port"], keepalive=30)
             while not stopped.is_set() and not self._closed.is_set():
-                if client.loop(timeout=1) != mqtt.MQTT_ERR_SUCCESS:
+                result = client.loop(timeout=1)
+                self.last_loop_result = int(result)
+                if result != mqtt.MQTT_ERR_SUCCESS:
                     return
         finally:
             self.ready.clear()
@@ -140,6 +144,13 @@ class Channel99Session:
         def received(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
             self._receive(c, msg, credentials.session_key)
 
+        def disconnected(
+            c: mqtt.Client, userdata: Any, flags: Any, reason: Any, properties: Any
+        ) -> None:
+            self.ready.clear()
+            self.last_disconnect_reason = reason.value
+
+        client.on_disconnect = disconnected
         client.on_connect = connected
         client.on_subscribe = subscribed
         client.on_message = received

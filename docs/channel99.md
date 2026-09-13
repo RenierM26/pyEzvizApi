@@ -26,8 +26,19 @@ stable feature code, user ID and refresh credentials. Subsequent starts can use
 `EzvizClient(token=saved_token)` and the existing `login()` refresh method. Save
 the resulting token after refresh, too.
 
-Do not copy a phone's feature code or push-device identity. Each independent
-installation must use its own persisted identity.
+### Feature-code identity
+
+Keep the existing host-based calculation: `FEATURE_CODE` is the MD5 of the
+colon-separated MAC address returned by `uuid.getnode()`. Channel-99 does not
+introduce a random UUID, a separate installation ID, or another identity file.
+Clients on the same host can share this feature code; per-installation uniqueness
+is not required.
+
+Migration reuses `feature_code` if it is already in the login token. Otherwise it
+uses the existing MAC-based `FEATURE_CODE`. Login headers, login/refresh payloads
+and the channel-99 serial all reuse that value. Retaining this existing token field
+keeps saved push credentials consistent if a container's MAC subsequently changes.
+Do not copy an Android phone's feature code or push-device credentials.
 
 ## Receiving events
 

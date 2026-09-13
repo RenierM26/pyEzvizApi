@@ -10,6 +10,7 @@ import pytest
 import requests
 
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.constants import FEATURE_CODE
 from pyezvizapi.exceptions import EzvizAuthTokenExpired, PyEzvizError
 from pyezvizapi.mqtt import MQTTClient
 
@@ -42,8 +43,10 @@ def test_legacy_token_migration_requires_credentials():
     assert client.export_token() == before
 
 
-def test_fresh_login_uses_profile_and_registers_channel(monkeypatch):
-    client = EzvizClient(account="synthetic", password="synthetic")
+@pytest.mark.parametrize("saved_code", [None, "previous-host-feature-code"])
+def test_login_uses_existing_host_feature_code_and_registers_channel(monkeypatch, saved_code):
+    saved = {"api_url": "apiieu.ezvizlife.com", "feature_code": saved_code} if saved_code else None
+    client = EzvizClient(account="synthetic", password="synthetic", token=saved)
     post = Mock(
         return_value=response(
             {
@@ -58,6 +61,10 @@ def test_fresh_login_uses_profile_and_registers_channel(monkeypatch):
     monkeypatch.setattr(client, "get_service_urls", lambda: {"pushDasDomain": "example.invalid"})
     result = client.enable_channel99()
     assert result["user_id"] == "uid"
+    expected_code = saved_code or FEATURE_CODE
+    assert result["feature_code"] == expected_code
+    assert client._session.headers["featureCode"] == expected_code
+    assert post.call_args.kwargs["data"]["featureCode"] == expected_code
     assert client._session.headers["clientNo"] == "google"
     assert client._session.headers["clientVersion"] == "7.4.1.0421"
     assert json.loads(post.call_args.kwargs["data"]["pushRegisterJson"]) == [{"channel": 99}]

@@ -297,3 +297,21 @@ def test_logout_wraps_invalid_json(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Impossible to decode response"):
         client.logout()
+
+
+def test_prepared_request_uses_rotated_header_on_retry(monkeypatch):
+    client = EzvizClient(token={"session_id": "old", "api_url": "api.example.test"})
+    prepared = client._session.prepare_request(requests.Request("GET", "https://api.example.test/path"))
+    sent = []
+
+    def send(request, **kwargs):
+        sent.append(request.headers["sessionId"])
+        return _response({}, status_code=401 if len(sent) == 1 else 200)
+
+    def login():
+        client._session.headers["sessionId"] = "rotated"
+
+    monkeypatch.setattr(client._session, "send", send)
+    monkeypatch.setattr(client, "login", login)
+    assert client._send_prepared(prepared).status_code == 200
+    assert sent == ["old", "rotated"]

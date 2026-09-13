@@ -323,6 +323,7 @@ class MQTTClient:
                 try:
                     with self._token_lock:
                         refresh_client.login()
+                        self._session.headers["sessionId"] = token["session_id"]
                 except EzvizAuthTokenExpired as error:
                     raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
                 except HTTPError as error:

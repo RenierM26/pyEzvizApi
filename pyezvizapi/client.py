@@ -899,6 +899,8 @@ class EzvizClient:
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 self.login()
+                if "sessionId" in prepared.headers:
+                    prepared.headers["sessionId"] = cast(str, self._session.headers["sessionId"])
                 return self._send_prepared(
                     prepared, retry_401=retry_401, max_retries=max_retries + 1
                 )

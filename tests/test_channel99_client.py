@@ -306,6 +306,7 @@ def test_push_registration_refreshes_expired_session_and_persists_before_retry(
     client.connect()
     prepare_push(client)
     assert registrations == ["synthetic-session", "rotated"]
+    assert client._session.headers["sessionId"] == "rotated"
     assert saved["push_state"]["device_id"] == "unchanged"
 
 

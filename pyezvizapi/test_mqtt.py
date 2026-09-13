@@ -52,8 +52,8 @@ def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
     save_private_token(path, token)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Entry point for testing MQTT messages."""
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse standalone listener arguments."""
     parser = argparse.ArgumentParser(prog="test_mqtt")
     parser.add_argument("-u", "--username", required=False, help="Ezviz username")
     parser.add_argument("-p", "--password", required=False, help="Ezviz password")
@@ -75,8 +75,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Compatibility flag: tokens are now always saved for channel-99",
     )
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for testing MQTT messages."""
+    args = _parse_args(argv)
     token = _load_token_file(args.token_file)
 
     username = args.username
@@ -90,11 +94,13 @@ def main(argv: list[str] | None = None) -> int:
         if not password:
             password = getpass("Password: ")
 
-    client = EzvizClient(username, password, args.region, token=token,
-                         on_token_updated=lambda snapshot: _save_token_file(args.token_file, snapshot))
-
-    # Login if we have credentials (to refresh session and populate service URLs)
-    if token or (username and password):
+    client = None
+    mqtt_client = None
+    try:
+        client = EzvizClient(
+            username, password, args.region, token=token,
+            on_token_updated=lambda snapshot: _save_token_file(args.token_file, snapshot),
+        )
         try:
             client.enable_channel99()
         except EzvizAuthVerificationCode:
@@ -104,26 +110,25 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError:
                 code_int = None
             client.enable_channel99(sms_code=code_int)
-        except PyEzvizError as exp:
-            _LOGGER.error("Login failed: %s", exp)
-            return 1
 
-    # Start MQTT client
-    mqtt_client = client.get_mqtt_client(on_message_callback=message_handler)
-    mqtt_client.connect()
-
-    try:
+        mqtt_client = client.get_mqtt_client(on_message_callback=message_handler)
+        mqtt_client.connect()
         _LOGGER.info("Listening for MQTT messages... (Ctrl+C to quit)")
         while True:
             mqtt_client.raise_if_failed()
             time.sleep(1)
-    except PyEzvizError as error:
-        _LOGGER.error("Push stopped: %s", error)
+    except (PyEzvizError, OSError) as error:
+        _LOGGER.error("Listener failed: %s", error)
         return 1
     except KeyboardInterrupt:
         _LOGGER.info("Stopping listener (keyboard interrupt)")
     finally:
-        mqtt_client.stop()
+        try:
+            if mqtt_client is not None:
+                mqtt_client.stop()
+        finally:
+            if client is not None:
+                client.close_session()
         _LOGGER.info("Listener stopped")
 
     return 0

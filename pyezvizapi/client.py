@@ -19,6 +19,11 @@ import zlib
 import requests
 
 from . import device_factory
+from ._longlink_profile import (
+    HEADERS as PUSH_HEADERS,
+    PROFILE as PUSH_PROFILE,
+    REGISTER as PUSH_REGISTER,
+)
 from .api_endpoints import (
     API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
     API_ENDPOINT_ALARM_DEVICE_CHIME,
@@ -198,6 +203,9 @@ class ClientToken(TypedDict):
     api_url: str
     feature_code: NotRequired[str]
     hardware_code: NotRequired[str]
+    push_profile: NotRequired[str]
+    push_state: NotRequired[dict[str, Any]]
+    user_id: NotRequired[str]
     service_urls: NotRequired[dict[str, Any]]
 
 
@@ -528,6 +536,9 @@ class EzvizClient:
                 "api_url": url,
             },
         )
+        if self._token.get("push_profile") == PUSH_PROFILE:
+            self._session.headers.update(PUSH_HEADERS)
+            self._session.headers["featureCode"] = self._token["feature_code"]
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
@@ -535,22 +546,35 @@ class EzvizClient:
         self.mqtt_client: MQTTClient | None = None
         self._debug_request_counters: dict[str, int] = {}
 
+    def _restore_push_login(self, previous: dict[str, Any], user: dict[str, Any]) -> None:
+        if previous.get("push_profile") != PUSH_PROFILE:
+            return
+        self._token["push_profile"] = PUSH_PROFILE
+        self._token["user_id"] = str(user["userId"])
+        if previous.get("user_id") != self._token["user_id"]:
+            self._token.pop("push_state", None)
+
     def _login(self, smscode: int | None = None) -> JsonDict:
         """Login to Ezviz API."""
         # Region code to url.
         if len(self._token["api_url"].split(".")) == 1:
             self._token["api_url"] = "apii" + self._token["api_url"] + ".ezvizlife.com"
 
+        push_enabled = self._token.get("push_profile") == PUSH_PROFILE
+        previous_push = dict(self._token)
+        feature_code = self._token.get("feature_code", FEATURE_CODE) if push_enabled else FEATURE_CODE
         payload = {
             "account": self.account,
             "password": self.password,
-            "featureCode": FEATURE_CODE,
+            "featureCode": feature_code,
             "msgType": "3" if smscode else "0",
             "bizType": "TERMINAL_BIND" if smscode else "",
             "cuName": "SGFzc2lv",  # hassio base64 encoded
             "smsCode": smscode,
         }
 
+        if push_enabled:
+            payload.update(PUSH_REGISTER)
         try:
             req = self._session.post(
                 url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
@@ -582,13 +606,14 @@ class EzvizClient:
             self._session.headers["sessionId"] = json_result["loginSession"][
                 "sessionId"
             ]
-            self._token = {
+            self._token.update({
                 "session_id": str(json_result["loginSession"]["sessionId"]),
                 "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
                 "username": str(json_result["loginUser"]["username"]),
                 "api_url": str(json_result["loginArea"]["apiDomain"]),
-                "feature_code": FEATURE_CODE,
-            }
+                "feature_code": feature_code,
+            })
+            self._restore_push_login(cast(dict[str, Any], previous_push), json_result["loginUser"])
 
             self._token["service_urls"] = self.get_service_urls()
 
@@ -4090,18 +4115,44 @@ class EzvizClient:
         self._ensure_ok(json_output, "Could not get unbind progress")
         return json_output
 
+    def enable_channel99(self, sms_code: int | None = None) -> JsonDict:
+        """Prepare an Android-profile login for the experimental push transport.
+
+        Legacy web-profile tokens require a fresh credential login (and MFA if
+        required). Merely changing headers does not migrate an existing session.
+        Persist the returned token before starting push reception.
+        """
+        if self.mqtt_client is not None:
+            raise PyEzvizError("Stop and discard the MQTT client before migrating login")
+        if self._token.get("push_profile") == PUSH_PROFILE:
+            return self.login(sms_code)
+        if not self.account or not self.password:
+            raise EzvizAuthTokenExpired("Channel-99 migration requires a fresh credential login")
+        self._token["push_profile"] = PUSH_PROFILE
+        self._token.setdefault("feature_code", FEATURE_CODE)
+        self._session.headers.update(PUSH_HEADERS)
+        self._session.headers["featureCode"] = self._token["feature_code"]
+        # Do not refresh a legacy session while presenting the new profile.
+        self._token["session_id"] = None
+        self._token["rf_session_id"] = None
+        return self._login(sms_code)
+
     def login(self, sms_code: int | None = None) -> JsonDict:
         """Get or refresh ezviz login token."""
         session_id = self._token.get("session_id")
         refresh_session_id = self._token.get("rf_session_id")
+        push_enabled = self._token.get("push_profile") == PUSH_PROFILE
+        feature_code = self._token.get("feature_code", FEATURE_CODE) if push_enabled else FEATURE_CODE
         if session_id and refresh_session_id:
             try:
                 req = self._session.put(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
                     data={
                         "refreshSessionId": refresh_session_id,
-                        "featureCode": FEATURE_CODE,
+                        "featureCode": feature_code,
+                        **(PUSH_REGISTER if push_enabled else {}),
                     },
+                    allow_redirects=False,
                     timeout=self._timeout,
                 )
                 req.raise_for_status()
@@ -4128,7 +4179,7 @@ class EzvizClient:
                 self._token["rf_session_id"] = str(
                     json_result["sessionInfo"]["refreshSessionId"]
                 )
-                self._token["feature_code"] = FEATURE_CODE
+                self._token["feature_code"] = feature_code
 
                 if not self._token.get("service_urls"):
                     self._token["service_urls"] = self.get_service_urls()
@@ -4137,12 +4188,12 @@ class EzvizClient:
 
             if json_result["meta"]["code"] == 403:
                 if self.account and self.password:
-                    self._token = {
+                    self._token.update({
                         "session_id": None,
                         "rf_session_id": None,
                         "username": None,
                         "api_url": self._token["api_url"],
-                    }
+                    })
                     return self.login()
 
                 raise EzvizAuthTokenExpired(
@@ -6197,7 +6248,8 @@ class EzvizClient:
         return True
 
     def get_mqtt_client(
-        self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
+        self, on_message_callback: Callable[[dict[str, Any]], None] | None = None,
+        *, on_state_changed: Callable[[dict[str, Any]], None] | None = None,
     ) -> MQTTClient:
         """Return a configured MQTTClient using this client's session."""
         if self.mqtt_client is None:
@@ -6206,6 +6258,7 @@ class EzvizClient:
                 session=self._session,
                 timeout=self._timeout,
                 on_message_callback=on_message_callback,
+                on_state_changed=on_state_changed,
             )
         return self.mqtt_client
 

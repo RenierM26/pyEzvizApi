@@ -1,0 +1,128 @@
+"""Public migration and durable-state callback contracts."""
+# ruff: noqa: SLF001
+
+from copy import deepcopy
+import json
+from unittest.mock import Mock
+
+import pytest
+import requests
+
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.exceptions import EzvizAuthTokenExpired, PyEzvizError
+from pyezvizapi.mqtt import MQTTClient
+
+
+def response(body):
+    result = requests.Response()
+    result.status_code = 200
+    result._content = json.dumps(body).encode()
+    return result
+
+
+def token():
+    return {
+        "push_profile": "android-channel99",
+        "user_id": "synthetic-user",
+        "username": "internal-user",
+        "feature_code": "synthetic-phone",
+        "api_url": "apiieu.ezvizlife.com",
+        "session_id": "synthetic-session",
+        "rf_session_id": "synthetic-refresh",
+        "service_urls": {"pushDasDomain": "example.invalid", "pushDasPort": 8777},
+    }
+
+
+def test_legacy_token_migration_requires_credentials():
+    client = EzvizClient(token={"session_id": "legacy", "api_url": "apiieu.ezvizlife.com"})
+    before = client.export_token()
+    with pytest.raises(EzvizAuthTokenExpired):
+        client.enable_channel99()
+    assert client.export_token() == before
+
+
+def test_fresh_login_uses_profile_and_registers_channel(monkeypatch):
+    client = EzvizClient(account="synthetic", password="synthetic")
+    post = Mock(
+        return_value=response(
+            {
+                "meta": {"code": 200},
+                "loginSession": {"sessionId": "session", "rfSessionId": "refresh"},
+                "loginUser": {"username": "internal", "userId": "uid"},
+                "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+            }
+        )
+    )
+    monkeypatch.setattr(client._session, "post", post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {"pushDasDomain": "example.invalid"})
+    result = client.enable_channel99()
+    assert result["user_id"] == "uid"
+    assert client._session.headers["clientNo"] == "google"
+    assert client._session.headers["clientVersion"] == "7.4.1.0421"
+    assert json.loads(post.call_args.kwargs["data"]["pushRegisterJson"]) == [{"channel": 99}]
+
+
+def test_refresh_retains_identity_and_includes_registration(monkeypatch):
+    saved = token()
+    saved["push_state"] = {"device_id": "synthetic-device"}
+    client = EzvizClient(token=saved)
+    put = Mock(
+        return_value=response(
+            {
+                "meta": {"code": 200},
+                "sessionInfo": {"sessionId": "rotated", "refreshSessionId": "rotated-refresh"},
+            }
+        )
+    )
+    monkeypatch.setattr(client._session, "put", put)
+    result = client.login()
+    assert result["feature_code"] == "synthetic-phone"
+    assert result["push_state"] == saved["push_state"]
+    assert put.call_args.kwargs["data"]["featureCode"] == "synthetic-phone"
+    assert "pushRegisterJson" in put.call_args.kwargs["data"]
+
+
+def test_channel99_requires_persistence_callback():
+    client = MQTTClient(token(), requests.Session())
+    with pytest.raises(PyEzvizError, match="on_state_changed"):
+        client.connect()
+
+
+def test_background_start_and_full_token_snapshot(monkeypatch):
+    saved = token()
+    snapshots = []
+    client = MQTTClient(saved, requests.Session(), on_state_changed=snapshots.append)
+    worker = Mock()
+    factory_holder = []
+
+    def worker_factory(factory):
+        factory_holder.append(factory)
+        return worker
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", worker_factory)
+    client.connect()
+    worker.start.assert_called_once()
+    session = factory_holder[0]()
+    session.save({"device_id": "device", "master_key": "key"})
+    assert snapshots[0]["session_id"] == saved["session_id"]
+    assert snapshots[0]["push_state"]["device_id"] == "device"
+    old = deepcopy(snapshots[0])
+    saved["push_state"]["device_id"] = "changed"
+    assert snapshots[0] == old
+    client.stop()
+    worker.stop.assert_called_once()
+
+
+def test_decoded_callback_and_cache_unchanged():
+    callback = Mock()
+    client = MQTTClient(
+        token(),
+        requests.Session(),
+        on_message_callback=callback,
+        on_state_changed=lambda snapshot: None,
+    )
+    payload = b'{"alert":"test","ext":"synthetic,1,2,3,4"}'
+    expected = client.decode_mqtt_message(payload)
+    client._handle_payload(payload)
+    callback.assert_called_once_with(expected)
+    assert client.messages_by_device["2"] == expected

@@ -31,6 +31,8 @@ class Channel99Session:
         state: dict[str, Any],
         save: Callable[[dict[str, Any]], None],
         on_message: Callable[[bytes], None],
+        *,
+        prepare: Callable[[], None] | None = None,
     ) -> None:
         self.endpoint = endpoint
         self.serial = serial
@@ -38,6 +40,7 @@ class Channel99Session:
         self.state = state
         self.save = save
         self.on_message = on_message
+        self.prepare = prepare
         self._lock = Lock()
         self._closed = Event()
         self.ready = Event()
@@ -57,6 +60,12 @@ class Channel99Session:
             client.disconnect()
 
     def run(self, stopped: Event) -> None:
+        if stopped.is_set() or self._closed.is_set():
+            return
+        if self.prepare is not None:
+            self.prepare()
+        if stopped.is_set() or self._closed.is_set():
+            return
         with LbsConnection(socket.create_connection(self.endpoint, timeout=10)) as lbs:
             with self._lock:
                 self._lbs = lbs

@@ -23,6 +23,7 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 from ._longlink_profile import (
+    HEADERS as PUSH_HEADERS,
     PROFILE as PUSH_PROFILE,
     REGISTER as PUSH_REGISTER,
     validate_feature_code,
@@ -387,6 +388,7 @@ class MQTTClient:
         # Isolate requests state from the owner's concurrent polling requests.
         with self._token_lock:
             session = _isolated_session(self._session)
+        session.headers.update(PUSH_HEADERS)
         session.headers["featureCode"] = FEATURE_CODE
         for attempt in range(2):
             session.headers["sessionId"] = token["session_id"]

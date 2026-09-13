@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
+from pyezvizapi._longlink_profile import HEADERS as PUSH_HEADERS
 from pyezvizapi._longlink_session import Channel99Session
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import FEATURE_CODE
@@ -622,6 +623,8 @@ def test_push_registration_and_refresh_preserve_transport_without_mutating_owner
     def put(session, url, **kwargs):
         calls.append(url)
         assert session is not supplied
+        assert all(session.headers[key] == value for key, value in PUSH_HEADERS.items())
+        assert session.headers["featureCode"] == FEATURE_CODE
         assert session.proxies == supplied.proxies
         assert session.cert == supplied.cert
         assert session.verify == supplied.verify
@@ -645,5 +648,6 @@ def test_push_registration_and_refresh_preserve_transport_without_mutating_owner
     assert len(calls) == 3
     assert supplied.cookies.get("worker") is None
     assert "Worker-Only" not in supplied.headers
+    assert "clientNo" not in supplied.headers
     assert supplied.headers["sessionId"] == "rotated"
     close_adapter.assert_not_called()

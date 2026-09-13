@@ -300,7 +300,7 @@ class MQTTClient:
         if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
         _push_endpoint(token.get("service_urls", {}))
-        serial = _push_serial(token["user_id"])
+        _push_serial(token["user_id"])
         _hostname(token["api_url"])
         if not isinstance(token["session_id"], str) or re.fullmatch(r"[!-~]+", token["session_id"]) is None:
             raise PyEzvizError("Invalid channel-99 session ID")
@@ -318,14 +318,26 @@ class MQTTClient:
             except Exception as error:
                 raise EzvizTokenPersistenceError("Failed to persist channel-99 credentials") from error
 
-        def save(snapshot: dict[str, Any]) -> None:
-            with self._token_lock:
-                token["push_state"] = deepcopy(snapshot)
-                save_token(deepcopy(dict(token)))
-
         def new_session() -> Channel99Session:
-            # Full logins may rediscover LBS while this worker is running.
+            # Logins may replace discovery or the user; bind each attempt to one
+            # identity and never let an obsolete attempt overwrite the new token.
             with self._token_lock:
+                user_id = token["user_id"]
+                serial = _push_serial(user_id)
+                state = deepcopy(token.get("push_state", {}))
+                if not isinstance(state, dict):
+                    raise PyEzvizError("Invalid saved push state")
+
+                def current() -> bool:
+                    return token.get("user_id") == user_id
+
+                def save(snapshot: dict[str, Any]) -> None:
+                    with self._token_lock:
+                        if not current():
+                            raise PyEzvizError("Push identity changed; reconnect required")
+                        token["push_state"] = deepcopy(snapshot)
+                        save_token(deepcopy(dict(token)))
+
                 return Channel99Session(
                     _push_endpoint(token.get("service_urls", {})),
                     serial,
@@ -334,6 +346,7 @@ class MQTTClient:
                     save,
                     self._handle_payload,
                     prepare=lambda: self._prepare_channel99(token, save_token),
+                    is_current=current,
                 )
 
         if self._push_worker is None:

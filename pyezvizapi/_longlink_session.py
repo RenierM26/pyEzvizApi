@@ -34,6 +34,7 @@ class Channel99Session:
         on_message: Callable[[bytes], None],
         *,
         prepare: Callable[[], None] | None = None,
+        is_current: Callable[[], bool] | None = None,
     ) -> None:
         self.endpoint = endpoint
         self.serial = serial
@@ -42,6 +43,7 @@ class Channel99Session:
         self.save = save
         self.on_message = on_message
         self.prepare = prepare
+        self.is_current = is_current or (lambda: True)
         self._lock = Lock()
         self._closed = Event()
         self.ready = Event()
@@ -61,17 +63,17 @@ class Channel99Session:
             client.disconnect()
 
     def run(self, stopped: Event) -> None:
-        if stopped.is_set() or self._closed.is_set():
+        if stopped.is_set() or self._closed.is_set() or not self.is_current():
             return
         if self.prepare is not None:
             self.prepare()
-        if stopped.is_set() or self._closed.is_set():
+        if stopped.is_set() or self._closed.is_set() or not self.is_current():
             return
         with LbsConnection(socket.create_connection(self.endpoint, timeout=10)) as lbs:
             with self._lock:
                 self._lbs = lbs
             try:
-                if stopped.is_set() or self._closed.is_set():
+                if stopped.is_set() or self._closed.is_set() or not self.is_current():
                     return
                 credentials = authenticate(
                     lbs, self.serial, self.credentials_input(), self.state, self.save
@@ -83,10 +85,10 @@ class Channel99Session:
         with self._lock:
             self._mqtt = client
         try:
-            if stopped.is_set() or self._closed.is_set():
+            if stopped.is_set() or self._closed.is_set() or not self.is_current():
                 return
             client.connect(credentials.broker["Address"], credentials.broker["Port"], keepalive=30)
-            while not stopped.is_set() and not self._closed.is_set():
+            while not stopped.is_set() and not self._closed.is_set() and self.is_current():
                 result = client.loop(timeout=1)
                 self.last_loop_result = int(result)
                 if result != mqtt.MQTT_ERR_SUCCESS:
@@ -153,7 +155,8 @@ class Channel99Session:
                 self.ready.set()
 
         def received(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-            self._receive(c, msg, credentials.session_key)
+            if self.is_current():
+                self._receive(c, msg, credentials.session_key)
 
         def disconnected(
             c: mqtt.Client, userdata: Any, flags: Any, reason: Any, properties: Any

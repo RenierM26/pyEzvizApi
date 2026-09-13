@@ -521,3 +521,28 @@ def test_reconnect_and_explicit_restart_use_current_discovery(monkeypatch):
     saved["service_urls"] = {"pushDasDomain": "restarted.invalid", "pushDasPort": 8999}
     client.connect()
     assert push_session(client).endpoint == ("restarted.invalid", 8999)
+
+
+def test_identity_change_refreshes_factory_and_rejects_old_session_save(monkeypatch):
+    saved = token()
+    saved["push_state"] = {"device_id": "old-device"}
+    snapshots: list[dict[str, Any]] = []
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=snapshots.append)
+    client.connect()
+    old = push_session(client)
+    saved["user_id"] = "new-user"
+    saved.pop("push_state")
+    assert not old.is_current()
+    with pytest.raises(PyEzvizError, match="identity changed"):
+        old.save({"device_id": "old-device"})
+    assert "push_state" not in saved
+    assert snapshots == []
+    new = push_session(client)
+    assert new.serial == f"MOBILE:ys7:new-user:{FEATURE_CODE}".encode()
+    assert new.state == {}
+    assert new.is_current()
+    new.save({"device_id": "new-device"})
+    client.stop()
+    client.connect()
+    assert push_session(client).state == {"device_id": "new-device"}

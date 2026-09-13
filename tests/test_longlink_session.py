@@ -77,3 +77,12 @@ def test_stop_during_registration_prevents_later_socket_creation(monkeypatch) ->
     monkeypatch.setattr("pyezvizapi._longlink_session.socket.create_connection", create)
     connection.run(Event())
     create.assert_not_called()
+
+
+def test_superseded_identity_stops_before_registration():
+    connection = session(Mock())
+    connection.is_current = lambda: False
+    prepare = Mock()
+    connection.prepare = prepare
+    connection.run(Event())
+    prepare.assert_not_called()

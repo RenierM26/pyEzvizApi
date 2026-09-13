@@ -583,3 +583,15 @@ def test_push_refresh_updates_owner_replacement_http_session(monkeypatch):
     assert owner._session.headers["sessionId"] == "rotated"
     assert owner.get_mqtt_client() is push
     assert snapshots[-1]["session_id"] == "rotated"
+
+
+@pytest.mark.parametrize("host", ["::1", "2001:db8::1", "::ffff:192.0.2.1"])
+def test_ipv6_api_host_fails_before_worker_start(monkeypatch, host):
+    saved = token()
+    saved["api_url"] = host
+    start = Mock()
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", start)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    with pytest.raises(PyEzvizError, match="IPv6 API hosts"):
+        client.connect()
+    start.assert_not_called()

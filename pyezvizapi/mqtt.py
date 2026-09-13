@@ -301,7 +301,8 @@ class MQTTClient:
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
         _push_endpoint(token.get("service_urls", {}))
         _push_serial(token["user_id"])
-        _hostname(token["api_url"])
+        if ":" in _hostname(token["api_url"]):
+            raise PyEzvizError("IPv6 API hosts are not supported")
         if not isinstance(token["session_id"], str) or re.fullmatch(r"[!-~]+", token["session_id"]) is None:
             raise PyEzvizError("Invalid channel-99 session ID")
         # Handshake state is worker-owned; only publish it to the shared token

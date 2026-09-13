@@ -34,11 +34,17 @@ introduce a random UUID, a separate installation ID, or another identity file.
 Clients on the same host can share this feature code; per-installation uniqueness
 is not required.
 
-Migration reuses `feature_code` if it is already in the login token. Otherwise it
-uses the existing MAC-based `FEATURE_CODE`. Login headers, login/refresh payloads
-and the channel-99 serial all reuse that value. Retaining this existing token field
-keeps saved push credentials consistent if a container's MAC subsequently changes.
-Do not copy an Android phone's feature code or push-device credentials.
+Always use `FEATURE_CODE` for login, refresh, push and CAS. Values stored in a
+token never override it. The existing `feature_code` token field is only a marker
+of the host identity used at login.
+
+If a saved channel-99 token's marker is missing or differs from `FEATURE_CODE`,
+the client raises `EzvizAuthTokenExpired` before using those credentials. Create
+a fresh client with account credentials and no old token, call
+`enable_channel99()` (including MFA if required), and replace the saved token.
+Old push-device keys must not be reused with a changed host identity. This means
+a container MAC change requires reauthentication; no UUID or fallback identity
+is introduced.
 
 ## Receiving events
 

@@ -8,6 +8,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Changed
 
+- Use the host MAC-derived `FEATURE_CODE` consistently for login, push and CAS; saved channel-99 credentials from a different host identity require a fresh login.
+
 - Replaced legacy push HTTP registration with Android channel-99 LBS/MQTT negotiation and reconnect handling. Existing push users must migrate with `EzvizClient.enable_channel99()` and provide a durable token persistence callback; see [the migration guide](docs/channel99.md).
 - Save rotated credentials through `on_token_updated` before service discovery and preserve the existing device ID during push-key renewal. Channel-99 requires Paho MQTT 2.0 or newer.
 

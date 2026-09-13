@@ -24,6 +24,7 @@ from ._longlink_profile import (
     HEADERS as PUSH_HEADERS,
     PROFILE as PUSH_PROFILE,
     REGISTER as PUSH_REGISTER,
+    validate_feature_code,
 )
 from .api_endpoints import (
     API_ENDPOINT_2FA_VALIDATE_POST_AUTH,
@@ -522,6 +523,7 @@ class EzvizClient:
         *, on_token_updated: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """Initialize the client object."""
+        validate_feature_code(token or {})
         self._on_token_updated = on_token_updated
         self.account = account
         self.password = _ezviz_password_digest(password) if password else None
@@ -541,10 +543,6 @@ class EzvizClient:
         )
         if self._token.get("push_profile") == PUSH_PROFILE:
             self._session.headers.update(PUSH_HEADERS)
-            feature_code = self._token.get("feature_code")
-            if not feature_code:
-                raise PyEzvizError("Channel-99 token is missing its persisted feature code")
-            self._session.headers["featureCode"] = feature_code
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
@@ -573,11 +571,10 @@ class EzvizClient:
 
         push_enabled = self._token.get("push_profile") == PUSH_PROFILE
         previous_push = dict(self._token)
-        feature_code = self._token.get("feature_code", FEATURE_CODE) if push_enabled else FEATURE_CODE
         payload = {
             "account": self.account,
             "password": self.password,
-            "featureCode": feature_code,
+            "featureCode": FEATURE_CODE,
             "msgType": "3" if smscode else "0",
             "bizType": "TERMINAL_BIND" if smscode else "",
             "cuName": "SGFzc2lv",  # hassio base64 encoded
@@ -622,7 +619,7 @@ class EzvizClient:
                 "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
                 "username": str(json_result["loginUser"]["username"]),
                 "api_url": str(json_result["loginArea"]["apiDomain"]),
-                "feature_code": feature_code,
+                "feature_code": FEATURE_CODE,
             })
             self._restore_push_login(cast(dict[str, Any], previous_push), json_result["loginUser"])
             self._notify_token_updated()
@@ -4142,9 +4139,10 @@ class EzvizClient:
         if not self.account or not self.password:
             raise EzvizAuthTokenExpired("Channel-99 migration requires a fresh credential login")
         self._token["push_profile"] = PUSH_PROFILE
-        feature_code = self._token.setdefault("feature_code", FEATURE_CODE)
+        self._token["feature_code"] = FEATURE_CODE
+        self._token.pop("push_state", None)
         self._session.headers.update(PUSH_HEADERS)
-        self._session.headers["featureCode"] = feature_code
+        self._session.headers["featureCode"] = FEATURE_CODE
         # Do not refresh a legacy session while presenting the new profile.
         self._token["session_id"] = None
         self._token["rf_session_id"] = None
@@ -4152,17 +4150,17 @@ class EzvizClient:
 
     def login(self, sms_code: int | None = None) -> JsonDict:
         """Get or refresh ezviz login token."""
+        validate_feature_code(cast(dict[str, Any], self._token))
         session_id = self._token.get("session_id")
         refresh_session_id = self._token.get("rf_session_id")
         push_enabled = self._token.get("push_profile") == PUSH_PROFILE
-        feature_code = self._token.get("feature_code", FEATURE_CODE) if push_enabled else FEATURE_CODE
         if session_id and refresh_session_id:
             try:
                 req = self._session.put(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
                     data={
                         "refreshSessionId": refresh_session_id,
-                        "featureCode": feature_code,
+                        "featureCode": FEATURE_CODE,
                         **(PUSH_REGISTER if push_enabled else {}),
                     },
                     allow_redirects=False,
@@ -4192,7 +4190,7 @@ class EzvizClient:
                 self._token["rf_session_id"] = str(
                     json_result["sessionInfo"]["refreshSessionId"]
                 )
-                self._token["feature_code"] = feature_code
+                self._token["feature_code"] = FEATURE_CODE
                 self._notify_token_updated()
 
                 if not self._token.get("service_urls"):

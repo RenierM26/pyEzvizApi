@@ -28,6 +28,7 @@ from pyezvizapi.cas import (
     EzvizCAS,
     xor_enc_dec,
 )
+from pyezvizapi.constants import FEATURE_CODE
 from pyezvizapi.exceptions import PyEzvizError
 
 DEV_SERIAL_XML = b"<DevSerial>CAM123</DevSerial>"
@@ -763,3 +764,18 @@ def test_cas_frame_header_rejects_invalid_payload() -> None:
 
     with pytest.raises(ValueError, match="magic"):
         CasFrameHeader.parse((b"x" * 4) + (b"\0" * 28))
+
+
+def test_cas_uses_host_feature_code_not_saved_overrides(monkeypatch) -> None:
+    client = EzvizCAS({"session_id": "synthetic", "service_urls": {},
+                       "feature_code": "old-feature", "featureCode": "old-camel",
+                       "hardware_code": "old-hardware"})
+    captured: list[bytes] = []
+
+    def send(payload: bytes, **kwargs: Any) -> Any:
+        captured.append(payload)
+        return None
+
+    monkeypatch.setattr(client, "_send_cas_payload", send)
+    client.probe_local_operation_code("synthetic-device", host="example.invalid", port=1)
+    assert f"<Sign>{FEATURE_CODE}</Sign>".encode() in captured[0]

@@ -18,10 +18,14 @@ from typing import Any, Final, NotRequired, TypedDict, cast
 
 import requests
 
-from ._longlink_profile import PROFILE as PUSH_PROFILE, REGISTER as PUSH_REGISTER
+from ._longlink_profile import (
+    PROFILE as PUSH_PROFILE,
+    REGISTER as PUSH_REGISTER,
+    validate_feature_code,
+)
 from ._longlink_session import Channel99Session
 from ._longlink_worker import PushWorker
-from .constants import DEFAULT_TIMEOUT
+from .constants import DEFAULT_TIMEOUT, FEATURE_CODE
 from .exceptions import EzvizAuthTokenExpired, PyEzvizError
 
 _LOGGER = logging.getLogger(__name__)
@@ -226,6 +230,7 @@ class MQTTClient:
         if self._on_token_updated is None:
             raise PyEzvizError("Channel-99 requires on_token_updated to durably save the token")
         token = cast(dict[str, Any], self._token)
+        validate_feature_code(token)
         if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
         urls = token.get("service_urls", {})
@@ -233,7 +238,7 @@ class MQTTClient:
         port = int(urls.get("pushDasPort") or 8666)
         if not isinstance(host, str) or not host or not 1 <= port <= 65535:
             raise PyEzvizError("Channel-99 service discovery is missing")
-        serial = f"MOBILE:ys7:{token['user_id']}:{token['feature_code']}".encode("ascii")
+        serial = f"MOBILE:ys7:{token['user_id']}:{FEATURE_CODE}".encode("ascii")
         state = token.setdefault("push_state", {})
         if not isinstance(state, dict):
             raise PyEzvizError("Invalid saved push state")
@@ -248,6 +253,7 @@ class MQTTClient:
             with requests.Session() as session:
                 session.headers.update(self._session.headers)
                 session.headers["sessionId"] = token["session_id"]
+                session.headers["featureCode"] = FEATURE_CODE
                 response = session.put(
                     f"https://{token['api_url']}/v3/push/token",
                     params=PUSH_REGISTER,

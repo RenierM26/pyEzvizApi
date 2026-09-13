@@ -27,7 +27,7 @@ def token():
         "push_profile": "android-channel99",
         "user_id": "synthetic-user",
         "username": "internal-user",
-        "feature_code": "synthetic-phone",
+        "feature_code": FEATURE_CODE,
         "api_url": "apiieu.ezvizlife.com",
         "session_id": "synthetic-session",
         "rf_session_id": "synthetic-refresh",
@@ -61,7 +61,7 @@ def test_login_uses_existing_host_feature_code_and_registers_channel(monkeypatch
     monkeypatch.setattr(client, "get_service_urls", lambda: {"pushDasDomain": "example.invalid"})
     result = client.enable_channel99()
     assert result["user_id"] == "uid"
-    expected_code = saved_code or FEATURE_CODE
+    expected_code = FEATURE_CODE
     assert result["feature_code"] == expected_code
     assert client._session.headers["featureCode"] == expected_code
     assert post.call_args.kwargs["data"]["featureCode"] == expected_code
@@ -84,9 +84,9 @@ def test_refresh_retains_identity_and_includes_registration(monkeypatch):
     )
     monkeypatch.setattr(client._session, "put", put)
     result = client.login()
-    assert result["feature_code"] == "synthetic-phone"
+    assert result["feature_code"] == FEATURE_CODE
     assert result["push_state"] == saved["push_state"]
-    assert put.call_args.kwargs["data"]["featureCode"] == "synthetic-phone"
+    assert put.call_args.kwargs["data"]["featureCode"] == FEATURE_CODE
     assert "pushRegisterJson" in put.call_args.kwargs["data"]
 
 
@@ -223,3 +223,31 @@ def test_unmigrated_push_never_calls_legacy_service():
     client.stop()
     http.post.assert_not_called()
     http.put.assert_not_called()
+
+
+@pytest.mark.parametrize("saved_code", [None, "different-host"])
+def test_changed_or_unknown_host_rejects_saved_channel99_credentials(saved_code):
+    saved = token()
+    saved["feature_code"] = saved_code
+    before = deepcopy(saved)
+    with pytest.raises(EzvizAuthTokenExpired, match="host feature code"):
+        EzvizClient(token=saved)
+    assert saved == before  # Caller must explicitly obtain a fresh login.
+    http = Mock()
+    push = MQTTClient(saved, http, on_token_updated=lambda snapshot: None)
+    with pytest.raises(EzvizAuthTokenExpired, match="host feature code"):
+        push.connect()
+    http.put.assert_not_called()
+
+
+def test_push_serial_uses_host_constant(monkeypatch):
+    client = MQTTClient(token(), requests.Session(), on_token_updated=lambda snapshot: None)
+    factories = []
+
+    def capture_factory(factory):
+        factories.append(factory)
+        return Mock()
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", capture_factory)
+    client.connect()
+    assert factories[0]().serial == f"MOBILE:ys7:synthetic-user:{FEATURE_CODE}".encode()

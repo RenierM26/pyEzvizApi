@@ -6277,16 +6277,17 @@ class EzvizClient:
         self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
     ) -> MQTTClient:
         """Return a push client sharing this client's session and token-save callback."""
-        if self.mqtt_client is None:
-            self.mqtt_client = MQTTClient(
-                token=cast(dict[Any, Any], self._token),
-                session=self._session,
-                timeout=self._timeout,
-                on_message_callback=on_message_callback,
-                on_token_updated=self._on_token_updated,
-                _token_lock=self._token_lock,
-            )
-        return self.mqtt_client
+        with self._token_lock:
+            if self.mqtt_client is None:
+                self.mqtt_client = MQTTClient(
+                    token=cast(dict[Any, Any], self._token),
+                    session=self._session,
+                    timeout=self._timeout,
+                    on_message_callback=on_message_callback,
+                    on_token_updated=self._on_token_updated,
+                    _token_lock=self._token_lock,
+                )
+            return self.mqtt_client
 
     def _get_page_list(self) -> Any:
         """Get ezviz device info broken down in sections."""
@@ -6349,10 +6350,16 @@ class EzvizClient:
 
     def close_session(self) -> None:
         """Clear current session."""
-        if self._session:
-            self._session.close()
+        with self._token_lock:
+            if self._session:
+                self._session.close()
 
-        self._session = requests.session()
-        self._session.headers.update(REQUEST_HEADER)  # Reset session.
-        if self._token.get("push_profile") == PUSH_PROFILE:
-            self._session.headers.update(PUSH_HEADERS)
+            self._session = requests.session()
+            self._session.headers.update(REQUEST_HEADER)  # Reset session.
+            if self._token.get("push_profile") == PUSH_PROFILE:
+                self._session.headers.update(PUSH_HEADERS)
+                if session_id := self._token.get("session_id"):
+                    self._session.headers["sessionId"] = str(session_id)
+            if self.mqtt_client is not None:
+                # This factory-owned client shares our replaceable HTTP session.
+                self.mqtt_client._session = self._session  # noqa: SLF001

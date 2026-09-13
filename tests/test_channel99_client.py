@@ -554,3 +554,32 @@ def test_identity_change_refreshes_factory_and_rejects_old_session_save(monkeypa
     client.stop()
     client.connect()
     assert push_session(client).state == {"device_id": "new-device"}
+
+
+def test_push_refresh_updates_owner_replacement_http_session(monkeypatch):
+    snapshots: list[dict[str, Any]] = []
+    owner = EzvizClient(token=token(), on_token_updated=snapshots.append)
+    push = owner.get_mqtt_client()
+    previous = owner._session
+    owner.close_session()
+    assert owner._session is not previous
+    assert push._session is owner._session
+    assert owner._session.headers["sessionId"] == "synthetic-session"
+    registrations = []
+
+    def put(session, url, **kwargs):
+        if url.endswith("/v3/push/token"):
+            registrations.append(session.headers["sessionId"])
+            return response({"meta": {"code": 403 if len(registrations) == 1 else 200}})
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    push.connect()
+    prepare_push(push)
+    assert registrations == ["synthetic-session", "rotated"]
+    assert owner._session.headers["sessionId"] == "rotated"
+    assert owner.get_mqtt_client() is push
+    assert snapshots[-1]["session_id"] == "rotated"

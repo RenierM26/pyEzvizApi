@@ -8,6 +8,9 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Changed
 
+- Return independent token snapshots, retain the Android profile on HTTP-session reset, and install CLI persistence before authentication. CLI token writes are atomic/private and fail explicitly; MQTT migration handles MFA directly.
+- Add Python 3.14 to the CI test matrix.
+
 - Use the host MAC-derived `FEATURE_CODE` consistently for login, push and CAS; saved channel-99 credentials from a different host identity require a fresh login.
 
 - Replaced legacy push HTTP registration with Android channel-99 LBS/MQTT negotiation and reconnect handling. Existing push users must migrate with `EzvizClient.enable_channel99()` and provide a durable token persistence callback; see [the migration guide](docs/channel99.md).

@@ -26,13 +26,16 @@ def test_client_init_with_token_sets_session_header() -> None:
     assert client.export_token() == {"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"}
 
 
-def test_export_token_returns_shallow_copy() -> None:
+def test_export_token_returns_independent_snapshot() -> None:
     client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
 
+    client._token["push_state"] = {"device": {"id": "original"}}
     exported = client.export_token()
     exported["session_id"] = "changed"
+    exported["push_state"]["device"]["id"] = "changed"
 
     assert client.export_token()["session_id"] == "session-id"
+    assert client.export_token()["push_state"]["device"]["id"] == "original"
 
 
 def test_close_session_resets_requests_session_and_default_headers() -> None:

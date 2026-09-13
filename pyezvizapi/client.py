@@ -6292,9 +6292,9 @@ class EzvizClient:
         return self._get_page_list()
 
     def export_token(self) -> dict[str, Any]:
-        """Return a shallow copy of the current authentication token."""
+        """Return an independent snapshot of the current authentication token."""
 
-        return dict(self._token)
+        return deepcopy(cast(dict[str, Any], self._token))
 
     def get_device(self) -> Any:
         """Get ezviz devices filter."""
@@ -6339,3 +6339,5 @@ class EzvizClient:
 
         self._session = requests.session()
         self._session.headers.update(REQUEST_HEADER)  # Reset session.
+        if self._token.get("push_profile") == PUSH_PROFILE:
+            self._session.headers.update(PUSH_HEADERS)

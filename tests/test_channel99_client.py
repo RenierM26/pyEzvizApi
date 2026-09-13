@@ -251,3 +251,20 @@ def test_push_serial_uses_host_constant(monkeypatch):
     monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", capture_factory)
     client.connect()
     assert factories[0]().serial == f"MOBILE:ys7:synthetic-user:{FEATURE_CODE}".encode()
+
+
+def test_close_session_preserves_android_profile_for_refresh(monkeypatch):
+    client = EzvizClient(token=token())
+    client.close_session()
+    captured: dict[str, Any] = {}
+
+    def refresh(**kwargs):
+        captured.update(client._session.headers)
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "new-session", "refreshSessionId": "new-refresh"
+        }})
+
+    monkeypatch.setattr(client._session, "put", refresh)
+    client.login()
+    assert captured["clientNo"] == "google"
+    assert captured["featureCode"] == FEATURE_CODE

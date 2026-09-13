@@ -40,7 +40,9 @@ class ServiceUrls(TypedDict):
     """Service URLs present in the EZVIZ auth token.
 
     Attributes:
-        pushAddr: Hostname of the EZVIZ push/MQTT entry point.
+        pushAddr: Legacy hostname retained for token compatibility.
+        pushDasDomain: Channel-99 LBS hostname.
+        pushDasPort: Channel-99 LBS port.
     """
 
     pushAddr: NotRequired[str]
@@ -54,7 +56,7 @@ class EzvizToken(TypedDict):
     Attributes:
         username: Internal EZVIZ username.
         session_id: Current session id.
-        service_urls: Nested object containing at least ``pushAddr``.
+        service_urls: Channel-99 discovery, including ``pushDasDomain``.
     """
 
     username: str

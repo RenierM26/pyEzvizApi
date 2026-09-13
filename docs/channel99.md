@@ -26,6 +26,19 @@ stable feature code, user ID and refresh credentials. Subsequent starts can use
 `EzvizClient(token=saved_token)` and the existing `login()` refresh method. Save
 the resulting token after refresh, too.
 
+### CLI storage and reuse
+
+The `mqtt` command installs durable storage before login and migrates directly
+with `enable_channel99()`, prompting for MFA when required. Its default token
+file is `ezviz_token.json`, used for both loading and saving. All CLI token
+writes use atomic owner-only files; a write failure stops the operation.
+Other CLI commands also persist credential rotation when loading a channel-99
+token, even without `--save-token`.
+
+`export_token()` returns a deep snapshot, so changing nested push state in the
+export does not change the live client. Resetting the HTTP session with
+`close_session()` retains the Android profile for subsequent login/refresh.
+
 ### Feature-code identity
 
 Keep the existing host-based calculation: `FEATURE_CODE` is the MD5 of the

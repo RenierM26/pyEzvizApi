@@ -24,6 +24,7 @@ import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
+from ._longlink_profile import PROFILE as PUSH_PROFILE
 from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
@@ -2927,12 +2928,15 @@ def _handle_home_defence_mode(args: argparse.Namespace, client: EzvizClient) -> 
 
 def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
     """Migrate the login and listen with durable channel-99 token storage."""
-    path = args.token_file or "ezviz_token.json"
-    def save(snapshot: dict[str, Any]) -> None:
-        save_private_token(path, snapshot)
-    # The CLI already owns this client's credential/login lifecycle.
-    client._on_token_updated = save  # noqa: SLF001
-    client.enable_channel99()
+    try:
+        client.enable_channel99()
+    except EzvizAuthVerificationCode:
+        code = input("MFA code required, please input MFA code.\n")
+        try:
+            sms_code = int(code.strip())
+        except ValueError as err:
+            raise PyEzvizError("MFA code must be numeric") from err
+        client.enable_channel99(sms_code=sms_code)
     mqtt = client.get_mqtt_client(on_message_callback=_write_json)
     mqtt.connect()
     try:
@@ -5152,12 +5156,10 @@ def _save_token_file(path: str | None, token: dict[str, Any]) -> None:
     """Persist the token dictionary to `path` in JSON format."""
     if not path:
         return
-    p = Path(path)
     try:
-        p.write_text(json.dumps(token, indent=2), encoding="utf-8")
-        _LOGGER.info("Saved token to %s", p)
-    except OSError:  # pragma: no cover - filesystem issues
-        _LOGGER.warning("Failed to save token file: %s", p)
+        save_private_token(path, token)
+    except OSError as err:
+        raise PyEzvizError(f"Failed to save token file: {path}") from err
 
 
 def _save_clip_can_run_without_cloud_credentials(args: argparse.Namespace) -> bool:
@@ -5174,6 +5176,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _setup_logging(args.debug)
 
+    if args.action == "mqtt" and not args.token_file:
+        args.token_file = "ezviz_token.json"
     token = _load_token_file(args.token_file)
     has_session_token = bool(token and token.get("session_id"))
     if args.action == "cloud_video_decrypt" and args.key and not args.serial and not token:
@@ -5226,13 +5230,27 @@ def main(argv: list[str] | None = None) -> int:
         _LOGGER.error("Provide --token-file (existing) or --username/--password")
         return 2
 
-    client = EzvizClient(args.username, args.password, args.region, token=token)
+    persist = args.save_token or args.action == "mqtt" or bool(
+        token and token.get("push_profile") == PUSH_PROFILE
+    )
+
+    def save(snapshot: dict[str, Any]) -> None:
+        _save_token_file(args.token_file, snapshot)
+
+    client = EzvizClient(
+        args.username, args.password, args.region, token=token,
+        on_token_updated=save if persist else None,
+    )
     try:
+        if args.action == "mqtt":
+            return _handle_mqtt(args, client)
         _login(
             client,
             token,
             require_service_urls=_action_requires_service_urls(args),
         )
+        if args.save_token:
+            save(client.export_token())
 
         if args.action == "devices":
             return _handle_devices(args, client)
@@ -5242,8 +5260,6 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_light(args, client)
         if args.action == "home_defence_mode":
             return _handle_home_defence_mode(args, client)
-        if args.action == "mqtt":
-            return _handle_mqtt(args, client)
         if args.action == "stream":
             return _handle_stream(args, client)
         if args.action == "save":
@@ -5275,8 +5291,6 @@ def main(argv: list[str] | None = None) -> int:
         _LOGGER.error("Action not implemented: %s", args.action)
         return 2
     finally:
-        if args.save_token and args.token_file:
-            _save_token_file(args.token_file, client.export_token())
         client.close_session()
 
 

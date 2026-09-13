@@ -12,8 +12,10 @@ from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
+import ipaddress
 import json
 import logging
+import re
 from threading import RLock
 from typing import Any, Final, NotRequired, TypedDict, cast
 
@@ -36,6 +38,54 @@ from .exceptions import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _hostname(value: Any) -> str:
+    """Validate saved DNS names/IP literals without attempting network access."""
+    if not isinstance(value, str) or not value or any(ord(c) < 33 or ord(c) == 127 for c in value):
+        raise PyEzvizError("Invalid channel-99 hostname")
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        pass
+    try:
+        encoded = value.encode("idna").decode("ascii")
+    except UnicodeError as error:
+        raise PyEzvizError("Invalid channel-99 hostname") from error
+    labels = encoded.removesuffix(".").split(".")
+    if len(encoded.removesuffix(".")) > 253 or any(
+        re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is None
+        for label in labels
+    ):
+        raise PyEzvizError("Invalid channel-99 hostname")
+    return encoded
+
+
+def _push_endpoint(urls: Any) -> tuple[str, int]:
+    """Reject malformed saved discovery before starting a background worker."""
+    if not isinstance(urls, dict):
+        raise PyEzvizError("Invalid channel-99 service discovery")
+    host = _hostname(urls.get("pushDasDomain"))
+    value = urls.get("pushDasPort", 8666)
+    if type(value) not in (int, str):
+        raise PyEzvizError("Invalid channel-99 service port")
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise PyEzvizError("Invalid channel-99 service port") from error
+    if not 1 <= port <= 65535:
+        raise PyEzvizError("Invalid channel-99 service port")
+    return host, port
+
+
+def _push_serial(user_id: Any) -> bytes:
+    """Validate the account component and native subserial length bound."""
+    if not isinstance(user_id, str) or re.fullmatch(r"[A-Za-z0-9_.-]+", user_id) is None:
+        raise PyEzvizError("Invalid channel-99 user ID")
+    serial = f"MOBILE:ys7:{user_id}:{FEATURE_CODE}".encode("ascii")
+    if len(serial) > 127:
+        raise PyEzvizError("Channel-99 user ID exceeds protocol limit")
+    return serial
 
 
 # ---------------------------------------------------------------------------
@@ -249,20 +299,11 @@ class MQTTClient:
         validate_feature_code(token)
         if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
-        urls = token.get("service_urls", {})
-        if not isinstance(urls, dict):
-            raise PyEzvizError("Invalid channel-99 service discovery")
-        host = urls.get("pushDasDomain")
-        port_value = urls.get("pushDasPort", 8666)
-        if type(port_value) not in (int, str):
-            raise PyEzvizError("Invalid channel-99 service port")
-        try:
-            port = int(port_value)
-        except ValueError as error:
-            raise PyEzvizError("Invalid channel-99 service port") from error
-        if not isinstance(host, str) or not host or not 1 <= port <= 65535:
-            raise PyEzvizError("Channel-99 service discovery is missing")
-        serial = f"MOBILE:ys7:{token['user_id']}:{FEATURE_CODE}".encode("ascii")
+        host, port = _push_endpoint(token.get("service_urls", {}))
+        serial = _push_serial(token["user_id"])
+        _hostname(token["api_url"])
+        if not isinstance(token["session_id"], str) or re.fullmatch(r"[!-~]+", token["session_id"]) is None:
+            raise PyEzvizError("Invalid channel-99 session ID")
         # Handshake state is worker-owned; only publish it to the shared token
         # under the credential lock, alongside snapshot creation and persistence.
         with self._token_lock:

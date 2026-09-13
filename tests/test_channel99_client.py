@@ -473,3 +473,34 @@ def test_malformed_service_discovery_raises_handled_error(urls):
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     with pytest.raises(PyEzvizError, match="service discovery"):
         client.connect()
+
+
+@pytest.mark.parametrize("host", ["bad\x00host", "bad host", "https://example.test", "bad/host",
+                                  "-bad.test", "bad..test", "a" * 64 + ".test", "bad\ud800"])
+def test_invalid_hostnames_fail_before_worker_start(monkeypatch, host):
+    saved = token()
+    saved["service_urls"]["pushDasDomain"] = host
+    start = Mock()
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", start)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    with pytest.raises(PyEzvizError, match="hostname"):
+        client.connect()
+    start.assert_not_called()
+
+
+@pytest.mark.parametrize("user_id", ["café", "id/other", "id+#", "id\x00", 123, [], "x" * 128])
+def test_invalid_user_ids_raise_handled_error(user_id):
+    saved = token()
+    saved["user_id"] = user_id
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    with pytest.raises(PyEzvizError):
+        client.connect()
+
+
+@pytest.mark.parametrize("host", ["example.test", "example.test.", "127.0.0.1", "::1", "bücher.test"])
+def test_valid_hostnames_and_ip_literals_are_accepted(monkeypatch, host):
+    saved = token()
+    saved["service_urls"]["pushDasDomain"] = host
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    client.connect()

@@ -504,3 +504,20 @@ def test_valid_hostnames_and_ip_literals_are_accepted(monkeypatch, host):
     monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
     client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
     client.connect()
+
+
+def test_reconnect_and_explicit_restart_use_current_discovery(monkeypatch):
+    saved = token()
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    client.connect()
+    first = push_session(client)
+    assert first.endpoint == ("example.invalid", 8777)
+    saved["service_urls"] = {"pushDasDomain": "rediscovered.invalid", "pushDasPort": 8888}
+    second = push_session(client)
+    assert second.endpoint == ("rediscovered.invalid", 8888)
+    assert first.endpoint == ("example.invalid", 8777)
+    client.stop()
+    saved["service_urls"] = {"pushDasDomain": "restarted.invalid", "pushDasPort": 8999}
+    client.connect()
+    assert push_session(client).endpoint == ("restarted.invalid", 8999)

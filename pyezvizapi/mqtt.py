@@ -299,7 +299,7 @@ class MQTTClient:
         validate_feature_code(token)
         if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
-        host, port = _push_endpoint(token.get("service_urls", {}))
+        _push_endpoint(token.get("service_urls", {}))
         serial = _push_serial(token["user_id"])
         _hostname(token["api_url"])
         if not isinstance(token["session_id"], str) or re.fullmatch(r"[!-~]+", token["session_id"]) is None:
@@ -323,11 +323,11 @@ class MQTTClient:
                 token["push_state"] = deepcopy(snapshot)
                 save_token(deepcopy(dict(token)))
 
-
-        if self._push_worker is None:
-            self._push_worker = PushWorker(
-                lambda: Channel99Session(
-                    (host, port),
+        def new_session() -> Channel99Session:
+            # Full logins may rediscover LBS while this worker is running.
+            with self._token_lock:
+                return Channel99Session(
+                    _push_endpoint(token.get("service_urls", {})),
                     serial,
                     lambda: token["session_id"],
                     state,
@@ -335,7 +335,9 @@ class MQTTClient:
                     self._handle_payload,
                     prepare=lambda: self._prepare_channel99(token, save_token),
                 )
-            )
+
+        if self._push_worker is None:
+            self._push_worker = PushWorker(new_session)
         self._push_worker.start()
 
     def _prepare_channel99(

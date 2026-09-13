@@ -59,6 +59,12 @@ Old push-device keys must not be reused with a changed host identity. This means
 a container MAC change requires reauthentication; no UUID or fallback identity
 is introduced.
 
+Login and its factory-created push client share a credential lock: token
+mutation, snapshot creation and persistence are serialized. The handshake keeps
+its working state separate until it is committed through the saver. Do not
+create independent clients sharing the same mutable token/storage without
+providing equivalent external coordination.
+
 ## Background failures and recovery
 
 Call `push.raise_if_failed()` periodically while listening (the bundled CLI

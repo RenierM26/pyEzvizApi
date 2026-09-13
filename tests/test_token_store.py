@@ -2,6 +2,8 @@
 
 import json
 import os
+from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -29,5 +31,30 @@ def test_failed_replace_preserves_old_token_and_propagates(tmp_path, monkeypatch
     monkeypatch.setattr("pyezvizapi._token_store.os.replace", fail)
     with pytest.raises(OSError):
         save_private_token(str(target), {"synthetic": "new"})
+    assert json.loads(target.read_text()) == {"old": True}
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_serialization_failure_closes_file_before_cleanup(tmp_path, monkeypatch):
+
+    opened = []
+    original_temporary = tempfile.NamedTemporaryFile
+    original_unlink = Path.unlink
+
+    def temporary(*args, **kwargs):
+        result = original_temporary(*args, **kwargs)
+        opened.append(result)
+        return result
+
+    def unlink(path, *args, **kwargs):
+        assert opened[0].closed, "Windows cannot delete an open temporary file"
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr("pyezvizapi._token_store.tempfile.NamedTemporaryFile", temporary)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    target = tmp_path / "token.json"
+    target.write_text('{"old":true}')
+    with pytest.raises(TypeError):
+        save_private_token(str(target), {"invalid": object()})
     assert json.loads(target.read_text()) == {"old": True}
     assert list(tmp_path.iterdir()) == [target]

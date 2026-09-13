@@ -3,6 +3,7 @@
 
 from copy import deepcopy
 import json
+from threading import Event, Thread
 from typing import Any
 from unittest.mock import Mock
 
@@ -367,3 +368,51 @@ def test_rejected_refresh_requires_intervention(monkeypatch, refresh_status):
     client.connect()
     with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
         prepare_push(client)
+
+
+def test_login_and_push_snapshots_are_serialized(monkeypatch):
+
+    entered, release, attempted, pushed = Event(), Event(), Event(), Event()
+    written = []
+
+    def persist(snapshot):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(2)
+        written.append(snapshot)
+
+    client = EzvizClient(token=token(), on_token_updated=persist)
+    monkeypatch.setattr(client._session, "put", lambda **kwargs: response({
+        "meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }
+    }))
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    push = client.get_mqtt_client()
+    push.connect()
+    session = push_session(push)
+
+    def save_push():
+        attempted.set()
+        session.save({"device_id": "new-device"})
+        pushed.set()
+
+    login_thread = Thread(target=client.login)
+    push_thread = Thread(target=save_push)
+    login_thread.start()
+    assert entered.wait(2)
+    push_thread.start()
+    assert attempted.wait(2)
+    try:
+        assert not pushed.wait(0.1)
+        assert written == []  # New snapshot must not overtake the blocked old save.
+    finally:
+        release.set()
+        login_thread.join(2)
+        push_thread.join(2)
+    assert not login_thread.is_alive() and not push_thread.is_alive()
+    assert len(written) == 2
+    assert written[-1]["session_id"] == "rotated"
+    assert written[-1]["push_state"]["device_id"] == "new-device"
+    session.state["unsaved"] = True
+    assert "unsaved" not in client.export_token()["push_state"]

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, Literal, NotRequired, TypedDict, cast
 from urllib.parse import urlencode
@@ -524,6 +525,7 @@ class EzvizClient:
     ) -> None:
         """Initialize the client object."""
         validate_feature_code(token or {})
+        self._token_lock = RLock()
         self._on_token_updated = on_token_updated
         self.account = account
         self.password = _ezviz_password_digest(password) if password else None
@@ -552,8 +554,9 @@ class EzvizClient:
 
     def _notify_token_updated(self) -> None:
         """Save rotating credentials before any subsequent discovery can fail."""
-        if self._on_token_updated is not None:
-            self._on_token_updated(deepcopy(dict(self._token)))
+        with self._token_lock:
+            if self._on_token_updated is not None:
+                self._on_token_updated(deepcopy(dict(self._token)))
 
     def _restore_push_login(self, previous: dict[str, Any], user: dict[str, Any]) -> None:
         if previous.get("push_profile") != PUSH_PROFILE:
@@ -4149,7 +4152,12 @@ class EzvizClient:
         return self._login(sms_code)
 
     def login(self, sms_code: int | None = None) -> JsonDict:
-        """Get or refresh ezviz login token."""
+        """Get or refresh credentials, serializing mutation and persistence with push."""
+        with self._token_lock:
+            return self._login_or_refresh(sms_code)
+
+    def _login_or_refresh(self, sms_code: int | None = None) -> JsonDict:
+        """Login implementation under the shared credential lock."""
         validate_feature_code(cast(dict[str, Any], self._token))
         session_id = self._token.get("session_id")
         refresh_session_id = self._token.get("rf_session_id")
@@ -6271,6 +6279,7 @@ class EzvizClient:
                 timeout=self._timeout,
                 on_message_callback=on_message_callback,
                 on_token_updated=self._on_token_updated,
+                _token_lock=self._token_lock,
             )
         return self.mqtt_client
 
@@ -6294,7 +6303,8 @@ class EzvizClient:
     def export_token(self) -> dict[str, Any]:
         """Return an independent snapshot of the current authentication token."""
 
-        return deepcopy(cast(dict[str, Any], self._token))
+        with self._token_lock:
+            return deepcopy(cast(dict[str, Any], self._token))
 
     def get_device(self) -> Any:
         """Get ezviz devices filter."""

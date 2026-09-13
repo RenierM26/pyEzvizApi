@@ -14,6 +14,7 @@ from contextlib import suppress
 from copy import deepcopy
 import json
 import logging
+from threading import RLock
 from typing import Any, Final, NotRequired, TypedDict, cast
 
 import requests
@@ -161,6 +162,7 @@ class MQTTClient:
         *,
         max_messages: int = 1000,
         on_token_updated: Callable[[dict[str, Any]], None] | None = None,
+        _token_lock: RLock | None = None,
     ) -> None:
         """Initialize the Ezviz MQTT client.
 
@@ -194,6 +196,7 @@ class MQTTClient:
             )
 
         # Requests session (synchronous)
+        self._token_lock = _token_lock if _token_lock is not None else RLock()
         self._session = session
 
         self._token: EzvizToken | dict = token
@@ -252,7 +255,10 @@ class MQTTClient:
         if not isinstance(host, str) or not host or not 1 <= port <= 65535:
             raise PyEzvizError("Channel-99 service discovery is missing")
         serial = f"MOBILE:ys7:{token['user_id']}:{FEATURE_CODE}".encode("ascii")
-        state = token.setdefault("push_state", {})
+        # Handshake state is worker-owned; only publish it to the shared token
+        # under the credential lock, alongside snapshot creation and persistence.
+        with self._token_lock:
+            state = deepcopy(token.get("push_state", {}))
         if not isinstance(state, dict):
             raise PyEzvizError("Invalid saved push state")
 
@@ -264,8 +270,9 @@ class MQTTClient:
                 raise EzvizTokenPersistenceError("Failed to persist channel-99 credentials") from error
 
         def save(snapshot: dict[str, Any]) -> None:
-            token["push_state"] = snapshot
-            save_token(deepcopy(dict(token)))
+            with self._token_lock:
+                token["push_state"] = deepcopy(snapshot)
+                save_token(deepcopy(dict(token)))
 
 
         if self._push_worker is None:
@@ -314,7 +321,8 @@ class MQTTClient:
                     raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
                 refresh_client = EzvizClient(token=token, on_token_updated=save_token)
                 try:
-                    refresh_client.login()
+                    with self._token_lock:
+                        refresh_client.login()
                 except EzvizAuthTokenExpired as error:
                     raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
                 except HTTPError as error:

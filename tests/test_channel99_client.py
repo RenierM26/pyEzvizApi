@@ -452,3 +452,24 @@ def test_migrated_login_discards_old_discovery_and_recovers_after_restart(monkey
     push = resumed.get_mqtt_client()
     push.connect()
     assert push_session(push).endpoint == ("current.invalid", 8777)
+
+
+@pytest.mark.parametrize("port", ["not-a-port", "", None, [], {}, True, 1.5, 0, -1, 65536])
+def test_invalid_service_ports_raise_handled_error_before_worker_start(monkeypatch, port):
+    saved = token()
+    saved["service_urls"]["pushDasPort"] = port
+    start = Mock()
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", start)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    with pytest.raises(PyEzvizError):
+        client.connect()
+    start.assert_not_called()
+
+
+@pytest.mark.parametrize("urls", [None, [], "invalid"])
+def test_malformed_service_discovery_raises_handled_error(urls):
+    saved = token()
+    saved["service_urls"] = urls
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    with pytest.raises(PyEzvizError, match="service discovery"):
+        client.connect()

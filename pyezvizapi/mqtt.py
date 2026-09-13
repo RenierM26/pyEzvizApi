@@ -250,8 +250,16 @@ class MQTTClient:
         if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
         urls = token.get("service_urls", {})
+        if not isinstance(urls, dict):
+            raise PyEzvizError("Invalid channel-99 service discovery")
         host = urls.get("pushDasDomain")
-        port = int(urls.get("pushDasPort") or 8666)
+        port_value = urls.get("pushDasPort", 8666)
+        if type(port_value) not in (int, str):
+            raise PyEzvizError("Invalid channel-99 service port")
+        try:
+            port = int(port_value)
+        except ValueError as error:
+            raise PyEzvizError("Invalid channel-99 service port") from error
         if not isinstance(host, str) or not host or not 1 <= port <= 65535:
             raise PyEzvizError("Channel-99 service discovery is missing")
         serial = f"MOBILE:ys7:{token['user_id']}:{FEATURE_CODE}".encode("ascii")

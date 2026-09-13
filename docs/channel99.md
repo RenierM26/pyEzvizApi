@@ -49,10 +49,7 @@ def save_token(snapshot):
     application_token_store.save(snapshot)
 
 client = EzvizClient(token=saved_token, on_token_updated=save_token)
-push = client.get_mqtt_client(
-    on_message_callback=handle_decoded_event,
-    # Defaults to the client's on_token_updated callback.
-)
+push = client.get_mqtt_client(on_message_callback=handle_decoded_event)
 push.connect()
 # ... application continues polling independently ...
 push.stop()
@@ -62,7 +59,10 @@ push.stop()
 the connection. Polling must remain independent of push availability. The
 callback payload and `messages_by_device` cache use the existing decoder.
 
-`on_state_changed` (or the client-level `on_token_updated`) is mandatory and receives a deep snapshot of
+`on_token_updated` is the single persistence callback. Set it on `EzvizClient`;
+`get_mqtt_client()` passes it to the push transport automatically. When constructing
+`MQTTClient` directly, supply the same callback name there. It is mandatory for
+push reception and receives a deep snapshot of
 the **whole token**, not just push fields. It runs on the worker thread and must
 not return until storage succeeds. In Home Assistant, marshal storage work onto
 the event loop and wait for completion from the worker; never block HA's event

@@ -16,7 +16,6 @@ import json
 import logging
 from typing import Any, Final, NotRequired, TypedDict, cast
 
-import paho.mqtt.client as mqtt
 import requests
 
 from ._longlink_profile import PROFILE as PUSH_PROFILE, REGISTER as PUSH_REGISTER
@@ -149,7 +148,7 @@ class MQTTClient:
         on_message_callback: Callable[[dict[str, Any]], None] | None = None,
         *,
         max_messages: int = 1000,
-        on_state_changed: Callable[[dict[str, Any]], None] | None = None,
+        on_token_updated: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """Initialize the Ezviz MQTT client.
 
@@ -167,6 +166,9 @@ class MQTTClient:
             on_message_callback (Callable[[dict[str, Any]], None], optional): Optional callback function
                 that will be called for each decoded MQTT message. The callback receives
                 a dictionary with the message data. Defaults to None.
+            on_token_updated:
+                Synchronous callback receiving the complete token snapshot. Must
+                durably save it before returning; required for push reception.
             max_messages:
                 Maximum number of device entries kept in :attr:`messages_by_device`.
                 Oldest entries are evicted when the limit is exceeded. Defaults to ``1000``.
@@ -185,7 +187,7 @@ class MQTTClient:
         self._token: EzvizToken | dict = token
         self._timeout: int = timeout
         self._on_message_callback = on_message_callback
-        self._on_state_changed = on_state_changed
+        self._on_token_updated = on_token_updated
         self._push_worker: PushWorker | None = None
         self._max_messages: int = max_messages
 
@@ -221,8 +223,8 @@ class MQTTClient:
 
     def _connect_channel99(self) -> None:
         """Start push in the background; persistence runs on the worker thread."""
-        if self._on_state_changed is None:
-            raise PyEzvizError("Channel-99 requires on_state_changed to durably save the token")
+        if self._on_token_updated is None:
+            raise PyEzvizError("Channel-99 requires on_token_updated to durably save the token")
         token = cast(dict[str, Any], self._token)
         if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
             raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
@@ -238,8 +240,8 @@ class MQTTClient:
 
         def save(snapshot: dict[str, Any]) -> None:
             token["push_state"] = snapshot
-            assert self._on_state_changed is not None
-            self._on_state_changed(deepcopy(dict(token)))
+            assert self._on_token_updated is not None
+            self._on_token_updated(deepcopy(dict(token)))
 
         def prepare() -> None:
             # Isolate requests state from the owner's concurrent polling requests.
@@ -273,19 +275,6 @@ class MQTTClient:
     # ------------------------------------------------------------------
     # MQTT callbacks
     # ------------------------------------------------------------------
-
-    def _on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-        """Handle incoming MQTT messages.
-
-        Decodes the payload, updates `messages_by_device` with the latest message,
-        and calls the optional user callback.
-
-        Args:
-            client (mqtt.Client): The MQTT client instance.
-            userdata (Any): The user data passed to the client (not used).
-            msg (mqtt.MQTTMessage): The MQTT message object containing payload and topic.
-        """
-        self._handle_payload(msg.payload)
 
     def _handle_payload(self, payload: bytes) -> None:
         """Preserve the public decoded-message/cache contract across transports."""

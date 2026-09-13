@@ -92,14 +92,14 @@ def test_refresh_retains_identity_and_includes_registration(monkeypatch):
 
 def test_channel99_requires_persistence_callback():
     client = MQTTClient(token(), requests.Session())
-    with pytest.raises(PyEzvizError, match="on_state_changed"):
+    with pytest.raises(PyEzvizError, match="on_token_updated"):
         client.connect()
 
 
 def test_background_start_and_full_token_snapshot(monkeypatch):
     saved = token()
     snapshots: list[dict[str, Any]] = []
-    client = MQTTClient(saved, requests.Session(), on_state_changed=snapshots.append)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=snapshots.append)
     worker = Mock()
     factory_holder = []
 
@@ -127,7 +127,7 @@ def test_decoded_callback_and_cache_unchanged():
         token(),
         requests.Session(),
         on_message_callback=callback,
-        on_state_changed=lambda snapshot: None,
+        on_token_updated=lambda snapshot: None,
     )
     payload = b'{"alert":"test","ext":"synthetic,1,2,3,4"}'
     expected = client.decode_mqtt_message(payload)
@@ -186,10 +186,26 @@ def test_persistence_failure_aborts_before_service_discovery(monkeypatch):
     assert client.export_token()["rf_session_id"] == "new-refresh"
 
 
-def test_login_persistence_callback_is_reused_for_push():
-    client = EzvizClient(token=token(), on_token_updated=lambda snapshot: None)
+def test_login_persistence_callback_is_reused_for_push(monkeypatch):
+    saved: list[dict[str, Any]] = []
+    client = EzvizClient(token=token(), on_token_updated=saved.append)
+    worker = Mock()
+    factories = []
+
+    def make_worker(factory):
+        factories.append(factory)
+        return worker
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker", make_worker)
     push = client.get_mqtt_client()
-    assert push._on_state_changed is client._on_token_updated
+    push.connect()
+    session = factories[0]()
+    session.save({"device_id": "saved-device", "master_key": "saved-key"})
+    assert saved[0]["push_state"]["device_id"] == "saved-device"
+    assert saved[0]["session_id"] == client.export_token()["session_id"]
+    worker.start.assert_called_once()
+    push.stop()
+    worker.stop.assert_called_once()
 
 
 def test_unmigrated_push_never_calls_legacy_service():

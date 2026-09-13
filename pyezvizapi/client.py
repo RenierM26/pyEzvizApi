@@ -6263,17 +6263,16 @@ class EzvizClient:
         return True
 
     def get_mqtt_client(
-        self, on_message_callback: Callable[[dict[str, Any]], None] | None = None,
-        *, on_state_changed: Callable[[dict[str, Any]], None] | None = None,
+        self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
     ) -> MQTTClient:
-        """Return a configured MQTTClient using this client's session."""
+        """Return a push client sharing this client's session and token-save callback."""
         if self.mqtt_client is None:
             self.mqtt_client = MQTTClient(
                 token=cast(dict[Any, Any], self._token),
                 session=self._session,
                 timeout=self._timeout,
                 on_message_callback=on_message_callback,
-                on_state_changed=on_state_changed or self._on_token_updated,
+                on_token_updated=self._on_token_updated,
             )
         return self.mqtt_client
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import suppress
-from copy import deepcopy
+from copy import copy, deepcopy
 import ipaddress
 import json
 import logging
@@ -20,6 +20,7 @@ from threading import RLock
 from typing import Any, Final, NotRequired, TypedDict, cast
 
 import requests
+from requests.structures import CaseInsensitiveDict
 
 from ._longlink_profile import (
     PROFILE as PUSH_PROFILE,
@@ -38,6 +39,22 @@ from .exceptions import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _isolated_session(source: requests.Session) -> requests.Session:
+    """Copy request state, borrowing transport adapters owned by the caller.
+
+    No transport pools are created here. Do not close this copy: adapter/pool
+    lifetime remains with the supplied session, including custom TLS adapters.
+    """
+    session = copy(source)
+    session.headers = CaseInsensitiveDict(source.headers)
+    session.cookies = source.cookies.copy()
+    session.params = deepcopy(source.params)
+    session.proxies = dict(source.proxies)
+    session.hooks = {name: list(hooks) for name, hooks in source.hooks.items()}
+    session.adapters = OrderedDict(source.adapters)
+    return session
 
 
 def _hostname(value: Any) -> str:
@@ -368,43 +385,44 @@ class MQTTClient:
         from .client import EzvizClient  # noqa: PLC0415
 
         # Isolate requests state from the owner's concurrent polling requests.
-        with requests.Session() as session:
-            session.headers.update(self._session.headers)
-            session.headers["featureCode"] = FEATURE_CODE
-            for attempt in range(2):
-                session.headers["sessionId"] = token["session_id"]
-                response = session.put(
-                    f"https://{token['api_url']}/v3/push/token",
-                    params=PUSH_REGISTER,
-                    timeout=self._timeout,
-                    allow_redirects=False,
-                )
-                expired = response.status_code in (401, 403)
-                if not expired:
-                    response.raise_for_status()
-                    code = response.json().get("meta", {}).get("code")
-                    if code == 200:
-                        return
-                    expired = code in (401, 403)
-                if not expired:
-                    raise PyEzvizError("Channel-99 registration rejected")
-                if attempt or not token.get("rf_session_id"):
-                    raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
-                refresh_client = EzvizClient(token=token, on_token_updated=save_token)
-                try:
-                    with self._token_lock:
-                        refresh_client.login()
-                        self._session.headers["sessionId"] = token["session_id"]
-                except EzvizAuthTokenExpired as error:
-                    raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
-                except HTTPError as error:
-                    cause = error.__cause__
-                    if (isinstance(cause, requests.HTTPError) and cause.response is not None
-                            and cause.response.status_code in (401, 403)):
-                        raise EzvizPushFatalError("Channel-99 refresh rejected; reauthentication required") from error
-                    raise
-                finally:
-                    refresh_client.close_session()
+        with self._token_lock:
+            session = _isolated_session(self._session)
+        session.headers["featureCode"] = FEATURE_CODE
+        for attempt in range(2):
+            session.headers["sessionId"] = token["session_id"]
+            response = session.put(
+                f"https://{token['api_url']}/v3/push/token",
+                params=PUSH_REGISTER,
+                timeout=self._timeout,
+                allow_redirects=False,
+            )
+            expired = response.status_code in (401, 403)
+            if not expired:
+                response.raise_for_status()
+                code = response.json().get("meta", {}).get("code")
+                if code == 200:
+                    return
+                expired = code in (401, 403)
+            if not expired:
+                raise PyEzvizError("Channel-99 registration rejected")
+            if attempt or not token.get("rf_session_id"):
+                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
+            refresh_client = EzvizClient(token=token, on_token_updated=save_token)
+            session.headers.update(refresh_client._session.headers)  # noqa: SLF001
+            refresh_client._session.close()  # noqa: SLF001
+            refresh_client._session = session  # noqa: SLF001 - borrow isolated transport
+            try:
+                with self._token_lock:
+                    refresh_client.login()
+                    self._session.headers["sessionId"] = token["session_id"]
+            except EzvizAuthTokenExpired as error:
+                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
+            except HTTPError as error:
+                cause = error.__cause__
+                if (isinstance(cause, requests.HTTPError) and cause.response is not None
+                        and cause.response.status_code in (401, 403)):
+                    raise EzvizPushFatalError("Channel-99 refresh rejected; reauthentication required") from error
+                raise
 
     # ------------------------------------------------------------------
     # MQTT callbacks

@@ -602,3 +602,48 @@ def test_ipv6_api_host_fails_before_worker_start(monkeypatch, host):
     with pytest.raises(PyEzvizError, match="IPv6 API hosts"):
         client.connect()
     start.assert_not_called()
+
+
+def test_push_registration_and_refresh_preserve_transport_without_mutating_owner(monkeypatch):
+    supplied = requests.Session()
+    supplied.proxies = {"https": "http://proxy.invalid:8080"}
+    supplied.cert = ("client.crt", "client.key")
+    supplied.verify = "private-ca.pem"
+    supplied.trust_env = False
+    supplied.auth = ("proxy-user", "synthetic-password")
+    supplied.params = {"custom": "parameter"}
+    supplied.cookies.set("owner", "original")
+    adapter = requests.adapters.HTTPAdapter()
+    close_adapter = Mock()
+    monkeypatch.setattr(adapter, "close", close_adapter)
+    supplied.mount("https://", adapter)
+    calls = []
+
+    def put(session, url, **kwargs):
+        calls.append(url)
+        assert session is not supplied
+        assert session.proxies == supplied.proxies
+        assert session.cert == supplied.cert
+        assert session.verify == supplied.verify
+        assert session.trust_env is False
+        assert session.auth == supplied.auth
+        assert session.params == supplied.params
+        assert session.get_adapter(url) is adapter
+        session.cookies.set("worker", "private")
+        session.headers["Worker-Only"] = "private"
+        if url.endswith("/v3/push/token"):
+            return response({"meta": {"code": 403 if len(calls) == 1 else 200}})
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(token(), supplied, on_token_updated=lambda snapshot: None)
+    client.connect()
+    prepare_push(client)
+    assert len(calls) == 3
+    assert supplied.cookies.get("worker") is None
+    assert "Worker-Only" not in supplied.headers
+    assert supplied.headers["sessionId"] == "rotated"
+    close_adapter.assert_not_called()

@@ -4212,7 +4212,7 @@ class EzvizClient:
 
                 return cast(dict[Any, Any], self._token)
 
-            if json_result["meta"]["code"] == 403:
+            if json_result["meta"]["code"] in (401, 403):
                 if self.account and self.password:
                     self._token.update({
                         "session_id": None,

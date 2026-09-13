@@ -357,10 +357,16 @@ def prepare_push(client: MQTTClient) -> None:
 
 
 @pytest.mark.parametrize("refresh_status", [401, 403])
-def test_rejected_refresh_requires_intervention(monkeypatch, refresh_status):
+@pytest.mark.parametrize("metadata_rejection", [False, True])
+def test_rejected_refresh_requires_intervention(monkeypatch, refresh_status, metadata_rejection):
+    calls = []
+
     def put(session, url, **kwargs):
-        result = response({})
-        result.status_code = refresh_status
+        calls.append(url)
+        if url.endswith("/v3/push/token"):
+            return response({"meta": {"code": 403}})
+        result = response({"meta": {"code": refresh_status}})
+        result.status_code = 200 if metadata_rejection else refresh_status
         return result
 
     monkeypatch.setattr(requests.Session, "put", put)
@@ -369,6 +375,7 @@ def test_rejected_refresh_requires_intervention(monkeypatch, refresh_status):
     client.connect()
     with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
         prepare_push(client)
+    assert len(calls) == 2
 
 
 def test_login_and_push_snapshots_are_serialized(monkeypatch):

@@ -116,7 +116,8 @@ def test_login_refresh_uses_existing_service_urls(monkeypatch) -> None:
     assert client.login()["service_urls"] == {"pushAddr": "existing.example.test"}
 
 
-def test_login_refresh_expired_without_credentials_raises(monkeypatch) -> None:
+@pytest.mark.parametrize("status", [401, 403])
+def test_login_refresh_expired_without_credentials_raises(monkeypatch, status) -> None:
     client = EzvizClient(
         token={
             "session_id": "old-session",
@@ -124,7 +125,7 @@ def test_login_refresh_expired_without_credentials_raises(monkeypatch) -> None:
             "api_url": "apiieu.ezvizlife.com",
         }
     )
-    monkeypatch.setattr(client._session, "put", lambda **kwargs: _response({"meta": {"code": 403}}))
+    monkeypatch.setattr(client._session, "put", lambda **kwargs: _response({"meta": {"code": status}}))
 
     with pytest.raises(EzvizAuthTokenExpired):
         client.login()

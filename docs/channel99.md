@@ -143,3 +143,24 @@ allocated an identity. Preserve the pending state for recovery.
 
 No Android binaries, account data, captured live payloads, or research emulator
 code are included in the library or its portable tests.
+
+## Implementation boundaries
+
+- `_auth.py` owns the shared HTTPS refresh operation. Both public login and
+  background push use it; MQTT does not instantiate another `EzvizClient`.
+  Callers keep ownership of the credential lock, durable-save callback and
+  HTTP transport. Background requests copy mutable request state but borrow
+  the caller's adapters, preserving proxy/certificate/TLS configuration.
+- `_token.py` contains the persisted token schema and boundary validators.
+  Historical `ClientToken`, `EzvizToken` and `ServiceUrls` imports remain
+  available. Partial login tokens still require runtime validation before push.
+- `_longlink.py` implements only EZVIZ wire encoding and cryptography. PKCS#7
+  padding uses `cryptography`; the fixed IV and native key derivation remain
+  protocol requirements, verified against synthetic native vectors.
+- `_paho.py` isolates Paho 2.x's private runtime keepalive field. There is no
+  public setter; a compatibility test verifies actual ping scheduling. Paho
+  automatic reconnect is intentionally not used because each reconnect must
+  first negotiate fresh EZVIZ keys through LBS.
+
+These internal refactors do not change the MAC-based `FEATURE_CODE`, public
+callbacks, token file format, lifecycle, or direct-event delivery behavior.

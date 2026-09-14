@@ -6,10 +6,12 @@ from threading import Event
 from unittest.mock import Mock
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import _ConnectionState
 
 from pyezvizapi import _longlink as wire
 from pyezvizapi._longlink_auth import PushCredentials
 from pyezvizapi._longlink_session import Channel99Session
+from pyezvizapi._paho import set_keepalive
 
 SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
 KEY = bytes(range(16))
@@ -86,3 +88,22 @@ def test_superseded_identity_stops_before_registration():
     connection.prepare = prepare
     connection.run(Event())
     prepare.assert_not_called()
+
+
+def test_paho_adapter_changes_actual_ping_deadline(monkeypatch) -> None:
+
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client._state = _ConnectionState.MQTT_CS_CONNECTED
+    client._sock = Mock()
+    client._last_msg_in = client._last_msg_out = 100
+    ping = Mock()
+    monkeypatch.setattr(client, "_send_pingreq", ping)
+    monkeypatch.setattr(mqtt, "time_func", lambda: 145)
+    set_keepalive(client, 60)
+    client._check_keepalive()
+    ping.assert_not_called()
+    monkeypatch.setattr(mqtt, "time_func", lambda: 160)
+    client._check_keepalive()
+    ping.assert_called_once()
+    client._sock = None

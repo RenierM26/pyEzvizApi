@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from threading import RLock
 import time
-from typing import Any, BinaryIO, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import Any, BinaryIO, ClassVar, Literal, TypedDict, cast
 from urllib.parse import urlencode
 from uuid import uuid4
 import zlib
@@ -21,10 +21,14 @@ import zlib
 import requests
 
 from . import device_factory
+from ._auth import refresh_credentials
 from ._longlink_profile import (
     HEADERS as PUSH_HEADERS,
     PROFILE as PUSH_PROFILE,
     REGISTER as PUSH_REGISTER,
+)
+from ._token import (
+    ClientToken as ClientToken,  # noqa: PLC0414 - public type export
     validate_feature_code,
 )
 from .api_endpoints import (
@@ -86,7 +90,6 @@ from .api_endpoints import (
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
     API_ENDPOINT_PAGELIST,
     API_ENDPOINT_PTZCONTROL,
-    API_ENDPOINT_REFRESH_SESSION_ID,
     API_ENDPOINT_REMOTE_LOCK,
     API_ENDPOINT_REMOTE_UNBIND_PROGRESS,
     API_ENDPOINT_REMOTE_UNLOCK,
@@ -195,21 +198,6 @@ class SaveMediaResult(TypedDict, total=False):
     cloud_refresh_vtm: bool
     image_url: str
     triggered_capture: bool
-
-
-class ClientToken(TypedDict):
-    """Typed shape for the Ezviz client token."""
-
-    session_id: NotRequired[str | None]
-    rf_session_id: NotRequired[str | None]
-    username: NotRequired[str | None]
-    api_url: str
-    feature_code: NotRequired[str]
-    hardware_code: NotRequired[str]
-    push_profile: NotRequired[str]
-    push_state: NotRequired[dict[str, Any]]
-    user_id: NotRequired[str]
-    service_urls: NotRequired[dict[str, Any]]
 
 
 class MetaDict(TypedDict, total=False):
@@ -4166,67 +4154,21 @@ class EzvizClient:
         validate_feature_code(cast(dict[str, Any], self._token))
         session_id = self._token.get("session_id")
         refresh_session_id = self._token.get("rf_session_id")
-        push_enabled = self._token.get("push_profile") == PUSH_PROFILE
         if session_id and refresh_session_id:
             try:
-                req = self._session.put(
-                    url=f"https://{self._token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
-                    data={
-                        "refreshSessionId": refresh_session_id,
-                        "featureCode": FEATURE_CODE,
-                        **(PUSH_REGISTER if push_enabled else {}),
-                    },
-                    allow_redirects=False,
-                    timeout=self._timeout,
+                refresh_credentials(
+                    self._session, cast(dict[str, Any], self._token), self._timeout,
+                    self._notify_token_updated, self.get_service_urls,
                 )
-                req.raise_for_status()
-
-            except requests.HTTPError as err:
-                raise HTTPError from err
-
-            try:
-                json_result = req.json()
-
-            except ValueError as err:
-                raise PyEzvizError(
-                    "Impossible to decode response: "
-                    + str(err)
-                    + "\nResponse was: "
-                    + str(req.text)
-                ) from err
-
-            if json_result["meta"]["code"] == 200:
-                self._session.headers["sessionId"] = json_result["sessionInfo"][
-                    "sessionId"
-                ]
-                self._token["session_id"] = str(json_result["sessionInfo"]["sessionId"])
-                self._token["rf_session_id"] = str(
-                    json_result["sessionInfo"]["refreshSessionId"]
-                )
-                self._token["feature_code"] = FEATURE_CODE
-                self._notify_token_updated()
-
-                if not self._token.get("service_urls"):
-                    self._token["service_urls"] = self.get_service_urls()
-                    self._notify_token_updated()
-
-                return cast(dict[Any, Any], self._token)
-
-            if json_result["meta"]["code"] in (401, 403):
-                if self.account and self.password:
-                    self._token.update({
-                        "session_id": None,
-                        "rf_session_id": None,
-                        "username": None,
-                        "api_url": self._token["api_url"],
-                    })
-                    return self.login()
-
-                raise EzvizAuthTokenExpired(
-                    f"Token expired, Login with username and password required: {req.text}"
-                )
-
-            raise PyEzvizError(f"Error renewing login token: {json_result['meta']}")
+            except EzvizAuthTokenExpired:
+                if not (self.account and self.password):
+                    raise
+                self._token.update({
+                    "session_id": None, "rf_session_id": None,
+                    "username": None, "api_url": self._token["api_url"],
+                })
+                return self.login()
+            return cast(dict[Any, Any], self._token)
 
         if self.account and self.password:
             return self._login(sms_code)

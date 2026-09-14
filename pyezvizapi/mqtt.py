@@ -11,26 +11,30 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import suppress
-from copy import copy, deepcopy
-import ipaddress
+from copy import deepcopy
 import json
 import logging
-import re
 from threading import RLock
-from typing import Any, Final, NotRequired, TypedDict, cast
+from typing import Any, Final, TypedDict, cast
 
 import requests
-from requests.structures import CaseInsensitiveDict
 
+from ._auth import discover_services, isolated_session, refresh_credentials
 from ._longlink_profile import (
     HEADERS as PUSH_HEADERS,
     PROFILE as PUSH_PROFILE,
     REGISTER as PUSH_REGISTER,
-    validate_feature_code,
 )
 from ._longlink_session import Channel99Session
 from ._longlink_worker import PushWorker
-from .constants import DEFAULT_TIMEOUT, FEATURE_CODE
+from ._token import (
+    ClientToken as EzvizToken,
+    ServiceUrls as ServiceUrls,  # noqa: PLC0414 - public type export
+    _push_endpoint,
+    _push_serial,
+    validate_push_token,
+)
+from .constants import DEFAULT_TIMEOUT, FEATURE_CODE, REQUEST_HEADER
 from .exceptions import (
     EzvizAuthTokenExpired,
     EzvizPushFatalError,
@@ -42,106 +46,9 @@ from .exceptions import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _isolated_session(source: requests.Session) -> requests.Session:
-    """Copy request state, borrowing transport adapters owned by the caller.
-
-    No transport pools are created here. Do not close this copy: adapter/pool
-    lifetime remains with the supplied session, including custom TLS adapters.
-    """
-    session = copy(source)
-    session.headers = CaseInsensitiveDict(source.headers)
-    session.cookies = source.cookies.copy()
-    session.params = deepcopy(source.params)
-    session.proxies = dict(source.proxies)
-    session.hooks = {name: list(hooks) for name, hooks in source.hooks.items()}
-    session.adapters = OrderedDict(source.adapters)
-    return session
-
-
-def _hostname(value: Any) -> str:
-    """Validate saved DNS names/IP literals without attempting network access."""
-    if not isinstance(value, str) or not value or any(ord(c) < 33 or ord(c) == 127 for c in value):
-        raise PyEzvizError("Invalid channel-99 hostname")
-    try:
-        return str(ipaddress.ip_address(value))
-    except ValueError:
-        pass
-    try:
-        encoded = value.encode("idna").decode("ascii")
-    except UnicodeError as error:
-        raise PyEzvizError("Invalid channel-99 hostname") from error
-    labels = encoded.removesuffix(".").split(".")
-    if len(encoded.removesuffix(".")) > 253 or any(
-        re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is None
-        for label in labels
-    ):
-        raise PyEzvizError("Invalid channel-99 hostname")
-    return encoded
-
-
-def _push_endpoint(urls: Any) -> tuple[str, int]:
-    """Reject malformed saved discovery before starting a background worker."""
-    if not isinstance(urls, dict):
-        raise PyEzvizError("Invalid channel-99 service discovery")
-    host = _hostname(urls.get("pushDasDomain"))
-    value = urls.get("pushDasPort", 8666)
-    if type(value) not in (int, str):
-        raise PyEzvizError("Invalid channel-99 service port")
-    try:
-        port = int(value)
-    except ValueError as error:
-        raise PyEzvizError("Invalid channel-99 service port") from error
-    if not 1 <= port <= 65535:
-        raise PyEzvizError("Invalid channel-99 service port")
-    return host, port
-
-
-def _push_serial(user_id: Any) -> bytes:
-    """Validate the account component and native subserial length bound."""
-    if not isinstance(user_id, str) or re.fullmatch(r"[A-Za-z0-9_.-]+", user_id) is None:
-        raise PyEzvizError("Invalid channel-99 user ID")
-    serial = f"MOBILE:ys7:{user_id}:{FEATURE_CODE}".encode("ascii")
-    if len(serial) > 127:
-        raise PyEzvizError("Channel-99 user ID exceeds protocol limit")
-    return serial
-
-
 # ---------------------------------------------------------------------------
 # Typed structures
 # ---------------------------------------------------------------------------
-
-
-class ServiceUrls(TypedDict):
-    """Service URLs present in the EZVIZ auth token.
-
-    Attributes:
-        pushAddr: Legacy hostname retained for token compatibility.
-        pushDasDomain: Channel-99 LBS hostname.
-        pushDasPort: Channel-99 LBS port.
-    """
-
-    pushAddr: NotRequired[str]
-    pushDasDomain: NotRequired[str]
-    pushDasPort: NotRequired[int | str]
-
-
-class EzvizToken(TypedDict):
-    """Minimal shape of the EZVIZ token required for MQTT.
-
-    Attributes:
-        username: Internal EZVIZ username.
-        session_id: Current session id.
-        service_urls: Channel-99 discovery, including ``pushDasDomain``.
-    """
-
-    username: str
-    session_id: str
-    service_urls: ServiceUrls
-    user_id: NotRequired[str]
-    feature_code: NotRequired[str]
-    api_url: NotRequired[str]
-    push_profile: NotRequired[str]
-    push_state: NotRequired[dict[str, Any]]
 
 
 class MqttData(TypedDict):
@@ -314,21 +221,8 @@ class MQTTClient:
         if self._on_token_updated is None:
             raise PyEzvizError("Channel-99 requires on_token_updated to durably save the token")
         token = cast(dict[str, Any], self._token)
-        validate_feature_code(token)
-        if not all(token.get(key) for key in ("user_id", "feature_code", "session_id", "api_url")):
-            raise PyEzvizError("Channel-99 login metadata is incomplete; migrate the login first")
-        _push_endpoint(token.get("service_urls", {}))
-        _push_serial(token["user_id"])
-        if ":" in _hostname(token["api_url"]):
-            raise PyEzvizError("IPv6 API hosts are not supported")
-        if not isinstance(token["session_id"], str) or re.fullmatch(r"[!-~]+", token["session_id"]) is None:
-            raise PyEzvizError("Invalid channel-99 session ID")
-        # Handshake state is worker-owned; only publish it to the shared token
-        # under the credential lock, alongside snapshot creation and persistence.
         with self._token_lock:
-            state = deepcopy(token.get("push_state", {}))
-        if not isinstance(state, dict):
-            raise PyEzvizError("Invalid saved push state")
+            validate_push_token(token)
 
         def save_token(snapshot: dict[str, Any]) -> None:
             assert self._on_token_updated is not None
@@ -382,12 +276,11 @@ class MQTTClient:
         self, token: dict[str, Any], save_token: Callable[[dict[str, Any]], None]
     ) -> None:
         """Register push, refreshing rejected HTTPS credentials once per attempt."""
-        # Lazy import avoids the public client's MQTT factory import cycle.
-        from .client import EzvizClient  # noqa: PLC0415
-
         # Isolate requests state from the owner's concurrent polling requests.
         with self._token_lock:
-            session = _isolated_session(self._session)
+            session = isolated_session(self._session)
+        for name, value in REQUEST_HEADER.items():
+            session.headers.setdefault(name, value)
         session.headers.update(PUSH_HEADERS)
         session.headers["featureCode"] = FEATURE_CODE
         for attempt in range(2):
@@ -409,14 +302,17 @@ class MQTTClient:
                 raise PyEzvizError("Channel-99 registration rejected")
             if attempt or not token.get("rf_session_id"):
                 raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
-            refresh_client = EzvizClient(token=token, on_token_updated=save_token)
-            session.headers.update(refresh_client._session.headers)  # noqa: SLF001
-            refresh_client._session.close()  # noqa: SLF001
-            refresh_client._session = session  # noqa: SLF001 - borrow isolated transport
             try:
                 with self._token_lock:
-                    refresh_client.login()
-                    self._session.headers["sessionId"] = token["session_id"]
+                    def notify() -> None:
+                        # Keep the polling transport current even if persistence fails.
+                        self._session.headers["sessionId"] = token["session_id"]
+                        save_token(deepcopy(token))
+
+                    refresh_credentials(
+                        session, token, self._timeout, notify,
+                        lambda: discover_services(session, token, self._timeout),
+                    )
             except EzvizAuthTokenExpired as error:
                 raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
             except HTTPError as error:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import pytest
 
 from pyezvizapi import _longlink as protocol
@@ -125,3 +126,23 @@ def test_existing_device_key_rotation(version: bytes) -> None:
         )
     with pytest.raises(ValueError, match="existing-device response"):
         protocol.authentication_iv_existing(response[:-1], serial, shared, nonces[:3])
+
+
+@pytest.mark.parametrize("size", [0, 1, 15, 16, 17, 31, 32, 255])
+def test_standard_padding_preserves_native_block_boundaries(size: int) -> None:
+    key = bytes(range(16))
+    plain = bytes(range(size))
+    ciphertext = protocol.encrypt(key, plain)
+    assert len(ciphertext) == (size // 16 + 1) * 16
+    assert protocol.decrypt(key, ciphertext) == plain
+
+
+@pytest.mark.parametrize("tail", [b"\x00", b"\x11", b"\x03\x02"])
+def test_standard_unpadding_rejects_malformed_wire_blocks(tail: bytes) -> None:
+
+    key = bytes(range(16))
+    raw = b"X" * (16 - len(tail)) + tail
+    cipher = Cipher(algorithms.AES(key), modes.CBC(protocol.IV)).encryptor()
+    ciphertext = cipher.update(raw) + cipher.finalize()
+    with pytest.raises(ValueError, match="Invalid padding"):
+        protocol.decrypt(key, ciphertext)

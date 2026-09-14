@@ -14,6 +14,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 from . import _longlink as wire
 from ._longlink_auth import PushCredentials, authenticate
 from ._longlink_transport import LbsConnection
+from ._paho import set_keepalive
 
 
 class Channel99Session:
@@ -179,7 +180,7 @@ class Channel99Session:
             interval = wire.control_keepalive(event["body"])
             if interval is not None:
                 # Paho has no public API for a server-negotiated keepalive.
-                client._keepalive = interval  # noqa: SLF001
+                set_keepalive(client, interval)
         elif domain == 9000 and command == 1:
             body = event["body"].rstrip(b"\0")
             if not isinstance(json.loads(body), dict):

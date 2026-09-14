@@ -15,6 +15,7 @@ import re
 import struct
 from typing import Any
 
+from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 IV = b"01234567" + bytes(8)
@@ -57,9 +58,10 @@ def signature(data: bytes, key: bytes) -> bytes:
 
 
 def encrypt(key: bytes, plain: bytes) -> bytes:
-    padding = 16 - len(plain) % 16
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(plain) + padder.finalize()
     ctx = Cipher(algorithms.AES(key), modes.CBC(IV)).encryptor()
-    return ctx.update(plain + bytes([padding]) * padding) + ctx.finalize()
+    return ctx.update(padded) + ctx.finalize()
 
 
 def decrypt(key: bytes, ciphertext: bytes) -> bytes:
@@ -67,10 +69,11 @@ def decrypt(key: bytes, ciphertext: bytes) -> bytes:
         raise ValueError("Invalid ciphertext length")
     ctx = Cipher(algorithms.AES(key), modes.CBC(IV)).decryptor()
     plain = ctx.update(ciphertext) + ctx.finalize()
-    pad = plain[-1]
-    if not 1 <= pad <= 16 or plain[-pad:] != bytes([pad]) * pad:
-        raise ValueError("Invalid padding")
-    return plain[:-pad]
+    unpadder = padding.PKCS7(128).unpadder()
+    try:
+        return unpadder.update(plain) + unpadder.finalize()
+    except ValueError as error:
+        raise ValueError("Invalid padding") from error
 
 
 def authentication_i(subserial: bytes, shared: bytes, random_1: int, auth_mode: int = 2) -> bytes:

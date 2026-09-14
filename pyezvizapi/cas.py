@@ -19,7 +19,7 @@ from Crypto.Cipher import AES
 from cryptography import x509
 import xmltodict
 
-from ._longlink_profile import validate_feature_code
+from ._token import validate_feature_code
 from .constants import FEATURE_CODE, XOR_KEY
 from .exceptions import InvalidHost, PyEzvizError
 
@@ -525,7 +525,7 @@ class EzvizCAS:
             doc = xmltodict.parse(body)
         except ExpatError as err:
             raise PyEzvizError("Could not parse CAS get-encryption XML response") from err
-        return cast(dict[str, Any], doc)
+        return doc
 
     def probe_local_operation_code(
         self,

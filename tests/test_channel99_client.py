@@ -625,6 +625,8 @@ def test_push_registration_and_refresh_preserve_transport_without_mutating_owner
         assert session is not supplied
         assert all(session.headers[key] == value for key, value in PUSH_HEADERS.items())
         assert session.headers["featureCode"] == FEATURE_CODE
+        assert session.headers["clientType"] == "3"
+        assert session.headers["appId"] == "ys7"
         assert session.proxies == supplied.proxies
         assert session.cert == supplied.cert
         assert session.verify == supplied.verify
@@ -651,3 +653,46 @@ def test_push_registration_and_refresh_preserve_transport_without_mutating_owner
     assert "clientNo" not in supplied.headers
     assert supplied.headers["sessionId"] == "rotated"
     close_adapter.assert_not_called()
+
+
+@pytest.mark.parametrize("discovery_fails", [False, True])
+def test_standalone_refresh_saves_before_discovery_without_constructing_client(
+    monkeypatch, discovery_fails
+):
+    saved = token()
+    saved.pop("service_urls")
+    snapshots: list[dict[str, Any]] = []
+    owner = requests.Session()
+    client = MQTTClient(saved, owner, timeout=7, on_token_updated=snapshots.append)
+
+    def put(session, url, **kwargs):
+        assert kwargs["timeout"] == 7
+        if url.endswith("/v3/push/token"):
+            return response({"meta": {"code": 403 if not snapshots else 200}})
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    def get(session, url, **kwargs):
+        assert kwargs["timeout"] == 7
+        assert session.headers["sessionId"] == owner.headers["sessionId"] == "rotated"
+        assert snapshots[0]["rf_session_id"] == "rotated-refresh"
+        assert "service_urls" not in snapshots[0]
+        if discovery_fails:
+            raise requests.ConnectionError("offline")
+        return response({"meta": {"code": 200}, "systemConfigInfo": {
+            "pushDasDomain": "new.invalid", "pushDasPort": 8777, "sysConf": "a|b"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr(requests.Session, "get", get)
+    monkeypatch.setattr("pyezvizapi.client.EzvizClient", Mock(side_effect=AssertionError("No nested client")))
+    if discovery_fails:
+        with pytest.raises(requests.ConnectionError):
+            client._prepare_channel99(saved, snapshots.append)
+        assert len(snapshots) == 1
+    else:
+        client._prepare_channel99(saved, snapshots.append)
+        assert len(snapshots) == 2
+        assert snapshots[-1]["service_urls"]["sysConf"] == ["a", "b"]
+        assert saved["service_urls"]["pushDasDomain"] == "new.invalid"

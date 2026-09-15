@@ -1,6 +1,7 @@
 """Public migration and durable-state callback contracts."""
 # ruff: noqa: SLF001
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
 from threading import Event, Thread
@@ -16,6 +17,7 @@ from pyezvizapi.client import EzvizClient
 from pyezvizapi.constants import FEATURE_CODE
 from pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
+    EzvizAuthVerificationCode,
     EzvizPushFatalError,
     EzvizTokenPersistenceError,
     PyEzvizError,
@@ -696,3 +698,129 @@ def test_standalone_refresh_saves_before_discovery_without_constructing_client(
         assert len(snapshots) == 2
         assert snapshots[-1]["service_urls"]["sysConf"] == ["a", "b"]
         assert saved["service_urls"]["pushDasDomain"] == "new.invalid"
+
+
+@pytest.mark.parametrize("observer", ["export", "refresh", "poll", "prepared", "factory", "close", "logout"])
+def test_migration_serializes_token_and_transport_users(monkeypatch, observer):
+    entered, release, attempted = Event(), Event(), Event()
+    legacy = {
+        "api_url": "old.invalid", "session_id": "legacy-session",
+        "rf_session_id": "legacy-refresh", "username": "legacy-user",
+    }
+    client = EzvizClient("synthetic", "synthetic", token=legacy)
+    captured = []
+    prepared = client._session.prepare_request(requests.Request(
+        "POST", "https://old.invalid/path?raw=%2F", data=b"raw=%2F",
+        headers={"Content-Type": "application/custom", "areaId": "specific"},
+    ))
+
+    def post(**kwargs):
+        entered.set()
+        assert release.wait(3)
+        return response({"meta": {"code": 200},
+                         "loginSession": {"sessionId": "new-session", "rfSessionId": "new-refresh"},
+                         "loginUser": {"username": "new-user", "userId": "new-user"},
+                         "loginArea": {"apiDomain": "new.invalid"}})
+
+    def request(**kwargs):
+        captured.append((kwargs["url"], dict(client._session.headers)))
+        return response({"meta": {"code": 200}})
+
+    expected_body = prepared.body
+
+    def send(request, **kwargs):
+        assert request.body == expected_body
+        assert request.headers["Content-Type"] == "application/custom"
+        assert request.headers["areaId"] == "specific"
+        captured.append((request.url, dict(request.headers)))
+        return response({"meta": {"code": 200}})
+
+    monkeypatch.setattr(client._session, "post", post)
+    monkeypatch.setattr(client._session, "request", request)
+    monkeypatch.setattr(client._session, "delete", request)
+    monkeypatch.setattr(client._session, "send", send)
+    monkeypatch.setattr(client._session, "put", lambda **kwargs: response({
+        "meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "refreshed", "refreshSessionId": "refreshed-refresh"}}))
+    monkeypatch.setattr(client, "get_service_urls", lambda: {"pushDasDomain": "push.invalid"})
+
+    def observe():
+        attempted.set()
+        return {
+            "export": client.export_token, "refresh": client.login,
+            "poll": lambda: client._request_json("GET", "/path"),
+            "prepared": lambda: client._send_prepared(prepared),
+            "factory": client.get_mqtt_client, "close": client.close_session, "logout": client.logout,
+        }[observer]()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        migration = pool.submit(client.enable_channel99)
+        try:
+            assert entered.wait(3)
+            other = pool.submit(observe)
+            assert attempted.wait(3)
+            assert not other.done()
+            assert not release.wait(0.05)
+            assert not other.done()
+        finally:
+            release.set()
+        migration.result(timeout=3)
+        result = other.result(timeout=3)
+    if observer in ("export", "refresh"):
+        assert result["session_id"] in ("new-session", "refreshed")
+        assert result["push_profile"] == "android-channel99"
+    if observer in ("poll", "prepared", "logout"):
+        url, headers = captured[0]
+        assert url.startswith("https://new.invalid/")
+        assert headers["sessionId"] == "new-session"
+        assert all(headers[key] == value for key, value in PUSH_HEADERS.items())
+    client.close_session()
+
+
+def test_mfa_migration_does_not_retain_legacy_auth_or_discovery(monkeypatch):
+    saved = token()
+    saved.pop("push_profile")
+    saved["push_state"] = {"device_id": "legacy"}
+    client = EzvizClient("synthetic", "synthetic", token=saved)
+    monkeypatch.setattr(client._session, "post", lambda **kwargs: response({"meta": {"code": 6002}}))
+    monkeypatch.setattr(client, "send_mfa_code", lambda: True)
+    with pytest.raises(EzvizAuthVerificationCode):
+        client.enable_channel99()
+    pending = client.export_token()
+    assert pending["session_id"] is None and pending["rf_session_id"] is None
+    assert not any(key in pending for key in ("push_state", "service_urls", "user_id", "username"))
+    assert "sessionId" not in client._session.headers
+    monkeypatch.setattr(client._session, "post", lambda **kwargs: response({
+        "meta": {"code": 200}, "loginSession": {"sessionId": "new", "rfSessionId": "new-rf"},
+        "loginUser": {"username": "new-user", "userId": "new-user"},
+        "loginArea": {"apiDomain": "new.invalid"}}))
+    monkeypatch.setattr(client, "get_service_urls", lambda: {"pushDasDomain": "push.invalid"})
+    assert client.enable_channel99(sms_code=123456)["session_id"] == "new"
+
+
+@pytest.mark.parametrize("phase", ["creation_pending", "needs_reauthentication", "authenticated"])
+def test_push_snapshot_is_detached_until_committed(monkeypatch, phase):
+    saved = token()
+    previous = {"device_id": "existing", "nested": {"value": "old"}}
+    saved["push_state"] = deepcopy(previous)
+    candidate = {"phase": phase, "nested": {"value": "new"}}
+    fail = True
+
+    def persist(snapshot):
+        assert saved["push_state"] == previous
+        snapshot["push_state"]["nested"]["value"] = "callback-mutated"
+        if fail:
+            raise OSError("storage offline")
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=persist)
+    client.connect()
+    session = push_session(client)
+    with pytest.raises(EzvizTokenPersistenceError):
+        session.save(candidate)
+    assert saved["push_state"] == previous
+    fail = False
+    session.save(candidate)
+    assert saved["push_state"] == candidate
+    candidate["nested"]["value"] = "caller-mutated"
+    assert saved["push_state"]["nested"]["value"] == "new"

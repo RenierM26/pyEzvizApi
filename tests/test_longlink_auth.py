@@ -5,10 +5,14 @@ import json
 from typing import Any
 
 import pytest
+import requests
 
 from pyezvizapi import _longlink as wire
 from pyezvizapi._longlink_auth import authenticate
-from pyezvizapi.exceptions import EzvizPushFatalError
+from pyezvizapi._longlink_session import Channel99Session
+from pyezvizapi.constants import FEATURE_CODE
+from pyezvizapi.exceptions import EzvizPushFatalError, EzvizTokenPersistenceError
+from pyezvizapi.mqtt import MQTTClient
 
 SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
 TOKEN = "synthetic-token"
@@ -17,10 +21,11 @@ SESSION = bytes(range(16))
 
 
 class Peer:
-    def __init__(self, *, redirect_fails: bool = False) -> None:
+    def __init__(self, *, redirect_fails: bool = False, serial: bytes = SERIAL) -> None:
+        self.serial = serial
         self.commands: list[int] = []
         self.redirect_fails = redirect_fails
-        self.shared = wire.share_key(hashlib.md5(TOKEN.encode()).hexdigest().encode(), SERIAL)
+        self.shared = wire.share_key(hashlib.md5(TOKEN.encode()).hexdigest().encode(), self.serial)
         self.n1 = 0
 
     def send(self, frame: bytes) -> None:
@@ -30,14 +35,14 @@ class Peer:
         command = frame[0] >> 4
         self.commands.append(command)
         if command == 1:
-            self.n1 = frame[7 + len(SERIAL)]
+            self.n1 = frame[7 + len(self.serial)]
             return 2, b"\x01\x00\x00\x00\x22" + wire.signature(
-                SERIAL + bytes([self.n1, 0x22]), self.shared
+                self.serial + bytes([self.n1, 0x22]), self.shared
             )
         if command in (3, 4):
             n3 = frame[5]
             master = wire.master_key(bytes([self.n1, 0x22, n3, 0x44]), self.shared)
-            signed = wire.signature(SERIAL + bytes([n3, 0x44]), self.shared)
+            signed = wire.signature(self.serial + bytes([n3, 0x44]), self.shared)
             if command == 3:
                 assert frame[7:39] == DEVICE
                 return 5, b"\x01\x00\x00\x00\x44\x20" + wire.encrypt(master, SESSION) + signed
@@ -218,3 +223,55 @@ def test_auth_iv_rejection_is_fatal_and_preserves_identity(existing, version, ex
         assert state["phase"] == "creation_pending"
         assert "device_id" not in state
         assert saved == [state]
+
+
+@pytest.mark.parametrize("failure_phase", ["creation_pending", "authenticated"])
+def test_public_save_failure_preserves_the_correct_allocation_boundary(monkeypatch, failure_phase):
+    saved: dict[str, Any] = {
+        "api_url": "api.invalid", "username": "user", "user_id": "user",
+        "session_id": TOKEN, "rf_session_id": "refresh", "feature_code": FEATURE_CODE,
+        "push_profile": "android-channel99", "service_urls": {"pushDasDomain": "push.invalid"},
+    }
+    repaired = False
+    committed = []
+
+    def persist(snapshot):
+        if not repaired and snapshot["push_state"]["phase"] == failure_phase:
+            raise OSError("storage offline")
+        committed.append(snapshot)
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=persist)
+    client.connect()
+    worker = client._push_worker  # noqa: SLF001 - exercise real factory/persistence boundary
+    assert worker is not None
+    first = worker.factory()
+    assert isinstance(first, Channel99Session)
+    peer = Peer(serial=first.serial)
+    with pytest.raises(EzvizTokenPersistenceError):
+        authenticate(peer, first.serial, TOKEN, first.state, first.save)
+    if failure_phase == "creation_pending":
+        assert peer.commands == [1]  # No allocation request was sent.
+        assert "push_state" not in saved
+        assert first.state == {}  # Even a retry by the direct orchestrator is safe.
+    else:
+        assert peer.commands == [1, 4]  # Allocated, but no broker lookup after failed save.
+        assert saved["push_state"]["phase"] == "creation_pending"
+        assert "device_id" not in saved["push_state"]
+        assert committed[-1]["push_state"] == saved["push_state"]
+    repaired = True
+    replacement = MQTTClient(saved, requests.Session(), on_token_updated=persist)
+    replacement.connect()
+    worker = replacement._push_worker  # noqa: SLF001 - replacement after storage repair
+    assert worker is not None
+    retry = worker.factory()
+    assert isinstance(retry, Channel99Session)
+    peer = Peer(serial=retry.serial)
+    if failure_phase == "creation_pending":
+        credentials = authenticate(peer, retry.serial, TOKEN, retry.state, retry.save)
+        assert credentials.device_id == DEVICE
+        assert peer.commands == [1, 4, 10]
+    else:
+        with pytest.raises(EzvizPushFatalError, match="no device identity"):
+            authenticate(peer, retry.serial, TOKEN, retry.state, retry.save)
+        assert peer.commands == []  # Never allocate a duplicate device after an ambiguous failure.

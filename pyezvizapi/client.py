@@ -14,7 +14,7 @@ from pathlib import Path
 from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, Literal, TypedDict, cast
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 import zlib
 
@@ -682,14 +682,15 @@ class EzvizClient:
                 self._body_debug_summary(json_body),
             )
         try:
-            req = self._session.request(
-                method=method,
-                url=url,
-                params=params,
-                data=data,
-                json=json_body,
-                timeout=self._timeout,
-            )
+            with self._token_lock:
+                req = self._session.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    data=data,
+                    json=json_body,
+                    timeout=self._timeout,
+                )
             req.raise_for_status()
         except requests.HTTPError as err:
             if (
@@ -876,7 +877,21 @@ class EzvizClient:
         Useful for endpoints requiring special URL encoding or manual preparation.
         """
         try:
-            req = self._session.send(request=prepared, timeout=self._timeout)
+            with self._token_lock:
+                # The request may have been prepared before a profile/region
+                # migration. Refresh only authentication/routing, not its encoded
+                # body, query or endpoint-specific headers.
+                for key in ("sessionId", "featureCode", *PUSH_HEADERS):
+                    if key in self._session.headers:
+                        prepared.headers[key] = cast(str, self._session.headers[key])
+                    else:
+                        prepared.headers.pop(key, None)
+                if prepared.url is not None:
+                    parts = urlsplit(prepared.url)
+                    prepared.url = urlunsplit(parts._replace(netloc=self._token["api_url"]))
+                    if "Host" in prepared.headers:
+                        prepared.headers["Host"] = self._token["api_url"]
+                req = self._session.send(request=prepared, timeout=self._timeout)
             req.raise_for_status()
         except requests.HTTPError as err:
             if (
@@ -913,15 +928,16 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> JsonDict:
         """Perform request and parse JSON in one step."""
-        resp = self._http_request(
-            method,
-            self._url(path),
-            params=params,
-            data=data,
-            json_body=json_body,
-            retry_401=retry_401,
-            max_retries=max_retries,
-        )
+        with self._token_lock:
+            resp = self._http_request(
+                method,
+                self._url(path),
+                params=params,
+                data=data,
+                json_body=json_body,
+                retry_401=retry_401,
+                max_retries=max_retries,
+            )
         payload = self._parse_json(resp)
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
@@ -4128,21 +4144,24 @@ class EzvizClient:
         required). Merely changing headers does not migrate an existing session.
         Persist the returned token before starting push reception.
         """
-        if self.mqtt_client is not None:
-            raise PyEzvizError("Stop and discard the MQTT client before migrating login")
-        if self._token.get("push_profile") == PUSH_PROFILE:
-            return self.login(sms_code)
-        if not self.account or not self.password:
-            raise EzvizAuthTokenExpired("Channel-99 migration requires a fresh credential login")
-        self._token["push_profile"] = PUSH_PROFILE
-        self._token["feature_code"] = FEATURE_CODE
-        self._token.pop("push_state", None)
-        self._session.headers.update(PUSH_HEADERS)
-        self._session.headers["featureCode"] = FEATURE_CODE
-        # Do not refresh a legacy session while presenting the new profile.
-        self._token["session_id"] = None
-        self._token["rf_session_id"] = None
-        return self._login(sms_code)
+        with self._token_lock:
+            if self.mqtt_client is not None:
+                raise PyEzvizError("Stop and discard the MQTT client before migrating login")
+            if self._token.get("push_profile") == PUSH_PROFILE:
+                return self.login(sms_code)
+            if not self.account or not self.password:
+                raise EzvizAuthTokenExpired("Channel-99 migration requires a fresh credential login")
+            self._token["push_profile"] = PUSH_PROFILE
+            self._token["feature_code"] = FEATURE_CODE
+            for key in ("push_state", "service_urls", "user_id", "username"):
+                cast(dict[str, Any], self._token).pop(key, None)
+            self._session.headers.pop("sessionId", None)
+            self._session.headers.update(PUSH_HEADERS)
+            self._session.headers["featureCode"] = FEATURE_CODE
+            # Do not refresh a legacy session while presenting the new profile.
+            self._token["session_id"] = None
+            self._token["rf_session_id"] = None
+            return self._login(sms_code)
 
     def login(self, sms_code: int | None = None) -> JsonDict:
         """Get or refresh credentials, serializing mutation and persistence with push."""
@@ -4177,38 +4196,39 @@ class EzvizClient:
 
     def logout(self) -> bool:
         """Close Ezviz session and remove login session from ezviz servers."""
-        try:
-            req = self._session.delete(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGOUT}",
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-
-        except requests.HTTPError as err:
-            if err.response.status_code == 401:
-                _LOGGER.warning(
-                    "Http_warning: serial=%s code=%s msg=%s",
-                    "unknown",
-                    401,
-                    "logout_already_invalid",
+        with self._token_lock:
+            try:
+                req = self._session.delete(
+                    url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGOUT}",
+                    timeout=self._timeout,
                 )
-                return True
-            raise HTTPError from err
+                req.raise_for_status()
 
-        try:
-            json_result = req.json()
+            except requests.HTTPError as err:
+                if err.response.status_code == 401:
+                    _LOGGER.warning(
+                        "Http_warning: serial=%s code=%s msg=%s",
+                        "unknown",
+                        401,
+                        "logout_already_invalid",
+                    )
+                    return True
+                raise HTTPError from err
 
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
-            ) from err
+            try:
+                json_result = req.json()
 
-        self.close_session()
+            except ValueError as err:
+                raise PyEzvizError(
+                    "Impossible to decode response: "
+                    + str(err)
+                    + "\nResponse was: "
+                    + str(req.text)
+                ) from err
 
-        return bool(json_result["meta"]["code"] == 200)
+            self.close_session()
+
+            return bool(json_result["meta"]["code"] == 200)
 
     def set_camera_defence_old(self, serial: str, enable: int) -> bool:
         """Enable/Disable motion detection on camera."""

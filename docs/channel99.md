@@ -164,3 +164,19 @@ code are included in the library or its portable tests.
 
 These internal refactors do not change the MAC-based `FEATURE_CODE`, public
 callbacks, token file format, lifecycle, or direct-event delivery behavior.
+
+
+### Migration and persistence ordering
+
+`enable_channel99()` holds the shared credential lock through migration and
+login, including MFA requests. Exports, factory creation, polling and logout
+cannot observe a partially installed profile. If MFA or login fails, no legacy
+session header, discovery or push identity is retained under the Android profile.
+
+Push state is staged in a detached snapshot and published to the live token only
+after the persistence callback succeeds. Failure before AUTH-III allocation leaves
+fresh in-memory state retryable after storage repair. Once the pending-creation
+marker is committed, failure to save returned device keys leaves that marker in
+place: automatic retries must not allocate another device. This differs from
+HTTPS token rotation, where the server has already rotated the credentials and
+the new credentials must remain in memory even if their save fails.

@@ -6,6 +6,7 @@ from collections.abc import Callable
 import json
 import socket
 from threading import Event, Lock
+from time import monotonic
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -15,6 +16,12 @@ from . import _longlink as wire
 from ._longlink_auth import PushCredentials, authenticate
 from ._longlink_transport import LbsConnection
 from ._paho import set_keepalive
+from .exceptions import EzvizPushFatalError
+
+# Paho VERSION2 maps MQTT 3.1.1 CONNACK 1/2/4/5 to MQTT 5 reason values.
+# Server unavailable (3 -> 0x88) remains retryable with fresh LBS credentials.
+_PERMANENT_CONNACK_REASONS = frozenset({0x84, 0x85, 0x86, 0x87})
+_MQTT_SETUP_TIMEOUT = 30
 
 
 class Channel99Session:
@@ -48,6 +55,9 @@ class Channel99Session:
         self._lock = Lock()
         self._closed = Event()
         self.ready = Event()
+        self.last_connect_reason: int | None = None
+        self.last_subscribe_reasons: list[int] | None = None
+        self._failure: EzvizPushFatalError | None = None
         self.last_disconnect_reason: int | None = None
         self.last_loop_result: int | None = None
         self._lbs: LbsConnection | None = None
@@ -82,6 +92,10 @@ class Channel99Session:
             finally:
                 with self._lock:
                     self._lbs = None
+        self._run_mqtt(credentials, stopped)
+
+    def _run_mqtt(self, credentials: PushCredentials, stopped: Event) -> None:
+        """Run one broker attempt, surfacing permanent refusals to the worker."""
         client = self._client(credentials)
         with self._lock:
             self._mqtt = client
@@ -89,15 +103,47 @@ class Channel99Session:
             if stopped.is_set() or self._closed.is_set() or not self.is_current():
                 return
             client.connect(credentials.broker["Address"], credentials.broker["Port"], keepalive=30)
+            deadline = monotonic() + _MQTT_SETUP_TIMEOUT
             while not stopped.is_set() and not self._closed.is_set() and self.is_current():
                 result = client.loop(timeout=1)
                 self.last_loop_result = int(result)
+                if self._failure is not None:
+                    raise self._failure
+                if result == mqtt.MQTT_ERR_PROTOCOL and self.last_connect_reason is None:
+                    # Paho skips on_connect for MQTT 3.1.1 protocol-version refusal.
+                    self._failure = EzvizPushFatalError(
+                        "MQTT setup protocol rejected; caller intervention required"
+                    )
+                    raise self._failure
                 if result != mqtt.MQTT_ERR_SUCCESS:
                     return
+                if not self.ready.is_set() and monotonic() >= deadline:
+                    raise TimeoutError("MQTT connection/subscription acknowledgement timed out")
+        except Exception as error:
+            if self._failure is not None and error is not self._failure:
+                raise self._failure from error
+            raise
         finally:
-            self.ready.clear()
-            client.disconnect()
-            client.loop(timeout=0.1)
+            self._finish_mqtt(client)
+
+    def _finish_mqtt(self, client: mqtt.Client) -> None:
+        """Close even a rejected/broken transport without masking its refusal."""
+        self._closed.set()
+        self.ready.clear()
+        try:
+            try:
+                client.disconnect()
+                client.loop(timeout=0.1)
+            finally:
+                # disconnect() queues a packet; a broken cleanup loop may never
+                # close the transport. Use Paho's public socket accessor as well.
+                sock = client.socket()
+                if sock is not None:
+                    sock.close()
+        except Exception:
+            if self._failure is None:
+                raise
+        finally:
             with self._lock:
                 self._mqtt = None
 
@@ -137,26 +183,52 @@ class Channel99Session:
             retain=True,
         )
 
+        subscription_mid: int | None = None
+
         def connected(
             c: mqtt.Client, userdata: Any, flags: Any, reason: Any, properties: Any
         ) -> None:
+            nonlocal subscription_mid
+            if self._closed.is_set() or not self.is_current():
+                return
+            self.last_connect_reason = reason.value
             if reason.is_failure:
+                self.ready.clear()
+                if reason.value in _PERMANENT_CONNACK_REASONS:
+                    self._failure = EzvizPushFatalError(
+                        f"MQTT connection rejected (reason {reason.value}); caller intervention required"
+                    )
                 c.disconnect()
                 return
-            result, _ = c.subscribe("/" + serial + "/#", qos=1)
+            result, subscription_mid = c.subscribe("/" + serial + "/#", qos=1)
             if result != mqtt.MQTT_ERR_SUCCESS:
+                subscription_mid = None
+                if result == mqtt.MQTT_ERR_INVAL:
+                    self._failure = EzvizPushFatalError("Invalid MQTT subscription request")
                 c.disconnect()
 
         def subscribed(
             c: mqtt.Client, userdata: Any, mid: int, reasons: Any, properties: Any
         ) -> None:
-            if not reasons or any(reason.is_failure for reason in reasons):
+            if self._closed.is_set() or not self.is_current() or mid != subscription_mid:
+                return
+            self.last_subscribe_reasons = [reason.value for reason in reasons]
+            if any(reason.is_failure for reason in reasons):
+                self.ready.clear()
+                # MQTT 3.1.1 SUBACK 0x80 is an explicit refusal of our only topic.
+                # Retrying unchanged forever would conceal the unusable feed.
+                self._failure = EzvizPushFatalError(
+                    f"MQTT subscription rejected (reasons {self.last_subscribe_reasons}); "
+                    "caller intervention required"
+                )
                 c.disconnect()
+            elif len(reasons) != 1 or reasons[0].value not in (0, 1):
+                c.disconnect()  # Malformed acknowledgement, not proof of authorization failure.
             else:
                 self.ready.set()
 
         def received(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-            if self.is_current():
+            if not self._closed.is_set() and self.is_current():
                 self._receive(c, msg, credentials.session_key)
 
         def disconnected(

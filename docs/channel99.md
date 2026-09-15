@@ -180,3 +180,17 @@ marker is committed, failure to save returned device keys leaves that marker in
 place: automatic retries must not allocate another device. This differs from
 HTTPS token rotation, where the server has already rotated the credentials and
 the new credentials must remain in memory even if their save fails.
+
+### Broker setup failures
+
+The worker surfaces permanent MQTT CONNACK refusals (invalid identity,
+credentials, authorization or protocol negotiation) through `raise_if_failed()`.
+An explicit SUBACK refusal of the single event topic is also fatal: MQTT 3.1.1
+provides no more specific reason for that refusal. Callers should inspect account
+permissions/configuration rather than silently retrying the same subscription.
+Server-unavailable responses and transport failures remain retryable. Missing
+CONNACK/SUBACK responses time out after 30 seconds of broker setup and retry with
+fresh LBS credentials. Only a matching successful SUBACK marks the session ready;
+late callbacks during shutdown cannot restore readiness or deliver messages.
+Numeric broker reasons are retained for diagnostics, and transport cleanup errors
+cannot replace an already-recorded permanent refusal.

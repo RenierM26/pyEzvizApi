@@ -700,11 +700,13 @@ class EzvizClient:
             ):
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
-                # Re-login and retry once
-                self.login()
+                # Re-login can also move the account to another regional API.
+                with self._token_lock:
+                    self.login()
+                    retry_url = urlunsplit(urlsplit(url)._replace(netloc=self._token["api_url"]))
                 return self._http_request(
                     method,
-                    url,
+                    retry_url,
                     params=params,
                     data=data,
                     json_body=json_body,

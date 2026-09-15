@@ -316,3 +316,23 @@ def test_prepared_request_uses_rotated_header_on_retry(monkeypatch):
     monkeypatch.setattr(client, "login", login)
     assert client._send_prepared(prepared).status_code == 200
     assert sent == ["old", "rotated"]
+
+
+def test_polling_retry_uses_refreshed_region_and_headers(monkeypatch):
+    client = EzvizClient(token={"session_id": "old", "api_url": "old.invalid"})
+    sent = []
+
+    def request(**kwargs):
+        sent.append((kwargs["url"], client._session.headers["sessionId"]))
+        return _response({"meta": {"code": 200}}, status_code=401 if len(sent) == 1 else 200)
+
+    def login():
+        client._token["api_url"] = "new.invalid"
+        client._token["session_id"] = "rotated"
+        client._session.headers["sessionId"] = "rotated"
+
+    monkeypatch.setattr(client._session, "request", request)
+    monkeypatch.setattr(client, "login", login)
+    client._request_json("GET", "/path?raw=%2F")
+    assert sent == [("https://old.invalid/path?raw=%2F", "old"),
+                    ("https://new.invalid/path?raw=%2F", "rotated")]

@@ -1,43 +1,49 @@
-"""Ezviz cloud MQTT client for push messages.
+"""EZVIZ channel-99 push client with the historical MQTTClient API name.
 
-Synchronous MQTT client tailored for EZVIZ push notifications as used by
-`pyezvizapi` and Home Assistant integrations. Handles the EZVIZ registration
-flow, starts/stops push, maintains a long-lived MQTT connection, and decodes
-incoming payloads into a structured form.
-
-This module is intentionally synchronous (uses `requests` and
-`paho-mqtt`'s background network thread via `loop_start()`), which keeps
-integration code simple. If you later migrate to an async HA integration,
-wrap the blocking calls with `hass.async_add_executor_job`.
-
-Example:
-    >>> client = MQTTClient(token)
-    >>> client.connect()
-    >>> # ... handle callbacks or read client.messages_by_device ...
-    >>> client.stop()
-
+Login registration uses the Android profile; LBS negotiates the device/session
+keys before a background MQTT connection delivers decoded notifications.
+Call EzvizClient.enable_channel99() to migrate an old web-profile login and
+provide a synchronous token persistence callback before connecting.
 """
 
 from __future__ import annotations
 
-import base64
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import suppress
+from copy import deepcopy
 import json
 import logging
-from typing import Any, Final, TypedDict
+from threading import RLock
+from typing import Any, Final, TypedDict, cast
 
-import paho.mqtt.client as mqtt
 import requests
 
-from .api_endpoints import (
-    API_ENDPOINT_REGISTER_MQTT,
-    API_ENDPOINT_START_MQTT,
-    API_ENDPOINT_STOP_MQTT,
+from ._auth import discover_services, isolated_session, refresh_credentials
+from ._longlink_profile import (
+    HEADERS as PUSH_HEADERS,
+    PROFILE as PUSH_PROFILE,
+    REGISTER as PUSH_REGISTER,
 )
-from .constants import APP_SECRET, DEFAULT_TIMEOUT, FEATURE_CODE, MQTT_APP_KEY
-from .exceptions import HTTPError, InvalidURL, PyEzvizError
+from ._longlink_session import Channel99Session
+from ._longlink_worker import PushWorker
+from ._token import (
+    ClientToken as EzvizToken,
+    ServiceUrls,
+    _push_endpoint,
+    _push_serial,
+    validate_push_token,
+)
+from .constants import DEFAULT_TIMEOUT, FEATURE_CODE, REQUEST_HEADER
+from .exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizPushFatalError,
+    EzvizTokenPersistenceError,
+    HTTPError,
+    PyEzvizError,
+)
+
+__all__ = ["EXT_FIELD_NAMES", "EzvizToken", "MQTTClient", "MqttData", "ServiceUrls"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,30 +51,6 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Typed structures
 # ---------------------------------------------------------------------------
-
-
-class ServiceUrls(TypedDict):
-    """Service URLs present in the EZVIZ auth token.
-
-    Attributes:
-        pushAddr: Hostname of the EZVIZ push/MQTT entry point.
-    """
-
-    pushAddr: str
-
-
-class EzvizToken(TypedDict):
-    """Minimal shape of the EZVIZ token required for MQTT.
-
-    Attributes:
-        username: Internal EZVIZ username.
-        session_id: Current session id.
-        service_urls: Nested object containing at least ``pushAddr``.
-    """
-
-    username: str
-    session_id: str
-    service_urls: ServiceUrls
 
 
 class MqttData(TypedDict):
@@ -156,6 +138,8 @@ class MQTTClient:
         on_message_callback: Callable[[dict[str, Any]], None] | None = None,
         *,
         max_messages: int = 1000,
+        on_token_updated: Callable[[dict[str, Any]], None] | None = None,
+        _token_lock: RLock | None = None,
     ) -> None:
         """Initialize the Ezviz MQTT client.
 
@@ -167,12 +151,15 @@ class MQTTClient:
                 Must include:
                     - 'username': Ezviz account username (The account aliase or generated one.)
                     - 'session_id': session token for API access
-                    - 'service_urls': dictionary containing at least 'pushAddr'
+                    - 'service_urls': channel-99 pushDasDomain/pushDasPort discovery
             timeout (int, optional): HTTP request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
             session (requests.Session): Pre-configured requests session for HTTP calls.
             on_message_callback (Callable[[dict[str, Any]], None], optional): Optional callback function
                 that will be called for each decoded MQTT message. The callback receives
                 a dictionary with the message data. Defaults to None.
+            on_token_updated:
+                Synchronous callback receiving the complete token snapshot. Must
+                durably save it before returning; required for push reception.
             max_messages:
                 Maximum number of device entries kept in :attr:`messages_by_device`.
                 Oldest entries are evicted when the limit is exceeded. Defaults to ``1000``.
@@ -186,21 +173,16 @@ class MQTTClient:
             )
 
         # Requests session (synchronous)
+        self._token_lock = _token_lock if _token_lock is not None else RLock()
         self._session = session
 
         self._token: EzvizToken | dict = token
         self._timeout: int = timeout
-        self._topic: str = f"{MQTT_APP_KEY}/#"
         self._on_message_callback = on_message_callback
+        self._on_token_updated = on_token_updated
+        self._push_worker: PushWorker | None = None
         self._max_messages: int = max_messages
 
-        self._mqtt_data: MqttData = {
-            "mqtt_clientid": None,
-            "ticket": None,
-            "push_url": token["service_urls"]["pushAddr"],
-        }
-
-        self.mqtt_client: mqtt.Client | None = None
         # Keep last payload per device, bounded by ``max_messages``
         self.messages_by_device: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
@@ -209,130 +191,161 @@ class MQTTClient:
     # ------------------------------------------------------------------
 
     def connect(self, *, clean_session: bool = False, keepalive: int = 60) -> None:
-        """Connect to the Ezviz MQTT broker and start receiving push messages.
+        """Start background channel-99 registration, negotiation and reception.
 
-        This method performs the following steps:
-            1. Registers the client with Ezviz push service.
-            2. Starts push notifications for this client.
-            3. Configures and connects the underlying MQTT client.
-            4. Starts the MQTT network loop in a background thread.
-
-        Keyword Args:
-          clean_session (bool, optional): Whether to start a clean MQTT session. Defaults to False.
-          keepalive (int, optional): Keep-alive interval in seconds for the MQTT connection. Defaults to 60.
-
-        Raises:
-          PyEzvizError: If required Ezviz credentials are missing or registration/start fails.
-          InvalidURL: If a push API endpoint is invalid or unreachable.
-          HTTPError: If a push API request returns a non-success status.
+        Returns before broker acceptance. Keep polling independent of push.
+        clean_session and keepalive remain accepted for source compatibility;
+        channel-99 uses its native clean-session profile and server keepalive.
         """
-        self._register_ezviz_push()
-        self._start_ezviz_push()
-        self._configure_mqtt(clean_session=clean_session)
-        assert self.mqtt_client is not None
-        self.mqtt_client.connect(self._mqtt_data["push_url"], 1882, keepalive)
-        self.mqtt_client.loop_start()
+        if self._token.get("push_profile") != PUSH_PROFILE:
+            raise EzvizAuthTokenExpired(
+                "Legacy push registration is no longer supported; migrate with "
+                "EzvizClient.enable_channel99() and persist the returned token"
+            )
+        self._connect_channel99()
+
+    def raise_if_failed(self) -> None:
+        """Raise a fatal background error; call periodically while listening."""
+        if self._push_worker is not None:
+            self._push_worker.raise_if_failed()
 
     def stop(self) -> None:
-        """Stop the MQTT client and push notifications.
+        """Cancel push without calling the obsolete HTTP stop endpoint.
 
-        This method stops the MQTT network loop, disconnects from the broker,
-        and signals the Ezviz API to stop push notifications.
-
-        This method is idempotent and can be called multiple times safely.
-
-        Raises:
-          PyEzvizError: If stopping the push service fails.
+        Raises TimeoutError if in-flight setup exceeds the worker join deadline.
+        Cancellation remains signalled; do not start another worker until it exits.
         """
-        if self.mqtt_client:
+        if self._push_worker is not None:
+            self._push_worker.stop()
+
+    def _connect_channel99(self) -> None:
+        """Start push in the background; persistence runs on the worker thread."""
+        if self._on_token_updated is None:
+            raise PyEzvizError("Channel-99 requires on_token_updated to durably save the token")
+        token = cast(dict[str, Any], self._token)
+        with self._token_lock:
+            validate_push_token(token)
+
+        def save_token(snapshot: dict[str, Any]) -> None:
+            assert self._on_token_updated is not None
             try:
-                # Stop background thread and disconnect
-                self.mqtt_client.loop_stop()
-                self.mqtt_client.disconnect()
-            except (OSError, ValueError, RuntimeError) as err:
-                _LOGGER.debug("MQTT disconnect failed: %s", err)
-        # Always attempt to stop push on server side
-        self._stop_ezviz_push()
+                self._on_token_updated(snapshot)
+            except Exception as error:
+                raise EzvizTokenPersistenceError("Failed to persist channel-99 credentials") from error
+
+        def new_session() -> Channel99Session:
+            # Logins may replace discovery or the user; bind each attempt to one
+            # identity and never let an obsolete attempt overwrite the new token.
+            with self._token_lock:
+                user_id = token["user_id"]
+                serial = _push_serial(user_id)
+                state = deepcopy(token.get("push_state", {}))
+                if not isinstance(state, dict):
+                    raise PyEzvizError("Invalid saved push state")
+
+                def current() -> bool:
+                    return token.get("user_id") == user_id
+
+                def credentials_input() -> str:
+                    with self._token_lock:
+                        if not current():
+                            raise PyEzvizError("Push identity changed; reconnect required")
+                        return cast(str, token["session_id"])
+
+                def save(snapshot: dict[str, Any]) -> None:
+                    with self._token_lock:
+                        if not current():
+                            raise PyEzvizError("Push identity changed; reconnect required")
+                        # Stage a detached snapshot: a failed pre-allocation save
+                        # must not poison the shared token with creation_pending.
+                        # After allocation, the previously committed pending guard
+                        # remains in place if saving the returned device keys fails.
+                        committed_state = deepcopy(snapshot)
+                        candidate = deepcopy(dict(token))
+                        candidate["push_state"] = deepcopy(committed_state)
+                        save_token(candidate)
+                        if not current():
+                            raise PyEzvizError("Push identity changed; reconnect required")
+                        token["push_state"] = committed_state
+
+                return Channel99Session(
+                    _push_endpoint(token.get("service_urls", {})),
+                    serial,
+                    credentials_input,
+                    state,
+                    save,
+                    self._handle_payload,
+                    prepare=lambda: self._prepare_channel99(token, save_token),
+                    is_current=current,
+                )
+
+        if self._push_worker is None:
+            self._push_worker = PushWorker(new_session)
+        self._push_worker.start()
+
+    def _prepare_channel99(
+        self, token: dict[str, Any], save_token: Callable[[dict[str, Any]], None]
+    ) -> None:
+        """Register push, refreshing rejected HTTPS credentials once per attempt."""
+        # Isolate requests state from the owner's concurrent polling requests.
+        with self._token_lock:
+            session = isolated_session(self._session)
+        for name, value in REQUEST_HEADER.items():
+            session.headers.setdefault(name, value)
+        session.headers.update(PUSH_HEADERS)
+        session.headers["featureCode"] = FEATURE_CODE
+        for attempt in range(2):
+            session.headers["sessionId"] = token["session_id"]
+            response = session.put(
+                f"https://{token['api_url']}/v3/push/token",
+                params=PUSH_REGISTER,
+                timeout=self._timeout,
+                allow_redirects=False,
+            )
+            expired = response.status_code in (401, 403)
+            if not expired:
+                response.raise_for_status()
+                code = response.json().get("meta", {}).get("code")
+                if code == 200:
+                    return
+                expired = code in (401, 403)
+            if not expired:
+                raise PyEzvizError("Channel-99 registration rejected")
+            if attempt or not token.get("rf_session_id"):
+                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
+            try:
+                with self._token_lock:
+                    def notify() -> None:
+                        # Keep the polling transport current even if persistence fails.
+                        self._session.headers["sessionId"] = token["session_id"]
+                        save_token(deepcopy(token))
+
+                    refresh_credentials(
+                        session, token, self._timeout, notify,
+                        lambda: discover_services(session, token, self._timeout),
+                    )
+            except EzvizAuthTokenExpired as error:
+                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
+            except HTTPError as error:
+                cause = error.__cause__
+                if (isinstance(cause, requests.HTTPError) and cause.response is not None
+                        and cause.response.status_code in (401, 403)):
+                    raise EzvizPushFatalError("Channel-99 refresh rejected; reauthentication required") from error
+                raise
 
     # ------------------------------------------------------------------
     # MQTT callbacks
     # ------------------------------------------------------------------
 
-    def _on_subscribe(
-        self, client: mqtt.Client, userdata: Any, mid: int, granted_qos: tuple[int, ...]
-    ) -> None:
-        """Handle subscription acknowledgement from the broker."""
-        _LOGGER.debug(
-            "MQTT subscribed: topic=%s mid=%s qos=%s", self._topic, mid, granted_qos
-        )
-
-    def _on_connect(
-        self, client: mqtt.Client, userdata: Any, flags: dict, rc: int
-    ) -> None:
-        """Handle successful or failed MQTT connection attempts.
-
-        Subscribes to the topic if this is a new session and logs connection status.
-
-        Args:
-            client (mqtt.Client): The MQTT client instance.
-            userdata (Any): The user data passed to the client (not used).
-            flags (dict): MQTT flags dictionary, includes 'session present'.
-            rc (int): MQTT connection result code. 0 indicates success.
-        """
-        session_present = (
-            flags.get("session present") if isinstance(flags, dict) else None
-        )
-        _LOGGER.debug("MQTT connected: rc=%s session_present=%s", rc, session_present)
-        if rc == 0 and not session_present:
-            client.subscribe(self._topic, qos=2)
-        if rc != 0:
-            # Let paho handle reconnects (reconnect_delay_set configured)
-            _LOGGER.error(
-                "MQTT connect failed: serial=%s code=%s msg=%s",
-                "unknown",
-                rc,
-                "connect_failed",
-            )
-
-    def _on_disconnect(self, client: mqtt.Client, userdata: Any, rc: int) -> None:
-        """Called when the MQTT client disconnects from the broker.
-
-        Logs the disconnection. Automatic reconnects are handled by paho-mqtt.
-
-        Args:
-            client (mqtt.Client): The MQTT client instance.
-            userdata (Any): The user data passed to the client (not used).
-            rc (int): Disconnect result code. 0 indicates a clean disconnect.
-        """
-        _LOGGER.debug(
-            "MQTT disconnected: serial=%s code=%s msg=%s",
-            "unknown",
-            rc,
-            "disconnected",
-        )
-
-    def _on_message(
-        self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage
-    ) -> None:
-        """Handle incoming MQTT messages.
-
-        Decodes the payload, updates `messages_by_device` with the latest message,
-        and calls the optional user callback.
-
-        Args:
-            client (mqtt.Client): The MQTT client instance.
-            userdata (Any): The user data passed to the client (not used).
-            msg (mqtt.MQTTMessage): The MQTT message object containing payload and topic.
-        """
+    def _handle_payload(self, payload: bytes) -> None:
+        """Preserve the public decoded-message/cache contract across transports."""
         try:
-            decoded = self.decode_mqtt_message(msg.payload)
+            decoded = self.decode_mqtt_message(payload)
         except PyEzvizError as err:
             _LOGGER.warning("MQTT decode error: msg=%s", str(err))
             return
 
-        ext: dict[str, Any] = (
-            decoded.get("ext", {}) if isinstance(decoded.get("ext"), dict) else {}
-        )
+        ext: dict[str, Any] = decoded.get("ext", {}) if isinstance(decoded.get("ext"), dict) else {}
         device_serial = ext.get("device_serial")
         alert_code = ext.get("alert_type_code")
         msg_id = ext.get("msgId")
@@ -357,212 +370,6 @@ class MQTTClient:
                 self._on_message_callback(decoded)
             except Exception:
                 _LOGGER.exception("The on_message_callback raised")
-
-    # ------------------------------------------------------------------
-    # HTTP helpers
-    # ------------------------------------------------------------------
-
-    def _register_ezviz_push(self) -> None:
-        """Register the client with the Ezviz push service.
-
-        Sends the necessary information to Ezviz to obtain a unique MQTT client ID.
-
-        Raises:
-            PyEzvizError: If the registration fails or the API returns a non-200 status.
-            InvalidURL: If the push service URL is invalid or unreachable.
-            HTTPError: If the HTTP request fails for other reasons.
-        """
-        auth_seq = (
-            "Basic "
-            + base64.b64encode(f"{MQTT_APP_KEY}:{APP_SECRET}".encode("ascii")).decode()
-        )
-
-        payload = {
-            "appKey": MQTT_APP_KEY,
-            "clientType": "5",
-            "mac": FEATURE_CODE,
-            "token": "123456",
-            "version": "v1.3.0",
-        }
-
-        try:
-            req = self._session.post(
-                f"https://{self._mqtt_data['push_url']}{API_ENDPOINT_REGISTER_MQTT}",
-                allow_redirects=False,
-                headers={"Authorization": auth_seq},
-                data=payload,
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-        except requests.HTTPError as err:  # network OK, HTTP error status
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-        except requests.ConnectionError as err:
-            raise InvalidURL("Invalid URL or proxy error") from err
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "Response was: "
-                + str(req.text)
-            ) from err
-
-        if json_output.get("status") != 200:
-            raise PyEzvizError(
-                f"Could not register to EZVIZ mqtt server: Got {json_output})"
-            )
-
-        # Persist client id from payload
-        self._mqtt_data["mqtt_clientid"] = json_output["data"]["clientId"]
-
-    def _start_ezviz_push(self) -> None:
-        """Start push notifications for this client with the Ezviz API.
-
-        Sends the client ID, session ID, and username to Ezviz so that the server
-        will start pushing messages to this client.
-
-        Raises:
-            PyEzvizError: If the API fails to start push notifications or returns a non-200 status.
-            InvalidURL: If the push service URL is invalid or unreachable.
-            HTTPError: If the HTTP request fails for other reasons.
-        """
-        payload = {
-            "appKey": MQTT_APP_KEY,
-            "clientId": self._mqtt_data["mqtt_clientid"],
-            "clientType": 5,
-            "sessionId": self._token["session_id"],
-            "username": self._token["username"],
-            "token": "123456",
-        }
-
-        try:
-            req = self._session.post(
-                f"https://{self._mqtt_data['push_url']}{API_ENDPOINT_START_MQTT}",
-                allow_redirects=False,
-                data=payload,
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-        except requests.HTTPError as err:
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-        except requests.ConnectionError as err:
-            raise InvalidURL("Invalid URL or proxy error") from err
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "Response was: "
-                + str(req.text)
-            ) from err
-
-        if json_output.get("status") != 200:
-            raise PyEzvizError(
-                f"Could not signal EZVIZ mqtt server to start pushing messages: Got {json_output})"
-            )
-
-        self._mqtt_data["ticket"] = json_output["ticket"]
-        _LOGGER.debug(
-            "MQTT ticket acquired: client_id=%s", self._mqtt_data["mqtt_clientid"]
-        )
-
-    def _stop_ezviz_push(self) -> None:
-        """Stop push notifications for this client via the Ezviz API.
-
-        Sends the client ID and session information to stop further messages.
-
-        Raises:
-            PyEzvizError: If the API fails to stop push notifications or returns a non-200 status.
-            InvalidURL: If the push service URL is invalid or unreachable.
-            HTTPError: If the HTTP request fails for other reasons.
-        """
-        payload = {
-            "appKey": MQTT_APP_KEY,
-            "clientId": self._mqtt_data["mqtt_clientid"],
-            "clientType": 5,
-            "sessionId": self._token["session_id"],
-            "username": self._token["username"],
-        }
-
-        try:
-            req = self._session.post(
-                f"https://{self._mqtt_data['push_url']}{API_ENDPOINT_STOP_MQTT}",
-                data=payload,
-                timeout=self._timeout,
-            )
-            req.raise_for_status()
-        except requests.HTTPError as err:
-            raise HTTPError from err
-
-        try:
-            json_output = req.json()
-        except requests.ConnectionError as err:
-            raise InvalidURL("Invalid URL or proxy error") from err
-        except ValueError as err:
-            raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "Response was: "
-                + str(req.text)
-            ) from err
-
-        if json_output.get("status") != 200:
-            raise PyEzvizError(
-                f"Could not signal EZVIZ mqtt server to stop pushing messages: Got {json_output})"
-            )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _configure_mqtt(self, *, clean_session: bool) -> None:
-        """Internal helper to configure and connect the paho-mqtt client.
-
-        This method sets up the MQTT client with:
-            - Callbacks for connect, disconnect, subscribe, and message
-            - Username and password authentication
-            - Reconnect delay settings
-            - Broker connection on the configured topic
-
-        Args:
-            clean_session (bool): Whether to start a clean MQTT session.
-
-        Notes:
-            This method is called automatically by `connect()`.
-
-        """
-        broker = self._mqtt_data["push_url"]
-
-        client_kwargs: dict[str, Any] = {
-            "client_id": self._mqtt_data["mqtt_clientid"],
-            "clean_session": clean_session,
-            "protocol": mqtt.MQTTv311,
-            "transport": "tcp",
-        }
-        callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
-        if callback_api_version is not None:
-            client_kwargs["callback_api_version"] = callback_api_version.VERSION1
-
-        mqtt_client = mqtt.Client(**client_kwargs)
-        self.mqtt_client = mqtt_client
-
-        # Bind callbacks
-        mqtt_client.on_connect = self._on_connect
-        mqtt_client.on_disconnect = self._on_disconnect
-        mqtt_client.on_subscribe = self._on_subscribe
-        mqtt_client.on_message = self._on_message
-
-        # Auth (do not log these!)
-        mqtt_client.username_pw_set(MQTT_APP_KEY, APP_SECRET)
-
-        # Backoff for reconnects handled by paho
-        mqtt_client.reconnect_delay_set(min_delay=5, max_delay=10)
-
-        _LOGGER.debug("Configured MQTT client for broker %s", broker)
 
     def _cache_message(self, device_serial: str, payload: dict[str, Any]) -> None:
         """Cache latest message per device with an LRU-like policy.

@@ -26,13 +26,16 @@ def test_client_init_with_token_sets_session_header() -> None:
     assert client.export_token() == {"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"}
 
 
-def test_export_token_returns_shallow_copy() -> None:
+def test_export_token_returns_independent_snapshot() -> None:
     client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
 
+    client._token["push_state"] = {"device": {"id": "original"}}
     exported = client.export_token()
     exported["session_id"] = "changed"
+    exported["push_state"]["device"]["id"] = "changed"
 
     assert client.export_token()["session_id"] == "session-id"
+    assert client.export_token()["push_state"]["device"]["id"] == "original"
 
 
 def test_close_session_resets_requests_session_and_default_headers() -> None:
@@ -113,7 +116,8 @@ def test_login_refresh_uses_existing_service_urls(monkeypatch) -> None:
     assert client.login()["service_urls"] == {"pushAddr": "existing.example.test"}
 
 
-def test_login_refresh_expired_without_credentials_raises(monkeypatch) -> None:
+@pytest.mark.parametrize("status", [401, 403])
+def test_login_refresh_expired_without_credentials_raises(monkeypatch, status) -> None:
     client = EzvizClient(
         token={
             "session_id": "old-session",
@@ -121,7 +125,7 @@ def test_login_refresh_expired_without_credentials_raises(monkeypatch) -> None:
             "api_url": "apiieu.ezvizlife.com",
         }
     )
-    monkeypatch.setattr(client._session, "put", lambda **kwargs: _response({"meta": {"code": 403}}))
+    monkeypatch.setattr(client._session, "put", lambda **kwargs: _response({"meta": {"code": status}}))
 
     with pytest.raises(EzvizAuthTokenExpired):
         client.login()
@@ -294,3 +298,41 @@ def test_logout_wraps_invalid_json(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Impossible to decode response"):
         client.logout()
+
+
+def test_prepared_request_uses_rotated_header_on_retry(monkeypatch):
+    client = EzvizClient(token={"session_id": "old", "api_url": "api.example.test"})
+    prepared = client._session.prepare_request(requests.Request("GET", "https://api.example.test/path"))
+    sent = []
+
+    def send(request, **kwargs):
+        sent.append(request.headers["sessionId"])
+        return _response({}, status_code=401 if len(sent) == 1 else 200)
+
+    def login():
+        client._session.headers["sessionId"] = "rotated"
+
+    monkeypatch.setattr(client._session, "send", send)
+    monkeypatch.setattr(client, "login", login)
+    assert client._send_prepared(prepared).status_code == 200
+    assert sent == ["old", "rotated"]
+
+
+def test_polling_retry_uses_refreshed_region_and_headers(monkeypatch):
+    client = EzvizClient(token={"session_id": "old", "api_url": "old.invalid"})
+    sent = []
+
+    def request(**kwargs):
+        sent.append((kwargs["url"], client._session.headers["sessionId"]))
+        return _response({"meta": {"code": 200}}, status_code=401 if len(sent) == 1 else 200)
+
+    def login():
+        client._token["api_url"] = "new.invalid"
+        client._token["session_id"] = "rotated"
+        client._session.headers["sessionId"] = "rotated"
+
+    monkeypatch.setattr(client._session, "request", request)
+    monkeypatch.setattr(client, "login", login)
+    client._request_json("GET", "/path?raw=%2F")
+    assert sent == [("https://old.invalid/path?raw=%2F", "old"),
+                    ("https://new.invalid/path?raw=%2F", "rotated")]

@@ -642,7 +642,7 @@ pyezvizapi home_defence_mode --mode HOME_MODE
 
 ### mqtt
 
-Connect to Ezviz MQTT push notifications using the current session token. Use `--debug` to see connection details.
+Receive channel-99 push notifications. Old web-profile logins require credential/MFA migration; tokens and push keys are saved privately throughout the connection. See the [migration guide](docs/channel99.md).
 
 ```bash
 pyezvizapi mqtt
@@ -659,8 +659,7 @@ python examples/mqtt_listener.py --token-file ezviz_token.json
 # Interactive login, then save token for next time
 python examples/mqtt_listener.py --save-token
 
-# Explicit credentials (not recommended for shared terminals)
-python examples/mqtt_listener.py -u USER -p PASS --save-token
+# Token saving is mandatory for channel-99; --save-token remains a compatibility flag.
 ```
 
 ### pagelist

@@ -19,6 +19,7 @@ from Crypto.Cipher import AES
 from cryptography import x509
 import xmltodict
 
+from ._token import validate_feature_code
 from .constants import FEATURE_CODE, XOR_KEY
 from .exceptions import InvalidHost, PyEzvizError
 
@@ -428,6 +429,7 @@ class EzvizCAS:
             raise PyEzvizError(
                 "Missing service_urls in token; call EzvizClient.login() first"
             )
+        validate_feature_code(token)
         self._service_urls: dict[str, Any] = token["service_urls"]
 
     def _cloud_address(self) -> tuple[str, int]:
@@ -435,16 +437,6 @@ class EzvizCAS:
         host = cast(str, self._service_urls["sysConf"][15])
         port = cast(int, self._service_urls["sysConf"][16])
         return host, port
-
-    def _hardware_code(self) -> str:
-        """Return the app-style hardware/feature code used to mint CAS tuples."""
-        return cast(
-            str,
-            self._token.get("hardware_code")
-            or self._token.get("feature_code")
-            or self._token.get("featureCode")
-            or FEATURE_CODE,
-        )
 
     def _send_cas_payload(
         self,
@@ -515,7 +507,7 @@ class EzvizCAS:
             _build_operation_code_request(
                 session_id=cast(str | None, self._token["session_id"]),
                 devserial=devserial,
-                hardware_code=self._hardware_code(),
+                hardware_code=FEATURE_CODE,
                 client_type=self._client_type,
             ),
             host=host,
@@ -533,7 +525,7 @@ class EzvizCAS:
             doc = xmltodict.parse(body)
         except ExpatError as err:
             raise PyEzvizError("Could not parse CAS get-encryption XML response") from err
-        return cast(dict[str, Any], doc)
+        return doc
 
     def probe_local_operation_code(
         self,
@@ -547,7 +539,7 @@ class EzvizCAS:
             _build_operation_code_request(
                 session_id=cast(str | None, self._token["session_id"]),
                 devserial=devserial,
-                hardware_code=self._hardware_code(),
+                hardware_code=FEATURE_CODE,
                 client_type=self._client_type,
             ),
             host=host,

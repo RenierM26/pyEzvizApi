@@ -192,6 +192,40 @@ def test_login_with_sms_code_sets_mfa_payload(monkeypatch) -> None:
     assert captured["data"]["smsCode"] == 123456
 
 
+def test_login_with_sms_code_keeps_code_after_region_redirect(monkeypatch) -> None:
+    client = EzvizClient(account="user@example.test", password="secret", url="eu")
+    posts: list[dict[str, Any]] = []
+
+    def fake_post(**kwargs: Any) -> requests.Response:
+        posts.append(kwargs)
+        if len(posts) == 1:
+            return _response(
+                {"meta": {"code": 1100}, "loginArea": {"apiDomain": "apiisgp.ezvizlife.com"}}
+            )
+        return _response(
+            {
+                "meta": {"code": 200},
+                "loginSession": {
+                    "sessionId": "session-id",
+                    "rfSessionId": "refresh-id",
+                },
+                "loginUser": {"username": "internal-user"},
+                "loginArea": {"apiDomain": "apiisgp.ezvizlife.com"},
+            }
+        )
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {})
+    monkeypatch.setattr(client, "send_mfa_code", lambda: pytest.fail("must not request a new code"))
+
+    client.login(sms_code=123456)
+
+    assert len(posts) == 2
+    assert posts[1]["url"] == "https://apiisgp.ezvizlife.com/v3/users/login/v5"
+    assert posts[1]["data"]["msgType"] == "3"
+    assert posts[1]["data"]["smsCode"] == 123456
+
+
 def test_login_mfa_required_sends_code_and_raises(monkeypatch) -> None:
     client = EzvizClient(account="user@example.test", password="secret")
     send_calls = 0

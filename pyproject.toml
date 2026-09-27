@@ -32,7 +32,7 @@ dependencies = [
   "xmltodict",
   "pycryptodome",
   "cryptography",
-  "paho-mqtt"
+  "paho-mqtt>=2.0"
 ]
 
 [project.urls]

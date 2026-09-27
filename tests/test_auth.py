@@ -26,13 +26,16 @@ def test_client_init_with_token_sets_session_header() -> None:
     assert client.export_token() == {"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"}
 
 
-def test_export_token_returns_shallow_copy() -> None:
+def test_export_token_returns_independent_snapshot() -> None:
     client = EzvizClient(token={"session_id": "session-id", "api_url": "apiieu.ezvizlife.com"})
 
+    client._token["push_state"] = {"device": {"id": "original"}}
     exported = client.export_token()
     exported["session_id"] = "changed"
+    exported["push_state"]["device"]["id"] = "changed"
 
     assert client.export_token()["session_id"] == "session-id"
+    assert client.export_token()["push_state"]["device"]["id"] == "original"
 
 
 def test_close_session_resets_requests_session_and_default_headers() -> None:
@@ -113,7 +116,8 @@ def test_login_refresh_uses_existing_service_urls(monkeypatch) -> None:
     assert client.login()["service_urls"] == {"pushAddr": "existing.example.test"}
 
 
-def test_login_refresh_expired_without_credentials_raises(monkeypatch) -> None:
+@pytest.mark.parametrize("status", [401, 403])
+def test_login_refresh_expired_without_credentials_raises(monkeypatch, status) -> None:
     client = EzvizClient(
         token={
             "session_id": "old-session",
@@ -121,10 +125,48 @@ def test_login_refresh_expired_without_credentials_raises(monkeypatch) -> None:
             "api_url": "apiieu.ezvizlife.com",
         }
     )
-    monkeypatch.setattr(client._session, "put", lambda **kwargs: _response({"meta": {"code": 403}}))
+    monkeypatch.setattr(client._session, "put", lambda **kwargs: _response({"meta": {"code": status}}))
 
     with pytest.raises(EzvizAuthTokenExpired):
         client.login()
+
+
+def test_login_refresh_fallback_keeps_mfa_code(monkeypatch) -> None:
+    client = EzvizClient(
+        account="user@example.test",
+        password="secret",
+        token={
+            "session_id": "old-session",
+            "rf_session_id": "old-refresh",
+            "api_url": "apiieu.ezvizlife.com",
+        },
+    )
+    monkeypatch.setattr(
+        client._session, "put", lambda **kwargs: _response({"meta": {"code": 403}})
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_post(**kwargs: Any) -> requests.Response:
+        captured.update(kwargs)
+        return _response(
+            {
+                "meta": {"code": 200},
+                "loginSession": {
+                    "sessionId": "session-id",
+                    "rfSessionId": "refresh-id",
+                },
+                "loginUser": {"username": "internal-user"},
+                "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+            }
+        )
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {})
+
+    client.login(sms_code=123456)
+
+    assert captured["data"]["msgType"] == "3"
+    assert captured["data"]["smsCode"] == 123456
 
 
 def test_login_with_credentials_posts_hashed_password_and_stores_token(monkeypatch) -> None:
@@ -190,6 +232,40 @@ def test_login_with_sms_code_sets_mfa_payload(monkeypatch) -> None:
     assert captured["data"]["msgType"] == "3"
     assert captured["data"]["bizType"] == "TERMINAL_BIND"
     assert captured["data"]["smsCode"] == 123456
+
+
+def test_login_with_sms_code_keeps_code_after_region_redirect(monkeypatch) -> None:
+    client = EzvizClient(account="user@example.test", password="secret", url="eu")
+    posts: list[dict[str, Any]] = []
+
+    def fake_post(**kwargs: Any) -> requests.Response:
+        posts.append(kwargs)
+        if len(posts) == 1:
+            return _response(
+                {"meta": {"code": 1100}, "loginArea": {"apiDomain": "apiisgp.ezvizlife.com"}}
+            )
+        return _response(
+            {
+                "meta": {"code": 200},
+                "loginSession": {
+                    "sessionId": "session-id",
+                    "rfSessionId": "refresh-id",
+                },
+                "loginUser": {"username": "internal-user"},
+                "loginArea": {"apiDomain": "apiisgp.ezvizlife.com"},
+            }
+        )
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {})
+    monkeypatch.setattr(client, "send_mfa_code", lambda: pytest.fail("must not request a new code"))
+
+    client.login(sms_code=123456)
+
+    assert len(posts) == 2
+    assert posts[1]["url"] == "https://apiisgp.ezvizlife.com/v3/users/login/v5"
+    assert posts[1]["data"]["msgType"] == "3"
+    assert posts[1]["data"]["smsCode"] == 123456
 
 
 def test_login_mfa_required_sends_code_and_raises(monkeypatch) -> None:
@@ -294,3 +370,41 @@ def test_logout_wraps_invalid_json(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Impossible to decode response"):
         client.logout()
+
+
+def test_prepared_request_uses_rotated_header_on_retry(monkeypatch):
+    client = EzvizClient(token={"session_id": "old", "api_url": "api.example.test"})
+    prepared = client._session.prepare_request(requests.Request("GET", "https://api.example.test/path"))
+    sent = []
+
+    def send(request, **kwargs):
+        sent.append(request.headers["sessionId"])
+        return _response({}, status_code=401 if len(sent) == 1 else 200)
+
+    def login():
+        client._session.headers["sessionId"] = "rotated"
+
+    monkeypatch.setattr(client._session, "send", send)
+    monkeypatch.setattr(client, "login", login)
+    assert client._send_prepared(prepared).status_code == 200
+    assert sent == ["old", "rotated"]
+
+
+def test_polling_retry_uses_refreshed_region_and_headers(monkeypatch):
+    client = EzvizClient(token={"session_id": "old", "api_url": "old.invalid"})
+    sent = []
+
+    def request(**kwargs):
+        sent.append((kwargs["url"], client._session.headers["sessionId"]))
+        return _response({"meta": {"code": 200}}, status_code=401 if len(sent) == 1 else 200)
+
+    def login():
+        client._token["api_url"] = "new.invalid"
+        client._token["session_id"] = "rotated"
+        client._session.headers["sessionId"] = "rotated"
+
+    monkeypatch.setattr(client._session, "request", request)
+    monkeypatch.setattr(client, "login", login)
+    client._request_json("GET", "/path?raw=%2F")
+    assert sent == [("https://old.invalid/path?raw=%2F", "old"),
+                    ("https://new.invalid/path?raw=%2F", "rotated")]

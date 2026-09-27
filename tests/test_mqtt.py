@@ -17,7 +17,7 @@ TOKEN = {
 
 
 class OfflineMQTTClient(MQTTClient):
-    """MQTT client that never calls the EZVIZ stop endpoint in tests."""
+    """MQTT client recording decoder-requested shutdown without a worker."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -25,11 +25,6 @@ class OfflineMQTTClient(MQTTClient):
 
     def stop(self) -> None:
         self.stop_called = True
-
-
-class DummyMessage:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
 
 
 def _client(**kwargs: Any) -> OfflineMQTTClient:
@@ -90,14 +85,10 @@ def test_decode_mqtt_message_raises_and_stops_on_malformed_json() -> None:
     assert client.stop_called is True
 
 
-def test_on_message_caches_by_device_and_invokes_callback() -> None:
+def test_payload_handler_caches_by_device_and_invokes_callback() -> None:
     seen: list[dict[str, Any]] = []
     client = _client(on_message_callback=seen.append)
-    message = DummyMessage(
-        json.dumps({"alert": "Person", "ext": "1,time,CAM123,1,2403"}).encode()
-    )
-
-    client._on_message(None, None, message)  # type: ignore[arg-type]
+    client._handle_payload(json.dumps({"alert": "Person", "ext": "1,time,CAM123,1,2403"}).encode())
 
     assert list(client.messages_by_device) == ["CAM123"]
     assert client.messages_by_device["CAM123"]["alert"] == "Person"

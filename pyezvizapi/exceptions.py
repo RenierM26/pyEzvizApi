@@ -31,3 +31,11 @@ class EzvizAuthVerificationCode(PyEzvizError):
 
 class DeviceException(PyEzvizError):
     """Raised when the physical device reports network or operational issues."""
+
+
+class EzvizPushFatalError(PyEzvizError):
+    """Push stopped and requires caller intervention before a new client is started."""
+
+
+class EzvizTokenPersistenceError(EzvizPushFatalError):
+    """Rotating push credentials could not be saved durably."""

@@ -162,7 +162,7 @@ def local_ecdh_media_packet_source(
         stream,
         local_ecdh_packet_to_media_packet,
         duration_from_start=bool(
-            getattr(stream, "supports_deadline_iter_packets", False)
+            getattr(stream, "supports_startup_deadline_iter_packets", False)
         ),
     )
 
@@ -544,6 +544,7 @@ class EzvizLocalSdkEcdhMediaStream:
     """Local SDK media stream that decrypts ECDH/ChaCha20 frames."""
 
     supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
 
     def __init__(
         self,

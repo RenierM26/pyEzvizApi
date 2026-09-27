@@ -14,7 +14,7 @@ from itertools import chain, pairwise
 from pathlib import Path
 import subprocess
 import tempfile
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 import time
 from typing import Any, BinaryIO, Literal, cast
 
@@ -132,7 +132,7 @@ def local_media_packet_source(
         stream,
         local_stream_packet_to_media_packet,
         duration_from_start=bool(
-            getattr(stream, "supports_deadline_iter_packets", False)
+            getattr(stream, "supports_startup_deadline_iter_packets", False)
         ),
     )
 
@@ -641,6 +641,7 @@ class EzvizLocalSdkMediaStream:
     """
 
     supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
 
     def __init__(
         self,
@@ -777,6 +778,7 @@ class HcNetSdkCommandPortMediaStream:
     """Port-8000 HCNetSDK media stream using caller-supplied command frames."""
 
     supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
 
     def __init__(
         self,
@@ -907,6 +909,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
     """Port-8000 stream using the app's native multi-socket command pattern."""
 
     supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
 
     def __init__(
         self,
@@ -933,6 +936,9 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         self._clients: list[HcNetSdkCommandPortClient] = []
         self._keepalive_stop = Event()
         self._keepalive_thread: Thread | None = None
+        self._keepalive_deadline_lock = Lock()
+        self._keepalive_deadline: float | None = None
+        self._keepalive_monotonic: Callable[[], float] = time.monotonic
         self.keepalive_events: list[HcNetSdkCommandPortKeepaliveEvent] = []
         self._read_interrupted = False
 
@@ -945,6 +951,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
     def close(self) -> None:
         """Close all command-port sockets opened by the plan."""
         self._keepalive_stop.set()
+        self._set_keepalive_deadline(None, time.monotonic)
         if self._keepalive_thread is not None:
             self._keepalive_thread.join(timeout=2.0)
             self._keepalive_thread = None
@@ -1049,6 +1056,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
     ) -> None:
         if self._media_client is None or not step.keepalive_frames:
             return
+        self._set_keepalive_deadline(deadline, monotonic)
         if self._keepalive_thread is not None:
             return
 
@@ -1069,13 +1077,16 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                     int.from_bytes(frame[12:16], "big") if len(frame) >= 16 else None
                 )
                 try:
+                    with self._keepalive_deadline_lock:
+                        send_deadline = self._keepalive_deadline
+                        send_monotonic = self._keepalive_monotonic
                     self._media_client.send_command_frame(
                         _hcnetsdk_command_port_frame_with_client_ip(
                             frame,
                             self.local_ip,
                         ),
-                        deadline=deadline,
-                        monotonic=monotonic,
+                        deadline=send_deadline,
+                        monotonic=send_monotonic,
                     )
                 except Exception as err:
                     self.keepalive_events.append(
@@ -1106,6 +1117,16 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
 
         self._keepalive_thread = Thread(target=send_keepalives, daemon=True)
         self._keepalive_thread.start()
+
+    def _set_keepalive_deadline(
+        self,
+        deadline: float | None,
+        monotonic: Callable[[], float],
+    ) -> None:
+        """Update the deadline applied to future background keepalive writes."""
+        with self._keepalive_deadline_lock:
+            self._keepalive_deadline = deadline
+            self._keepalive_monotonic = monotonic
 
     def _read_first_media(
         self,
@@ -1271,7 +1292,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         )
         return self.bootstrap
 
-    def iter_packets(  # noqa: PLR0912
+    def iter_packets(
         self,
         *,
         max_packets: int | None = None,
@@ -1306,16 +1327,39 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         if self._media_client is None:
             raise PyEzvizError("HCNetSDK command-port media socket is closed")
 
+        self._set_keepalive_deadline(deadline, monotonic)
+        try:
+            yield from self._iter_started_packets(
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        finally:
+            self._set_keepalive_deadline(None, time.monotonic)
+
+    def _iter_started_packets(  # noqa: PLR0912
+        self,
+        *,
+        max_packets: int | None,
+        duration_seconds: float | None,
+        deadline: float | None,
+        monotonic: Callable[[], float],
+    ) -> Iterator[EzvizLocalStreamPacket]:
+        """Yield packets after startup while keeping background I/O in budget."""
+        assert self._media_client is not None
         emitted = 0
         if self._first_media is not None:
             if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
+                self._set_keepalive_deadline(deadline, monotonic)
             yield _hcnetsdk_command_port_media_packet(self._first_media)
             emitted += 1
             self._first_media = None
         while self._drained_media and (max_packets is None or emitted < max_packets):
             if deadline is None and duration_seconds is not None:
                 deadline = monotonic() + duration_seconds
+                self._set_keepalive_deadline(deadline, monotonic)
             if deadline is not None and monotonic() >= deadline:
                 break
             yield _hcnetsdk_command_port_media_packet(self._drained_media.pop(0))
@@ -1349,6 +1393,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                 ) from err
             if deadline is None and duration_seconds is not None:
                 deadline = monotonic() + duration_seconds
+                self._set_keepalive_deadline(deadline, monotonic)
             yield _hcnetsdk_command_port_media_packet(media)
             emitted += 1
 
@@ -1357,6 +1402,7 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
     """Port-8000 stream that logs in and renders a generated socket plan."""
 
     supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
 
     def __init__(
         self,

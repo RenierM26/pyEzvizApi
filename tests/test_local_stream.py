@@ -5,6 +5,7 @@ from datetime import date
 import io
 import subprocess
 import sys
+from threading import Event
 import time
 from types import SimpleNamespace
 from typing import Any, cast
@@ -678,6 +679,88 @@ def test_hcnetsdk_background_keepalive_inherits_capture_deadline() -> None:
     assert sent == [{"deadline": deadline, "monotonic": clock}]
     assert stream.keepalive_events[0].error is None
     assert stream.keepalive_events[0].elapsed_seconds >= 0.0
+
+
+def test_hcnetsdk_background_keepalive_uses_updated_capture_deadline() -> None:
+    first_sent = Event()
+    release_first = Event()
+    sent: list[dict[str, object]] = []
+
+    class FakeMediaClient:
+        def send_command_frame(self, _frame: bytes, **kwargs: object) -> None:
+            sent.append(kwargs)
+            if len(sent) == 1:
+                first_sent.set()
+                assert release_first.wait(timeout=1.0)
+
+    step = HcNetSdkCommandPortSocketStep(
+        (
+            build_hcnetsdk_tcp_frame(b"keepalive-1"),
+            build_hcnetsdk_tcp_frame(b"keepalive-2"),
+        ),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(
+            build_hcnetsdk_tcp_frame(b"keepalive-1"),
+            build_hcnetsdk_tcp_frame(b"keepalive-2"),
+        ),
+        keepalive_initial_delay_seconds=0.0,
+        keepalive_interval_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    stream._media_client = cast(Any, FakeMediaClient())  # noqa: SLF001
+    first_clock = lambda: 10.0  # noqa: E731
+    second_clock = lambda: 20.0  # noqa: E731
+
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=11.0,
+        monotonic=first_clock,
+    )
+    assert first_sent.wait(timeout=1.0)
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=21.0,
+        monotonic=second_clock,
+    )
+    release_first.set()
+    assert stream._keepalive_thread is not None  # noqa: SLF001
+    stream._keepalive_thread.join(timeout=1.0)  # noqa: SLF001
+
+    assert sent == [
+        {"deadline": 11.0, "monotonic": first_clock},
+        {"deadline": 21.0, "monotonic": second_clock},
+    ]
+
+
+def test_hcnetsdk_packet_limited_capture_clears_keepalive_deadline() -> None:
+    media_step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((media_step,)),
+    )
+    stream.bootstrap = cast(Any, object())
+    stream._media_client = cast(Any, object())  # noqa: SLF001
+    stream._first_media = _media(b"\x00\x00\x01\xbaabc")  # noqa: SLF001
+
+    packets = list(
+        stream.iter_packets(
+            max_packets=1,
+            duration_seconds=10.0,
+            duration_from_start=True,
+            monotonic=lambda: 5.0,
+        )
+    )
+
+    assert len(packets) == 1
+    assert stream._keepalive_deadline is None  # noqa: SLF001
 
 
 def test_hcnetsdk_multi_socket_plan_rejects_immediate_read_without_media_socket() -> None:

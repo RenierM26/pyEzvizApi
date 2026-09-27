@@ -208,6 +208,7 @@ class VtmStreamClient:
         self._sequence = 0
         self._recv_buffer = bytearray()
         self._pending_header: VtmPacket | None = None
+        self._read_inactivity_deadline: float | None = None
         self.stream_info: StreamInfoResponse | None = None
 
     def __enter__(self) -> VtmStreamClient:
@@ -245,6 +246,7 @@ class VtmStreamClient:
         self._socket = None
         self._recv_buffer.clear()
         self._pending_header = None
+        self._read_inactivity_deadline = None
         if sock is not None:
             sock.close()
 
@@ -277,22 +279,29 @@ class VtmStreamClient:
     ) -> VtmPacket:
         """Read one complete VTM packet from the TCP stream."""
 
-        header = self._pending_header
-        if header is None:
-            header = decode_vtm_header(
-                self._recv_exact(
-                    VTM_HEADER_SIZE,
-                    deadline=deadline,
-                    monotonic=monotonic,
+        try:
+            header = self._pending_header
+            if header is None:
+                header = decode_vtm_header(
+                    self._recv_exact(
+                        VTM_HEADER_SIZE,
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
                 )
+                self._pending_header = header
+            body = self._recv_exact(
+                header.length,
+                deadline=deadline,
+                monotonic=monotonic,
             )
-            self._pending_header = header
-        body = self._recv_exact(
-            header.length,
-            deadline=deadline,
-            monotonic=monotonic,
-        )
+        except _VtmReadDeadlineExpired:
+            raise
+        except Exception:
+            self._read_inactivity_deadline = None
+            raise
         self._pending_header = None
+        self._read_inactivity_deadline = None
         return VtmPacket(
             channel=header.channel,
             length=header.length,
@@ -540,23 +549,50 @@ class VtmStreamClient:
                 if callable(gettimeout)
                 else self.timeout
             )
-            effective_timeout = configured_timeout
-            deadline_limited = False
-            if deadline is not None:
-                remaining_seconds = deadline - monotonic()
-                if remaining_seconds <= 0:
-                    raise _VtmReadDeadlineExpired
-                if configured_timeout is None or remaining_seconds <= configured_timeout:
-                    effective_timeout = remaining_seconds
-                    deadline_limited = True
+            now = monotonic()
+            if (
+                self._read_inactivity_deadline is None
+                and configured_timeout is not None
+            ):
+                self._read_inactivity_deadline = now + configured_timeout
+            inactivity_remaining = (
+                None
+                if self._read_inactivity_deadline is None
+                else self._read_inactivity_deadline - now
+            )
+            if inactivity_remaining is not None and inactivity_remaining <= 0:
+                raise DeviceException(
+                    "Device offline or unreachable: timed out waiting for VTM stream data"
+                )
 
-            timeout_changed = deadline is not None and effective_timeout != configured_timeout
+            caller_remaining: float | None = None
+            if deadline is not None:
+                caller_remaining = deadline - now
+                if caller_remaining <= 0:
+                    raise _VtmReadDeadlineExpired
+
+            timeout_candidates = [
+                value
+                for value in (
+                    configured_timeout,
+                    inactivity_remaining,
+                    caller_remaining,
+                )
+                if value is not None
+            ]
+            effective_timeout = min(timeout_candidates) if timeout_candidates else None
+            caller_limited = caller_remaining is not None and (
+                inactivity_remaining is None
+                or caller_remaining < inactivity_remaining
+            )
+
+            timeout_changed = effective_timeout != configured_timeout
             if timeout_changed:
                 sock.settimeout(effective_timeout)
             try:
                 chunk = sock.recv(length - len(self._recv_buffer))
             except TimeoutError as err:
-                if deadline_limited:
+                if caller_limited:
                     raise _VtmReadDeadlineExpired from err
                 raise DeviceException(
                     "Device offline or unreachable: timed out waiting for VTM stream data"
@@ -567,6 +603,8 @@ class VtmStreamClient:
             if not chunk:
                 raise PyEzvizError("VTM socket closed while reading packet")
             self._recv_buffer.extend(chunk)
+            if configured_timeout is not None:
+                self._read_inactivity_deadline = monotonic() + configured_timeout
 
         result = bytes(self._recv_buffer[:length])
         del self._recv_buffer[:length]

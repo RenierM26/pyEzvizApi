@@ -1841,6 +1841,58 @@ def test_vtm_stream_client_sends_keepalive_while_socket_is_quiet() -> None:
     assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
 
 
+def test_vtm_stream_client_keepalive_does_not_renew_socket_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            self.recv_calls += 1
+            if self.recv_calls > 2:
+                pytest.fail("configured timeout was renewed after keepalive")
+            clock.now = self.recv_calls * 5.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        with pytest.raises(DeviceException, match="timed out waiting for VTM"):
+            next(
+                stream.iter_packets(
+                    keepalive_interval=5.0,
+                    monotonic=clock,
+                )
+            )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert fake_socket.recv_calls == 2
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+
 def test_vtm_stream_client_preserves_partial_packet_across_keepalive() -> None:
     stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
     media_packet = encode_vtm_packet(

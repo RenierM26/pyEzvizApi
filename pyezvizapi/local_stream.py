@@ -578,6 +578,9 @@ class EzvizLocalSdkCredentials:
 
 
 LocalSdkOutputFormat = Literal["mpegps", "mpegts"]
+_INTERRUPTED_LOCAL_STREAM_MESSAGE = (
+    "Local stream cannot resume after a capture deadline interrupted a frame read"
+)
 
 
 class EzvizLocalSdkMediaStream:
@@ -613,6 +616,7 @@ class EzvizLocalSdkMediaStream:
         self.max_prefix_bytes = max_prefix_bytes
         self.bootstrap: EzvizLocalSdkStreamBootstrap | None = None
         self._first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
+        self._read_interrupted = False
 
     def __enter__(self) -> EzvizLocalSdkMediaStream:
         return self
@@ -646,7 +650,7 @@ class EzvizLocalSdkMediaStream:
             raise PyEzvizError("EZVIZ local stream did not return a first media frame")
         return self.bootstrap
 
-    def iter_packets(
+    def iter_packets(  # noqa: PLR0912
         self,
         *,
         max_packets: int | None = None,
@@ -658,6 +662,8 @@ class EzvizLocalSdkMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
+        if self._read_interrupted:
+            raise PyEzvizError(_INTERRUPTED_LOCAL_STREAM_MESSAGE)
 
         deadline: float | None = None
         if self.bootstrap is None:
@@ -689,6 +695,8 @@ class EzvizLocalSdkMediaStream:
                         monotonic=monotonic,
                     )
             except EzvizLocalSdkDeadlineExpired:
+                self._read_interrupted = True
+                self.close()
                 break
             if deadline is None and duration_seconds is not None:
                 deadline = monotonic() + duration_seconds
@@ -719,6 +727,7 @@ class HcNetSdkCommandPortMediaStream:
         self.max_prefix_bytes = max_prefix_bytes
         self.bootstrap: HcNetSdkCommandPortStreamBootstrap | None = None
         self._first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
+        self._read_interrupted = False
 
     def __enter__(self) -> HcNetSdkCommandPortMediaStream:
         return self
@@ -750,7 +759,7 @@ class HcNetSdkCommandPortMediaStream:
             raise PyEzvizError("HCNetSDK command-port stream did not return media")
         return self.bootstrap
 
-    def iter_packets(
+    def iter_packets(  # noqa: PLR0912
         self,
         *,
         max_packets: int | None = None,
@@ -762,6 +771,8 @@ class HcNetSdkCommandPortMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
+        if self._read_interrupted:
+            raise PyEzvizError(_INTERRUPTED_LOCAL_STREAM_MESSAGE)
 
         deadline: float | None = None
         if self.bootstrap is None:
@@ -793,6 +804,8 @@ class HcNetSdkCommandPortMediaStream:
                         monotonic=monotonic,
                     )
             except EzvizLocalSdkDeadlineExpired:
+                self._read_interrupted = True
+                self.close()
                 break
             if deadline is None and duration_seconds is not None:
                 deadline = monotonic() + duration_seconds
@@ -829,6 +842,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         self._keepalive_stop = Event()
         self._keepalive_thread: Thread | None = None
         self.keepalive_events: list[HcNetSdkCommandPortKeepaliveEvent] = []
+        self._read_interrupted = False
 
     def __enter__(self) -> HcNetSdkCommandPortMultiSocketMediaStream:
         return self
@@ -1084,6 +1098,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
+        if self._read_interrupted:
+            raise PyEzvizError(_INTERRUPTED_LOCAL_STREAM_MESSAGE)
 
         if self.bootstrap is None:
             self.start()
@@ -1124,6 +1140,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         monotonic=monotonic,
                     )
             except EzvizLocalSdkDeadlineExpired:
+                self._read_interrupted = True
+                self.close()
                 break
             except (OSError, PyEzvizError) as err:
                 raise PyEzvizError(

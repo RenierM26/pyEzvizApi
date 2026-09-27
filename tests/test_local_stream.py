@@ -312,6 +312,9 @@ def test_local_sdk_media_stream_bounds_blocking_read_after_first_packet() -> Non
 
     assert [packet.body for packet in packets] == [first_payload]
     assert sdk.read_timeout == 1.0
+    assert sdk.closed is True
+    with pytest.raises(PyEzvizError, match=r"cannot resume after.*interrupted"):
+        list(stream.iter_packets(max_packets=1))
 
 
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:

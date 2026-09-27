@@ -29,6 +29,7 @@ import math
 import re
 import socket
 import ssl
+import sys
 import time
 from typing import Any, cast
 import xml.etree.ElementTree as ET
@@ -42,6 +43,7 @@ from .exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, PyEzvizEr
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
 HCNETSDK_DEFAULT_RTSP_PORT = 554
+_WINDOWS_EXCLUSIVE_SOURCE_BIND = sys.platform == "win32"
 HCNETSDK_EZVIZ_DEFAULT_USERNAME = "admin"
 HCNETSDK_EZVIZ_LOCAL_USERNAME = "EZ_LOCAL_USER"
 HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX = "_lan_device_space-"
@@ -9035,7 +9037,7 @@ def _create_reusable_source_connection(
         try:
             sock = socket.socket(family, sock_type, protocol)
             sock.settimeout(timeout)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _configure_source_port_socket(sock)
             sock.bind(source_address)
             sock.connect(target)
             if sock.getsockname()[1] != source_address[1]:
@@ -9052,6 +9054,20 @@ def _create_reusable_source_connection(
     if last_error is not None:
         raise last_error
     raise OSError("getaddrinfo returned no addresses")
+
+
+def _configure_source_port_socket(sock: socket.socket) -> None:
+    """Keep source-port binds reusable on POSIX and exclusive on Windows."""
+
+    if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
+        exclusive_option = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive_option is None:
+            raise PyEzvizError(
+                "Windows does not expose exclusive source-port binding support"
+            )
+        sock.setsockopt(socket.SOL_SOCKET, exclusive_option, 1)
+        return
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

@@ -254,6 +254,7 @@ from pyezvizapi.hcnetsdk import (
     SadpNoArgRequest,
     SadpSetLogToFileRequest,
     SadpStartRequest,
+    _configure_source_port_socket,
     _connect_with_optional_source_address,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
@@ -4295,6 +4296,32 @@ def test_local_sdk_source_port_can_reopen_immediately() -> None:
         second_peer.close()
     finally:
         server.close()
+
+
+def test_local_sdk_source_port_uses_exclusive_binding_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exclusive_option = 0x100
+    option_calls: list[tuple[int, int, int]] = []
+
+    class OptionSocket:
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            option_calls.append((level, option, value))
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(
+        socket,
+        "SO_EXCLUSIVEADDRUSE",
+        exclusive_option,
+        raising=False,
+    )
+
+    _configure_source_port_socket(OptionSocket())  # type: ignore[arg-type]
+
+    assert option_calls == [(socket.SOL_SOCKET, exclusive_option, 1)]
 
 
 def test_local_sdk_source_port_reports_an_active_conflict() -> None:

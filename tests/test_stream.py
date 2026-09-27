@@ -1812,7 +1812,36 @@ def test_vtm_stream_capture_deadline_bounds_keepalive_write() -> None:
 
     assert packets == []
     assert remaining_timeout in fake_socket.timeout_history
-    assert fake_socket.timeout_history[-1] == configured_timeout
+    assert fake_socket.closed
+    assert not stream.connected
+
+
+@pytest.mark.parametrize(
+    "message_code",
+    (VtmMessageCode.KEEPALIVE_REQ, VtmMessageCode.KEEPALIVE_RSP),
+)
+def test_vtm_keepalive_deadline_invalidates_partial_write(message_code: int) -> None:
+    class PartialSendSocket(FakeVtmSocket):
+        def sendall(self, data: bytes) -> None:
+            self.sent += data[:4]
+            raise TimeoutError
+
+    fake_socket = PartialSendSocket([])
+    fake_socket.timeout = 10.0
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+
+    with pytest.raises(TimeoutError):
+        stream.send_keepalive(
+            message_code=message_code,
+            deadline=1.0,
+            monotonic=lambda: 0.75,
+        )
+
+    assert fake_socket.sent
+    assert fake_socket.closed
+    assert not stream.connected
 
 
 @pytest.mark.parametrize("keepalive_interval", [0.0, -1.0])

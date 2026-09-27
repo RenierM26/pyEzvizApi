@@ -322,10 +322,12 @@ class VtmStreamClient:
                 sock.sendall(packet)
             except TimeoutError as err:
                 if deadline_limits_write:
+                    self.close()
                     raise _VtmReadDeadlineExpired from err
                 raise
             finally:
-                sock.settimeout(configured_timeout)
+                if self._socket is sock:
+                    cast(Any, sock).settimeout(configured_timeout)
         self._sequence = (self._sequence + 1) & 0xFFFF
         return sequence
 

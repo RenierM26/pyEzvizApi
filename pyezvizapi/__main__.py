@@ -24,7 +24,6 @@ import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
-from ._longlink_profile import PROFILE as PUSH_PROFILE
 from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
@@ -32,6 +31,7 @@ from .client import EzvizClient
 from .cloud_stream import open_cloud_stream
 from .constants import (
     MAX_RETRIES,
+    PROFILE as PUSH_PROFILE,
     BatteryCameraWorkMode,
     DefenseModeType,
     DeviceSwitchType,

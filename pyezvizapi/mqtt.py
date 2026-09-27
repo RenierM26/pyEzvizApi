@@ -21,9 +21,8 @@ import requests
 
 from ._auth import discover_services, isolated_session, refresh_credentials
 from ._longlink_profile import (
-    HEADERS as PUSH_HEADERS,
-    PROFILE as PUSH_PROFILE,
-    REGISTER as PUSH_REGISTER,
+    profile_for_token,
+    synchronize_http_headers,
 )
 from ._longlink_session import Channel99Session
 from ._longlink_worker import PushWorker
@@ -34,7 +33,12 @@ from ._token import (
     _push_serial,
     validate_push_token,
 )
-from .constants import DEFAULT_TIMEOUT, FEATURE_CODE, REQUEST_HEADER
+from .constants import (
+    ANDROID_PROFILE,
+    DEFAULT_TIMEOUT,
+    PROFILE as PUSH_PROFILE,
+    REGISTER as PUSH_REGISTER,
+)
 from .exceptions import (
     EzvizAuthTokenExpired,
     EzvizPushFatalError,
@@ -328,10 +332,12 @@ class MQTTClient:
         # Isolate requests state from the owner's concurrent polling requests.
         with self._token_lock:
             session = isolated_session(self._session)
-        for name, value in REQUEST_HEADER.items():
-            session.headers.setdefault(name, value)
-        session.headers.update(PUSH_HEADERS)
-        session.headers["featureCode"] = FEATURE_CODE
+        synchronize_http_headers(
+            session.headers,
+            ANDROID_PROFILE,
+            token["session_id"],
+            scope="profile",
+        )
         for attempt in range(2):
             with self._token_lock:
                 if is_current is not None and not is_current():
@@ -364,7 +370,12 @@ class MQTTClient:
 
                     def notify() -> None:
                         # Keep the polling transport current even if persistence fails.
-                        self._session.headers["sessionId"] = token["session_id"]
+                        synchronize_http_headers(
+                            self._session.headers,
+                            profile_for_token(token),
+                            token["session_id"],
+                            scope="session",
+                        )
                         if adopt_session is not None:
                             adopt_session(cast(str, token["session_id"]))
                         save_token(deepcopy(token))

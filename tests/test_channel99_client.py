@@ -12,10 +12,9 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from pyezvizapi._longlink_profile import HEADERS as PUSH_HEADERS
 from pyezvizapi._longlink_session import Channel99Session
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.constants import FEATURE_CODE
+from pyezvizapi.constants import FEATURE_CODE, HEADERS as PUSH_HEADERS
 from pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,

@@ -9,8 +9,7 @@ import ipaddress
 import re
 from typing import Any, NotRequired, TypedDict
 
-from ._longlink_profile import PROFILE
-from .constants import FEATURE_CODE
+from .constants import FEATURE_CODE, PROFILE
 from .exceptions import EzvizAuthTokenExpired, PyEzvizError
 
 

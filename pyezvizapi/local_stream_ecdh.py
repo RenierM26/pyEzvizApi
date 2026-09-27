@@ -290,9 +290,7 @@ def derive_ezviz_local_sdk_ecdh_chacha20_key(
         shared_secret,
         AES.MODE_ECB,
     )
-    return cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
-        encrypted_key
-    )
+    return cipher.decrypt(encrypted_key)  # codeql[py/weak-cryptographic-algorithm]
 
 
 def _ezviz_local_sdk_ecdh_verification_input(

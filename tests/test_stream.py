@@ -1954,6 +1954,74 @@ def test_vtm_stream_client_preserves_partial_packet_across_keepalive() -> None:
     assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
 
 
+def test_vtm_stream_client_resets_inactivity_after_bounded_partial_read() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47partial-packet",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class PartialDeadlineSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            if self.recv_calls == 3:
+                return super().recv(8)
+            if self.recv_calls == 4:
+                return super().recv(3)
+            if self.recv_calls == 5:
+                clock.now = 5.0
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = PartialDeadlineSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            ),
+            media_packet,
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        assert list(
+            stream.iter_packets(
+                first_packet_timeout=5.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        ) == []
+
+        clock.now = 20.0
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert [packet.body for packet in packets] == [b"\x47partial-packet"]
+
+
 def test_vtm_stream_client_keeps_shorter_configured_socket_timeout() -> None:
     stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
     expected_timeout = 2.0

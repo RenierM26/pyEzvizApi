@@ -405,8 +405,10 @@ class VtmStreamClient:
         while max_packets is None or seen < max_packets:
             now = monotonic()
             if capture_deadline is not None and now >= capture_deadline:
+                self._read_inactivity_deadline = None
                 break
             if first_packet_deadline is not None and now >= first_packet_deadline:
+                self._read_inactivity_deadline = None
                 break
             if next_keepalive is not None and now >= next_keepalive:
                 assert keepalive_interval is not None

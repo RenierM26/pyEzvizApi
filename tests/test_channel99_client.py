@@ -328,6 +328,65 @@ def test_push_registration_refreshes_expired_session_and_persists_before_retry(
     assert saved["push_state"]["device_id"] == "unchanged"
 
 
+def test_second_registration_rejection_after_attempt_refresh_is_fatal(monkeypatch):
+    saved = token()
+    calls = []
+
+    def put(session, url, **kwargs):
+        calls.append(url)
+        if url.endswith("/v3/push/token"):
+            return response({"meta": {"code": 403}})
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr(
+        "pyezvizapi._longlink_session.socket.create_connection",
+        Mock(side_effect=AssertionError("Must not open LBS after registration rejection")),
+    )
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    client.connect()
+    connection = push_session(client)
+
+    with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
+        connection.run(Event())
+
+    assert saved["session_id"] == "rotated"
+    assert connection.is_current()
+    assert connection.credentials_input() == "rotated"
+    assert len(calls) == 3
+
+
+def test_external_refresh_during_registration_supersedes_without_second_refresh(monkeypatch):
+    saved = token()
+    calls = []
+
+    def put(_session, url, **_kwargs):
+        calls.append(url)
+        if url.endswith("/v3/push/token"):
+            saved["session_id"] = "external-session"
+            saved["rf_session_id"] = "external-refresh"
+            return response({"meta": {"code": 403}})
+        raise AssertionError("Superseded push attempt must not refresh credentials")
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    create = Mock(side_effect=AssertionError("Must not open LBS for superseded attempt"))
+    monkeypatch.setattr("pyezvizapi._longlink_session.socket.create_connection", create)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=lambda snapshot: None)
+    client.connect()
+    connection = push_session(client)
+
+    connection.run(Event())
+
+    assert len(calls) == 1
+    assert calls[0].endswith("/v3/push/token")
+    assert not connection.is_current()
+    create.assert_not_called()
+
+
 def test_push_refresh_persistence_failure_stops_before_registration_retry(monkeypatch):
 
     registrations = []
@@ -349,6 +408,40 @@ def test_push_refresh_persistence_failure_stops_before_registration_retry(monkey
     client.connect()
     with pytest.raises(EzvizTokenPersistenceError, match="persist channel-99"):
         prepare_push(client)
+    assert len(registrations) == 1
+
+
+def test_push_refresh_persistence_failure_is_not_hidden_as_superseded(monkeypatch):
+    saved = token()
+    registrations = []
+
+    def put(_session, url, **_kwargs):
+        if url.endswith("/v3/push/token"):
+            registrations.append(url)
+            return response({"meta": {"code": 403}})
+        return response({"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "rotated", "refreshSessionId": "rotated-refresh"
+        }})
+
+    monkeypatch.setattr(requests.Session, "put", put)
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    monkeypatch.setattr(
+        "pyezvizapi._longlink_session.socket.create_connection",
+        Mock(side_effect=AssertionError("Must not open LBS after persistence failure")),
+    )
+    client = MQTTClient(
+        saved,
+        requests.Session(),
+        on_token_updated=Mock(side_effect=OSError("private filesystem error")),
+    )
+    client.connect()
+    connection = push_session(client)
+
+    with pytest.raises(EzvizTokenPersistenceError, match="persist channel-99"):
+        connection.run(Event())
+
+    assert connection.is_current()
+    assert connection.credentials_input() == "rotated"
     assert len(registrations) == 1
 
 

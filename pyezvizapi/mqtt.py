@@ -267,6 +267,17 @@ class MQTTClient:
                             and token.get("session_id") == session_id
                         )
 
+                def adopt_session(rotated_session_id: str) -> None:
+                    """Keep this attempt current after its own HTTPS refresh."""
+                    nonlocal session_id
+                    with self._token_lock:
+                        if (
+                            token.get("user_id") != user_id
+                            or token.get("session_id") != rotated_session_id
+                        ):
+                            raise PyEzvizError("Push credentials changed; reconnect required")
+                        session_id = rotated_session_id
+
                 def credentials_input() -> str:
                     with self._token_lock:
                         if not current():
@@ -296,7 +307,9 @@ class MQTTClient:
                     state,
                     save,
                     self._handle_payload,
-                    prepare=lambda: self._prepare_channel99(token, save_token),
+                    prepare=lambda: self._prepare_channel99(
+                        token, save_token, current, adopt_session
+                    ),
                     is_current=current,
                 )
 
@@ -305,7 +318,11 @@ class MQTTClient:
         self._push_worker.start()
 
     def _prepare_channel99(
-        self, token: dict[str, Any], save_token: Callable[[dict[str, Any]], None]
+        self,
+        token: dict[str, Any],
+        save_token: Callable[[dict[str, Any]], None],
+        is_current: Callable[[], bool] | None = None,
+        adopt_session: Callable[[str], None] | None = None,
     ) -> None:
         """Register push, refreshing rejected HTTPS credentials once per attempt."""
         # Isolate requests state from the owner's concurrent polling requests.
@@ -316,7 +333,10 @@ class MQTTClient:
         session.headers.update(PUSH_HEADERS)
         session.headers["featureCode"] = FEATURE_CODE
         for attempt in range(2):
-            session.headers["sessionId"] = token["session_id"]
+            with self._token_lock:
+                if is_current is not None and not is_current():
+                    return
+                session.headers["sessionId"] = token["session_id"]
             response = session.put(
                 f"https://{token['api_url']}/v3/push/token",
                 params=PUSH_REGISTER,
@@ -336,9 +356,17 @@ class MQTTClient:
                 raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
             try:
                 with self._token_lock:
+                    # Polling may have rotated the credential while registration
+                    # was in flight. Leave that superseded attempt to the worker
+                    # rather than refreshing the replacement credential again.
+                    if is_current is not None and not is_current():
+                        return
+
                     def notify() -> None:
                         # Keep the polling transport current even if persistence fails.
                         self._session.headers["sessionId"] = token["session_id"]
+                        if adopt_session is not None:
+                            adopt_session(cast(str, token["session_id"]))
                         save_token(deepcopy(token))
 
                     refresh_credentials(

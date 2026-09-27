@@ -311,12 +311,16 @@ def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:
     """A live iterable cannot block past the common duration limit."""
 
     release = Event()
+    closed = Event()
     max_elapsed = 0.5
 
     def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
-        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
-        release.wait()
-        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        try:
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+            release.wait()
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        finally:
+            closed.set()
 
     started_at = time.monotonic()
     packets = list(
@@ -331,6 +335,7 @@ def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:
 
     assert [packet.body for packet in packets] == [BODY]
     assert release.is_set()
+    assert closed.is_set()
     assert elapsed < max_elapsed
 
 

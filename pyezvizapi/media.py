@@ -86,14 +86,14 @@ class _IteratorProducer[PacketT]:
         if self._cancel is not None:
             with suppress(Exception):
                 self._cancel()
-        else:
+        with suppress(Full):
+            self._requests.put_nowait(object())
+        self._thread.join(timeout=0.01)
+        if not self.alive:
             close = getattr(self._packets, "close", None)
             if callable(close):
                 with suppress(RuntimeError, ValueError):
                     close()
-        with suppress(Full):
-            self._requests.put_nowait(object())
-        self._thread.join(timeout=0.01)
 
 
 @dataclass

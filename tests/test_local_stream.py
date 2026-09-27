@@ -167,6 +167,36 @@ def test_idmx_infer_aac_sample_rate_uses_common_48khz_interval() -> None:
     assert _idmx_infer_aac_sample_rate(packets) == 48_000
 
 
+def test_idmx_infer_aac_sample_rate_rejects_edge_only_overlap() -> None:
+    def frame(payload_type: int, timestamp: int, sequence: int) -> bytes:
+        return (
+            b"\x80"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+
+    packets: list[bytes] = []
+    sequence = 0
+    for index in range(7):
+        packets.extend(
+            (
+                frame(104, index * 1024, sequence),
+                frame(97, index, sequence + 1),
+            )
+        )
+        sequence += 2
+    packets.append(frame(96, 0, sequence))
+    packets.append(frame(104, 7 * 1024, sequence + 1))
+    packets.extend(
+        frame(96, index * 5760, sequence + index)
+        for index in range(1, 8)
+    )
+
+    assert _idmx_infer_aac_sample_rate(packets) is None
+
+
 def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
     return (
         b"\x80\x60"

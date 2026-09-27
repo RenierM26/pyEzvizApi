@@ -5117,6 +5117,19 @@ def _idmx_common_timestamp_spans(
             overlap_end = min(audio_run[-1][0], video_run[-1][0])
             if overlap_end <= overlap_start:
                 continue
+            if min(
+                _idmx_interval_sample_count(
+                    audio_run,
+                    overlap_start,
+                    overlap_end,
+                ),
+                _idmx_interval_sample_count(
+                    video_run,
+                    overlap_start,
+                    overlap_end,
+                ),
+            ) < 8:
+                continue
             audio_span = _idmx_interpolated_timestamp_span(
                 audio_run,
                 overlap_start,
@@ -5133,6 +5146,32 @@ def _idmx_common_timestamp_spans(
             if best is None or candidate[0] > best[0]:
                 best = candidate
     return (best[1], best[2]) if best is not None else None
+
+
+def _idmx_interval_sample_count(
+    points: list[tuple[int, int]],
+    start_position: int,
+    end_position: int,
+) -> int:
+    """Count samples used to bracket a shared interpolation interval."""
+
+    start = max(
+        (
+            index
+            for index, point in enumerate(points)
+            if point[0] <= start_position
+        ),
+        default=0,
+    )
+    end = next(
+        (
+            index
+            for index, point in enumerate(points)
+            if point[0] >= end_position
+        ),
+        len(points) - 1,
+    )
+    return max(0, end - start + 1)
 
 
 def _idmx_interpolated_timestamp_span(

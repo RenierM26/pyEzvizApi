@@ -15,6 +15,16 @@ _LOGGER = logging.getLogger(__name__)
 __test__ = False
 
 
+def _decode_response(msg: bytes) -> str:
+    """Decode an RTSP reply without failing on non-UTF-8 bytes.
+
+    RTSP headers are ASCII, but some cameras send bytes such as 0xFF
+    after them. latin-1 maps every byte to one character, so offsets
+    found in the text also index the raw bytes.
+    """
+    return msg.decode("latin-1")
+
+
 def genmsg_describe(url: str, seq: int, user_agent: str, auth_seq: str) -> str:
     """Generate RTSP DESCRIBE request message."""
     msg_ret = f"DESCRIBE {url} RTSP/1.0\r\n"
@@ -122,7 +132,7 @@ class TestRTSPAuth:
         msg1: bytes = session.recv(self._rtsp_details["bufLen"])
         seq += 1
 
-        decoded = msg1.decode()
+        decoded = _decode_response(msg1)
         if "200 OK" in decoded:
             _LOGGER.info("Basic auth result: %s", decoded)
             return
@@ -149,7 +159,7 @@ class TestRTSPAuth:
             _LOGGER.debug("RTSP DESCRIBE (digest) request prepared for %s", url)
             session.send(describe.encode())
             msg1 = session.recv(self._rtsp_details["bufLen"])
-            decoded = msg1.decode()
+            decoded = _decode_response(msg1)
             _LOGGER.info("Digest auth result: %s", decoded)
 
             if "200 OK" in decoded:

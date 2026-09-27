@@ -13,7 +13,7 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 import pytest
 
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrame,
@@ -288,6 +288,30 @@ def test_local_sdk_media_stream_yields_mpeg_ps_payloads() -> None:
     assert sdk.bootstrap_calls[0]["read_first_media"] is True
     assert sdk.bootstrap_calls[0]["max_prefix_bytes"] == 128
     assert sdk.read_prefix_limits == [128]
+
+
+def test_local_sdk_media_stream_bounds_blocking_read_after_first_packet() -> None:
+    first_payload = b"\x00\x00\x01\xbaabc"
+
+    class DeadlineSdkClient(_FakeSdkClient):
+        read_timeout: float | None = None
+
+        def read_stream_frame_after_prefix(self, **kwargs: Any) -> Any:
+            self.read_timeout = kwargs.get("timeout")
+            raise EzvizLocalSdkDeadlineExpired("deadline")
+
+    sdk = DeadlineSdkClient(_media(first_payload, sequence=1))
+    stream = EzvizLocalSdkMediaStream(sdk, _preview_request())  # type: ignore[arg-type]
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            monotonic=lambda: 10.0,
+        )
+    )
+
+    assert [packet.body for packet in packets] == [first_payload]
+    assert sdk.read_timeout == 1.0
 
 
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 import json
@@ -402,10 +402,12 @@ def _write_cloud_stream_payloads(
 ) -> None:
     """Write clear VTM stream packet bodies to a binary file-like object."""
 
-    deadline = None if duration_seconds is None else monotonic() + duration_seconds
-    for packet in stream.iter_packets(max_packets=max_packets):
-        if deadline is not None and monotonic() >= deadline:
-            break
+    for packet in _iter_bounded_cloud_packets(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    ):
         if packet.encrypted:
             raise PyEzvizError(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
@@ -427,16 +429,44 @@ def _collect_cloud_stream_payloads(
     """Collect clear VTM stream packet bodies into memory."""
 
     chunks: list[bytes] = []
-    deadline = None if duration_seconds is None else monotonic() + duration_seconds
-    for packet in stream.iter_packets(max_packets=max_packets):
-        if deadline is not None and monotonic() >= deadline:
-            break
+    for packet in _iter_bounded_cloud_packets(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    ):
         if packet.encrypted:
             raise PyEzvizError(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
             )
         chunks.append(packet.body)
     return b"".join(chunks)
+
+
+def _iter_bounded_cloud_packets(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float],
+) -> Iterator[Any]:
+    """Iterate cloud packets with transport-level deadlines when available."""
+
+    if isinstance(stream, VtmStreamClient):
+        return stream.iter_packets(
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+
+    def _fallback() -> Iterator[Any]:
+        deadline = None if duration_seconds is None else monotonic() + duration_seconds
+        for packet in stream.iter_packets(max_packets=max_packets):
+            if deadline is not None and monotonic() >= deadline:
+                break
+            yield packet
+
+    return _fallback()
 
 
 def _copy_cloud_stream_payloads_to_mpegts(

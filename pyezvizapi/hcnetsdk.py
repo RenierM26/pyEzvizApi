@@ -10395,6 +10395,7 @@ class HcNetSdkCommandPortClient:
         timeout: float | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        invalidate_on_deadline: bool = True,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next command-port media frame."""
         with self._read_lock:
@@ -10403,6 +10404,7 @@ class HcNetSdkCommandPortClient:
                 timeout=timeout,
                 deadline=deadline,
                 monotonic=monotonic,
+                invalidate_on_deadline=invalidate_on_deadline,
             )
 
     def _read_media_frame_after_prefix_unlocked(
@@ -10412,6 +10414,7 @@ class HcNetSdkCommandPortClient:
         timeout: float | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        invalidate_on_deadline: bool = True,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         effective_timeout = (
             _remaining_timeout(deadline, monotonic)
@@ -10445,7 +10448,8 @@ class HcNetSdkCommandPortClient:
                 max_prefix_bytes=max_prefix_bytes,
             )
         except EzvizLocalSdkDeadlineExpired:
-            self._invalidate_socket(sock)
+            if invalidate_on_deadline:
+                self._invalidate_socket(sock)
             raise
 
     def login(

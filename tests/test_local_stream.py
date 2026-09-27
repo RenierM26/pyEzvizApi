@@ -576,10 +576,13 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
 
 def test_hcnetsdk_multi_socket_short_drain_expiry_continues_bootstrap() -> None:
     class QuietMediaClient:
-        reads = 0
+        def __init__(self) -> None:
+            self.reads = 0
+            self.invalidate_values: list[object] = []
 
-        def read_media_frame_after_prefix(self, **_kwargs: object) -> object:
+        def read_media_frame_after_prefix(self, **kwargs: object) -> object:
             self.reads += 1
+            self.invalidate_values.append(kwargs.get("invalidate_on_deadline"))
             raise EzvizLocalSdkDeadlineExpired("drain complete")
 
     step = HcNetSdkCommandPortSocketStep(
@@ -603,6 +606,7 @@ def test_hcnetsdk_multi_socket_short_drain_expiry_continues_bootstrap() -> None:
     )
 
     assert quiet_client.reads == 1
+    assert quiet_client.invalidate_values == [False]
 
 
 def test_hcnetsdk_multi_socket_stream_checks_deadline_between_drained_media() -> None:
@@ -1332,6 +1336,25 @@ def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> 
     assert packets == []
     assert stream.rsa_key is generated_key
     assert deadlines == [6.0]
+
+
+def test_prestarted_generated_stream_skips_unused_rsa_key(monkeypatch) -> None:
+    class RenderedStream:
+        def iter_packets(self, **_kwargs: object) -> Iterator[EzvizLocalStreamPacket]:
+            return iter(())
+
+    stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
+    stream.bootstrap = cast(Any, object())
+    stream._stream = cast(Any, RenderedStream())  # noqa: SLF001
+    stream.rsa_key = None
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",
+        lambda: pytest.fail("pre-started stream must not generate an unused RSA key"),
+    )
+
+    packets = list(stream.iter_packets(duration_seconds=1.0))
+
+    assert packets == []
 
 
 def test_hcnetsdk_multi_socket_stream_reports_response_step_context() -> None:

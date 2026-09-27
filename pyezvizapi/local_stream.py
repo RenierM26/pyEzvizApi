@@ -1198,6 +1198,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         max_prefix_bytes=self.max_prefix_bytes,
                         deadline=drain_deadline,
                         monotonic=clock,
+                        invalidate_on_deadline=drain_deadline >= capture_deadline,
                     )
             except EzvizLocalSdkDeadlineExpired:
                 if capture_deadline is None or drain_deadline < capture_deadline:
@@ -1546,7 +1547,7 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
-        if self.rsa_key is None:
+        if self.bootstrap is None and self.rsa_key is None:
             # Key generation may block on system randomness. Complete it before
             # starting a startup-inclusive capture budget, then cache it for
             # subsequent starts.

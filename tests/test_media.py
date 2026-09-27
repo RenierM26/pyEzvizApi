@@ -359,6 +359,36 @@ def test_iterable_source_duration_requires_cancellation_callback() -> None:
         )
 
 
+def test_iterable_source_rejects_unbounded_reuse_during_slow_cancellation() -> None:
+    """An unbounded retry cannot race a worker still executing next()."""
+
+    release = Event()
+
+    def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
+        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        release.wait()
+        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+
+    source = hcnetsdk_media_packet_source(callback_packets(), cancel=lambda: None)
+
+    assert [
+        packet.body
+        for packet in source.iter_media_packets(
+            limits=CaptureLimits(duration_seconds=0.02)
+        )
+    ] == [BODY]
+    producer = source._producer_state.producer  # noqa: SLF001
+    assert producer is not None
+    assert producer.alive
+
+    with pytest.raises(PyEzvizError, match="still cancelling"):
+        list(source.iter_media_packets(limits=CaptureLimits(max_packets=1)))
+
+    release.set()
+    producer.close()
+    assert not producer.alive
+
+
 def test_ecdh_adapter_applies_duration_from_iteration_start() -> None:
     stream = object.__new__(EzvizLocalSdkEcdhMediaStream)
 

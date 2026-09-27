@@ -360,13 +360,14 @@ class IterableMediaPacketSource[PacketT]:
         emitted_bytes = 0
         packets = iter(self.packets)
         producer = None
-        if deadline is not None:
-            with self._producer_state.lock:
-                active = self._producer_state.producer
-                if active is not None and active.alive:
-                    raise PyEzvizError(
-                        "Packet source is still cancelling a timed-out iterator read"
-                    )
+        with self._producer_state.lock:
+            active = self._producer_state.producer
+            if active is not None and active.alive:
+                raise PyEzvizError(
+                    "Packet source is still cancelling a timed-out iterator read"
+                )
+            self._producer_state.producer = None
+            if deadline is not None:
                 producer = _IteratorProducer(packets, self.cancel)
                 self._producer_state.producer = producer
         try:

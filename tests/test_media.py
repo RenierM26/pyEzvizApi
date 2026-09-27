@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError
+import time
 from typing import Any
 
 import pytest
@@ -42,10 +43,10 @@ from pyezvizapi.stream import (
 BODY = b"abc"
 
 
-class RecordingPacketStream:
+class RecordingPacketStream[PacketT]:
     """Minimal legacy stream that records the compatibility adapter call."""
 
-    def __init__(self, packets: list[Any]) -> None:
+    def __init__(self, packets: list[PacketT]) -> None:
         self.packets = packets
         self.calls: list[tuple[int | None, float | None, Callable[[], float]]] = []
 
@@ -54,8 +55,8 @@ class RecordingPacketStream:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
-        monotonic: Callable[[], float],
-    ) -> Iterator[Any]:
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> Iterator[PacketT]:
         """Yield packets using the bounds supported by existing stream classes."""
 
         self.calls.append((max_packets, duration_seconds, monotonic))

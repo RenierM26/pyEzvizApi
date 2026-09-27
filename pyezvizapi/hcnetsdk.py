@@ -28,6 +28,7 @@ import math
 import re
 import socket
 import ssl
+import time
 from typing import Any, cast
 import xml.etree.ElementTree as ET
 
@@ -35,7 +36,7 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
-from .exceptions import DeviceException, PyEzvizError
+from .exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, PyEzvizError
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
@@ -3262,6 +3263,7 @@ class EzvizLocalPreviewRequest:
     authentication: str | EzvizLocalAuthenticationAttrs | None = None
     uuid: str | None = None
     timestamp: str | int | None = None
+    public_key: str | None = None
 
     def to_xml(self) -> bytes:
         """Build a caller-owned XML body for the encrypted preview request."""
@@ -3280,6 +3282,7 @@ class EzvizLocalPreviewRequest:
             authentication=self.authentication,
             uuid=self.uuid,
             timestamp=self.timestamp,
+            public_key=self.public_key,
         )
 
 
@@ -8631,6 +8634,7 @@ def build_ezviz_local_preview_request_body(  # noqa: PLR0913
     authentication: str | EzvizLocalAuthenticationAttrs | None = None,
     uuid: str | None = None,
     timestamp: str | int | None = None,
+    public_key: str | None = None,
 ) -> bytes:
     """Build the plaintext XML body for the observed 0x2011 request.
 
@@ -8655,6 +8659,7 @@ def build_ezviz_local_preview_request_body(  # noqa: PLR0913
             ("Authentication", authentication),
             ("Uuid", uuid),
             ("Timestamp", timestamp),
+            ("PublicKey", public_key),
         )
     )
 
@@ -8673,6 +8678,48 @@ def build_ezviz_local_stream_setup_request_body(
             ("Mode", mode),
         )
     )
+
+
+class _DeadlineBoundRecvSocket:
+    """Apply an absolute deadline and configured timeout to every receive."""
+
+    def __init__(
+        self,
+        sock: Any,
+        *,
+        deadline: float,
+        configured_timeout: float | None,
+        monotonic: Callable[[], float],
+    ) -> None:
+        self._sock = sock
+        self._deadline = deadline
+        self._configured_timeout = configured_timeout
+        self._monotonic = monotonic
+
+    def recv(self, length: int) -> bytes:
+        remaining = self._deadline - self._monotonic()
+        if remaining <= 0:
+            raise EzvizLocalSdkDeadlineExpired(
+                "EZVIZ local SDK frame read exceeded its deadline"
+            )
+        deadline_limits_receive = (
+            self._configured_timeout is None
+            or remaining <= self._configured_timeout
+        )
+        effective_timeout = (
+            remaining
+            if self._configured_timeout is None
+            else min(self._configured_timeout, remaining)
+        )
+        self._sock.settimeout(effective_timeout)
+        try:
+            return self._sock.recv(length)
+        except TimeoutError as err:
+            if deadline_limits_receive:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame read exceeded its deadline"
+                ) from err
+            raise
 
 
 class EzvizLocalSdkClient:
@@ -8890,12 +8937,31 @@ class EzvizLocalSdkClient:
         self,
         *,
         max_prefix_bytes: int = 4096,
+        timeout: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next local stream frame, tolerating any binary preface."""
-        return read_ezviz_interleaved_rtp_frame_after_prefix(
-            self._stream(),
-            max_prefix_bytes=max_prefix_bytes,
+        sock = self._stream()
+        if timeout is None:
+            return read_ezviz_interleaved_rtp_frame_after_prefix(
+                sock,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+
+        previous_timeout = sock.gettimeout()
+        deadline_socket = _DeadlineBoundRecvSocket(
+            sock,
+            deadline=monotonic() + timeout,
+            configured_timeout=previous_timeout,
+            monotonic=monotonic,
         )
+        try:
+            return read_ezviz_interleaved_rtp_frame_after_prefix(
+                deadline_socket,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+        finally:
+            sock.settimeout(previous_timeout)
 
     def _command(self) -> Any:
         if self._command_sock is None:

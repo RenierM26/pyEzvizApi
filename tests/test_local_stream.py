@@ -42,6 +42,7 @@ from pyezvizapi.local_stream import (
     _ffmpeg_stderr_tail,
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
+    _idmx_local_video_frame_rate,
     _start_ffmpeg_stderr_drain,
     _try_first_clean_hevc_annexb_irap_window_offset,
     collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
@@ -87,6 +88,29 @@ LOCAL_DECRYPTED_PAYLOAD = b"decrypted"
 LOCAL_DECRYPTED_TS_PAYLOAD = b"ts:decrypted"
 LOCAL_DECRYPTED_WITH_KEY_PAYLOAD = b"decrypted:encrypted-payload:media-secret"
 IDMX_MEDIA_KEY = b"0123456789abcdef"
+
+
+def test_idmx_local_video_frame_rate_uses_rtp_timestamp_clock() -> None:
+    def frame(timestamp: int, sequence: int) -> bytes:
+        return (
+            b"\x90\x60"
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + b"\x40\x00\x00\x00"
+            + b"\x40\x01vps"
+        )
+
+    assert (
+        _idmx_local_video_frame_rate(
+            [
+                frame(90_000, 1),
+                frame(96_000, 2),
+                frame(102_000, 3),
+            ]
+        )
+        == "15"
+    )
 
 
 def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
@@ -1775,6 +1799,97 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_direct_hevc_idmx_payload
     )
 
 
+def test_copy_local_stream_to_decrypted_mpegts_handles_live_padded_extended_hevc_rtp(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    decrypted_nals: list[bytes] = []
+
+    def fake_decrypt_hevc_nal_prefix(nal: bytes, _aes_key: bytes) -> bytes:
+        decrypted_nals.append(nal)
+        return nal
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        fake_decrypt_hevc_nal_prefix,
+    )
+    rtp_timestamp = 0x3601D1EF
+    sequence_base = 0x7000
+
+    def rtp_frame(
+        body: bytes,
+        *,
+        sequence: int,
+        marker: bool = False,
+        padding: int = 0,
+    ) -> bytes:
+        first_byte = 0x90 | (0x20 if padding else 0)
+        extension = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        padding_bytes = b"" if not padding else b"\x00" * (padding - 1) + bytes([padding])
+        return (
+            bytes([first_byte, 0x60 | (0x80 if marker else 0)])
+            + sequence.to_bytes(2, "big")
+            + rtp_timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + extension
+            + body
+            + padding_bytes
+        )
+
+    vps = b"\x40\x01encrypted-vps"
+    first_fu = b"\x62\x01\x93slice-"
+    last_fu = b"\x62\x01\x66payload\x24\x00X"
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 3
+            return [
+                SimpleNamespace(body=rtp_frame(vps, sequence=sequence_base)),
+                SimpleNamespace(
+                    body=rtp_frame(
+                        first_fu,
+                        sequence=sequence_base + 1,
+                        padding=4,
+                    )
+                ),
+                SimpleNamespace(
+                    body=rtp_frame(
+                        last_fu,
+                        sequence=sequence_base + 2,
+                        marker=True,
+                        padding=4,
+                    )
+                ),
+            ]
+
+    output = io.BytesIO()
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=3,
+        decrypt_hevc_parameter_sets=True,
+    )
+
+    assert decrypted_nals == [vps, b"\x26\x01slice-payload\x24\x00X"]
+    assert output.getvalue() == (
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01\x26\x01slice-payload\x24\x00X"
+    )
+
+
 def test_copy_local_stream_to_decrypted_mpegts_prefers_direct_hevc_before_h264_encrypted_header_fallback(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2450,7 +2565,7 @@ def test_copy_local_stream_to_mpegts_strips_direct_hevc_command_trailer(
 
     def frame(body: bytes, *, sequence: int) -> bytes:
         return (
-            b"\x80\x60"
+            b"\x0d\x80\x60"
             + sequence.to_bytes(2, "big")
             + b"\x36\x01\xd1\xef"
             + b"\x55\x66\x77\x88"

@@ -11,7 +11,11 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 import pytest
 
-from pyezvizapi.exceptions import DeviceException, PyEzvizError
+from pyezvizapi.exceptions import (
+    DeviceException,
+    EzvizLocalSdkDeadlineExpired,
+    PyEzvizError,
+)
 from pyezvizapi.hcnetsdk import (
     EZVIZ_CAS_PTZ_COMMAND_MAP,
     EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE,
@@ -751,6 +755,19 @@ EXPECTED_PREVIEW_XML = (
     b"\t<Authentication>auth</Authentication>\n"
     b"\t<Uuid>uuid</Uuid>\n"
     b"\t<Timestamp>123456</Timestamp>\n"
+    b"</Request>\n"
+)
+EXPECTED_PREVIEW_PUBLIC_KEY_XML = (
+    b'<?xml version="1.0" encoding="utf-8"?>\n'
+    b"<Request>\n"
+    b"\t<OperationCode>op</OperationCode>\n"
+    b"\t<Channel>1</Channel>\n"
+    b"\t<ReceiverInfo>receiver</ReceiverInfo>\n"
+    b"\t<IsEncrypt>TRUE</IsEncrypt>\n"
+    b"\t<ReceiverInfoEx>receiver-ex</ReceiverInfoEx>\n"
+    b"\t<Uuid>uuid</Uuid>\n"
+    b"\t<Timestamp>123456</Timestamp>\n"
+    b"\t<PublicKey>MFkwEwYH&lt;key&gt;</PublicKey>\n"
     b"</Request>\n"
 )
 EXPECTED_STRUCTURED_PREVIEW_XML = (
@@ -1979,6 +1996,31 @@ def test_build_ezviz_local_preview_request_body_uses_observed_tag_order() -> Non
         "Authentication",
         "Uuid",
         "Timestamp",
+    )
+
+
+def test_build_ezviz_local_preview_request_body_supports_public_key() -> None:
+    body = build_ezviz_local_preview_request_body(
+        operation_code="op",
+        channel=1,
+        receiver_info="receiver",
+        receiver_info_ex="receiver-ex",
+        uuid="uuid",
+        timestamp=123456,
+        public_key="MFkwEwYH<key>",
+    )
+
+    assert body == EXPECTED_PREVIEW_PUBLIC_KEY_XML
+    assert classify_ezviz_local_sdk_body(body).xml_tags == (
+        "Request",
+        "OperationCode",
+        "Channel",
+        "ReceiverInfo",
+        "IsEncrypt",
+        "ReceiverInfoEx",
+        "Uuid",
+        "Timestamp",
+        "PublicKey",
     )
 
 
@@ -4195,6 +4237,119 @@ def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:
                 receiver_info_ex="receiver-ex",
             ),
         )
+
+
+def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
+    monkeypatch,
+) -> None:
+    stream_byte = b"x"
+    stream_sock = _FakeSocket([stream_byte])
+    stream_sock.timeout = 3.0
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        lambda sock, *, max_prefix_bytes: sock.recv(1),
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=lambda _address, _timeout: stream_sock,
+    ) as client:
+        ticks = iter([0.0, 0.0])
+        result = client.read_stream_frame_after_prefix(
+            timeout=0.75,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert result == stream_byte
+    assert stream_sock.timeout_history == [0.75, 3.0]
+
+
+def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) -> None:
+    stream_byte = b"x"
+    stream_sock = _FakeSocket([stream_byte])
+    stream_sock.timeout = 3.0
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        lambda sock, *, max_prefix_bytes: sock.recv(1),
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=lambda _address, _timeout: stream_sock,
+    ) as client:
+        ticks = iter([0.0, 0.0])
+        result = client.read_stream_frame_after_prefix(
+            timeout=60.0,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert result == stream_byte
+    assert stream_sock.timeout_history == [3.0, 3.0]
+
+
+def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
+    monkeypatch,
+) -> None:
+    stream_sock = _FakeSocket([b"x", b"y"])
+    stream_sock.timeout = 5.0
+
+    def read_fragmented(sock, *, max_prefix_bytes):
+        sock.recv(1)
+        sock.recv(1)
+        return sock.recv(1)
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        read_fragmented,
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+    ticks = iter([0.0, 0.1, 0.6, 1.1])
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=lambda _address, _timeout: stream_sock,
+    ) as client, pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.read_stream_frame_after_prefix(
+            timeout=1.0,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert stream_sock.timeout_history == [0.9, 0.4, 5.0]
 
 
 def test_apk_observed_command_ids_are_named() -> None:
@@ -7261,9 +7416,18 @@ class _FakeSocket(_FragmentedSocket):
         super().__init__(chunks)
         self.sent: list[bytes] = []
         self.closed = False
+        self.timeout: float | None = None
+        self.timeout_history: list[float | None] = []
 
     def sendall(self, data: bytes) -> None:
         self.sent.append(data)
 
     def close(self) -> None:
         self.closed = True
+
+    def gettimeout(self) -> float | None:
+        return self.timeout
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.timeout = timeout
+        self.timeout_history.append(timeout)

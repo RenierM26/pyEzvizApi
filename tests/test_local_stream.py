@@ -746,7 +746,7 @@ def test_hcnetsdk_close_interrupts_in_flight_keepalive_before_join() -> None:
             send_started.set()
             assert socket_closed.wait(timeout=1.0)
 
-        def close(self) -> None:
+        def shutdown(self) -> None:
             socket_closed.set()
 
     step = HcNetSdkCommandPortSocketStep(

@@ -30,6 +30,7 @@ import re
 import socket
 import ssl
 import sys
+from threading import Lock
 import time
 from typing import Any, cast
 import xml.etree.ElementTree as ET
@@ -8887,11 +8888,15 @@ class EzvizLocalSdkClient:
             self._stream(
                 timeout=effective_timeout,
                 deadline_limited=deadline is not None,
+                deadline=deadline,
+                monotonic=monotonic,
             )
             if stream_socket
             else self._command(
                 timeout=effective_timeout,
                 deadline_limited=deadline is not None,
+                deadline=deadline,
+                monotonic=monotonic,
             )
         )
         request = build_ezviz_cas_ssl_local_sdk_frame(
@@ -9108,6 +9113,8 @@ class EzvizLocalSdkClient:
         sock = self._stream(
             timeout=effective_timeout,
             deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if effective_timeout is None:
             return read_ezviz_interleaved_rtp_frame_after_prefix(
@@ -9137,6 +9144,8 @@ class EzvizLocalSdkClient:
         *,
         timeout: float | None = None,
         deadline_limited: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> Any:
         if self._command_sock is None:
             source_address = (
@@ -9157,6 +9166,8 @@ class EzvizLocalSdkClient:
                     (self.endpoint.host, self.endpoint.command_port),
                     connect_timeout,
                     source_address=source_address,
+                    deadline=deadline,
+                    monotonic=monotonic,
                 )
             except TimeoutError as err:
                 if deadline_limited and (
@@ -9177,6 +9188,8 @@ class EzvizLocalSdkClient:
         *,
         timeout: float | None = None,
         deadline_limited: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> Any:
         if self._stream_sock is None:
             connect_timeout = self.timeout
@@ -9187,9 +9200,12 @@ class EzvizLocalSdkClient:
                     else min(connect_timeout, timeout)
                 )
             try:
-                stream_sock = self.socket_factory(
+                stream_sock = _connect_with_optional_source_address(
+                    self.socket_factory,
                     (self.endpoint.host, self.endpoint.stream_port or 0),
                     connect_timeout,
+                    deadline=deadline,
+                    monotonic=monotonic,
                 )
             except TimeoutError as err:
                 if deadline_limited and (
@@ -9216,8 +9232,17 @@ def _connect_with_optional_source_address(
     timeout: float | None,
     *,
     source_address: SocketSourceAddress = None,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> Any:
     if source_address is None:
+        if socket_factory is socket.create_connection and deadline is not None:
+            return _create_deadline_connection(
+                address,
+                timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
         return socket_factory(address, timeout)
     try:
         if socket_factory is socket.create_connection:
@@ -9225,6 +9250,8 @@ def _connect_with_optional_source_address(
                 address,
                 timeout,
                 source_address=source_address,
+                deadline=deadline,
+                monotonic=monotonic,
             )
         source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
         return source_socket_factory(address, timeout, source_address)
@@ -9244,6 +9271,8 @@ def _create_reusable_source_connection(
     timeout: float | None,
     *,
     source_address: tuple[str, int],
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> socket.socket:
     """Connect from an exact source port with platform-safe ownership."""
 
@@ -9255,6 +9284,11 @@ def _create_reusable_source_connection(
         type=socket.SOCK_STREAM,
     ):
         try:
+            attempt_timeout = _connect_attempt_timeout(
+                timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
             if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
                 try:
                     return _connect_bound_source_socket(
@@ -9262,7 +9296,7 @@ def _create_reusable_source_connection(
                         sock_type,
                         protocol,
                         target,
-                        timeout,
+                        attempt_timeout,
                         source_address=source_address,
                         exclusive=True,
                     )
@@ -9281,7 +9315,11 @@ def _create_reusable_source_connection(
                         sock_type,
                         protocol,
                         target,
-                        timeout,
+                        _connect_attempt_timeout(
+                            timeout,
+                            deadline=deadline,
+                            monotonic=monotonic,
+                        ),
                         source_address=concrete_source_address,
                         exclusive=True,
                     )
@@ -9290,13 +9328,61 @@ def _create_reusable_source_connection(
                 sock_type,
                 protocol,
                 target,
-                timeout,
+                attempt_timeout,
                 source_address=source_address,
                 exclusive=False,
             )
         except OSError as err:
             last_error = err
 
+    if last_error is not None:
+        raise last_error
+    raise OSError("getaddrinfo returned no addresses")
+
+
+def _connect_attempt_timeout(
+    timeout: float | None,
+    *,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    """Return a per-attempt timeout from the current absolute deadline."""
+    if deadline is None:
+        return timeout
+    remaining = _remaining_timeout(deadline, monotonic)
+    assert remaining is not None
+    return remaining if timeout is None else min(timeout, remaining)
+
+
+def _create_deadline_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> socket.socket:
+    """Connect to resolved addresses without renewing an absolute deadline."""
+    last_error: OSError | None = None
+    host, port = address
+    for family, sock_type, protocol, _, target in socket.getaddrinfo(
+        host,
+        port,
+        type=socket.SOCK_STREAM,
+    ):
+        sock = socket.socket(family, sock_type, protocol)
+        try:
+            sock.settimeout(
+                _connect_attempt_timeout(
+                    timeout,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            )
+            sock.connect(target)
+            return sock
+        except OSError as err:
+            last_error = err
+            sock.close()
     if last_error is not None:
         raise last_error
     raise OSError("getaddrinfo returned no addresses")
@@ -9896,6 +9982,8 @@ class HcNetSdkCommandPortClient:
         self.timeout = timeout
         self.socket_factory = socket_factory
         self._socket: Any | None = None
+        self._state_lock = Lock()
+        self._allow_reconnect = True
 
     def __enter__(self) -> HcNetSdkCommandPortClient:
         self.connect()
@@ -9914,9 +10002,17 @@ class HcNetSdkCommandPortClient:
         *,
         timeout: float | None = None,
         deadline_limited: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> Any:
         """Open the command-port TCP socket if needed."""
-        if self._socket is None:
+        with self._state_lock:
+            existing_socket = self._socket
+            if existing_socket is not None:
+                return existing_socket
+            if not self._allow_reconnect:
+                raise PyEzvizError("HCNetSDK command-port client is shut down")
+        if existing_socket is None:
             connect_timeout = self.timeout
             if timeout is not None:
                 connect_timeout = (
@@ -9925,9 +10021,12 @@ class HcNetSdkCommandPortClient:
                     else min(connect_timeout, timeout)
                 )
             try:
-                command_sock = self.socket_factory(
+                command_sock = _connect_with_optional_source_address(
+                    self.socket_factory,
                     (self.endpoint.host, self.endpoint.command_port),
                     connect_timeout,
+                    deadline=deadline,
+                    monotonic=monotonic,
                 )
             except TimeoutError as err:
                 if deadline_limited and (
@@ -9940,16 +10039,39 @@ class HcNetSdkCommandPortClient:
                 raise
             if timeout is not None:
                 command_sock.settimeout(self.timeout)
-            self._socket = command_sock
-        return self._socket
+            with self._state_lock:
+                if not self._allow_reconnect:
+                    with suppress(Exception):
+                        command_sock.close()
+                    raise PyEzvizError("HCNetSDK command-port client is shut down")
+                if self._socket is None:
+                    self._socket = command_sock
+                    return command_sock
+                existing_socket = self._socket
+            with suppress(Exception):
+                command_sock.close()
+            return existing_socket
+        raise AssertionError("unreachable command-port connection state")
 
     def close(self) -> None:
         """Close the command-port socket."""
-        if self._socket is None:
+        with self._state_lock:
+            command_sock = self._socket
+            self._socket = None
+        if command_sock is None:
             return
         with suppress(Exception):
-            self._socket.close()
-        self._socket = None
+            command_sock.close()
+
+    def shutdown(self) -> None:
+        """Close the socket and permanently reject lazy reconnection."""
+        with self._state_lock:
+            self._allow_reconnect = False
+            command_sock = self._socket
+            self._socket = None
+        if command_sock is not None:
+            with suppress(Exception):
+                command_sock.close()
 
     def send_command_frame(
         self,
@@ -9969,6 +10091,8 @@ class HcNetSdkCommandPortClient:
             self.connect(
                 timeout=effective_timeout,
                 deadline_limited=deadline is not None,
+                deadline=deadline,
+                monotonic=monotonic,
             ),
             frame,
             timeout=timeout,
@@ -9992,6 +10116,8 @@ class HcNetSdkCommandPortClient:
         sock = self.connect(
             timeout=effective_timeout,
             deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if effective_timeout is None:
             return read_hcnetsdk_tcp_frame(sock)
@@ -10026,6 +10152,8 @@ class HcNetSdkCommandPortClient:
         sock = self.connect(
             timeout=effective_timeout,
             deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if effective_timeout is None:
             return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
@@ -10064,6 +10192,8 @@ class HcNetSdkCommandPortClient:
         sock = self.connect(
             timeout=_remaining_timeout(deadline, monotonic),
             deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if local_ip is None:
             try:

@@ -953,7 +953,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         self._keepalive_stop.set()
         self._set_keepalive_deadline(None, time.monotonic)
         for client in reversed(self._clients):
-            client.close()
+            client.shutdown()
         self._clients.clear()
         self._media_client = None
         if self._keepalive_thread is not None:
@@ -1481,6 +1481,8 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         login_client.connect(
             timeout=_remaining_capture_timeout(deadline, monotonic),
             deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         with login_client:
             local_ip = self.local_ip or self._client_local_ip(login_client)

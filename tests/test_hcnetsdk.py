@@ -8,6 +8,7 @@ import hashlib
 import hmac
 from pathlib import Path
 import socket
+from threading import Event, Thread
 from typing import Any
 
 from Crypto.Cipher import PKCS1_v1_5
@@ -4004,6 +4005,43 @@ def test_hcnetsdk_command_port_client_bootstraps_first_media() -> None:
     assert bootstrap.first_media.frame.payload == media_payload
 
 
+def test_hcnetsdk_command_port_shutdown_rejects_late_connect() -> None:
+    connect_started = Event()
+    release_connect = Event()
+    sock = _FakeSocket([])
+    errors: list[Exception] = []
+
+    def socket_factory(_address: tuple[str, int], _timeout: float | None) -> _FakeSocket:
+        connect_started.set()
+        assert release_connect.wait(timeout=1.0)
+        return sock
+
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        socket_factory=socket_factory,
+    )
+
+    def connect() -> None:
+        try:
+            client.connect()
+        except Exception as err:
+            errors.append(err)
+
+    thread = Thread(target=connect)
+    thread.start()
+    assert connect_started.wait(timeout=1.0)
+    client.shutdown()
+    release_connect.set()
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert sock.closed is True
+    assert len(errors) == 1
+    assert isinstance(errors[0], PyEzvizError)
+    with pytest.raises(PyEzvizError, match="shut down"):
+        client.connect()
+
+
 def test_hcnetsdk_command_port_media_read_restores_socket_timeout() -> None:
     expected_prefix = b"preface"
     expected_timeout = 3.0
@@ -4407,6 +4445,56 @@ def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
         (("", 10103), True),
         (("192.0.2.25", 10103), True),
     ]
+
+
+def test_source_connection_recomputes_timeout_between_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_socket = object()
+    timeouts: list[float | None] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        del source_address, exclusive
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            raise OSError(errno.ETIMEDOUT, "first address timed out")
+        return connected_socket
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        False,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    clock = iter((0.0, 0.4)).__next__
+
+    assert _create_reusable_source_connection(
+        ("camera.example", 9010),
+        1.0,
+        source_address=("", 10103),
+        deadline=1.0,
+        monotonic=clock,
+    ) is connected_socket
+    assert timeouts == [1.0, 0.6]
 
 
 def test_windows_ipv6_wildcard_source_preserves_route_scope(

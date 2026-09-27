@@ -58,6 +58,8 @@ from .constants import (
     LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH,
     LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH,
     MAX_RETRIES,
+    RTP_FIXED_HEADER_LENGTH,
+    RTP_VERSION,
 )
 from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
 from .hcnetsdk import (
@@ -78,6 +80,7 @@ from .local_stream import (
     copy_local_stream_to_mpegts,
     get_local_sdk_stream_credentials_from_client,
 )
+from .stream import rtp_payload
 
 
 @dataclass(frozen=True)
@@ -461,7 +464,7 @@ class EzvizLocalSdkEcdhStreamDecoder:
     def _absorb_plain(self, plain: bytes) -> bytes:
         if not plain:
             return b""
-        if len(plain) >= 12 and plain[0] >> 6 == 2:
+        if _is_complete_ecdh_rtp_packet(plain):
             # Some ECDH devices return one complete IDMX/RTP packet per
             # authenticated ChaCha20 record. Preserve that packet boundary for
             # the IDMX demux/media-key layer instead of buffering for MPEG-PS.
@@ -493,6 +496,17 @@ class EzvizLocalSdkEcdhStreamDecoder:
                 "header followed by an H.264/HEVC keyframe within the configured limit"
             )
         return b""
+
+
+def _is_complete_ecdh_rtp_packet(payload: bytes) -> bool:
+    """Return whether an authenticated ECDH record is one complete RTP packet."""
+    if len(payload) < RTP_FIXED_HEADER_LENGTH or payload[0] >> 6 != RTP_VERSION:
+        return False
+    try:
+        rtp_payload(payload)
+    except PyEzvizError:
+        return False
+    return True
 
 
 class EzvizLocalSdkEcdhMediaStream:
@@ -912,6 +926,7 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
         duration_seconds=duration_seconds,
         monotonic=monotonic,
     )
+    transformed_max_packets = max_packets if max_packets is not None else max_frames
     if output_format == "mpegps":
         assert media_key is not None
         copy_local_stream_to_decrypted_mpegps(
@@ -919,7 +934,7 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
             output,
             media_key,
             nalu_header_size=nalu_header_size,
-            max_packets=max_packets,
+            max_packets=transformed_max_packets,
             duration_seconds=duration_seconds,
         )
     elif decrypt_video:
@@ -930,7 +945,7 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
             media_key,
             ffmpeg_path=ffmpeg_path,
             nalu_header_size=nalu_header_size,
-            max_packets=max_packets,
+            max_packets=transformed_max_packets,
             duration_seconds=duration_seconds,
             decrypt_hevc_parameter_sets=True,
         )
@@ -939,7 +954,7 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
             bounded_stream,
             output,
             ffmpeg_path=ffmpeg_path,
-            max_packets=max_packets,
+            max_packets=transformed_max_packets,
             duration_seconds=duration_seconds,
         )
 
@@ -954,11 +969,25 @@ def copy_local_sdk_ecdh_stream_to_mpegps(
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Write decoded local SDK ECDH MPEG-PS payloads to ``output``."""
-    for packet in stream.iter_packets(
-        max_packets=max_packets,
-        max_frames=max_frames,
-        duration_seconds=duration_seconds,
-        monotonic=monotonic,
-    ):
+    packets = iter(
+        stream.iter_packets(
+            max_packets=max_packets,
+            max_frames=max_frames,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+    )
+    try:
+        first_packet = next(packets)
+    except StopIteration:
+        output.flush()
+        return
+    if _is_complete_ecdh_rtp_packet(first_packet.body):
+        raise PyEzvizError(
+            "EZVIZ local SDK ECDH stream contains RTP/IDMX, not MPEG-PS; "
+            "use output_format='mpegts' with decrypt_video=True"
+        )
+    output.write(first_packet.body)
+    for packet in packets:
         output.write(packet.body)
     output.flush()

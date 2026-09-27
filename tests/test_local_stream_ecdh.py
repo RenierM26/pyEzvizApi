@@ -860,7 +860,6 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
         output_format="mpegts",
         decrypt_video=True,
         media_key="media-secret",
-        max_packets=3,
         max_frames=7,
         duration_seconds=duration_seconds,
     )
@@ -868,10 +867,10 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
     assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGTS_PAYLOAD
     assert calls[0]["fetch_media_key"] is False
     assert calls[1]["media_key"] == "media-secret"
-    assert calls[1]["max_packets"] == 3
+    assert calls[1]["max_packets"] == 7
     assert calls[1]["duration_seconds"] == duration_seconds
     assert calls[1]["decrypt_hevc_parameter_sets"] is True
-    assert calls[2]["max_packets"] == 3
+    assert calls[2]["max_packets"] == 7
     assert calls[2]["max_frames"] == 7
     assert calls[2]["duration_seconds"] == duration_seconds
 
@@ -895,6 +894,21 @@ def test_copy_local_sdk_ecdh_stream_to_mpegps_flushes_output() -> None:
 
     assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD
     assert output.flush_calls == 1
+
+
+def test_copy_local_sdk_ecdh_stream_to_mpegps_rejects_rtp_idmx() -> None:
+    rtp_packet = b"\x80\x60\x00\x01\x00\x00\x00\x01\x55\x66\x77\x88video"
+
+    class FakeStream:
+        def iter_packets(self, **_kwargs: object) -> list[object]:
+            return [type("Packet", (), {"body": rtp_packet})()]
+
+    output = BytesIO()
+
+    with pytest.raises(PyEzvizError, match="RTP/IDMX, not MPEG-PS"):
+        copy_local_sdk_ecdh_stream_to_mpegps(cast(Any, FakeStream()), output)
+
+    assert output.getvalue() == EMPTY_BYTES
 
 
 def test_ezviz_local_sdk_ecdh_stream_iter_packets_can_bound_input_frames() -> None:

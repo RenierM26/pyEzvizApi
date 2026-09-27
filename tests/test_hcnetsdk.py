@@ -6,6 +6,7 @@ from datetime import date, datetime
 import hashlib
 import hmac
 from pathlib import Path
+import socket
 
 from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
@@ -253,6 +254,7 @@ from pyezvizapi.hcnetsdk import (
     SadpNoArgRequest,
     SadpSetLogToFileRequest,
     SadpStartRequest,
+    _connect_with_optional_source_address,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
     build_ezviz_cas_ssl_local_sdk_frame,
@@ -4231,6 +4233,94 @@ def test_ezviz_local_sdk_client_can_bind_command_source_port() -> None:
         )
 
     assert connect_calls == [(("192.0.2.10", 9010), 5.0, ("", 10103))]
+
+
+@pytest.mark.parametrize("source_port", [0, 65536])
+def test_ezviz_local_sdk_client_rejects_non_advertisable_source_port(
+    source_port: int,
+) -> None:
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+
+    with pytest.raises(PyEzvizError, match="between 1 and 65535"):
+        EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            command_source_port=source_port,
+        )
+
+
+def test_local_sdk_source_port_can_reopen_immediately() -> None:
+    timeout = 1.0
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+
+    reservation = socket.socket()
+    reservation.bind(("127.0.0.1", 0))
+    source_address = ("127.0.0.1", reservation.getsockname()[1])
+    reservation.close()
+
+    try:
+        first = _connect_with_optional_source_address(
+            socket.create_connection,
+            server.getsockname(),
+            timeout,
+            source_address=source_address,
+        )
+        first_peer, _ = server.accept()
+        first.close()
+        while first_peer.recv(1024):
+            pass
+        first_peer.close()
+
+        second = _connect_with_optional_source_address(
+            socket.create_connection,
+            server.getsockname(),
+            timeout,
+            source_address=source_address,
+        )
+        second_peer, _ = server.accept()
+        assert second.getsockname()[1] == source_address[1]
+        second.close()
+        second_peer.close()
+    finally:
+        server.close()
+
+
+def test_local_sdk_source_port_reports_an_active_conflict() -> None:
+    timeout = 1.0
+    target = socket.socket()
+    target.bind(("127.0.0.1", 0))
+    target.listen()
+    occupied = socket.socket()
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen()
+    source_address = occupied.getsockname()
+
+    try:
+        with pytest.raises(
+            PyEzvizError,
+            match=rf"receiver port {source_address[1]} is already in use",
+        ):
+            _connect_with_optional_source_address(
+                socket.create_connection,
+                target.getsockname(),
+                timeout,
+                source_address=source_address,
+            )
+    finally:
+        occupied.close()
+        target.close()
 
 
 def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:

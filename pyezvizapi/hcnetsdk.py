@@ -8993,6 +8993,10 @@ class EzvizLocalSdkClient:
         return self._stream_sock
 
 
+class _SourcePortConflictError(OSError):
+    """An address error known to have occurred after binding the source port."""
+
+
 def _connect_with_optional_source_address(
     socket_factory: SocketFactory,
     address: tuple[str, int],
@@ -9012,7 +9016,10 @@ def _connect_with_optional_source_address(
         source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
         return source_socket_factory(address, timeout, source_address)
     except OSError as err:
-        if err.errno in {errno.EADDRINUSE, errno.EADDRNOTAVAIL}:
+        if err.errno == errno.EADDRINUSE or isinstance(
+            err,
+            _SourcePortConflictError,
+        ):
             raise PyEzvizError(
                 f"EZVIZ local SDK receiver port {source_address[1]} is already in use"
             ) from err
@@ -9102,7 +9109,12 @@ def _connect_bound_source_socket(
         else:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(source_address)
-        sock.connect(target)
+        try:
+            sock.connect(target)
+        except OSError as err:
+            if err.errno == errno.EADDRNOTAVAIL:
+                raise _SourcePortConflictError(err.errno, str(err)) from err
+            raise
         if sock.getsockname()[1] != source_address[1]:
             raise PyEzvizError(
                 "EZVIZ local SDK receiver port changed while opening the socket"

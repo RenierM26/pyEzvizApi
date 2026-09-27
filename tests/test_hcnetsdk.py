@@ -4379,20 +4379,61 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
 
 
 def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
+    class ConnectSocket:
+        def settimeout(self, _timeout: float | None) -> None:
+            return
+
+        def setsockopt(self, _level: int, _option: int, _value: int) -> None:
+            return
+
+        def bind(self, _address: tuple[str, int]) -> None:
+            return
+
+        def connect(self, _target: tuple[str, int]) -> None:
+            raise OSError(errno.EADDRNOTAVAIL, "duplicate TCP tuple")
+
+        def close(self) -> None:
+            return
+
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *_args, **_kwargs: [
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+            ],
+        )
+        monkeypatch.setattr(socket, "socket", lambda *_args: ConnectSocket())
+
+        with pytest.raises(PyEzvizError, match="receiver port 10103 is already in use"):
+            _connect_with_optional_source_address(
+                socket.create_connection,
+                ("192.0.2.10", 9010),
+                1.0,
+                source_address=("127.0.0.1", 10103),
+            )
+
+
+def test_local_sdk_source_host_preserves_bind_address_error() -> None:
+    bind_error = OSError(errno.EADDRNOTAVAIL, "source address is not configured")
+
     def socket_factory(
         _address: tuple[str, int],
         _timeout: float | None,
         _source_address: tuple[str, int] | None = None,
     ) -> Any:
-        raise OSError(errno.EADDRNOTAVAIL, "duplicate TCP tuple")
+        raise bind_error
 
-    with pytest.raises(PyEzvizError, match="receiver port 10103 is already in use"):
+    with pytest.raises(OSError) as error:
         _connect_with_optional_source_address(
             socket_factory,
             ("192.0.2.10", 9010),
             1.0,
-            source_address=("127.0.0.1", 10103),
+            source_address=("192.0.2.99", 10103),
         )
+
+    assert error.value is bind_error
 
 
 def test_windows_bound_source_port_does_not_fall_back_to_reuse(
@@ -4469,6 +4510,7 @@ def test_windows_tcp_table_reads_states_for_requested_port(
         local_port=socket.htons(10104),
     )
     payload = bytes(ctypes.c_uint32(2)) + bytes(matching_row) + bytes(other_row)
+    calls = 0
 
     def get_extended_tcp_table(
         buffer: Any,
@@ -4478,8 +4520,13 @@ def test_windows_tcp_table_reads_states_for_requested_port(
         _table_class: int,
         _reserved: int,
     ) -> int:
+        nonlocal calls
+        calls += 1
         size = ctypes.cast(size_pointer, ctypes.POINTER(ctypes.c_uint32))
         if buffer is None:
+            size.contents.value = len(payload) - 1
+            return 122
+        if ctypes.sizeof(buffer) < len(payload):
             size.contents.value = len(payload)
             return 122
         ctypes.memmove(buffer, payload, len(payload))
@@ -4498,6 +4545,7 @@ def test_windows_tcp_table_reads_states_for_requested_port(
     )
 
     assert _windows_tcp.tcp_states_for_port(10103, socket.AF_INET) == {11}
+    assert calls == 3
 
 
 def test_windows_wildcard_source_uses_target_route_interface(

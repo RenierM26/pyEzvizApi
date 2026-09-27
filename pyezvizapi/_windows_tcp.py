@@ -52,17 +52,20 @@ def tcp_states_for_port(port: int, family: int) -> set[int]:
     if result not in {0, _ERROR_INSUFFICIENT_BUFFER}:
         raise OSError(result, "GetExtendedTcpTable size query failed")
 
-    buffer = ctypes.create_string_buffer(size.value)
-    result = get_table(
-        buffer,
-        ctypes.byref(size),
-        False,
-        family,
-        _TCP_TABLE_OWNER_PID_ALL,
-        0,
-    )
-    if result != 0:
-        raise OSError(result, "GetExtendedTcpTable failed")
+    while True:
+        buffer = ctypes.create_string_buffer(size.value)
+        result = get_table(
+            buffer,
+            ctypes.byref(size),
+            False,
+            family,
+            _TCP_TABLE_OWNER_PID_ALL,
+            0,
+        )
+        if result == 0:
+            break
+        if result != _ERROR_INSUFFICIENT_BUFFER:
+            raise OSError(result, "GetExtendedTcpTable failed")
 
     dword_size = ctypes.sizeof(ctypes.c_uint32)
     count = int(ctypes.c_uint32.from_buffer_copy(buffer.raw[:dword_size]).value)

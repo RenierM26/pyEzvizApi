@@ -8884,9 +8884,15 @@ class EzvizLocalSdkClient:
             else timeout
         )
         sock = (
-            self._stream(timeout=effective_timeout)
+            self._stream(
+                timeout=effective_timeout,
+                deadline_limited=deadline is not None,
+            )
             if stream_socket
-            else self._command(timeout=effective_timeout)
+            else self._command(
+                timeout=effective_timeout,
+                deadline_limited=deadline is not None,
+            )
         )
         request = build_ezviz_cas_ssl_local_sdk_frame(
             command=command,
@@ -9099,7 +9105,10 @@ class EzvizLocalSdkClient:
             if deadline is not None
             else timeout
         )
-        sock = self._stream(timeout=effective_timeout)
+        sock = self._stream(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+        )
         if effective_timeout is None:
             return read_ezviz_interleaved_rtp_frame_after_prefix(
                 sock,
@@ -9123,7 +9132,12 @@ class EzvizLocalSdkClient:
         finally:
             sock.settimeout(previous_timeout)
 
-    def _command(self, *, timeout: float | None = None) -> Any:
+    def _command(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline_limited: bool = False,
+    ) -> Any:
         if self._command_sock is None:
             source_address = (
                 (self.command_source_host, self.command_source_port)
@@ -9137,18 +9151,33 @@ class EzvizLocalSdkClient:
                     if connect_timeout is None
                     else min(connect_timeout, timeout)
                 )
-            command_sock = _connect_with_optional_source_address(
-                self.socket_factory,
-                (self.endpoint.host, self.endpoint.command_port),
-                connect_timeout,
-                source_address=source_address,
-            )
+            try:
+                command_sock = _connect_with_optional_source_address(
+                    self.socket_factory,
+                    (self.endpoint.host, self.endpoint.command_port),
+                    connect_timeout,
+                    source_address=source_address,
+                )
+            except TimeoutError as err:
+                if deadline_limited and (
+                    self.timeout is None
+                    or (timeout is not None and timeout <= self.timeout)
+                ):
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "EZVIZ local SDK command connect exceeded its deadline"
+                    ) from err
+                raise
             if timeout is not None:
                 command_sock.settimeout(self.timeout)
             self._command_sock = command_sock
         return self._command_sock
 
-    def _stream(self, *, timeout: float | None = None) -> Any:
+    def _stream(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline_limited: bool = False,
+    ) -> Any:
         if self._stream_sock is None:
             connect_timeout = self.timeout
             if timeout is not None:
@@ -9157,10 +9186,20 @@ class EzvizLocalSdkClient:
                     if connect_timeout is None
                     else min(connect_timeout, timeout)
                 )
-            stream_sock = self.socket_factory(
-                (self.endpoint.host, self.endpoint.stream_port or 0),
-                connect_timeout,
-            )
+            try:
+                stream_sock = self.socket_factory(
+                    (self.endpoint.host, self.endpoint.stream_port or 0),
+                    connect_timeout,
+                )
+            except TimeoutError as err:
+                if deadline_limited and (
+                    self.timeout is None
+                    or (timeout is not None and timeout <= self.timeout)
+                ):
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "EZVIZ local SDK stream connect exceeded its deadline"
+                    ) from err
+                raise
             if timeout is not None:
                 stream_sock.settimeout(self.timeout)
             self._stream_sock = stream_sock
@@ -9870,7 +9909,12 @@ class HcNetSdkCommandPortClient:
         """Return the connected socket, opening it lazily."""
         return self.connect()
 
-    def connect(self, *, timeout: float | None = None) -> Any:
+    def connect(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline_limited: bool = False,
+    ) -> Any:
         """Open the command-port TCP socket if needed."""
         if self._socket is None:
             connect_timeout = self.timeout
@@ -9880,10 +9924,20 @@ class HcNetSdkCommandPortClient:
                     if connect_timeout is None
                     else min(connect_timeout, timeout)
                 )
-            command_sock = self.socket_factory(
-                (self.endpoint.host, self.endpoint.command_port),
-                connect_timeout,
-            )
+            try:
+                command_sock = self.socket_factory(
+                    (self.endpoint.host, self.endpoint.command_port),
+                    connect_timeout,
+                )
+            except TimeoutError as err:
+                if deadline_limited and (
+                    self.timeout is None
+                    or (timeout is not None and timeout <= self.timeout)
+                ):
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "HCNetSDK command-port connect exceeded its deadline"
+                    ) from err
+                raise
             if timeout is not None:
                 command_sock.settimeout(self.timeout)
             self._socket = command_sock
@@ -9912,7 +9966,10 @@ class HcNetSdkCommandPortClient:
             else timeout
         )
         _send_all_with_timeout(
-            self.connect(timeout=effective_timeout),
+            self.connect(
+                timeout=effective_timeout,
+                deadline_limited=deadline is not None,
+            ),
             frame,
             timeout=timeout,
             deadline=deadline,
@@ -9932,7 +9989,10 @@ class HcNetSdkCommandPortClient:
             if deadline is not None
             else timeout
         )
-        sock = self.connect(timeout=effective_timeout)
+        sock = self.connect(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+        )
         if effective_timeout is None:
             return read_hcnetsdk_tcp_frame(sock)
         previous_timeout = sock.gettimeout()
@@ -9963,7 +10023,10 @@ class HcNetSdkCommandPortClient:
             if deadline is not None
             else timeout
         )
-        sock = self.connect(timeout=effective_timeout)
+        sock = self.connect(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+        )
         if effective_timeout is None:
             return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
                 sock,
@@ -9998,7 +10061,10 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortLoginSession:
         """Run the generated RSA/challenge command-port login handshake."""
-        sock = self.connect(timeout=_remaining_timeout(deadline, monotonic))
+        sock = self.connect(
+            timeout=_remaining_timeout(deadline, monotonic),
+            deadline_limited=deadline is not None,
+        )
         if local_ip is None:
             try:
                 local_ip = str(sock.getsockname()[0])

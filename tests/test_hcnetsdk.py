@@ -4772,6 +4772,50 @@ def test_local_command_writes_use_remaining_capture_deadline(client_kind: str) -
     assert command_sock.timeout_history[-1] == configured_timeout
 
 
+@pytest.mark.parametrize("client_kind", ("local", "command_port"))
+def test_local_connect_timeout_uses_capture_deadline_exception(client_kind: str) -> None:
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+
+    def socket_factory(_address: tuple[str, int], _timeout: float | None) -> Any:
+        raise TimeoutError
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        if client_kind == "local":
+            device_info = EzvizCasDeviceInfo(
+                serial="CAM123456",
+                operation_code="0123456",
+                key="1234567890abcdef",
+            )
+            local_client = EzvizLocalSdkClient(
+                endpoint,
+                device_info,
+                timeout=10.0,
+                socket_factory=socket_factory,
+            )
+            local_client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                b"<Request/>",
+                deadline=1.0,
+                monotonic=lambda: 0.0,
+            )
+        else:
+            command_client = HcNetSdkCommandPortClient(
+                endpoint,
+                timeout=10.0,
+                socket_factory=socket_factory,
+            )
+            command_client.send_command_frame(
+                b"request",
+                deadline=1.0,
+                monotonic=lambda: 0.0,
+            )
+
+
 def test_apk_observed_command_ids_are_named() -> None:
     assert HcNetSdkDvrCommand.GET_WIFI_CFG == 307
     assert HcNetSdkDvrCommand.SET_WIFI_CFG == 306

@@ -1432,7 +1432,10 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             return self.bootstrap
 
         login_client = self._login_client(deadline=deadline, monotonic=monotonic)
-        login_client.connect(timeout=_remaining_capture_timeout(deadline, monotonic))
+        login_client.connect(
+            timeout=_remaining_capture_timeout(deadline, monotonic),
+            deadline_limited=deadline is not None,
+        )
         with login_client:
             local_ip = self.local_ip or self._client_local_ip(login_client)
             self.login_session = login_client.login(

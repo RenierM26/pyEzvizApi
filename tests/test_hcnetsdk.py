@@ -4586,10 +4586,10 @@ def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
         )
 
     assert result == stream_byte
-    assert stream_sock.timeout_history == [0.75, 3.0]
+    assert stream_sock.timeout_history == [5.0, 0.75, 5.0]
 
 
-def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) -> None:
+def test_ezviz_local_sdk_client_preserves_configured_stream_timeout(monkeypatch) -> None:
     stream_byte = b"x"
     stream_sock = _FakeSocket([stream_byte])
     stream_sock.timeout = 3.0
@@ -4621,7 +4621,7 @@ def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) ->
         )
 
     assert result == stream_byte
-    assert stream_sock.timeout_history == [3.0, 3.0]
+    assert stream_sock.timeout_history == [5.0, 5.0, 5.0]
 
 
 def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
@@ -4662,7 +4662,7 @@ def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
             monotonic=lambda: next(ticks),
         )
 
-    assert stream_sock.timeout_history == [0.9, 0.4, 5.0]
+    assert stream_sock.timeout_history == [5.0, 0.9, 0.4, 5.0]
 
 
 def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
@@ -4711,7 +4711,7 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
         )
 
     assert connect_timeouts == [1.0]
-    assert command_sock.timeout_history == [0.75, 5.0]
+    assert command_sock.timeout_history == [5.0, 0.75, 5.0]
 
 
 def test_apk_observed_command_ids_are_named() -> None:

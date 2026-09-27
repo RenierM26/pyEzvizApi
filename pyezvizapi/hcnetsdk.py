@@ -9089,12 +9089,15 @@ class EzvizLocalSdkClient:
                     if connect_timeout is None
                     else min(connect_timeout, timeout)
                 )
-            self._command_sock = _connect_with_optional_source_address(
+            command_sock = _connect_with_optional_source_address(
                 self.socket_factory,
                 (self.endpoint.host, self.endpoint.command_port),
                 connect_timeout,
                 source_address=source_address,
             )
+            if timeout is not None:
+                command_sock.settimeout(self.timeout)
+            self._command_sock = command_sock
         return self._command_sock
 
     def _stream(self, *, timeout: float | None = None) -> Any:
@@ -9106,10 +9109,13 @@ class EzvizLocalSdkClient:
                     if connect_timeout is None
                     else min(connect_timeout, timeout)
                 )
-            self._stream_sock = self.socket_factory(
+            stream_sock = self.socket_factory(
                 (self.endpoint.host, self.endpoint.stream_port or 0),
                 connect_timeout,
             )
+            if timeout is not None:
+                stream_sock.settimeout(self.timeout)
+            self._stream_sock = stream_sock
         return self._stream_sock
 
 
@@ -9826,10 +9832,13 @@ class HcNetSdkCommandPortClient:
                     if connect_timeout is None
                     else min(connect_timeout, timeout)
                 )
-            self._socket = self.socket_factory(
+            command_sock = self.socket_factory(
                 (self.endpoint.host, self.endpoint.command_port),
                 connect_timeout,
             )
+            if timeout is not None:
+                command_sock.settimeout(self.timeout)
+            self._socket = command_sock
         return self._socket
 
     def close(self) -> None:

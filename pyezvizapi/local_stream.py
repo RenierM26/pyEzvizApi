@@ -959,11 +959,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortClient:
-        remaining = _remaining_capture_timeout(deadline, monotonic)
-        timeout = self.timeout
-        if remaining is not None:
-            timeout = remaining if timeout is None else min(timeout, remaining)
-        kwargs: dict[str, Any] = {"timeout": timeout}
+        _remaining_capture_timeout(deadline, monotonic)
+        kwargs: dict[str, Any] = {"timeout": self.timeout}
         if self.socket_factory is not None:
             kwargs["socket_factory"] = self.socket_factory
         client = HcNetSdkCommandPortClient(self.endpoint, **kwargs)
@@ -1388,11 +1385,8 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortClient:
-        remaining = _remaining_capture_timeout(deadline, monotonic)
-        timeout = self.timeout
-        if remaining is not None:
-            timeout = remaining if timeout is None else min(timeout, remaining)
-        kwargs: dict[str, Any] = {"timeout": timeout}
+        _remaining_capture_timeout(deadline, monotonic)
+        kwargs: dict[str, Any] = {"timeout": self.timeout}
         if self.socket_factory is not None:
             kwargs["socket_factory"] = self.socket_factory
         return HcNetSdkCommandPortClient(self.endpoint, **kwargs)
@@ -1418,7 +1412,11 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         if self.bootstrap is not None:
             return self.bootstrap
 
-        with self._login_client(deadline=deadline, monotonic=monotonic) as login_client:
+        login_client = self._login_client(deadline=deadline, monotonic=monotonic)
+        try:
+            login_client.connect(
+                timeout=_remaining_capture_timeout(deadline, monotonic)
+            )
             local_ip = self.local_ip or self._client_local_ip(login_client)
             self.login_session = login_client.login(
                 password=self.password,
@@ -1428,6 +1426,8 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
                 deadline=deadline,
                 monotonic=monotonic,
             )
+        finally:
+            login_client.close()
 
         rendered_plan = self.generated_plan.to_socket_plan(
             session_id=self.login_session.session_id,

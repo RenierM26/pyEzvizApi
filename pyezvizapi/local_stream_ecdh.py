@@ -158,7 +158,13 @@ def local_ecdh_media_packet_source(
 ) -> MediaPacketSourceAdapter[EzvizLocalSdkEcdhStreamPacket]:
     """Adapt an existing local ECDH stream to the shared packet contract."""
 
-    return MediaPacketSourceAdapter(stream, local_ecdh_packet_to_media_packet)
+    return MediaPacketSourceAdapter(
+        stream,
+        local_ecdh_packet_to_media_packet,
+        duration_from_start=bool(
+            getattr(stream, "supports_deadline_iter_packets", False)
+        ),
+    )
 
 
 def generate_ezviz_local_sdk_ecdh_keypair() -> EzvizLocalSdkEcdhKeyPair:
@@ -537,6 +543,8 @@ def _is_complete_ecdh_rtp_packet(payload: bytes) -> bool:
 class EzvizLocalSdkEcdhMediaStream:
     """Local SDK media stream that decrypts ECDH/ChaCha20 frames."""
 
+    supports_deadline_iter_packets = True
+
     def __init__(
         self,
         sdk_client: EzvizLocalSdkClient,
@@ -580,6 +588,8 @@ class EzvizLocalSdkEcdhMediaStream:
         self,
         *,
         read_first_media: bool = True,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap local SDK ECDH preview setup."""
         self.bootstrap = self.sdk_client.bootstrap_preview_from_fields(
@@ -592,6 +602,8 @@ class EzvizLocalSdkEcdhMediaStream:
             stream_mode=self.stream_mode,
             read_first_media=read_first_media,
             max_prefix_bytes=self.max_prefix_bytes,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         self._first_media = self.bootstrap.first_media if read_first_media else None
         if read_first_media and self._first_media is None:
@@ -604,6 +616,7 @@ class EzvizLocalSdkEcdhMediaStream:
         max_packets: int | None = None,
         max_frames: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[EzvizLocalSdkEcdhStreamPacket]:
         """Yield decoded local SDK ECDH MPEG-PS payloads."""
@@ -613,9 +626,18 @@ class EzvizLocalSdkEcdhMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
+        del duration_from_start
         deadline = monotonic() + duration_seconds if duration_seconds is not None else None
         if self.bootstrap is None:
-            self.start(read_first_media=deadline is None)
+            try:
+                self.start(
+                    read_first_media=deadline is None,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                self.close()
+                return
 
         emitted = 0
         read_frames = 0
@@ -639,6 +661,8 @@ class EzvizLocalSdkEcdhMediaStream:
                 media = self.sdk_client.read_stream_frame_after_prefix(
                     max_prefix_bytes=self.max_prefix_bytes,
                     timeout=remaining,
+                    deadline=deadline,
+                    monotonic=monotonic,
                 )
             except EzvizLocalSdkDeadlineExpired:
                 break

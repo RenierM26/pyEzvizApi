@@ -11,6 +11,8 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 import math
+from queue import Empty, Queue
+from threading import Thread
 import time
 from types import MappingProxyType
 from typing import Literal, Protocol, cast, runtime_checkable
@@ -19,6 +21,41 @@ from .exceptions import PyEzvizError
 
 MediaOutputFormat = Literal["mpegps", "mpegts"]
 MediaMetadataValue = str | int | float | bool | None
+_ITERATOR_STOPPED = object()
+_ITERATOR_TIMED_OUT = object()
+
+
+def _next_before_deadline[PacketT](
+    packets: Iterator[PacketT],
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> PacketT | object:
+    """Retrieve one potentially blocking iterator item before a deadline."""
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return _ITERATOR_TIMED_OUT
+
+    result: Queue[tuple[bool, object]] = Queue(maxsize=1)
+
+    def retrieve() -> None:
+        try:
+            packet = next(packets)
+        except StopIteration:
+            result.put((True, _ITERATOR_STOPPED))
+        except BaseException as err:
+            result.put((False, err))
+        else:
+            result.put((True, packet))
+
+    Thread(target=retrieve, daemon=True).start()
+    try:
+        succeeded, value = result.get(timeout=remaining)
+    except Empty:
+        return _ITERATOR_TIMED_OUT
+    if not succeeded:
+        raise cast(BaseException, value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -259,15 +296,31 @@ class IterableMediaPacketSource[PacketT]:
         """Yield normalized packets while enforcing common capture bounds."""
 
         selected_limits = limits or CaptureLimits()
-        started_at = monotonic()
+        deadline = (
+            monotonic() + selected_limits.duration_seconds
+            if selected_limits.duration_seconds is not None
+            else None
+        )
         emitted_packets = 0
         emitted_bytes = 0
-        for packet in self.packets:
-            if (
-                selected_limits.duration_seconds is not None
-                and monotonic() - started_at >= selected_limits.duration_seconds
-            ):
-                break
+        packets = iter(self.packets)
+        while True:
+            if deadline is None:
+                try:
+                    packet = next(packets)
+                except StopIteration:
+                    return
+            else:
+                result = _next_before_deadline(
+                    packets,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+                if result is _ITERATOR_STOPPED or result is _ITERATOR_TIMED_OUT:
+                    return
+                packet = cast(PacketT, result)
+                if monotonic() >= deadline:
+                    return
             if self.predicate is not None and not self.predicate(packet):
                 continue
             normalized = self.converter(packet)

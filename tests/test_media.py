@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError
+from threading import Event
 import time
 from typing import Any
 
@@ -22,6 +23,7 @@ from pyezvizapi.local_stream import (
     local_stream_packet_to_media_packet,
 )
 from pyezvizapi.local_stream_ecdh import (
+    EzvizLocalSdkEcdhMediaStream,
     EzvizLocalSdkEcdhStreamPacket,
     local_ecdh_media_packet_source,
     local_ecdh_packet_to_media_packet,
@@ -303,6 +305,36 @@ def test_iterable_source_does_not_read_past_packet_or_byte_limit() -> None:
     assert [
         packet.body for packet in byte_limited.iter_media_packets(limits=CaptureLimits(max_bytes=3))
     ] == [BODY]
+
+
+def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:
+    """A live iterable cannot block past the common duration limit."""
+
+    release = Event()
+    max_elapsed = 0.5
+
+    def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
+        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        release.wait()
+        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+
+    started_at = time.monotonic()
+    packets = list(
+        hcnetsdk_media_packet_source(callback_packets()).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=0.02)
+        )
+    )
+    elapsed = time.monotonic() - started_at
+    release.set()
+
+    assert [packet.body for packet in packets] == [BODY]
+    assert elapsed < max_elapsed
+
+
+def test_ecdh_adapter_applies_duration_from_iteration_start() -> None:
+    stream = object.__new__(EzvizLocalSdkEcdhMediaStream)
+
+    assert local_ecdh_media_packet_source(stream).duration_from_start is True
 
 
 def test_iterable_source_checks_duration_before_filtering() -> None:

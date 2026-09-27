@@ -1015,10 +1015,12 @@ def test_ezviz_local_sdk_ecdh_stream_applies_duration_before_first_media_read() 
     class FakeSdkClient:
         def __init__(self) -> None:
             self.read_first_media: bool | None = None
+            self.deadline: float | None = None
             self.reads = 0
 
         def bootstrap_preview_from_fields(self, **kwargs: object) -> object:
             self.read_first_media = cast(bool, kwargs["read_first_media"])
+            self.deadline = cast(float, kwargs["deadline"])
             return EzvizLocalSdkStreamBootstrap(
                 preview=cast(Any, object()),
                 stream_setup=cast(Any, object()),
@@ -1055,6 +1057,7 @@ def test_ezviz_local_sdk_ecdh_stream_applies_duration_before_first_media_read() 
 
     assert packets == []
     assert sdk_client.read_first_media is False
+    assert sdk_client.deadline == pytest.approx(1.0)
     assert sdk_client.reads == 0
 
 

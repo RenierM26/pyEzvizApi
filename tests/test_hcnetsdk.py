@@ -4120,6 +4120,29 @@ def test_hcnetsdk_command_port_allows_keepalive_during_media_read() -> None:
     peer_sock.close()
 
 
+def test_hcnetsdk_command_port_write_obeys_deadline_under_backpressure() -> None:
+    max_elapsed = 0.5
+    client_sock, peer_sock = socket.socketpair()
+    client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=5.0,
+        socket_factory=lambda _address, _timeout: client_sock,
+    )
+    started_at = time.monotonic()
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="write"):
+        client.send_command_frame(
+            b"x" * (1024 * 1024),
+            deadline=started_at + 0.02,
+        )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < max_elapsed
+    client.close()
+    peer_sock.close()
+
+
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
     pre_start_response = build_ezviz_local_sdk_frame(
         command=0x2014,
@@ -4613,6 +4636,44 @@ def test_deadline_expiry_between_addresses_does_not_allocate_socket(
 
     assert len(created) == 1
     assert created[0].closed is True
+
+
+def test_final_address_timeout_uses_deadline_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float | None] = []
+
+    class ConnectSocket:
+        def settimeout(self, timeout: float | None) -> None:
+            timeouts.append(timeout)
+
+        def connect(self, _target: Any) -> None:
+            raise TimeoutError
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    monkeypatch.setattr(socket, "socket", lambda *_args: ConnectSocket())
+    clock = iter((0.0, 0.5, 1.5)).__next__
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="connect"):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=2.0,
+            monotonic=clock,
+        )
+
+    assert timeouts == [1.0, 0.5]
 
 
 def test_windows_ipv6_wildcard_source_preserves_route_scope(

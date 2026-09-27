@@ -8837,6 +8837,19 @@ def _send_all_with_timeout(
         _send_all(sock, data)
         return
     previous_timeout = sock.gettimeout()
+    operation_deadline = (
+        deadline if deadline is not None else monotonic() + effective_timeout
+    )
+    if callable(getattr(sock, "fileno", None)) and _send_all_before_deadline(
+            sock,
+            data,
+            operation_deadline=operation_deadline,
+            configured_timeout=previous_timeout,
+            capture_deadline=deadline is not None,
+            monotonic=monotonic,
+        ):
+        return
+
     write_timeout = (
         effective_timeout
         if previous_timeout is None
@@ -8845,21 +8858,6 @@ def _send_all_with_timeout(
     deadline_limits_write = deadline is not None and (
         previous_timeout is None or effective_timeout <= previous_timeout
     )
-    writable = _wait_for_socket_io(
-        sock,
-        readable=False,
-        timeout=write_timeout,
-    )
-    if writable is not None:
-        if not writable:
-            if deadline_limits_write:
-                raise EzvizLocalSdkDeadlineExpired(
-                    "EZVIZ local SDK frame write exceeded its deadline"
-                )
-            raise TimeoutError("timed out")
-        _send_all(sock, data)
-        return
-
     sock.settimeout(write_timeout)
     try:
         _send_all(sock, data)
@@ -8871,6 +8869,60 @@ def _send_all_with_timeout(
         raise
     finally:
         sock.settimeout(previous_timeout)
+
+
+def _send_all_before_deadline(
+    sock: Any,
+    data: bytes,
+    *,
+    operation_deadline: float,
+    configured_timeout: float | None,
+    capture_deadline: bool,
+    monotonic: Callable[[], float],
+) -> bool:
+    """Partially send on a real socket while recomputing its deadline."""
+    remaining_data = memoryview(data)
+    while remaining_data:
+        remaining = operation_deadline - monotonic()
+        if remaining <= 0:
+            if capture_deadline:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                )
+            raise TimeoutError("timed out")
+        write_timeout = (
+            remaining
+            if configured_timeout is None
+            else min(configured_timeout, remaining)
+        )
+        deadline_limits_write = capture_deadline and (
+            configured_timeout is None or remaining <= configured_timeout
+        )
+        writable = _wait_for_socket_io(
+            sock,
+            readable=False,
+            timeout=write_timeout,
+        )
+        if writable is None:
+            return False
+        if not writable:
+            if deadline_limits_write:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                )
+            raise TimeoutError("timed out")
+        try:
+            sent = sock.send(remaining_data)
+        except TimeoutError as err:
+            if deadline_limits_write:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                ) from err
+            raise
+        if sent <= 0:
+            raise PyEzvizError("Socket closed before EZVIZ frame was sent")
+        remaining_data = remaining_data[sent:]
+    return True
 
 
 class EzvizLocalSdkClient:
@@ -9422,11 +9474,10 @@ def _create_deadline_connection(
         deadline=deadline,
         monotonic=monotonic,
     ):
-        attempt_timeout = _connect_attempt_timeout(
-            timeout,
-            deadline=deadline,
-            monotonic=monotonic,
-        )
+        remaining = _remaining_timeout(deadline, monotonic)
+        assert remaining is not None
+        attempt_timeout = remaining if timeout is None else min(timeout, remaining)
+        deadline_limits_attempt = timeout is None or remaining <= timeout
         sock = socket.socket(family, sock_type, protocol)
         try:
             sock.settimeout(attempt_timeout)
@@ -9435,6 +9486,10 @@ def _create_deadline_connection(
         except OSError as err:
             last_error = err
             sock.close()
+            if isinstance(err, TimeoutError) and deadline_limits_attempt:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK connect exceeded its deadline"
+                ) from err
     if last_error is not None:
         raise last_error
     raise OSError("getaddrinfo returned no addresses")

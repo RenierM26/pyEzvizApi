@@ -1066,6 +1066,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
         def __init__(self) -> None:
             self.read_timeout: float | None = None
             self.timeout = 5.0
+            self.closed = 0
 
         def bootstrap_preview_from_fields(self, **_kwargs: object) -> object:
             return EzvizLocalSdkStreamBootstrap(
@@ -1079,7 +1080,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
             raise EzvizLocalSdkDeadlineExpired("timed out")
 
         def close(self) -> None:
-            return None
+            self.closed += 1
 
     ticks = iter([0.0, 0.25])
     sdk_client = FakeSdkClient()
@@ -1105,6 +1106,8 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
         == []
     )
     assert sdk_client.read_timeout == pytest.approx(0.75)
+    assert sdk_client.closed == 1
+    assert stream.bootstrap is None
 
 
 def test_ezviz_local_sdk_ecdh_stream_preserves_earlier_socket_timeout() -> None:

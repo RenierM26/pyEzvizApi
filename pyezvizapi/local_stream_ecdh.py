@@ -584,6 +584,10 @@ class EzvizLocalSdkEcdhMediaStream:
     def close(self) -> None:
         """Close the underlying local SDK sockets."""
         self.sdk_client.close()
+        self.bootstrap = None
+        self._first_media = None
+        self.media_key = None
+        self.decoder = EzvizLocalSdkEcdhStreamDecoder(self.key_pair.private_key)
 
     def start(
         self,
@@ -666,6 +670,7 @@ class EzvizLocalSdkEcdhMediaStream:
                     monotonic=monotonic,
                 )
             except EzvizLocalSdkDeadlineExpired:
+                self.close()
                 break
             read_frames += 1
             body = self.decoder.feed_interleaved_frame(media)

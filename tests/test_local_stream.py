@@ -46,7 +46,6 @@ from pyezvizapi.local_stream import (
     _idmx_audio_metadata,
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
-    _idmx_infer_aac_sample_rate,
     _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     _start_ffmpeg_stderr_drain,
@@ -117,106 +116,6 @@ def test_idmx_local_video_frame_rate_uses_rtp_timestamp_clock() -> None:
         )
         == "15"
     )
-
-
-def test_idmx_infer_aac_sample_rate_compares_audio_and_video_clocks() -> None:
-    def frame(payload_type: int, timestamp: int, sequence: int) -> bytes:
-        return (
-            b"\x80"
-            + bytes((payload_type,))
-            + sequence.to_bytes(2, "big")
-            + timestamp.to_bytes(4, "big")
-            + b"\x55\x66\x77\x88"
-        )
-
-    packets = [
-        packet
-        for index in range(8)
-        for packet in (
-            frame(96, index * 5760, index * 2),
-            frame(104, index * 1024, index * 2 + 1),
-        )
-    ]
-
-    assert _idmx_infer_aac_sample_rate(packets) == 16_000
-    aggregate = b"".join(
-        len(packet).to_bytes(4, "little") + packet for packet in packets
-    )
-    assert _idmx_infer_aac_sample_rate([aggregate]) == 16_000
-
-
-def test_idmx_infer_aac_sample_rate_uses_common_48khz_interval() -> None:
-    def frame(payload_type: int, timestamp: int, sequence: int) -> bytes:
-        return (
-            b"\x80"
-            + bytes((payload_type,))
-            + sequence.to_bytes(2, "big")
-            + timestamp.to_bytes(4, "big")
-            + b"\x55\x66\x77\x88"
-        )
-
-    events = [
-        *((index / 15, 96, index * 6000) for index in range(9)),
-        *((index * 1024 / 48_000, 104, index * 1024) for index in range(26)),
-    ]
-    packets = [
-        frame(payload_type, timestamp, sequence)
-        for sequence, (_time, payload_type, timestamp) in enumerate(sorted(events))
-    ]
-
-    assert _idmx_infer_aac_sample_rate(packets) == 48_000
-
-
-def test_idmx_infer_aac_sample_rate_rejects_edge_only_overlap() -> None:
-    def frame(payload_type: int, timestamp: int, sequence: int) -> bytes:
-        return (
-            b"\x80"
-            + bytes((payload_type,))
-            + sequence.to_bytes(2, "big")
-            + timestamp.to_bytes(4, "big")
-            + b"\x55\x66\x77\x88"
-        )
-
-    packets: list[bytes] = []
-    sequence = 0
-    for index in range(7):
-        packets.extend(
-            (
-                frame(104, index * 1024, sequence),
-                frame(97, index, sequence + 1),
-            )
-        )
-        sequence += 2
-    packets.append(frame(96, 0, sequence))
-    packets.append(frame(104, 7 * 1024, sequence + 1))
-    packets.extend(
-        frame(96, index * 5760, sequence + index)
-        for index in range(1, 8)
-    )
-
-    assert _idmx_infer_aac_sample_rate(packets) is None
-
-
-def test_idmx_infer_aac_sample_rate_rejects_ambiguous_packet_cadence() -> None:
-    def frame(payload_type: int, timestamp: int, sequence: int) -> bytes:
-        return (
-            b"\x80"
-            + bytes((payload_type,))
-            + sequence.to_bytes(2, "big")
-            + timestamp.to_bytes(4, "big")
-            + b"\x55\x66\x77\x88"
-        )
-
-    events = [
-        *((index / 15, 96, index * 6000) for index in range(16)),
-        *((index * 1024 / 11_025, 104, index * 1024) for index in range(11)),
-    ]
-    packets = [
-        frame(payload_type, timestamp, sequence)
-        for sequence, (_time, payload_type, timestamp) in enumerate(sorted(events))
-    ]
-
-    assert _idmx_infer_aac_sample_rate(packets) is None
 
 
 def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
@@ -2038,57 +1937,8 @@ def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
     ) == (sample_rate, 1)
 
 
-def test_idmx_audio_metadata_infers_clock_from_valid_aac_frames_only() -> None:
-    audio_extension = b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
-    audio_cipher = bytes.fromhex("9ad09600fb4162b8b5f84bfbd23cce0d") + b"tail"
-    access_unit = (
-        b"\x00\x10"
-        + (len(audio_cipher) << 3).to_bytes(2, "big")
-        + audio_cipher
-    )
-
-    def frame(
-        payload_type: int,
-        timestamp: int,
-        sequence: int,
-        body: bytes,
-        *,
-        extension: bool = False,
-    ) -> bytes:
-        return (
-            bytes((0x90 if extension else 0x80, payload_type))
-            + sequence.to_bytes(2, "big")
-            + timestamp.to_bytes(4, "big")
-            + b"\x55\x66\x77\x88"
-            + (audio_extension if extension else b"")
-            + body
-        )
-
-    packets = [
-        frame(104, 0x70000000, 1, b"\x00\x10\x00", extension=True),
-        frame(104, 0, 2, access_unit, extension=True),
-        *[
-            frame(96, index * 5760, index + 3, b"\x41leading-video")
-            for index in range(8)
-        ],
-        *[
-            packet
-            for index in range(8)
-            for packet in (
-                frame(96, 90_000 + index * 5760, index * 2 + 11, b"\x41video"),
-                frame(
-                    104,
-                    (index + 1) * 1024,
-                    index * 2 + 12,
-                    access_unit,
-                    extension=True,
-                ),
-            )
-        ],
-        frame(104, 9 * 1024, 27, access_unit, extension=True),
-    ]
-
-    assert _idmx_audio_metadata(packets, IDMX_MEDIA_KEY) == (16_000, 1)
+def test_idmx_audio_metadata_requires_native_descriptor() -> None:
+    assert _idmx_audio_metadata([], IDMX_MEDIA_KEY) is None
 
 
 def test_decrypt_idmx_aac_rejects_access_unit_too_large_for_adts() -> None:

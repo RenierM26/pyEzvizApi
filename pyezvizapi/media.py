@@ -7,6 +7,7 @@ code after a transport has produced media packets.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 import math
@@ -122,14 +123,15 @@ class MediaMuxOptions:
             raise PyEzvizError("h264_clean_idr_preroll_seconds must be non-negative")
         if self.h264_clean_idr_max_windows <= 0:
             raise PyEzvizError("h264_clean_idr_max_windows must be positive")
-        if self.h264_clean_idr_wait_seconds <= 0:
-            raise PyEzvizError("h264_clean_idr_wait_seconds must be positive")
+        if self.h264_clean_idr_wait_seconds < 0:
+            raise PyEzvizError("h264_clean_idr_wait_seconds must be non-negative")
 
 
 @runtime_checkable
 class MediaPacketSource(Protocol):
     """Transport-neutral bounded packet source."""
 
+    @abstractmethod
     def iter_media_packets(
         self,
         *,
@@ -138,12 +140,13 @@ class MediaPacketSource(Protocol):
     ) -> Iterator[MediaPacket]:
         """Yield normalized packets within the requested limits."""
 
-        ...
+        raise NotImplementedError
 
 
 class LegacyPacketSource[PacketT](Protocol):
     """Existing transport stream shape accepted by the compatibility adapter."""
 
+    @abstractmethod
     def iter_packets(
         self,
         *,
@@ -153,7 +156,7 @@ class LegacyPacketSource[PacketT](Protocol):
     ) -> Iterator[PacketT]:
         """Yield transport packets within the existing stream limits."""
 
-        ...
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,8 @@ class MediaPacketSourceAdapter[PacketT]:
                 break
             emitted_bytes += normalized.length
             yield normalized
+            if selected_limits.max_bytes is not None and emitted_bytes >= selected_limits.max_bytes:
+                return
 
 
 @dataclass(frozen=True)
@@ -210,18 +215,13 @@ class IterableMediaPacketSource[PacketT]:
         emitted_packets = 0
         emitted_bytes = 0
         for packet in self.packets:
-            if self.predicate is not None and not self.predicate(packet):
-                continue
-            if (
-                selected_limits.max_packets is not None
-                and emitted_packets >= selected_limits.max_packets
-            ):
-                break
             if (
                 selected_limits.duration_seconds is not None
                 and monotonic() - started_at >= selected_limits.duration_seconds
             ):
                 break
+            if self.predicate is not None and not self.predicate(packet):
+                continue
             normalized = self.converter(packet)
             if (
                 selected_limits.max_bytes is not None
@@ -231,3 +231,10 @@ class IterableMediaPacketSource[PacketT]:
             emitted_packets += 1
             emitted_bytes += normalized.length
             yield normalized
+            if (
+                selected_limits.max_packets is not None
+                and emitted_packets >= selected_limits.max_packets
+            ) or (
+                selected_limits.max_bytes is not None and emitted_bytes >= selected_limits.max_bytes
+            ):
+                return

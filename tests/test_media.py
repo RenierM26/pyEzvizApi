@@ -97,6 +97,7 @@ def test_common_decode_and_mux_option_validation() -> None:
         MediaMuxOptions(output_format="invalid")  # type: ignore[arg-type]
     with pytest.raises(PyEzvizError, match="ffmpeg_path"):
         MediaMuxOptions(ffmpeg_path="")
+    assert MediaMuxOptions(h264_clean_idr_wait_seconds=0).h264_clean_idr_wait_seconds == 0
 
 
 def test_cloud_vtm_packet_adapter_preserves_metadata() -> None:
@@ -217,6 +218,69 @@ def test_legacy_stream_adapter_enforces_max_bytes() -> None:
     )
 
     assert [packet.body for packet in packets] == [b"abc"]
+
+
+def test_legacy_stream_adapter_does_not_read_past_exact_byte_limit() -> None:
+    """A filled byte budget terminates before requesting another live packet."""
+
+    class ExactByteStream:
+        def iter_packets(
+            self,
+            *,
+            max_packets: int | None = None,
+            duration_seconds: float | None = None,
+            monotonic: Callable[[], float] = time.monotonic,
+        ) -> Iterator[VtmPacket]:
+            del max_packets, duration_seconds, monotonic
+            yield VtmPacket(1, 3, 1, 0, BODY)
+            raise AssertionError("adapter advanced past the exact byte limit")
+
+    packets = list(
+        vtm_media_packet_source(ExactByteStream()).iter_media_packets(
+            limits=CaptureLimits(max_bytes=3)
+        )
+    )
+
+    assert [packet.body for packet in packets] == [BODY]
+
+
+def test_iterable_source_does_not_read_past_packet_or_byte_limit() -> None:
+    """Completed iterable limits return before a blocking second callback."""
+
+    def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
+        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        raise AssertionError("adapter advanced past the completed limit")
+
+    packet_limited = hcnetsdk_media_packet_source(callback_packets())
+    byte_limited = hcnetsdk_media_packet_source(callback_packets())
+
+    assert [
+        packet.body
+        for packet in packet_limited.iter_media_packets(limits=CaptureLimits(max_packets=1))
+    ] == [BODY]
+    assert [
+        packet.body for packet in byte_limited.iter_media_packets(limits=CaptureLimits(max_bytes=3))
+    ] == [BODY]
+
+
+def test_iterable_source_checks_duration_before_filtering() -> None:
+    """Rejected callbacks cannot extend a duration-bounded capture."""
+
+    def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
+        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.SYSTEM_HEADER, b"header")
+        raise AssertionError("adapter advanced after the duration expired")
+
+    clock = iter((0.0, 2.0)).__next__
+    source = hcnetsdk_media_packet_source(callback_packets())
+
+    packets = list(
+        source.iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
+            monotonic=clock,
+        )
+    )
+
+    assert packets == []
 
 
 def test_hcnetsdk_source_filters_non_media_and_applies_limits() -> None:

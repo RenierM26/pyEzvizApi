@@ -20,6 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import IntEnum
+import errno
 import hashlib
 import hmac
 import ipaddress
@@ -8751,8 +8752,10 @@ class EzvizLocalSdkClient:
         self.iv_factory = iv_factory
         self._request_iv = iv_factory(EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE)
         self.response_trailer_length = response_trailer_length
-        if command_source_port is not None and command_source_port < 0:
-            raise PyEzvizError("EZVIZ local SDK command source port must be non-negative")
+        if command_source_port is not None and not 1 <= command_source_port <= 65535:
+            raise PyEzvizError(
+                "EZVIZ local SDK command source port must be between 1 and 65535"
+            )
         self.command_source_port = command_source_port
         self.command_source_host = command_source_host
         self._command_sock: Any | None = None
@@ -8997,16 +9000,58 @@ def _connect_with_optional_source_address(
     if source_address is None:
         return socket_factory(address, timeout)
     try:
-        source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
-        return source_socket_factory(address, timeout, source_address)
-    except TypeError:
         if socket_factory is socket.create_connection:
-            return socket.create_connection(
+            return _create_reusable_source_connection(
                 address,
-                timeout=timeout,
+                timeout,
                 source_address=source_address,
             )
+        source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
+        return source_socket_factory(address, timeout, source_address)
+    except OSError as err:
+        if err.errno == errno.EADDRINUSE:
+            raise PyEzvizError(
+                f"EZVIZ local SDK receiver port {source_address[1]} is already in use"
+            ) from err
         raise
+
+
+def _create_reusable_source_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    source_address: tuple[str, int],
+) -> socket.socket:
+    """Connect from an exact reusable source port for rapid stream reopen."""
+
+    last_error: OSError | None = None
+    host, port = address
+    for family, sock_type, protocol, _, target in socket.getaddrinfo(
+        host,
+        port,
+        type=socket.SOCK_STREAM,
+    ):
+        sock: socket.socket | None = None
+        try:
+            sock = socket.socket(family, sock_type, protocol)
+            sock.settimeout(timeout)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(source_address)
+            sock.connect(target)
+            if sock.getsockname()[1] != source_address[1]:
+                sock.close()
+                raise PyEzvizError(
+                    "EZVIZ local SDK receiver port changed while opening the socket"
+                )
+            return sock
+        except OSError as err:
+            last_error = err
+            if sock is not None:
+                sock.close()
+
+    if last_error is not None:
+        raise last_error
+    raise OSError("getaddrinfo returned no addresses")
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

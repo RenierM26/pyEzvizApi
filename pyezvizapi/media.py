@@ -413,3 +413,8 @@ class IterableMediaPacketSource[PacketT]:
                 with self._producer_state.lock:
                     if not producer.alive:
                         self._producer_state.producer = None
+            else:
+                close = getattr(packets, "close", None)
+                if callable(close):
+                    with suppress(RuntimeError, ValueError):
+                        close()

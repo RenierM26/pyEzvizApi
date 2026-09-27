@@ -291,9 +291,15 @@ def test_legacy_stream_adapter_does_not_read_past_exact_byte_limit() -> None:
 def test_iterable_source_does_not_read_past_packet_or_byte_limit() -> None:
     """Completed iterable limits return before a blocking second callback."""
 
+    closed = 0
+
     def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
-        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
-        raise AssertionError("adapter advanced past the completed limit")
+        nonlocal closed
+        try:
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+            raise AssertionError("adapter advanced past the completed limit")
+        finally:
+            closed += 1
 
     packet_limited = hcnetsdk_media_packet_source(callback_packets())
     byte_limited = hcnetsdk_media_packet_source(callback_packets())
@@ -305,6 +311,7 @@ def test_iterable_source_does_not_read_past_packet_or_byte_limit() -> None:
     assert [
         packet.body for packet in byte_limited.iter_media_packets(limits=CaptureLimits(max_bytes=3))
     ] == [BODY]
+    assert closed == 2
 
 
 def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:

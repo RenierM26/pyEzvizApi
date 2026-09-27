@@ -4352,8 +4352,6 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
                 nal_start_frame = active_start_frame
                 emitted_nal_type = active_nal_type
             else:
-                active_start_packet = packet_index
-                active_nal_type = nal_type
                 nal_start_packet = packet_index
                 nal_start_frame = frame_index
                 emitted_nal_type = nal_type

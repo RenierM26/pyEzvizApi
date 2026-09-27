@@ -2081,6 +2081,39 @@ def test_idmx_hevc_span_map_records_fragment_flushed_at_eof(
     assert spans == [(0, len(annexb), 0, 1, 19, 0, 0)]
 
 
+def test_idmx_hevc_span_map_preserves_pending_fragment_across_standalone_nal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x64"
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+    vps = b"\x40\x01vps"
+    packets = [
+        frame(b"\x62\x01\x93slice", sequence=1),
+        frame(vps, sequence=2),
+    ]
+
+    annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+    vps_end = len(b"\x00\x00\x00\x01" + vps)
+
+    assert annexb == b"\x00\x00\x00\x01" + vps + b"\x00\x00\x00\x01\x26\x01slice"
+    assert spans == [
+        (0, vps_end, 1, 1, 32, 0, 0),
+        (vps_end, len(annexb), 0, 0, 19, 0, 0),
+    ]
+
+
 def test_idmx_h264_selected_packets_stop_at_selected_video_endpoint() -> None:
     def frame(payload_type: int, body: bytes, *, sequence: int, timestamp: int) -> bytes:
         rtp = (

@@ -10474,6 +10474,11 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortLoginSession:
         """Run the generated RSA/challenge command-port login handshake."""
+        if deadline is not None and rsa_key is None:
+            raise PyEzvizError(
+                "Deadline-aware HCNetSDK command-port login requires a "
+                "pre-generated rsa_key"
+            )
         sock = self.connect(
             timeout=_remaining_timeout(deadline, monotonic),
             deadline_limited=deadline is not None,

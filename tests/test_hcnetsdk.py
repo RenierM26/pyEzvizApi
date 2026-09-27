@@ -5205,6 +5205,27 @@ def test_command_port_expected_media_timeout_preserves_socket() -> None:
     assert sock.sent == [b"keepalive"]
 
 
+def test_deadline_aware_command_port_login_requires_pre_generated_key() -> None:
+    def unexpected_socket_factory(
+        _address: tuple[str, int],
+        _timeout: float | None,
+    ) -> Any:
+        pytest.fail("invalid deadline login must fail before connecting")
+
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        socket_factory=unexpected_socket_factory,
+    )
+
+    with pytest.raises(PyEzvizError, match="pre-generated rsa_key"):
+        client.login(
+            password=b"123456",
+            local_ip="192.0.2.20",
+            deadline=1.0,
+            monotonic=lambda: 0.0,
+        )
+
+
 def test_command_port_partial_expected_media_timeout_invalidates_socket() -> None:
     media_payload = b"media"
     media_frame = (

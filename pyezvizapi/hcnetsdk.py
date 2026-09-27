@@ -8238,7 +8238,7 @@ def hcnetsdk_command_port_rsa_key() -> Any:
     """Generate the protocol-mandated RSA key for command-port login."""
     # The native SDK handshake requires 1024-bit RSA; larger generated keys are
     # rejected by the device-side command-port login framing.
-    return RSA.generate(  # codeql[py/weak-cryptographic-algorithm]
+    return RSA.generate(  # codeql[py/weak-crypto-key]
         HCNETSDK_COMMAND_PORT_RSA_BITS
     )
 

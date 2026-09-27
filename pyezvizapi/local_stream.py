@@ -944,6 +944,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         self._keepalive_deadline_lock = Lock()
         self._keepalive_deadline: float | None = None
         self._keepalive_monotonic: Callable[[], float] = time.monotonic
+        self._keepalive_deadline_expired = Event()
         self.keepalive_events: list[HcNetSdkCommandPortKeepaliveEvent] = []
         self._read_interrupted = False
 
@@ -1099,6 +1100,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         and isinstance(err, EzvizLocalSdkDeadlineExpired)
                     )
                     if deadline_failure:
+                        self._keepalive_deadline_expired.set()
                         media_client.shutdown()
                     self.keepalive_events.append(
                         HcNetSdkCommandPortKeepaliveEvent(
@@ -1138,6 +1140,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
     ) -> None:
         """Update the deadline applied to future background keepalive writes."""
         with self._keepalive_deadline_lock:
+            if deadline is not None:
+                self._keepalive_deadline_expired.clear()
             self._keepalive_deadline = deadline
             self._keepalive_monotonic = monotonic
 
@@ -1406,6 +1410,13 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                 self.close()
                 break
             except (OSError, PyEzvizError) as err:
+                if deadline is not None and (
+                    monotonic() >= deadline
+                    or self._keepalive_deadline_expired.is_set()
+                ):
+                    self._read_interrupted = True
+                    self.close()
+                    break
                 raise PyEzvizError(
                     f"HCNetSDK command-port media packet read failed: {err}"
                 ) from err

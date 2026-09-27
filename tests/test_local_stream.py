@@ -851,6 +851,73 @@ def test_hcnetsdk_background_deadline_failure_invalidates_media_client() -> None
     assert stream.keepalive_events[0].sent is False
 
 
+def test_hcnetsdk_keepalive_deadline_socket_close_ends_capture_normally() -> None:
+    """A deadline-limited keepalive may close an in-flight media read."""
+
+    class ClosedMediaClient:
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> Any:
+            stream._keepalive_deadline_expired.set()  # noqa: SLF001
+            raise OSError("socket closed by keepalive")
+
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan(
+            steps=(
+                HcNetSdkCommandPortSocketStep(
+                    (build_hcnetsdk_tcp_frame(b"preview"),),
+                    response_reads_after_each=0,
+                    media_socket=True,
+                ),
+            )
+        ),
+    )
+    stream.bootstrap = cast(Any, object())
+    stream._media_client = cast(Any, ClosedMediaClient())  # noqa: SLF001
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            monotonic=lambda: 0.0,
+        )
+    )
+
+    assert packets == []
+    assert stream._read_interrupted is True  # noqa: SLF001
+
+
+def test_hcnetsdk_unrelated_socket_close_before_deadline_still_fails() -> None:
+    """An early socket failure is not hidden merely because capture is bounded."""
+
+    class ClosedMediaClient:
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> Any:
+            raise OSError("remote closed")
+
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan(
+            steps=(
+                HcNetSdkCommandPortSocketStep(
+                    (build_hcnetsdk_tcp_frame(b"preview"),),
+                    response_reads_after_each=0,
+                    media_socket=True,
+                ),
+            )
+        ),
+    )
+    stream.bootstrap = cast(Any, object())
+    stream._media_client = cast(Any, ClosedMediaClient())  # noqa: SLF001
+
+    with pytest.raises(PyEzvizError, match="media packet read failed: remote closed"):
+        list(
+            stream.iter_packets(
+                duration_seconds=1.0,
+                duration_from_start=True,
+                monotonic=lambda: 0.0,
+            )
+        )
+
+
 def test_hcnetsdk_close_interrupts_in_flight_keepalive_before_join() -> None:
     send_started = Event()
     socket_closed = Event()

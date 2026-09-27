@@ -50,6 +50,7 @@ from pyezvizapi.local_stream_ecdh import (
     EzvizLocalSdkEcdhStreamPacket,
     build_ezviz_local_sdk_ecdh_init_request_body,
     copy_local_sdk_ecdh_stream_from_client,
+    copy_local_sdk_ecdh_stream_to_mpegps,
     decrypt_ezviz_local_sdk_ecdh_data_packet,
     derive_ezviz_local_sdk_ecdh_chacha20_key,
     derive_ezviz_local_sdk_ecdh_shared_secret,
@@ -734,6 +735,27 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[1]["max_frames"] == 3
     assert copied[1]["duration_seconds"] == duration_seconds
     assert callable(copied[1]["monotonic"])
+
+
+def test_copy_local_sdk_ecdh_stream_to_mpegps_flushes_output() -> None:
+    class FlushTrackingOutput(BytesIO):
+        flush_calls = 0
+
+        def flush(self) -> None:
+            self.flush_calls += 1
+            super().flush()
+
+    class FakeStream:
+        def iter_packets(self, **_kwargs: object) -> list[object]:
+            return [
+                type("Packet", (), {"body": LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD})(),
+            ]
+
+    output = FlushTrackingOutput()
+    copy_local_sdk_ecdh_stream_to_mpegps(cast(Any, FakeStream()), output)
+
+    assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD
+    assert output.flush_calls == 1
 
 
 def test_ezviz_local_sdk_ecdh_stream_iter_packets_can_bound_input_frames() -> None:

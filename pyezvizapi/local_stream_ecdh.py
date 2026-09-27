@@ -828,3 +828,4 @@ def copy_local_sdk_ecdh_stream_to_mpegps(
         monotonic=monotonic,
     ):
         output.write(packet.body)
+    output.flush()

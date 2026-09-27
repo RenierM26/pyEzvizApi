@@ -4711,7 +4711,65 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
         )
 
     assert connect_timeouts == [1.0]
-    assert command_sock.timeout_history == [5.0, 0.75, 5.0]
+    assert command_sock.timeout_history == [5.0, 0.75, 5.0, 5.0]
+
+
+@pytest.mark.parametrize("client_kind", ("local", "command_port"))
+def test_local_command_writes_use_remaining_capture_deadline(client_kind: str) -> None:
+    configured_timeout = 10.0
+    remaining_timeout = 0.75
+
+    class BlockingSendSocket(_FakeSocket):
+        def sendall(self, data: bytes) -> None:
+            del data
+            raise TimeoutError
+
+    command_sock = BlockingSendSocket([])
+    command_sock.timeout = configured_timeout
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    ticks = iter([0.0, 0.25])
+
+    def clock() -> float:
+        return next(ticks)
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        if client_kind == "local":
+            device_info = EzvizCasDeviceInfo(
+                serial="CAM123456",
+                operation_code="0123456",
+                key="1234567890abcdef",
+            )
+            with EzvizLocalSdkClient(
+                endpoint,
+                device_info,
+                timeout=configured_timeout,
+                socket_factory=lambda _address, _timeout: command_sock,
+            ) as local_client:
+                local_client.send_encrypted_command(
+                    EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                    b"<Request/>",
+                    deadline=1.0,
+                    monotonic=clock,
+                )
+        else:
+            with HcNetSdkCommandPortClient(
+                endpoint,
+                timeout=configured_timeout,
+                socket_factory=lambda _address, _timeout: command_sock,
+            ) as command_client:
+                command_client.send_command_frame(
+                    b"request",
+                    deadline=1.0,
+                    monotonic=clock,
+                )
+
+    assert remaining_timeout in command_sock.timeout_history
+    assert command_sock.timeout_history[-1] == configured_timeout
 
 
 def test_apk_observed_command_ids_are_named() -> None:

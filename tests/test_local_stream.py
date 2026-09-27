@@ -31,6 +31,7 @@ from pyezvizapi.hcnetsdk import (
 )
 from pyezvizapi.local_stream import (
     EzvizLocalSdkMediaStream,
+    EzvizLocalStreamPacket,
     HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortGeneratedSocketStep,
@@ -536,6 +537,37 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
     assert events.index("media.recv") < events.index("keyframe.send")
 
 
+def test_hcnetsdk_multi_socket_short_drain_expiry_continues_bootstrap() -> None:
+    class QuietMediaClient:
+        reads = 0
+
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> object:
+            self.reads += 1
+            raise EzvizLocalSdkDeadlineExpired("drain complete")
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        drain_media_before_next_step_seconds=0.5,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    quiet_client = QuietMediaClient()
+    stream._media_client = cast(Any, quiet_client)  # noqa: SLF001
+
+    stream._drain_media_before_next_step(  # noqa: SLF001
+        step,
+        step_index=0,
+        capture_deadline=10.0,
+        monotonic=lambda: 0.0,
+    )
+
+    assert quiet_client.reads == 1
+
+
 def test_hcnetsdk_multi_socket_stream_checks_deadline_between_drained_media() -> None:
     first_payload = b"\x00\x00\x01\xbaabc"
     second_payload = b"\x00\x00\x01\xbadef"
@@ -995,6 +1027,34 @@ def test_hcnetsdk_generated_multi_socket_stream_skips_start_for_empty_duration(
 
     assert packets == []
     assert stream.bootstrap is None
+
+
+def test_generated_stream_ends_normally_when_bootstrap_uses_capture_budget() -> None:
+    class RenderedStream:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def iter_packets(self, **_kwargs: object) -> Iterator[EzvizLocalStreamPacket]:
+            raise AssertionError("expired capture must not request a packet")
+
+    rendered = RenderedStream()
+    stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
+    stream.bootstrap = cast(Any, object())
+    stream._stream = cast(Any, rendered)  # noqa: SLF001
+    ticks = iter((0.0, 1.0))
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            monotonic=lambda: next(ticks),
+        )
+    )
+
+    assert packets == []
+    assert rendered.closed is True
 
 
 def test_hcnetsdk_multi_socket_stream_reports_response_step_context() -> None:

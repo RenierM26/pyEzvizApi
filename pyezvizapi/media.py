@@ -43,7 +43,7 @@ def _next_before_deadline[PacketT](
             packet = next(packets)
         except StopIteration:
             result.put((True, _ITERATOR_STOPPED))
-        except BaseException as err:
+        except Exception as err:
             result.put((False, err))
         else:
             result.put((True, packet))
@@ -54,7 +54,7 @@ def _next_before_deadline[PacketT](
     except Empty:
         return _ITERATOR_TIMED_OUT
     if not succeeded:
-        raise cast(BaseException, value)
+        raise cast(Exception, value)
     return value
 
 

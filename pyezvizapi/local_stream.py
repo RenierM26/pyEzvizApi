@@ -997,7 +997,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
             try:
                 client.send_command_frame(
                     frame_to_send,
-                    timeout=_remaining_capture_timeout(deadline, monotonic),
+                    deadline=deadline,
+                    monotonic=monotonic,
                 )
             except EzvizLocalSdkDeadlineExpired:
                 raise
@@ -1159,6 +1160,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         monotonic=clock,
                     )
             except EzvizLocalSdkDeadlineExpired:
+                if capture_deadline is None or drain_deadline < capture_deadline:
+                    break
                 raise
             except (OSError, PyEzvizError) as err:
                 context = _hcnetsdk_command_port_step_context(
@@ -1413,10 +1416,8 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             return self.bootstrap
 
         login_client = self._login_client(deadline=deadline, monotonic=monotonic)
-        try:
-            login_client.connect(
-                timeout=_remaining_capture_timeout(deadline, monotonic)
-            )
+        login_client.connect(timeout=_remaining_capture_timeout(deadline, monotonic))
+        with login_client:
             local_ip = self.local_ip or self._client_local_ip(login_client)
             self.login_session = login_client.login(
                 password=self.password,
@@ -1426,8 +1427,6 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
                 deadline=deadline,
                 monotonic=monotonic,
             )
-        finally:
-            login_client.close()
 
         rendered_plan = self.generated_plan.to_socket_plan(
             session_id=self.login_session.session_id,
@@ -1485,7 +1484,11 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
                 return
         if self._stream is None:
             raise PyEzvizError("HCNetSDK generated command-port stream is closed")
-        remaining = _remaining_capture_timeout(deadline, monotonic)
+        try:
+            remaining = _remaining_capture_timeout(deadline, monotonic)
+        except EzvizLocalSdkDeadlineExpired:
+            self.close()
+            return
         yield from self._stream.iter_packets(
             max_packets=max_packets,
             duration_seconds=(

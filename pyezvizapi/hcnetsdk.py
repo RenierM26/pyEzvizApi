@@ -8772,6 +8772,45 @@ def _remaining_timeout(
     return remaining
 
 
+def _send_all_with_timeout(
+    sock: Any,
+    data: bytes,
+    *,
+    timeout: float | None,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> None:
+    """Send a frame without letting writes exceed an optional deadline."""
+    effective_timeout = (
+        _remaining_timeout(deadline, monotonic)
+        if deadline is not None
+        else timeout
+    )
+    if effective_timeout is None:
+        _send_all(sock, data)
+        return
+    previous_timeout = sock.gettimeout()
+    write_timeout = (
+        effective_timeout
+        if previous_timeout is None
+        else min(previous_timeout, effective_timeout)
+    )
+    deadline_limits_write = deadline is not None and (
+        previous_timeout is None or effective_timeout <= previous_timeout
+    )
+    sock.settimeout(write_timeout)
+    try:
+        _send_all(sock, data)
+    except TimeoutError as err:
+        if deadline_limits_write:
+            raise EzvizLocalSdkDeadlineExpired(
+                "EZVIZ local SDK frame write exceeded its deadline"
+            ) from err
+        raise
+    finally:
+        sock.settimeout(previous_timeout)
+
+
 class EzvizLocalSdkClient:
     """Socket client for the EZVIZ direct-local SDK frame layer.
 
@@ -8853,7 +8892,13 @@ class EzvizLocalSdkClient:
             iv=self._request_iv,
             sequence=sequence,
         )
-        _send_all(sock, request)
+        _send_all_with_timeout(
+            sock,
+            request,
+            timeout=timeout,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
         read_socket = sock
         previous_timeout = None
         if effective_timeout is not None:
@@ -9849,9 +9894,27 @@ class HcNetSdkCommandPortClient:
             self._socket.close()
         self._socket = None
 
-    def send_command_frame(self, frame: bytes, *, timeout: float | None = None) -> None:
+    def send_command_frame(
+        self,
+        frame: bytes,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         """Send one complete command-port frame."""
-        _send_all(self.connect(timeout=timeout), frame)
+        effective_timeout = (
+            _remaining_timeout(deadline, monotonic)
+            if deadline is not None
+            else timeout
+        )
+        _send_all_with_timeout(
+            self.connect(timeout=effective_timeout),
+            frame,
+            timeout=timeout,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
 
     def read_tcp_frame(
         self,
@@ -9957,7 +10020,8 @@ class HcNetSdkCommandPortClient:
                 username=username,
                 local_ip=local_ip,
             ),
-            timeout=_remaining_timeout(deadline, monotonic),
+            deadline=deadline,
+            monotonic=monotonic,
         )
         first_response = self.read_tcp_frame(
             deadline=deadline,
@@ -9972,7 +10036,8 @@ class HcNetSdkCommandPortClient:
                 password_seed=challenge.password_seed,
                 local_ip=local_ip,
             ),
-            timeout=_remaining_timeout(deadline, monotonic),
+            deadline=deadline,
+            monotonic=monotonic,
         )
         second_response = self.read_tcp_frame(
             deadline=deadline,
@@ -10011,7 +10076,8 @@ class HcNetSdkCommandPortClient:
         for index, frame in enumerate(frames):
             self.send_command_frame(
                 frame,
-                timeout=_remaining_timeout(deadline, monotonic),
+                deadline=deadline,
+                monotonic=monotonic,
             )
             should_read = (
                 read_response_after_each if response_flags is None else response_flags[index]

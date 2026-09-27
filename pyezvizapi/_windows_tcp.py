@@ -34,10 +34,32 @@ class _Tcp6Row(ctypes.Structure):
     ]
 
 
-def tcp_states_for_port(port: int, family: int) -> set[int]:
-    """Return Windows TCP owner-table states for a local port and family."""
+def tcp_states_for_source(
+    source_address: tuple[str, int],
+    family: int,
+) -> set[int]:
+    """Return Windows TCP states matching a source address or wildcard owner."""
 
     row_type = _Tcp6Row if family == socket.AF_INET6 else _Tcp4Row
+    source_host, port = source_address
+    try:
+        packed_source_host = socket.inet_pton(
+            family,
+            source_host.partition("%")[0],
+        )
+    except OSError:
+        resolved_host = str(
+            socket.getaddrinfo(
+                source_host,
+                port,
+                family=family,
+                type=socket.SOCK_STREAM,
+            )[0][4][0]
+        )
+        packed_source_host = socket.inet_pton(family, resolved_host)
+    address_size = 16 if family == socket.AF_INET6 else 4
+    address_offset = row_type.local_addr.offset
+    wildcard_address = bytes(address_size)
     ctypes_api = cast(Any, ctypes)
     get_table = ctypes_api.windll.iphlpapi.GetExtendedTcpTable
     size = ctypes.c_uint32(0)
@@ -74,6 +96,10 @@ def tcp_states_for_port(port: int, family: int) -> set[int]:
     for index in range(count):
         row = row_type.from_buffer_copy(buffer.raw, dword_size + index * row_size)
         local_port = socket.ntohs(int(row.local_port) & 0xFFFF)
-        if local_port == port:
+        row_address = bytes(row)[address_offset : address_offset + address_size]
+        if local_port == port and row_address in {
+            packed_source_host,
+            wildcard_address,
+        }:
             states.add(int(row.state))
     return states

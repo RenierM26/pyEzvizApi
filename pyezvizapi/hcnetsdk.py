@@ -9057,16 +9057,16 @@ def _create_reusable_source_connection(
                 except OSError as err:
                     if err.errno != errno.EADDRINUSE:
                         raise
-                    if not _windows_source_port_is_time_wait_only(
-                        candidate_source_address[1],
-                        family,
-                    ):
-                        raise
                     candidate_source_address = _windows_concrete_source_address(
                         candidate_source_address,
                         family,
                         target,
                     )
+                    if not _windows_source_port_is_time_wait_only(
+                        candidate_source_address,
+                        family,
+                    ):
+                        raise
             return _connect_bound_source_socket(
                 family,
                 sock_type,
@@ -9126,20 +9126,26 @@ def _connect_bound_source_socket(
 
 
 def _windows_source_port_is_time_wait_only(
-    port: int,
+    source_address: tuple[str, int],
     family: int,
 ) -> bool:
     """Return whether Windows reports only stale TIME_WAIT users of a port."""
 
-    states = _windows_tcp_states_for_port(port, family)
+    states = _windows_tcp_states_for_source(source_address, family)
     return bool(states) and states == {11}
 
 
-def _windows_tcp_states_for_port(port: int, family: int) -> set[int]:
-    """Read Windows' TCP owner table without loading native APIs here."""
+def _windows_tcp_states_for_source(
+    source_address: tuple[str, int],
+    family: int,
+) -> set[int]:
+    """Read matching Windows TCP states without loading native APIs here."""
 
     windows_tcp = import_module("pyezvizapi._windows_tcp")
-    return cast(set[int], windows_tcp.tcp_states_for_port(port, family))
+    return cast(
+        set[int],
+        windows_tcp.tcp_states_for_source(source_address, family),
+    )
 
 
 def _windows_concrete_source_address(

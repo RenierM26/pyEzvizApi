@@ -9,6 +9,7 @@ import hashlib
 import hmac
 from pathlib import Path
 import socket
+import sys
 from typing import Any
 
 from Crypto.Cipher import PKCS1_v1_5
@@ -4346,7 +4347,7 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     )
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
-        lambda _port, _family: True,
+        lambda _source_address, _family: True,
     )
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._windows_concrete_source_address",
@@ -4451,7 +4452,7 @@ def test_windows_bound_source_port_does_not_fall_back_to_reuse(
     )
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
-        lambda _port, _family: False,
+        lambda _source_address, _family: False,
     )
     monkeypatch.setattr(
         socket,
@@ -4481,11 +4482,17 @@ def test_windows_source_port_requires_time_wait_only(
     expected: bool,
 ) -> None:
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._windows_tcp_states_for_port",
-        lambda _port, _family: states,
+        "pyezvizapi.hcnetsdk._windows_tcp_states_for_source",
+        lambda _source_address, _family: states,
     )
 
-    assert _windows_source_port_is_time_wait_only(10103, socket.AF_INET) is expected
+    assert (
+        _windows_source_port_is_time_wait_only(
+            ("192.0.2.25", 10103),
+            socket.AF_INET,
+        )
+        is expected
+    )
 
 
 def test_windows_tcp_table_reads_states_for_requested_port(
@@ -4503,11 +4510,13 @@ def test_windows_tcp_table_reads_states_for_requested_port(
 
     matching_row = Tcp4Row(
         state=11,
+        local_addr=int.from_bytes(socket.inet_aton("192.0.2.25"), sys.byteorder),
         local_port=socket.htons(10103),
     )
     other_row = Tcp4Row(
         state=5,
-        local_port=socket.htons(10104),
+        local_addr=int.from_bytes(socket.inet_aton("192.0.2.26"), sys.byteorder),
+        local_port=socket.htons(10103),
     )
     payload = bytes(ctypes.c_uint32(2)) + bytes(matching_row) + bytes(other_row)
     calls = 0
@@ -4544,7 +4553,24 @@ def test_windows_tcp_table_reads_states_for_requested_port(
         raising=False,
     )
 
-    assert _windows_tcp.tcp_states_for_port(10103, socket.AF_INET) == {11}
+    assert _windows_tcp.tcp_states_for_source(
+        ("192.0.2.25", 10103),
+        socket.AF_INET,
+    ) == {11}
+    assert calls == 3
+
+    wildcard_row = Tcp4Row(
+        state=2,
+        local_addr=0,
+        local_port=socket.htons(10103),
+    )
+    payload = bytes(ctypes.c_uint32(1)) + bytes(wildcard_row)
+    calls = 0
+
+    assert _windows_tcp.tcp_states_for_source(
+        ("192.0.2.25", 10103),
+        socket.AF_INET,
+    ) == {2}
     assert calls == 3
 
 
@@ -4622,7 +4648,7 @@ def test_windows_source_address_is_resolved_per_connection_candidate(
     )
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
-        lambda _port, _family: True,
+        lambda _source_address, _family: True,
     )
     monkeypatch.setattr(
         socket,

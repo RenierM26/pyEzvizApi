@@ -11,7 +11,9 @@ import hashlib
 from importlib import import_module
 import ipaddress
 from itertools import chain, pairwise
+from pathlib import Path
 import subprocess
+import tempfile
 from threading import Event, Thread
 import time
 from typing import Any, BinaryIO, Literal, cast
@@ -135,6 +137,16 @@ class _RtpFragmentedNal:
     data: bytearray
     last_sequence: int | None
     rtp_timestamp: int | None
+
+
+@dataclass(frozen=True)
+class _IdmxAacStream:
+    """Decrypted AAC access units framed for an FFmpeg AAC input."""
+
+    adts: bytes
+    sample_rate: int
+    channels: int
+    frame_count: int
 
 
 @dataclass(frozen=True)
@@ -1665,7 +1677,7 @@ def copy_local_stream_to_decrypted_mpegps(
     output.flush()
 
 
-def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
+def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
     stream: Any,
     output: BinaryIO,
     media_key: str | bytes,
@@ -1706,8 +1718,15 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
             duration_seconds=payload_duration_seconds,
             monotonic=monotonic,
         )
+        recorded_packets: list[bytes] = []
+
+        def record_payloads() -> Iterator[bytes]:
+            for payload in payloads:
+                recorded_packets.append(payload)
+                yield payload
+
         annexb = collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window(
-            payloads,
+            record_payloads(),
             media_key,
             nalu_header_size=nalu_header_size,
             duration_seconds=duration_seconds,
@@ -1716,6 +1735,54 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
             max_windows=h264_clean_idr_max_windows,
             wait_seconds=h264_clean_idr_wait_seconds,
         )
+        full_annexb = _decrypt_idmx_local_packets_to_annexb(
+            recorded_packets,
+            media_key,
+            nalu_header_size=nalu_header_size,
+        )
+        stream_is_clear = False
+        with suppress(PyEzvizError):
+            clear_annexb = _idmx_local_packets_to_h264_annexb(recorded_packets)
+            if _annexb_contains_selected_vcl(
+                clear_annexb,
+                annexb,
+                video_input_format="h264",
+            ):
+                full_annexb = clear_annexb
+                stream_is_clear = True
+        selected_packets = _idmx_h264_packets_from_selected_annexb(
+            recorded_packets,
+            full_annexb=full_annexb,
+            selected_annexb=annexb,
+            media_key=media_key,
+            nalu_header_size=nalu_header_size,
+            stream_is_clear=stream_is_clear,
+        )
+        metadata_audio = _decrypt_idmx_local_packets_to_adts_aac(
+            recorded_packets,
+            media_key,
+            require_contiguous=False,
+        )
+        audio_metadata = (
+            (metadata_audio.sample_rate, metadata_audio.channels)
+            if metadata_audio is not None
+            else None
+        )
+        audio = _decrypt_idmx_local_packets_to_adts_aac(
+            selected_packets,
+            media_key,
+            audio_metadata=audio_metadata,
+        )
+        if audio is not None:
+            _copy_idmx_audio_video_to_mpegts(
+                annexb,
+                audio,
+                output,
+                ffmpeg_path=ffmpeg_path,
+                video_input_format="h264",
+                video_frame_rate=None,
+            )
+            return
         process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
@@ -1746,6 +1813,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
             nalu_header_size=nalu_header_size,
             decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
         )
+        full_annexb = annexb
         if _annexb_has_h264_vcl(annexb):
             annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
@@ -1757,7 +1825,8 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
                     ffmpeg_path=ffmpeg_path,
                     max_windows=h264_clean_idr_max_windows,
                 )
-            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+            video_input_format = "h264"
+            video_frame_rate = None
         elif _annexb_looks_like_hevc(annexb):
             annexb = skip_hevc_annexb_initial_irap_windows(
                 annexb,
@@ -1769,14 +1838,56 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
                     ffmpeg_path=ffmpeg_path,
                     max_windows=h264_clean_idr_max_windows,
                 )
-            process = _open_local_hevc_mpegts_remux_process(
-                ffmpeg_path,
-                frame_rate=_idmx_local_video_frame_rate(packets),
-            )
+            video_input_format = "hevc"
+            video_frame_rate = _idmx_local_video_frame_rate(packets)
         elif _annexb_looks_like_h264(annexb):
-            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+            video_input_format = "h264"
+            video_frame_rate = None
         else:
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
+        if annexb != full_annexb:
+            selected_packets = _idmx_packets_from_selected_annexb(
+                packets,
+                full_annexb=full_annexb,
+                selected_annexb=annexb,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                video_input_format=video_input_format,
+            )
+            metadata_audio = _decrypt_idmx_local_packets_to_adts_aac(
+                packets,
+                media_key,
+                require_contiguous=False,
+            )
+            audio_metadata = (
+                (metadata_audio.sample_rate, metadata_audio.channels)
+                if metadata_audio is not None
+                else None
+            )
+            audio = _decrypt_idmx_local_packets_to_adts_aac(
+                selected_packets,
+                media_key,
+                audio_metadata=audio_metadata,
+            )
+        else:
+            audio = _decrypt_idmx_local_packets_to_adts_aac(packets, media_key)
+        if audio is not None:
+            _copy_idmx_audio_video_to_mpegts(
+                annexb,
+                audio,
+                output,
+                ffmpeg_path=ffmpeg_path,
+                video_input_format=video_input_format,
+                video_frame_rate=video_frame_rate,
+            )
+            return
+        if video_input_format == "hevc":
+            process = _open_local_hevc_mpegts_remux_process(
+                ffmpeg_path,
+                frame_rate=video_frame_rate or str(IDMX_DEFAULT_VIDEO_FRAME_RATE),
+            )
+        else:
+            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
     if (
@@ -2218,12 +2329,81 @@ def _open_local_h264_mpegts_remux_process(
         raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
 
+def _open_local_idmx_audio_video_mpegts_remux_process(
+    ffmpeg_path: str,
+    *,
+    video_input_format: str,
+    audio_path: str,
+    video_frame_rate: str | None,
+) -> subprocess.Popen[bytes]:
+    command = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        video_input_format,
+    ]
+    if video_frame_rate is not None:
+        command.extend(("-r", video_frame_rate))
+    command.extend(
+        (
+            "-i",
+            "pipe:0",
+            "-f",
+            "aac",
+            "-i",
+            audio_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c",
+            "copy",
+            "-f",
+            "mpegts",
+            "pipe:1",
+        )
+    )
+    try:
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+
+
 IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
 IDMX_LOCAL_FRAME_HEADER_SIZE = 13
 IDMX_LOCAL_FRAME_SENTINEL_OFFSETS = (8, 9)
 H264_NAL_HEADER_SIZE = 1
 HEVC_NAL_HEADER_SIZE = 2
 IDMX_H264_RTP_PAYLOAD_TYPE = 96
+IDMX_AAC_RTP_PAYLOAD_TYPE = 104
+IDMX_AAC_SAMPLES_PER_FRAME = 1024
+IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE = 2
+IDMX_AAC_CLOCK_RATE_TOLERANCE = 0.08
+IDMX_AAC_ADTS_HEADER_SIZE = 7
+IDMX_AAC_ADTS_MAX_FRAME_LENGTH = 0x1FFF
+IDMX_AUDIO_EXTENSION_VERSION = b"\x00\x01"
+IDMX_AAC_SAMPLE_RATES = (
+    96_000,
+    88_200,
+    64_000,
+    48_000,
+    44_100,
+    32_000,
+    24_000,
+    22_050,
+    16_000,
+    12_000,
+    11_025,
+    8_000,
+    7_350,
+)
 H264_FU_A_NAL_TYPE = 28
 IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = 12
 IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = b"\x24\0"
@@ -3983,18 +4163,329 @@ def _decrypted_h264_annexb_packet_index_for_offset(
 ) -> int:
     """Return the packet index that first contributes the given Annex-B offset."""
 
-    for index in range(len(packets)):
-        try:
-            annexb = _decrypt_idmx_local_packets_to_annexb(
-                packets[: index + 1],
-                media_key,
-                nalu_header_size=nalu_header_size,
-            )
-        except PyEzvizError:
-            continue
-        if len(annexb) > offset:
-            return index
+    _annexb, spans = _idmx_h264_annexb_packet_spans(
+        packets,
+        media_key,
+        nalu_header_size=nalu_header_size,
+        stream_is_clear=False,
+    )
+    for start_offset, end_offset, start_packet, _end_packet, _nal_type in spans:
+        if start_offset <= offset < end_offset:
+            return start_packet
     return max(len(packets) - 1, 0)
+
+
+def _decrypted_hevc_annexb_packet_index_for_offset(
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    offset: int,
+) -> int:
+    """Return the first packet contributing the HEVC NAL at ``offset``."""
+
+    _annexb, spans = _idmx_hevc_annexb_packet_spans(packets, media_key)
+    for start_offset, end_offset, start_packet, _end_packet, _nal_type in spans:
+        if start_offset <= offset < end_offset:
+            return start_packet
+    return max(len(packets) - 1, 0)
+
+
+def _idmx_h264_annexb_packet_spans(
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    nalu_header_size: int | None,
+    stream_is_clear: bool,
+) -> tuple[bytes, list[tuple[int, int, int, int, int]]]:
+    """Assemble H.264 while recording each NAL's contributing packet span."""
+
+    output = bytearray()
+    spans: list[tuple[int, int, int, int, int]] = []
+    active_fu: _RtpFragmentedNal | None = None
+    active_start_packet: int | None = None
+    aes_key = _local_media_aes_key(media_key)
+    header_size = H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
+    for packet_index, packet in enumerate(packets):
+        for frame in _iter_idmx_local_packet_frame(packet):
+            frame_header_size = _idmx_local_frame_header_size(frame)
+            if frame_header_size is None or not _idmx_local_frame_is_h264_transport(
+                frame,
+                frame_header_size,
+            ):
+                continue
+            body = _idmx_local_frame_media_body(frame, frame_header_size)
+            if _looks_like_idmx_h264_fu_a_frame(body):
+                is_start = bool(body[1] & 0x80)
+                nal_type = body[1] & 0x1F
+                if is_start:
+                    active_start_packet = packet_index
+                nal_start_packet = active_start_packet
+                start_offset = len(output)
+                active_fu = _append_idmx_h264_fu_a_payload(
+                    output,
+                    body,
+                    active_fu=active_fu,
+                    sequence_number=_idmx_local_frame_sequence_number(
+                        frame,
+                        frame_header_size,
+                    ),
+                    rtp_timestamp=_idmx_local_frame_rtp_timestamp(
+                        frame,
+                        frame_header_size,
+                    ),
+                    aes_key=None if stream_is_clear else aes_key,
+                    nalu_header_size=header_size,
+                )
+                if len(output) > start_offset:
+                    spans.append(
+                        (
+                            start_offset,
+                            len(output),
+                            nal_start_packet
+                            if nal_start_packet is not None
+                            else packet_index,
+                            packet_index,
+                            nal_type,
+                        )
+                    )
+                if active_fu is None:
+                    active_start_packet = None
+                continue
+            decrypted_body: bytes | None = None
+            if not _looks_like_idmx_h264_clear_nal(body):
+                if stream_is_clear or header_size != 0 or not body:
+                    continue
+                decrypted_body = _decrypt_h264_nal_prefix(
+                    body,
+                    aes_key,
+                    nalu_header_size=header_size,
+                )
+            active_fu = None
+            active_start_packet = None
+            start_offset = len(output)
+            if stream_is_clear:
+                _append_h264_nal(output, body)
+                nal_type = _h264_nal_type(body)
+            elif decrypted_body is not None:
+                _append_h264_nal(output, decrypted_body)
+                nal_type = _h264_nal_type(decrypted_body)
+            else:
+                _append_decrypted_h264_nal(
+                    output,
+                    body,
+                    aes_key,
+                    nalu_header_size=header_size,
+                )
+                nal_type = _h264_nal_type(body)
+            spans.append(
+                (
+                    start_offset,
+                    len(output),
+                    packet_index,
+                    packet_index,
+                    nal_type,
+                )
+            )
+    return bytes(output), spans
+
+
+def _idmx_hevc_annexb_packet_spans(
+    packets: list[bytes],
+    media_key: str | bytes,
+) -> tuple[bytes, list[tuple[int, int, int, int, int]]]:
+    """Assemble decrypted HEVC while recording each NAL's packet span."""
+
+    output = bytearray()
+    spans: list[tuple[int, int, int, int, int]] = []
+    active_fu: _RtpFragmentedNal | None = None
+    active_start_packet: int | None = None
+    active_nal_type: int | None = None
+    hevc_evidence_seen = False
+    aes_key = _local_media_aes_key(media_key)
+    for packet_index, packet in enumerate(packets):
+        for frame in _iter_idmx_local_packet_frame(packet):
+            frame_header_size = _idmx_local_frame_header_size(frame)
+            if frame_header_size is None:
+                continue
+            body = _idmx_local_frame_media_body(frame, frame_header_size)
+            h264_transport = _idmx_local_frame_is_h264_transport(
+                frame,
+                frame_header_size,
+            )
+            wrapped_media = _looks_like_idmx_hevc_media_frame(body)
+            direct_media = h264_transport and (
+                hevc_evidence_seen or _looks_like_idmx_hevc_evidence_frame(body)
+            ) and _looks_like_idmx_hevc_direct_frame(body)
+            if wrapped_media:
+                hevc_evidence_seen = True
+                payload = body[IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET:]
+                decrypt_parameter_sets = True
+            elif direct_media:
+                hevc_evidence_seen = True
+                payload = body
+                decrypt_parameter_sets = False
+            else:
+                continue
+            if len(payload) < HEVC_NAL_HEADER_SIZE:
+                continue
+            nal_type = _hevc_nal_type(payload)
+            if nal_type == 49 and len(payload) >= 3:
+                if payload[2] & 0x80:
+                    active_start_packet = packet_index
+                    active_nal_type = payload[2] & 0x3F
+                nal_start_packet = active_start_packet
+                emitted_nal_type = active_nal_type
+            else:
+                active_start_packet = packet_index
+                active_nal_type = nal_type
+                nal_start_packet = packet_index
+                emitted_nal_type = nal_type
+            start_offset = len(output)
+            active_fu = _append_idmx_hevc_media_payload(
+                output,
+                payload,
+                aes_key,
+                active_fu=active_fu,
+                sequence_number=_idmx_local_frame_sequence_number(
+                    frame,
+                    frame_header_size,
+                ),
+                rtp_timestamp=_idmx_local_frame_rtp_timestamp(
+                    frame,
+                    frame_header_size,
+                ),
+                rtp_marker=_idmx_local_frame_rtp_marker(frame, frame_header_size),
+                decrypt_parameter_sets=decrypt_parameter_sets,
+            )
+            if len(output) > start_offset:
+                spans.append(
+                    (
+                        start_offset,
+                        len(output),
+                        nal_start_packet
+                        if nal_start_packet is not None
+                        else packet_index,
+                        packet_index,
+                        emitted_nal_type if emitted_nal_type is not None else nal_type,
+                    )
+                )
+            if active_fu is None:
+                active_start_packet = None
+                active_nal_type = None
+    return bytes(output), spans
+
+
+def _idmx_h264_packets_from_selected_annexb(
+    packets: list[bytes],
+    *,
+    full_annexb: bytes,
+    selected_annexb: bytes,
+    media_key: str | bytes,
+    nalu_header_size: int | None,
+    stream_is_clear: bool,
+) -> list[bytes]:
+    """Return the packet interval contributing selected H.264 VCL NALs."""
+
+    selected_offset = full_annexb.find(selected_annexb)
+    if selected_offset < 0:
+        raise PyEzvizError("Could not align trimmed IDMX video with its RTP packets")
+    selected_end = selected_offset + len(selected_annexb)
+    _annexb, spans = _idmx_h264_annexb_packet_spans(
+        packets,
+        media_key,
+        nalu_header_size=nalu_header_size,
+        stream_is_clear=stream_is_clear,
+    )
+    selected_vcl_spans = [
+        span
+        for span in spans
+        if 1 <= span[4] <= 5
+        and span[0] >= selected_offset
+        and span[1] <= selected_end
+    ]
+    if not selected_vcl_spans:
+        raise PyEzvizError("Trimmed IDMX stream did not include a video frame")
+    return packets[selected_vcl_spans[0][2] : selected_vcl_spans[-1][3] + 1]
+
+
+def _annexb_first_vcl_unit(data: bytes, *, video_input_format: str) -> bytes | None:
+    for start_code_offset, nal_start, end in _h264_annexb_nal_spans(data):
+        nal = data[nal_start:end]
+        if video_input_format == "h264":
+            is_vcl = 1 <= _h264_nal_type(nal) <= 5
+        elif video_input_format == "hevc":
+            is_vcl = _hevc_nal_type(nal) <= 31
+        else:
+            raise PyEzvizError(
+                f"Unsupported IDMX video input format: {video_input_format}"
+            )
+        if is_vcl:
+            return data[start_code_offset:end]
+    return None
+
+
+def _annexb_contains_selected_vcl(
+    full_annexb: bytes,
+    selected_annexb: bytes,
+    *,
+    video_input_format: str,
+) -> bool:
+    """Return whether a full stream contains the selected suffix or first VCL."""
+
+    if selected_annexb in full_annexb:
+        return True
+    first_vcl = _annexb_first_vcl_unit(
+        selected_annexb,
+        video_input_format=video_input_format,
+    )
+    return first_vcl is not None and first_vcl in full_annexb
+
+
+def _idmx_packets_from_selected_annexb(
+    packets: list[bytes],
+    *,
+    full_annexb: bytes,
+    selected_annexb: bytes,
+    media_key: str | bytes,
+    nalu_header_size: int | None,
+    video_input_format: str,
+) -> list[bytes]:
+    """Keep packets from the first selected VCL NAL for aligned audio muxing."""
+
+    if selected_annexb == full_annexb:
+        return packets
+    first_vcl = _annexb_first_vcl_unit(
+        selected_annexb,
+        video_input_format=video_input_format,
+    )
+    if first_vcl is None:
+        raise PyEzvizError("Trimmed IDMX stream did not include a video frame")
+    suffix_offset = full_annexb.find(selected_annexb)
+    selected_offset = full_annexb.find(
+        first_vcl,
+        max(suffix_offset, 0),
+        (
+            suffix_offset + len(selected_annexb)
+            if suffix_offset >= 0
+            else len(full_annexb)
+        ),
+    )
+    if selected_offset < 0:
+        raise PyEzvizError("Could not align trimmed IDMX video with its RTP packets")
+    if video_input_format == "h264":
+        packet_index = _decrypted_h264_annexb_packet_index_for_offset(
+            packets,
+            media_key,
+            nalu_header_size=nalu_header_size,
+            offset=selected_offset,
+        )
+    else:
+        packet_index = _decrypted_hevc_annexb_packet_index_for_offset(
+            packets,
+            media_key,
+            offset=selected_offset,
+        )
+    return packets[packet_index:]
 
 
 def _h264_annexb_packet_index_for_offset(
@@ -4324,6 +4815,106 @@ def _idmx_local_frame_rtp_timestamp(frame: bytes, header_size: int) -> int | Non
 
 def _idmx_local_frame_rtp_marker(frame: bytes, header_size: int) -> bool:
     return bool(_idmx_local_frame_transport_fields(frame, header_size).get("rtp_marker"))
+
+
+def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
+    """Return the profile and bytes from a complete RTP header extension."""
+
+    if not _is_complete_idmx_rtp_frame(frame) or not frame[0] & 0x10:
+        return None
+    offset = 12 + (frame[0] & 0x0F) * 4
+    if len(frame) < offset + 4:
+        return None
+    profile = int.from_bytes(frame[offset : offset + 2], "big")
+    extension_length = int.from_bytes(frame[offset + 2 : offset + 4], "big") * 4
+    extension_end = offset + 4 + extension_length
+    if extension_end > len(frame):
+        return None
+    return profile, frame[offset + 4 : extension_end]
+
+
+def _idmx_rtp_extension_is_audio(frame: bytes) -> bool:
+    """Recognize the IDMX media-class extension used on audio RTP packets."""
+
+    extension = _idmx_rtp_extension(frame)
+    if extension is None:
+        return False
+    profile, data = extension
+    return (
+        profile == 0x4000
+        and len(data) >= 8
+        and data[0] == 0x80
+        and data[1] >= 6
+        and data[2:4] == IDMX_AUDIO_EXTENSION_VERSION
+        and data[4] & 0xF0 == 0x20
+    )
+
+
+def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
+    """Read sample rate and channels from an IDMX 0x43 audio descriptor."""
+
+    for frame in _iter_idmx_local_packet_frames(packets):
+        extension = _idmx_rtp_extension(frame)
+        if extension is None:
+            continue
+        _profile, data = extension
+        offset = 0
+        while offset + 2 <= len(data):
+            descriptor_length = data[offset + 1]
+            descriptor_end = offset + descriptor_length + 2
+            if descriptor_end > len(data):
+                break
+            if data[offset] == 0x43 and descriptor_length >= 10:
+                channels = (data[offset + 4] & 0x01) + 1
+                sample_rate = (
+                    (data[offset + 5] << 14)
+                    | (data[offset + 6] << 6)
+                    | (data[offset + 7] >> 2)
+                )
+                if sample_rate in IDMX_AAC_SAMPLE_RATES and channels in (1, 2):
+                    return sample_rate, channels
+            offset = descriptor_end
+    return None
+
+
+def _idmx_rtp_timestamps(packets: list[bytes], payload_type: int) -> list[int]:
+    timestamps: list[int] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        transport = _idmx_local_frame_transport_fields(frame, header_size)
+        if transport.get("rtp_payload_type") != payload_type:
+            continue
+        timestamp = transport.get("rtp_timestamp")
+        if isinstance(timestamp, int) and (not timestamps or timestamps[-1] != timestamp):
+            timestamps.append(timestamp)
+    return timestamps
+
+
+def _rtp_timestamp_span(timestamps: list[int]) -> int:
+    return sum(
+        (current - previous) & 0xFFFFFFFF
+        for previous, current in pairwise(timestamps)
+    )
+
+
+def _idmx_infer_aac_sample_rate(packets: list[bytes]) -> int | None:
+    """Infer the AAC RTP clock by comparing it with the 90 kHz video clock."""
+
+    audio_timestamps = _idmx_rtp_timestamps(packets, IDMX_AAC_RTP_PAYLOAD_TYPE)
+    video_timestamps = _idmx_rtp_timestamps(packets, IDMX_H264_RTP_PAYLOAD_TYPE)
+    if len(audio_timestamps) < 8 or len(video_timestamps) < 8:
+        return None
+    audio_span = _rtp_timestamp_span(audio_timestamps)
+    video_span = _rtp_timestamp_span(video_timestamps)
+    if not audio_span or not video_span:
+        return None
+    estimate = audio_span * IDMX_VIDEO_RTP_CLOCK_RATE / video_span
+    sample_rate = min(IDMX_AAC_SAMPLE_RATES, key=lambda candidate: abs(candidate - estimate))
+    if abs(sample_rate - estimate) / sample_rate > IDMX_AAC_CLOCK_RATE_TOLERANCE:
+        return None
+    return sample_rate
 
 
 def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
@@ -4918,6 +5509,142 @@ def _decrypt_idmx_local_packets_to_annexb(
     if not output:
         raise PyEzvizError("EZVIZ local IDMX stream did not include media frames")
     return bytes(output)
+
+
+def _decrypt_idmx_aac_complete_blocks(data: bytes, aes_key: bytes) -> bytes:
+    # codeql[py/weak-cryptographic-algorithm]
+    cipher = AES.new(
+        aes_key,
+        AES.MODE_ECB,
+    )
+    # codeql[py/weak-cryptographic-algorithm]
+    return cipher.decrypt(data)
+
+
+def _decrypt_idmx_aac_access_unit(access_unit: bytes, aes_key: bytes) -> bytes:
+    decrypt_length = len(access_unit) - len(access_unit) % AES.block_size
+    if decrypt_length == 0:
+        return access_unit
+    decrypted_prefix = _decrypt_idmx_aac_complete_blocks(
+        access_unit[:decrypt_length],
+        aes_key,
+    )
+    return decrypted_prefix + access_unit[decrypt_length:]
+
+
+def _idmx_aac_access_unit(body: bytes) -> bytes | None:
+    """Parse one RFC 3640 MPEG4-GENERIC access unit from an RTP payload."""
+
+    if len(body) < 4 or int.from_bytes(body[:2], "big") != 16:
+        return None
+    access_unit_header = int.from_bytes(body[2:4], "big")
+    access_unit_size = access_unit_header >> 3
+    if access_unit_header & 0x07 or access_unit_size != len(body) - 4:
+        return None
+    return body[4:]
+
+
+def _aac_channels_from_access_units(access_units: list[bytes]) -> int | None:
+    channels: list[int] = []
+    for access_unit in access_units:
+        if not access_unit:
+            continue
+        syntax_element = access_unit[0] >> 5
+        if syntax_element == 0:
+            channels.append(1)
+        elif syntax_element == 1:
+            channels.append(2)
+    if not channels:
+        return None
+    return max(set(channels), key=channels.count)
+
+
+def _aac_adts_header(payload_length: int, sample_rate: int, channels: int) -> bytes:
+    try:
+        sample_rate_index = IDMX_AAC_SAMPLE_RATES.index(sample_rate)
+    except ValueError as err:
+        raise PyEzvizError(f"Unsupported IDMX AAC sample rate: {sample_rate}") from err
+    frame_length = payload_length + IDMX_AAC_ADTS_HEADER_SIZE
+    if frame_length > IDMX_AAC_ADTS_MAX_FRAME_LENGTH:
+        raise PyEzvizError("IDMX AAC access unit exceeds the ADTS frame limit")
+    profile = IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE - 1
+    return bytes(
+        (
+            0xFF,
+            0xF1,
+            (profile << 6) | (sample_rate_index << 2) | (channels >> 2),
+            ((channels & 0x03) << 6) | (frame_length >> 11),
+            (frame_length >> 3) & 0xFF,
+            ((frame_length & 0x07) << 5) | 0x1F,
+            0xFC,
+        )
+    )
+
+
+def _decrypt_idmx_local_packets_to_adts_aac(  # noqa: PLR0911
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    audio_metadata: tuple[int, int] | None = None,
+    require_contiguous: bool = True,
+) -> _IdmxAacStream | None:
+    """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
+
+    encrypted_access_units: list[bytes] = []
+    timestamps: list[int] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None or not _is_complete_idmx_rtp_frame(frame):
+            continue
+        transport = _idmx_local_frame_transport_fields(frame, header_size)
+        if transport.get("rtp_payload_type") != IDMX_AAC_RTP_PAYLOAD_TYPE:
+            continue
+        if not _idmx_rtp_extension_is_audio(frame):
+            return None
+        access_unit = _idmx_aac_access_unit(rtp_payload(frame))
+        if access_unit is None:
+            return None
+        timestamp = transport.get("rtp_timestamp")
+        if isinstance(timestamp, int):
+            timestamps.append(timestamp)
+        encrypted_access_units.append(access_unit)
+    if not encrypted_access_units:
+        return None
+    timestamp_deltas = [
+        (current - previous) & 0xFFFFFFFF
+        for previous, current in pairwise(timestamps)
+    ]
+    if require_contiguous and any(
+        delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in timestamp_deltas
+    ):
+        return None
+    if any(
+        len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+        > IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        for access_unit in encrypted_access_units
+    ):
+        return None
+
+    aes_key = _local_media_aes_key(media_key)
+    access_units = [
+        _decrypt_idmx_aac_access_unit(access_unit, aes_key)
+        for access_unit in encrypted_access_units
+    ]
+    descriptor = _idmx_audio_descriptor(packets) or audio_metadata
+    sample_rate = descriptor[0] if descriptor else _idmx_infer_aac_sample_rate(packets)
+    channels = descriptor[1] if descriptor else _aac_channels_from_access_units(access_units)
+    if sample_rate is None or channels is None:
+        return None
+    adts = b"".join(
+        _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
+        for access_unit in access_units
+    )
+    return _IdmxAacStream(
+        adts=adts,
+        sample_rate=sample_rate,
+        channels=channels,
+        frame_count=len(access_units),
+    )
 
 
 def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
@@ -5610,6 +6337,29 @@ def _copy_mpegps_payloads_to_mpegts(
         if stderr_tail:
             message = f"{message}: {stderr_tail}"
         raise PyEzvizError(message)
+
+
+def _copy_idmx_audio_video_to_mpegts(
+    annexb: bytes,
+    audio: _IdmxAacStream,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    video_input_format: str,
+    video_frame_rate: str | None,
+) -> None:
+    """Mux decrypted IDMX elementary video and AAC into MPEG-TS."""
+
+    with tempfile.TemporaryDirectory(prefix="pyezvizapi-idmx-") as directory:
+        audio_path = Path(directory) / "audio.aac"
+        audio_path.write_bytes(audio.adts)
+        process = _open_local_idmx_audio_video_mpegts_remux_process(
+            ffmpeg_path,
+            video_input_format=video_input_format,
+            audio_path=str(audio_path),
+            video_frame_rate=video_frame_rate,
+        )
+        _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
 
 
 def _start_ffmpeg_stderr_drain(

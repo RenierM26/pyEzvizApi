@@ -579,6 +579,7 @@ def test_hcnetsdk_multi_socket_short_drain_expiry_continues_bootstrap() -> None:
         def __init__(self) -> None:
             self.reads = 0
             self.invalidate_values: list[object] = []
+            self.connected = True
 
         def read_media_frame_after_prefix(self, **kwargs: object) -> object:
             self.reads += 1
@@ -607,6 +608,34 @@ def test_hcnetsdk_multi_socket_short_drain_expiry_continues_bootstrap() -> None:
 
     assert quiet_client.reads == 1
     assert quiet_client.invalidate_values == [False]
+
+
+def test_hcnetsdk_multi_socket_partial_drain_expiry_aborts_bootstrap() -> None:
+    class InvalidatedMediaClient:
+        connected = False
+
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> object:
+            raise EzvizLocalSdkDeadlineExpired("partial drain")
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        drain_media_before_next_step_seconds=0.5,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    stream._media_client = cast(Any, InvalidatedMediaClient())  # noqa: SLF001
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="partial drain"):
+        stream._drain_media_before_next_step(  # noqa: SLF001
+            step,
+            step_index=0,
+            capture_deadline=10.0,
+            monotonic=lambda: 0.0,
+        )
 
 
 def test_hcnetsdk_multi_socket_stream_checks_deadline_between_drained_media() -> None:

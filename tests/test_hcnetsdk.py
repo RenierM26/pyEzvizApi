@@ -5200,6 +5200,7 @@ def test_command_port_expected_media_timeout_preserves_socket() -> None:
         )
 
     assert sock.closed is False
+    assert client.connected is True
     client.send_command_frame(b"keepalive")
     assert sock.sent == [b"keepalive"]
 
@@ -5229,6 +5230,7 @@ def test_command_port_partial_expected_media_timeout_invalidates_socket() -> Non
         )
 
     assert interrupted_sock.closed is True
+    assert client.connected is False
     assert client.read_media_frame_after_prefix().frame.payload == media_payload
 
 

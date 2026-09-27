@@ -1201,7 +1201,10 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         invalidate_on_deadline=drain_deadline >= capture_deadline,
                     )
             except EzvizLocalSdkDeadlineExpired:
-                if capture_deadline is None or drain_deadline < capture_deadline:
+                if (
+                    (capture_deadline is None or drain_deadline < capture_deadline)
+                    and self._media_client.connected
+                ):
                     break
                 raise
             except (OSError, PyEzvizError) as err:

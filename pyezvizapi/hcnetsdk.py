@@ -10211,6 +10211,12 @@ class HcNetSdkCommandPortClient:
         """Return the connected socket, opening it lazily."""
         return self.connect()
 
+    @property
+    def connected(self) -> bool:
+        """Return whether a command-port socket is currently attached."""
+        with self._state_lock:
+            return self._socket is not None
+
     def connect(
         self,
         *,

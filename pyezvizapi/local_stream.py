@@ -1758,16 +1758,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             nalu_header_size=nalu_header_size,
             stream_is_clear=stream_is_clear,
         )
-        metadata_audio = _decrypt_idmx_local_packets_to_adts_aac(
-            recorded_packets,
-            media_key,
-            require_contiguous=False,
-        )
-        audio_metadata = (
-            (metadata_audio.sample_rate, metadata_audio.channels)
-            if metadata_audio is not None
-            else None
-        )
+        audio_metadata = _idmx_audio_metadata(recorded_packets, media_key)
         audio = _decrypt_idmx_local_packets_to_adts_aac(
             selected_packets,
             media_key,
@@ -1845,7 +1836,8 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             video_frame_rate = None
         else:
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
-        if annexb != full_annexb:
+        audio = None
+        if _idmx_local_packets_have_aac(packets):
             selected_packets = _idmx_packets_from_selected_annexb(
                 packets,
                 full_annexb=full_annexb,
@@ -1854,23 +1846,11 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 nalu_header_size=nalu_header_size,
                 video_input_format=video_input_format,
             )
-            metadata_audio = _decrypt_idmx_local_packets_to_adts_aac(
-                packets,
-                media_key,
-                require_contiguous=False,
-            )
-            audio_metadata = (
-                (metadata_audio.sample_rate, metadata_audio.channels)
-                if metadata_audio is not None
-                else None
-            )
             audio = _decrypt_idmx_local_packets_to_adts_aac(
                 selected_packets,
                 media_key,
-                audio_metadata=audio_metadata,
+                audio_metadata=_idmx_audio_metadata(packets, media_key),
             )
-        else:
-            audio = _decrypt_idmx_local_packets_to_adts_aac(packets, media_key)
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
@@ -4998,6 +4978,46 @@ def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
     return None
 
 
+def _idmx_audio_metadata(
+    packets: list[bytes],
+    media_key: str | bytes,
+) -> tuple[int, int] | None:
+    """Read or infer AAC metadata without requiring every audio AU to be valid."""
+
+    descriptor = _idmx_audio_descriptor(packets)
+    if descriptor is not None:
+        return descriptor
+    sample_rate = _idmx_infer_aac_sample_rate(packets)
+    if sample_rate is None:
+        return None
+    encrypted_access_units: list[bytes] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None or not _is_complete_idmx_rtp_frame(frame):
+            continue
+        transport = _idmx_local_frame_transport_fields(frame, header_size)
+        if (
+            transport.get("rtp_payload_type") != IDMX_AAC_RTP_PAYLOAD_TYPE
+            or not _idmx_rtp_extension_is_audio(frame)
+        ):
+            continue
+        access_unit = _idmx_aac_access_unit(rtp_payload(frame))
+        if (
+            access_unit is not None
+            and len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+            <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        ):
+            encrypted_access_units.append(access_unit)
+    aes_key = _local_media_aes_key(media_key)
+    channels = _aac_channels_from_access_units(
+        [
+            _decrypt_idmx_aac_access_unit(access_unit, aes_key)
+            for access_unit in encrypted_access_units
+        ]
+    )
+    return (sample_rate, channels) if channels is not None else None
+
+
 def _idmx_rtp_timestamps(packets: list[bytes], payload_type: int) -> list[int]:
     timestamps: list[int] = []
     for frame in _iter_idmx_local_packet_frames(packets):
@@ -5011,6 +5031,17 @@ def _idmx_rtp_timestamps(packets: list[bytes], payload_type: int) -> list[int]:
         if isinstance(timestamp, int) and (not timestamps or timestamps[-1] != timestamp):
             timestamps.append(timestamp)
     return timestamps
+
+
+def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        transport = _idmx_local_frame_transport_fields(frame, header_size)
+        if transport.get("rtp_payload_type") == IDMX_AAC_RTP_PAYLOAD_TYPE:
+            return True
+    return False
 
 
 def _rtp_timestamp_span(timestamps: list[int]) -> int:

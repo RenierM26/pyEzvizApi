@@ -817,6 +817,10 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
         def __exit__(self, *_args: object) -> None:
             return None
 
+        def iter_packets(self, **kwargs: object) -> Any:
+            calls.append({"kind": "iterate", **kwargs})
+            return iter(())
+
     def fake_open(*args: object, **kwargs: object) -> FakeStream:
         calls.append({"kind": "open", "args": args, **kwargs})
         return FakeStream()
@@ -835,6 +839,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
                 **kwargs,
             }
         )
+        list(stream.iter_packets(max_packets=kwargs["max_packets"]))  # type: ignore[attr-defined]
         output.write(LOCAL_SDK_ECDH_TEST_MPEGTS_PAYLOAD)
 
     monkeypatch.setattr(
@@ -856,6 +861,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
         decrypt_video=True,
         media_key="media-secret",
         max_packets=3,
+        max_frames=7,
         duration_seconds=duration_seconds,
     )
 
@@ -865,6 +871,9 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
     assert calls[1]["max_packets"] == 3
     assert calls[1]["duration_seconds"] == duration_seconds
     assert calls[1]["decrypt_hevc_parameter_sets"] is True
+    assert calls[2]["max_packets"] == 3
+    assert calls[2]["max_frames"] == 7
+    assert calls[2]["duration_seconds"] == duration_seconds
 
 
 def test_copy_local_sdk_ecdh_stream_to_mpegps_flushes_output() -> None:

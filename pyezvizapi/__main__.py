@@ -74,7 +74,7 @@ from .local_stream import (
 )
 from .local_stream_ecdh import (
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
-    copy_local_sdk_ecdh_stream_to_mpegps,
+    copy_local_sdk_ecdh_stream_to_media,
     open_local_sdk_ecdh_stream,
 )
 from .stream import (
@@ -4160,42 +4160,18 @@ def _copy_local_sdk_ecdh_cli_stream(
     output: BinaryIO,
 ) -> None:
     """Copy one CLI-selected ECDH stream to its requested container."""
-    if args.decrypt_video and args.format == "mpegps":
-        copy_local_stream_to_decrypted_mpegps(
-            stream,
-            output,
-            _local_sdk_media_key(args, client),
-            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
-            max_packets=args.max_packets,
-            duration_seconds=args.duration,
-        )
-    elif args.decrypt_video:
-        copy_local_stream_to_decrypted_mpegts(
-            stream,
-            output,
-            _local_sdk_media_key(args, client),
-            ffmpeg_path=args.ffmpeg_path,
-            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
-            max_packets=args.max_packets,
-            duration_seconds=args.duration,
-            decrypt_hevc_parameter_sets=True,
-        )
-    elif args.format == "mpegps":
-        copy_local_sdk_ecdh_stream_to_mpegps(
-            stream,
-            output,
-            max_packets=args.max_packets,
-            max_frames=args.max_packets,
-            duration_seconds=args.duration,
-        )
-    else:
-        copy_local_stream_to_mpegts(
-            stream,
-            output,
-            ffmpeg_path=args.ffmpeg_path,
-            max_packets=args.max_packets,
-            duration_seconds=args.duration,
-        )
+    copy_local_sdk_ecdh_stream_to_media(
+        stream,
+        output,
+        output_format=args.format,
+        decrypt_video=args.decrypt_video,
+        media_key=_local_sdk_media_key(args, client) if args.decrypt_video else None,
+        ffmpeg_path=args.ffmpeg_path,
+        nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+        max_packets=args.max_packets,
+        max_frames=args.max_packets,
+        duration_seconds=args.duration,
+    )
 
 
 def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int:

@@ -3180,7 +3180,7 @@ def test_local_sdk_dump_ecdh_uses_ecdh_stream_writer(monkeypatch, tmp_path) -> N
         output.write(LOCAL_SDK_TEST_PAYLOAD)
 
     monkeypatch.setattr(cli_module, "_build_local_sdk_ecdh_cli_stream", fake_build)
-    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_media", fake_copy)
 
     assert (
         cli_module.main(
@@ -3263,7 +3263,7 @@ def test_local_sdk_dump_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
         output.write(LOCAL_SDK_TEST_PAYLOAD)
 
     monkeypatch.setattr(cli_module, "_build_local_sdk_ecdh_cli_stream", fake_build)
-    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_media", fake_copy)
 
     assert (
         cli_module.main(
@@ -3308,17 +3308,12 @@ def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
         assert client is None
         return FakeLocalSdkEcdhStream()
 
-    def fake_copy(
-        stream: FakeLocalSdkEcdhStream,
-        output: BinaryIO,
-        media_key: str | bytes,
-        **kwargs: Any,
-    ) -> None:
-        calls.append({"stream": stream, "media_key": media_key, **kwargs})
+    def fake_copy(stream: FakeLocalSdkEcdhStream, output: BinaryIO, **kwargs: Any) -> None:
+        calls.append({"stream": stream, **kwargs})
         output.write(LOCAL_SDK_TEST_PAYLOAD)
 
     monkeypatch.setattr(cli_module, "_build_local_sdk_ecdh_cli_stream", fake_build)
-    monkeypatch.setattr(cli_module, "copy_local_stream_to_decrypted_mpegts", fake_copy)
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_media", fake_copy)
 
     assert (
         cli_module.main(
@@ -3350,8 +3345,10 @@ def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
 
     assert calls[0]["media_key"] == "media-secret"
     assert calls[0]["max_packets"] == 2
+    assert calls[0]["max_frames"] == 2
     assert calls[0]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
-    assert calls[0]["decrypt_hevc_parameter_sets"] is True
+    assert calls[0]["decrypt_video"] is True
+    assert calls[0]["output_format"] == "mpegts"
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 
@@ -3394,7 +3391,7 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
         "open_local_sdk_ecdh_stream",
         fake_open_local_sdk_ecdh_stream,
     )
-    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_media", fake_copy)
 
     assert (
         cli_module.main(
@@ -3495,7 +3492,7 @@ def test_local_sdk_dump_ecdh_preserves_auto_sequences_when_omitted(
         fake_open_local_sdk_ecdh_stream,
     )
     monkeypatch.setattr(cli_module, "os_environ_get", fake_environ_get)
-    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
+    monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_media", fake_copy)
 
     assert (
         cli_module.main(

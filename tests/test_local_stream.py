@@ -1847,7 +1847,7 @@ def test_copy_local_stream_to_decrypted_mpegts_handles_live_padded_extended_hevc
 
     vps = b"\x40\x01encrypted-vps"
     first_fu = b"\x62\x01\x93slice-"
-    last_fu = b"\x62\x01\x66payload"
+    last_fu = b"\x62\x01\x66payload\x24\x00X"
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -1882,9 +1882,11 @@ def test_copy_local_stream_to_decrypted_mpegts_handles_live_padded_extended_hevc
         decrypt_hevc_parameter_sets=True,
     )
 
-    assert decrypted_nals == [vps, b"\x26\x01slice-payload"]
+    assert decrypted_nals == [vps, b"\x26\x01slice-payload\x24\x00X"]
     assert output.getvalue() == (
-        b"hevc:\x00\x00\x00\x01" + vps + b"\x00\x00\x00\x01\x26\x01slice-payload"
+        b"hevc:\x00\x00\x00\x01"
+        + vps
+        + b"\x00\x00\x00\x01\x26\x01slice-payload\x24\x00X"
     )
 
 
@@ -2563,7 +2565,7 @@ def test_copy_local_stream_to_mpegts_strips_direct_hevc_command_trailer(
 
     def frame(body: bytes, *, sequence: int) -> bytes:
         return (
-            b"\x80\x60"
+            b"\x0d\x80\x60"
             + sequence.to_bytes(2, "big")
             + b"\x36\x01\xd1\xef"
             + b"\x55\x66\x77\x88"

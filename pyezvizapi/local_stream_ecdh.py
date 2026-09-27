@@ -610,6 +610,28 @@ class EzvizLocalSdkEcdhMediaStream:
                 yield EzvizLocalSdkEcdhStreamPacket(channel=media.frame.header.channel, body=body)
 
 
+@dataclass
+class _BoundedEcdhMediaStream:
+    """Adapt ECDH input-frame/deadline bounds to generic media helpers."""
+
+    stream: EzvizLocalSdkEcdhMediaStream
+    max_frames: int | None
+    duration_seconds: float | None
+    monotonic: Callable[[], float] = time.monotonic
+
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+    ) -> Iterator[EzvizLocalSdkEcdhStreamPacket]:
+        return self.stream.iter_packets(
+            max_packets=max_packets,
+            max_frames=self.max_frames,
+            duration_seconds=self.duration_seconds,
+            monotonic=self.monotonic,
+        )
+
+
 def build_ezviz_local_sdk_ecdh_init_request_body(
     *,
     operation_code: str,
@@ -809,9 +831,6 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     smscode: str | int | None = None,
 ) -> None:
     """Write authenticated local SDK ECDH media using an ``EzvizClient``."""
-    if output_format not in {"mpegps", "mpegts"}:
-        raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
-
     with open_local_sdk_ecdh_stream_from_client(
         client,
         serial,
@@ -843,46 +862,86 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
                 raise PyEzvizError(
                     "decrypt_video requires a media_key or fetchable camera media key"
                 )
-        if output_format == "mpegps":
-            if decrypt_video:
-                assert selected_media_key is not None
-                copy_local_stream_to_decrypted_mpegps(
-                    stream,
-                    output,
-                    selected_media_key,
-                    nalu_header_size=nalu_header_size,
-                    max_packets=max_packets,
-                    duration_seconds=duration_seconds,
-                )
-            else:
-                copy_local_sdk_ecdh_stream_to_mpegps(
-                    stream,
-                    output,
-                    max_packets=max_packets,
-                    max_frames=max_frames,
-                    duration_seconds=duration_seconds,
-                )
-            return
-        if decrypt_video:
-            assert selected_media_key is not None
-            copy_local_stream_to_decrypted_mpegts(
-                stream,
-                output,
-                selected_media_key,
-                ffmpeg_path=ffmpeg_path,
-                nalu_header_size=nalu_header_size,
-                max_packets=max_packets,
-                duration_seconds=duration_seconds,
-                decrypt_hevc_parameter_sets=True,
-            )
-        else:
-            copy_local_stream_to_mpegts(
-                stream,
-                output,
-                ffmpeg_path=ffmpeg_path,
-                max_packets=max_packets,
-                duration_seconds=duration_seconds,
-            )
+        copy_local_sdk_ecdh_stream_to_media(
+            stream,
+            output,
+            output_format=output_format,
+            decrypt_video=decrypt_video,
+            media_key=selected_media_key,
+            ffmpeg_path=ffmpeg_path,
+            nalu_header_size=nalu_header_size,
+            max_packets=max_packets,
+            max_frames=max_frames,
+            duration_seconds=duration_seconds,
+        )
+
+
+def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
+    stream: EzvizLocalSdkEcdhMediaStream,
+    output: BinaryIO,
+    *,
+    output_format: str = "mpegps",
+    decrypt_video: bool = False,
+    media_key: str | bytes | None = None,
+    ffmpeg_path: str = "ffmpeg",
+    nalu_header_size: int | None = None,
+    max_packets: int | None = None,
+    max_frames: int | None = None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Copy one ECDH stream while enforcing bounds on encrypted input frames."""
+    if output_format not in {"mpegps", "mpegts"}:
+        raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
+    if decrypt_video and media_key is None:
+        raise PyEzvizError("decrypt_video requires a media_key or fetchable camera media key")
+    if output_format == "mpegps" and not decrypt_video:
+        copy_local_sdk_ecdh_stream_to_mpegps(
+            stream,
+            output,
+            max_packets=max_packets,
+            max_frames=max_frames,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+        return
+
+    bounded_stream = _BoundedEcdhMediaStream(
+        stream,
+        max_frames=max_frames,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+    if output_format == "mpegps":
+        assert media_key is not None
+        copy_local_stream_to_decrypted_mpegps(
+            bounded_stream,
+            output,
+            media_key,
+            nalu_header_size=nalu_header_size,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+        )
+    elif decrypt_video:
+        assert media_key is not None
+        copy_local_stream_to_decrypted_mpegts(
+            bounded_stream,
+            output,
+            media_key,
+            ffmpeg_path=ffmpeg_path,
+            nalu_header_size=nalu_header_size,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            decrypt_hevc_parameter_sets=True,
+        )
+    else:
+        copy_local_stream_to_mpegts(
+            bounded_stream,
+            output,
+            ffmpeg_path=ffmpeg_path,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+        )
 
 
 def copy_local_sdk_ecdh_stream_to_mpegps(

@@ -4230,8 +4230,9 @@ def _is_complete_idmx_rtp_frame(frame: bytes) -> bool:
 def _idmx_local_frame_media_body(frame: bytes, header_size: int) -> bytes:
     """Return media bytes after RTP extensions/padding or a legacy IDMX header."""
 
-    body = rtp_payload(frame) if _is_complete_idmx_rtp_frame(frame) else frame[header_size:]
-    return _strip_idmx_command_h264_record_trailer(body)
+    if _is_complete_idmx_rtp_frame(frame):
+        return rtp_payload(frame)
+    return _strip_idmx_command_h264_record_trailer(frame[header_size:])
 
 
 def _summarize_idmx_h264_local_frame(  # noqa: PLR0911

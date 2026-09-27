@@ -6,10 +6,10 @@ from collections.abc import Mapping, MutableMapping
 from typing import Any, Literal
 
 from .constants import (
+    _DEFAULT_SESSION,
+    _IDENTITY_HEADER_NAMES,
+    _PROFILE_HEADER_NAMES,
     ANDROID_PROFILE,
-    DEFAULT_SESSION,
-    IDENTITY_HEADER_NAMES,
-    PROFILE_HEADER_NAMES,
     WEB_PROFILE,
     HttpProfile,
 )
@@ -35,7 +35,7 @@ def session_header_for_token(token: Mapping[str, Any]) -> object | str | None:
         return str(session_id)
     if profile_for_token(token) is ANDROID_PROFILE:
         return None
-    return DEFAULT_SESSION
+    return _DEFAULT_SESSION
 
 
 def recreated_session_header_for_token(
@@ -59,7 +59,7 @@ def current_session_header(headers: Mapping[str, Any]) -> str | bytes | None:
 def synchronize_http_headers(
     headers: MutableMapping[str, Any],
     profile: HttpProfile,
-    session_id: object | str | bytes | None = DEFAULT_SESSION,
+    session_id: object | str | bytes | None = _DEFAULT_SESSION,
     *,
     scope: Literal["profile", "identity", "session"],
 ) -> None:
@@ -76,8 +76,8 @@ def synchronize_http_headers(
     """
 
     managed = {
-        "profile": PROFILE_HEADER_NAMES,
-        "identity": IDENTITY_HEADER_NAMES,
+        "profile": _PROFILE_HEADER_NAMES,
+        "identity": _IDENTITY_HEADER_NAMES,
         "session": ("sessionId",),
     }[scope]
     for name in managed:
@@ -87,7 +87,7 @@ def synchronize_http_headers(
             headers.pop(name, None)
     if session_id is None:
         headers.pop("sessionId", None)
-    elif session_id is not DEFAULT_SESSION:
+    elif session_id is not _DEFAULT_SESSION:
         headers["sessionId"] = (
             session_id if isinstance(session_id, (str, bytes)) else str(session_id)
         )

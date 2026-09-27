@@ -85,15 +85,15 @@ PROFILE: Final = ANDROID_PROFILE.name
 HEADERS: Final = _immutable(_ANDROID_OVERRIDES)
 REGISTER: Final = ANDROID_PROFILE.registration
 
-PROFILE_HEADER_NAMES: Final = tuple(
+_PROFILE_HEADER_NAMES: Final = tuple(
     dict.fromkeys((*WEB_PROFILE.headers, *ANDROID_PROFILE.headers))
 )
-IDENTITY_HEADER_NAMES: Final = (
+_IDENTITY_HEADER_NAMES: Final = (
     "sessionId",
     "featureCode",
     *_ANDROID_OVERRIDES,
 )
-DEFAULT_SESSION: Final = object()
+_DEFAULT_SESSION: Final = object()
 MQTT_APP_KEY = "4c6b3cc2-b5eb-4813-a592-612c1374c1fe"
 APP_SECRET = "17454517-cc1c-42b3-a845-99b4a15dd3e6"
 

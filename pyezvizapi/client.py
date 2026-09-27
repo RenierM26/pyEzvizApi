@@ -397,14 +397,13 @@ class _LocalStreamPacketMetadataRecorder:
         duration_seconds: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[Any]:
+        iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
         if getattr(self._stream, "supports_deadline_iter_packets", False):
-            packets = self._stream.iter_packets(
-                max_packets=max_packets,
+            iterator_kwargs.update(
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
             )
-        else:
-            packets = self._stream.iter_packets(max_packets=max_packets)
+        packets = self._stream.iter_packets(**iterator_kwargs)
         try:
             for packet in packets:
                 self._record_packet(packet)

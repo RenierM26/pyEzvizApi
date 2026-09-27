@@ -9011,7 +9011,7 @@ def _connect_with_optional_source_address(
         source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
         return source_socket_factory(address, timeout, source_address)
     except OSError as err:
-        if err.errno == errno.EADDRINUSE:
+        if err.errno in {errno.EADDRINUSE, errno.EADDRNOTAVAIL}:
             raise PyEzvizError(
                 f"EZVIZ local SDK receiver port {source_address[1]} is already in use"
             ) from err
@@ -9033,41 +9033,94 @@ def _create_reusable_source_connection(
         port,
         type=socket.SOCK_STREAM,
     ):
-        sock: socket.socket | None = None
         try:
-            sock = socket.socket(family, sock_type, protocol)
-            sock.settimeout(timeout)
-            _configure_source_port_socket(sock)
-            sock.bind(source_address)
-            sock.connect(target)
-            if sock.getsockname()[1] != source_address[1]:
-                sock.close()
-                raise PyEzvizError(
-                    "EZVIZ local SDK receiver port changed while opening the socket"
-                )
-            return sock
+            if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
+                try:
+                    return _connect_bound_source_socket(
+                        family,
+                        sock_type,
+                        protocol,
+                        target,
+                        timeout,
+                        source_address=source_address,
+                        exclusive=True,
+                    )
+                except OSError as err:
+                    if (
+                        err.errno != errno.EADDRINUSE
+                        or _windows_source_port_has_listener(source_address, family)
+                    ):
+                        raise
+            return _connect_bound_source_socket(
+                family,
+                sock_type,
+                protocol,
+                target,
+                timeout,
+                source_address=source_address,
+                exclusive=False,
+            )
         except OSError as err:
             last_error = err
-            if sock is not None:
-                sock.close()
 
     if last_error is not None:
         raise last_error
     raise OSError("getaddrinfo returned no addresses")
 
 
-def _configure_source_port_socket(sock: socket.socket) -> None:
-    """Keep source-port binds reusable on POSIX and exclusive on Windows."""
+def _connect_bound_source_socket(
+    family: int,
+    sock_type: int,
+    protocol: int,
+    target: Any,
+    timeout: float | None,
+    *,
+    source_address: tuple[str, int],
+    exclusive: bool,
+) -> socket.socket:
+    """Bind and connect one source socket with the requested ownership mode."""
 
-    if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
-        exclusive_option = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
-        if exclusive_option is None:
+    sock = socket.socket(family, sock_type, protocol)
+    try:
+        sock.settimeout(timeout)
+        if exclusive:
+            exclusive_option = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive_option is None:
+                raise PyEzvizError(
+                    "Windows does not expose exclusive source-port binding support"
+                )
+            sock.setsockopt(socket.SOL_SOCKET, exclusive_option, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(source_address)
+        sock.connect(target)
+        if sock.getsockname()[1] != source_address[1]:
             raise PyEzvizError(
-                "Windows does not expose exclusive source-port binding support"
+                "EZVIZ local SDK receiver port changed while opening the socket"
             )
-        sock.setsockopt(socket.SOL_SOCKET, exclusive_option, 1)
-        return
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def _windows_source_port_has_listener(
+    source_address: tuple[str, int],
+    family: int,
+) -> bool:
+    """Return whether a local listener actively owns a Windows source port."""
+
+    host, port = source_address
+    if family == socket.AF_INET6:
+        probe_host = "::1" if host in {"", "::"} else host
+    else:
+        probe_host = "127.0.0.1" if host in {"", "0.0.0.0"} else host
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.1)
+        return probe.connect_ex((probe_host, port)) == 0
+    finally:
+        probe.close()
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

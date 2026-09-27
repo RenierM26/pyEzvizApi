@@ -3,10 +3,12 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from datetime import date, datetime
+import errno
 import hashlib
 import hmac
 from pathlib import Path
 import socket
+from typing import Any
 
 from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
@@ -254,8 +256,9 @@ from pyezvizapi.hcnetsdk import (
     SadpNoArgRequest,
     SadpSetLogToFileRequest,
     SadpStartRequest,
-    _configure_source_port_socket,
     _connect_with_optional_source_address,
+    _create_reusable_source_connection,
+    _windows_source_port_has_listener,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
     build_ezviz_cas_ssl_local_sdk_frame,
@@ -4298,30 +4301,104 @@ def test_local_sdk_source_port_can_reopen_immediately() -> None:
         server.close()
 
 
-def test_local_sdk_source_port_uses_exclusive_binding_on_windows(
+def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exclusive_option = 0x100
-    option_calls: list[tuple[int, int, int]] = []
+    sockets: list[Any] = []
 
-    class OptionSocket:
+    class ConnectSocket:
+        def __init__(self, *, bind_error: OSError | None = None) -> None:
+            self.bind_error = bind_error
+            self.option_calls: list[tuple[int, int, int]] = []
+            self.closed = False
+
+        def settimeout(self, _timeout: float | None) -> None:
+            return
+
         def setsockopt(self, level: int, option: int, value: int) -> None:
-            option_calls.append((level, option, value))
+            self.option_calls.append((level, option, value))
 
+        def bind(self, _address: tuple[str, int]) -> None:
+            if self.bind_error is not None:
+                raise self.bind_error
+
+        def connect(self, _target: tuple[str, int]) -> None:
+            return
+
+        def getsockname(self) -> tuple[str, int]:
+            return ("127.0.0.1", 10103)
+
+        def close(self) -> None:
+            self.closed = True
+
+    exclusive_socket = ConnectSocket(
+        bind_error=OSError(errno.EADDRINUSE, "TIME_WAIT"),
+    )
+    reusable_socket = ConnectSocket()
+    sockets.extend((exclusive_socket, reusable_socket))
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         True,
     )
     monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_source_port_has_listener",
+        lambda _address, _family: False,
+    )
+    monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive_option, raising=False)
+    monkeypatch.setattr(
         socket,
-        "SO_EXCLUSIVEADDRUSE",
-        exclusive_option,
-        raising=False,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+        ],
+    )
+    monkeypatch.setattr(socket, "socket", lambda *_args: sockets.pop(0))
+
+    result = _create_reusable_source_connection(
+        ("192.0.2.10", 9010),
+        1.0,
+        source_address=("127.0.0.1", 10103),
     )
 
-    _configure_source_port_socket(OptionSocket())  # type: ignore[arg-type]
+    assert result is reusable_socket
+    assert exclusive_socket.closed is True
+    assert exclusive_socket.option_calls == [
+        (socket.SOL_SOCKET, exclusive_option, 1)
+    ]
+    assert reusable_socket.option_calls == [
+        (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ]
 
-    assert option_calls == [(socket.SOL_SOCKET, exclusive_option, 1)]
+
+def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
+    def socket_factory(
+        _address: tuple[str, int],
+        _timeout: float | None,
+        _source_address: tuple[str, int],
+    ) -> Any:
+        raise OSError(errno.EADDRNOTAVAIL, "duplicate TCP tuple")
+
+    with pytest.raises(PyEzvizError, match="receiver port 10103 is already in use"):
+        _connect_with_optional_source_address(
+            socket_factory,
+            ("192.0.2.10", 9010),
+            1.0,
+            source_address=("127.0.0.1", 10103),
+        )
+
+
+def test_windows_source_port_listener_probe_detects_active_listener() -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    try:
+        assert _windows_source_port_has_listener(
+            listener.getsockname(),
+            socket.AF_INET,
+        )
+    finally:
+        listener.close()
 
 
 def test_local_sdk_source_port_reports_an_active_conflict() -> None:

@@ -11,7 +11,11 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 import pytest
 
-from pyezvizapi.exceptions import DeviceException, PyEzvizError
+from pyezvizapi.exceptions import (
+    DeviceException,
+    EzvizLocalSdkDeadlineExpired,
+    PyEzvizError,
+)
 from pyezvizapi.hcnetsdk import (
     EZVIZ_CAS_PTZ_COMMAND_MAP,
     EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE,
@@ -4238,12 +4242,12 @@ def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:
 def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
     monkeypatch,
 ) -> None:
-    stream_sock = _FakeSocket([])
+    stream_byte = b"x"
+    stream_sock = _FakeSocket([stream_byte])
     stream_sock.timeout = 3.0
-    expected = object()
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
-        lambda _sock, *, max_prefix_bytes: expected,
+        lambda sock, *, max_prefix_bytes: sock.recv(1),
     )
     endpoint = HcNetSdkLanEndpoint(
         serial="CAM123456",
@@ -4262,19 +4266,23 @@ def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
         device_info,
         socket_factory=lambda _address, _timeout: stream_sock,
     ) as client:
-        result = client.read_stream_frame_after_prefix(timeout=0.75)
+        ticks = iter([0.0, 0.0])
+        result = client.read_stream_frame_after_prefix(
+            timeout=0.75,
+            monotonic=lambda: next(ticks),
+        )
 
-    assert result is expected
+    assert result == stream_byte
     assert stream_sock.timeout_history == [0.75, 3.0]
 
 
 def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) -> None:
-    stream_sock = _FakeSocket([])
+    stream_byte = b"x"
+    stream_sock = _FakeSocket([stream_byte])
     stream_sock.timeout = 3.0
-    expected = object()
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
-        lambda _sock, *, max_prefix_bytes: expected,
+        lambda sock, *, max_prefix_bytes: sock.recv(1),
     )
     endpoint = HcNetSdkLanEndpoint(
         serial="CAM123456",
@@ -4293,10 +4301,55 @@ def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) ->
         device_info,
         socket_factory=lambda _address, _timeout: stream_sock,
     ) as client:
-        result = client.read_stream_frame_after_prefix(timeout=60.0)
+        ticks = iter([0.0, 0.0])
+        result = client.read_stream_frame_after_prefix(
+            timeout=60.0,
+            monotonic=lambda: next(ticks),
+        )
 
-    assert result is expected
+    assert result == stream_byte
     assert stream_sock.timeout_history == [3.0, 3.0]
+
+
+def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
+    monkeypatch,
+) -> None:
+    stream_sock = _FakeSocket([b"x", b"y"])
+    stream_sock.timeout = 5.0
+
+    def read_fragmented(sock, *, max_prefix_bytes):
+        sock.recv(1)
+        sock.recv(1)
+        return sock.recv(1)
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        read_fragmented,
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+    ticks = iter([0.0, 0.1, 0.6, 1.1])
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=lambda _address, _timeout: stream_sock,
+    ) as client, pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.read_stream_frame_after_prefix(
+            timeout=1.0,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert stream_sock.timeout_history == [0.9, 0.4, 5.0]
 
 
 def test_apk_observed_command_ids_are_named() -> None:

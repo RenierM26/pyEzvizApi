@@ -33,6 +33,10 @@ class DeviceException(PyEzvizError):
     """Raised when the physical device reports network or operational issues."""
 
 
+class EzvizLocalSdkDeadlineExpired(DeviceException):
+    """Raised when a bounded local SDK frame read reaches its total deadline."""
+
+
 class EzvizPushFatalError(PyEzvizError):
     """Push stopped and requires caller intervention before a new client is started."""
 

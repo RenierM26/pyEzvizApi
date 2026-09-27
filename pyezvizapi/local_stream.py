@@ -5627,6 +5627,11 @@ _LOCAL_STREAM_ECDH_EXPORTS = {
     "parse_ezviz_local_sdk_ecdh_handshake_packet",
     "transform_ezviz_local_sdk_ecdh_nonce",
 }
+_LOCAL_STREAM_ECDH_CONSTANT_EXPORTS = {
+    "LOCAL_SDK_ECDH_CONTROL_PORT",
+    "LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT",
+    "LOCAL_SDK_ECDH_STREAM_PORT",
+}
 
 
 def __getattr__(name: str) -> Any:
@@ -5634,7 +5639,12 @@ def __getattr__(name: str) -> Any:
     if name not in _LOCAL_STREAM_ECDH_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    module = import_module(".local_stream_ecdh", __package__)
+    module_name = (
+        ".constants"
+        if name in _LOCAL_STREAM_ECDH_CONSTANT_EXPORTS
+        else ".local_stream_ecdh"
+    )
+    module = import_module(module_name, __package__)
     value = getattr(module, name)
     globals()[name] = value
     return value

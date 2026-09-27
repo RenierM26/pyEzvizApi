@@ -12,7 +12,11 @@ from pyezvizapi import (
     EzvizLocalSdkEcdhStreamDecoder as PackageLocalSdkEcdhStreamDecoder,
     generate_ezviz_local_sdk_ecdh_keypair as package_generate_local_sdk_ecdh_keypair,
 )
-from pyezvizapi.exceptions import DeviceException, PyEzvizError
+from pyezvizapi.exceptions import (
+    DeviceException,
+    EzvizLocalSdkDeadlineExpired,
+    PyEzvizError,
+)
 from pyezvizapi.hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrame,
@@ -671,7 +675,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
 
         def read_stream_frame_after_prefix(self, **kwargs: object) -> object:
             self.read_timeout = cast(float, kwargs["timeout"])
-            raise DeviceException("timed out")
+            raise EzvizLocalSdkDeadlineExpired("timed out")
 
         def close(self) -> None:
             return None

@@ -28,7 +28,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from .constants import (
-    LOCAL_SDK_ECDH_CONTROL_PORT,  # noqa: F401 - compatibility re-export
     LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET,
     LOCAL_SDK_ECDH_DATA_MARKER,
     LOCAL_SDK_ECDH_DATA_NONCE_OFFSET,
@@ -53,10 +52,9 @@ from .constants import (
     LOCAL_SDK_ECDH_PACKET_MARKER,
     LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH,
     LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH,
-    LOCAL_SDK_ECDH_STREAM_PORT,  # noqa: F401 - compatibility re-export
     MAX_RETRIES,
 )
-from .exceptions import DeviceException, PyEzvizError
+from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -465,20 +463,13 @@ class EzvizLocalSdkEcdhMediaStream:
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     break
-            configured_timeout = getattr(self.sdk_client, "timeout", None)
-            deadline_limits_read = (
-                remaining is not None
-                and (configured_timeout is None or remaining <= configured_timeout)
-            )
             try:
                 media = self.sdk_client.read_stream_frame_after_prefix(
                     max_prefix_bytes=self.max_prefix_bytes,
                     timeout=remaining,
                 )
-            except DeviceException:
-                if deadline_limits_read:
-                    break
-                raise
+            except EzvizLocalSdkDeadlineExpired:
+                break
             read_frames += 1
             body = self.decoder.feed_interleaved_frame(media)
             if body:

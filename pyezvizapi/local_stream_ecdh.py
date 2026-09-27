@@ -27,8 +27,36 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from .constants import MAX_RETRIES
-from .exceptions import PyEzvizError
+from .constants import (
+    LOCAL_SDK_ECDH_CONTROL_PORT,  # noqa: F401 - compatibility re-export
+    LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET,
+    LOCAL_SDK_ECDH_DATA_MARKER,
+    LOCAL_SDK_ECDH_DATA_NONCE_OFFSET,
+    LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH,
+    LOCAL_SDK_ECDH_DATA_TYPE,
+    LOCAL_SDK_ECDH_DEFAULT_INIT_SESSION,
+    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH,
+    LOCAL_SDK_ECDH_H264_SPS_3B,
+    LOCAL_SDK_ECDH_H264_SPS_4B,
+    LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET,
+    LOCAL_SDK_ECDH_HANDSHAKE_MARKER,
+    LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET,
+    LOCAL_SDK_ECDH_HANDSHAKE_TYPE,
+    LOCAL_SDK_ECDH_HEVC_VPS_3B,
+    LOCAL_SDK_ECDH_HEVC_VPS_4B,
+    LOCAL_SDK_ECDH_MAGIC,
+    LOCAL_SDK_ECDH_MAX_PACK_LOOKBACK_BEFORE_KEYFRAME,
+    LOCAL_SDK_ECDH_MAX_PRE_KEYFRAME_BYTES,
+    LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER,
+    LOCAL_SDK_ECDH_NONCE_LENGTH,
+    LOCAL_SDK_ECDH_PACKET_MARKER,
+    LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH,
+    LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH,
+    LOCAL_SDK_ECDH_STREAM_PORT,  # noqa: F401 - compatibility re-export
+    MAX_RETRIES,
+)
+from .exceptions import DeviceException, PyEzvizError
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -42,36 +70,6 @@ from .hcnetsdk import (
     SocketFactory,
 )
 from .local_stream import get_local_sdk_stream_credentials_from_client
-
-LOCAL_SDK_ECDH_CONTROL_PORT = 9010
-LOCAL_SDK_ECDH_STREAM_PORT = 9020
-LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT = 10105
-LOCAL_SDK_ECDH_DEFAULT_INIT_SESSION = 10011
-
-LOCAL_SDK_ECDH_MAGIC = 0x24
-LOCAL_SDK_ECDH_HANDSHAKE_TYPE = 0x01
-LOCAL_SDK_ECDH_DATA_TYPE = 0x02
-LOCAL_SDK_ECDH_PACKET_MARKER = 0x01
-LOCAL_SDK_ECDH_HANDSHAKE_MARKER = b"\x24\x01"
-LOCAL_SDK_ECDH_DATA_MARKER = b"\x24\x02"
-LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET = 0x0B
-LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET = 0x2B
-LOCAL_SDK_ECDH_DATA_NONCE_OFFSET = 0x07
-LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET = 0x0B
-LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH = 32
-LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH = 91
-LOCAL_SDK_ECDH_NONCE_LENGTH = 4
-LOCAL_SDK_ECDH_CHACHA20_NONCE_LENGTH = 12
-LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH = 32
-LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH = 4
-
-LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER = b"\x00\x00\x01\xba"
-LOCAL_SDK_ECDH_HEVC_VPS_4B = b"\x00\x00\x00\x01\x40\x01"
-LOCAL_SDK_ECDH_HEVC_VPS_3B = b"\x00\x00\x01\x40\x01"
-LOCAL_SDK_ECDH_H264_SPS_4B = b"\x00\x00\x00\x01\x67"
-LOCAL_SDK_ECDH_H264_SPS_3B = b"\x00\x00\x01\x67"
-LOCAL_SDK_ECDH_MAX_PACK_LOOKBACK_BEFORE_KEYFRAME = 64 * 1024
-LOCAL_SDK_ECDH_MAX_PRE_KEYFRAME_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -467,13 +465,18 @@ class EzvizLocalSdkEcdhMediaStream:
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     break
+            configured_timeout = getattr(self.sdk_client, "timeout", None)
+            deadline_limits_read = (
+                remaining is not None
+                and (configured_timeout is None or remaining <= configured_timeout)
+            )
             try:
                 media = self.sdk_client.read_stream_frame_after_prefix(
                     max_prefix_bytes=self.max_prefix_bytes,
                     timeout=remaining,
                 )
-            except TimeoutError:
-                if deadline is not None:
+            except DeviceException:
+                if deadline_limits_read:
                     break
                 raise
             read_frames += 1

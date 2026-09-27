@@ -12,7 +12,7 @@ from pyezvizapi import (
     EzvizLocalSdkEcdhStreamDecoder as PackageLocalSdkEcdhStreamDecoder,
     generate_ezviz_local_sdk_ecdh_keypair as package_generate_local_sdk_ecdh_keypair,
 )
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import DeviceException, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrame,
@@ -660,6 +660,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
     class FakeSdkClient:
         def __init__(self) -> None:
             self.read_timeout: float | None = None
+            self.timeout = 5.0
 
         def bootstrap_preview_from_fields(self, **_kwargs: object) -> object:
             return EzvizLocalSdkStreamBootstrap(
@@ -670,7 +671,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
 
         def read_stream_frame_after_prefix(self, **kwargs: object) -> object:
             self.read_timeout = cast(float, kwargs["timeout"])
-            raise TimeoutError
+            raise DeviceException("timed out")
 
         def close(self) -> None:
             return None
@@ -696,3 +697,42 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
         )
     ) == []
     assert sdk_client.read_timeout == pytest.approx(0.75)
+
+
+def test_ezviz_local_sdk_ecdh_stream_preserves_earlier_socket_timeout() -> None:
+    class FakeSdkClient:
+        timeout = 0.25
+
+        def bootstrap_preview_from_fields(self, **_kwargs: object) -> object:
+            return EzvizLocalSdkStreamBootstrap(
+                preview=cast(Any, object()),
+                stream_setup=cast(Any, object()),
+                first_media=None,
+            )
+
+        def read_stream_frame_after_prefix(self, **_kwargs: object) -> object:
+            raise DeviceException("timed out")
+
+        def close(self) -> None:
+            return None
+
+    ticks = iter([0.0, 0.1])
+    stream = EzvizLocalSdkEcdhMediaStream(
+        cast(Any, FakeSdkClient()),
+        EzvizLocalPreviewRequest(
+            operation_code="0123456",
+            channel=1,
+            receiver_info="receiver",
+            receiver_info_ex="receiver-ex",
+        ),
+        generate_ezviz_local_sdk_ecdh_keypair(),
+    )
+
+    with pytest.raises(DeviceException, match="timed out"):
+        list(
+            stream.iter_packets(
+                max_packets=1,
+                duration_seconds=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        )

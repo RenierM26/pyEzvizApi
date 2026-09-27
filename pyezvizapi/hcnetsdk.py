@@ -8905,7 +8905,10 @@ class EzvizLocalSdkClient:
             )
 
         previous_timeout = sock.gettimeout()
-        sock.settimeout(timeout)
+        effective_timeout = (
+            timeout if previous_timeout is None else min(previous_timeout, timeout)
+        )
+        sock.settimeout(effective_timeout)
         try:
             return read_ezviz_interleaved_rtp_frame_after_prefix(
                 sock,

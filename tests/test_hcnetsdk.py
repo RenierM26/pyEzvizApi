@@ -258,6 +258,7 @@ from pyezvizapi.hcnetsdk import (
     SadpStartRequest,
     _connect_with_optional_source_address,
     _create_reusable_source_connection,
+    _windows_concrete_source_address,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
     build_ezviz_cas_ssl_local_sdk_frame,
@@ -4354,6 +4355,80 @@ def test_local_sdk_source_port_uses_exclusive_binding_on_windows(
         (socket.SOL_SOCKET, exclusive_option, 1)
     ]
     assert exclusive_socket.bound_address == ("", 10103)
+
+
+def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_socket = object()
+    calls: list[tuple[tuple[Any, ...], bool]] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        _timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        calls.append((source_address, exclusive))
+        if source_address == ("", 10103):
+            raise OSError(errno.EADDRINUSE, "owned on another interface")
+        return connected_socket
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_concrete_source_address",
+        lambda _address, _family, _target: ("192.0.2.25", 10103),
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+        ],
+    )
+
+    assert _create_reusable_source_connection(
+        ("192.0.2.10", 9010),
+        1.0,
+        source_address=("", 10103),
+    ) is connected_socket
+    assert calls == [
+        (("", 10103), True),
+        (("192.0.2.25", 10103), True),
+    ]
+
+
+def test_windows_ipv6_wildcard_source_preserves_route_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RouteSocket:
+        def connect(self, _target: Any) -> None:
+            return
+
+        def getsockname(self) -> tuple[str, int, int, int]:
+            return ("fe80::25", 53000, 0, 7)
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(socket, "socket", lambda *_args: RouteSocket())
+
+    assert _windows_concrete_source_address(
+        ("::", 10103),
+        socket.AF_INET6,
+        ("fe80::10", 9010, 0, 7),
+    ) == ("fe80::25", 10103, 0, 7)
 
 
 def test_local_sdk_source_port_maps_established_connection_conflict() -> None:

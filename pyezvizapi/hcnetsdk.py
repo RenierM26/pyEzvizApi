@@ -4331,6 +4331,7 @@ class SadpBatchResult:
 
 
 SocketSourceAddress = tuple[str, int] | None
+SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
 SocketFactory = Callable[[tuple[str, int], float | None], Any]
 SourceAddressSocketFactory = Callable[
     [tuple[str, int], float | None, SocketSourceAddress],
@@ -9041,6 +9042,36 @@ def _create_reusable_source_connection(
         type=socket.SOCK_STREAM,
     ):
         try:
+            if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
+                try:
+                    return _connect_bound_source_socket(
+                        family,
+                        sock_type,
+                        protocol,
+                        target,
+                        timeout,
+                        source_address=source_address,
+                        exclusive=True,
+                    )
+                except OSError as err:
+                    if err.errno != errno.EADDRINUSE:
+                        raise
+                    concrete_source_address = _windows_concrete_source_address(
+                        source_address,
+                        family,
+                        target,
+                    )
+                    if concrete_source_address == source_address:
+                        raise
+                    return _connect_bound_source_socket(
+                        family,
+                        sock_type,
+                        protocol,
+                        target,
+                        timeout,
+                        source_address=concrete_source_address,
+                        exclusive=True,
+                    )
             return _connect_bound_source_socket(
                 family,
                 sock_type,
@@ -9048,7 +9079,7 @@ def _create_reusable_source_connection(
                 target,
                 timeout,
                 source_address=source_address,
-                exclusive=_WINDOWS_EXCLUSIVE_SOURCE_BIND,
+                exclusive=False,
             )
         except OSError as err:
             last_error = err
@@ -9065,7 +9096,7 @@ def _connect_bound_source_socket(
     target: Any,
     timeout: float | None,
     *,
-    source_address: tuple[str, int],
+    source_address: SocketBindAddress,
     exclusive: bool,
 ) -> socket.socket:
     """Bind and connect one source socket with the requested ownership mode."""
@@ -9097,6 +9128,29 @@ def _connect_bound_source_socket(
     except Exception:
         sock.close()
         raise
+
+
+def _windows_concrete_source_address(
+    source_address: tuple[str, int],
+    family: int,
+    target: Any,
+) -> SocketBindAddress:
+    """Resolve a wildcard source to the interface selected for the target."""
+
+    host, port = source_address
+    wildcard_hosts = {"", "::"} if family == socket.AF_INET6 else {"", "0.0.0.0"}
+    if host not in wildcard_hosts:
+        return source_address
+    route_probe = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        route_probe.connect(target)
+        routed_address = route_probe.getsockname()
+        routed_host = str(routed_address[0])
+    finally:
+        route_probe.close()
+    if family == socket.AF_INET6:
+        return routed_host, port, int(routed_address[2]), int(routed_address[3])
+    return routed_host, port
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

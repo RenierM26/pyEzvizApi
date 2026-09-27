@@ -47,21 +47,27 @@ class _IteratorProducer[PacketT]:
         return self._thread.is_alive()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            self._requests.get()
-            if self._stop.is_set():
-                return
-            try:
-                packet = next(self._packets)
-            except StopIteration:
-                self._results.put((True, _ITERATOR_STOPPED))
-                return
-            except Exception as err:
-                self._results.put((False, err))
-                return
-            if self._stop.is_set():
-                return
-            self._results.put((True, packet))
+        try:
+            while not self._stop.is_set():
+                self._requests.get()
+                if self._stop.is_set():
+                    return
+                try:
+                    packet = next(self._packets)
+                except StopIteration:
+                    self._results.put((True, _ITERATOR_STOPPED))
+                    return
+                except Exception as err:
+                    self._results.put((False, err))
+                    return
+                if self._stop.is_set():
+                    return
+                self._results.put((True, packet))
+        finally:
+            close = getattr(self._packets, "close", None)
+            if callable(close):
+                with suppress(RuntimeError, ValueError):
+                    close()
 
     def next_before(
         self,
@@ -89,11 +95,6 @@ class _IteratorProducer[PacketT]:
         with suppress(Full):
             self._requests.put_nowait(object())
         self._thread.join(timeout=0.01)
-        if not self.alive:
-            close = getattr(self._packets, "close", None)
-            if callable(close):
-                with suppress(RuntimeError, ValueError):
-                    close()
 
 
 @dataclass

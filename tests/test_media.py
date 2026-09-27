@@ -363,11 +363,15 @@ def test_iterable_source_rejects_unbounded_reuse_during_slow_cancellation() -> N
     """An unbounded retry cannot race a worker still executing next()."""
 
     release = Event()
+    closed = Event()
 
     def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
-        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
-        release.wait()
-        yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        try:
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+            release.wait()
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        finally:
+            closed.set()
 
     source = hcnetsdk_media_packet_source(callback_packets(), cancel=lambda: None)
 
@@ -385,7 +389,7 @@ def test_iterable_source_rejects_unbounded_reuse_during_slow_cancellation() -> N
         list(source.iter_media_packets(limits=CaptureLimits(max_packets=1)))
 
     release.set()
-    producer.close()
+    assert closed.wait(timeout=1.0)
     assert not producer.alive
 
 

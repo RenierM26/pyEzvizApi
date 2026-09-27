@@ -16,11 +16,14 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+import hashlib
+import hmac
 import socket
 import time
 from typing import Any, BinaryIO
 import uuid as uuid_module
 from xml.sax.saxutils import escape as xml_escape
+import zlib
 
 from Crypto.Cipher import AES, ChaCha20
 from cryptography.exceptions import UnsupportedAlgorithm
@@ -41,15 +44,16 @@ from .constants import (
     LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET,
     LOCAL_SDK_ECDH_HANDSHAKE_MARKER,
     LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET,
+    LOCAL_SDK_ECDH_HANDSHAKE_SUBTYPE,
     LOCAL_SDK_ECDH_HANDSHAKE_TYPE,
     LOCAL_SDK_ECDH_HEVC_VPS_3B,
     LOCAL_SDK_ECDH_HEVC_VPS_4B,
     LOCAL_SDK_ECDH_MAGIC,
-    LOCAL_SDK_ECDH_MAX_PACK_LOOKBACK_BEFORE_KEYFRAME,
     LOCAL_SDK_ECDH_MAX_PRE_KEYFRAME_BYTES,
     LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER,
     LOCAL_SDK_ECDH_NONCE_LENGTH,
     LOCAL_SDK_ECDH_PACKET_MARKER,
+    LOCAL_SDK_ECDH_PACKET_WINDOW_SIZE,
     LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH,
     LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH,
     MAX_RETRIES,
@@ -89,6 +93,10 @@ class EzvizLocalSdkEcdhHandshakePacket:
     nonce_raw: bytes = field(repr=False)
     encrypted_key: bytes = field(repr=False)
     peer_public_key_der: bytes = field(repr=False)
+    ciphertext: bytes = field(repr=False)
+    trailer: bytes = field(repr=False)
+    authenticated_header: bytes = field(repr=False)
+    outer_prefix: bytes = field(repr=False)
     packet_offset: int
 
 
@@ -96,11 +104,13 @@ class EzvizLocalSdkEcdhHandshakePacket:
 class EzvizLocalSdkEcdhDataPacket:
     """Parsed ``$\x02`` encrypted data packet."""
 
+    header_length: int
     payload_length: int
     subtype: int
     nonce_raw: bytes = field(repr=False)
     ciphertext: bytes = field(repr=False)
     trailer: bytes = field(repr=False)
+    authenticated_header: bytes = field(repr=False)
     outer_prefix: bytes = field(repr=False)
 
 
@@ -131,43 +141,61 @@ def generate_ezviz_local_sdk_ecdh_keypair() -> EzvizLocalSdkEcdhKeyPair:
     )
 
 
-def parse_ezviz_local_sdk_ecdh_handshake_packet(
+def parse_ezviz_local_sdk_ecdh_handshake_packet(  # noqa: PLR0911
     data: bytes,
 ) -> EzvizLocalSdkEcdhHandshakePacket | None:
     """Parse a local SDK ECDH ``$\x01`` handshake packet from a media payload."""
-    packet_offset = data.find(LOCAL_SDK_ECDH_HANDSHAKE_MARKER)
-    if packet_offset < 0:
+    if data.startswith(LOCAL_SDK_ECDH_HANDSHAKE_MARKER):
+        packet_offset = 0
+    elif data[LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH:].startswith(
+        LOCAL_SDK_ECDH_HANDSHAKE_MARKER
+    ):
+        packet_offset = LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH
+    else:
         return None
 
     packet = data[packet_offset:]
-    if len(packet) < LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET:
+    if len(packet) < LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET:
         return None
     if packet[0] != LOCAL_SDK_ECDH_MAGIC or packet[1] != LOCAL_SDK_ECDH_HANDSHAKE_TYPE:
         return None
-    if len(packet) > 5 and packet[5] != LOCAL_SDK_ECDH_PACKET_MARKER:
-        return None
 
     header_length = packet[2]
-    encrypted_key_offset = LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET + header_length
-    peer_public_key_offset = LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET + header_length
+    header_base = header_length
+    encrypted_key_offset = LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET + header_base
+    peer_public_key_offset = LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET + header_base
     peer_public_key_end = peer_public_key_offset + LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH
     encrypted_key_end = encrypted_key_offset + LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH
-    if len(packet) < max(encrypted_key_end, peer_public_key_end):
+    if len(packet) < peer_public_key_end + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH:
+        return None
+    if packet[header_base + 5] != LOCAL_SDK_ECDH_PACKET_MARKER:
+        return None
+    if packet[header_base + 6] != LOCAL_SDK_ECDH_HANDSHAKE_SUBTYPE:
         return None
 
-    payload_length = int.from_bytes(packet[3:5], "big")
+    payload_length = int.from_bytes(packet[header_base + 3 : header_base + 5], "big")
+    ciphertext_end = peer_public_key_end + payload_length
+    packet_end = ciphertext_end + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH
+    if len(packet) != packet_end:
+        return None
     return EzvizLocalSdkEcdhHandshakePacket(
         header_length=header_length,
         payload_length=payload_length,
-        subtype=packet[6] if len(packet) > 6 else 0,
-        nonce_raw=packet[7:11],
+        subtype=packet[header_base + 6],
+        nonce_raw=packet[header_base + 7 : header_base + 11],
         encrypted_key=packet[encrypted_key_offset:encrypted_key_end],
         peer_public_key_der=packet[peer_public_key_offset:peer_public_key_end],
+        ciphertext=packet[peer_public_key_end:ciphertext_end],
+        trailer=packet[ciphertext_end:packet_end],
+        authenticated_header=packet[:peer_public_key_end],
+        outer_prefix=data[:packet_offset],
         packet_offset=packet_offset,
     )
 
 
-def parse_ezviz_local_sdk_ecdh_data_packet(data: bytes) -> EzvizLocalSdkEcdhDataPacket | None:
+def parse_ezviz_local_sdk_ecdh_data_packet(  # noqa: PLR0911
+    data: bytes,
+) -> EzvizLocalSdkEcdhDataPacket | None:
     """Parse a local SDK ECDH ``$\x02`` encrypted data packet.
 
     The media payload usually has a 4-byte outer prefix before the inner ECDH
@@ -190,22 +218,30 @@ def parse_ezviz_local_sdk_ecdh_data_packet(data: bytes) -> EzvizLocalSdkEcdhData
     if packet[0] != LOCAL_SDK_ECDH_MAGIC or packet[1] != LOCAL_SDK_ECDH_DATA_TYPE:
         return None
 
-    payload_length = int.from_bytes(packet[3:5], "big")
-    ciphertext_offset = LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET
+    header_length = packet[2]
+    header_base = header_length
+    ciphertext_offset = LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET + header_base
+    if len(packet) < ciphertext_offset + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH:
+        return None
+    payload_length = int.from_bytes(packet[header_base + 3 : header_base + 5], "big")
     ciphertext_end = ciphertext_offset + payload_length
-    if len(packet) < ciphertext_end + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH:
+    packet_end = ciphertext_end + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH
+    if len(packet) != packet_end:
         return None
     ciphertext = packet[ciphertext_offset:ciphertext_end]
-    trailer = packet[ciphertext_end : ciphertext_end + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH]
+    trailer = packet[ciphertext_end:packet_end]
     return EzvizLocalSdkEcdhDataPacket(
+        header_length=header_length,
         payload_length=payload_length,
-        subtype=packet[6],
+        subtype=packet[header_base + 6],
         nonce_raw=packet[
-            LOCAL_SDK_ECDH_DATA_NONCE_OFFSET : LOCAL_SDK_ECDH_DATA_NONCE_OFFSET
+            LOCAL_SDK_ECDH_DATA_NONCE_OFFSET + header_base : LOCAL_SDK_ECDH_DATA_NONCE_OFFSET
+            + header_base
             + LOCAL_SDK_ECDH_NONCE_LENGTH
         ],
         ciphertext=ciphertext,
         trailer=trailer,
+        authenticated_header=packet[:ciphertext_offset],
         outer_prefix=outer_prefix,
     )
 
@@ -253,13 +289,50 @@ def derive_ezviz_local_sdk_ecdh_chacha20_key(
     return AES.new(shared_secret, AES.MODE_ECB).decrypt(encrypted_key)
 
 
+def _ezviz_local_sdk_ecdh_verification_input(
+    authenticated_header: bytes,
+    ciphertext: bytes,
+) -> bytes:
+    """Build the native eight-byte HMAC input from the two packet CRC32s."""
+    crc_text = f"{zlib.crc32(authenticated_header)}{zlib.crc32(ciphertext)}".encode()
+    # The Android native library passes exactly eight bytes to HMAC-SHA256,
+    # including NUL padding when the decimal CRC text is shorter.  Keep this
+    # wire-compatible rather than silently strengthening a protocol peer
+    # would not be able to reproduce.
+    return crc_text[:8].ljust(8, b"\x00")
+
+
+def _verify_ezviz_local_sdk_ecdh_packet(
+    key: bytes,
+    authenticated_header: bytes,
+    ciphertext: bytes,
+    trailer: bytes,
+) -> None:
+    """Verify the native HMAC-SHA256 packet trailer before decryption."""
+    if len(key) != LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH:
+        raise PyEzvizError("EZVIZ local SDK ECDH verification key must be 32 bytes")
+    expected = hmac.new(
+        key,
+        _ezviz_local_sdk_ecdh_verification_input(authenticated_header, ciphertext),
+        hashlib.sha256,
+    ).digest()
+    if not hmac.compare_digest(trailer, expected):
+        raise PyEzvizError("EZVIZ local SDK ECDH packet authentication failed")
+
+
 def decrypt_ezviz_local_sdk_ecdh_data_packet(
     chacha20_key: bytes,
     packet: EzvizLocalSdkEcdhDataPacket,
 ) -> bytes:
-    """Decrypt a parsed local SDK ECDH data packet."""
+    """Authenticate and decrypt a parsed local SDK ECDH data packet."""
     if len(chacha20_key) != LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH:
         raise PyEzvizError("EZVIZ local SDK ECDH ChaCha20 key must be 32 bytes")
+    _verify_ezviz_local_sdk_ecdh_packet(
+        chacha20_key,
+        packet.authenticated_header,
+        packet.ciphertext,
+        packet.trailer,
+    )
     return ChaCha20.new(
         key=chacha20_key,
         nonce=ezviz_local_sdk_ecdh_chacha20_nonce(packet.nonce_raw),
@@ -284,6 +357,8 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._chacha20_key: bytes | None = None
         self._mpeg_started = False
         self._pending = bytearray()
+        self._highest_sequence: int | None = None
+        self._seen_sequences: set[int] = set()
 
     @property
     def keys_derived(self) -> bool:
@@ -307,11 +382,23 @@ class EzvizLocalSdkEcdhStreamDecoder:
                 self.private_key,
                 handshake.peer_public_key_der,
             )
-            self._chacha20_key = derive_ezviz_local_sdk_ecdh_chacha20_key(
+            _verify_ezviz_local_sdk_ecdh_packet(
                 shared_secret,
-                handshake.encrypted_key,
+                handshake.authenticated_header,
+                handshake.ciphertext,
+                handshake.trailer,
             )
-            return b""
+            chacha20_key = derive_ezviz_local_sdk_ecdh_chacha20_key(
+                shared_secret, handshake.encrypted_key
+            )
+            self._chacha20_key = chacha20_key
+            if not handshake.ciphertext:
+                return b""
+            plain = ChaCha20.new(
+                key=chacha20_key,
+                nonce=ezviz_local_sdk_ecdh_chacha20_nonce(handshake.nonce_raw),
+            ).decrypt(handshake.ciphertext)
+            return self._absorb_plain(plain)
 
         if channel != self.data_channel:
             return b""
@@ -319,15 +406,40 @@ class EzvizLocalSdkEcdhStreamDecoder:
         if packet is None:
             return b""
         plain = decrypt_ezviz_local_sdk_ecdh_data_packet(self._chacha20_key, packet)
+        self._record_sequence(packet.nonce_raw)
         return self._absorb_plain(plain)
 
+    def _record_sequence(self, nonce_raw: bytes) -> None:
+        """Apply the native four-packet acceptance window to an authenticated packet."""
+        sequence = int.from_bytes(nonce_raw, "big")
+        if sequence == 0:
+            raise PyEzvizError("EZVIZ local SDK ECDH packet sequence is zero")
+        if self._highest_sequence is None:
+            self._highest_sequence = sequence
+            self._seen_sequences = {sequence}
+            return
+
+        highest = self._highest_sequence
+        if sequence > highest:
+            self._highest_sequence = sequence
+            self._seen_sequences = {
+                seen
+                for seen in self._seen_sequences
+                if sequence - seen < LOCAL_SDK_ECDH_PACKET_WINDOW_SIZE
+            }
+        elif highest - sequence >= LOCAL_SDK_ECDH_PACKET_WINDOW_SIZE:
+            raise PyEzvizError("EZVIZ local SDK ECDH packet sequence is outside the window")
+        elif sequence in self._seen_sequences:
+            raise PyEzvizError("EZVIZ local SDK ECDH packet sequence was replayed")
+        self._seen_sequences.add(sequence)
+
     @staticmethod
-    def _find_keyframe(data: bytes) -> int:
+    def _find_keyframe(data: bytes, start: int = 0) -> int:
         candidates = (
-            data.find(LOCAL_SDK_ECDH_HEVC_VPS_4B),
-            data.find(LOCAL_SDK_ECDH_HEVC_VPS_3B),
-            data.find(LOCAL_SDK_ECDH_H264_SPS_4B),
-            data.find(LOCAL_SDK_ECDH_H264_SPS_3B),
+            data.find(LOCAL_SDK_ECDH_HEVC_VPS_4B, start),
+            data.find(LOCAL_SDK_ECDH_HEVC_VPS_3B, start),
+            data.find(LOCAL_SDK_ECDH_H264_SPS_4B, start),
+            data.find(LOCAL_SDK_ECDH_H264_SPS_3B, start),
         )
         valid = [candidate for candidate in candidates if candidate >= 0]
         return min(valid) if valid else -1
@@ -341,25 +453,26 @@ class EzvizLocalSdkEcdhStreamDecoder:
 
         self._pending.extend(plain)
         buffered = bytes(self._pending)
-        keyframe_offset = self._find_keyframe(buffered)
-        if keyframe_offset >= 0:
-            pack_offset = buffered.rfind(LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER, 0, keyframe_offset)
-            if (
-                pack_offset >= 0
-                and keyframe_offset - pack_offset <= LOCAL_SDK_ECDH_MAX_PACK_LOOKBACK_BEFORE_KEYFRAME
-            ):
-                start = pack_offset
-            else:
-                start = keyframe_offset
-            self._mpeg_started = True
-            self._pending.clear()
-            return buffered[start:]
+        first_pack_offset = buffered.find(LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER)
+        if first_pack_offset >= 0:
+            keyframe_offset = self._find_keyframe(
+                buffered,
+                first_pack_offset + len(LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER),
+            )
+            if keyframe_offset >= 0:
+                pack_offset = buffered.rfind(
+                    LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER, 0, keyframe_offset
+                )
+                self._mpeg_started = True
+                self._pending.clear()
+                return buffered[pack_offset:]
 
         if len(self._pending) > self.max_pre_keyframe_bytes:
-            self._mpeg_started = True
-            out = bytes(self._pending)
             self._pending.clear()
-            return out
+            raise PyEzvizError(
+                "EZVIZ local SDK ECDH stream did not contain an MPEG-PS pack "
+                "header followed by an H.264/HEVC keyframe within the configured limit"
+            )
         return b""
 
 

@@ -18,6 +18,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 from Crypto.Cipher import AES
 
 from .exceptions import DeviceException, PyEzvizError
+from .media import (
+    LegacyPacketSource,
+    MediaPacket,
+    MediaPacketMetadata,
+    MediaPacketSourceAdapter,
+)
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
@@ -105,6 +111,29 @@ class VtmPacket:
             VtmChannel.ENCRYPTED_MESSAGE,
             VtmChannel.ENCRYPTED_STREAM,
         )
+
+
+def vtm_packet_to_media_packet(packet: VtmPacket) -> MediaPacket:
+    """Normalize a cloud VTM packet without changing its wire model."""
+
+    return MediaPacket(
+        body=packet.body,
+        metadata=MediaPacketMetadata(
+            source="cloud_vtm",
+            channel=packet.channel,
+            encrypted=packet.encrypted,
+            sequence=packet.sequence,
+            message_code=packet.message_code,
+        ),
+    )
+
+
+def vtm_media_packet_source(
+    stream: LegacyPacketSource[VtmPacket],
+) -> MediaPacketSourceAdapter[VtmPacket]:
+    """Adapt an existing VTM stream to the shared media packet contract."""
+
+    return MediaPacketSourceAdapter(stream, vtm_packet_to_media_packet)
 
 
 @dataclass(frozen=True)

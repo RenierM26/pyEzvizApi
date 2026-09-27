@@ -47,6 +47,12 @@ from .hcnetsdk import (
     hcnetsdk_command_port_control_template_from_frame,
     iter_hcnetsdk_real_data_mpegps,
 )
+from .media import (
+    LegacyPacketSource,
+    MediaPacket,
+    MediaPacketMetadata,
+    MediaPacketSourceAdapter,
+)
 from .stream import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
@@ -101,6 +107,28 @@ class EzvizLocalStreamPacket:
     body: bytes
     encrypted: bool = False
     prefix: bytes = b""
+
+
+def local_stream_packet_to_media_packet(packet: EzvizLocalStreamPacket) -> MediaPacket:
+    """Normalize a local SDK packet without changing its transport model."""
+
+    return MediaPacket(
+        body=packet.body,
+        metadata=MediaPacketMetadata(
+            source="local_sdk",
+            channel=packet.channel,
+            encrypted=packet.encrypted,
+            attributes={"prefix_length": len(packet.prefix)},
+        ),
+    )
+
+
+def local_media_packet_source(
+    stream: LegacyPacketSource[EzvizLocalStreamPacket],
+) -> MediaPacketSourceAdapter[EzvizLocalStreamPacket]:
+    """Adapt an existing local SDK stream to the shared packet contract."""
+
+    return MediaPacketSourceAdapter(stream, local_stream_packet_to_media_packet)
 
 
 @dataclass(frozen=True)
@@ -6624,6 +6652,8 @@ _LOCAL_STREAM_ECDH_EXPORTS = {
     "derive_ezviz_local_sdk_ecdh_shared_secret",
     "ezviz_local_sdk_ecdh_chacha20_nonce",
     "generate_ezviz_local_sdk_ecdh_keypair",
+    "local_ecdh_media_packet_source",
+    "local_ecdh_packet_to_media_packet",
     "open_local_sdk_ecdh_stream",
     "open_local_sdk_ecdh_stream_from_client",
     "parse_ezviz_local_sdk_ecdh_data_packet",

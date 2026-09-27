@@ -80,6 +80,12 @@ from .local_stream import (
     copy_local_stream_to_mpegts,
     get_local_sdk_stream_credentials_from_client,
 )
+from .media import (
+    LegacyPacketSource,
+    MediaPacket,
+    MediaPacketMetadata,
+    MediaPacketSourceAdapter,
+)
 from .stream import rtp_payload
 
 
@@ -134,6 +140,25 @@ class EzvizLocalSdkEcdhStreamPacket:
     def length(self) -> int:
         """Return the decoded payload length."""
         return len(self.body)
+
+
+def local_ecdh_packet_to_media_packet(
+    packet: EzvizLocalSdkEcdhStreamPacket,
+) -> MediaPacket:
+    """Normalize a decoded local ECDH packet without changing its wire model."""
+
+    return MediaPacket(
+        body=packet.body,
+        metadata=MediaPacketMetadata(source="local_ecdh", channel=packet.channel),
+    )
+
+
+def local_ecdh_media_packet_source(
+    stream: LegacyPacketSource[EzvizLocalSdkEcdhStreamPacket],
+) -> MediaPacketSourceAdapter[EzvizLocalSdkEcdhStreamPacket]:
+    """Adapt an existing local ECDH stream to the shared packet contract."""
+
+    return MediaPacketSourceAdapter(stream, local_ecdh_packet_to_media_packet)
 
 
 def generate_ezviz_local_sdk_ecdh_keypair() -> EzvizLocalSdkEcdhKeyPair:

@@ -39,6 +39,7 @@ from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
 from .exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .media import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
@@ -2549,6 +2550,36 @@ class HcNetSdkRealDataPacket:
     def payload_kind(self) -> str:
         """Return a small, non-secret classification of the callback body."""
         return classify_hcnetsdk_real_data_payload(self.body)
+
+
+def hcnetsdk_real_data_to_media_packet(
+    packet: HcNetSdkRealDataPacket,
+) -> MediaPacket:
+    """Normalize an HCNetSDK callback packet without changing its SDK model."""
+
+    return MediaPacket(
+        body=packet.body,
+        metadata=MediaPacketMetadata(
+            source="hcnetsdk",
+            data_type=packet.data_type,
+            attributes={
+                "real_handle": packet.real_handle,
+                "payload_kind": packet.payload_kind,
+            },
+        ),
+    )
+
+
+def hcnetsdk_media_packet_source(
+    packets: Iterable[HcNetSdkRealDataPacket],
+) -> IterableMediaPacketSource[HcNetSdkRealDataPacket]:
+    """Adapt HCNetSDK callback media packets to the shared packet contract."""
+
+    return IterableMediaPacketSource(
+        packets,
+        hcnetsdk_real_data_to_media_packet,
+        predicate=lambda packet: packet.is_media,
+    )
 
 
 @dataclass(frozen=True)

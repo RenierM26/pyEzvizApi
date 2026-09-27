@@ -1040,7 +1040,13 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
             first_media=None,
         )
 
-    def _start_keepalives(self, step: HcNetSdkCommandPortSocketStep) -> None:
+    def _start_keepalives(
+        self,
+        step: HcNetSdkCommandPortSocketStep,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         if self._media_client is None or not step.keepalive_frames:
             return
         if self._keepalive_thread is not None:
@@ -1067,7 +1073,9 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         _hcnetsdk_command_port_frame_with_client_ip(
                             frame,
                             self.local_ip,
-                        )
+                        ),
+                        deadline=deadline,
+                        monotonic=monotonic,
                     )
                 except Exception as err:
                     self.keepalive_events.append(
@@ -1213,7 +1221,11 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                 media_step = step
                 media_step_index = step_index
                 if step.drain_media_before_next_step_seconds:
-                    self._start_keepalives(step)
+                    self._start_keepalives(
+                        step,
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
                 if should_read_first_media and step.read_first_media_immediately:
                     self._read_first_media(
                         step,
@@ -1233,7 +1245,11 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         if self._media_client is None or media_step is None or media_step_index is None:
             raise PyEzvizError("HCNetSDK command-port socket plan has no media socket")
 
-        self._start_keepalives(media_step)
+        self._start_keepalives(
+            media_step,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
         self.bootstrap = HcNetSdkCommandPortStreamBootstrap(
             exchanges=tuple(exchanges),
             first_media=None,

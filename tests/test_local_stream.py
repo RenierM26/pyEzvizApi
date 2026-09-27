@@ -736,6 +736,45 @@ def test_hcnetsdk_background_keepalive_uses_updated_capture_deadline() -> None:
     ]
 
 
+def test_hcnetsdk_close_interrupts_in_flight_keepalive_before_join() -> None:
+    send_started = Event()
+    socket_closed = Event()
+    max_elapsed = 0.5
+
+    class BlockingMediaClient:
+        def send_command_frame(self, _frame: bytes, **_kwargs: object) -> None:
+            send_started.set()
+            assert socket_closed.wait(timeout=1.0)
+
+        def close(self) -> None:
+            socket_closed.set()
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(build_hcnetsdk_tcp_frame(b"keepalive"),),
+        keepalive_initial_delay_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    client = BlockingMediaClient()
+    stream._media_client = cast(Any, client)  # noqa: SLF001
+    stream._clients = [cast(Any, client)]  # noqa: SLF001
+    stream._start_keepalives(step)  # noqa: SLF001
+    assert send_started.wait(timeout=1.0)
+
+    started_at = time.monotonic()
+    stream.close()
+    elapsed = time.monotonic() - started_at
+
+    assert socket_closed.is_set()
+    assert elapsed < max_elapsed
+    assert stream._keepalive_thread is None  # noqa: SLF001
+
+
 def test_hcnetsdk_packet_limited_capture_clears_keepalive_deadline() -> None:
     media_step = HcNetSdkCommandPortSocketStep(
         (build_hcnetsdk_tcp_frame(b"preview"),),

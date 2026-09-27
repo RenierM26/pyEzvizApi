@@ -952,13 +952,13 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         """Close all command-port sockets opened by the plan."""
         self._keepalive_stop.set()
         self._set_keepalive_deadline(None, time.monotonic)
-        if self._keepalive_thread is not None:
-            self._keepalive_thread.join(timeout=2.0)
-            self._keepalive_thread = None
         for client in reversed(self._clients):
             client.close()
         self._clients.clear()
         self._media_client = None
+        if self._keepalive_thread is not None:
+            self._keepalive_thread.join(timeout=2.0)
+            self._keepalive_thread = None
 
     def _new_client(
         self,
@@ -1059,9 +1059,9 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         self._set_keepalive_deadline(deadline, monotonic)
         if self._keepalive_thread is not None:
             return
+        media_client = self._media_client
 
         def send_keepalives() -> None:
-            assert self._media_client is not None
             started_at = time.monotonic()
             initial_delay = (
                 step.keepalive_interval_seconds
@@ -1080,7 +1080,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                     with self._keepalive_deadline_lock:
                         send_deadline = self._keepalive_deadline
                         send_monotonic = self._keepalive_monotonic
-                    self._media_client.send_command_frame(
+                    media_client.send_command_frame(
                         _hcnetsdk_command_port_frame_with_client_ip(
                             frame,
                             self.local_ip,

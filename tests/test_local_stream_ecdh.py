@@ -98,11 +98,13 @@ def _public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:
 
 
 def _encrypt_session_key(shared_secret: bytes, session_key: bytes) -> bytes:
-    cipher = AES.new(  # codeql[py/weak-cryptographic-algorithm]
+    # codeql[py/weak-cryptographic-algorithm]
+    cipher = AES.new(
         shared_secret,
         AES.MODE_ECB,
     )
-    return cipher.encrypt(session_key)  # codeql[py/weak-cryptographic-algorithm]
+    # codeql[py/weak-cryptographic-algorithm]
+    return cipher.encrypt(session_key)
 
 
 def _handshake_payload(

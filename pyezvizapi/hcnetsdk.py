@@ -9388,7 +9388,7 @@ def _create_reusable_source_connection(
         monotonic=monotonic,
     ):
         try:
-            attempt_timeout = _connect_attempt_timeout(
+            attempt_timeout, deadline_limits_attempt = _connect_attempt_settings(
                 timeout,
                 deadline=deadline,
                 monotonic=monotonic,
@@ -9414,16 +9414,20 @@ def _create_reusable_source_connection(
                     )
                     if concrete_source_address == source_address:
                         raise
+                    (
+                        concrete_timeout,
+                        deadline_limits_attempt,
+                    ) = _connect_attempt_settings(
+                        timeout,
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
                     return _connect_bound_source_socket(
                         family,
                         sock_type,
                         protocol,
                         target,
-                        _connect_attempt_timeout(
-                            timeout,
-                            deadline=deadline,
-                            monotonic=monotonic,
-                        ),
+                        concrete_timeout,
                         source_address=concrete_source_address,
                         exclusive=True,
                     )
@@ -9437,6 +9441,10 @@ def _create_reusable_source_connection(
                 exclusive=False,
             )
         except OSError as err:
+            if isinstance(err, TimeoutError) and deadline_limits_attempt:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK connect exceeded its deadline"
+                ) from err
             last_error = err
 
     if last_error is not None:
@@ -9444,18 +9452,21 @@ def _create_reusable_source_connection(
     raise OSError("getaddrinfo returned no addresses")
 
 
-def _connect_attempt_timeout(
+def _connect_attempt_settings(
     timeout: float | None,
     *,
     deadline: float | None,
     monotonic: Callable[[], float],
-) -> float | None:
-    """Return a per-attempt timeout from the current absolute deadline."""
+) -> tuple[float | None, bool]:
+    """Return the timeout and whether the absolute deadline constrains it."""
     if deadline is None:
-        return timeout
+        return timeout, False
     remaining = _remaining_timeout(deadline, monotonic)
     assert remaining is not None
-    return remaining if timeout is None else min(timeout, remaining)
+    return (
+        remaining if timeout is None else min(timeout, remaining),
+        timeout is None or remaining <= timeout,
+    )
 
 
 def _create_deadline_connection(

@@ -4555,16 +4555,65 @@ def test_source_connection_recomputes_timeout_between_addresses(
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
         ],
     )
-    clock = iter((0.0, 0.0, 0.4)).__next__
+    clock = iter((0.0, 0.0, 0.5)).__next__
 
     assert _create_reusable_source_connection(
         ("camera.example", 9010),
         1.0,
         source_address=("", 10103),
-        deadline=1.0,
+        deadline=1.1,
         monotonic=clock,
     ) is connected_socket
-    assert timeouts == [1.0, 0.6]
+    assert timeouts == pytest.approx([1.0, 0.6])
+
+
+def test_source_connection_final_timeout_uses_deadline_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float | None] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        del source_address, exclusive
+        timeouts.append(timeout)
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        False,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    clock = iter((0.0, 0.5, 1.5)).__next__
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="connect"):
+        _create_reusable_source_connection(
+            ("camera.example", 9010),
+            1.0,
+            source_address=("", 10103),
+            deadline=2.0,
+            monotonic=clock,
+        )
+
+    assert timeouts == [1.0, 0.5]
 
 
 def test_hostname_resolution_obeys_absolute_deadline(

@@ -128,7 +128,11 @@ def local_media_packet_source(
 ) -> MediaPacketSourceAdapter[EzvizLocalStreamPacket]:
     """Adapt an existing local SDK stream to the shared packet contract."""
 
-    return MediaPacketSourceAdapter(stream, local_stream_packet_to_media_packet)
+    return MediaPacketSourceAdapter(
+        stream,
+        local_stream_packet_to_media_packet,
+        duration_from_start=isinstance(stream, EzvizLocalSdkMediaStream),
+    )
 
 
 @dataclass(frozen=True)
@@ -685,6 +689,7 @@ class EzvizLocalSdkMediaStream:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[EzvizLocalStreamPacket]:
         """Yield local RTP payloads as MPEG-PS packet bodies."""
@@ -695,9 +700,13 @@ class EzvizLocalSdkMediaStream:
         if self._read_interrupted:
             raise PyEzvizError(_INTERRUPTED_LOCAL_STREAM_MESSAGE)
 
-        deadline: float | None = None
+        deadline = (
+            monotonic() + duration_seconds
+            if duration_from_start and duration_seconds is not None
+            else None
+        )
         if self.bootstrap is None:
-            self.start()
+            self.start(read_first_media=not duration_from_start)
 
         emitted = 0
         if self._first_media is not None:

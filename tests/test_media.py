@@ -55,10 +55,12 @@ class RecordingPacketStream[PacketT]:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[PacketT]:
         """Yield packets using the bounds supported by existing stream classes."""
 
+        del duration_from_start
         self.calls.append((max_packets, duration_seconds, monotonic))
         packets = self.packets if max_packets is None else self.packets[:max_packets]
         yield from packets
@@ -98,6 +100,13 @@ def test_common_decode_and_mux_option_validation() -> None:
     with pytest.raises(PyEzvizError, match="ffmpeg_path"):
         MediaMuxOptions(ffmpeg_path="")
     assert MediaMuxOptions(h264_clean_idr_wait_seconds=0).h264_clean_idr_wait_seconds == 0
+    with pytest.raises(PyEzvizError, match="cannot be combined"):
+        MediaMuxOptions(
+            h264_wait_for_clean_idr_window=True,
+            h264_trim_to_clean_idr_window=True,
+        )
+    with pytest.raises(PyEzvizError, match="requires h264_trim"):
+        MediaMuxOptions(h264_clean_idr_preroll_seconds=1.0)
 
 
 def test_cloud_vtm_packet_adapter_preserves_metadata() -> None:
@@ -220,6 +229,38 @@ def test_legacy_stream_adapter_enforces_max_bytes() -> None:
     assert [packet.body for packet in packets] == [b"abc"]
 
 
+def test_vtm_adapter_applies_duration_from_iteration_start() -> None:
+    """The cloud adapter requests and enforces a startup-inclusive deadline."""
+
+    class DeadlineStream:
+        duration_from_start: bool | None = None
+
+        def iter_packets(
+            self,
+            *,
+            max_packets: int | None = None,
+            duration_seconds: float | None = None,
+            duration_from_start: bool = False,
+            monotonic: Callable[[], float] = time.monotonic,
+        ) -> Iterator[VtmPacket]:
+            del max_packets, duration_seconds, monotonic
+            self.duration_from_start = duration_from_start
+            yield VtmPacket(1, 3, 1, 0, BODY)
+
+    stream = DeadlineStream()
+    clock = iter((0.0, 2.0)).__next__
+
+    packets = list(
+        vtm_media_packet_source(stream).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
+            monotonic=clock,
+        )
+    )
+
+    assert packets == []
+    assert stream.duration_from_start is True
+
+
 def test_legacy_stream_adapter_does_not_read_past_exact_byte_limit() -> None:
     """A filled byte budget terminates before requesting another live packet."""
 
@@ -229,9 +270,10 @@ def test_legacy_stream_adapter_does_not_read_past_exact_byte_limit() -> None:
             *,
             max_packets: int | None = None,
             duration_seconds: float | None = None,
+            duration_from_start: bool = False,
             monotonic: Callable[[], float] = time.monotonic,
         ) -> Iterator[VtmPacket]:
-            del max_packets, duration_seconds, monotonic
+            del max_packets, duration_seconds, duration_from_start, monotonic
             yield VtmPacket(1, 3, 1, 0, BODY)
             raise AssertionError("adapter advanced past the exact byte limit")
 

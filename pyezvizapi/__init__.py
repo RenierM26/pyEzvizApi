@@ -662,6 +662,7 @@ if TYPE_CHECKING:
     )
     from .media import (
         CaptureLimits,
+        DeadlineLegacyPacketSource,
         IterableMediaPacketSource,
         LegacyPacketSource,
         MediaDecodeOptions,
@@ -725,6 +726,7 @@ _EXPORTS = {
     "BatteryCameraNewWorkMode": "constants",
     "BatteryCameraWorkMode": "constants",
     "CaptureLimits": "media",
+    "DeadlineLegacyPacketSource": "media",
     "build_ezviz_local_sdk_ecdh_init_request_body": "local_stream",
     "DefenseModeType": "constants",
     "DeviceCatagories": "constants",

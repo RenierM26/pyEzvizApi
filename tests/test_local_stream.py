@@ -63,6 +63,7 @@ from pyezvizapi.local_stream import (
     get_local_sdk_stream_credentials_from_client,
     hcnetsdk_command_port_generated_plan_from_socket_plan,
     hcnetsdk_command_port_native_lan_live_view_plan,
+    local_media_packet_source,
     open_hcnetsdk_command_port_generated_multi_socket_stream,
     open_local_sdk_stream,
     open_local_sdk_stream_from_client,
@@ -78,6 +79,7 @@ from pyezvizapi.local_stream import (
     trim_hevc_annexb_to_first_clean_irap_window,
     trim_hevc_annexb_to_first_error_free_suffix,
 )
+from pyezvizapi.media import CaptureLimits
 
 FIRST_PREFIX = b"preface"
 STREAM_TIMEOUT = 3.0
@@ -315,6 +317,36 @@ def test_local_sdk_media_stream_bounds_blocking_read_after_first_packet() -> Non
     assert sdk.closed is True
     with pytest.raises(PyEzvizError, match=r"cannot resume after.*interrupted"):
         list(stream.iter_packets(max_packets=1))
+
+
+def test_local_sdk_media_stream_can_include_startup_in_duration() -> None:
+    """The shared adapter can bound startup without changing legacy defaults."""
+
+    class StartupDeadlineSdkClient(_FakeSdkClient):
+        read_called = False
+
+        def bootstrap_preview_from_fields(self, **kwargs: Any) -> Any:
+            self.bootstrap_calls.append(kwargs)
+            return SimpleNamespace(first_media=None)
+
+        def read_stream_frame_after_prefix(self, **kwargs: Any) -> Any:
+            self.read_called = True
+            return super().read_stream_frame_after_prefix(**kwargs)
+
+    sdk = StartupDeadlineSdkClient(_media(b"\x00\x00\x01\xbaabc"))
+    stream = EzvizLocalSdkMediaStream(sdk, _preview_request())  # type: ignore[arg-type]
+    times = iter((10.0, 10.0, 11.0))
+
+    packets = list(
+        local_media_packet_source(stream).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
+            monotonic=lambda: next(times),
+        )
+    )
+
+    assert packets == []
+    assert sdk.bootstrap_calls[0]["read_first_media"] is False
+    assert sdk.read_called is False
 
 
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:

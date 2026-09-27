@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import math
 import time
 from types import MappingProxyType
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from .exceptions import PyEzvizError
 
@@ -125,6 +125,18 @@ class MediaMuxOptions:
             raise PyEzvizError("h264_clean_idr_max_windows must be positive")
         if self.h264_clean_idr_wait_seconds < 0:
             raise PyEzvizError("h264_clean_idr_wait_seconds must be non-negative")
+        if self.h264_wait_for_clean_idr_window and (
+            self.h264_skip_initial_idr_windows
+            or self.h264_trim_to_clean_idr_window
+            or self.h264_clean_idr_preroll_seconds
+        ):
+            raise PyEzvizError(
+                "h264_wait_for_clean_idr_window cannot be combined with H.264 startup trim options"
+            )
+        if self.h264_clean_idr_preroll_seconds and not self.h264_trim_to_clean_idr_window:
+            raise PyEzvizError(
+                "h264_clean_idr_preroll_seconds requires h264_trim_to_clean_idr_window"
+            )
 
 
 @runtime_checkable
@@ -159,12 +171,30 @@ class LegacyPacketSource[PacketT](Protocol):
         raise NotImplementedError
 
 
+class DeadlineLegacyPacketSource[PacketT](Protocol):
+    """Legacy packet source that can include startup in its duration budget."""
+
+    @abstractmethod
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+        duration_seconds: float | None = None,
+        duration_from_start: bool = False,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> Iterator[PacketT]:
+        """Yield transport packets using an optional wall-clock duration."""
+
+        raise NotImplementedError
+
+
 @dataclass(frozen=True)
 class MediaPacketSourceAdapter[PacketT]:
     """Adapt an existing ``iter_packets`` stream without changing its API."""
 
     source: LegacyPacketSource[PacketT]
     converter: Callable[[PacketT], MediaPacket]
+    duration_from_start: bool = False
 
     def iter_media_packets(
         self,
@@ -175,13 +205,31 @@ class MediaPacketSourceAdapter[PacketT]:
         """Yield normalized packets from the wrapped transport stream."""
 
         selected_limits = limits or CaptureLimits()
-        emitted_bytes = 0
-        packets = self.source.iter_packets(
-            max_packets=selected_limits.max_packets,
-            duration_seconds=selected_limits.duration_seconds,
-            monotonic=monotonic,
+        deadline = (
+            monotonic() + selected_limits.duration_seconds
+            if self.duration_from_start and selected_limits.duration_seconds is not None
+            else None
         )
+        emitted_bytes = 0
+        if self.duration_from_start:
+            packets = cast(
+                DeadlineLegacyPacketSource[PacketT],
+                self.source,
+            ).iter_packets(
+                max_packets=selected_limits.max_packets,
+                duration_seconds=selected_limits.duration_seconds,
+                duration_from_start=True,
+                monotonic=monotonic,
+            )
+        else:
+            packets = self.source.iter_packets(
+                max_packets=selected_limits.max_packets,
+                duration_seconds=selected_limits.duration_seconds,
+                monotonic=monotonic,
+            )
         for packet in packets:
+            if deadline is not None and monotonic() >= deadline:
+                break
             normalized = self.converter(packet)
             if (
                 selected_limits.max_bytes is not None

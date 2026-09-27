@@ -19,7 +19,7 @@ from Crypto.Cipher import AES
 
 from .exceptions import DeviceException, PyEzvizError
 from .media import (
-    LegacyPacketSource,
+    DeadlineLegacyPacketSource,
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
@@ -129,11 +129,15 @@ def vtm_packet_to_media_packet(packet: VtmPacket) -> MediaPacket:
 
 
 def vtm_media_packet_source(
-    stream: LegacyPacketSource[VtmPacket],
+    stream: DeadlineLegacyPacketSource[VtmPacket],
 ) -> MediaPacketSourceAdapter[VtmPacket]:
     """Adapt an existing VTM stream to the shared media packet contract."""
 
-    return MediaPacketSourceAdapter(stream, vtm_packet_to_media_packet)
+    return MediaPacketSourceAdapter(
+        stream,
+        vtm_packet_to_media_packet,
+        duration_from_start=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -402,6 +406,7 @@ class VtmStreamClient:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         first_packet_timeout: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
@@ -422,7 +427,11 @@ class VtmStreamClient:
 
         seen = 0
         started_at = monotonic()
-        capture_deadline: float | None = None
+        capture_deadline = (
+            started_at + duration_seconds
+            if duration_from_start and duration_seconds is not None
+            else None
+        )
         first_packet_deadline = (
             None
             if first_packet_timeout is None

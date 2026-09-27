@@ -592,6 +592,8 @@ class EzvizLocalSdkMediaStream:
     proprietary HCNetSDK command protocol on port 8000.
     """
 
+    supports_deadline_iter_packets = True
+
     def __init__(
         self,
         sdk_client: EzvizLocalSdkClient,
@@ -707,6 +709,8 @@ class EzvizLocalSdkMediaStream:
 class HcNetSdkCommandPortMediaStream:
     """Port-8000 HCNetSDK media stream using caller-supplied command frames."""
 
+    supports_deadline_iter_packets = True
+
     def __init__(
         self,
         command_client: HcNetSdkCommandPortClient,
@@ -815,6 +819,8 @@ class HcNetSdkCommandPortMediaStream:
 
 class HcNetSdkCommandPortMultiSocketMediaStream:
     """Port-8000 stream using the app's native multi-socket command pattern."""
+
+    supports_deadline_iter_packets = True
 
     def __init__(
         self,
@@ -1155,6 +1161,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
 
 class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
     """Port-8000 stream that logs in and renders a generated socket plan."""
+
+    supports_deadline_iter_packets = True
 
     def __init__(
         self,
@@ -6442,15 +6450,7 @@ def _iter_local_stream_payloads(
     duration_seconds: float | None,
     monotonic: Callable[[], float],
 ) -> Iterator[bytes]:
-    if isinstance(
-        stream,
-        (
-            EzvizLocalSdkMediaStream,
-            HcNetSdkCommandPortMediaStream,
-            HcNetSdkCommandPortMultiSocketMediaStream,
-            HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
-        ),
-    ):
+    if getattr(stream, "supports_deadline_iter_packets", False):
         for packet in stream.iter_packets(
             max_packets=max_packets,
             duration_seconds=duration_seconds,

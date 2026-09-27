@@ -346,6 +346,45 @@ def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:
     assert elapsed < max_elapsed
 
 
+def test_iterable_source_duration_does_not_wait_for_blocking_cancel() -> None:
+    """A cancellation callback cannot extend a duration-bounded capture."""
+
+    worker_release = Event()
+    cancel_started = Event()
+    cancel_release = Event()
+    closed = Event()
+    max_elapsed = 0.5
+
+    def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
+        try:
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+            worker_release.wait()
+            yield HcNetSdkRealDataPacket(1, HcNetSdkRealDataType.STREAM_DATA, BODY)
+        finally:
+            closed.set()
+
+    def cancel() -> None:
+        cancel_started.set()
+        cancel_release.wait()
+        worker_release.set()
+
+    started_at = time.monotonic()
+    packets = list(
+        hcnetsdk_media_packet_source(
+            callback_packets(),
+            cancel=cancel,
+        ).iter_media_packets(limits=CaptureLimits(duration_seconds=0.02))
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert [packet.body for packet in packets] == [BODY]
+    assert cancel_started.is_set()
+    assert elapsed < max_elapsed
+
+    cancel_release.set()
+    assert closed.wait(timeout=1.0)
+
+
 def test_iterable_source_duration_requires_cancellation_callback() -> None:
     """A bounded capture cannot start a worker it has no way to interrupt."""
 

@@ -28,6 +28,7 @@ import json
 import math
 from queue import Empty, Queue
 import re
+import select
 import socket
 import ssl
 import sys
@@ -8751,6 +8752,21 @@ class _DeadlineBoundRecvSocket:
             if self._configured_timeout is None
             else min(self._configured_timeout, remaining)
         )
+        readable = _wait_for_socket_io(
+            self._sock,
+            readable=True,
+            timeout=effective_timeout,
+        )
+        if readable is not None:
+            if not readable:
+                if deadline_limits_receive:
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "EZVIZ local SDK frame read exceeded its deadline"
+                    )
+                raise TimeoutError("timed out")
+            return self._sock.recv(length)
+
+        previous_timeout = self._sock.gettimeout()
         self._sock.settimeout(effective_timeout)
         try:
             return self._sock.recv(length)
@@ -8760,6 +8776,32 @@ class _DeadlineBoundRecvSocket:
                     "EZVIZ local SDK frame read exceeded its deadline"
                 ) from err
             raise
+        finally:
+            self._sock.settimeout(previous_timeout)
+
+
+def _wait_for_socket_io(
+    sock: Any,
+    *,
+    readable: bool,
+    timeout: float,
+) -> bool | None:
+    """Wait for real socket readiness without changing its shared timeout."""
+    try:
+        file_descriptor = sock.fileno()
+    except (AttributeError, TypeError):
+        return None
+    if file_descriptor < 0:
+        raise OSError(errno.EBADF, "Bad file descriptor")
+    read_list = [sock] if readable else []
+    write_list = [] if readable else [sock]
+    ready_read, ready_write, _ = select.select(
+        read_list,
+        write_list,
+        [],
+        timeout,
+    )
+    return bool(ready_read if readable else ready_write)
 
 
 def _remaining_timeout(
@@ -8803,6 +8845,21 @@ def _send_all_with_timeout(
     deadline_limits_write = deadline is not None and (
         previous_timeout is None or effective_timeout <= previous_timeout
     )
+    writable = _wait_for_socket_io(
+        sock,
+        readable=False,
+        timeout=write_timeout,
+    )
+    if writable is not None:
+        if not writable:
+            if deadline_limits_write:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                )
+            raise TimeoutError("timed out")
+        _send_all(sock, data)
+        return
+
     sock.settimeout(write_timeout)
     try:
         _send_all(sock, data)
@@ -8928,14 +8985,10 @@ class EzvizLocalSdkClient:
                 configured_timeout=previous_timeout,
                 monotonic=monotonic,
             )
-        try:
-            response = read_ezviz_local_sdk_frame(
-                read_socket,
-                trailer_length=self.response_trailer_length,
-            )
-        finally:
-            if effective_timeout is not None:
-                sock.settimeout(previous_timeout)
+        response = read_ezviz_local_sdk_frame(
+            read_socket,
+            trailer_length=self.response_trailer_length,
+        )
         return EzvizLocalSdkExchange(request=request, response=response)
 
     def bootstrap_preview(
@@ -9132,13 +9185,10 @@ class EzvizLocalSdkClient:
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
-        try:
-            return read_ezviz_interleaved_rtp_frame_after_prefix(
-                deadline_socket,
-                max_prefix_bytes=max_prefix_bytes,
-            )
-        finally:
-            sock.settimeout(previous_timeout)
+        return read_ezviz_interleaved_rtp_frame_after_prefix(
+            deadline_socket,
+            max_prefix_bytes=max_prefix_bytes,
+        )
 
     def _command(
         self,
@@ -10020,7 +10070,8 @@ class HcNetSdkCommandPortClient:
         self.socket_factory = socket_factory
         self._socket: Any | None = None
         self._state_lock = Lock()
-        self._io_lock = Lock()
+        self._read_lock = Lock()
+        self._write_lock = Lock()
         self._allow_reconnect = True
 
     def __enter__(self) -> HcNetSdkCommandPortClient:
@@ -10120,7 +10171,7 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """Send one complete command-port frame."""
-        with self._io_lock:
+        with self._write_lock:
             self._send_command_frame_unlocked(
                 frame,
                 timeout=timeout,
@@ -10162,7 +10213,7 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkTcpFrame:
         """Read one non-media command-port response frame."""
-        with self._io_lock:
+        with self._read_lock:
             return self._read_tcp_frame_unlocked(
                 timeout=timeout,
                 deadline=deadline,
@@ -10198,10 +10249,7 @@ class HcNetSdkCommandPortClient:
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
-        try:
-            return read_hcnetsdk_tcp_frame(deadline_socket)
-        finally:
-            sock.settimeout(previous_timeout)
+        return read_hcnetsdk_tcp_frame(deadline_socket)
 
     def read_media_frame_after_prefix(
         self,
@@ -10212,7 +10260,7 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next command-port media frame."""
-        with self._io_lock:
+        with self._read_lock:
             return self._read_media_frame_after_prefix_unlocked(
                 max_prefix_bytes=max_prefix_bytes,
                 timeout=timeout,
@@ -10254,13 +10302,10 @@ class HcNetSdkCommandPortClient:
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
-        try:
-            return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
-                deadline_socket,
-                max_prefix_bytes=max_prefix_bytes,
-            )
-        finally:
-            sock.settimeout(previous_timeout)
+        return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+            deadline_socket,
+            max_prefix_bytes=max_prefix_bytes,
+        )
 
     def login(
         self,

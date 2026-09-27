@@ -4074,12 +4074,10 @@ def test_hcnetsdk_command_port_media_read_restores_socket_timeout() -> None:
     assert 1.0 in sock.timeout_history
 
 
-def test_hcnetsdk_command_port_serializes_media_reads_and_keepalive_writes() -> None:
+def test_hcnetsdk_command_port_allows_keepalive_during_media_read() -> None:
     expected_timeout = 3.0
+    keepalive = b"keepalive"
     read_started = Event()
-    release_read = Event()
-    write_attempted = Event()
-    write_sent = Event()
     errors: list[Exception] = []
     media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
     media_frame = (
@@ -4087,60 +4085,39 @@ def test_hcnetsdk_command_port_serializes_media_reads_and_keepalive_writes() -> 
         + (len(media_payload) + 4).to_bytes(2, "little")
         + media_payload
     )
-
-    class BlockingReadSocket(_FakeSocket):
-        read_released = False
-
-        def recv(self, length: int) -> bytes:
-            if not self.read_released:
-                read_started.set()
-                assert release_read.wait(timeout=1.0)
-                self.read_released = True
-            return super().recv(length)
-
-        def sendall(self, data: bytes) -> None:
-            write_sent.set()
-            super().sendall(data)
-
-    sock = BlockingReadSocket([media_frame])
-    sock.timeout = expected_timeout
+    client_sock, peer_sock = socket.socketpair()
+    client_sock.settimeout(expected_timeout)
+    peer_sock.settimeout(1.0)
     client = HcNetSdkCommandPortClient(
         HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
         timeout=expected_timeout,
-        socket_factory=lambda _address, _timeout: sock,
+        socket_factory=lambda _address, _timeout: client_sock,
     )
 
     def read_media() -> None:
+        read_started.set()
         try:
             client.read_media_frame_after_prefix(timeout=1.0)
         except Exception as err:
             errors.append(err)
 
-    def send_keepalive() -> None:
-        write_attempted.set()
-        try:
-            client.send_command_frame(b"keepalive", timeout=1.0)
-        except Exception as err:
-            errors.append(err)
-
     reader = Thread(target=read_media)
-    writer = Thread(target=send_keepalive)
     reader.start()
     assert read_started.wait(timeout=1.0)
-    writer.start()
-    assert write_attempted.wait(timeout=1.0)
     time.sleep(0.02)
-    assert not write_sent.is_set()
+    client.send_command_frame(keepalive, timeout=1.0)
 
-    release_read.set()
+    assert peer_sock.recv(len(keepalive)) == keepalive
+    assert reader.is_alive()
+
+    peer_sock.sendall(media_frame)
     reader.join(timeout=1.0)
-    writer.join(timeout=1.0)
 
     assert not reader.is_alive()
-    assert not writer.is_alive()
-    assert write_sent.is_set()
     assert errors == []
-    assert sock.timeout == expected_timeout
+    assert client_sock.gettimeout() == expected_timeout
+    client.close()
+    peer_sock.close()
 
 
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
@@ -4891,7 +4868,7 @@ def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
             monotonic=lambda: next(ticks),
         )
 
-    assert stream_sock.timeout_history == [5.0, 0.9, 0.4, 5.0]
+    assert stream_sock.timeout_history == [5.0, 0.9, 5.0, 0.4, 5.0]
 
 
 def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
@@ -4940,7 +4917,7 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
         )
 
     assert connect_timeouts == [1.0]
-    assert command_sock.timeout_history == [5.0, 0.75, 5.0, 5.0]
+    assert command_sock.timeout_history == [5.0, 0.75, 5.0]
 
 
 @pytest.mark.parametrize("client_kind", ("local", "command_port"))

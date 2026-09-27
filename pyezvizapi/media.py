@@ -24,6 +24,7 @@ MediaOutputFormat = Literal["mpegps", "mpegts"]
 MediaMetadataValue = str | int | float | bool | None
 _ITERATOR_STOPPED = object()
 _ITERATOR_TIMED_OUT = object()
+_ITERATOR_CLOSE_TIMEOUT_SECONDS = 0.05
 
 
 class _IteratorProducer[PacketT]:
@@ -89,12 +90,23 @@ class _IteratorProducer[PacketT]:
 
     def close(self) -> None:
         self._stop.set()
-        if self._cancel is not None:
-            with suppress(Exception):
-                self._cancel()
+        close_deadline = time.monotonic() + _ITERATOR_CLOSE_TIMEOUT_SECONDS
+        cancel_thread: Thread | None = None
+        cancel_callback = self._cancel
+        if cancel_callback is not None:
+            def cancel() -> None:
+                with suppress(Exception):
+                    cancel_callback()
+
+            cancel_thread = Thread(target=cancel, daemon=True)
+            cancel_thread.start()
         with suppress(Full):
             self._requests.put_nowait(object())
-        self._thread.join(timeout=0.01)
+        if cancel_thread is not None:
+            cancel_thread.join(
+                timeout=max(0.0, close_deadline - time.monotonic())
+            )
+        self._thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
 
 
 @dataclass

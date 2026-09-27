@@ -116,7 +116,7 @@ class PushWorker:
             try:
                 with self._lock:
                     if self._stopped.is_set():
-                        return
+                        break
                     self._attempts += 1
                     self._state = "connecting"
                     session = self.factory()
@@ -145,7 +145,7 @@ class PushWorker:
                 with self._lock:
                     self._session = None
             if self._stopped.wait(self.retry_delay):
-                return
+                break
         with self._lock:
             if self._state != "fatal":
                 self._state = "stopped"

@@ -95,14 +95,16 @@ def test_stop_timeout_keeps_cancellation_and_prevents_overlapping_restart() -> N
     worker = PushWorker(lambda: session)
     worker.start()
     assert session.running.wait(2)
-    try:
-        with pytest.raises(TimeoutError):
-            worker.stop(timeout=0.001)
-        with pytest.raises(RuntimeError, match="still stopping"):
-            worker.start()
-    finally:
-        release.set()
-        worker.stop()
+    with pytest.raises(TimeoutError):
+        worker.stop(timeout=0.001)
+    with pytest.raises(RuntimeError, match="still stopping"):
+        worker.start()
+
+    release.set()
+    assert worker._thread is not None  # noqa: SLF001
+    worker._thread.join(2)  # noqa: SLF001
+    assert not worker._thread.is_alive()  # noqa: SLF001
+    assert worker.diagnostics()["state"] == "stopped"
 
 
 def test_fatal_persistence_failure_stops_and_is_observable_without_retry():

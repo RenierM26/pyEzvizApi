@@ -1307,7 +1307,7 @@ def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> 
     generated_key = object()
     deadlines: list[float | None] = []
 
-    def generate(_bits: int) -> object:
+    def generate() -> object:
         now[0] = 5.0
         return generated_key
 
@@ -1315,7 +1315,10 @@ def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> 
         deadlines.append(cast(float | None, kwargs["deadline"]))
         raise EzvizLocalSdkDeadlineExpired
 
-    monkeypatch.setattr("pyezvizapi.local_stream.RSA.generate", generate)
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",
+        generate,
+    )
     monkeypatch.setattr(stream, "start", start)
 
     packets = list(

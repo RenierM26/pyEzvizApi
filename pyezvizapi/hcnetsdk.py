@@ -8234,6 +8234,15 @@ def hcnetsdk_command_port_public_key_der(rsa_key: Any) -> bytes:
     return bytes(DerSequence([public_key.n, public_key.e]).encode())
 
 
+def hcnetsdk_command_port_rsa_key() -> Any:
+    """Generate the protocol-mandated RSA key for command-port login."""
+    # The native SDK handshake requires 1024-bit RSA; larger generated keys are
+    # rejected by the device-side command-port login framing.
+    return RSA.generate(  # codeql[py/weak-key-size]
+        HCNETSDK_COMMAND_PORT_RSA_BITS
+    )
+
+
 def decode_hcnetsdk_command_port_login_challenge(
     response: HcNetSdkTcpFrame,
     rsa_key: Any,
@@ -10465,15 +10474,7 @@ class HcNetSdkCommandPortClient:
                     "socket does not expose getsockname()"
                 ) from err
 
-        key = (
-            rsa_key
-            if rsa_key is not None
-            # The native SDK handshake uses 1024-bit RSA; larger generated keys
-            # are rejected by the device-side command-port login framing.
-            else RSA.generate(  # codeql[py/weak-key-size]
-                HCNETSDK_COMMAND_PORT_RSA_BITS
-            )
-        )
+        key = rsa_key if rsa_key is not None else hcnetsdk_command_port_rsa_key()
         self.send_command_frame(
             hcnetsdk_command_port_login_request_frame(
                 hcnetsdk_command_port_public_key_der(key),

@@ -102,7 +102,9 @@ def _encrypt_session_key(shared_secret: bytes, session_key: bytes) -> bytes:
         shared_secret,
         AES.MODE_ECB,
     )
-    return cipher.encrypt(session_key)
+    return cipher.encrypt(  # codeql[py/weak-cryptographic-algorithm]
+        session_key
+    )
 
 
 def _handshake_payload(

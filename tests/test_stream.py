@@ -14,6 +14,7 @@ import requests
 import pyezvizapi
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    copy_cloud_playback_to_mpegps,
     copy_cloud_stream_to_mpegps,
     copy_cloud_stream_to_mpegts,
     get_cloud_stream_info,
@@ -57,9 +58,11 @@ from pyezvizapi.stream import (
 )
 
 BODY = b"abc"
+MPEG_PS_BYTES = b"\x00\x00\x01\xba"
 cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
 stream_module = importlib.import_module("pyezvizapi.stream")
 CAMERA_SERIAL_BYTES = b"CAM123"
+CLEAR_PLAYBACK_PAYLOAD = b"clear"
 KEEPALIVE_REQ = b"\x0a\x07ssn-123"
 PEER_HOST_BYTES = b"peerhost"
 PUBLIC_KEY_BYTES = b"pub"
@@ -173,6 +176,19 @@ def test_vtm_packet_roundtrip() -> None:
     assert decoded.message_code == VtmMessageCode.STREAMINFO_REQ
     assert decoded.body == BODY
     assert not decoded.encrypted
+
+
+def test_vtm_packet_allows_unknown_media_channel() -> None:
+    packet = b"\x24\x02\x00\x04\x00\x07\x00\x00" + MPEG_PS_BYTES
+
+    decoded = decode_vtm_packet(packet)
+    summary = summarize_vtm_packet(decoded)
+
+    assert decoded.channel == 0x02
+    assert decoded.body == MPEG_PS_BYTES
+    assert not decoded.encrypted
+    assert summary.channel_name is None
+    assert summary.transport == "MPEG_PS"
 
 
 def test_vtm_packet_sequence_wraps_to_16_bits() -> None:
@@ -1754,6 +1770,34 @@ def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
     assert sent_packets[-1].body == build_stream_keepalive_request("ssn-123")
 
 
+def test_vtm_stream_client_iter_packets_yields_unknown_media_channel() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    responses = [
+        encode_vtm_packet(
+            stream_info_body,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+        ),
+        encode_vtm_packet(
+            MPEG_PS_BYTES,
+            channel=0x02,
+            message_code=0,
+            sequence=8,
+        ),
+    ]
+    fake_socket = FakeVtmSocket(responses)
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(stream.iter_packets(max_packets=1))
+
+    assert len(packets) == 1
+    assert packets[0].channel == 0x02
+    assert packets[0].body == MPEG_PS_BYTES
+
+
 def test_vtm_stream_client_start_follows_redirect_response() -> None:
     redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
     redirect_key = "redirect-key"
@@ -2736,6 +2780,91 @@ def test_copy_cloud_stream_rejects_encrypted_vtm_packets(monkeypatch) -> None:
 
     with pytest.raises(PyEzvizError, match="Received encrypted VTM stream packet"):
         copy_cloud_stream_to_mpegps(_client(), "CAM123", io.BytesIO(), max_packets=1)
+
+
+def test_copy_cloud_playback_to_mpegps_preserves_encrypted_packet_error(
+    monkeypatch,
+) -> None:
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=5,
+                sequence=1,
+                message_code=0,
+                body=CLEAR_PLAYBACK_PAYLOAD,
+            )
+            yield VtmPacket(
+                channel=VtmChannel.ENCRYPTED_STREAM,
+                length=3,
+                sequence=2,
+                message_code=0,
+                body=b"enc",
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_playback_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    with pytest.raises(PyEzvizError, match="Received encrypted VTM stream packet"):
+        copy_cloud_playback_to_mpegps(
+            _client(),
+            "CAM123",
+            io.BytesIO(),
+            "20260709T222458Z",
+            "20260709T222531Z",
+        )
+
+
+def test_copy_cloud_playback_to_mpegps_accepts_timeout_after_payload(
+    monkeypatch,
+) -> None:
+    output = io.BytesIO()
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=5,
+                sequence=1,
+                message_code=0,
+                body=CLEAR_PLAYBACK_PAYLOAD,
+            )
+            raise DeviceException("stream ended")
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_playback_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    copy_cloud_playback_to_mpegps(
+        _client(),
+        "CAM123",
+        output,
+        "20260709T222458Z",
+        "20260709T222531Z",
+    )
+
+    assert output.getvalue() == CLEAR_PLAYBACK_PAYLOAD
 
 
 def test_open_cloud_mpegts_remux_process_builds_ffmpeg_command(monkeypatch) -> None:

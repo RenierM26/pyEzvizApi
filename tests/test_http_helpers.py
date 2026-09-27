@@ -2992,6 +2992,54 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_save_clip_cloud_playback_defaults_to_full_requested_range(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "www" / "front.ps"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_cloud_playback_to_mpegps(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        begin_time: str,
+        end_time: str,
+        **kwargs: Any,
+    ) -> None:
+        calls.append(
+            {
+                "client": source_client,
+                "serial": serial,
+                "begin_time": begin_time,
+                "end_time": end_time,
+                **kwargs,
+            }
+        )
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_playback_to_mpegps",
+        fake_copy_cloud_playback_to_mpegps,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud-playback",
+        output_format="mpegps",
+        cloud_playback_begin_time="20260709T222458Z",
+        cloud_playback_end_time="20260709T222531Z",
+    )
+
+    assert calls[0]["duration_seconds"] is None
+    assert calls[0]["max_packets"] is None
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert result["source"] == "cloud-playback"
+    assert result["duration_seconds"] is None
+
+
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "snapshots" / "front.jpg"

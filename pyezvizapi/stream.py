@@ -63,6 +63,7 @@ class VtmChannel(IntEnum):
 
     MESSAGE = 0x00
     STREAM = 0x01
+    STREAM_ALT = 0x02
     ENCRYPTED_MESSAGE = 0x0A
     ENCRYPTED_STREAM = 0x0B
 
@@ -194,11 +195,13 @@ class VtmStreamClient:
         *,
         timeout: float | None = 10.0,
         client_version: str = "v3.6.3.20221124",
+        stream_info_type: int | None = None,
         socket_factory: SocketFactory = socket.create_connection,
     ) -> None:
         self.stream_url = stream_url
         self.timeout = timeout
         self.client_version = client_version
+        self.stream_info_type = stream_info_type
         self._socket_factory = socket_factory
         self._socket: Any | None = None
         self._sequence = 0
@@ -290,6 +293,7 @@ class VtmStreamClient:
                 self.stream_url,
                 vtm_stream_key=vtm_stream_key,
                 client_version=self.client_version,
+                stream_info_type=self.stream_info_type,
             )
             self.send_packet(request)
 
@@ -367,7 +371,11 @@ class VtmStreamClient:
                     yield packet
                 continue
 
-            if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+            if packet.channel in (
+                VtmChannel.STREAM,
+                VtmChannel.STREAM_ALT,
+                VtmChannel.ENCRYPTED_STREAM,
+            ):
                 seen += 1
                 yield packet
                 continue
@@ -409,6 +417,7 @@ class VtmStreamClient:
                 self.stream_url,
                 vtm_stream_key=vtm_stream_key,
                 client_version=self.client_version,
+                stream_info_type=self.stream_info_type,
             )
             self.send_packet(request)
 
@@ -499,12 +508,8 @@ def decode_vtm_header(header: bytes) -> VtmPacket:
     if header[0] != VTM_MAGIC:
         raise PyEzvizError("VTM magic byte not found")
 
-    channel = header[1]
-    if channel not in {int(item) for item in VtmChannel}:
-        raise PyEzvizError(f"Unknown VTM channel: 0x{channel:02x}")
-
     return VtmPacket(
-        channel=channel,
+        channel=header[1],
         length=int.from_bytes(header[2:4], "big"),
         sequence=int.from_bytes(header[4:6], "big"),
         message_code=int.from_bytes(header[6:8], "big"),
@@ -532,9 +537,7 @@ def decode_vtm_packet(packet: bytes) -> VtmPacket:
 def summarize_vtm_packet(packet: VtmPacket, *, index: int = 0) -> VtmTraceEvent:
     """Build a body-free packet summary for debugging live VTM streams."""
 
-    transport = StreamTransport.UNKNOWN
-    if packet.channel == VtmChannel.STREAM:
-        transport = detect_transport(packet.body)
+    transport = detect_transport(packet.body)
 
     return VtmTraceEvent(
         index=index,
@@ -580,6 +583,46 @@ def build_vtm_url(
     return f"ysproto://{_format_url_host(host)}:{port}/live?{urlencode(params)}"
 
 
+def build_vtm_playback_url(  # noqa: PLR0913
+    host: str,
+    port: int,
+    serial: str,
+    stream_biz_url: str,
+    vtdu_token: str,
+    begin_time: str,
+    end_time: str,
+    *,
+    channel: int = 1,
+    client_type: int = 3,
+    lid: str | None = None,
+    timestamp_ms: int | None = None,
+) -> str:
+    """Build the ysproto playback URL used for VTM SD-card streams."""
+
+    if timestamp_ms is None:
+        timestamp_ms = int(time.time() * 1000)
+    biz = _parse_stream_biz_params(stream_biz_url)
+    params = {
+        **biz,
+        "dev": serial,
+        "chn": str(channel),
+        "stream": "1",
+        "begin": begin_time,
+        "end": end_time,
+        "serial": serial,
+        "cln": str(client_type),
+        "isp": "0",
+        "auth": "1",
+        "ssn": vtdu_token,
+        "rnd": str(int(time.time() * 1000) & 0x7FFFFFFF),
+        "timestamp": str(timestamp_ms),
+        "etp": "1",
+    }
+    if lid:
+        params["lid"] = lid
+    return f"ysproto://{_format_url_host(host)}:{port}/playback?{urlencode(params)}"
+
+
 def parse_vtm_url(url: str) -> tuple[str, int, str, dict[str, str]]:
     """Parse a ysproto URL into host, port, path, and query parameters."""
 
@@ -608,6 +651,7 @@ def build_stream_info_request(
     *,
     vtm_stream_key: str | None = None,
     client_version: str = "v3.6.3.20221124",
+    stream_info_type: int | None = None,
 ) -> bytes:
     """Encode the limited StreamInfoReq protobuf used by VTM/VTDU."""
 
@@ -621,6 +665,8 @@ def build_stream_info_request(
             _proto_string(6, client_version),
         )
     )
+    if stream_info_type is not None:
+        parts.append(_proto_varint(8, stream_info_type))
     return b"".join(parts)
 
 

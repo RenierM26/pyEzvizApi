@@ -1785,6 +1785,145 @@ def test_save_clip_cloud_decrypt_keeps_sms_code_key_lookup(
     assert "media_key" not in request
 
 
+def test_save_clip_can_use_cloud_playback_source(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ps"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "--json",
+                "save",
+                "clip",
+                "--source",
+                "cloud-playback",
+                "--serial",
+                "CAM123",
+                "--channel",
+                "2",
+                "--begin-time",
+                "20260709T222458Z",
+                "--end-time",
+                "20260709T222531Z",
+                "--format",
+                "mpegps",
+                "--output",
+                str(output_path),
+                "--decrypt-video",
+                "--sms-code",
+                "654321",
+                "--client-type",
+                "3",
+                "--token-index",
+                "1",
+                "--no-refresh-vtm",
+                "--lid",
+                "lid-test",
+            ]
+        )
+        == 0
+    )
+
+    client = fake_client.instances[0]
+    assert client.save_clip_request == {
+        "serial": "CAM123",
+        "output": str(output_path),
+        "source": "cloud-playback",
+        "output_format": "mpegps",
+        "duration_seconds": None,
+        "max_packets": None,
+        "channel": 2,
+        "ffmpeg_path": "ffmpeg",
+        "decrypt_video": True,
+        "nalu_header_size": None,
+        "cas_serial": None,
+        "timeout": HCNETSDK_DEFAULT_SAVE_TIMEOUT,
+        "smscode": "654321",
+        "host": None,
+        "command_port": None,
+        "hcnetsdk_command_frames": None,
+        "hcnetsdk_command_plan": None,
+        "hcnetsdk_command_generated_plan": None,
+        "hcnetsdk_command_password": None,
+        "hcnetsdk_local_ip": None,
+        "hcnetsdk_read_response_after_each": True,
+        "hcnetsdk_command_metadata_callback": None,
+        "hcnetsdk_h264_skip_initial_idr_windows": 0,
+        "hcnetsdk_h264_trim_to_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
+        "hcnetsdk_h264_clean_idr_max_windows": 32,
+        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
+        "cloud_client_type": 3,
+        "cloud_token_index": 1,
+        "cloud_refresh_vtm": False,
+        "cloud_playback_begin_time": "20260709T222458Z",
+        "cloud_playback_end_time": "20260709T222531Z",
+        "cloud_playback_lid": "lid-test",
+    }
+    assert output_path.read_bytes() == MPEGTS_PAYLOAD
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "kind": "clip",
+        "serial": "CAM123",
+        "channel": 2,
+        "output": str(output_path),
+        "bytes": len(MPEGTS_PAYLOAD),
+        "source": "cloud-playback",
+        "format": "mpegps",
+        "duration_seconds": None,
+        "content_type": "video/mp2t",
+        "cloud_client_type": 3,
+        "cloud_token_index": 1,
+        "cloud_refresh_vtm": False,
+        "begin_time": "20260709T222458Z",
+        "end_time": "20260709T222531Z",
+    }
+
+
+def test_save_clip_cloud_playback_decrypt_codec_override(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ps"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                "cloud-playback",
+                "--serial",
+                "CAM123",
+                "--begin-time",
+                "20260709T222458Z",
+                "--end-time",
+                "20260709T222531Z",
+                "--format",
+                "mpegps",
+                "--output",
+                str(output_path),
+                "--decrypt-video",
+                "--decrypt-codec",
+                "hevc",
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["nalu_header_size"] == 2
+
+
 def test_save_image_triggers_capture_and_downloads_url(
     monkeypatch,
     tmp_path,

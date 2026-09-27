@@ -4439,6 +4439,80 @@ def test_windows_wildcard_source_uses_target_route_interface(
     assert route_socket.closed is True
 
 
+def test_windows_source_address_is_resolved_per_connection_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ipv6_target = ("2001:db8::10", 9010, 0, 0)
+    ipv4_target = ("192.0.2.10", 9010)
+    connected_socket = object()
+    connect_calls: list[tuple[int, Any, tuple[str, int], bool]] = []
+
+    def connect_bound_source_socket(
+        family: int,
+        _sock_type: int,
+        _protocol: int,
+        target: Any,
+        _timeout: float | None,
+        *,
+        source_address: tuple[str, int],
+        exclusive: bool,
+    ) -> Any:
+        connect_calls.append((family, target, source_address, exclusive))
+        if exclusive:
+            raise OSError(errno.EADDRINUSE, "TIME_WAIT")
+        if family == socket.AF_INET6:
+            raise OSError(errno.ECONNREFUSED, "IPv6 unavailable")
+        return connected_socket
+
+    def concrete_source_address(
+        _source_address: tuple[str, int],
+        family: int,
+        _target: Any,
+    ) -> tuple[str, int]:
+        if family == socket.AF_INET6:
+            return ("2001:db8::25", 10103)
+        return ("192.0.2.25", 10103)
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_concrete_source_address",
+        concrete_source_address,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_source_port_has_listener",
+        lambda _address, _family: False,
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ipv6_target),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ipv4_target),
+        ],
+    )
+
+    result = _create_reusable_source_connection(
+        ("camera.example.test", 9010),
+        1.0,
+        source_address=("", 10103),
+    )
+
+    assert result is connected_socket
+    assert connect_calls == [
+        (socket.AF_INET6, ipv6_target, ("", 10103), True),
+        (socket.AF_INET6, ipv6_target, ("2001:db8::25", 10103), False),
+        (socket.AF_INET, ipv4_target, ("", 10103), True),
+        (socket.AF_INET, ipv4_target, ("192.0.2.25", 10103), False),
+    ]
+
+
 def test_local_sdk_source_port_reports_an_active_conflict() -> None:
     timeout = 1.0
     target = socket.socket()

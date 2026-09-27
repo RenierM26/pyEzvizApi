@@ -9033,6 +9033,7 @@ def _create_reusable_source_connection(
         port,
         type=socket.SOCK_STREAM,
     ):
+        candidate_source_address = source_address
         try:
             if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
                 try:
@@ -9042,18 +9043,21 @@ def _create_reusable_source_connection(
                         protocol,
                         target,
                         timeout,
-                        source_address=source_address,
+                        source_address=candidate_source_address,
                         exclusive=True,
                     )
                 except OSError as err:
                     if err.errno != errno.EADDRINUSE:
                         raise
-                    source_address = _windows_concrete_source_address(
-                        source_address,
+                    candidate_source_address = _windows_concrete_source_address(
+                        candidate_source_address,
                         family,
                         target,
                     )
-                    if _windows_source_port_has_listener(source_address, family):
+                    if _windows_source_port_has_listener(
+                        candidate_source_address,
+                        family,
+                    ):
                         raise
             return _connect_bound_source_socket(
                 family,
@@ -9061,7 +9065,7 @@ def _create_reusable_source_connection(
                 protocol,
                 target,
                 timeout,
-                source_address=source_address,
+                source_address=candidate_source_address,
                 exclusive=False,
             )
         except OSError as err:

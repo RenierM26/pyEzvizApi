@@ -3991,6 +3991,7 @@ def _build_local_sdk_ecdh_cli_stream(
         channel=args.channel,
         receiver_port=args.local_sdk_ecdh_receiver_port,
         send_init=args.local_sdk_ecdh_send_init,
+        pre_start_body=_read_optional_binary_file(args.pre_start_body_file),
         pre_start_sequence=args.pre_start_sequence,
         preview_sequence=args.preview_sequence,
         stream_setup_sequence=args.stream_sequence,

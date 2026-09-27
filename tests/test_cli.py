@@ -3293,6 +3293,8 @@ def test_local_sdk_dump_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
 
 def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "local_sdk_ecdh.ps"
+    pre_start_path = tmp_path / "pre-start.bin"
+    pre_start_path.write_bytes(LOCAL_SDK_PRE_START_BODY)
     calls: list[dict[str, Any]] = []
 
     class FakeLocalSdkEcdhStream:
@@ -3346,6 +3348,8 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
                 "1234567890abcdef",
                 "--pre-start-sequence",
                 "27",
+                "--pre-start-body-file",
+                str(pre_start_path),
                 "--preview-sequence",
                 "28",
                 "--stream-sequence",
@@ -3367,6 +3371,7 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
     assert calls[0]["host"] == "192.0.2.10"
     assert calls[0]["operation_code"] == "0123456"
     assert calls[0]["pre_start_sequence"] == 27
+    assert calls[0]["pre_start_body"] == LOCAL_SDK_PRE_START_BODY
     assert calls[0]["preview_sequence"] == 28
     assert calls[0]["stream_setup_sequence"] == 29
     assert calls[0]["stream_rate"] == "3"

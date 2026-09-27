@@ -488,6 +488,7 @@ def open_local_sdk_ecdh_stream(  # noqa: PLR0913
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     send_init: bool = False,
+    pre_start_body: bytes | str | None = None,
     pre_start_sequence: int | None = None,
     preview_sequence: int | None = None,
     stream_setup_sequence: int | None = None,
@@ -501,17 +502,21 @@ def open_local_sdk_ecdh_stream(  # noqa: PLR0913
 
     Some firmware sends a 0x2013 INIT before preview setup.  Other local SDK
     ECDH paths can reject that pre-start command, so callers opt in with
-    ``send_init=True`` only when their device needs it.
+    ``send_init=True`` only when their device needs it. A caller-supplied
+    ``pre_start_body`` takes precedence over the generated INIT body.
     """
     key_pair = key_pair or generate_ezviz_local_sdk_ecdh_keypair()
+    has_pre_start = pre_start_body is not None or send_init
     resolved_pre_start_sequence = (
-        pre_start_sequence if pre_start_sequence is not None else (1 if send_init else 0)
+        pre_start_sequence if pre_start_sequence is not None else (1 if has_pre_start else 0)
     )
     resolved_preview_sequence = (
-        preview_sequence if preview_sequence is not None else (2 if send_init else 1)
+        preview_sequence if preview_sequence is not None else (2 if has_pre_start else 1)
     )
     resolved_stream_setup_sequence = (
-        stream_setup_sequence if stream_setup_sequence is not None else (3 if send_init else 2)
+        stream_setup_sequence
+        if stream_setup_sequence is not None
+        else (3 if has_pre_start else 2)
     )
     preview_request = EzvizLocalPreviewRequest(
         operation_code=device_info.operation_code,
@@ -530,14 +535,12 @@ def open_local_sdk_ecdh_stream(  # noqa: PLR0913
         timestamp=int(time.time() * 1000),
         public_key=key_pair.public_key_b64,
     )
-    pre_start_body = (
-        build_ezviz_local_sdk_ecdh_init_request_body(
+    resolved_pre_start_body = pre_start_body
+    if resolved_pre_start_body is None and send_init:
+        resolved_pre_start_body = build_ezviz_local_sdk_ecdh_init_request_body(
             operation_code=device_info.operation_code,
             session=LOCAL_SDK_ECDH_DEFAULT_INIT_SESSION,
         )
-        if send_init
-        else None
-    )
     sdk_client = EzvizLocalSdkClient(
         endpoint,
         device_info,
@@ -549,7 +552,7 @@ def open_local_sdk_ecdh_stream(  # noqa: PLR0913
         sdk_client,
         preview_request,
         key_pair,
-        pre_start_body=pre_start_body,
+        pre_start_body=resolved_pre_start_body,
         pre_start_sequence=resolved_pre_start_sequence,
         preview_sequence=resolved_preview_sequence,
         stream_setup_sequence=resolved_stream_setup_sequence,
@@ -568,6 +571,7 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     send_init: bool = False,
+    pre_start_body: bytes | str | None = None,
     pre_start_sequence: int | None = None,
     preview_sequence: int | None = None,
     stream_setup_sequence: int | None = None,
@@ -595,6 +599,7 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         channel=channel,
         receiver_port=receiver_port,
         send_init=send_init,
+        pre_start_body=pre_start_body,
         pre_start_sequence=pre_start_sequence,
         preview_sequence=preview_sequence,
         stream_setup_sequence=stream_setup_sequence,
@@ -615,6 +620,7 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     send_init: bool = False,
+    pre_start_body: bytes | str | None = None,
     pre_start_sequence: int | None = None,
     preview_sequence: int | None = None,
     stream_setup_sequence: int | None = None,
@@ -637,6 +643,7 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         channel=channel,
         receiver_port=receiver_port,
         send_init=send_init,
+        pre_start_body=pre_start_body,
         pre_start_sequence=pre_start_sequence,
         preview_sequence=preview_sequence,
         stream_setup_sequence=stream_setup_sequence,

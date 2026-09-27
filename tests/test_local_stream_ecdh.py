@@ -47,6 +47,7 @@ from pyezvizapi.local_stream_ecdh import (
     derive_ezviz_local_sdk_ecdh_shared_secret,
     ezviz_local_sdk_ecdh_chacha20_nonce,
     generate_ezviz_local_sdk_ecdh_keypair,
+    open_local_sdk_ecdh_stream,
     open_local_sdk_ecdh_stream_from_client,
     parse_ezviz_local_sdk_ecdh_data_packet,
     parse_ezviz_local_sdk_ecdh_handshake_packet,
@@ -67,6 +68,7 @@ EXPECTED_LOCAL_SDK_ECDH_INIT_XML = (
     b"</Request>\n"
 )
 LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD = b"mpegps"
+LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY = b"custom-pre-start"
 
 
 def test_local_stream_namespace_reexports_ecdh_helpers() -> None:
@@ -319,6 +321,29 @@ def test_build_ezviz_local_sdk_ecdh_init_request_body_uses_operation_code_and_se
     ) == EXPECTED_LOCAL_SDK_ECDH_INIT_XML
 
 
+def test_open_local_sdk_ecdh_stream_prefers_custom_pre_start_body() -> None:
+    stream = open_local_sdk_ecdh_stream(
+        HcNetSdkLanEndpoint(
+            serial="CAM123",
+            host="192.0.2.10",
+            command_port=9010,
+            stream_port=9020,
+        ),
+        EzvizCasDeviceInfo(
+            serial="CAM123",
+            operation_code="0123456",
+            key="1234567890abcdef",
+        ),
+        send_init=True,
+        pre_start_body=LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY,
+    )
+
+    assert stream.pre_start_body == LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY
+    assert stream.pre_start_sequence == 1
+    assert stream.preview_sequence == 2
+    assert stream.stream_setup_sequence == 3
+
+
 def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -353,6 +378,7 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
         cas_serial="CAMALT",
         register_p2p_session=False,
         p2p_register_max_retries=1,
+        pre_start_body=LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY,
         pre_start_sequence=27,
         preview_sequence=28,
         stream_setup_sequence=29,
@@ -372,7 +398,7 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
         }
     ]
     assert stream.preview_request.public_key == stream.key_pair.public_key_b64
-    assert stream.pre_start_body is None
+    assert stream.pre_start_body == LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY
     assert stream.pre_start_sequence == 27
     assert stream.preview_sequence == 28
     assert stream.stream_setup_sequence == 29
@@ -417,6 +443,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
         cas_serial="CAMALT",
         channel=2,
         send_init=True,
+        pre_start_body=LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY,
         pre_start_sequence=27,
         preview_sequence=28,
         stream_setup_sequence=29,
@@ -434,6 +461,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[0]["cas_serial"] == "CAMALT"
     assert copied[0]["channel"] == 2
     assert copied[0]["send_init"] is True
+    assert copied[0]["pre_start_body"] == LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY
     assert copied[0]["pre_start_sequence"] == 27
     assert copied[0]["preview_sequence"] == 28
     assert copied[0]["stream_setup_sequence"] == 29

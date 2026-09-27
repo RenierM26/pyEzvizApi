@@ -4332,6 +4332,7 @@ class SadpBatchResult:
 
 
 SocketSourceAddress = tuple[str, int] | None
+SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
 SocketFactory = Callable[[tuple[str, int], float | None], Any]
 SourceAddressSocketFactory = Callable[
     [tuple[str, int], float | None, SocketSourceAddress],
@@ -9041,7 +9042,7 @@ def _create_reusable_source_connection(
         port,
         type=socket.SOCK_STREAM,
     ):
-        candidate_source_address = source_address
+        candidate_source_address: SocketBindAddress = source_address
         try:
             if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
                 try:
@@ -9091,7 +9092,7 @@ def _connect_bound_source_socket(
     target: Any,
     timeout: float | None,
     *,
-    source_address: tuple[str, int],
+    source_address: SocketBindAddress,
     exclusive: bool,
 ) -> socket.socket:
     """Bind and connect one source socket with the requested ownership mode."""
@@ -9126,7 +9127,7 @@ def _connect_bound_source_socket(
 
 
 def _windows_source_port_is_time_wait_only(
-    source_address: tuple[str, int],
+    source_address: SocketBindAddress,
     family: int,
 ) -> bool:
     """Return whether Windows reports only stale TIME_WAIT users of a port."""
@@ -9136,7 +9137,7 @@ def _windows_source_port_is_time_wait_only(
 
 
 def _windows_tcp_states_for_source(
-    source_address: tuple[str, int],
+    source_address: SocketBindAddress,
     family: int,
 ) -> set[int]:
     """Read matching Windows TCP states without loading native APIs here."""
@@ -9149,22 +9150,25 @@ def _windows_tcp_states_for_source(
 
 
 def _windows_concrete_source_address(
-    source_address: tuple[str, int],
+    source_address: SocketBindAddress,
     family: int,
     target: Any,
-) -> tuple[str, int]:
+) -> SocketBindAddress:
     """Resolve a wildcard source to the interface selected for the target."""
 
-    host, port = source_address
+    host, port = source_address[:2]
     wildcard_hosts = {"", "::"} if family == socket.AF_INET6 else {"", "0.0.0.0"}
     if host not in wildcard_hosts:
         return source_address
     route_probe = socket.socket(family, socket.SOCK_DGRAM)
     try:
         route_probe.connect(target)
-        routed_host = str(route_probe.getsockname()[0])
+        routed_address = route_probe.getsockname()
+        routed_host = str(routed_address[0])
     finally:
         route_probe.close()
+    if family == socket.AF_INET6:
+        return routed_host, port, int(routed_address[2]), int(routed_address[3])
     return routed_host, port
 
 

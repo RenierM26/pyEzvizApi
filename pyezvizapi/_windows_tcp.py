@@ -8,6 +8,7 @@ from typing import Any, cast
 
 _TCP_TABLE_OWNER_PID_ALL = 5
 _ERROR_INSUFFICIENT_BUFFER = 122
+_SourceAddress = tuple[str, int] | tuple[str, int, int, int]
 
 
 class _Tcp4Row(ctypes.Structure):
@@ -35,18 +36,22 @@ class _Tcp6Row(ctypes.Structure):
 
 
 def tcp_states_for_source(
-    source_address: tuple[str, int],
+    source_address: _SourceAddress,
     family: int,
 ) -> set[int]:
     """Return Windows TCP states matching a source address or wildcard owner."""
 
     row_type = _Tcp6Row if family == socket.AF_INET6 else _Tcp4Row
-    source_host, port = source_address
+    source_host, port = source_address[:2]
+    source_scope_id = source_address[3] if len(source_address) == 4 else 0
+    source_host, has_zone, zone = source_host.partition("%")
+    if family == socket.AF_INET6 and has_zone and source_scope_id == 0:
+        try:
+            source_scope_id = int(zone)
+        except ValueError:
+            source_scope_id = socket.if_nametoindex(zone)
     try:
-        packed_source_host = socket.inet_pton(
-            family,
-            source_host.partition("%")[0],
-        )
+        packed_source_host = socket.inet_pton(family, source_host)
     except OSError:
         resolved_host = str(
             socket.getaddrinfo(
@@ -97,9 +102,18 @@ def tcp_states_for_source(
         row = row_type.from_buffer_copy(buffer.raw, dword_size + index * row_size)
         local_port = socket.ntohs(int(row.local_port) & 0xFFFF)
         row_address = bytes(row)[address_offset : address_offset + address_size]
-        if local_port == port and row_address in {
-            packed_source_host,
-            wildcard_address,
-        }:
+        if local_port != port:
+            continue
+        if row_address == wildcard_address:
             states.add(int(row.state))
+            continue
+        if row_address != packed_source_host:
+            continue
+        if (
+            family == socket.AF_INET6
+            and source_scope_id != 0
+            and int(row.local_scope_id) != source_scope_id
+        ):
+            continue
+        states.add(int(row.state))
     return states

@@ -4573,6 +4573,46 @@ def test_windows_tcp_table_reads_states_for_requested_port(
     ) == {2}
     assert calls == 3
 
+    class Tcp6Row(ctypes.Structure):
+        _fields_ = [
+            ("local_addr", ctypes.c_ubyte * 16),
+            ("local_scope_id", ctypes.c_uint32),
+            ("local_port", ctypes.c_uint32),
+            ("remote_addr", ctypes.c_ubyte * 16),
+            ("remote_scope_id", ctypes.c_uint32),
+            ("remote_port", ctypes.c_uint32),
+            ("state", ctypes.c_uint32),
+            ("owning_pid", ctypes.c_uint32),
+        ]
+
+    matching_ipv6_row = Tcp6Row(
+        local_scope_id=7,
+        local_port=socket.htons(10103),
+        state=11,
+    )
+    matching_ipv6_row.local_addr[:] = socket.inet_pton(
+        socket.AF_INET6,
+        "fe80::25",
+    )
+    other_scope_row = Tcp6Row(
+        local_scope_id=8,
+        local_port=socket.htons(10103),
+        state=5,
+    )
+    other_scope_row.local_addr[:] = matching_ipv6_row.local_addr[:]
+    payload = (
+        bytes(ctypes.c_uint32(2))
+        + bytes(matching_ipv6_row)
+        + bytes(other_scope_row)
+    )
+    calls = 0
+
+    assert _windows_tcp.tcp_states_for_source(
+        ("fe80::25", 10103, 0, 7),
+        socket.AF_INET6,
+    ) == {11}
+    assert calls == 3
+
 
 def test_windows_wildcard_source_uses_target_route_interface(
     monkeypatch: pytest.MonkeyPatch,
@@ -4598,6 +4638,28 @@ def test_windows_wildcard_source_uses_target_route_interface(
         ("192.0.2.10", 9010),
     ) == ("192.0.2.25", 10103)
     assert route_socket.closed is True
+
+
+def test_windows_ipv6_wildcard_source_preserves_route_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RouteSocket:
+        def connect(self, _target: Any) -> None:
+            return
+
+        def getsockname(self) -> tuple[str, int, int, int]:
+            return ("fe80::25", 53000, 0, 7)
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(socket, "socket", lambda *_args: RouteSocket())
+
+    assert _windows_concrete_source_address(
+        ("::", 10103),
+        socket.AF_INET6,
+        ("fe80::10", 9010, 0, 7),
+    ) == ("fe80::25", 10103, 0, 7)
 
 
 def test_windows_source_address_is_resolved_per_connection_candidate(

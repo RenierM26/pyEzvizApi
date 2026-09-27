@@ -8982,6 +8982,15 @@ class EzvizLocalSdkClient:
         self._command_sock = None
         self._stream_sock = None
 
+    def _invalidate_socket(self, sock: Any) -> None:
+        """Detach and close a socket whose protocol framing may be corrupt."""
+        if self._command_sock is sock:
+            self._command_sock = None
+        if self._stream_sock is sock:
+            self._stream_sock = None
+        with suppress(Exception):
+            sock.close()
+
     def send_encrypted_command(
         self,
         command: int,
@@ -9021,13 +9030,17 @@ class EzvizLocalSdkClient:
             iv=self._request_iv,
             sequence=sequence,
         )
-        _send_all_with_timeout(
-            sock,
-            request,
-            timeout=timeout,
-            deadline=deadline,
-            monotonic=monotonic,
-        )
+        try:
+            _send_all_with_timeout(
+                sock,
+                request,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
         read_socket = sock
         previous_timeout = None
         if effective_timeout is not None:
@@ -10252,6 +10265,14 @@ class HcNetSdkCommandPortClient:
             with suppress(Exception):
                 command_sock.close()
 
+    def _invalidate_socket(self, sock: Any) -> None:
+        """Detach and close a socket whose protocol framing may be corrupt."""
+        with self._state_lock:
+            if self._socket is sock:
+                self._socket = None
+        with suppress(Exception):
+            sock.close()
+
     def send_command_frame(
         self,
         frame: bytes,
@@ -10282,18 +10303,23 @@ class HcNetSdkCommandPortClient:
             if deadline is not None
             else timeout
         )
-        _send_all_with_timeout(
-            self.connect(
-                timeout=effective_timeout,
-                deadline_limited=deadline is not None,
-                deadline=deadline,
-                monotonic=monotonic,
-            ),
-            frame,
-            timeout=timeout,
+        sock = self.connect(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
             deadline=deadline,
             monotonic=monotonic,
         )
+        try:
+            _send_all_with_timeout(
+                sock,
+                frame,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
 
     def read_tcp_frame(
         self,

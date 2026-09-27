@@ -5140,6 +5140,76 @@ def test_local_command_writes_use_remaining_capture_deadline(client_kind: str) -
 
 
 @pytest.mark.parametrize("client_kind", ("local", "command_port"))
+def test_partial_deadline_write_invalidates_local_socket(client_kind: str) -> None:
+    class PartialWriteSocket(_FakeSocket):
+        def sendall(self, data: bytes) -> None:
+            self.sent.append(data[:1])
+            raise TimeoutError
+
+    command_sock = PartialWriteSocket([])
+    command_sock.timeout = 10.0
+    replacement_sock = _FakeSocket(
+        [
+            build_ezviz_local_sdk_frame(
+                command=EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                body=b"<Response><Result>0</Result></Response>",
+            )
+            + LOCAL_SDK_RESPONSE_TRAILER
+        ]
+    )
+    sockets = iter([command_sock, replacement_sock])
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    ticks = iter([0.0, 0.25])
+    client: EzvizLocalSdkClient | HcNetSdkCommandPortClient
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="write"):
+        if client_kind == "local":
+            client = EzvizLocalSdkClient(
+                endpoint,
+                EzvizCasDeviceInfo(
+                    serial="CAM123456",
+                    operation_code="0123456",
+                    key="1234567890abcdef",
+                ),
+                timeout=10.0,
+                socket_factory=lambda _address, _timeout: next(sockets),
+            )
+            client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                b"<Request/>",
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        else:
+            client = HcNetSdkCommandPortClient(
+                endpoint,
+                timeout=10.0,
+                socket_factory=lambda _address, _timeout: next(sockets),
+            )
+            client.send_command_frame(
+                b"request",
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+
+    assert command_sock.sent
+    assert command_sock.closed is True
+    if isinstance(client, EzvizLocalSdkClient):
+        exchange = client.send_encrypted_command(
+            EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            b"<Request/>",
+        )
+        assert exchange.response.header.command == EZVIZ_LOCAL_SDK_PREVIEW_COMMAND
+    else:
+        assert client.connect() is replacement_sock
+
+
+@pytest.mark.parametrize("client_kind", ("local", "command_port"))
 def test_local_connect_timeout_uses_capture_deadline_exception(client_kind: str) -> None:
     endpoint = HcNetSdkLanEndpoint(
         serial="CAM123456",

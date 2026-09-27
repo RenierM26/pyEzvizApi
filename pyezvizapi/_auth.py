@@ -13,7 +13,7 @@ from typing import Any
 import requests
 from requests.structures import CaseInsensitiveDict
 
-from ._longlink_profile import PROFILE, REGISTER
+from ._longlink_profile import profile_for_token, synchronize_http_headers
 from ._token import validate_feature_code
 from .api_endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
 from .constants import FEATURE_CODE
@@ -67,7 +67,7 @@ def refresh_credentials(
         response = session.put(
             url=f"https://{token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
             data={"refreshSessionId": token["rf_session_id"], "featureCode": FEATURE_CODE,
-                  **(REGISTER if token.get("push_profile") == PROFILE else {})},
+                  **profile_for_token(token).registration},
             allow_redirects=False, timeout=timeout,
         )
         response.raise_for_status()
@@ -85,7 +85,9 @@ def refresh_credentials(
     token["session_id"] = str(result["sessionInfo"]["sessionId"])
     token["rf_session_id"] = str(result["sessionInfo"]["refreshSessionId"])
     token["feature_code"] = FEATURE_CODE
-    session.headers["sessionId"] = token["session_id"]
+    synchronize_http_headers(
+        session.headers, profile_for_token(token), token["session_id"], scope="session"
+    )
     notify()
     if not token.get("service_urls"):
         token["service_urls"] = discover()

@@ -23,9 +23,13 @@ import requests
 from . import device_factory
 from ._auth import refresh_credentials
 from ._longlink_profile import (
-    HEADERS as PUSH_HEADERS,
+    ANDROID_PROFILE,
     PROFILE as PUSH_PROFILE,
-    REGISTER as PUSH_REGISTER,
+    current_session_header,
+    profile_for_token,
+    recreated_session_header_for_token,
+    session_header_for_token,
+    synchronize_http_headers,
 )
 from ._token import (
     ClientToken as ClientToken,  # noqa: PLC0414 - public type export
@@ -139,7 +143,6 @@ from .constants import (
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
     MAX_RETRIES,
-    REQUEST_HEADER,
     DefenseModeType,
     DeviceCatagories,
     DeviceSwitchType,
@@ -517,10 +520,6 @@ class EzvizClient:
         self._on_token_updated = on_token_updated
         self.account = account
         self.password = _ezviz_password_digest(password) if password else None
-        self._session = requests.session()
-        self._session.headers.update(REQUEST_HEADER)
-        if token and token.get("session_id"):
-            self._session.headers["sessionId"] = str(token["session_id"])  # ensure str
         self._token: ClientToken = cast(
             ClientToken,
             token
@@ -531,8 +530,13 @@ class EzvizClient:
                 "api_url": url,
             },
         )
-        if self._token.get("push_profile") == PUSH_PROFILE:
-            self._session.headers.update(PUSH_HEADERS)
+        self._session = requests.session()
+        synchronize_http_headers(
+            self._session.headers,
+            profile_for_token(self._token),
+            session_header_for_token(self._token),
+            scope="profile",
+        )
         self._timeout = timeout
         self._cameras: dict[str, Any] = {}
         self._light_bulbs: dict[str, Any] = {}
@@ -573,7 +577,7 @@ class EzvizClient:
         }
 
         if push_enabled:
-            payload.update(PUSH_REGISTER)
+            payload.update(ANDROID_PROFILE.registration)
         try:
             req = self._session.post(
                 url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
@@ -602,16 +606,20 @@ class EzvizClient:
             ) from err
 
         if json_result["meta"]["code"] == 200:
-            self._session.headers["sessionId"] = json_result["loginSession"][
-                "sessionId"
-            ]
+            session_id = str(json_result["loginSession"]["sessionId"])
             self._token.update({
-                "session_id": str(json_result["loginSession"]["sessionId"]),
+                "session_id": session_id,
                 "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
                 "username": str(json_result["loginUser"]["username"]),
                 "api_url": str(json_result["loginArea"]["apiDomain"]),
                 "feature_code": FEATURE_CODE,
             })
+            synchronize_http_headers(
+                self._session.headers,
+                profile_for_token(self._token),
+                session_id,
+                scope="session",
+            )
             # A fresh login may change profile/region. Never persist old discovery
             # alongside new credentials: a failed lookup must be retried on resume.
             self._token.pop("service_urls", None)
@@ -883,11 +891,12 @@ class EzvizClient:
                 # The request may have been prepared before a profile/region
                 # migration. Refresh only authentication/routing, not its encoded
                 # body, query or endpoint-specific headers.
-                for key in ("sessionId", "featureCode", *PUSH_HEADERS):
-                    if key in self._session.headers:
-                        prepared.headers[key] = cast(str, self._session.headers[key])
-                    else:
-                        prepared.headers.pop(key, None)
+                synchronize_http_headers(
+                    prepared.headers,
+                    profile_for_token(self._token),
+                    current_session_header(self._session.headers),
+                    scope="identity",
+                )
                 if prepared.url is not None:
                     parts = urlsplit(prepared.url)
                     prepared.url = urlunsplit(parts._replace(netloc=self._token["api_url"]))
@@ -904,8 +913,6 @@ class EzvizClient:
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 self.login()
-                if "sessionId" in prepared.headers:
-                    prepared.headers["sessionId"] = cast(str, self._session.headers["sessionId"])
                 return self._send_prepared(
                     prepared, retry_401=retry_401, max_retries=max_retries + 1
                 )
@@ -4157,9 +4164,12 @@ class EzvizClient:
             self._token["feature_code"] = FEATURE_CODE
             for key in ("push_state", "service_urls", "user_id", "username"):
                 cast(dict[str, Any], self._token).pop(key, None)
-            self._session.headers.pop("sessionId", None)
-            self._session.headers.update(PUSH_HEADERS)
-            self._session.headers["featureCode"] = FEATURE_CODE
+            synchronize_http_headers(
+                self._session.headers,
+                ANDROID_PROFILE,
+                None,
+                scope="profile",
+            )
             # Do not refresh a legacy session while presenting the new profile.
             self._token["session_id"] = None
             self._token["rf_session_id"] = None
@@ -6320,11 +6330,12 @@ class EzvizClient:
                 self._session.close()
 
             self._session = requests.session()
-            self._session.headers.update(REQUEST_HEADER)  # Reset session.
-            if self._token.get("push_profile") == PUSH_PROFILE:
-                self._session.headers.update(PUSH_HEADERS)
-                if session_id := self._token.get("session_id"):
-                    self._session.headers["sessionId"] = str(session_id)
+            synchronize_http_headers(
+                self._session.headers,
+                profile_for_token(self._token),
+                recreated_session_header_for_token(self._token),
+                scope="profile",
+            )
             if self.mqtt_client is not None:
                 # This factory-owned client shares our replaceable HTTP session.
                 self.mqtt_client._session = self._session  # noqa: SLF001

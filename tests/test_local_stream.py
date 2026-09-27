@@ -1960,6 +1960,53 @@ def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
     ) == (sample_rate, 1)
 
 
+def test_idmx_audio_metadata_infers_clock_from_valid_aac_frames_only() -> None:
+    audio_extension = b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+    audio_cipher = bytes.fromhex("9ad09600fb4162b8b5f84bfbd23cce0d") + b"tail"
+    access_unit = (
+        b"\x00\x10"
+        + (len(audio_cipher) << 3).to_bytes(2, "big")
+        + audio_cipher
+    )
+
+    def frame(
+        payload_type: int,
+        timestamp: int,
+        sequence: int,
+        body: bytes,
+        *,
+        extension: bool = False,
+    ) -> bytes:
+        return (
+            bytes((0x90 if extension else 0x80, payload_type))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + (audio_extension if extension else b"")
+            + body
+        )
+
+    packets = [
+        frame(104, 0x70000000, 1, b"\x00\x10\x00", extension=True),
+        *[
+            packet
+            for index in range(8)
+            for packet in (
+                frame(96, 90_000 + index * 5760, index * 2 + 2, b"\x41video"),
+                frame(
+                    104,
+                    index * 1024,
+                    index * 2 + 3,
+                    access_unit,
+                    extension=True,
+                ),
+            )
+        ],
+    ]
+
+    assert _idmx_audio_metadata(packets, IDMX_MEDIA_KEY) == (16_000, 1)
+
+
 def test_decrypt_idmx_aac_rejects_access_unit_too_large_for_adts() -> None:
     access_unit_length = 0x1FFF - 6
     access_unit = (

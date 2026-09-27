@@ -4987,10 +4987,8 @@ def _idmx_audio_metadata(
     descriptor = _idmx_audio_descriptor(packets)
     if descriptor is not None:
         return descriptor
-    sample_rate = _idmx_infer_aac_sample_rate(packets)
-    if sample_rate is None:
-        return None
     encrypted_access_units: list[bytes] = []
+    audio_timestamps: list[int] = []
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None or not _is_complete_idmx_rtp_frame(frame):
@@ -5008,6 +5006,17 @@ def _idmx_audio_metadata(
             <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
         ):
             encrypted_access_units.append(access_unit)
+            timestamp = transport.get("rtp_timestamp")
+            if isinstance(timestamp, int) and (
+                not audio_timestamps or audio_timestamps[-1] != timestamp
+            ):
+                audio_timestamps.append(timestamp)
+    sample_rate = _idmx_infer_aac_sample_rate(
+        packets,
+        audio_timestamps=audio_timestamps,
+    )
+    if sample_rate is None:
+        return None
     aes_key = _local_media_aes_key(media_key)
     channels = _aac_channels_from_access_units(
         [
@@ -5051,10 +5060,18 @@ def _rtp_timestamp_span(timestamps: list[int]) -> int:
     )
 
 
-def _idmx_infer_aac_sample_rate(packets: list[bytes]) -> int | None:
+def _idmx_infer_aac_sample_rate(
+    packets: list[bytes],
+    *,
+    audio_timestamps: list[int] | None = None,
+) -> int | None:
     """Infer the AAC RTP clock by comparing it with the 90 kHz video clock."""
 
-    audio_timestamps = _idmx_rtp_timestamps(packets, IDMX_AAC_RTP_PAYLOAD_TYPE)
+    if audio_timestamps is None:
+        audio_timestamps = _idmx_rtp_timestamps(
+            packets,
+            IDMX_AAC_RTP_PAYLOAD_TYPE,
+        )
     video_timestamps = _idmx_rtp_timestamps(packets, IDMX_H264_RTP_PAYLOAD_TYPE)
     if len(audio_timestamps) < 8 or len(video_timestamps) < 8:
         return None

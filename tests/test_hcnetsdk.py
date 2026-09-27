@@ -3,9 +3,12 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from datetime import date, datetime
+import errno
 import hashlib
 import hmac
 from pathlib import Path
+import socket
+from typing import Any
 
 from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
@@ -253,6 +256,9 @@ from pyezvizapi.hcnetsdk import (
     SadpNoArgRequest,
     SadpSetLogToFileRequest,
     SadpStartRequest,
+    _connect_with_optional_source_address,
+    _create_reusable_source_connection,
+    _windows_concrete_source_address,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
     build_ezviz_cas_ssl_local_sdk_frame,
@@ -4231,6 +4237,282 @@ def test_ezviz_local_sdk_client_can_bind_command_source_port() -> None:
         )
 
     assert connect_calls == [(("192.0.2.10", 9010), 5.0, ("", 10103))]
+
+
+@pytest.mark.parametrize("source_port", [0, 65536])
+def test_ezviz_local_sdk_client_rejects_non_advertisable_source_port(
+    source_port: int,
+) -> None:
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+
+    with pytest.raises(PyEzvizError, match="between 1 and 65535"):
+        EzvizLocalSdkClient(
+            endpoint,
+            device_info,
+            command_source_port=source_port,
+        )
+
+
+def test_local_sdk_source_port_can_reopen_immediately() -> None:
+    timeout = 1.0
+    server = socket.socket()
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+
+    reservation = socket.socket()
+    reservation.bind(("127.0.0.1", 0))
+    source_address = ("127.0.0.1", reservation.getsockname()[1])
+    reservation.close()
+
+    try:
+        first = _connect_with_optional_source_address(
+            socket.create_connection,
+            server.getsockname(),
+            timeout,
+            source_address=source_address,
+        )
+        first_peer, _ = server.accept()
+        first.close()
+        while first_peer.recv(1024):
+            pass
+        first_peer.close()
+
+        second = _connect_with_optional_source_address(
+            socket.create_connection,
+            server.getsockname(),
+            timeout,
+            source_address=source_address,
+        )
+        second_peer, _ = server.accept()
+        assert second.getsockname()[1] == source_address[1]
+        second.close()
+        second_peer.close()
+    finally:
+        server.close()
+
+
+def test_local_sdk_source_port_uses_exclusive_binding_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exclusive_option = 0x100
+
+    class ConnectSocket:
+        def __init__(self) -> None:
+            self.option_calls: list[tuple[int, int, int]] = []
+            self.bound_address: tuple[str, int] | None = None
+
+        def settimeout(self, _timeout: float | None) -> None:
+            return
+
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            self.option_calls.append((level, option, value))
+
+        def bind(self, address: tuple[str, int]) -> None:
+            self.bound_address = address
+
+        def connect(self, _target: tuple[str, int]) -> None:
+            return
+
+        def getsockname(self) -> tuple[str, int]:
+            return ("127.0.0.1", 10103)
+
+        def close(self) -> None:
+            return
+
+    exclusive_socket = ConnectSocket()
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive_option, raising=False)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+        ],
+    )
+    monkeypatch.setattr(socket, "socket", lambda *_args: exclusive_socket)
+
+    result = _create_reusable_source_connection(
+        ("192.0.2.10", 9010),
+        1.0,
+        source_address=("", 10103),
+    )
+
+    assert result is exclusive_socket
+    assert exclusive_socket.option_calls == [
+        (socket.SOL_SOCKET, exclusive_option, 1)
+    ]
+    assert exclusive_socket.bound_address == ("", 10103)
+
+
+def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_socket = object()
+    calls: list[tuple[tuple[Any, ...], bool]] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        _timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        calls.append((source_address, exclusive))
+        if source_address == ("", 10103):
+            raise OSError(errno.EADDRINUSE, "owned on another interface")
+        return connected_socket
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_concrete_source_address",
+        lambda _address, _family, _target: ("192.0.2.25", 10103),
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+        ],
+    )
+
+    assert _create_reusable_source_connection(
+        ("192.0.2.10", 9010),
+        1.0,
+        source_address=("", 10103),
+    ) is connected_socket
+    assert calls == [
+        (("", 10103), True),
+        (("192.0.2.25", 10103), True),
+    ]
+
+
+def test_windows_ipv6_wildcard_source_preserves_route_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RouteSocket:
+        def connect(self, _target: Any) -> None:
+            return
+
+        def getsockname(self) -> tuple[str, int, int, int]:
+            return ("fe80::25", 53000, 0, 7)
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(socket, "socket", lambda *_args: RouteSocket())
+
+    assert _windows_concrete_source_address(
+        ("::", 10103),
+        socket.AF_INET6,
+        ("fe80::10", 9010, 0, 7),
+    ) == ("fe80::25", 10103, 0, 7)
+
+
+def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
+    class ConnectSocket:
+        def settimeout(self, _timeout: float | None) -> None:
+            return
+
+        def setsockopt(self, _level: int, _option: int, _value: int) -> None:
+            return
+
+        def bind(self, _address: tuple[str, int]) -> None:
+            return
+
+        def connect(self, _target: tuple[str, int]) -> None:
+            raise OSError(errno.EADDRNOTAVAIL, "duplicate TCP tuple")
+
+        def close(self) -> None:
+            return
+
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *_args, **_kwargs: [
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+            ],
+        )
+        monkeypatch.setattr(socket, "socket", lambda *_args: ConnectSocket())
+
+        with pytest.raises(PyEzvizError, match="receiver port 10103 is already in use"):
+            _connect_with_optional_source_address(
+                socket.create_connection,
+                ("192.0.2.10", 9010),
+                1.0,
+                source_address=("127.0.0.1", 10103),
+            )
+
+
+def test_local_sdk_source_host_preserves_bind_address_error() -> None:
+    bind_error = OSError(errno.EADDRNOTAVAIL, "source address is not configured")
+
+    def socket_factory(
+        _address: tuple[str, int],
+        _timeout: float | None,
+        _source_address: tuple[str, int] | None = None,
+    ) -> Any:
+        raise bind_error
+
+    with pytest.raises(OSError) as error:
+        _connect_with_optional_source_address(
+            socket_factory,
+            ("192.0.2.10", 9010),
+            1.0,
+            source_address=("192.0.2.99", 10103),
+        )
+
+    assert error.value is bind_error
+
+
+def test_local_sdk_source_port_reports_an_active_conflict() -> None:
+    timeout = 1.0
+    target = socket.socket()
+    target.bind(("127.0.0.1", 0))
+    target.listen()
+    occupied = socket.socket()
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen()
+    source_address = occupied.getsockname()
+
+    try:
+        with pytest.raises(
+            PyEzvizError,
+            match=rf"receiver port {source_address[1]} is already in use",
+        ):
+            _connect_with_optional_source_address(
+                socket.create_connection,
+                target.getsockname(),
+                timeout,
+                source_address=source_address,
+            )
+    finally:
+        occupied.close()
+        target.close()
 
 
 def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:

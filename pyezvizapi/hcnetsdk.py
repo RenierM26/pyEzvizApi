@@ -20,6 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import IntEnum
+import errno
 import hashlib
 import hmac
 import ipaddress
@@ -28,6 +29,7 @@ import math
 import re
 import socket
 import ssl
+import sys
 import time
 from typing import Any, cast
 import xml.etree.ElementTree as ET
@@ -41,6 +43,7 @@ from .exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, PyEzvizEr
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
 HCNETSDK_DEFAULT_RTSP_PORT = 554
+_WINDOWS_EXCLUSIVE_SOURCE_BIND = sys.platform == "win32"
 HCNETSDK_EZVIZ_DEFAULT_USERNAME = "admin"
 HCNETSDK_EZVIZ_LOCAL_USERNAME = "EZ_LOCAL_USER"
 HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX = "_lan_device_space-"
@@ -4328,6 +4331,7 @@ class SadpBatchResult:
 
 
 SocketSourceAddress = tuple[str, int] | None
+SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
 SocketFactory = Callable[[tuple[str, int], float | None], Any]
 SourceAddressSocketFactory = Callable[
     [tuple[str, int], float | None, SocketSourceAddress],
@@ -8751,8 +8755,10 @@ class EzvizLocalSdkClient:
         self.iv_factory = iv_factory
         self._request_iv = iv_factory(EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE)
         self.response_trailer_length = response_trailer_length
-        if command_source_port is not None and command_source_port < 0:
-            raise PyEzvizError("EZVIZ local SDK command source port must be non-negative")
+        if command_source_port is not None and not 1 <= command_source_port <= 65535:
+            raise PyEzvizError(
+                "EZVIZ local SDK command source port must be between 1 and 65535"
+            )
         self.command_source_port = command_source_port
         self.command_source_host = command_source_host
         self._command_sock: Any | None = None
@@ -8987,6 +8993,10 @@ class EzvizLocalSdkClient:
         return self._stream_sock
 
 
+class _SourcePortConflictError(OSError):
+    """An address error known to have occurred after binding the source port."""
+
+
 def _connect_with_optional_source_address(
     socket_factory: SocketFactory,
     address: tuple[str, int],
@@ -8997,16 +9007,150 @@ def _connect_with_optional_source_address(
     if source_address is None:
         return socket_factory(address, timeout)
     try:
-        source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
-        return source_socket_factory(address, timeout, source_address)
-    except TypeError:
         if socket_factory is socket.create_connection:
-            return socket.create_connection(
+            return _create_reusable_source_connection(
                 address,
-                timeout=timeout,
+                timeout,
                 source_address=source_address,
             )
+        source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
+        return source_socket_factory(address, timeout, source_address)
+    except OSError as err:
+        if err.errno == errno.EADDRINUSE or isinstance(
+            err,
+            _SourcePortConflictError,
+        ):
+            raise PyEzvizError(
+                f"EZVIZ local SDK receiver port {source_address[1]} is already in use"
+            ) from err
         raise
+
+
+def _create_reusable_source_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    source_address: tuple[str, int],
+) -> socket.socket:
+    """Connect from an exact source port with platform-safe ownership."""
+
+    last_error: OSError | None = None
+    host, port = address
+    for family, sock_type, protocol, _, target in socket.getaddrinfo(
+        host,
+        port,
+        type=socket.SOCK_STREAM,
+    ):
+        try:
+            if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
+                try:
+                    return _connect_bound_source_socket(
+                        family,
+                        sock_type,
+                        protocol,
+                        target,
+                        timeout,
+                        source_address=source_address,
+                        exclusive=True,
+                    )
+                except OSError as err:
+                    if err.errno != errno.EADDRINUSE:
+                        raise
+                    concrete_source_address = _windows_concrete_source_address(
+                        source_address,
+                        family,
+                        target,
+                    )
+                    if concrete_source_address == source_address:
+                        raise
+                    return _connect_bound_source_socket(
+                        family,
+                        sock_type,
+                        protocol,
+                        target,
+                        timeout,
+                        source_address=concrete_source_address,
+                        exclusive=True,
+                    )
+            return _connect_bound_source_socket(
+                family,
+                sock_type,
+                protocol,
+                target,
+                timeout,
+                source_address=source_address,
+                exclusive=False,
+            )
+        except OSError as err:
+            last_error = err
+
+    if last_error is not None:
+        raise last_error
+    raise OSError("getaddrinfo returned no addresses")
+
+
+def _connect_bound_source_socket(
+    family: int,
+    sock_type: int,
+    protocol: int,
+    target: Any,
+    timeout: float | None,
+    *,
+    source_address: SocketBindAddress,
+    exclusive: bool,
+) -> socket.socket:
+    """Bind and connect one source socket with the requested ownership mode."""
+
+    sock = socket.socket(family, sock_type, protocol)
+    try:
+        sock.settimeout(timeout)
+        if exclusive:
+            exclusive_option = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive_option is None:
+                raise PyEzvizError(
+                    "Windows does not expose exclusive source-port binding support"
+                )
+            sock.setsockopt(socket.SOL_SOCKET, exclusive_option, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(source_address)
+        try:
+            sock.connect(target)
+        except OSError as err:
+            if err.errno == errno.EADDRNOTAVAIL:
+                raise _SourcePortConflictError(err.errno, str(err)) from err
+            raise
+        if sock.getsockname()[1] != source_address[1]:
+            raise PyEzvizError(
+                "EZVIZ local SDK receiver port changed while opening the socket"
+            )
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def _windows_concrete_source_address(
+    source_address: tuple[str, int],
+    family: int,
+    target: Any,
+) -> SocketBindAddress:
+    """Resolve a wildcard source to the interface selected for the target."""
+
+    host, port = source_address
+    wildcard_hosts = {"", "::"} if family == socket.AF_INET6 else {"", "0.0.0.0"}
+    if host not in wildcard_hosts:
+        return source_address
+    route_probe = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        route_probe.connect(target)
+        routed_address = route_probe.getsockname()
+        routed_host = str(routed_address[0])
+    finally:
+        route_probe.close()
+    if family == socket.AF_INET6:
+        return routed_host, port, int(routed_address[2]), int(routed_address[3])
+    return routed_host, port
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

@@ -3240,6 +3240,7 @@ class EzvizClient:
                 "source='local-sdk-ecdh' currently writes MPEG-PS only"
             )
 
+        resolved_max_frames = max_frames if max_frames is not None else max_packets
         start_position = None
         if isinstance(output, str | Path):
             output_path = Path(output)
@@ -3258,7 +3259,7 @@ class EzvizClient:
                     timeout=timeout,
                     max_prefix_bytes=max_prefix_bytes,
                     max_packets=max_packets,
-                    max_frames=max_frames,
+                    max_frames=resolved_max_frames,
                     duration_seconds=duration_seconds,
                 )
         else:
@@ -3276,7 +3277,7 @@ class EzvizClient:
                 timeout=timeout,
                 max_prefix_bytes=max_prefix_bytes,
                 max_packets=max_packets,
-                max_frames=max_frames,
+                max_frames=resolved_max_frames,
                 duration_seconds=duration_seconds,
             )
 

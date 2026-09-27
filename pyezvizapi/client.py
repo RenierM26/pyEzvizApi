@@ -4701,16 +4701,17 @@ class EzvizClient:
                 "Unproper sensibility for type 0 (should be within 1 to 6)."
             )
         try:
-            req = self._session.post(
-                url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY}",
-                data={
-                    "subSerial": serial,
-                    "type": type_value,
-                    "channelNo": 1,
-                    "value": sensibility,
-                },
-                timeout=self._timeout,
-            )
+            with self._token_lock:
+                req = self._session.post(
+                    url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY}",
+                    data={
+                        "subSerial": serial,
+                        "type": type_value,
+                        "channelNo": 1,
+                        "value": sensibility,
+                    },
+                    timeout=self._timeout,
+                )
 
             req.raise_for_status()
 

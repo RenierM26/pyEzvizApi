@@ -1,6 +1,7 @@
 """Public migration and durable-state callback contracts."""
 # ruff: noqa: SLF001
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
@@ -714,7 +715,10 @@ def test_standalone_refresh_saves_before_discovery_without_constructing_client(
         assert saved["service_urls"]["pushDasDomain"] == "new.invalid"
 
 
-@pytest.mark.parametrize("observer", ["export", "refresh", "poll", "prepared", "factory", "close", "logout"])
+@pytest.mark.parametrize(
+    "observer",
+    ["export", "refresh", "poll", "direct_poll", "prepared", "factory", "close", "logout"],
+)
 def test_migration_serializes_token_and_transport_users(monkeypatch, observer):
     entered, release, attempted = Event(), Event(), Event()
     legacy = {
@@ -729,12 +733,15 @@ def test_migration_serializes_token_and_transport_users(monkeypatch, observer):
     ))
 
     def post(**kwargs):
-        entered.set()
-        assert release.wait(3)
-        return response({"meta": {"code": 200},
-                         "loginSession": {"sessionId": "new-session", "rfSessionId": "new-refresh"},
-                         "loginUser": {"username": "new-user", "userId": "new-user"},
-                         "loginArea": {"apiDomain": "new.invalid"}})
+        if kwargs["url"].endswith("/v3/users/login/v5"):
+            entered.set()
+            assert release.wait(3)
+            return response({"meta": {"code": 200},
+                             "loginSession": {"sessionId": "new-session", "rfSessionId": "new-refresh"},
+                             "loginUser": {"username": "new-user", "userId": "new-user"},
+                             "loginArea": {"apiDomain": "new.invalid"}})
+        captured.append((kwargs["url"], dict(client._session.headers)))
+        return response({"resultCode": "0"})
 
     def request(**kwargs):
         captured.append((kwargs["url"], dict(client._session.headers)))
@@ -760,12 +767,14 @@ def test_migration_serializes_token_and_transport_users(monkeypatch, observer):
 
     def observe():
         attempted.set()
-        return {
+        operations: dict[str, Callable[[], Any]] = {
             "export": client.export_token, "refresh": client.login,
             "poll": lambda: client._request_json("GET", "/path"),
+            "direct_poll": lambda: client.detection_sensibility("CAM123"),
             "prepared": lambda: client._send_prepared(prepared),
             "factory": client.get_mqtt_client, "close": client.close_session, "logout": client.logout,
-        }[observer]()
+        }
+        return operations[observer]()
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         migration = pool.submit(client.enable_channel99)
@@ -783,7 +792,7 @@ def test_migration_serializes_token_and_transport_users(monkeypatch, observer):
     if observer in ("export", "refresh"):
         assert result["session_id"] in ("new-session", "refreshed")
         assert result["push_profile"] == "android-channel99"
-    if observer in ("poll", "prepared", "logout"):
+    if observer in ("poll", "direct_poll", "prepared", "logout"):
         url, headers = captured[0]
         assert url.startswith("https://new.invalid/")
         assert headers["sessionId"] == "new-session"

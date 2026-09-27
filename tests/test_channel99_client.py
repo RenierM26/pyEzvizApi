@@ -812,6 +812,49 @@ def test_mfa_migration_does_not_retain_legacy_auth_or_discovery(monkeypatch):
     assert client.enable_channel99(sms_code=123456)["session_id"] == "new"
 
 
+def test_mfa_migration_keeps_android_profile_across_region_redirect(monkeypatch):
+    saved = token()
+    saved.pop("push_profile")
+    client = EzvizClient("synthetic", "synthetic", token=saved)
+    posts: list[dict[str, Any]] = []
+    persisted: list[dict[str, Any]] = []
+
+    def post(**kwargs):
+        posts.append(kwargs)
+        if len(posts) == 1:
+            return response({
+                "meta": {"code": 1100},
+                "loginArea": {"apiDomain": "new.invalid"},
+            })
+        return response({
+            "meta": {"code": 200},
+            "loginSession": {"sessionId": "new", "rfSessionId": "new-rf"},
+            "loginUser": {"username": "new-user", "userId": "new-user"},
+            "loginArea": {"apiDomain": "new.invalid"},
+        })
+
+    client._on_token_updated = persisted.append
+    monkeypatch.setattr(client._session, "post", post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {
+        "pushDasDomain": "push.invalid"
+    })
+
+    result = client.enable_channel99(sms_code=123456)
+
+    assert [request["url"] for request in posts] == [
+        "https://apiieu.ezvizlife.com/v3/users/login/v5",
+        "https://new.invalid/v3/users/login/v5",
+    ]
+    assert all(request["data"]["smsCode"] == 123456 for request in posts)
+    assert all(
+        json.loads(request["data"]["pushRegisterJson"]) == [{"channel": 99}]
+        for request in posts
+    )
+    assert result["push_profile"] == "android-channel99"
+    assert result["user_id"] == "new-user"
+    assert persisted[-1] == result
+
+
 @pytest.mark.parametrize("phase", ["creation_pending", "needs_reauthentication", "authenticated"])
 def test_push_snapshot_is_detached_until_committed(monkeypatch, phase):
     saved = token()

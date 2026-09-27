@@ -4188,7 +4188,7 @@ class EzvizClient:
                     "session_id": None, "rf_session_id": None,
                     "username": None, "api_url": self._token["api_url"],
                 })
-                return self.login()
+                return self.login(sms_code=sms_code)
             return cast(dict[Any, Any], self._token)
 
         if self.account and self.password:

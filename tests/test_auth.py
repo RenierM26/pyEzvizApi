@@ -131,6 +131,44 @@ def test_login_refresh_expired_without_credentials_raises(monkeypatch, status) -
         client.login()
 
 
+def test_login_refresh_fallback_keeps_mfa_code(monkeypatch) -> None:
+    client = EzvizClient(
+        account="user@example.test",
+        password="secret",
+        token={
+            "session_id": "old-session",
+            "rf_session_id": "old-refresh",
+            "api_url": "apiieu.ezvizlife.com",
+        },
+    )
+    monkeypatch.setattr(
+        client._session, "put", lambda **kwargs: _response({"meta": {"code": 403}})
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_post(**kwargs: Any) -> requests.Response:
+        captured.update(kwargs)
+        return _response(
+            {
+                "meta": {"code": 200},
+                "loginSession": {
+                    "sessionId": "session-id",
+                    "rfSessionId": "refresh-id",
+                },
+                "loginUser": {"username": "internal-user"},
+                "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+            }
+        )
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+    monkeypatch.setattr(client, "get_service_urls", lambda: {})
+
+    client.login(sms_code=123456)
+
+    assert captured["data"]["msgType"] == "3"
+    assert captured["data"]["smsCode"] == 123456
+
+
 def test_login_with_credentials_posts_hashed_password_and_stores_token(monkeypatch) -> None:
     client = EzvizClient(account="user@example.test", password="secret", url="eu")
     captured: dict[str, Any] = {}

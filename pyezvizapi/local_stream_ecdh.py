@@ -42,9 +42,10 @@ from .constants import (
     LOCAL_SDK_ECDH_H264_SPS_3B,
     LOCAL_SDK_ECDH_H264_SPS_4B,
     LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET,
+    LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_LENGTH,
+    LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_MAGIC,
     LOCAL_SDK_ECDH_HANDSHAKE_MARKER,
     LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET,
-    LOCAL_SDK_ECDH_HANDSHAKE_SUBTYPE,
     LOCAL_SDK_ECDH_HANDSHAKE_TYPE,
     LOCAL_SDK_ECDH_HEVC_VPS_3B,
     LOCAL_SDK_ECDH_HEVC_VPS_4B,
@@ -71,7 +72,12 @@ from .hcnetsdk import (
     HcNetSdkLanEndpoint,
     SocketFactory,
 )
-from .local_stream import get_local_sdk_stream_credentials_from_client
+from .local_stream import (
+    copy_local_stream_to_decrypted_mpegps,
+    copy_local_stream_to_decrypted_mpegts,
+    copy_local_stream_to_mpegts,
+    get_local_sdk_stream_credentials_from_client,
+)
 
 
 @dataclass(frozen=True)
@@ -145,13 +151,18 @@ def parse_ezviz_local_sdk_ecdh_handshake_packet(  # noqa: PLR0911
     data: bytes,
 ) -> EzvizLocalSdkEcdhHandshakePacket | None:
     """Parse a local SDK ECDH ``$\x01`` handshake packet from a media payload."""
-    if data.startswith(LOCAL_SDK_ECDH_HANDSHAKE_MARKER):
-        packet_offset = 0
-    elif data[LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH:].startswith(
-        LOCAL_SDK_ECDH_HANDSHAKE_MARKER
-    ):
-        packet_offset = LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH
-    else:
+    packet_offsets: tuple[int, ...] = (0, LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH)
+    if data.startswith(LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_MAGIC):
+        packet_offsets += (LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_LENGTH,)
+    packet_offset = next(
+        (
+            offset
+            for offset in packet_offsets
+            if data[offset:].startswith(LOCAL_SDK_ECDH_HANDSHAKE_MARKER)
+        ),
+        None,
+    )
+    if packet_offset is None:
         return None
 
     packet = data[packet_offset:]
@@ -170,9 +181,6 @@ def parse_ezviz_local_sdk_ecdh_handshake_packet(  # noqa: PLR0911
         return None
     if packet[header_base + 5] != LOCAL_SDK_ECDH_PACKET_MARKER:
         return None
-    if packet[header_base + 6] != LOCAL_SDK_ECDH_HANDSHAKE_SUBTYPE:
-        return None
-
     payload_length = int.from_bytes(packet[header_base + 3 : header_base + 5], "big")
     ciphertext_end = peer_public_key_end + payload_length
     packet_end = ciphertext_end + LOCAL_SDK_ECDH_DATA_TRAILER_LENGTH
@@ -453,6 +461,11 @@ class EzvizLocalSdkEcdhStreamDecoder:
     def _absorb_plain(self, plain: bytes) -> bytes:
         if not plain:
             return b""
+        if len(plain) >= 12 and plain[0] >> 6 == 2:
+            # Some ECDH devices return one complete IDMX/RTP packet per
+            # authenticated ChaCha20 record. Preserve that packet boundary for
+            # the IDMX demux/media-key layer instead of buffering for MPEG-PS.
+            return plain
         if self._mpeg_started or not self.require_keyframe:
             self._mpeg_started = True
             return plain
@@ -509,6 +522,7 @@ class EzvizLocalSdkEcdhMediaStream:
         self.stream_rate = stream_rate
         self.stream_mode = stream_mode
         self.max_prefix_bytes = max_prefix_bytes
+        self.media_key: str | bytes | None = None
         self.decoder = EzvizLocalSdkEcdhStreamDecoder(key_pair.private_key)
         self.bootstrap: EzvizLocalSdkStreamBootstrap | None = None
         self._first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
@@ -720,17 +734,24 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     timeout: float | None = 5.0,
     socket_factory: SocketFactory | None = None,
     max_prefix_bytes: int = 4096,
+    fetch_media_key: bool = False,
+    smscode: str | int | None = None,
 ) -> EzvizLocalSdkEcdhMediaStream:
     """Open a local SDK ECDH stream using an ``EzvizClient`` credential source."""
+    credential_options: dict[str, Any] = {
+        "cas_serial": cas_serial,
+        "fetch_media_key": fetch_media_key,
+        "register_p2p_session": register_p2p_session,
+        "p2p_register_max_retries": p2p_register_max_retries,
+    }
+    if smscode is not None:
+        credential_options["smscode"] = smscode
     credentials = get_local_sdk_stream_credentials_from_client(
         client,
         serial,
-        cas_serial=cas_serial,
-        fetch_media_key=False,
-        register_p2p_session=register_p2p_session,
-        p2p_register_max_retries=p2p_register_max_retries,
+        **credential_options,
     )
-    return open_local_sdk_ecdh_stream(
+    stream = open_local_sdk_ecdh_stream(
         credentials.endpoint,
         credentials.device_info,
         key_pair=key_pair,
@@ -750,6 +771,8 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         socket_factory=socket_factory,
         max_prefix_bytes=max_prefix_bytes,
     )
+    stream.media_key = credentials.media_key
+    return stream
 
 
 def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
@@ -778,8 +801,17 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     max_packets: int | None = None,
     max_frames: int | None = None,
     duration_seconds: float | None = None,
+    output_format: str = "mpegps",
+    decrypt_video: bool = False,
+    media_key: str | bytes | None = None,
+    ffmpeg_path: str = "ffmpeg",
+    nalu_header_size: int | None = None,
+    smscode: str | int | None = None,
 ) -> None:
-    """Write decoded local SDK ECDH MPEG-PS bytes using an ``EzvizClient``."""
+    """Write authenticated local SDK ECDH media using an ``EzvizClient``."""
+    if output_format not in {"mpegps", "mpegts"}:
+        raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
+
     with open_local_sdk_ecdh_stream_from_client(
         client,
         serial,
@@ -801,14 +833,56 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         timeout=timeout,
         socket_factory=socket_factory,
         max_prefix_bytes=max_prefix_bytes,
+        fetch_media_key=decrypt_video and media_key is None,
+        smscode=smscode,
     ) as stream:
-        copy_local_sdk_ecdh_stream_to_mpegps(
-            stream,
-            output,
-            max_packets=max_packets,
-            max_frames=max_frames,
-            duration_seconds=duration_seconds,
-        )
+        selected_media_key = media_key
+        if decrypt_video and selected_media_key is None:
+            selected_media_key = stream.media_key
+            if selected_media_key is None:
+                raise PyEzvizError(
+                    "decrypt_video requires a media_key or fetchable camera media key"
+                )
+        if output_format == "mpegps":
+            if decrypt_video:
+                assert selected_media_key is not None
+                copy_local_stream_to_decrypted_mpegps(
+                    stream,
+                    output,
+                    selected_media_key,
+                    nalu_header_size=nalu_header_size,
+                    max_packets=max_packets,
+                    duration_seconds=duration_seconds,
+                )
+            else:
+                copy_local_sdk_ecdh_stream_to_mpegps(
+                    stream,
+                    output,
+                    max_packets=max_packets,
+                    max_frames=max_frames,
+                    duration_seconds=duration_seconds,
+                )
+            return
+        if decrypt_video:
+            assert selected_media_key is not None
+            copy_local_stream_to_decrypted_mpegts(
+                stream,
+                output,
+                selected_media_key,
+                ffmpeg_path=ffmpeg_path,
+                nalu_header_size=nalu_header_size,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+                decrypt_hevc_parameter_sets=True,
+            )
+        else:
+            copy_local_stream_to_mpegts(
+                stream,
+                output,
+                ffmpeg_path=ffmpeg_path,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+            )
 
 
 def copy_local_sdk_ecdh_stream_to_mpegps(

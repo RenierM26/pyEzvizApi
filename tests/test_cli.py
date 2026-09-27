@@ -3291,6 +3291,70 @@ def test_local_sdk_dump_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 
+def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
+    output_path = tmp_path / "local_sdk_ecdh.ts"
+    calls: list[dict[str, Any]] = []
+
+    class FakeLocalSdkEcdhStream:
+        bootstrap = None
+
+        def __enter__(self) -> FakeLocalSdkEcdhStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_build(args: Any, client: Any = None) -> FakeLocalSdkEcdhStream:
+        assert client is None
+        return FakeLocalSdkEcdhStream()
+
+    def fake_copy(
+        stream: FakeLocalSdkEcdhStream,
+        output: BinaryIO,
+        media_key: str | bytes,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"stream": stream, "media_key": media_key, **kwargs})
+        output.write(LOCAL_SDK_TEST_PAYLOAD)
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_ecdh_cli_stream", fake_build)
+    monkeypatch.setattr(cli_module, "copy_local_stream_to_decrypted_mpegts", fake_copy)
+
+    assert (
+        cli_module.main(
+            [
+                "stream",
+                "local-sdk-dump",
+                "--local-sdk-ecdh",
+                "--host",
+                "192.0.2.10",
+                "--serial",
+                "CAM123456",
+                "--operation-code",
+                "0123456",
+                "--cas-key",
+                "1234567890abcdef",
+                "--format",
+                "mpegts",
+                "--decrypt-video",
+                "--media-key",
+                "media-secret",
+                "--max-packets",
+                "2",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert calls[0]["media_key"] == "media-secret"
+    assert calls[0]["max_packets"] == 2
+    assert calls[0]["duration_seconds"] == LOCAL_SDK_DEFAULT_DURATION
+    assert calls[0]["decrypt_hevc_parameter_sets"] is True
+    assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
+
+
 def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "local_sdk_ecdh.ps"
     pre_start_path = tmp_path / "pre-start.bin"

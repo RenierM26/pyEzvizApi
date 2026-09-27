@@ -6,10 +6,11 @@ import bisect
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
+from fractions import Fraction
 import hashlib
 from importlib import import_module
 import ipaddress
-from itertools import chain
+from itertools import chain, pairwise
 import subprocess
 from threading import Event, Thread
 import time
@@ -18,7 +19,11 @@ from typing import Any, BinaryIO, Literal, cast
 from Crypto.Cipher import AES
 
 from .cas import CasDeviceSession, EzvizCAS
-from .constants import MAX_RETRIES
+from .constants import (
+    IDMX_DEFAULT_VIDEO_FRAME_RATE,
+    IDMX_VIDEO_RTP_CLOCK_RATE,
+    MAX_RETRIES,
+)
 from .exceptions import PyEzvizError
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
@@ -1676,6 +1681,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
     h264_clean_idr_max_windows: int = 32,
     h264_wait_for_clean_idr_window: bool = False,
     h264_clean_idr_wait_seconds: float = 60.0,
+    decrypt_hevc_parameter_sets: bool = False,
 ) -> None:
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
     if h264_wait_for_clean_idr_window:
@@ -1738,6 +1744,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
             packets,
             media_key,
             nalu_header_size=nalu_header_size,
+            decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
         )
         if _annexb_has_h264_vcl(annexb):
             annexb = skip_h264_annexb_initial_idr_windows(
@@ -1762,7 +1769,10 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0913
                     ffmpeg_path=ffmpeg_path,
                     max_windows=h264_clean_idr_max_windows,
                 )
-            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+            process = _open_local_hevc_mpegts_remux_process(
+                ffmpeg_path,
+                frame_rate=_idmx_local_video_frame_rate(packets),
+            )
         elif _annexb_looks_like_h264(annexb):
             process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
         else:
@@ -2150,6 +2160,8 @@ def _open_local_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes
 
 def _open_local_hevc_mpegts_remux_process(
     ffmpeg_path: str,
+    *,
+    frame_rate: str = str(IDMX_DEFAULT_VIDEO_FRAME_RATE),
 ) -> subprocess.Popen[bytes]:
     try:
         return subprocess.Popen(
@@ -2161,7 +2173,7 @@ def _open_local_hevc_mpegts_remux_process(
                 "-f",
                 "hevc",
                 "-r",
-                "25",
+                frame_rate,
                 "-i",
                 "pipe:0",
                 "-c",
@@ -4203,6 +4215,25 @@ def _hevc_annexb_irap_window_start_index(
     return start
 
 
+def _is_complete_idmx_rtp_frame(frame: bytes) -> bool:
+    """Return whether ``frame`` is one complete standards-shaped IDMX RTP packet."""
+
+    if len(frame) < 12 or frame[0] >> 6 != 2 or frame[8:12] != IDMX_LOCAL_FRAME_SENTINEL:
+        return False
+    try:
+        rtp_payload(frame)
+    except PyEzvizError:
+        return False
+    return True
+
+
+def _idmx_local_frame_media_body(frame: bytes, header_size: int) -> bytes:
+    """Return media bytes after RTP extensions/padding or a legacy IDMX header."""
+
+    body = rtp_payload(frame) if _is_complete_idmx_rtp_frame(frame) else frame[header_size:]
+    return _strip_idmx_command_h264_record_trailer(body)
+
+
 def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
     frame: bytes,
     frame_index: int,
@@ -4221,7 +4252,7 @@ def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
 
     transport = _idmx_local_frame_transport_fields(frame, header_size)
     sample.update(transport)
-    body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    body = _idmx_local_frame_media_body(frame, header_size)
     sample["body_length"] = len(body)
     sample["body_sha256"] = hashlib.sha256(body).hexdigest()
     is_h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
@@ -4292,6 +4323,29 @@ def _idmx_local_frame_rtp_timestamp(frame: bytes, header_size: int) -> int | Non
 
 def _idmx_local_frame_rtp_marker(frame: bytes, header_size: int) -> bool:
     return bool(_idmx_local_frame_transport_fields(frame, header_size).get("rtp_marker"))
+
+
+def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
+    """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
+
+    timestamps: list[int] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None or not _idmx_local_frame_is_h264_transport(frame, header_size):
+            continue
+        timestamp = _idmx_local_frame_rtp_timestamp(frame, header_size)
+        if timestamp is not None and (not timestamps or timestamps[-1] != timestamp):
+            timestamps.append(timestamp)
+    deltas = sorted(
+        delta
+        for previous, current in pairwise(timestamps)
+        if 0 < (delta := (current - previous) & 0xFFFFFFFF) <= IDMX_VIDEO_RTP_CLOCK_RATE
+    )
+    if not deltas:
+        return str(IDMX_DEFAULT_VIDEO_FRAME_RATE)
+    median_delta = deltas[len(deltas) // 2]
+    rate = Fraction(IDMX_VIDEO_RTP_CLOCK_RATE, median_delta).limit_denominator(1001)
+    return str(rate.numerator) if rate.denominator == 1 else f"{rate.numerator}/{rate.denominator}"
 
 
 def _rtp_fragment_continues(
@@ -4374,7 +4428,7 @@ def _record_idmx_h264_nal_unit_summary(  # noqa: PLR0911, PLR0912
         return active_fu
     if not _idmx_local_frame_is_h264_transport(frame, header_size):
         return active_fu
-    body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    body = _idmx_local_frame_media_body(frame, header_size)
     if _looks_like_idmx_h264_clear_nal(body):
         _append_idmx_h264_nal_unit_sample(
             summary,
@@ -4683,6 +4737,11 @@ def _iter_idmx_local_frame_or_nested(frame: bytes) -> Iterator[bytes]:
 
 
 def _iter_idmx_local_packet_frame(packet: bytes) -> Iterator[bytes]:
+    if _is_complete_idmx_rtp_frame(
+        packet
+    ) and not _idmx_local_packet_contains_aggregate_media_frame(packet):
+        yield packet
+        return
     header_size = _idmx_local_frame_header_size(packet)
     if (
         header_size is not None
@@ -4731,7 +4790,7 @@ def _idmx_local_frame_contains_media(frame: bytes) -> bool:
     header_size = _idmx_local_frame_header_size(frame)
     if header_size is None:
         return False
-    body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+    body = _idmx_local_frame_media_body(frame, header_size)
     h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
     return (
         _looks_like_idmx_hevc_parameter_frame(body)
@@ -4768,6 +4827,7 @@ def _decrypt_idmx_local_packets_to_annexb(
     media_key: str | bytes,
     *,
     nalu_header_size: int | None = None,
+    decrypt_hevc_parameter_sets: bool = False,
 ) -> bytes:
     aes_key = _local_media_aes_key(media_key)
     h264_nalu_header_size = (
@@ -4781,7 +4841,7 @@ def _decrypt_idmx_local_packets_to_annexb(
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             raise PyEzvizError("Mixed EZVIZ local stream payload formats are unsupported")
-        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        body = _idmx_local_frame_media_body(frame, header_size)
         h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
         if _looks_like_idmx_hevc_parameter_frame(body):
             # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
@@ -4840,7 +4900,7 @@ def _decrypt_idmx_local_packets_to_annexb(
                 sequence_number=_idmx_local_frame_sequence_number(frame, header_size),
                 rtp_timestamp=_idmx_local_frame_rtp_timestamp(frame, header_size),
                 rtp_marker=_idmx_local_frame_rtp_marker(frame, header_size),
-                decrypt_parameter_sets=False,
+                decrypt_parameter_sets=decrypt_hevc_parameter_sets,
             )
             continue
         if h264_transport and h264_nalu_header_size == 0 and body:
@@ -4866,7 +4926,7 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
-        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        body = _idmx_local_frame_media_body(frame, header_size)
         if not _idmx_local_frame_is_h264_transport(frame, header_size):
             continue
         if _looks_like_idmx_h264_fu_a_frame(body):
@@ -4895,7 +4955,7 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
-            body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+            body = _idmx_local_frame_media_body(frame, header_size)
             if not _idmx_local_frame_is_h264_transport(frame, header_size):
                 continue
             if _looks_like_idmx_h264_fu_a_frame(body):
@@ -4931,7 +4991,7 @@ def _idmx_local_packets_to_hevc_annexb(
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
-        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        body = _idmx_local_frame_media_body(frame, header_size)
         if not _idmx_local_frame_is_h264_transport(frame, header_size):
             continue
         if not _looks_like_idmx_hevc_direct_frame(body):
@@ -4961,7 +5021,7 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
-            body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+            body = _idmx_local_frame_media_body(frame, header_size)
             if not _idmx_local_frame_is_h264_transport(frame, header_size):
                 continue
             if not _looks_like_idmx_hevc_direct_frame(body):
@@ -5027,7 +5087,7 @@ def _idmx_local_packets_have_direct_hevc_media(packets: list[bytes]) -> bool:
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
-        body = _strip_idmx_command_h264_record_trailer(frame[header_size:])
+        body = _idmx_local_frame_media_body(frame, header_size)
         if not _idmx_local_frame_is_h264_transport(frame, header_size):
             continue
         if _looks_like_idmx_hevc_evidence_frame(body):

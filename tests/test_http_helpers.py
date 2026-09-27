@@ -2705,6 +2705,12 @@ def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
             "max_packets": 2,
             "max_frames": 8,
             "duration_seconds": 5.0,
+            "output_format": "mpegps",
+            "decrypt_video": False,
+            "media_key": None,
+            "ffmpeg_path": "ffmpeg",
+            "nalu_header_size": 0,
+            "smscode": None,
         }
     ]
     assert output_path.read_bytes() == SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD
@@ -2787,29 +2793,44 @@ def test_save_clip_local_sdk_ecdh_bounds_input_frames_by_max_packets(
     assert calls[0]["max_frames"] == 2
 
 
-def test_save_clip_local_sdk_ecdh_rejects_mpegts(tmp_path) -> None:
+def test_save_clip_local_sdk_ecdh_supports_decrypted_mpegts(
+    monkeypatch,
+    tmp_path,
+) -> None:
     client = _client()
+    output_path = tmp_path / "front.ts"
+    calls: list[dict[str, Any]] = []
 
-    with pytest.raises(PyEzvizError, match="MPEG-PS only"):
-        client.save_clip(
-            "CAM123",
-            tmp_path / "front.ts",
-            source="local-sdk-ecdh",
-            output_format="mpegts",
-        )
+    def fake_copy(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
 
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy,
+    )
 
-def test_save_clip_local_sdk_ecdh_rejects_decrypt_video(tmp_path) -> None:
-    client = _client()
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="local-sdk-ecdh",
+        output_format="mpegts",
+        decrypt_video=True,
+        media_key="media-secret",
+        duration_seconds=5.0,
+    )
 
-    with pytest.raises(PyEzvizError, match="does not support decrypt_video"):
-        client.save_clip(
-            "CAM123",
-            tmp_path / "front.ps",
-            source="local-sdk-ecdh",
-            output_format="mpegps",
-            decrypt_video=True,
-        )
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert calls[0]["output_format"] == "mpegts"
+    assert calls[0]["decrypt_video"] is True
+    assert calls[0]["media_key"] == "media-secret"
+    assert result["format"] == "mpegts"
+    assert result["content_type"] == "video/mp2t"
 
 
 def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> None:

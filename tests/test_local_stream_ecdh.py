@@ -77,6 +77,7 @@ EXPECTED_LOCAL_SDK_ECDH_INIT_XML = (
     b"</Request>\n"
 )
 LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD = b"mpegps"
+LOCAL_SDK_ECDH_TEST_MPEGTS_PAYLOAD = b"mpegts"
 LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY = b"custom-pre-start"
 NATIVE_VECTOR_PLAINTEXT = b"hello"
 REPLAY_PACKET_1 = b"packet-1"
@@ -117,6 +118,7 @@ def _handshake_payload(
     ciphertext: bytes = b"",
     verification_key: bytes | None = None,
     outer_prefix: bytes = b"IMKH",
+    subtype: int = 2,
 ) -> bytes:
     encrypted_key_offset = LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET + header_length
     peer_public_key_offset = LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET + header_length
@@ -126,7 +128,7 @@ def _handshake_payload(
     packet[2] = header_length
     packet[header_length + 3 : header_length + 5] = len(ciphertext).to_bytes(2, "big")
     packet[header_length + 5] = 1
-    packet[header_length + 6] = 2
+    packet[header_length + 6] = subtype
     packet[header_length + 7 : header_length + 11] = nonce
     packet[encrypted_key_offset : encrypted_key_offset + len(encrypted_key)] = encrypted_key
     packet[peer_public_key_offset : peer_public_key_offset + len(peer_public_key_der)] = (
@@ -240,6 +242,28 @@ def test_parse_ezviz_local_sdk_ecdh_handshake_packet_uses_header_relative_offset
     assert packet.peer_public_key_der == peer_public_key_der
 
 
+def test_parse_ezviz_local_sdk_ecdh_handshake_accepts_live_imkh_envelope_and_subtype_zero() -> None:
+    encrypted_key = b"E" * 32
+    peer_public_key_der = _public_key_der(ec.generate_private_key(ec.SECP256R1()))
+    envelope = b"IMKH" + b"\x00" * 36
+
+    packet = parse_ezviz_local_sdk_ecdh_handshake_packet(
+        _handshake_payload(
+            encrypted_key=encrypted_key,
+            peer_public_key_der=peer_public_key_der,
+            header_length=0,
+            nonce=TEST_HANDSHAKE_NONCE,
+            outer_prefix=envelope,
+            subtype=0,
+        )
+    )
+
+    assert packet is not None
+    assert packet.packet_offset == len(envelope)
+    assert packet.outer_prefix == envelope
+    assert packet.subtype == 0
+
+
 def test_parse_ezviz_local_sdk_ecdh_data_packet_accepts_outer_prefixed_payload() -> None:
     payload = _data_payload(nonce=TEST_NONCE, ciphertext=TEST_CIPHERTEXT)
 
@@ -285,7 +309,9 @@ def test_parse_ezviz_local_sdk_ecdh_data_packet_rejects_truncated_length() -> No
     assert parse_ezviz_local_sdk_ecdh_data_packet(payload + b"extra") is None
 
 
-def test_parse_ezviz_local_sdk_ecdh_packets_reject_embedded_or_unknown_markers() -> None:
+def test_parse_ezviz_local_sdk_ecdh_packets_accepts_opaque_subtype_but_rejects_embedded_marker() -> (
+    None
+):
     camera_public_key_der = _public_key_der(ec.generate_private_key(ec.SECP256R1()))
     handshake_payload = bytearray(
         _handshake_payload(
@@ -294,7 +320,9 @@ def test_parse_ezviz_local_sdk_ecdh_packets_reject_embedded_or_unknown_markers()
         )
     )
     handshake_payload[LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH + 2 + 6] = 3
-    assert parse_ezviz_local_sdk_ecdh_handshake_packet(bytes(handshake_payload)) is None
+    packet = parse_ezviz_local_sdk_ecdh_handshake_packet(bytes(handshake_payload))
+    assert packet is not None
+    assert packet.subtype == 3
 
     assert (
         parse_ezviz_local_sdk_ecdh_handshake_packet(
@@ -418,6 +446,46 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_derives_key_and_waits_for_keyframe(
         1,
         _data_payload(nonce=nonce, ciphertext=ciphertext, verification_key=chacha20_key),
     ) == (LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER + b"\x00" * 8 + LOCAL_SDK_ECDH_HEVC_VPS_4B + b"frame")
+
+
+def test_ezviz_local_sdk_ecdh_stream_decoder_preserves_authenticated_rtp_packet() -> None:
+    client_key_pair = generate_ezviz_local_sdk_ecdh_keypair()
+    camera_private_key = ec.generate_private_key(ec.SECP256R1())
+    camera_public_key_der = _public_key_der(camera_private_key)
+    shared_secret = derive_ezviz_local_sdk_ecdh_shared_secret(
+        client_key_pair.private_key,
+        camera_public_key_der,
+    )
+    chacha20_key = b"C" * 32
+    decoder = EzvizLocalSdkEcdhStreamDecoder(client_key_pair.private_key)
+    handshake = _handshake_payload(
+        encrypted_key=_encrypt_session_key(shared_secret, chacha20_key),
+        peer_public_key_der=camera_public_key_der,
+        verification_key=shared_secret,
+        outer_prefix=b"IMKH" + b"\x00" * 36,
+        subtype=0,
+        header_length=0,
+    )
+    rtp_packet = (
+        b"\xb0\x60\x12\x34\x56\x78\x9a\xbc\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        b"\x62\x01\x93encrypted-video"
+        b"\x00\x00\x00\x04"
+    )
+    nonce = b"\x00\x00\x00\x02"
+    ciphertext = ChaCha20.new(
+        key=chacha20_key,
+        nonce=ezviz_local_sdk_ecdh_chacha20_nonce(nonce),
+    ).encrypt(rtp_packet)
+
+    assert decoder.feed_payload(0, handshake) == EMPTY_BYTES
+    assert (
+        decoder.feed_payload(
+            1,
+            _data_payload(nonce=nonce, ciphertext=ciphertext, verification_key=chacha20_key),
+        )
+        == rtp_packet
+    )
 
 
 def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering() -> None:
@@ -735,6 +803,68 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[1]["max_frames"] == 3
     assert copied[1]["duration_seconds"] == duration_seconds
     assert callable(copied[1]["monotonic"])
+
+
+def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open(*args: object, **kwargs: object) -> FakeStream:
+        calls.append({"kind": "open", "args": args, **kwargs})
+        return FakeStream()
+
+    def fake_copy(
+        stream: object,
+        output: BytesIO,
+        media_key: str | bytes,
+        **kwargs: object,
+    ) -> None:
+        calls.append(
+            {
+                "kind": "copy",
+                "stream": stream,
+                "media_key": media_key,
+                **kwargs,
+            }
+        )
+        output.write(LOCAL_SDK_ECDH_TEST_MPEGTS_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        fake_open,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.copy_local_stream_to_decrypted_mpegts",
+        fake_copy,
+    )
+    output = BytesIO()
+
+    duration_seconds = 5.0
+    copy_local_sdk_ecdh_stream_from_client(
+        object(),
+        "CAM123",
+        output,
+        output_format="mpegts",
+        decrypt_video=True,
+        media_key="media-secret",
+        max_packets=3,
+        duration_seconds=duration_seconds,
+    )
+
+    assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGTS_PAYLOAD
+    assert calls[0]["fetch_media_key"] is False
+    assert calls[1]["media_key"] == "media-secret"
+    assert calls[1]["max_packets"] == 3
+    assert calls[1]["duration_seconds"] == duration_seconds
+    assert calls[1]["decrypt_hevc_parameter_sets"] is True
 
 
 def test_copy_local_sdk_ecdh_stream_to_mpegps_flushes_output() -> None:

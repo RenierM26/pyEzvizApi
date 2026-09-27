@@ -3119,10 +3119,6 @@ class EzvizClient:
                 smscode=smscode,
             )
         if source == "local-sdk-ecdh":
-            if decrypt_video:
-                raise PyEzvizError(
-                    "source='local-sdk-ecdh' does not support decrypt_video"
-                )
             return self._save_local_sdk_ecdh_clip(
                 serial,
                 output,
@@ -3138,6 +3134,11 @@ class EzvizClient:
                 receiver_port=local_sdk_ecdh_receiver_port,
                 send_init=local_sdk_ecdh_send_init,
                 max_prefix_bytes=local_sdk_ecdh_max_prefix_bytes,
+                ffmpeg_path=ffmpeg_path,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+                smscode=smscode,
             )
         if source == "hcnetsdk-command-port":
             trim_to_clean_window = (
@@ -3232,13 +3233,13 @@ class EzvizClient:
         receiver_port: int,
         send_init: bool,
         max_prefix_bytes: int,
+        ffmpeg_path: str,
+        decrypt_video: bool,
+        media_key: str | bytes | None,
+        nalu_header_size: int | None,
+        smscode: str | int | None,
     ) -> SaveMediaResult:
         """Save a clip through the local SDK ECDH stream path."""
-
-        if output_format != "mpegps":
-            raise PyEzvizError(
-                "source='local-sdk-ecdh' currently writes MPEG-PS only"
-            )
 
         resolved_max_frames = max_frames if max_frames is not None else max_packets
         start_position = None
@@ -3261,6 +3262,12 @@ class EzvizClient:
                     max_packets=max_packets,
                     max_frames=resolved_max_frames,
                     duration_seconds=duration_seconds,
+                    output_format=output_format,
+                    decrypt_video=decrypt_video,
+                    media_key=media_key,
+                    ffmpeg_path=ffmpeg_path,
+                    nalu_header_size=nalu_header_size,
+                    smscode=smscode,
                 )
         else:
             start_position = _binary_position(output)
@@ -3279,6 +3286,12 @@ class EzvizClient:
                 max_packets=max_packets,
                 max_frames=resolved_max_frames,
                 duration_seconds=duration_seconds,
+                output_format=output_format,
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                ffmpeg_path=ffmpeg_path,
+                nalu_header_size=nalu_header_size,
+                smscode=smscode,
             )
 
         return {

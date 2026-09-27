@@ -4066,28 +4066,12 @@ def _handle_local_sdk_stream_dump(
         args.format = "mpegps" if args.local_sdk_ecdh else "mpegts"
 
     if args.local_sdk_ecdh:
-        if args.decrypt_video:
-            raise PyEzvizError("--local-sdk-ecdh does not support --decrypt-video")
-        if args.format != "mpegps":
-            raise PyEzvizError("--local-sdk-ecdh currently supports --format mpegps only")
         with _build_local_sdk_ecdh_cli_stream(args, client) as stream:
             if args.output == "-":
-                copy_local_sdk_ecdh_stream_to_mpegps(
-                    stream,
-                    sys.stdout.buffer,
-                    max_packets=args.max_packets,
-                    max_frames=args.max_packets,
-                    duration_seconds=args.duration,
-                )
+                _copy_local_sdk_ecdh_cli_stream(args, client, stream, sys.stdout.buffer)
             else:
                 with Path(args.output).open("wb") as output:
-                    copy_local_sdk_ecdh_stream_to_mpegps(
-                        stream,
-                        output,
-                        max_packets=args.max_packets,
-                        max_frames=args.max_packets,
-                        duration_seconds=args.duration,
-                    )
+                    _copy_local_sdk_ecdh_cli_stream(args, client, stream, output)
             _write_local_sdk_metadata_output(args.metadata_output, stream)
         return 0
 
@@ -4167,6 +4151,51 @@ def _handle_local_sdk_stream_dump(
                 )
         _write_local_sdk_metadata_output(args.metadata_output, stream)
     return 0
+
+
+def _copy_local_sdk_ecdh_cli_stream(
+    args: argparse.Namespace,
+    client: EzvizClient | None,
+    stream: Any,
+    output: BinaryIO,
+) -> None:
+    """Copy one CLI-selected ECDH stream to its requested container."""
+    if args.decrypt_video and args.format == "mpegps":
+        copy_local_stream_to_decrypted_mpegps(
+            stream,
+            output,
+            _local_sdk_media_key(args, client),
+            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+            max_packets=args.max_packets,
+            duration_seconds=args.duration,
+        )
+    elif args.decrypt_video:
+        copy_local_stream_to_decrypted_mpegts(
+            stream,
+            output,
+            _local_sdk_media_key(args, client),
+            ffmpeg_path=args.ffmpeg_path,
+            nalu_header_size=_codec_nalu_header_size(args.decrypt_codec),
+            max_packets=args.max_packets,
+            duration_seconds=args.duration,
+            decrypt_hevc_parameter_sets=True,
+        )
+    elif args.format == "mpegps":
+        copy_local_sdk_ecdh_stream_to_mpegps(
+            stream,
+            output,
+            max_packets=args.max_packets,
+            max_frames=args.max_packets,
+            duration_seconds=args.duration,
+        )
+    else:
+        copy_local_stream_to_mpegts(
+            stream,
+            output,
+            ffmpeg_path=args.ffmpeg_path,
+            max_packets=args.max_packets,
+            duration_seconds=args.duration,
+        )
 
 
 def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int:

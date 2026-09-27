@@ -372,6 +372,42 @@ def test_all_local_packet_sources_include_startup_in_shared_duration(
     assert local_media_packet_source(stream).duration_from_start is True
 
 
+@pytest.mark.parametrize("stream_kind", ("direct", "command", "multi"))
+def test_exact_byte_limit_commits_cached_first_packet(stream_kind: str) -> None:
+    """Closing the adapter at an exact byte limit cannot replay cached media."""
+    first_body = b"\x00\x00\x01\xbaabc"
+    second_body = b"\x00\x00\x01\xbadef"
+    first_media = _media(first_body)
+    client = _FakeCommandPortClient(_media(second_body))
+
+    if stream_kind == "direct":
+        sdk_client = _FakeSdkClient(_media(second_body))
+        stream: Any = EzvizLocalSdkMediaStream(sdk_client, _preview_request())  # type: ignore[arg-type]
+    elif stream_kind == "command":
+        stream = HcNetSdkCommandPortMediaStream(cast(Any, client), ())
+    else:
+        media_step = HcNetSdkCommandPortSocketStep(
+            (build_hcnetsdk_tcp_frame(b"preview"),),
+            response_reads_after_each=0,
+            media_socket=True,
+        )
+        stream = HcNetSdkCommandPortMultiSocketMediaStream(
+            HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+            HcNetSdkCommandPortMultiSocketPlan((media_step,)),
+        )
+        stream._media_client = cast(Any, client)  # noqa: SLF001
+
+    stream.bootstrap = cast(Any, object())
+    stream._first_media = first_media  # noqa: SLF001
+    source = local_media_packet_source(stream)
+
+    first = list(source.iter_media_packets(limits=CaptureLimits(max_bytes=len(first_body))))
+    second = list(source.iter_media_packets(limits=CaptureLimits(max_packets=1)))
+
+    assert [packet.body for packet in first] == [first_body]
+    assert [packet.body for packet in second] == [second_body]
+
+
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:
     control_request = build_hcnetsdk_tcp_frame(b"auth", field_4=90)
     preview_request = build_hcnetsdk_tcp_frame(b"preview", field_4=99)

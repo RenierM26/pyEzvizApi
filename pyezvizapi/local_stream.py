@@ -742,9 +742,10 @@ class EzvizLocalSdkMediaStream:
         if self._first_media is not None:
             if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
-            yield _local_media_packet(self._first_media)
-            emitted += 1
+            first_media = self._first_media
             self._first_media = None
+            yield _local_media_packet(first_media)
+            emitted += 1
 
         while max_packets is None or emitted < max_packets:
             remaining = None
@@ -873,9 +874,10 @@ class HcNetSdkCommandPortMediaStream:
         if self._first_media is not None:
             if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
-            yield _hcnetsdk_command_port_media_packet(self._first_media)
-            emitted += 1
+            first_media = self._first_media
             self._first_media = None
+            yield _hcnetsdk_command_port_media_packet(first_media)
+            emitted += 1
 
         while max_packets is None or emitted < max_packets:
             remaining = None
@@ -1353,9 +1355,10 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
             if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
                 self._set_keepalive_deadline(deadline, monotonic)
-            yield _hcnetsdk_command_port_media_packet(self._first_media)
-            emitted += 1
+            first_media = self._first_media
             self._first_media = None
+            yield _hcnetsdk_command_port_media_packet(first_media)
+            emitted += 1
         while self._drained_media and (max_packets is None or emitted < max_packets):
             if deadline is None and duration_seconds is not None:
                 deadline = monotonic() + duration_seconds

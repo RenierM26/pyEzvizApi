@@ -379,6 +379,8 @@ class VtmStreamClient:
             return
         if first_packet_timeout is not None and first_packet_timeout <= 0:
             return
+        if keepalive_interval is not None and keepalive_interval <= 0:
+            raise PyEzvizError("keepalive_interval must be positive or None")
 
         seen = 0
         started_at = monotonic()

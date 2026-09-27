@@ -480,6 +480,42 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
     assert events.index("media.recv") < events.index("keyframe.send")
 
 
+def test_hcnetsdk_multi_socket_stream_checks_deadline_between_drained_media() -> None:
+    first_payload = b"\x00\x00\x01\xbaabc"
+    second_payload = b"\x00\x00\x01\xbadef"
+    plan = HcNetSdkCommandPortMultiSocketPlan(
+        steps=(
+            HcNetSdkCommandPortSocketStep(
+                (build_hcnetsdk_tcp_frame(b"preview"),),
+                response_reads_after_each=0,
+                media_socket=True,
+            ),
+        )
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        plan,
+    )
+    stream.bootstrap = SimpleNamespace()  # type: ignore[assignment]
+    stream._media_client = cast(Any, object())  # noqa: SLF001
+    stream._drained_media = [  # noqa: SLF001
+        _media(first_payload, sequence=1),
+        _media(second_payload, sequence=2),
+    ]
+    monotonic_values = iter((0.0, 0.0, 1.0, 1.0))
+
+    packets = list(
+        stream.iter_packets(
+            max_packets=2,
+            duration_seconds=1.0,
+            monotonic=lambda: next(monotonic_values),
+        )
+    )
+
+    assert [packet.body for packet in packets] == [first_payload]
+    assert len(stream._drained_media) == 1  # noqa: SLF001
+
+
 def test_hcnetsdk_multi_socket_stream_records_keepalive_events() -> None:
     preview_request = build_hcnetsdk_tcp_frame(b"preview", field_12=0x30000)
     keepalive_request = build_hcnetsdk_tcp_frame(b"keepalive", field_12=0x30006)

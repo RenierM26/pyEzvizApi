@@ -1101,6 +1101,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         while self._drained_media and (max_packets is None or emitted < max_packets):
             if deadline is None and duration_seconds is not None:
                 deadline = monotonic() + duration_seconds
+            if deadline is not None and monotonic() >= deadline:
+                break
             yield _hcnetsdk_command_port_media_packet(self._drained_media.pop(0))
             emitted += 1
 

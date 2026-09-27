@@ -1774,6 +1774,16 @@ def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
     assert sent_packets[-1].body == build_stream_keepalive_request("ssn-123")
 
 
+@pytest.mark.parametrize("keepalive_interval", [0.0, -1.0])
+def test_vtm_stream_client_rejects_nonpositive_keepalive_interval(
+    keepalive_interval: float,
+) -> None:
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+
+    with pytest.raises(PyEzvizError, match="keepalive_interval must be positive"):
+        list(stream.iter_packets(keepalive_interval=keepalive_interval))
+
+
 def test_vtm_stream_client_sends_keepalive_while_socket_is_quiet() -> None:
     stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
     media_packet = encode_vtm_packet(

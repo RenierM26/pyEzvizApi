@@ -139,6 +139,10 @@ def test_idmx_infer_aac_sample_rate_compares_audio_and_video_clocks() -> None:
     ]
 
     assert _idmx_infer_aac_sample_rate(packets) == 16_000
+    aggregate = b"".join(
+        len(packet).to_bytes(4, "little") + packet for packet in packets
+    )
+    assert _idmx_infer_aac_sample_rate([aggregate]) == 16_000
 
 
 def test_idmx_infer_aac_sample_rate_uses_common_48khz_interval() -> None:

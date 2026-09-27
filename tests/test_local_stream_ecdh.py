@@ -654,3 +654,45 @@ def test_ezviz_local_sdk_ecdh_stream_applies_duration_before_first_media_read() 
     assert packets == []
     assert sdk_client.read_first_media is False
     assert sdk_client.reads == 0
+
+
+def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
+    class FakeSdkClient:
+        def __init__(self) -> None:
+            self.read_timeout: float | None = None
+
+        def bootstrap_preview_from_fields(self, **_kwargs: object) -> object:
+            return EzvizLocalSdkStreamBootstrap(
+                preview=cast(Any, object()),
+                stream_setup=cast(Any, object()),
+                first_media=None,
+            )
+
+        def read_stream_frame_after_prefix(self, **kwargs: object) -> object:
+            self.read_timeout = cast(float, kwargs["timeout"])
+            raise TimeoutError
+
+        def close(self) -> None:
+            return None
+
+    ticks = iter([0.0, 0.25])
+    sdk_client = FakeSdkClient()
+    stream = EzvizLocalSdkEcdhMediaStream(
+        cast(Any, sdk_client),
+        EzvizLocalPreviewRequest(
+            operation_code="0123456",
+            channel=1,
+            receiver_info="receiver",
+            receiver_info_ex="receiver-ex",
+        ),
+        generate_ezviz_local_sdk_ecdh_keypair(),
+    )
+
+    assert list(
+        stream.iter_packets(
+            max_packets=1,
+            duration_seconds=1.0,
+            monotonic=lambda: next(ticks),
+        )
+    ) == []
+    assert sdk_client.read_timeout == pytest.approx(0.75)

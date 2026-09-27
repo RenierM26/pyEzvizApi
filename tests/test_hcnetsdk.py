@@ -4235,6 +4235,39 @@ def test_ezviz_local_sdk_client_missing_session_reports_result() -> None:
         )
 
 
+def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
+    monkeypatch,
+) -> None:
+    stream_sock = _FakeSocket([])
+    stream_sock.timeout = 3.0
+    expected = object()
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_interleaved_rtp_frame_after_prefix",
+        lambda _sock, *, max_prefix_bytes: expected,
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=lambda _address, _timeout: stream_sock,
+    ) as client:
+        result = client.read_stream_frame_after_prefix(timeout=0.75)
+
+    assert result is expected
+    assert stream_sock.timeout_history == [0.75, 3.0]
+
+
 def test_apk_observed_command_ids_are_named() -> None:
     assert HcNetSdkDvrCommand.GET_WIFI_CFG == 307
     assert HcNetSdkDvrCommand.SET_WIFI_CFG == 306
@@ -7299,9 +7332,18 @@ class _FakeSocket(_FragmentedSocket):
         super().__init__(chunks)
         self.sent: list[bytes] = []
         self.closed = False
+        self.timeout: float | None = None
+        self.timeout_history: list[float | None] = []
 
     def sendall(self, data: bytes) -> None:
         self.sent.append(data)
 
     def close(self) -> None:
         self.closed = True
+
+    def gettimeout(self) -> float | None:
+        return self.timeout
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.timeout = timeout
+        self.timeout_history.append(timeout)

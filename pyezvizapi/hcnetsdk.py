@@ -8894,12 +8894,25 @@ class EzvizLocalSdkClient:
         self,
         *,
         max_prefix_bytes: int = 4096,
+        timeout: float | None = None,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next local stream frame, tolerating any binary preface."""
-        return read_ezviz_interleaved_rtp_frame_after_prefix(
-            self._stream(),
-            max_prefix_bytes=max_prefix_bytes,
-        )
+        sock = self._stream()
+        if timeout is None:
+            return read_ezviz_interleaved_rtp_frame_after_prefix(
+                sock,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+
+        previous_timeout = sock.gettimeout()
+        sock.settimeout(timeout)
+        try:
+            return read_ezviz_interleaved_rtp_frame_after_prefix(
+                sock,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+        finally:
+            sock.settimeout(previous_timeout)
 
     def _command(self) -> Any:
         if self._command_sock is None:

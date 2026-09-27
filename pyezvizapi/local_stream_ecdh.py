@@ -462,11 +462,20 @@ class EzvizLocalSdkEcdhMediaStream:
         while (max_packets is None or emitted < max_packets) and (
             max_frames is None or read_frames < max_frames
         ):
-            if deadline is not None and monotonic() >= deadline:
-                break
-            media = self.sdk_client.read_stream_frame_after_prefix(
-                max_prefix_bytes=self.max_prefix_bytes,
-            )
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    break
+            try:
+                media = self.sdk_client.read_stream_frame_after_prefix(
+                    max_prefix_bytes=self.max_prefix_bytes,
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                if deadline is not None:
+                    break
+                raise
             read_frames += 1
             body = self.decoder.feed_interleaved_frame(media)
             if body:

@@ -129,12 +129,14 @@ def local_media_packet_source(
 ) -> MediaPacketSourceAdapter[EzvizLocalStreamPacket]:
     """Adapt an existing local SDK stream to the shared packet contract."""
 
+    prepare_startup = getattr(stream, "prepare_startup", None)
     return MediaPacketSourceAdapter(
         stream,
         local_stream_packet_to_media_packet,
         duration_from_start=bool(
             getattr(stream, "supports_startup_deadline_iter_packets", False)
         ),
+        prepare=prepare_startup if callable(prepare_startup) else None,
     )
 
 
@@ -1460,6 +1462,11 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             self._stream.close()
             self._stream = None
 
+    def prepare_startup(self) -> None:
+        """Cache startup work that must not consume a capture deadline."""
+        if self.bootstrap is None and self.rsa_key is None:
+            self.rsa_key = hcnetsdk_command_port_rsa_key()
+
     def _login_client(
         self,
         *,
@@ -1550,11 +1557,7 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
-        if self.bootstrap is None and self.rsa_key is None:
-            # Key generation may block on system randomness. Complete it before
-            # starting a startup-inclusive capture budget, then cache it for
-            # subsequent starts.
-            self.rsa_key = hcnetsdk_command_port_rsa_key()
+        self.prepare_startup()
         deadline = (
             monotonic() + duration_seconds
             if duration_from_start and duration_seconds is not None

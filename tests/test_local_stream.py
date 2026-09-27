@@ -1355,9 +1355,8 @@ def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> 
     monkeypatch.setattr(stream, "start", start)
 
     packets = list(
-        stream.iter_packets(
-            duration_seconds=1.0,
-            duration_from_start=True,
+        local_media_packet_source(stream).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
             monotonic=lambda: now[0],
         )
     )

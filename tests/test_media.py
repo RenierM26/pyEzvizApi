@@ -263,6 +263,42 @@ def test_vtm_adapter_applies_duration_from_iteration_start() -> None:
     assert stream.duration_from_start is True
 
 
+def test_local_adapter_prepares_stream_before_starting_deadline() -> None:
+    """Potentially blocking local startup preparation is outside the budget."""
+
+    class PreparedDeadlineStream:
+        supports_startup_deadline_iter_packets = True
+
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def prepare_startup(self) -> None:
+            self.now = 5.0
+
+        def iter_packets(
+            self,
+            *,
+            max_packets: int | None = None,
+            duration_seconds: float | None = None,
+            duration_from_start: bool = False,
+            monotonic: Callable[[], float] = time.monotonic,
+        ) -> Iterator[EzvizLocalStreamPacket]:
+            del max_packets, duration_seconds, duration_from_start, monotonic
+            self.now = 5.5
+            yield EzvizLocalStreamPacket(1, 3, BODY)
+
+    stream = PreparedDeadlineStream()
+
+    packets = list(
+        local_media_packet_source(stream).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
+            monotonic=lambda: stream.now,
+        )
+    )
+
+    assert [packet.body for packet in packets] == [BODY]
+
+
 def test_legacy_stream_adapter_does_not_read_past_exact_byte_limit() -> None:
     """A filled byte budget terminates before requesting another live packet."""
 

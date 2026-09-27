@@ -289,6 +289,7 @@ class MediaPacketSourceAdapter[PacketT]:
     source: LegacyPacketSource[PacketT]
     converter: Callable[[PacketT], MediaPacket]
     duration_from_start: bool = False
+    prepare: Callable[[], object] | None = None
 
     def iter_media_packets(
         self,
@@ -299,6 +300,8 @@ class MediaPacketSourceAdapter[PacketT]:
         """Yield normalized packets from the wrapped transport stream."""
 
         selected_limits = limits or CaptureLimits()
+        if self.prepare is not None:
+            self.prepare()
         deadline = (
             monotonic() + selected_limits.duration_seconds
             if self.duration_from_start and selected_limits.duration_seconds is not None

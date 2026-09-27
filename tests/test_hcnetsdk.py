@@ -4339,8 +4339,11 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     exclusive_socket = ConnectSocket(
         bind_error=OSError(errno.EADDRINUSE, "TIME_WAIT"),
     )
+    routed_exclusive_socket = ConnectSocket(
+        bind_error=OSError(errno.EADDRINUSE, "TIME_WAIT"),
+    )
     reusable_socket = ConnectSocket()
-    sockets.extend((exclusive_socket, reusable_socket))
+    sockets.extend((exclusive_socket, routed_exclusive_socket, reusable_socket))
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         True,
@@ -4366,12 +4369,16 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     result = _create_reusable_source_connection(
         ("192.0.2.10", 9010),
         1.0,
-        source_address=("127.0.0.1", 10103),
+        source_address=("", 10103),
     )
 
     assert result is reusable_socket
     assert exclusive_socket.closed is True
     assert exclusive_socket.option_calls == [
+        (socket.SOL_SOCKET, exclusive_option, 1)
+    ]
+    assert routed_exclusive_socket.closed is True
+    assert routed_exclusive_socket.option_calls == [
         (socket.SOL_SOCKET, exclusive_option, 1)
     ]
     assert reusable_socket.option_calls == [
@@ -4640,6 +4647,62 @@ def test_windows_wildcard_source_uses_target_route_interface(
     assert route_socket.closed is True
 
 
+def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_socket = object()
+    calls: list[tuple[tuple[Any, ...], bool]] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        _timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        calls.append((source_address, exclusive))
+        if source_address == ("", 10103):
+            raise OSError(errno.EADDRINUSE, "owned on another interface")
+        return connected_socket
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_concrete_source_address",
+        lambda _address, _family, _target: ("192.0.2.25", 10103),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
+        lambda *_args: pytest.fail("TIME_WAIT fallback should not be consulted"),
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+        ],
+    )
+
+    assert _create_reusable_source_connection(
+        ("192.0.2.10", 9010),
+        1.0,
+        source_address=("", 10103),
+    ) is connected_socket
+    assert calls == [
+        (("", 10103), True),
+        (("192.0.2.25", 10103), True),
+    ]
+
+
 def test_windows_ipv6_wildcard_source_preserves_route_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4730,8 +4793,10 @@ def test_windows_source_address_is_resolved_per_connection_candidate(
     assert result is connected_socket
     assert connect_calls == [
         (socket.AF_INET6, ipv6_target, ("", 10103), True),
+        (socket.AF_INET6, ipv6_target, ("2001:db8::25", 10103), True),
         (socket.AF_INET6, ipv6_target, ("2001:db8::25", 10103), False),
         (socket.AF_INET, ipv4_target, ("", 10103), True),
+        (socket.AF_INET, ipv4_target, ("192.0.2.25", 10103), True),
         (socket.AF_INET, ipv4_target, ("192.0.2.25", 10103), False),
     ]
 

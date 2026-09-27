@@ -9058,11 +9058,26 @@ def _create_reusable_source_connection(
                 except OSError as err:
                     if err.errno != errno.EADDRINUSE:
                         raise
+                    wildcard_source_address = candidate_source_address
                     candidate_source_address = _windows_concrete_source_address(
                         candidate_source_address,
                         family,
                         target,
                     )
+                    if candidate_source_address != wildcard_source_address:
+                        try:
+                            return _connect_bound_source_socket(
+                                family,
+                                sock_type,
+                                protocol,
+                                target,
+                                timeout,
+                                source_address=candidate_source_address,
+                                exclusive=True,
+                            )
+                        except OSError as routed_err:
+                            if routed_err.errno != errno.EADDRINUSE:
+                                raise
                     if not _windows_source_port_is_time_wait_only(
                         candidate_source_address,
                         family,

@@ -1932,48 +1932,6 @@ def test_decrypt_idmx_aac_rejects_access_unit_too_large_for_adts() -> None:
     )
 
 
-def test_idmx_packets_from_selected_annexb_aligns_first_vcl_packet(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    first_idr = b"\x00\x00\x00\x01\x65first"
-    second_idr = b"\x00\x00\x00\x01\x65second"
-    packets = [b"before", b"selected", b"after"]
-    seen: dict[str, Any] = {}
-
-    def fake_packet_index(
-        candidate_packets: list[bytes],
-        _media_key: str | bytes,
-        *,
-        nalu_header_size: int | None,
-        offset: int,
-    ) -> int:
-        seen.update(
-            packets=candidate_packets,
-            nalu_header_size=nalu_header_size,
-            offset=offset,
-        )
-        return 1
-
-    monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypted_h264_annexb_packet_index_for_offset",
-        fake_packet_index,
-    )
-
-    assert _idmx_packets_from_selected_annexb(
-        packets,
-        full_annexb=first_idr + second_idr,
-        selected_annexb=second_idr,
-        media_key=IDMX_MEDIA_KEY,
-        nalu_header_size=None,
-        video_input_format="h264",
-    ) == packets[1:]
-    assert seen == {
-        "packets": packets,
-        "nalu_header_size": None,
-        "offset": len(first_idr),
-    }
-
-
 def test_idmx_packets_from_selected_annexb_keeps_audio_between_vcl_fragments() -> None:
     def frame(payload_type: int, body: bytes, *, sequence: int, timestamp: int) -> bytes:
         rtp = (
@@ -2037,44 +1995,60 @@ def test_idmx_packets_from_selected_annexb_starts_at_first_vcl_after_parameters(
     ) == packets[3:]
 
 
-def test_idmx_packets_from_selected_annexb_dispatches_hevc_mapping(
+def test_idmx_packets_from_selected_annexb_anchors_hevc_after_synthesized_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    old_vcl = b"\x00\x00\x00\x01\x02\x01old"
+    def frame(body: bytes, *, sequence: int, timestamp: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    irap = b"\x00\x00\x00\x01\x26\x01same"
+    middle = b"\x00\x00\x00\x01\x02\x01middle"
+    tail = b"\x00\x00\x00\x01\x02\x01tail"
     parameters = b"\x00\x00\x00\x01\x40\x01vps"
-    selected_vcl = b"\x00\x00\x00\x01\x26\x01selected"
-    packets = [b"old", b"parameters", b"selected"]
-    offsets: list[int] = []
+    full_annexb = irap + middle + irap + tail
+    selected_annexb = parameters + irap + tail
+    second_irap_offset = len(irap + middle)
+    packets = [
+        frame(b"old", sequence=1, timestamp=100),
+        frame(b"middle", sequence=2, timestamp=200),
+        frame(b"retained", sequence=3, timestamp=300),
+        frame(b"tail", sequence=4, timestamp=300),
+    ]
+    spans = [
+        (0, len(irap), 0, 0, 19, 0, 0),
+        (len(irap), second_irap_offset, 1, 1, 1, 0, 0),
+        (
+            second_irap_offset,
+            second_irap_offset + len(irap),
+            2,
+            2,
+            19,
+            0,
+            0,
+        ),
+        (len(full_annexb) - len(tail), len(full_annexb), 3, 3, 1, 0, 0),
+    ]
 
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypted_h264_annexb_packet_index_for_offset",
-        lambda *_args, **_kwargs: pytest.fail("H.264 mapper should not be used"),
-    )
-
-    def fake_hevc_index(
-        candidate_packets: list[bytes],
-        _media_key: str | bytes,
-        *,
-        offset: int,
-    ) -> int:
-        assert candidate_packets == packets
-        offsets.append(offset)
-        return 2
-
-    monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypted_hevc_annexb_packet_index_for_offset",
-        fake_hevc_index,
+        "pyezvizapi.local_stream._idmx_hevc_annexb_packet_spans",
+        lambda *_args, **_kwargs: (full_annexb, spans),
     )
 
     assert _idmx_packets_from_selected_annexb(
         packets,
-        full_annexb=old_vcl + parameters + selected_vcl,
-        selected_annexb=parameters + selected_vcl,
+        full_annexb=full_annexb,
+        selected_annexb=selected_annexb,
         media_key=IDMX_MEDIA_KEY,
         nalu_header_size=None,
         video_input_format="hevc",
     ) == packets[2:]
-    assert offsets == [len(old_vcl + parameters)]
 
 
 def test_idmx_h264_selected_packets_stop_at_selected_video_endpoint() -> None:
@@ -2119,10 +2093,14 @@ def test_idmx_h264_selected_packets_track_vcl_inside_aggregate_packet() -> None:
 
     selected = b"\x00\x00\x00\x01\x65first-last"
     next_nal = b"\x00\x00\x00\x01\x41next"
+    start_fu = frame(96, b"\x7c\x85first-", sequence=1, timestamp=100)
+    middle_audio = frame(104, b"audio", sequence=9, timestamp=0)
+    end_fu = frame(96, b"\x7c\x45last", sequence=2, timestamp=100)
     packets = [
-        frame(96, b"\x7c\x85first-", sequence=1, timestamp=100),
-        frame(104, b"audio", sequence=9, timestamp=0),
-        frame(96, b"\x7c\x45last", sequence=2, timestamp=100)
+        frame(104, b"audio-before", sequence=8, timestamp=0) + start_fu,
+        middle_audio,
+        end_fu
+        + frame(104, b"audio-after", sequence=10, timestamp=1024)
         + frame(96, b"\x41next", sequence=3, timestamp=200),
     ]
 
@@ -2133,7 +2111,7 @@ def test_idmx_h264_selected_packets_track_vcl_inside_aggregate_packet() -> None:
         media_key=IDMX_MEDIA_KEY,
         nalu_header_size=None,
         stream_is_clear=True,
-    ) == packets
+    ) == [start_fu, middle_audio, end_fu]
 
 
 def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(

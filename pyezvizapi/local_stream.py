@@ -4169,9 +4169,9 @@ def _decrypted_h264_annexb_packet_index_for_offset(
         nalu_header_size=nalu_header_size,
         stream_is_clear=False,
     )
-    for start_offset, end_offset, start_packet, _end_packet, _nal_type in spans:
-        if start_offset <= offset < end_offset:
-            return start_packet
+    for span in spans:
+        if span[0] <= offset < span[1]:
+            return span[2]
     return max(len(packets) - 1, 0)
 
 
@@ -4184,9 +4184,9 @@ def _decrypted_hevc_annexb_packet_index_for_offset(
     """Return the first packet contributing the HEVC NAL at ``offset``."""
 
     _annexb, spans = _idmx_hevc_annexb_packet_spans(packets, media_key)
-    for start_offset, end_offset, start_packet, _end_packet, _nal_type in spans:
-        if start_offset <= offset < end_offset:
-            return start_packet
+    for span in spans:
+        if span[0] <= offset < span[1]:
+            return span[2]
     return max(len(packets) - 1, 0)
 
 
@@ -4196,17 +4196,18 @@ def _idmx_h264_annexb_packet_spans(
     *,
     nalu_header_size: int | None,
     stream_is_clear: bool,
-) -> tuple[bytes, list[tuple[int, int, int, int, int]]]:
+) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:
     """Assemble H.264 while recording each NAL's contributing packet span."""
 
     output = bytearray()
-    spans: list[tuple[int, int, int, int, int]] = []
+    spans: list[tuple[int, int, int, int, int, int, int]] = []
     active_fu: _RtpFragmentedNal | None = None
     active_start_packet: int | None = None
+    active_start_frame: int | None = None
     aes_key = _local_media_aes_key(media_key)
     header_size = H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
     for packet_index, packet in enumerate(packets):
-        for frame in _iter_idmx_local_packet_frame(packet):
+        for frame_index, frame in enumerate(_iter_idmx_local_packet_frame(packet)):
             frame_header_size = _idmx_local_frame_header_size(frame)
             if frame_header_size is None or not _idmx_local_frame_is_h264_transport(
                 frame,
@@ -4219,7 +4220,9 @@ def _idmx_h264_annexb_packet_spans(
                 nal_type = body[1] & 0x1F
                 if is_start:
                     active_start_packet = packet_index
+                    active_start_frame = frame_index
                 nal_start_packet = active_start_packet
+                nal_start_frame = active_start_frame
                 start_offset = len(output)
                 active_fu = _append_idmx_h264_fu_a_payload(
                     output,
@@ -4246,10 +4249,15 @@ def _idmx_h264_annexb_packet_spans(
                             else packet_index,
                             packet_index,
                             nal_type,
+                            nal_start_frame
+                            if nal_start_frame is not None
+                            else frame_index,
+                            frame_index,
                         )
                     )
                 if active_fu is None:
                     active_start_packet = None
+                    active_start_frame = None
                 continue
             decrypted_body: bytes | None = None
             if not _looks_like_idmx_h264_clear_nal(body):
@@ -4262,6 +4270,7 @@ def _idmx_h264_annexb_packet_spans(
                 )
             active_fu = None
             active_start_packet = None
+            active_start_frame = None
             start_offset = len(output)
             if stream_is_clear:
                 _append_h264_nal(output, body)
@@ -4284,26 +4293,29 @@ def _idmx_h264_annexb_packet_spans(
                     packet_index,
                     packet_index,
                     nal_type,
+                    frame_index,
+                    frame_index,
                 )
             )
     return bytes(output), spans
 
 
-def _idmx_hevc_annexb_packet_spans(
+def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0915
     packets: list[bytes],
     media_key: str | bytes,
-) -> tuple[bytes, list[tuple[int, int, int, int, int]]]:
+) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:
     """Assemble decrypted HEVC while recording each NAL's packet span."""
 
     output = bytearray()
-    spans: list[tuple[int, int, int, int, int]] = []
+    spans: list[tuple[int, int, int, int, int, int, int]] = []
     active_fu: _RtpFragmentedNal | None = None
     active_start_packet: int | None = None
+    active_start_frame: int | None = None
     active_nal_type: int | None = None
     hevc_evidence_seen = False
     aes_key = _local_media_aes_key(media_key)
     for packet_index, packet in enumerate(packets):
-        for frame in _iter_idmx_local_packet_frame(packet):
+        for frame_index, frame in enumerate(_iter_idmx_local_packet_frame(packet)):
             frame_header_size = _idmx_local_frame_header_size(frame)
             if frame_header_size is None:
                 continue
@@ -4332,13 +4344,16 @@ def _idmx_hevc_annexb_packet_spans(
             if nal_type == 49 and len(payload) >= 3:
                 if payload[2] & 0x80:
                     active_start_packet = packet_index
+                    active_start_frame = frame_index
                     active_nal_type = payload[2] & 0x3F
                 nal_start_packet = active_start_packet
+                nal_start_frame = active_start_frame
                 emitted_nal_type = active_nal_type
             else:
                 active_start_packet = packet_index
                 active_nal_type = nal_type
                 nal_start_packet = packet_index
+                nal_start_frame = frame_index
                 emitted_nal_type = nal_type
             start_offset = len(output)
             active_fu = _append_idmx_hevc_media_payload(
@@ -4367,10 +4382,15 @@ def _idmx_hevc_annexb_packet_spans(
                         else packet_index,
                         packet_index,
                         emitted_nal_type if emitted_nal_type is not None else nal_type,
+                        nal_start_frame
+                        if nal_start_frame is not None
+                        else frame_index,
+                        frame_index,
                     )
                 )
             if active_fu is None:
                 active_start_packet = None
+                active_start_frame = None
                 active_nal_type = None
     return bytes(output), spans
 
@@ -4386,26 +4406,114 @@ def _idmx_h264_packets_from_selected_annexb(
 ) -> list[bytes]:
     """Return the packet interval contributing selected H.264 VCL NALs."""
 
-    selected_offset = full_annexb.find(selected_annexb)
-    if selected_offset < 0:
-        raise PyEzvizError("Could not align trimmed IDMX video with its RTP packets")
-    selected_end = selected_offset + len(selected_annexb)
     _annexb, spans = _idmx_h264_annexb_packet_spans(
         packets,
         media_key,
         nalu_header_size=nalu_header_size,
         stream_is_clear=stream_is_clear,
     )
-    selected_vcl_spans = [
+    return _idmx_packets_for_selected_vcl_spans(
+        packets,
+        spans=spans,
+        full_annexb=full_annexb,
+        selected_annexb=selected_annexb,
+        video_input_format="h264",
+    )
+
+
+def _annexb_vcl_bounds(
+    data: bytes,
+    *,
+    video_input_format: str,
+) -> tuple[int, int] | None:
+    bounds: list[tuple[int, int]] = []
+    for start_code_offset, nal_start, end in _h264_annexb_nal_spans(data):
+        nal = data[nal_start:end]
+        if video_input_format == "h264":
+            is_vcl = 1 <= _h264_nal_type(nal) <= 5
+        elif video_input_format == "hevc":
+            is_vcl = _hevc_nal_type(nal) <= 31
+        else:
+            raise PyEzvizError(
+                f"Unsupported IDMX video input format: {video_input_format}"
+            )
+        if is_vcl:
+            bounds.append((start_code_offset, end))
+    return (bounds[0][0], bounds[-1][1]) if bounds else None
+
+
+def _idmx_packet_frame_slice(packet: bytes, start: int, stop: int) -> bytes:
+    frames = list(_iter_idmx_local_packet_frame(packet))
+    if start == 0 and stop == len(frames):
+        return packet
+    return b"".join(
+        len(frame).to_bytes(4, "little") + frame for frame in frames[start:stop]
+    )
+
+
+def _idmx_packets_for_selected_vcl_spans(
+    packets: list[bytes],
+    *,
+    spans: list[tuple[int, int, int, int, int, int, int]],
+    full_annexb: bytes,
+    selected_annexb: bytes,
+    video_input_format: str,
+) -> list[bytes]:
+    """Return packets and aggregate frames bounded by selected VCL NALs."""
+
+    selected_bounds = _annexb_vcl_bounds(
+        selected_annexb,
+        video_input_format=video_input_format,
+    )
+    if selected_bounds is None:
+        raise PyEzvizError("Trimmed IDMX stream did not include a video frame")
+    first_vcl_offset, last_vcl_end = selected_bounds
+    retained_tail = selected_annexb[first_vcl_offset:]
+    retained_tail_offset = full_annexb.rfind(retained_tail)
+    if retained_tail_offset >= 0:
+        selected_start = retained_tail_offset
+        selected_end = retained_tail_offset + last_vcl_end - first_vcl_offset
+    else:
+        first_vcl = selected_annexb[first_vcl_offset:last_vcl_end]
+        selected_start = full_annexb.rfind(first_vcl)
+        selected_end = selected_start + len(first_vcl)
+    if selected_start < 0:
+        raise PyEzvizError("Could not align trimmed IDMX video with its RTP packets")
+    selected_spans = [
         span
         for span in spans
-        if 1 <= span[4] <= 5
-        and span[0] >= selected_offset
+        if span[0] >= selected_start
         and span[1] <= selected_end
+        and (
+            1 <= span[4] <= 5
+            if video_input_format == "h264"
+            else span[4] <= 31
+        )
     ]
-    if not selected_vcl_spans:
-        raise PyEzvizError("Trimmed IDMX stream did not include a video frame")
-    return packets[selected_vcl_spans[0][2] : selected_vcl_spans[-1][3] + 1]
+    if not selected_spans:
+        raise PyEzvizError("Could not align trimmed IDMX video with its RTP packets")
+    first_span = selected_spans[0]
+    last_span = selected_spans[-1]
+    start_packet = first_span[2]
+    end_packet = last_span[3]
+    if start_packet == end_packet:
+        return [
+            _idmx_packet_frame_slice(
+                packets[start_packet],
+                first_span[5],
+                last_span[6] + 1,
+            )
+        ]
+    selected_packets = [
+        _idmx_packet_frame_slice(
+            packets[start_packet],
+            first_span[5],
+            len(list(_iter_idmx_local_packet_frame(packets[start_packet]))),
+        ),
+        *packets[start_packet + 1 : end_packet],
+        _idmx_packet_frame_slice(packets[end_packet], 0, last_span[6] + 1),
+    ]
+    return [packet for packet in selected_packets if packet]
 
 
 def _annexb_first_vcl_unit(data: bytes, *, video_input_format: str) -> bytes | None:
@@ -4452,40 +4560,22 @@ def _idmx_packets_from_selected_annexb(
 ) -> list[bytes]:
     """Keep packets from the first selected VCL NAL for aligned audio muxing."""
 
-    if selected_annexb == full_annexb:
-        return packets
-    first_vcl = _annexb_first_vcl_unit(
-        selected_annexb,
-        video_input_format=video_input_format,
-    )
-    if first_vcl is None:
-        raise PyEzvizError("Trimmed IDMX stream did not include a video frame")
-    suffix_offset = full_annexb.find(selected_annexb)
-    selected_offset = full_annexb.find(
-        first_vcl,
-        max(suffix_offset, 0),
-        (
-            suffix_offset + len(selected_annexb)
-            if suffix_offset >= 0
-            else len(full_annexb)
-        ),
-    )
-    if selected_offset < 0:
-        raise PyEzvizError("Could not align trimmed IDMX video with its RTP packets")
     if video_input_format == "h264":
-        packet_index = _decrypted_h264_annexb_packet_index_for_offset(
+        _annexb, spans = _idmx_h264_annexb_packet_spans(
             packets,
             media_key,
             nalu_header_size=nalu_header_size,
-            offset=selected_offset,
+            stream_is_clear=False,
         )
     else:
-        packet_index = _decrypted_hevc_annexb_packet_index_for_offset(
-            packets,
-            media_key,
-            offset=selected_offset,
-        )
-    return packets[packet_index:]
+        _annexb, spans = _idmx_hevc_annexb_packet_spans(packets, media_key)
+    return _idmx_packets_for_selected_vcl_spans(
+        packets,
+        spans=spans,
+        full_annexb=full_annexb,
+        selected_annexb=selected_annexb,
+        video_input_format=video_input_format,
+    )
 
 
 def _h264_annexb_packet_index_for_offset(

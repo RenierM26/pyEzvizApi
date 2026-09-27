@@ -918,6 +918,29 @@ def test_hcnetsdk_generated_multi_socket_stream_logs_in_and_renders_plan() -> No
     assert keyframe_socket.closed is True
 
 
+@pytest.mark.parametrize("duration_seconds", [0.0, -1.0])
+def test_hcnetsdk_generated_multi_socket_stream_skips_start_for_empty_duration(
+    duration_seconds: float,
+) -> None:
+    def unexpected_socket_factory(
+        _address: tuple[str, int],
+        _timeout: float | None,
+    ) -> _FakeSocket:
+        pytest.fail("empty capture must not open a socket")
+
+    stream = HcNetSdkCommandPortGeneratedMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortGeneratedMultiSocketPlan(steps=()),
+        password=b"123456",
+        socket_factory=unexpected_socket_factory,
+    )
+
+    packets = list(stream.iter_packets(duration_seconds=duration_seconds))
+
+    assert packets == []
+    assert stream.bootstrap is None
+
+
 def test_hcnetsdk_multi_socket_stream_reports_response_step_context() -> None:
     request = build_hcnetsdk_tcp_frame(
         field_4=0x63000000,

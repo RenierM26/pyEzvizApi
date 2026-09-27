@@ -1240,6 +1240,8 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         """Yield command-port RTP payloads from the rendered media socket."""
         if max_packets is not None and max_packets <= 0:
             return
+        if duration_seconds is not None and duration_seconds <= 0:
+            return
         if self.bootstrap is None:
             self.start()
         if self._stream is None:

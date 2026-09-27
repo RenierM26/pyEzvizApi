@@ -4665,6 +4665,55 @@ def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
     assert stream_sock.timeout_history == [0.9, 0.4, 5.0]
 
 
+def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
+    monkeypatch,
+) -> None:
+    command_sock = _FakeSocket([])
+    command_sock.timeout = 5.0
+    connect_timeouts: list[float | None] = []
+
+    def read_fragmented(sock, *, trailer_length):
+        del trailer_length
+        sock.recv(1)
+        return sock.recv(1)
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_local_sdk_frame",
+        read_fragmented,
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+    ticks = iter([0.0, 0.25, 1.1])
+
+    def socket_factory(_address, timeout):
+        connect_timeouts.append(timeout)
+        return command_sock
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=socket_factory,
+    ) as client, pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.send_encrypted_command(
+            EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            b"<Request/>",
+            deadline=1.0,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert connect_timeouts == [1.0]
+    assert command_sock.timeout_history == [0.75, 5.0]
+
+
 def test_apk_observed_command_ids_are_named() -> None:
     assert HcNetSdkDvrCommand.GET_WIFI_CFG == 307
     assert HcNetSdkDvrCommand.SET_WIFI_CFG == 306

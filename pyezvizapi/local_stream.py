@@ -131,7 +131,9 @@ def local_media_packet_source(
     return MediaPacketSourceAdapter(
         stream,
         local_stream_packet_to_media_packet,
-        duration_from_start=isinstance(stream, EzvizLocalSdkMediaStream),
+        duration_from_start=bool(
+            getattr(stream, "supports_deadline_iter_packets", False)
+        ),
     )
 
 
@@ -615,6 +617,20 @@ _INTERRUPTED_LOCAL_STREAM_MESSAGE = (
 )
 
 
+def _remaining_capture_timeout(
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    if deadline is None:
+        return None
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise EzvizLocalSdkDeadlineExpired(
+            "Local stream capture exceeded its deadline"
+        )
+    return remaining
+
+
 class EzvizLocalSdkMediaStream:
     """Direct-local SDK media stream compatible with the cloud stream dump path.
 
@@ -666,6 +682,8 @@ class EzvizLocalSdkMediaStream:
         self,
         *,
         read_first_media: bool = True,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap preview setup and read the first local RTP media frame."""
         self.bootstrap = self.sdk_client.bootstrap_preview_from_fields(
@@ -678,6 +696,8 @@ class EzvizLocalSdkMediaStream:
             stream_mode=self.stream_mode,
             read_first_media=read_first_media,
             max_prefix_bytes=self.max_prefix_bytes,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         self._first_media = self.bootstrap.first_media
         if read_first_media and self._first_media is None:
@@ -706,11 +726,20 @@ class EzvizLocalSdkMediaStream:
             else None
         )
         if self.bootstrap is None:
-            self.start(read_first_media=not duration_from_start)
+            try:
+                self.start(
+                    read_first_media=not duration_from_start,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                self._read_interrupted = True
+                self.close()
+                return
 
         emitted = 0
         if self._first_media is not None:
-            if duration_seconds is not None:
+            if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
             yield _local_media_packet(self._first_media)
             emitted += 1
@@ -731,6 +760,7 @@ class EzvizLocalSdkMediaStream:
                     media = self.sdk_client.read_stream_frame_after_prefix(
                         max_prefix_bytes=self.max_prefix_bytes,
                         timeout=remaining,
+                        deadline=deadline,
                         monotonic=monotonic,
                     )
             except EzvizLocalSdkDeadlineExpired:
@@ -784,6 +814,8 @@ class HcNetSdkCommandPortMediaStream:
         self,
         *,
         read_first_media: bool | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortStreamBootstrap:
         """Send bootstrap frames and read the first media frame."""
         should_read_first_media = (
@@ -794,6 +826,8 @@ class HcNetSdkCommandPortMediaStream:
             read_response_after_each=self.read_response_after_each,
             read_first_media=should_read_first_media,
             max_prefix_bytes=self.max_prefix_bytes,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         self._first_media = self.bootstrap.first_media
         if should_read_first_media and self._first_media is None:
@@ -805,6 +839,7 @@ class HcNetSdkCommandPortMediaStream:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[EzvizLocalStreamPacket]:
         """Yield command-port RTP payloads as MPEG-PS or IDMX packet bodies."""
@@ -815,13 +850,26 @@ class HcNetSdkCommandPortMediaStream:
         if self._read_interrupted:
             raise PyEzvizError(_INTERRUPTED_LOCAL_STREAM_MESSAGE)
 
-        deadline: float | None = None
+        deadline = (
+            monotonic() + duration_seconds
+            if duration_from_start and duration_seconds is not None
+            else None
+        )
         if self.bootstrap is None:
-            self.start()
+            try:
+                self.start(
+                    read_first_media=None if not duration_from_start else False,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                self._read_interrupted = True
+                self.close()
+                return
 
         emitted = 0
         if self._first_media is not None:
-            if duration_seconds is not None:
+            if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
             yield _hcnetsdk_command_port_media_packet(self._first_media)
             emitted += 1
@@ -842,6 +890,7 @@ class HcNetSdkCommandPortMediaStream:
                     media = self.command_client.read_media_frame_after_prefix(
                         max_prefix_bytes=self.max_prefix_bytes,
                         timeout=remaining,
+                        deadline=deadline,
                         monotonic=monotonic,
                     )
             except EzvizLocalSdkDeadlineExpired:
@@ -904,8 +953,17 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         self._clients.clear()
         self._media_client = None
 
-    def _new_client(self) -> HcNetSdkCommandPortClient:
-        kwargs: dict[str, Any] = {"timeout": self.timeout}
+    def _new_client(
+        self,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkCommandPortClient:
+        remaining = _remaining_capture_timeout(deadline, monotonic)
+        timeout = self.timeout
+        if remaining is not None:
+            timeout = remaining if timeout is None else min(timeout, remaining)
+        kwargs: dict[str, Any] = {"timeout": timeout}
         if self.socket_factory is not None:
             kwargs["socket_factory"] = self.socket_factory
         client = HcNetSdkCommandPortClient(self.endpoint, **kwargs)
@@ -918,6 +976,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         step: HcNetSdkCommandPortSocketStep,
         *,
         step_index: int,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortStreamBootstrap:
         exchanges: list[HcNetSdkCommandPortExchange] = []
         for frame_index, (frame, response_count) in enumerate(
@@ -938,7 +998,12 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                 self.local_ip,
             )
             try:
-                client.send_command_frame(frame_to_send)
+                client.send_command_frame(
+                    frame_to_send,
+                    timeout=_remaining_capture_timeout(deadline, monotonic),
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                raise
             except (OSError, PyEzvizError) as err:
                 raise PyEzvizError(
                     f"HCNetSDK command-port {context} send failed: {err}"
@@ -947,7 +1012,12 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                 exchanges.append(HcNetSdkCommandPortExchange(frame, None))
                 continue
             try:
-                first_response = client.read_tcp_frame()
+                first_response = client.read_tcp_frame(
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                raise
             except (OSError, PyEzvizError) as err:
                 raise PyEzvizError(
                     f"HCNetSDK command-port {context} response 1 failed: {err}"
@@ -955,7 +1025,12 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
             exchanges.append(HcNetSdkCommandPortExchange(frame, first_response))
             for response_index in range(1, response_count):
                 try:
-                    response = client.read_tcp_frame()
+                    response = client.read_tcp_frame(
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
+                except EzvizLocalSdkDeadlineExpired:
+                    raise
                 except (OSError, PyEzvizError) as err:
                     raise PyEzvizError(
                         "HCNetSDK command-port "
@@ -1031,6 +1106,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         step: HcNetSdkCommandPortSocketStep,
         *,
         step_index: int,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """Read and retain the first media frame from the active media socket."""
         if self._media_client is None:
@@ -1038,7 +1115,11 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         try:
             self._first_media = self._media_client.read_media_frame_after_prefix(
                 max_prefix_bytes=self.max_prefix_bytes,
+                deadline=deadline,
+                monotonic=monotonic,
             )
+        except EzvizLocalSdkDeadlineExpired:
+            raise
         except (OSError, PyEzvizError) as err:
             context = _hcnetsdk_command_port_step_context(
                 step,
@@ -1056,18 +1137,32 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         step: HcNetSdkCommandPortSocketStep,
         *,
         step_index: int,
+        capture_deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """Drain and preserve media packets before continuing later socket steps."""
         if not step.drain_media_before_next_step_seconds:
             return
         if self._media_client is None:
             raise PyEzvizError("HCNetSDK command-port media socket is closed")
-        deadline = time.monotonic() + step.drain_media_before_next_step_seconds
-        while time.monotonic() < deadline:
+        clock = monotonic if capture_deadline is not None else time.monotonic
+        drain_deadline = clock() + step.drain_media_before_next_step_seconds
+        if capture_deadline is not None:
+            drain_deadline = min(drain_deadline, capture_deadline)
+        while clock() < drain_deadline:
             try:
-                media = self._media_client.read_media_frame_after_prefix(
-                    max_prefix_bytes=self.max_prefix_bytes,
-                )
+                if capture_deadline is None:
+                    media = self._media_client.read_media_frame_after_prefix(
+                        max_prefix_bytes=self.max_prefix_bytes,
+                    )
+                else:
+                    media = self._media_client.read_media_frame_after_prefix(
+                        max_prefix_bytes=self.max_prefix_bytes,
+                        deadline=drain_deadline,
+                        monotonic=clock,
+                    )
+            except EzvizLocalSdkDeadlineExpired:
+                raise
             except (OSError, PyEzvizError) as err:
                 context = _hcnetsdk_command_port_step_context(
                     step,
@@ -1079,7 +1174,13 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                 ) from err
             self._drained_media.append(media)
 
-    def start(self) -> HcNetSdkCommandPortStreamBootstrap:
+    def start(
+        self,
+        *,
+        read_first_media: bool | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkCommandPortStreamBootstrap:
         """Execute all socket steps and read the first media frame."""
         if self.bootstrap is not None:
             return self.bootstrap
@@ -1087,25 +1188,45 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         exchanges: list[HcNetSdkCommandPortExchange] = []
         media_step: HcNetSdkCommandPortSocketStep | None = None
         media_step_index: int | None = None
+        should_read_first_media = (
+            self.read_first_media if read_first_media is None else read_first_media
+        )
         for step_index, step in enumerate(self.plan.steps):
-            client = self._new_client()
+            client = self._new_client(deadline=deadline, monotonic=monotonic)
             step_bootstrap = self._run_socket_step(
                 client,
                 step,
                 step_index=step_index,
+                deadline=deadline,
+                monotonic=monotonic,
             )
             exchanges.extend(step_bootstrap.exchanges)
             if step.delay_after_commands_seconds:
-                time.sleep(step.delay_after_commands_seconds)
+                remaining = _remaining_capture_timeout(deadline, monotonic)
+                delay = step.delay_after_commands_seconds
+                if remaining is not None:
+                    delay = min(delay, remaining)
+                time.sleep(delay)
+                _remaining_capture_timeout(deadline, monotonic)
             if step.media_socket:
                 self._media_client = client
                 media_step = step
                 media_step_index = step_index
                 if step.drain_media_before_next_step_seconds:
                     self._start_keepalives(step)
-                if self.read_first_media and step.read_first_media_immediately:
-                    self._read_first_media(step, step_index=step_index)
-                self._drain_media_before_next_step(step, step_index=step_index)
+                if should_read_first_media and step.read_first_media_immediately:
+                    self._read_first_media(
+                        step,
+                        step_index=step_index,
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
+                self._drain_media_before_next_step(
+                    step,
+                    step_index=step_index,
+                    capture_deadline=deadline,
+                    monotonic=monotonic,
+                )
             else:
                 client.close()
 
@@ -1118,11 +1239,16 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
             first_media=None,
         )
         if (
-            self.read_first_media
+            should_read_first_media
             and self._first_media is None
             and not self._drained_media
         ):
-            self._read_first_media(media_step, step_index=media_step_index)
+            self._read_first_media(
+                media_step,
+                step_index=media_step_index,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
         self.bootstrap = HcNetSdkCommandPortStreamBootstrap(
             exchanges=tuple(exchanges),
             first_media=self._first_media,
@@ -1134,6 +1260,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[EzvizLocalStreamPacket]:
         """Yield command-port RTP payloads from the media socket."""
@@ -1144,15 +1271,28 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
         if self._read_interrupted:
             raise PyEzvizError(_INTERRUPTED_LOCAL_STREAM_MESSAGE)
 
+        deadline = (
+            monotonic() + duration_seconds
+            if duration_from_start and duration_seconds is not None
+            else None
+        )
         if self.bootstrap is None:
-            self.start()
+            try:
+                self.start(
+                    read_first_media=None if not duration_from_start else False,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                self._read_interrupted = True
+                self.close()
+                return
         if self._media_client is None:
             raise PyEzvizError("HCNetSDK command-port media socket is closed")
 
         emitted = 0
-        deadline: float | None = None
         if self._first_media is not None:
-            if duration_seconds is not None:
+            if duration_seconds is not None and deadline is None:
                 deadline = monotonic() + duration_seconds
             yield _hcnetsdk_command_port_media_packet(self._first_media)
             emitted += 1
@@ -1180,6 +1320,7 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                     media = self._media_client.read_media_frame_after_prefix(
                         max_prefix_bytes=self.max_prefix_bytes,
                         timeout=remaining,
+                        deadline=deadline,
                         monotonic=monotonic,
                     )
             except EzvizLocalSdkDeadlineExpired:
@@ -1241,8 +1382,17 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             self._stream.close()
             self._stream = None
 
-    def _login_client(self) -> HcNetSdkCommandPortClient:
-        kwargs: dict[str, Any] = {"timeout": self.timeout}
+    def _login_client(
+        self,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkCommandPortClient:
+        remaining = _remaining_capture_timeout(deadline, monotonic)
+        timeout = self.timeout
+        if remaining is not None:
+            timeout = remaining if timeout is None else min(timeout, remaining)
+        kwargs: dict[str, Any] = {"timeout": timeout}
         if self.socket_factory is not None:
             kwargs["socket_factory"] = self.socket_factory
         return HcNetSdkCommandPortClient(self.endpoint, **kwargs)
@@ -1257,18 +1407,26 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
                 "the socket does not expose getsockname()"
             ) from err
 
-    def start(self) -> HcNetSdkCommandPortStreamBootstrap:
+    def start(
+        self,
+        *,
+        read_first_media: bool | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkCommandPortStreamBootstrap:
         """Run command-port login, render the plan, and read first media."""
         if self.bootstrap is not None:
             return self.bootstrap
 
-        with self._login_client() as login_client:
+        with self._login_client(deadline=deadline, monotonic=monotonic) as login_client:
             local_ip = self.local_ip or self._client_local_ip(login_client)
             self.login_session = login_client.login(
                 password=self.password,
                 username=self.username,
                 local_ip=local_ip,
                 rsa_key=self.rsa_key,
+                deadline=deadline,
+                monotonic=monotonic,
             )
 
         rendered_plan = self.generated_plan.to_socket_plan(
@@ -1287,7 +1445,11 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             local_ip=None,
         )
         try:
-            self.bootstrap = self._stream.start()
+            self.bootstrap = self._stream.start(
+                read_first_media=read_first_media,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
         except PyEzvizError:
             self.bootstrap = self._stream.bootstrap
             raise
@@ -1298,6 +1460,7 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[EzvizLocalStreamPacket]:
         """Yield command-port RTP payloads from the rendered media socket."""
@@ -1305,13 +1468,30 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
+        deadline = (
+            monotonic() + duration_seconds
+            if duration_from_start and duration_seconds is not None
+            else None
+        )
         if self.bootstrap is None:
-            self.start()
+            try:
+                self.start(
+                    read_first_media=None if not duration_from_start else False,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except EzvizLocalSdkDeadlineExpired:
+                self.close()
+                return
         if self._stream is None:
             raise PyEzvizError("HCNetSDK generated command-port stream is closed")
+        remaining = _remaining_capture_timeout(deadline, monotonic)
         yield from self._stream.iter_packets(
             max_packets=max_packets,
-            duration_seconds=duration_seconds,
+            duration_seconds=(
+                duration_seconds if remaining is None else remaining
+            ),
+            duration_from_start=duration_from_start,
             monotonic=monotonic,
         )
 

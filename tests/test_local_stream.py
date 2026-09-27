@@ -335,6 +335,7 @@ def test_local_sdk_media_stream_can_include_startup_in_duration() -> None:
 
     sdk = StartupDeadlineSdkClient(_media(b"\x00\x00\x01\xbaabc"))
     stream = EzvizLocalSdkMediaStream(sdk, _preview_request())  # type: ignore[arg-type]
+    expected_deadline = 11.0
     times = iter((10.0, 10.0, 11.0))
 
     packets = list(
@@ -346,7 +347,27 @@ def test_local_sdk_media_stream_can_include_startup_in_duration() -> None:
 
     assert packets == []
     assert sdk.bootstrap_calls[0]["read_first_media"] is False
+    assert sdk.bootstrap_calls[0]["deadline"] == expected_deadline
     assert sdk.read_called is False
+
+
+@pytest.mark.parametrize(
+    "stream_type",
+    (
+        EzvizLocalSdkMediaStream,
+        HcNetSdkCommandPortMediaStream,
+        HcNetSdkCommandPortMultiSocketMediaStream,
+        HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
+    ),
+)
+def test_all_local_packet_sources_include_startup_in_shared_duration(
+    stream_type: type[Any],
+) -> None:
+    """Every supported local source opts into the shared startup deadline."""
+
+    stream = object.__new__(stream_type)
+
+    assert local_media_packet_source(stream).duration_from_start is True
 
 
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:

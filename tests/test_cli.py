@@ -3346,6 +3346,12 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
                 "0123456",
                 "--cas-key",
                 "1234567890abcdef",
+                "--identifier",
+                "preview-id",
+                "--uuid",
+                "preview-uuid",
+                "--timestamp",
+                "123456",
                 "--pre-start-sequence",
                 "27",
                 "--pre-start-body-file",
@@ -3370,6 +3376,9 @@ def test_local_sdk_dump_ecdh_forwards_max_prefix_bytes(monkeypatch, tmp_path) ->
     assert calls[0]["serial"] == "CAM123456"
     assert calls[0]["host"] == "192.0.2.10"
     assert calls[0]["operation_code"] == "0123456"
+    assert calls[0]["identifier"] == "preview-id"
+    assert calls[0]["uuid"] == "preview-uuid"
+    assert calls[0]["timestamp"] == "123456"
     assert calls[0]["pre_start_sequence"] == 27
     assert calls[0]["pre_start_body"] == LOCAL_SDK_PRE_START_BODY
     assert calls[0]["preview_sequence"] == 28
@@ -3388,6 +3397,12 @@ def test_local_sdk_dump_ecdh_preserves_auto_sequences_when_omitted(
 ) -> None:
     output_path = tmp_path / "local_sdk_ecdh.ps"
     calls: list[dict[str, Any]] = []
+
+    def fake_environ_get(name: str) -> str | None:
+        return {
+            "EZVIZ_LOCAL_UUID": "environment-uuid",
+            "EZVIZ_LOCAL_TIMESTAMP": "654321",
+        }.get(name)
 
     class FakeLocalSdkEcdhStream:
         bootstrap = None
@@ -3415,6 +3430,7 @@ def test_local_sdk_dump_ecdh_preserves_auto_sequences_when_omitted(
         "open_local_sdk_ecdh_stream",
         fake_open_local_sdk_ecdh_stream,
     )
+    monkeypatch.setattr(cli_module, "os_environ_get", fake_environ_get)
     monkeypatch.setattr(cli_module, "copy_local_sdk_ecdh_stream_to_mpegps", fake_copy)
 
     assert (
@@ -3441,6 +3457,8 @@ def test_local_sdk_dump_ecdh_preserves_auto_sequences_when_omitted(
     assert calls[0]["pre_start_sequence"] is None
     assert calls[0]["preview_sequence"] is None
     assert calls[0]["stream_setup_sequence"] is None
+    assert calls[0]["uuid"] == "environment-uuid"
+    assert calls[0]["timestamp"] == "654321"
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 

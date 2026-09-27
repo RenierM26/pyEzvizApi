@@ -168,6 +168,21 @@ def test_ezviz_local_sdk_ecdh_key_derivation_matches_native_shape() -> None:
     )
 
 
+def test_ezviz_local_sdk_ecdh_shared_secret_rejects_invalid_peer_key() -> None:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+
+    with pytest.raises(PyEzvizError, match="peer public key is invalid"):
+        derive_ezviz_local_sdk_ecdh_shared_secret(private_key, b"invalid")
+
+
+def test_ezviz_local_sdk_ecdh_shared_secret_rejects_incompatible_curve() -> None:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    peer_public_key_der = _public_key_der(ec.generate_private_key(ec.SECP384R1()))
+
+    with pytest.raises(PyEzvizError, match="peer public key is incompatible"):
+        derive_ezviz_local_sdk_ecdh_shared_secret(private_key, peer_public_key_der)
+
+
 def test_parse_ezviz_local_sdk_ecdh_handshake_packet_uses_header_relative_offsets() -> None:
     encrypted_key = b"E" * 32
     peer_public_key_der = _public_key_der(ec.generate_private_key(ec.SECP256R1()))
@@ -336,9 +351,15 @@ def test_open_local_sdk_ecdh_stream_prefers_custom_pre_start_body() -> None:
         ),
         send_init=True,
         pre_start_body=LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY,
+        identifier="preview-id",
+        uuid="preview-uuid",
+        timestamp="123456",
     )
 
     assert stream.pre_start_body == LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY
+    assert stream.preview_request.identifier == "preview-id"
+    assert stream.preview_request.uuid == "preview-uuid"
+    assert stream.preview_request.timestamp == "123456"
     assert stream.pre_start_sequence == 1
     assert stream.preview_sequence == 2
     assert stream.stream_setup_sequence == 3
@@ -379,6 +400,9 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
         register_p2p_session=False,
         p2p_register_max_retries=1,
         pre_start_body=LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY,
+        identifier="preview-id",
+        uuid="preview-uuid",
+        timestamp="123456",
         pre_start_sequence=27,
         preview_sequence=28,
         stream_setup_sequence=29,
@@ -399,6 +423,9 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
     ]
     assert stream.preview_request.public_key == stream.key_pair.public_key_b64
     assert stream.pre_start_body == LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY
+    assert stream.preview_request.identifier == "preview-id"
+    assert stream.preview_request.uuid == "preview-uuid"
+    assert stream.preview_request.timestamp == "123456"
     assert stream.pre_start_sequence == 27
     assert stream.preview_sequence == 28
     assert stream.stream_setup_sequence == 29
@@ -444,6 +471,9 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
         channel=2,
         send_init=True,
         pre_start_body=LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY,
+        identifier="preview-id",
+        uuid="preview-uuid",
+        timestamp="123456",
         pre_start_sequence=27,
         preview_sequence=28,
         stream_setup_sequence=29,
@@ -462,6 +492,9 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
     assert copied[0]["channel"] == 2
     assert copied[0]["send_init"] is True
     assert copied[0]["pre_start_body"] == LOCAL_SDK_ECDH_CUSTOM_PRE_START_BODY
+    assert copied[0]["identifier"] == "preview-id"
+    assert copied[0]["uuid"] == "preview-uuid"
+    assert copied[0]["timestamp"] == "123456"
     assert copied[0]["pre_start_sequence"] == 27
     assert copied[0]["preview_sequence"] == 28
     assert copied[0]["stream_setup_sequence"] == 29

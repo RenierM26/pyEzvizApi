@@ -23,6 +23,7 @@ import uuid as uuid_module
 from xml.sax.saxutils import escape as xml_escape
 
 from Crypto.Cipher import AES, ChaCha20
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -230,10 +231,18 @@ def derive_ezviz_local_sdk_ecdh_shared_secret(
     peer_public_key_der: bytes,
 ) -> bytes:
     """Compute the raw ECDH P-256 shared secret."""
-    peer_public_key = serialization.load_der_public_key(peer_public_key_der)
+    try:
+        peer_public_key = serialization.load_der_public_key(peer_public_key_der)
+    except (UnsupportedAlgorithm, ValueError) as err:
+        raise PyEzvizError("EZVIZ local SDK ECDH peer public key is invalid") from err
     if not isinstance(peer_public_key, ec.EllipticCurvePublicKey):
         raise PyEzvizError("EZVIZ local SDK ECDH peer public key is not elliptic-curve")
-    return private_key.exchange(ec.ECDH(), peer_public_key)
+    try:
+        return private_key.exchange(ec.ECDH(), peer_public_key)
+    except (UnsupportedAlgorithm, ValueError) as err:
+        raise PyEzvizError(
+            "EZVIZ local SDK ECDH peer public key is incompatible"
+        ) from err
 
 
 def derive_ezviz_local_sdk_ecdh_chacha20_key(
@@ -487,6 +496,9 @@ def open_local_sdk_ecdh_stream(  # noqa: PLR0913
     key_pair: EzvizLocalSdkEcdhKeyPair | None = None,
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    identifier: str | None = None,
+    uuid: str | None = None,
+    timestamp: str | int | None = None,
     send_init: bool = False,
     pre_start_body: bytes | str | None = None,
     pre_start_sequence: int | None = None,
@@ -531,8 +543,9 @@ def open_local_sdk_ecdh_stream(  # noqa: PLR0913
         receiver_info_ex=EzvizLocalReceiverInfoExAttrs(port=receiver_port),
         authentication=EzvizLocalAuthenticationAttrs(),
         is_encrypt="TRUE",
-        uuid=str(uuid_module.uuid4()),
-        timestamp=int(time.time() * 1000),
+        identifier=identifier,
+        uuid=uuid if uuid is not None else str(uuid_module.uuid4()),
+        timestamp=timestamp if timestamp is not None else int(time.time() * 1000),
         public_key=key_pair.public_key_b64,
     )
     resolved_pre_start_body = pre_start_body
@@ -570,6 +583,9 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     key_pair: EzvizLocalSdkEcdhKeyPair | None = None,
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    identifier: str | None = None,
+    uuid: str | None = None,
+    timestamp: str | int | None = None,
     send_init: bool = False,
     pre_start_body: bytes | str | None = None,
     pre_start_sequence: int | None = None,
@@ -598,6 +614,9 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         key_pair=key_pair,
         channel=channel,
         receiver_port=receiver_port,
+        identifier=identifier,
+        uuid=uuid,
+        timestamp=timestamp,
         send_init=send_init,
         pre_start_body=pre_start_body,
         pre_start_sequence=pre_start_sequence,
@@ -619,6 +638,9 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     cas_serial: str | None = None,
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    identifier: str | None = None,
+    uuid: str | None = None,
+    timestamp: str | int | None = None,
     send_init: bool = False,
     pre_start_body: bytes | str | None = None,
     pre_start_sequence: int | None = None,
@@ -642,6 +664,9 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         cas_serial=cas_serial,
         channel=channel,
         receiver_port=receiver_port,
+        identifier=identifier,
+        uuid=uuid,
+        timestamp=timestamp,
         send_init=send_init,
         pre_start_body=pre_start_body,
         pre_start_sequence=pre_start_sequence,

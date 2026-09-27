@@ -9,15 +9,17 @@ import pytest
 import requests
 
 from pyezvizapi._longlink_profile import (
-    ANDROID_PROFILE,
-    HEADERS,
-    WEB_PROFILE,
-    HttpProfile,
     profile_for_token,
     session_header_for_token,
     synchronize_http_headers,
 )
-from pyezvizapi.constants import REQUEST_HEADER
+from pyezvizapi.constants import (
+    ANDROID_PROFILE,
+    HEADERS,
+    REQUEST_HEADER,
+    WEB_PROFILE,
+    HttpProfile,
+)
 
 
 def _profile_headers(headers: Mapping[str, Any]) -> dict[str, str]:

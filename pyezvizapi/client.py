@@ -23,8 +23,6 @@ import requests
 from . import device_factory
 from ._auth import refresh_credentials
 from ._longlink_profile import (
-    ANDROID_PROFILE,
-    PROFILE as PUSH_PROFILE,
     current_session_header,
     profile_for_token,
     recreated_session_header_for_token,
@@ -138,11 +136,13 @@ from .api_endpoints import (
 from .cas import EzvizCAS
 from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
 from .constants import (
+    ANDROID_PROFILE,
     DEFAULT_TIMEOUT,
     DEFAULT_UNIFIEDMSG_STYPE,
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
     MAX_RETRIES,
+    PROFILE as PUSH_PROFILE,
     DefenseModeType,
     DeviceCatagories,
     DeviceSwitchType,

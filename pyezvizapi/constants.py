@@ -5,9 +5,28 @@ client, and a large collection of enums that map integers/strings from
 the Ezviz API to descriptive names.
 """
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum, StrEnum, unique
 from hashlib import md5
+from types import MappingProxyType
+from typing import Final
 import uuid
+
+
+@dataclass(frozen=True, slots=True)
+class HttpProfile:
+    """One server-bound HTTP client identity."""
+
+    name: str
+    headers: Mapping[str, str]
+    registration: Mapping[str, str]
+
+
+def _immutable(values: Mapping[str, str]) -> Mapping[str, str]:
+    """Return a detached read-only mapping."""
+
+    return MappingProxyType(dict(values))
 
 
 def _generate_unique_code() -> str:
@@ -40,6 +59,41 @@ REQUEST_HEADER = {
     "sessionId": "",
     "User-Agent": "okhttp/3.12.1",
 }  # Standard android header.
+_ANDROID_OVERRIDES: Final = {
+    "clientNo": "google",
+    "clientVersion": "7.4.1.0421",
+    "osVersion": "13",
+}
+_ANDROID_REGISTRATION: Final = {
+    "pushRegisterJson": '[{"channel":99}]',
+    "pushExtJson": '{"language":"","protoVer":"2"}',
+}
+
+WEB_PROFILE: Final = HttpProfile(
+    name="web",
+    headers=_immutable(REQUEST_HEADER),
+    registration=_immutable({}),
+)
+ANDROID_PROFILE: Final = HttpProfile(
+    name="android-channel99",
+    headers=_immutable({**REQUEST_HEADER, **_ANDROID_OVERRIDES}),
+    registration=_immutable(_ANDROID_REGISTRATION),
+)
+
+# Historical internal names retained while callers migrate to the profile object.
+PROFILE: Final = ANDROID_PROFILE.name
+HEADERS: Final = _immutable(_ANDROID_OVERRIDES)
+REGISTER: Final = ANDROID_PROFILE.registration
+
+PROFILE_HEADER_NAMES: Final = tuple(
+    dict.fromkeys((*WEB_PROFILE.headers, *ANDROID_PROFILE.headers))
+)
+IDENTITY_HEADER_NAMES: Final = (
+    "sessionId",
+    "featureCode",
+    *_ANDROID_OVERRIDES,
+)
+DEFAULT_SESSION: Final = object()
 MQTT_APP_KEY = "4c6b3cc2-b5eb-4813-a592-612c1374c1fe"
 APP_SECRET = "17454517-cc1c-42b3-a845-99b4a15dd3e6"
 

@@ -21,9 +21,6 @@ import requests
 
 from ._auth import discover_services, isolated_session, refresh_credentials
 from ._longlink_profile import (
-    ANDROID_PROFILE,
-    PROFILE as PUSH_PROFILE,
-    REGISTER as PUSH_REGISTER,
     profile_for_token,
     synchronize_http_headers,
 )
@@ -36,7 +33,12 @@ from ._token import (
     _push_serial,
     validate_push_token,
 )
-from .constants import DEFAULT_TIMEOUT
+from .constants import (
+    ANDROID_PROFILE,
+    DEFAULT_TIMEOUT,
+    PROFILE as PUSH_PROFILE,
+    REGISTER as PUSH_REGISTER,
+)
 from .exceptions import (
     EzvizAuthTokenExpired,
     EzvizPushFatalError,

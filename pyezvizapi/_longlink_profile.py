@@ -3,63 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping
-from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Any, Literal
 
-from .constants import REQUEST_HEADER
-
-
-@dataclass(frozen=True, slots=True)
-class HttpProfile:
-    """One server-bound HTTP client identity."""
-
-    name: str
-    headers: Mapping[str, str]
-    registration: Mapping[str, str]
-
-
-def _immutable(values: Mapping[str, str]) -> Mapping[str, str]:
-    """Return a detached read-only mapping."""
-
-    return MappingProxyType(dict(values))
-
-
-_ANDROID_OVERRIDES: Final = {
-    "clientNo": "google",
-    "clientVersion": "7.4.1.0421",
-    "osVersion": "13",
-}
-_ANDROID_REGISTRATION: Final = {
-    "pushRegisterJson": '[{"channel":99}]',
-    "pushExtJson": '{"language":"","protoVer":"2"}',
-}
-
-WEB_PROFILE: Final = HttpProfile(
-    name="web",
-    headers=_immutable(REQUEST_HEADER),
-    registration=_immutable({}),
+from .constants import (
+    ANDROID_PROFILE,
+    DEFAULT_SESSION,
+    IDENTITY_HEADER_NAMES,
+    PROFILE_HEADER_NAMES,
+    WEB_PROFILE,
+    HttpProfile,
 )
-ANDROID_PROFILE: Final = HttpProfile(
-    name="android-channel99",
-    headers=_immutable({**REQUEST_HEADER, **_ANDROID_OVERRIDES}),
-    registration=_immutable(_ANDROID_REGISTRATION),
-)
-
-# Historical internal names retained while callers migrate to the profile object.
-PROFILE: Final = ANDROID_PROFILE.name
-HEADERS: Final = _immutable(_ANDROID_OVERRIDES)
-REGISTER: Final = ANDROID_PROFILE.registration
-
-_PROFILE_HEADER_NAMES: Final = tuple(
-    dict.fromkeys((*WEB_PROFILE.headers, *ANDROID_PROFILE.headers))
-)
-_IDENTITY_HEADER_NAMES: Final = (
-    "sessionId",
-    "featureCode",
-    *_ANDROID_OVERRIDES,
-)
-_DEFAULT_SESSION: Final = object()
 
 
 def profile_for_token(token: Mapping[str, Any]) -> HttpProfile:
@@ -82,7 +35,7 @@ def session_header_for_token(token: Mapping[str, Any]) -> object | str | None:
         return str(session_id)
     if profile_for_token(token) is ANDROID_PROFILE:
         return None
-    return _DEFAULT_SESSION
+    return DEFAULT_SESSION
 
 
 def recreated_session_header_for_token(
@@ -106,7 +59,7 @@ def current_session_header(headers: Mapping[str, Any]) -> str | bytes | None:
 def synchronize_http_headers(
     headers: MutableMapping[str, Any],
     profile: HttpProfile,
-    session_id: object | str | bytes | None = _DEFAULT_SESSION,
+    session_id: object | str | bytes | None = DEFAULT_SESSION,
     *,
     scope: Literal["profile", "identity", "session"],
 ) -> None:
@@ -123,8 +76,8 @@ def synchronize_http_headers(
     """
 
     managed = {
-        "profile": _PROFILE_HEADER_NAMES,
-        "identity": _IDENTITY_HEADER_NAMES,
+        "profile": PROFILE_HEADER_NAMES,
+        "identity": IDENTITY_HEADER_NAMES,
         "session": ("sessionId",),
     }[scope]
     for name in managed:
@@ -134,7 +87,7 @@ def synchronize_http_headers(
             headers.pop(name, None)
     if session_id is None:
         headers.pop("sessionId", None)
-    elif session_id is not _DEFAULT_SESSION:
+    elif session_id is not DEFAULT_SESSION:
         headers["sessionId"] = (
             session_id if isinstance(session_id, (str, bytes)) else str(session_id)
         )

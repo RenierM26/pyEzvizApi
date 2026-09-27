@@ -258,6 +258,7 @@ from pyezvizapi.hcnetsdk import (
     SadpStartRequest,
     _connect_with_optional_source_address,
     _create_reusable_source_connection,
+    _windows_concrete_source_address,
     _windows_source_port_has_listener,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
@@ -4337,13 +4338,23 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     )
     reusable_socket = ConnectSocket()
     sockets.extend((exclusive_socket, reusable_socket))
+    listener_probes: list[tuple[str, int]] = []
+
+    def record_listener_probe(address: tuple[str, int], _family: int) -> bool:
+        listener_probes.append(address)
+        return False
+
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         True,
     )
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._windows_source_port_has_listener",
-        lambda _address, _family: False,
+        record_listener_probe,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_concrete_source_address",
+        lambda _address, _family, _target: ("192.0.2.25", 10103),
     )
     monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive_option, raising=False)
     monkeypatch.setattr(
@@ -4369,6 +4380,7 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     assert reusable_socket.option_calls == [
         (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     ]
+    assert listener_probes == [("192.0.2.25", 10103)]
 
 
 def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
@@ -4399,6 +4411,32 @@ def test_windows_source_port_listener_probe_detects_active_listener() -> None:
         )
     finally:
         listener.close()
+
+
+def test_windows_wildcard_source_uses_target_route_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RouteSocket:
+        closed = False
+
+        def connect(self, target: tuple[str, int]) -> None:
+            assert target == ("192.0.2.10", 9010)
+
+        def getsockname(self) -> tuple[str, int]:
+            return ("192.0.2.25", 53000)
+
+        def close(self) -> None:
+            self.closed = True
+
+    route_socket = RouteSocket()
+    monkeypatch.setattr(socket, "socket", lambda *_args: route_socket)
+
+    assert _windows_concrete_source_address(
+        ("", 10103),
+        socket.AF_INET,
+        ("192.0.2.10", 9010),
+    ) == ("192.0.2.25", 10103)
+    assert route_socket.closed is True
 
 
 def test_local_sdk_source_port_reports_an_active_conflict() -> None:

@@ -9046,10 +9046,14 @@ def _create_reusable_source_connection(
                         exclusive=True,
                     )
                 except OSError as err:
-                    if (
-                        err.errno != errno.EADDRINUSE
-                        or _windows_source_port_has_listener(source_address, family)
-                    ):
+                    if err.errno != errno.EADDRINUSE:
+                        raise
+                    source_address = _windows_concrete_source_address(
+                        source_address,
+                        family,
+                        target,
+                    )
+                    if _windows_source_port_has_listener(source_address, family):
                         raise
             return _connect_bound_source_socket(
                 family,
@@ -9121,6 +9125,26 @@ def _windows_source_port_has_listener(
         return probe.connect_ex((probe_host, port)) == 0
     finally:
         probe.close()
+
+
+def _windows_concrete_source_address(
+    source_address: tuple[str, int],
+    family: int,
+    target: Any,
+) -> tuple[str, int]:
+    """Resolve a wildcard source to the interface selected for the target."""
+
+    host, port = source_address
+    wildcard_hosts = {"", "::"} if family == socket.AF_INET6 else {"", "0.0.0.0"}
+    if host not in wildcard_hosts:
+        return source_address
+    route_probe = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        route_probe.connect(target)
+        routed_host = str(route_probe.getsockname()[0])
+    finally:
+        route_probe.close()
+    return routed_host, port
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

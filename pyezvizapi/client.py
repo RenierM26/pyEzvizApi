@@ -631,7 +631,7 @@ class EzvizClient:
                 1100,
                 self._token["api_url"],
             )
-            return self.login()
+            return self.login(sms_code=smscode)
 
         if json_result["meta"]["code"] == 1012:
             raise PyEzvizError("The MFA code is invalid, please try again.")

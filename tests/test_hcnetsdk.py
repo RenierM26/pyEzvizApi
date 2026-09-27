@@ -5204,6 +5204,34 @@ def test_command_port_expected_media_timeout_preserves_socket() -> None:
     assert sock.sent == [b"keepalive"]
 
 
+def test_command_port_partial_expected_media_timeout_invalidates_socket() -> None:
+    media_payload = b"media"
+    media_frame = (
+        b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    interrupted_sock = _FakeSocket([media_frame[:2]])
+    replacement_sock = _FakeSocket([media_frame])
+    sockets = iter([interrupted_sock, replacement_sock])
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: next(sockets),
+    )
+    ticks = iter([0.0, 0.1, 1.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        client.read_media_frame_after_prefix(
+            deadline=1.0,
+            monotonic=lambda: next(ticks),
+            invalidate_on_deadline=False,
+        )
+
+    assert interrupted_sock.closed is True
+    assert client.read_media_frame_after_prefix().frame.payload == media_payload
+
+
 @pytest.mark.parametrize("client_kind", ("local", "command_port"))
 def test_local_command_writes_use_remaining_capture_deadline(client_kind: str) -> None:
     configured_timeout = 10.0

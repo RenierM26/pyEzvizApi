@@ -8750,6 +8750,7 @@ class _DeadlineBoundRecvSocket:
         self._deadline = deadline
         self._configured_timeout = configured_timeout
         self._monotonic = monotonic
+        self.bytes_received = 0
 
     def recv(self, length: int) -> bytes:
         remaining = self._deadline - self._monotonic()
@@ -8778,12 +8779,14 @@ class _DeadlineBoundRecvSocket:
                         "EZVIZ local SDK frame read exceeded its deadline"
                     )
                 raise TimeoutError("timed out")
-            return self._sock.recv(length)
+            data = self._sock.recv(length)
+            self.bytes_received += len(data)
+            return data
 
         previous_timeout = self._sock.gettimeout()
         self._sock.settimeout(effective_timeout)
         try:
-            return self._sock.recv(length)
+            data = self._sock.recv(length)
         except TimeoutError as err:
             if deadline_limits_receive:
                 raise EzvizLocalSdkDeadlineExpired(
@@ -8792,6 +8795,8 @@ class _DeadlineBoundRecvSocket:
             raise
         finally:
             self._sock.settimeout(previous_timeout)
+        self.bytes_received += len(data)
+        return data
 
 
 def _wait_for_socket_io(
@@ -10448,7 +10453,7 @@ class HcNetSdkCommandPortClient:
                 max_prefix_bytes=max_prefix_bytes,
             )
         except EzvizLocalSdkDeadlineExpired:
-            if invalidate_on_deadline:
+            if invalidate_on_deadline or deadline_socket.bytes_received:
                 self._invalidate_socket(sock)
             raise
 

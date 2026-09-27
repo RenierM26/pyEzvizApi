@@ -13,7 +13,7 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 import pytest
 
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrame,
@@ -290,6 +290,33 @@ def test_local_sdk_media_stream_yields_mpeg_ps_payloads() -> None:
     assert sdk.read_prefix_limits == [128]
 
 
+def test_local_sdk_media_stream_bounds_blocking_read_after_first_packet() -> None:
+    first_payload = b"\x00\x00\x01\xbaabc"
+
+    class DeadlineSdkClient(_FakeSdkClient):
+        read_timeout: float | None = None
+
+        def read_stream_frame_after_prefix(self, **kwargs: Any) -> Any:
+            self.read_timeout = kwargs.get("timeout")
+            raise EzvizLocalSdkDeadlineExpired("deadline")
+
+    sdk = DeadlineSdkClient(_media(first_payload, sequence=1))
+    stream = EzvizLocalSdkMediaStream(sdk, _preview_request())  # type: ignore[arg-type]
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            monotonic=lambda: 10.0,
+        )
+    )
+
+    assert [packet.body for packet in packets] == [first_payload]
+    assert sdk.read_timeout == 1.0
+    assert sdk.closed is True
+    with pytest.raises(PyEzvizError, match=r"cannot resume after.*interrupted"):
+        list(stream.iter_packets(max_packets=1))
+
+
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:
     control_request = build_hcnetsdk_tcp_frame(b"auth", field_4=90)
     preview_request = build_hcnetsdk_tcp_frame(b"preview", field_4=99)
@@ -454,6 +481,42 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
 
     assert [packet.body for packet in packets] == [first_payload, second_payload]
     assert events.index("media.recv") < events.index("keyframe.send")
+
+
+def test_hcnetsdk_multi_socket_stream_checks_deadline_between_drained_media() -> None:
+    first_payload = b"\x00\x00\x01\xbaabc"
+    second_payload = b"\x00\x00\x01\xbadef"
+    plan = HcNetSdkCommandPortMultiSocketPlan(
+        steps=(
+            HcNetSdkCommandPortSocketStep(
+                (build_hcnetsdk_tcp_frame(b"preview"),),
+                response_reads_after_each=0,
+                media_socket=True,
+            ),
+        )
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        plan,
+    )
+    stream.bootstrap = SimpleNamespace()  # type: ignore[assignment]
+    stream._media_client = cast(Any, object())  # noqa: SLF001
+    stream._drained_media = [  # noqa: SLF001
+        _media(first_payload, sequence=1),
+        _media(second_payload, sequence=2),
+    ]
+    monotonic_values = iter((0.0, 0.0, 1.0, 1.0))
+
+    packets = list(
+        stream.iter_packets(
+            max_packets=2,
+            duration_seconds=1.0,
+            monotonic=lambda: next(monotonic_values),
+        )
+    )
+
+    assert [packet.body for packet in packets] == [first_payload]
+    assert len(stream._drained_media) == 1  # noqa: SLF001
 
 
 def test_hcnetsdk_multi_socket_stream_records_keepalive_events() -> None:
@@ -856,6 +919,29 @@ def test_hcnetsdk_generated_multi_socket_stream_logs_in_and_renders_plan() -> No
     assert control_socket.closed is True
     assert media_socket.closed is True
     assert keyframe_socket.closed is True
+
+
+@pytest.mark.parametrize("duration_seconds", [0.0, -1.0])
+def test_hcnetsdk_generated_multi_socket_stream_skips_start_for_empty_duration(
+    duration_seconds: float,
+) -> None:
+    def unexpected_socket_factory(
+        _address: tuple[str, int],
+        _timeout: float | None,
+    ) -> _FakeSocket:
+        pytest.fail("empty capture must not open a socket")
+
+    stream = HcNetSdkCommandPortGeneratedMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortGeneratedMultiSocketPlan(steps=()),
+        password=b"123456",
+        socket_factory=unexpected_socket_factory,
+    )
+
+    packets = list(stream.iter_packets(duration_seconds=duration_seconds))
+
+    assert packets == []
+    assert stream.bootstrap is None
 
 
 def test_hcnetsdk_multi_socket_stream_reports_response_step_context() -> None:

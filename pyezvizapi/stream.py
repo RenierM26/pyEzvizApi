@@ -12,7 +12,7 @@ import socket
 import ssl
 import struct
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 from Crypto.Cipher import AES
@@ -179,6 +179,10 @@ class StopStreamResponse:
 SocketFactory = Callable[[tuple[str, int], float | None], Any]
 
 
+class _VtmReadDeadlineExpired(TimeoutError):
+    """Internal signal that a bounded VTM read reached its caller deadline."""
+
+
 class VtmStreamClient:
     """Experimental synchronous client for the APK-discovered VTM TCP stream.
 
@@ -202,6 +206,9 @@ class VtmStreamClient:
         self._socket_factory = socket_factory
         self._socket: Any | None = None
         self._sequence = 0
+        self._recv_buffer = bytearray()
+        self._pending_header: VtmPacket | None = None
+        self._read_inactivity_deadline: float | None = None
         self.stream_info: StreamInfoResponse | None = None
 
     def __enter__(self) -> VtmStreamClient:
@@ -237,6 +244,9 @@ class VtmStreamClient:
 
         sock = self._socket
         self._socket = None
+        self._recv_buffer.clear()
+        self._pending_header = None
+        self._read_inactivity_deadline = None
         if sock is not None:
             sock.close()
 
@@ -261,11 +271,37 @@ class VtmStreamClient:
         self._sequence = (self._sequence + 1) & 0xFFFF
         return sequence
 
-    def read_packet(self) -> VtmPacket:
+    def read_packet(
+        self,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> VtmPacket:
         """Read one complete VTM packet from the TCP stream."""
 
-        header = decode_vtm_header(self._recv_exact(VTM_HEADER_SIZE))
-        body = self._recv_exact(header.length)
+        try:
+            header = self._pending_header
+            if header is None:
+                header = decode_vtm_header(
+                    self._recv_exact(
+                        VTM_HEADER_SIZE,
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
+                )
+                self._pending_header = header
+            body = self._recv_exact(
+                header.length,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        except _VtmReadDeadlineExpired:
+            raise
+        except Exception:
+            self._read_inactivity_deadline = None
+            raise
+        self._pending_header = None
+        self._read_inactivity_deadline = None
         return VtmPacket(
             channel=header.channel,
             length=header.length,
@@ -332,10 +368,12 @@ class VtmStreamClient:
             message_code=message_code,
         )
 
-    def iter_packets(
+    def iter_packets(  # noqa: PLR0912
         self,
         *,
         max_packets: int | None = None,
+        duration_seconds: float | None = None,
+        first_packet_timeout: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
         monotonic: Callable[[], float] = time.monotonic,
@@ -346,28 +384,66 @@ class VtmStreamClient:
         to surface them to callers while still iterating over the same TCP feed.
         """
 
-        seen = 0
-        last_keepalive = monotonic()
-        while max_packets is None or seen < max_packets:
-            if (
-                keepalive_interval is not None
-                and self.stream_info is not None
-                and self.stream_info.streamssn
-                and monotonic() - last_keepalive >= keepalive_interval
-            ):
-                self.send_keepalive()
-                last_keepalive = monotonic()
+        if duration_seconds is not None and duration_seconds <= 0:
+            return
+        if first_packet_timeout is not None and first_packet_timeout <= 0:
+            return
+        if keepalive_interval is not None and keepalive_interval <= 0:
+            raise PyEzvizError("keepalive_interval must be positive or None")
 
-            packet = self.read_packet()
+        seen = 0
+        started_at = monotonic()
+        capture_deadline: float | None = None
+        first_packet_deadline = (
+            None
+            if first_packet_timeout is None
+            else started_at + first_packet_timeout
+        )
+        next_keepalive = (
+            None if keepalive_interval is None else started_at + keepalive_interval
+        )
+        while max_packets is None or seen < max_packets:
+            now = monotonic()
+            if capture_deadline is not None and now >= capture_deadline:
+                self._read_inactivity_deadline = None
+                break
+            if first_packet_deadline is not None and now >= first_packet_deadline:
+                self._read_inactivity_deadline = None
+                break
+            if next_keepalive is not None and now >= next_keepalive:
+                assert keepalive_interval is not None
+                if self.stream_info is not None and self.stream_info.streamssn:
+                    self.send_keepalive()
+                next_keepalive = now + keepalive_interval
+
+            read_deadlines = [
+                deadline
+                for deadline in (
+                    capture_deadline,
+                    first_packet_deadline,
+                    next_keepalive,
+                )
+                if deadline is not None
+            ]
+            read_deadline = min(read_deadlines) if read_deadlines else None
+
+            try:
+                packet = self.read_packet(deadline=read_deadline, monotonic=monotonic)
+            except _VtmReadDeadlineExpired:
+                continue
             if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
                 self.send_keepalive(message_code=VtmMessageCode.KEEPALIVE_RSP)
-                last_keepalive = monotonic()
+                if keepalive_interval is not None:
+                    next_keepalive = monotonic() + keepalive_interval
                 if include_control:
                     seen += 1
                     yield packet
                 continue
 
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+                if capture_deadline is None and duration_seconds is not None:
+                    capture_deadline = monotonic() + duration_seconds
+                first_packet_deadline = None
                 seen += 1
                 yield packet
                 continue
@@ -376,10 +452,20 @@ class VtmStreamClient:
                 seen += 1
                 yield packet
 
-    def iter_payloads(self, *, max_packets: int | None = None) -> Iterator[bytes]:
+    def iter_payloads(
+        self,
+        *,
+        max_packets: int | None = None,
+        duration_seconds: float | None = None,
+        first_packet_timeout: float | None = None,
+    ) -> Iterator[bytes]:
         """Yield stream packet bodies from the VTM connection."""
 
-        for packet in self.iter_packets(max_packets=max_packets):
+        for packet in self.iter_packets(
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            first_packet_timeout=first_packet_timeout,
+        ):
             yield packet.body
 
     def trace_packets(
@@ -450,22 +536,81 @@ class VtmStreamClient:
             raise PyEzvizError("VTM socket is not connected")
         return sock
 
-    def _recv_exact(self, length: int) -> bytes:
+    def _recv_exact(
+        self,
+        length: int,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> bytes:
         sock = self._require_socket()
-        chunks: list[bytes] = []
-        remaining = length
-        while remaining:
+        while len(self._recv_buffer) < length:
+            gettimeout = getattr(sock, "gettimeout", None)
+            configured_timeout = (
+                cast("float | None", gettimeout())
+                if callable(gettimeout)
+                else self.timeout
+            )
+            now = monotonic()
+            if (
+                self._read_inactivity_deadline is None
+                and configured_timeout is not None
+            ):
+                self._read_inactivity_deadline = now + configured_timeout
+            inactivity_remaining = (
+                None
+                if self._read_inactivity_deadline is None
+                else self._read_inactivity_deadline - now
+            )
+            if inactivity_remaining is not None and inactivity_remaining <= 0:
+                raise DeviceException(
+                    "Device offline or unreachable: timed out waiting for VTM stream data"
+                )
+
+            caller_remaining: float | None = None
+            if deadline is not None:
+                caller_remaining = deadline - now
+                if caller_remaining <= 0:
+                    raise _VtmReadDeadlineExpired
+
+            timeout_candidates = [
+                value
+                for value in (
+                    configured_timeout,
+                    inactivity_remaining,
+                    caller_remaining,
+                )
+                if value is not None
+            ]
+            effective_timeout = min(timeout_candidates) if timeout_candidates else None
+            caller_limited = caller_remaining is not None and (
+                inactivity_remaining is None
+                or caller_remaining < inactivity_remaining
+            )
+
+            timeout_changed = effective_timeout != configured_timeout
+            if timeout_changed:
+                sock.settimeout(effective_timeout)
             try:
-                chunk = sock.recv(remaining)
+                chunk = sock.recv(length - len(self._recv_buffer))
             except TimeoutError as err:
+                if caller_limited:
+                    raise _VtmReadDeadlineExpired from err
                 raise DeviceException(
                     "Device offline or unreachable: timed out waiting for VTM stream data"
                 ) from err
+            finally:
+                if timeout_changed:
+                    sock.settimeout(configured_timeout)
             if not chunk:
                 raise PyEzvizError("VTM socket closed while reading packet")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
+            self._recv_buffer.extend(chunk)
+            if configured_timeout is not None:
+                self._read_inactivity_deadline = monotonic() + configured_timeout
+
+        result = bytes(self._recv_buffer[:length])
+        del self._recv_buffer[:length]
+        return result
 
 
 def encode_vtm_packet(

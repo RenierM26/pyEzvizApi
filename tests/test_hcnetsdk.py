@@ -3998,6 +3998,37 @@ def test_hcnetsdk_command_port_client_bootstraps_first_media() -> None:
     assert bootstrap.first_media.frame.payload == media_payload
 
 
+def test_hcnetsdk_command_port_media_read_restores_socket_timeout() -> None:
+    expected_prefix = b"preface"
+    expected_timeout = 3.0
+    media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
+    media_frame = (
+        expected_prefix
+        + b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    sock = _FakeSocket([media_frame])
+    sock.timeout = expected_timeout
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=expected_timeout,
+        socket_factory=lambda _address, _timeout: sock,
+    )
+
+    frame = client.read_media_frame_after_prefix(
+        max_prefix_bytes=16,
+        timeout=1.0,
+        monotonic=lambda: 10.0,
+    )
+
+    assert frame.prefix == expected_prefix
+    assert frame.frame.payload == media_payload
+    assert sock.timeout == expected_timeout
+    assert sock.timeout_history[-1] == expected_timeout
+    assert 1.0 in sock.timeout_history
+
+
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
     pre_start_response = build_ezviz_local_sdk_frame(
         command=0x2014,

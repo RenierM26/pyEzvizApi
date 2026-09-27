@@ -9581,12 +9581,31 @@ class HcNetSdkCommandPortClient:
         self,
         *,
         max_prefix_bytes: int = 4096,
+        timeout: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next command-port media frame."""
-        return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
-            self.sock,
-            max_prefix_bytes=max_prefix_bytes,
+        sock = self.sock
+        if timeout is None:
+            return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+                sock,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+
+        previous_timeout = sock.gettimeout()
+        deadline_socket = _DeadlineBoundRecvSocket(
+            sock,
+            deadline=monotonic() + timeout,
+            configured_timeout=previous_timeout,
+            monotonic=monotonic,
         )
+        try:
+            return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+                deadline_socket,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+        finally:
+            sock.settimeout(previous_timeout)
 
     def login(
         self,

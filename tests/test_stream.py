@@ -94,6 +94,9 @@ class FakeVtmSocket:
     def settimeout(self, timeout: float | None) -> None:
         self.timeout = timeout
 
+    def gettimeout(self) -> float | None:
+        return self.timeout
+
     def sendall(self, data: bytes) -> None:
         self.sent += data
 
@@ -1731,8 +1734,25 @@ def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
             sequence=9,
         ),
     ]
-    fake_socket = FakeVtmSocket(responses)
-    times = iter([0.0, 0.0, 6.0, 6.0])
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class AdvancingSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            chunk = super().recv(size)
+            if self.recv_calls == 4:
+                clock.now = 6.0
+            return chunk
+
+    fake_socket = AdvancingSocket(responses)
 
     with VtmStreamClient(
         "ysproto://vtm.example.test:8554/live",
@@ -1743,7 +1763,7 @@ def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
             stream.iter_packets(
                 max_packets=2,
                 keepalive_interval=5.0,
-                monotonic=lambda: next(times),
+                monotonic=clock,
             )
         )
 
@@ -1752,6 +1772,332 @@ def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
     assert [packet.body for packet in packets] == [b"\x47one", b"\x47two"]
     assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
     assert sent_packets[-1].body == build_stream_keepalive_request("ssn-123")
+
+
+@pytest.mark.parametrize("keepalive_interval", [0.0, -1.0])
+def test_vtm_stream_client_rejects_nonpositive_keepalive_interval(
+    keepalive_interval: float,
+) -> None:
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+
+    with pytest.raises(PyEzvizError, match="keepalive_interval must be positive"):
+        list(stream.iter_packets(keepalive_interval=keepalive_interval))
+
+
+def test_vtm_stream_client_sends_keepalive_while_socket_is_quiet() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47after-idle",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        idle_once = True
+
+        def recv(self, size: int) -> bytes:
+            if not self._buffer and self.idle_once:
+                self.idle_once = False
+                clock.now = 5.0
+                self._buffer = media_packet
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=5.0,
+                monotonic=clock,
+            )
+        )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert [packet.body for packet in packets] == [b"\x47after-idle"]
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+
+def test_vtm_stream_client_keepalive_does_not_renew_socket_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            self.recv_calls += 1
+            if self.recv_calls > 2:
+                pytest.fail("configured timeout was renewed after keepalive")
+            clock.now = self.recv_calls * 5.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        with pytest.raises(DeviceException, match="timed out waiting for VTM"):
+            next(
+                stream.iter_packets(
+                    keepalive_interval=5.0,
+                    monotonic=clock,
+                )
+            )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert fake_socket.recv_calls == 2
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+
+def test_vtm_stream_client_preserves_partial_packet_across_keepalive() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47partial-packet",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class PartialIdleSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            if self.recv_calls == 3:
+                return super().recv(8)
+            if self.recv_calls == 4:
+                return super().recv(3)
+            if self.recv_calls == 5:
+                clock.now = 5.0
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = PartialIdleSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            ),
+            media_packet,
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=5.0,
+                monotonic=clock,
+            )
+        )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert [packet.body for packet in packets] == [b"\x47partial-packet"]
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+
+def test_vtm_stream_client_resets_inactivity_after_bounded_partial_read() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47partial-packet",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class PartialDeadlineSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            if self.recv_calls == 3:
+                return super().recv(8)
+            if self.recv_calls == 4:
+                return super().recv(3)
+            if self.recv_calls == 5:
+                clock.now = 5.0
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = PartialDeadlineSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            ),
+            media_packet,
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        assert list(
+            stream.iter_packets(
+                first_packet_timeout=5.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        ) == []
+
+        clock.now = 20.0
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert [packet.body for packet in packets] == [b"\x47partial-packet"]
+
+
+def test_vtm_stream_client_keeps_shorter_configured_socket_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    expected_timeout = 2.0
+
+    class QuietSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=expected_timeout,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        with pytest.raises(DeviceException, match="timed out waiting for VTM"):
+            next(stream.iter_packets(keepalive_interval=5.0))
+
+    assert fake_socket.timeout == expected_timeout
+
+
+def test_vtm_stream_client_stops_quiet_read_at_first_packet_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            clock.now = 1.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=None,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                first_packet_timeout=1.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert packets == []
+    assert fake_socket.timeout is None
 
 
 def test_vtm_stream_client_start_follows_redirect_response() -> None:

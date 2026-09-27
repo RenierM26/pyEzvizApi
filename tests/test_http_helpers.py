@@ -33,6 +33,7 @@ from pyezvizapi.exceptions import (
 from pyezvizapi.local_stream import (
     HcNetSdkCommandPortMultiSocketPlan,
     HcNetSdkCommandPortSocketStep,
+    _iter_local_stream_payloads,
 )
 
 DEFAULT_SAVE_TIMEOUT = 10.0
@@ -88,6 +89,30 @@ class _PacketStream:
             )
 
 
+class _DeadlinePacketStream(_PacketStream):
+    supports_deadline_iter_packets = True
+
+    def __init__(self, bodies: list[bytes]) -> None:
+        super().__init__(bodies)
+        self.iter_calls: list[dict[str, Any]] = []
+
+    def iter_packets(
+        self,
+        *,
+        max_packets: int | None = None,
+        duration_seconds: float | None = None,
+        monotonic: Any = None,
+    ) -> Iterator[Any]:
+        self.iter_calls.append(
+            {
+                "max_packets": max_packets,
+                "duration_seconds": duration_seconds,
+                "monotonic": monotonic,
+            }
+        )
+        yield from super().iter_packets(max_packets=max_packets)
+
+
 def test_parse_json_returns_decoded_payload() -> None:
     assert EzvizClient._parse_json(_response(text='{"resultCode": "0", "value": 1}')) == {
         "resultCode": "0",
@@ -112,6 +137,28 @@ def test_local_stream_metadata_recorder_honors_env_limits(
     assert summary["capture_byte_limit"] == 64
     assert summary["capture_truncated"] is True
     assert summary["sample_limit"] == 3
+
+
+def test_local_stream_metadata_recorder_forwards_deadline_capability() -> None:
+    stream = _DeadlinePacketStream([b"packet"])
+    recorder = _LocalStreamPacketMetadataRecorder(stream)
+    monotonic = lambda: 1.0  # noqa: E731
+
+    assert list(
+        _iter_local_stream_payloads(
+            recorder,
+            max_packets=2,
+            duration_seconds=3.0,
+            monotonic=monotonic,
+        )
+    ) == [b"packet"]
+    assert stream.iter_calls == [
+        {
+            "max_packets": 2,
+            "duration_seconds": 3.0,
+            "monotonic": monotonic,
+        }
+    ]
 
 
 def test_parse_json_raises_contextual_error_for_invalid_json() -> None:

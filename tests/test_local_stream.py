@@ -1282,6 +1282,7 @@ def test_generated_stream_ends_normally_when_bootstrap_uses_capture_budget() -> 
     stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
     stream.bootstrap = cast(Any, object())
     stream._stream = cast(Any, rendered)  # noqa: SLF001
+    stream.rsa_key = object()
     ticks = iter((0.0, 1.0))
 
     packets = list(
@@ -1294,6 +1295,40 @@ def test_generated_stream_ends_normally_when_bootstrap_uses_capture_budget() -> 
 
     assert packets == []
     assert rendered.closed is True
+
+
+def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> None:
+    stream = HcNetSdkCommandPortGeneratedMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortGeneratedMultiSocketPlan(steps=()),
+        password=b"123456",
+    )
+    now = [0.0]
+    generated_key = object()
+    deadlines: list[float | None] = []
+
+    def generate(_bits: int) -> object:
+        now[0] = 5.0
+        return generated_key
+
+    def start(**kwargs: object) -> None:
+        deadlines.append(cast(float | None, kwargs["deadline"]))
+        raise EzvizLocalSdkDeadlineExpired
+
+    monkeypatch.setattr("pyezvizapi.local_stream.RSA.generate", generate)
+    monkeypatch.setattr(stream, "start", start)
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            monotonic=lambda: now[0],
+        )
+    )
+
+    assert packets == []
+    assert stream.rsa_key is generated_key
+    assert deadlines == [6.0]
 
 
 def test_hcnetsdk_multi_socket_stream_reports_response_step_context() -> None:

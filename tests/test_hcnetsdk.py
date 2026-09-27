@@ -5081,6 +5081,104 @@ def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
     assert command_sock.timeout_history == [5.0, 0.75, 5.0]
 
 
+@pytest.mark.parametrize("read_kind", ("command_response", "stream_media"))
+def test_local_deadline_read_invalidates_socket(read_kind: str) -> None:
+    response = build_ezviz_local_sdk_frame(
+        command=EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+        body=b"<Response><Result>0</Result></Response>",
+    ) + LOCAL_SDK_RESPONSE_TRAILER
+    media_payload = b"media"
+    media = b"\x24\x00" + len(media_payload).to_bytes(2, "big") + media_payload
+    first_data = response[:1] if read_kind == "command_response" else media[:2]
+    replacement_data = response if read_kind == "command_response" else media
+    interrupted_sock = _FakeSocket([first_data])
+    replacement_sock = _FakeSocket([replacement_data])
+    sockets = iter([interrupted_sock, replacement_sock])
+    client = EzvizLocalSdkClient(
+        HcNetSdkLanEndpoint(
+            serial="CAM123456",
+            host="192.0.2.10",
+            command_port=9010,
+            stream_port=9020,
+        ),
+        EzvizCasDeviceInfo(
+            serial="CAM123456",
+            operation_code="0123456",
+            key="1234567890abcdef",
+        ),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: next(sockets),
+    )
+    ticks = iter([0.0, 0.1, 0.2, 1.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        if read_kind == "command_response":
+            client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                b"<Request/>",
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        else:
+            client.read_stream_frame_after_prefix(
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+
+    assert interrupted_sock.closed is True
+    if read_kind == "command_response":
+        exchange = client.send_encrypted_command(
+            EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            b"<Request/>",
+        )
+        assert exchange.response.header.command == EZVIZ_LOCAL_SDK_PREVIEW_COMMAND
+    else:
+        frame = client.read_stream_frame_after_prefix()
+        assert frame.frame.payload == media_payload
+
+
+@pytest.mark.parametrize("read_kind", ("tcp", "media"))
+def test_command_port_deadline_read_invalidates_socket(read_kind: str) -> None:
+    tcp_payload = b"ok"
+    tcp_frame = build_hcnetsdk_tcp_frame(tcp_payload)
+    media_payload = b"media"
+    media_frame = (
+        b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    expected_frame = tcp_frame if read_kind == "tcp" else media_frame
+    interrupted_sock = _FakeSocket(
+        [expected_frame[:1] if read_kind == "tcp" else expected_frame[:2]]
+    )
+    replacement_sock = _FakeSocket([expected_frame])
+    sockets = iter([interrupted_sock, replacement_sock])
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: next(sockets),
+    )
+    ticks = iter([0.0, 0.2, 1.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        if read_kind == "tcp":
+            client.read_tcp_frame(
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        else:
+            client.read_media_frame_after_prefix(
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+
+    assert interrupted_sock.closed is True
+    if read_kind == "tcp":
+        assert client.read_tcp_frame().body == tcp_payload
+    else:
+        assert client.read_media_frame_after_prefix().frame.payload == media_payload
+
+
 @pytest.mark.parametrize("client_kind", ("local", "command_port"))
 def test_local_command_writes_use_remaining_capture_deadline(client_kind: str) -> None:
     configured_timeout = 10.0

@@ -19,6 +19,7 @@ import time
 from typing import Any, BinaryIO, Literal, cast
 
 from Crypto.Cipher import AES
+from Crypto.PublicKey import RSA
 
 from .cas import CasDeviceSession, EzvizCAS
 from .constants import (
@@ -28,6 +29,7 @@ from .constants import (
 )
 from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
 from .hcnetsdk import (
+    HCNETSDK_COMMAND_PORT_RSA_BITS,
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
     EzvizLocalAuthenticationAttrs,
@@ -1545,6 +1547,13 @@ class HcNetSdkCommandPortGeneratedMultiSocketMediaStream:
             return
         if duration_seconds is not None and duration_seconds <= 0:
             return
+        if self.rsa_key is None:
+            # Key generation may block on system randomness. Complete it before
+            # starting a startup-inclusive capture budget, then cache it for
+            # subsequent starts.
+            self.rsa_key = RSA.generate(  # codeql[py/weak-key-size]
+                HCNETSDK_COMMAND_PORT_RSA_BITS
+            )
         deadline = (
             monotonic() + duration_seconds
             if duration_from_start and duration_seconds is not None

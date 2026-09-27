@@ -9055,10 +9055,14 @@ class EzvizLocalSdkClient:
                 configured_timeout=previous_timeout,
                 monotonic=monotonic,
             )
-        response = read_ezviz_local_sdk_frame(
-            read_socket,
-            trailer_length=self.response_trailer_length,
-        )
+        try:
+            response = read_ezviz_local_sdk_frame(
+                read_socket,
+                trailer_length=self.response_trailer_length,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
         return EzvizLocalSdkExchange(request=request, response=response)
 
     def bootstrap_preview(
@@ -9255,10 +9259,14 @@ class EzvizLocalSdkClient:
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
-        return read_ezviz_interleaved_rtp_frame_after_prefix(
-            deadline_socket,
-            max_prefix_bytes=max_prefix_bytes,
-        )
+        try:
+            return read_ezviz_interleaved_rtp_frame_after_prefix(
+                deadline_socket,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
 
     def _command(
         self,
@@ -10365,7 +10373,11 @@ class HcNetSdkCommandPortClient:
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
-        return read_hcnetsdk_tcp_frame(deadline_socket)
+        try:
+            return read_hcnetsdk_tcp_frame(deadline_socket)
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
 
     def read_media_frame_after_prefix(
         self,
@@ -10418,10 +10430,14 @@ class HcNetSdkCommandPortClient:
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
-        return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
-            deadline_socket,
-            max_prefix_bytes=max_prefix_bytes,
-        )
+        try:
+            return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+                deadline_socket,
+                max_prefix_bytes=max_prefix_bytes,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
 
     def login(
         self,

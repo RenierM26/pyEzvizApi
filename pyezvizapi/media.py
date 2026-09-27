@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 import math
-from queue import Empty, Queue
-from threading import Thread
+from queue import Empty, Full, Queue
+from threading import Event, Lock, Thread
 import time
 from types import MappingProxyType
-from typing import Literal, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from .exceptions import PyEzvizError
 
@@ -25,37 +26,80 @@ _ITERATOR_STOPPED = object()
 _ITERATOR_TIMED_OUT = object()
 
 
-def _next_before_deadline[PacketT](
-    packets: Iterator[PacketT],
-    *,
-    deadline: float,
-    monotonic: Callable[[], float],
-) -> PacketT | object:
-    """Retrieve one potentially blocking iterator item before a deadline."""
-    remaining = deadline - monotonic()
-    if remaining <= 0:
-        return _ITERATOR_TIMED_OUT
+class _IteratorProducer[PacketT]:
+    """Manage one request-driven worker for a potentially blocking iterator."""
 
-    result: Queue[tuple[bool, object]] = Queue(maxsize=1)
+    def __init__(
+        self,
+        packets: Iterator[PacketT],
+        cancel: Callable[[], None] | None,
+    ) -> None:
+        self._packets = packets
+        self._cancel = cancel
+        self._requests: Queue[object] = Queue(maxsize=1)
+        self._results: Queue[tuple[bool, object]] = Queue(maxsize=1)
+        self._stop = Event()
+        self._thread = Thread(target=self._run, daemon=True)
+        self._thread.start()
 
-    def retrieve() -> None:
+    @property
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._requests.get()
+            if self._stop.is_set():
+                return
+            try:
+                packet = next(self._packets)
+            except StopIteration:
+                self._results.put((True, _ITERATOR_STOPPED))
+                return
+            except Exception as err:
+                self._results.put((False, err))
+                return
+            if self._stop.is_set():
+                return
+            self._results.put((True, packet))
+
+    def next_before(
+        self,
+        *,
+        deadline: float,
+        monotonic: Callable[[], float],
+    ) -> PacketT | object:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return _ITERATOR_TIMED_OUT
+        self._requests.put(object())
         try:
-            packet = next(packets)
-        except StopIteration:
-            result.put((True, _ITERATOR_STOPPED))
-        except Exception as err:
-            result.put((False, err))
-        else:
-            result.put((True, packet))
+            succeeded, value = self._results.get(timeout=remaining)
+        except Empty:
+            return _ITERATOR_TIMED_OUT
+        if not succeeded:
+            raise cast(Exception, value)
+        return value
 
-    Thread(target=retrieve, daemon=True).start()
-    try:
-        succeeded, value = result.get(timeout=remaining)
-    except Empty:
-        return _ITERATOR_TIMED_OUT
-    if not succeeded:
-        raise cast(Exception, value)
-    return value
+    def close(self) -> None:
+        self._stop.set()
+        if self._cancel is not None:
+            with suppress(Exception):
+                self._cancel()
+        else:
+            close = getattr(self._packets, "close", None)
+            if callable(close):
+                with suppress(RuntimeError, ValueError):
+                    close()
+        with suppress(Full):
+            self._requests.put_nowait(object())
+        self._thread.join(timeout=0.01)
+
+
+@dataclass
+class _IterableProducerState[PacketT]:
+    lock: Lock = field(default_factory=Lock)
+    producer: _IteratorProducer[PacketT] | None = None
 
 
 @dataclass(frozen=True)
@@ -286,8 +330,15 @@ class IterableMediaPacketSource[PacketT]:
     packets: Iterable[PacketT]
     converter: Callable[[PacketT], MediaPacket]
     predicate: Callable[[PacketT], bool] | None = None
+    cancel: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _producer_state: _IterableProducerState[Any] = field(
+        default_factory=_IterableProducerState,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
-    def iter_media_packets(
+    def iter_media_packets(  # noqa: PLR0912
         self,
         *,
         limits: CaptureLimits | None = None,
@@ -304,38 +355,55 @@ class IterableMediaPacketSource[PacketT]:
         emitted_packets = 0
         emitted_bytes = 0
         packets = iter(self.packets)
-        while True:
-            if deadline is None:
-                try:
-                    packet = next(packets)
-                except StopIteration:
+        producer = None
+        if deadline is not None:
+            with self._producer_state.lock:
+                active = self._producer_state.producer
+                if active is not None and active.alive:
+                    raise PyEzvizError(
+                        "Packet source is still cancelling a timed-out iterator read"
+                    )
+                producer = _IteratorProducer(packets, self.cancel)
+                self._producer_state.producer = producer
+        try:
+            while True:
+                if producer is None or deadline is None:
+                    try:
+                        packet = next(packets)
+                    except StopIteration:
+                        return
+                else:
+                    result = producer.next_before(
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
+                    if result is _ITERATOR_STOPPED or result is _ITERATOR_TIMED_OUT:
+                        return
+                    packet = cast(PacketT, result)
+                    if monotonic() >= deadline:
+                        return
+                if self.predicate is not None and not self.predicate(packet):
+                    continue
+                normalized = self.converter(packet)
+                if (
+                    selected_limits.max_bytes is not None
+                    and emitted_bytes + normalized.length > selected_limits.max_bytes
+                ):
+                    break
+                emitted_packets += 1
+                emitted_bytes += normalized.length
+                yield normalized
+                if (
+                    selected_limits.max_packets is not None
+                    and emitted_packets >= selected_limits.max_packets
+                ) or (
+                    selected_limits.max_bytes is not None
+                    and emitted_bytes >= selected_limits.max_bytes
+                ):
                     return
-            else:
-                result = _next_before_deadline(
-                    packets,
-                    deadline=deadline,
-                    monotonic=monotonic,
-                )
-                if result is _ITERATOR_STOPPED or result is _ITERATOR_TIMED_OUT:
-                    return
-                packet = cast(PacketT, result)
-                if monotonic() >= deadline:
-                    return
-            if self.predicate is not None and not self.predicate(packet):
-                continue
-            normalized = self.converter(packet)
-            if (
-                selected_limits.max_bytes is not None
-                and emitted_bytes + normalized.length > selected_limits.max_bytes
-            ):
-                break
-            emitted_packets += 1
-            emitted_bytes += normalized.length
-            yield normalized
-            if (
-                selected_limits.max_packets is not None
-                and emitted_packets >= selected_limits.max_packets
-            ) or (
-                selected_limits.max_bytes is not None and emitted_bytes >= selected_limits.max_bytes
-            ):
-                return
+        finally:
+            if producer is not None:
+                producer.close()
+                with self._producer_state.lock:
+                    if not producer.alive:
+                        self._producer_state.producer = None

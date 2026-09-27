@@ -320,14 +320,17 @@ def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:
 
     started_at = time.monotonic()
     packets = list(
-        hcnetsdk_media_packet_source(callback_packets()).iter_media_packets(
+        hcnetsdk_media_packet_source(
+            callback_packets(),
+            cancel=release.set,
+        ).iter_media_packets(
             limits=CaptureLimits(duration_seconds=0.02)
         )
     )
     elapsed = time.monotonic() - started_at
-    release.set()
 
     assert [packet.body for packet in packets] == [BODY]
+    assert release.is_set()
     assert elapsed < max_elapsed
 
 

@@ -5,6 +5,7 @@ import importlib
 import io
 import json
 import subprocess
+from types import SimpleNamespace
 from typing import Any
 
 from Crypto.Cipher import AES
@@ -1772,6 +1773,46 @@ def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
     assert [packet.body for packet in packets] == [b"\x47one", b"\x47two"]
     assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
     assert sent_packets[-1].body == build_stream_keepalive_request("ssn-123")
+
+
+def test_vtm_stream_capture_deadline_bounds_keepalive_write() -> None:
+    configured_timeout = 10.0
+    remaining_timeout = 0.25
+
+    class BlockingSendSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__([])
+            self.timeout = configured_timeout
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def sendall(self, data: bytes) -> None:
+            del data
+            raise TimeoutError
+
+    fake_socket = BlockingSendSocket()
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+    ticks = iter((0.0, 0.5, 0.75))
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            keepalive_interval=0.5,
+            monotonic=lambda: next(ticks),
+        )
+    )
+
+    assert packets == []
+    assert remaining_timeout in fake_socket.timeout_history
+    assert fake_socket.timeout_history[-1] == configured_timeout
 
 
 @pytest.mark.parametrize("keepalive_interval", [0.0, -1.0])

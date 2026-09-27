@@ -2572,6 +2572,8 @@ def hcnetsdk_real_data_to_media_packet(
 
 def hcnetsdk_media_packet_source(
     packets: Iterable[HcNetSdkRealDataPacket],
+    *,
+    cancel: Callable[[], None] | None = None,
 ) -> IterableMediaPacketSource[HcNetSdkRealDataPacket]:
     """Adapt HCNetSDK callback media packets to the shared packet contract."""
 
@@ -2579,6 +2581,7 @@ def hcnetsdk_media_packet_source(
         packets,
         hcnetsdk_real_data_to_media_packet,
         predicate=lambda packet: packet.is_media,
+        cancel=cancel,
     )
 
 

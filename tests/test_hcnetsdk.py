@@ -4375,7 +4375,7 @@ def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
     def socket_factory(
         _address: tuple[str, int],
         _timeout: float | None,
-        _source_address: tuple[str, int],
+        _source_address: tuple[str, int] | None = None,
     ) -> Any:
         raise OSError(errno.EADDRNOTAVAIL, "duplicate TCP tuple")
 

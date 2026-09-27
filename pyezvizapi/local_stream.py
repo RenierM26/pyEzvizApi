@@ -5227,10 +5227,14 @@ def _idmx_infer_aac_sample_rate(
         return None
     audio_span, video_span = spans
     estimate = audio_span * IDMX_VIDEO_RTP_CLOCK_RATE / video_span
-    sample_rate = min(IDMX_AAC_SAMPLE_RATES, key=lambda candidate: abs(candidate - estimate))
-    if abs(sample_rate - estimate) / sample_rate > IDMX_AAC_CLOCK_RATE_TOLERANCE:
+    matching_rates = [
+        candidate
+        for candidate in IDMX_AAC_SAMPLE_RATES
+        if abs(candidate - estimate) / candidate <= IDMX_AAC_CLOCK_RATE_TOLERANCE
+    ]
+    if len(matching_rates) != 1:
         return None
-    return sample_rate
+    return matching_rates[0]
 
 
 def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:

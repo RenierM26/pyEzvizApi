@@ -4989,73 +4989,31 @@ def _idmx_audio_metadata(
         return descriptor
     encrypted_access_units: list[bytes] = []
     audio_timestamps: list[int] = []
-    valid_audio_packet_indexes: list[int] = []
-    video_timestamps_by_packet: list[tuple[int, int]] = []
-    for packet_index, packet in enumerate(packets):
-        for frame in _iter_idmx_local_packet_frame(packet):
-            header_size = _idmx_local_frame_header_size(frame)
-            if header_size is None or not _is_complete_idmx_rtp_frame(frame):
-                continue
-            transport = _idmx_local_frame_transport_fields(frame, header_size)
-            payload_type = transport.get("rtp_payload_type")
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None or not _is_complete_idmx_rtp_frame(frame):
+            continue
+        transport = _idmx_local_frame_transport_fields(frame, header_size)
+        if (
+            transport.get("rtp_payload_type") != IDMX_AAC_RTP_PAYLOAD_TYPE
+            or not _idmx_rtp_extension_is_audio(frame)
+        ):
+            continue
+        access_unit = _idmx_aac_access_unit(rtp_payload(frame))
+        if (
+            access_unit is not None
+            and len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+            <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        ):
+            encrypted_access_units.append(access_unit)
             timestamp = transport.get("rtp_timestamp")
-            if payload_type == IDMX_H264_RTP_PAYLOAD_TYPE:
-                if isinstance(timestamp, int) and (
-                    not video_timestamps_by_packet
-                    or video_timestamps_by_packet[-1][1] != timestamp
-                ):
-                    video_timestamps_by_packet.append((packet_index, timestamp))
-                continue
-            if (
-                payload_type != IDMX_AAC_RTP_PAYLOAD_TYPE
-                or not _idmx_rtp_extension_is_audio(frame)
+            if isinstance(timestamp, int) and (
+                not audio_timestamps or audio_timestamps[-1] != timestamp
             ):
-                continue
-            access_unit = _idmx_aac_access_unit(rtp_payload(frame))
-            if (
-                access_unit is not None
-                and len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
-                <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
-            ):
-                encrypted_access_units.append(access_unit)
-                valid_audio_packet_indexes.append(packet_index)
-                if isinstance(timestamp, int) and (
-                    not audio_timestamps or audio_timestamps[-1] != timestamp
-                ):
-                    audio_timestamps.append(timestamp)
-    video_timestamps: list[int] = []
-    if valid_audio_packet_indexes and video_timestamps_by_packet:
-        first_audio_packet = valid_audio_packet_indexes[0]
-        last_audio_packet = valid_audio_packet_indexes[-1]
-        start = max(
-            (
-                index
-                for index, (packet_index, _timestamp) in enumerate(
-                    video_timestamps_by_packet
-                )
-                if packet_index <= first_audio_packet
-            ),
-            default=0,
-        )
-        end = max(
-            (
-                index
-                for index, (packet_index, _timestamp) in enumerate(
-                    video_timestamps_by_packet
-                )
-                if packet_index <= last_audio_packet
-            ),
-            default=-1,
-        )
-        if end >= start:
-            video_timestamps = [
-                timestamp
-                for _packet_index, timestamp in video_timestamps_by_packet[start : end + 1]
-            ]
+                audio_timestamps.append(timestamp)
     sample_rate = _idmx_infer_aac_sample_rate(
         packets,
         audio_timestamps=audio_timestamps,
-        video_timestamps=video_timestamps,
     )
     if sample_rate is None:
         return None
@@ -5095,11 +5053,13 @@ def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
     return False
 
 
-def _rtp_timestamp_span(timestamps: list[int]) -> int:
-    return sum(
-        (current - previous) & 0xFFFFFFFF
+def _rtp_timestamp_median_delta(timestamps: list[int]) -> int:
+    deltas = sorted(
+        delta
         for previous, current in pairwise(timestamps)
+        if (delta := (current - previous) & 0xFFFFFFFF)
     )
+    return deltas[len(deltas) // 2] if deltas else 0
 
 
 def _idmx_infer_aac_sample_rate(
@@ -5122,11 +5082,11 @@ def _idmx_infer_aac_sample_rate(
         )
     if len(audio_timestamps) < 8 or len(video_timestamps) < 8:
         return None
-    audio_span = _rtp_timestamp_span(audio_timestamps)
-    video_span = _rtp_timestamp_span(video_timestamps)
-    if not audio_span or not video_span:
+    audio_delta = _rtp_timestamp_median_delta(audio_timestamps)
+    video_delta = _rtp_timestamp_median_delta(video_timestamps)
+    if not audio_delta or not video_delta:
         return None
-    estimate = audio_span * IDMX_VIDEO_RTP_CLOCK_RATE / video_span
+    estimate = audio_delta * IDMX_VIDEO_RTP_CLOCK_RATE / video_delta
     sample_rate = min(IDMX_AAC_SAMPLE_RATES, key=lambda candidate: abs(candidate - estimate))
     if abs(sample_rate - estimate) / sample_rate > IDMX_AAC_CLOCK_RATE_TOLERANCE:
         return None

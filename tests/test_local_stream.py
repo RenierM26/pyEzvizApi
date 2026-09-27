@@ -1988,24 +1988,26 @@ def test_idmx_audio_metadata_infers_clock_from_valid_aac_frames_only() -> None:
 
     packets = [
         frame(104, 0x70000000, 1, b"\x00\x10\x00", extension=True),
+        frame(104, 0, 2, access_unit, extension=True),
         *[
-            frame(96, index * 5760, index + 2, b"\x41leading-video")
+            frame(96, index * 5760, index + 3, b"\x41leading-video")
             for index in range(8)
         ],
         *[
             packet
             for index in range(8)
             for packet in (
-                frame(96, 90_000 + index * 5760, index * 2 + 10, b"\x41video"),
+                frame(96, 90_000 + index * 5760, index * 2 + 11, b"\x41video"),
                 frame(
                     104,
-                    index * 1024,
-                    index * 2 + 11,
+                    (index + 1) * 1024,
+                    index * 2 + 12,
                     access_unit,
                     extension=True,
                 ),
             )
         ],
+        frame(104, 9 * 1024, 27, access_unit, extension=True),
     ]
 
     assert _idmx_audio_metadata(packets, IDMX_MEDIA_KEY) == (16_000, 1)

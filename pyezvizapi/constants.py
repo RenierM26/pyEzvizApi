@@ -10,17 +10,8 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum, unique
 from hashlib import md5
 from types import MappingProxyType
-from typing import Final
+from typing import ClassVar, Final
 import uuid
-
-
-@dataclass(frozen=True, slots=True)
-class HttpProfile:
-    """One server-bound HTTP client identity."""
-
-    name: str
-    headers: Mapping[str, str]
-    registration: Mapping[str, str]
 
 
 def _immutable(values: Mapping[str, str]) -> Mapping[str, str]:
@@ -69,6 +60,26 @@ _ANDROID_REGISTRATION: Final = {
     "pushExtJson": '{"language":"","protoVer":"2"}',
 }
 
+
+@dataclass(frozen=True, slots=True)
+class HttpProfile:
+    """One server-bound HTTP client identity and its managed-header policy."""
+
+    name: str
+    headers: Mapping[str, str]
+    registration: Mapping[str, str]
+
+    PROFILE_HEADER_NAMES: ClassVar = tuple(
+        dict.fromkeys((*REQUEST_HEADER, *_ANDROID_OVERRIDES))
+    )
+    IDENTITY_HEADER_NAMES: ClassVar = (
+        "sessionId",
+        "featureCode",
+        *_ANDROID_OVERRIDES,
+    )
+    DEFAULT_SESSION: ClassVar = object()
+
+
 WEB_PROFILE: Final = HttpProfile(
     name="web",
     headers=_immutable(REQUEST_HEADER),
@@ -84,16 +95,6 @@ ANDROID_PROFILE: Final = HttpProfile(
 PROFILE: Final = ANDROID_PROFILE.name
 HEADERS: Final = _immutable(_ANDROID_OVERRIDES)
 REGISTER: Final = ANDROID_PROFILE.registration
-
-_PROFILE_HEADER_NAMES: Final = tuple(
-    dict.fromkeys((*WEB_PROFILE.headers, *ANDROID_PROFILE.headers))
-)
-_IDENTITY_HEADER_NAMES: Final = (
-    "sessionId",
-    "featureCode",
-    *_ANDROID_OVERRIDES,
-)
-_DEFAULT_SESSION: Final = object()
 MQTT_APP_KEY = "4c6b3cc2-b5eb-4813-a592-612c1374c1fe"
 APP_SECRET = "17454517-cc1c-42b3-a845-99b4a15dd3e6"
 

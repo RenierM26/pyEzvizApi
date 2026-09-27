@@ -1,0 +1,277 @@
+"""Handshake state transitions, including failures after server allocation."""
+
+import hashlib
+import json
+from typing import Any
+
+import pytest
+import requests
+
+from pyezvizapi import _longlink as wire
+from pyezvizapi._longlink_auth import authenticate
+from pyezvizapi._longlink_session import Channel99Session
+from pyezvizapi.constants import FEATURE_CODE
+from pyezvizapi.exceptions import EzvizPushFatalError, EzvizTokenPersistenceError
+from pyezvizapi.mqtt import MQTTClient
+
+SERIAL = b"MOBILE:ys7:synthetic-user:synthetic-phone"
+TOKEN = "synthetic-token"
+DEVICE = bytes(range(32))
+SESSION = bytes(range(16))
+
+
+class Peer:
+    def __init__(self, *, redirect_fails: bool = False, serial: bytes = SERIAL) -> None:
+        self.serial = serial
+        self.commands: list[int] = []
+        self.redirect_fails = redirect_fails
+        self.shared = wire.share_key(hashlib.md5(TOKEN.encode()).hexdigest().encode(), self.serial)
+        self.n1 = 0
+
+    def send(self, frame: bytes) -> None:
+        self.commands.append(frame[0] >> 4)
+
+    def exchange(self, frame: bytes) -> tuple[int, bytes]:
+        command = frame[0] >> 4
+        self.commands.append(command)
+        if command == 1:
+            self.n1 = frame[7 + len(self.serial)]
+            return 2, b"\x01\x00\x00\x00\x22" + wire.signature(
+                self.serial + bytes([self.n1, 0x22]), self.shared
+            )
+        if command in (3, 4):
+            n3 = frame[5]
+            master = wire.master_key(bytes([self.n1, 0x22, n3, 0x44]), self.shared)
+            signed = wire.signature(self.serial + bytes([n3, 0x44]), self.shared)
+            if command == 3:
+                assert frame[7:39] == DEVICE
+                return 5, b"\x01\x00\x00\x00\x44\x20" + wire.encrypt(master, SESSION) + signed
+            return 6, b"\x01\x00\x00\x00\x44\x30" + wire.encrypt(
+                master, DEVICE
+            ) + b"\x20" + wire.encrypt(master, SESSION) + signed
+        if command == 10:
+            if self.redirect_fails:
+                raise ConnectionError("Synthetic redirect failure")
+            body = {
+                "Type": "DAS",
+                "DasInfo": {
+                    "Address": "192.0.2.10",
+                    "Domain": "broker.example.invalid",
+                    "Port": 8667,
+                    "UdpPort": 0,
+                    "ServerID": "synthetic",
+                },
+            }
+            return 11, b"\x01\x00\x00\x00" + wire.encrypt(SESSION, json.dumps(body).encode())
+        raise AssertionError(f"Unexpected command {command}")
+
+
+def test_creation_persisted_before_redirect_failure() -> None:
+    state: dict[str, Any] = {}
+    saved: list[dict[str, Any]] = []
+    peer = Peer(redirect_fails=True)
+    with pytest.raises(ConnectionError):
+        authenticate(peer, SERIAL, TOKEN, state, saved.append)
+    assert saved[0]["phase"] == "creation_pending"
+    assert saved[1]["device_id"] == DEVICE.hex()
+    assert peer.commands == [1, 4, 10]
+
+
+def test_existing_identity_retained_on_session_rotation() -> None:
+    state: dict[str, Any] = {"device_id": DEVICE.hex(), "session_hash": "old"}
+    saved: list[dict[str, Any]] = []
+    peer = Peer()
+    credentials = authenticate(peer, SERIAL, TOKEN, state, saved.append)
+    assert credentials.device_id == DEVICE
+    assert peer.commands == [1, 3, 10]
+    assert len(saved) == 1
+    assert saved[0]["session_hash"] == hashlib.sha256(TOKEN.encode()).hexdigest()
+
+
+def test_failed_persistence_stops_before_redirect() -> None:
+    state: dict[str, Any] = {"device_id": DEVICE.hex()}
+    peer = Peer()
+
+    def save(snapshot: dict[str, Any]) -> None:
+        raise OSError("Synthetic storage failure")
+
+    with pytest.raises(OSError):
+        authenticate(peer, SERIAL, TOKEN, state, save)
+    assert peer.commands == [1, 3]
+    # Retry may not bypass failed persistence via the cached-key branch.
+    with pytest.raises(OSError):
+        authenticate(peer, SERIAL, TOKEN, state, save)
+    assert peer.commands == [1, 3]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"phase": "creation_pending"},
+        {"phase": "authenticated"},
+        {"phase": "needs_reauthentication"},
+        {"phase": "unknown"},
+        {"phase": None},
+        {"master_key": SESSION.hex()},
+        {"session_hash": "orphaned"},
+        {"identity": "different"},
+        {"custom_metadata": True},
+    ],
+)
+def test_ambiguous_creation_or_wrong_account_stops_without_network(state: dict[str, Any]) -> None:
+    peer = Peer()
+    with pytest.raises(EzvizPushFatalError):
+        authenticate(peer, SERIAL, TOKEN, state, lambda value: None)
+    assert peer.commands == []
+
+
+@pytest.mark.parametrize("status", [10, 5])
+def test_only_invalid_master_key_selects_existing_device_reauthentication(status: int) -> None:
+    state: dict[str, Any] = {
+        "device_id": DEVICE.hex(),
+        "master_key": SESSION.hex(),
+        "session_hash": hashlib.sha256(TOKEN.encode()).hexdigest(),
+    }
+    saved: list[dict[str, Any]] = []
+
+    class RejectedPeer(Peer):
+        def exchange(self, frame: bytes) -> tuple[int, bytes]:
+            self.commands.append(frame[0] >> 4)
+            return 8, b"\x01\x00\x00" + bytes([status])
+
+    rejected = RejectedPeer()
+    expected = wire.AuthenticationRejected if status == 10 else EzvizPushFatalError
+    with pytest.raises(expected):
+        authenticate(rejected, SERIAL, TOKEN, state, saved.append)
+    assert rejected.commands == [7]
+    assert state["device_id"] == DEVICE.hex()
+    if status == 10:
+        assert "master_key" not in state
+        assert saved[-1]["phase"] == "needs_reauthentication"
+        retry = Peer()
+        credentials = authenticate(retry, SERIAL, TOKEN, state, saved.append)
+        assert credentials.device_id == DEVICE
+        assert retry.commands == [1, 3, 10]
+    else:
+        assert state["master_key"] == SESSION.hex()
+        assert len(saved) == 1
+
+
+@pytest.mark.parametrize("value", [None, "", "not-hex", "00", 123, "00" * 33])
+@pytest.mark.parametrize("field", ["device_id", "master_key"])
+def test_malformed_saved_credentials_are_fatal_before_network(field, value):
+    state = {
+        "device_id": DEVICE.hex(),
+        "master_key": SESSION.hex(),
+        "session_hash": hashlib.sha256(TOKEN.encode()).hexdigest(),
+    }
+    state[field] = value
+    peer = Peer()
+    with pytest.raises(EzvizPushFatalError, match="recovery required"):
+        authenticate(peer, SERIAL, TOKEN, state, lambda snapshot: None)
+    assert peer.commands == []
+
+
+@pytest.mark.parametrize("phase", ["authenticated", "needs_reauthentication"])
+def test_missing_device_in_existing_state_cannot_create_another_identity(phase):
+    peer = Peer()
+    with pytest.raises(EzvizPushFatalError):
+        authenticate(peer, SERIAL, TOKEN, {"phase": phase}, lambda snapshot: None)
+    assert peer.commands == []
+
+
+@pytest.mark.parametrize("version", [b"\x01\x00\x00", b"\x01\x03\x00"])
+@pytest.mark.parametrize("extra", [b"", b"\x00", bytes(33)])
+def test_rejected_https_based_handshake_is_fatal_without_allocating_identity(version, extra):
+    class RejectedPeer(Peer):
+        def exchange(self, frame):
+            self.commands.append(frame[0] >> 4)
+            return 2, version + b"\x05" + extra
+
+    peer = RejectedPeer()
+    state: dict[str, Any] = {}
+    saved: list[dict[str, Any]] = []
+    with pytest.raises(EzvizPushFatalError, match="reauthentication required"):
+        authenticate(peer, SERIAL, TOKEN, state, saved.append)
+    assert peer.commands == [1]
+    assert state == {}
+    assert saved == []
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("version", [b"\x01\x00\x00", b"\x01\x01\x00"])
+@pytest.mark.parametrize("extra", [b"", b"\x00", bytes(66), bytes(115)])
+def test_auth_iv_rejection_is_fatal_and_preserves_identity(existing, version, extra):
+    class RejectedPeer(Peer):
+        def exchange(self, frame):
+            command = frame[0] >> 4
+            if command in (3, 4):
+                self.commands.append(command)
+                return (5 if command == 3 else 6), version + b"\x05" + extra
+            return super().exchange(frame)
+
+    peer = RejectedPeer()
+    state = {"device_id": DEVICE.hex()} if existing else {}
+    saved: list[dict[str, Any]] = []
+    with pytest.raises(EzvizPushFatalError, match="status 5"):
+        authenticate(peer, SERIAL, TOKEN, state, saved.append)
+    assert peer.commands == [1, 3 if existing else 4]
+    if existing:
+        assert state == {"device_id": DEVICE.hex()}
+        assert saved == []
+    else:
+        assert state["phase"] == "creation_pending"
+        assert "device_id" not in state
+        assert saved == [state]
+
+
+@pytest.mark.parametrize("failure_phase", ["creation_pending", "authenticated"])
+def test_public_save_failure_preserves_the_correct_allocation_boundary(monkeypatch, failure_phase):
+    saved: dict[str, Any] = {
+        "api_url": "api.invalid", "username": "user", "user_id": "user",
+        "session_id": TOKEN, "rf_session_id": "refresh", "feature_code": FEATURE_CODE,
+        "push_profile": "android-channel99", "service_urls": {"pushDasDomain": "push.invalid"},
+    }
+    repaired = False
+    committed = []
+
+    def persist(snapshot):
+        if not repaired and snapshot["push_state"]["phase"] == failure_phase:
+            raise OSError("storage offline")
+        committed.append(snapshot)
+
+    monkeypatch.setattr("pyezvizapi.mqtt.PushWorker.start", lambda self: None)
+    client = MQTTClient(saved, requests.Session(), on_token_updated=persist)
+    client.connect()
+    worker = client._push_worker  # noqa: SLF001 - exercise real factory/persistence boundary
+    assert worker is not None
+    first = worker.factory()
+    assert isinstance(first, Channel99Session)
+    peer = Peer(serial=first.serial)
+    with pytest.raises(EzvizTokenPersistenceError):
+        authenticate(peer, first.serial, TOKEN, first.state, first.save)
+    if failure_phase == "creation_pending":
+        assert peer.commands == [1]  # No allocation request was sent.
+        assert "push_state" not in saved
+        assert first.state == {}  # Even a retry by the direct orchestrator is safe.
+    else:
+        assert peer.commands == [1, 4]  # Allocated, but no broker lookup after failed save.
+        assert saved["push_state"]["phase"] == "creation_pending"
+        assert "device_id" not in saved["push_state"]
+        assert committed[-1]["push_state"] == saved["push_state"]
+    repaired = True
+    replacement = MQTTClient(saved, requests.Session(), on_token_updated=persist)
+    replacement.connect()
+    worker = replacement._push_worker  # noqa: SLF001 - replacement after storage repair
+    assert worker is not None
+    retry = worker.factory()
+    assert isinstance(retry, Channel99Session)
+    peer = Peer(serial=retry.serial)
+    if failure_phase == "creation_pending":
+        credentials = authenticate(peer, retry.serial, TOKEN, retry.state, retry.save)
+        assert credentials.device_id == DEVICE
+        assert peer.commands == [1, 4, 10]
+    else:
+        with pytest.raises(EzvizPushFatalError, match="no device identity"):
+            authenticate(peer, retry.serial, TOKEN, retry.state, retry.save)
+        assert peer.commands == []  # Never allocate a duplicate device after an ambiguous failure.

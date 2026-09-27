@@ -1,0 +1,17 @@
+{
+  "provenance": "Synthetic inputs; Android libezLongLink 2.4.0 ARM wrappers executed offline. Standard crypto primitives shimmed. No account data or executable artifacts.",
+  "serial": "MOBILE:ys7:synthetic-user:synthetic-phone",
+  "code": "0123456789abcdef0123456789abcdef",
+  "nonce_hex": "11223344",
+  "shared": "3DD7AAECD3B4BADF1061F42002EE6AC8",
+  "master": "B130C5D0C2CD374E",
+  "auth_i_hex": "104f01030002294d4f42494c453a7973373a73796e7468657469632d757365723a73796e7468657469632d70686f6e651134ed3e0a21421e7053da5f84af3e96feb98f8e492cfd166bcfec5d4143d11a2f",
+  "ack": {
+    "topic": "/9000/2",
+    "ciphertext_hex": "96f007f44fd51cbe0b850af14a999a0f0e8a70014a4ce3ea2fd7c9d188b04166be81280e239a81ea83ce42e2e8a16fa97c8aee4c3f02143409fbeb00d03234d231046963997463a7dbeebe1acf5e0db4215d2fab4b94a8feb46730feb560120a643472366034b5e9a59fbf29b0495312dfa660e09f4103682202ce21c6777715de01d46a7734012513ccaffc075d87c1",
+    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><Response><Result>0</Result></Response>",
+    "key_hex": "000102030405060708090a0b0c0d0e0f",
+    "sequence": 42,
+    "qos": 0
+  }
+}

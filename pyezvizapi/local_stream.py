@@ -4300,7 +4300,7 @@ def _idmx_h264_annexb_packet_spans(
     return bytes(output), spans
 
 
-def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0915
+def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     packets: list[bytes],
     media_key: str | bytes,
 ) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:
@@ -4311,6 +4311,8 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0915
     active_fu: _RtpFragmentedNal | None = None
     active_start_packet: int | None = None
     active_start_frame: int | None = None
+    active_end_packet: int | None = None
+    active_end_frame: int | None = None
     active_nal_type: int | None = None
     hevc_evidence_seen = False
     aes_key = _local_media_aes_key(media_key)
@@ -4372,6 +4374,9 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0915
                 rtp_marker=_idmx_local_frame_rtp_marker(frame, frame_header_size),
                 decrypt_parameter_sets=decrypt_parameter_sets,
             )
+            if nal_type == 49 and active_fu is not None:
+                active_end_packet = packet_index
+                active_end_frame = frame_index
             if len(output) > start_offset:
                 spans.append(
                     (
@@ -4391,7 +4396,35 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0915
             if active_fu is None:
                 active_start_packet = None
                 active_start_frame = None
+                active_end_packet = None
+                active_end_frame = None
                 active_nal_type = None
+    if active_fu is not None:
+        start_offset = len(output)
+        _append_decrypted_hevc_nal(output, bytes(active_fu.data), aes_key)
+        end_packet = (
+            active_end_packet
+            if active_end_packet is not None
+            else max(len(packets) - 1, 0)
+        )
+        end_frame = active_end_frame if active_end_frame is not None else 0
+        spans.append(
+            (
+                start_offset,
+                len(output),
+                active_start_packet
+                if active_start_packet is not None
+                else end_packet,
+                end_packet,
+                active_nal_type
+                if active_nal_type is not None
+                else _hevc_nal_type(bytes(active_fu.data)),
+                active_start_frame
+                if active_start_frame is not None
+                else end_frame,
+                end_frame,
+            )
+        )
     return bytes(output), spans
 
 

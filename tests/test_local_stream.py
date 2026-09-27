@@ -44,6 +44,7 @@ from pyezvizapi.local_stream import (
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
     _idmx_h264_packets_from_selected_annexb,
+    _idmx_hevc_annexb_packet_spans,
     _idmx_infer_aac_sample_rate,
     _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
@@ -2049,6 +2050,35 @@ def test_idmx_packets_from_selected_annexb_anchors_hevc_after_synthesized_prefix
         nalu_header_size=None,
         video_input_format="hevc",
     ) == packets[2:]
+
+
+def test_idmx_hevc_span_map_records_fragment_flushed_at_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x64"
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+    packets = [
+        frame(b"\x62\x01\x93slice-", sequence=1),
+        frame(b"\x62\x01payload", sequence=2),
+    ]
+
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01slice-payload"
+    annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert annexb == expected_annexb
+    assert spans == [(0, len(annexb), 0, 1, 19, 0, 0)]
 
 
 def test_idmx_h264_selected_packets_stop_at_selected_video_endpoint() -> None:

@@ -334,6 +334,26 @@ def test_iterable_source_duration_bounds_a_blocking_next_callback() -> None:
     assert elapsed < max_elapsed
 
 
+def test_iterable_source_duration_requires_cancellation_callback() -> None:
+    """A bounded capture cannot start a worker it has no way to interrupt."""
+
+    def callback_packets() -> Iterator[HcNetSdkRealDataPacket]:
+        raise AssertionError("iterator must not be started without cancellation")
+        yield
+
+    source = hcnetsdk_media_packet_source(callback_packets())
+
+    with pytest.raises(
+        PyEzvizError,
+        match="require a cancellation callback",
+    ):
+        list(
+            source.iter_media_packets(
+                limits=CaptureLimits(duration_seconds=0.02)
+            )
+        )
+
+
 def test_ecdh_adapter_applies_duration_from_iteration_start() -> None:
     stream = object.__new__(EzvizLocalSdkEcdhMediaStream)
 
@@ -348,7 +368,7 @@ def test_iterable_source_checks_duration_before_filtering() -> None:
         raise AssertionError("adapter advanced after the duration expired")
 
     clock = iter((0.0, 2.0)).__next__
-    source = hcnetsdk_media_packet_source(callback_packets())
+    source = hcnetsdk_media_packet_source(callback_packets(), cancel=lambda: None)
 
     packets = list(
         source.iter_media_packets(

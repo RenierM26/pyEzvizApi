@@ -352,6 +352,10 @@ class IterableMediaPacketSource[PacketT]:
             if selected_limits.duration_seconds is not None
             else None
         )
+        if deadline is not None and self.cancel is None:
+            raise PyEzvizError(
+                "Duration-bounded iterable packet sources require a cancellation callback"
+            )
         emitted_packets = 0
         emitted_bytes = 0
         packets = iter(self.packets)

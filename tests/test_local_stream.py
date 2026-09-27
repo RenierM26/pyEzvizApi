@@ -38,11 +38,16 @@ from pyezvizapi.local_stream import (
     HcNetSdkCommandPortMultiSocketMediaStream,
     HcNetSdkCommandPortMultiSocketPlan,
     HcNetSdkCommandPortSocketStep,
+    _decrypt_idmx_local_packets_to_adts_aac,
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
+    _idmx_audio_metadata,
+    _idmx_h264_packets_from_selected_annexb,
+    _idmx_hevc_annexb_packet_spans,
     _idmx_local_video_frame_rate,
+    _idmx_packets_from_selected_annexb,
     _start_ffmpeg_stderr_drain,
     _try_first_clean_hevc_annexb_irap_window_offset,
     collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
@@ -1732,6 +1737,760 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     )
 
 
+def test_copy_local_stream_to_decrypted_mpegts_muxes_idmx_aac_audio(
+    tmp_path,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib\n"
+        "import sys\n"
+        "audio_format = sys.argv.index('aac')\n"
+        "assert sys.argv[audio_format - 1] == '-f'\n"
+        "assert sys.argv[audio_format + 1] == '-i'\n"
+        "assert '-shortest' not in sys.argv\n"
+        "audio = pathlib.Path(sys.argv[audio_format + 2]).read_bytes()\n"
+        "video = sys.stdin.buffer.read()\n"
+        "sys.stdout.buffer.write(b'av:' + audio + b':' + video)\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    vps_plain = b"\x40\x01" + b"vps-plain-123456"
+    vps_cipher = bytes.fromhex("0ac29ce603f96a3e7b95e63df730b0ad")
+    slice_plain = b"slice-plain-1234"
+    slice_cipher = bytes.fromhex("7a51a826f29068d1a992b0d6c59a5be9")
+    media_prefix = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+
+    def video_frame(body: bytes, *, sequence: int, marker: bool = False) -> bytes:
+        return (
+            b"\x80"
+            + bytes((0xE0 if marker else 0x60,))
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x64"
+            + b"\x55\x66\x77\x88"
+            + media_prefix
+            + body
+        )
+
+    vps_frame = (
+        video_frame(vps_plain[:2] + vps_cipher, sequence=1)
+    )
+    media_frame = video_frame(
+        b"\x62\x01\x93" + slice_cipher[:8],
+        sequence=2,
+    )
+    media_end_frame = video_frame(
+        b"\x62\x01\x53" + slice_cipher[8:],
+        sequence=3,
+        marker=True,
+    )
+    sample_rate = 16_000
+    descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            sample_rate >> 14,
+            (sample_rate >> 6) & 0xFF,
+            ((sample_rate & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
+    descriptor_frame = (
+        b"\x90\xf0\x00\x01\x00\x00\x00\x01\x55\x66\x77\x88"
+        b"\x00\x01\x00\x03"
+        + descriptor
+    )
+    audio_plain = b"\x00aac-plain-frame" + b"tail"
+    audio_cipher = bytes.fromhex("9ad09600fb4162b8b5f84bfbd23cce0d") + b"tail"
+    access_unit_header = (len(audio_cipher) << 3).to_bytes(2, "big")
+    audio_frame = (
+        b"\x90\xe8\x00\x02\x00\x00\x04\x00\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+        b"\x00\x10"
+        + access_unit_header
+        + audio_cipher
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 5
+            return [
+                SimpleNamespace(body=descriptor_frame),
+                SimpleNamespace(body=vps_frame),
+                SimpleNamespace(body=media_frame),
+                SimpleNamespace(body=audio_frame),
+                SimpleNamespace(body=media_end_frame),
+            ]
+
+    output = io.BytesIO()
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=5,
+    )
+
+    adts_frame_length = len(audio_plain) + 7
+    adts_header = bytes.fromhex("fff160") + bytes(
+        (
+            0x40 | (adts_frame_length >> 11),
+            (adts_frame_length >> 3) & 0xFF,
+            ((adts_frame_length & 0x07) << 5) | 0x1F,
+            0xFC,
+        )
+    )
+    assert output.getvalue() == (
+        b"av:"
+        + adts_header
+        + audio_plain
+        + b":\x00\x00\x00\x01"
+        + vps_plain
+        + b"\x00\x00\x00\x01\x26\x01"
+        + slice_plain
+    )
+
+
+def test_decrypt_idmx_aac_rejects_missing_rtp_frame() -> None:
+    sample_rate = 16_000
+    descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            sample_rate >> 14,
+            (sample_rate >> 6) & 0xFF,
+            ((sample_rate & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
+    descriptor_frame = (
+        b"\x90\xf0\x00\x01\x00\x00\x00\x01\x55\x66\x77\x88"
+        b"\x00\x01\x00\x03"
+        + descriptor
+    )
+    audio_cipher = bytes.fromhex("9ad09600fb4162b8b5f84bfbd23cce0d") + b"tail"
+    access_unit = b"\x00\x10" + (len(audio_cipher) << 3).to_bytes(2, "big") + audio_cipher
+
+    def audio_frame(timestamp: int, sequence: int) -> bytes:
+        return (
+            b"\x90\xe8"
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+            + access_unit
+        )
+
+    assert (
+        _decrypt_idmx_local_packets_to_adts_aac(
+            [descriptor_frame, audio_frame(0, 2), audio_frame(2048, 3)],
+            IDMX_MEDIA_KEY,
+        )
+        is None
+    )
+
+
+def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
+    sample_rate = 16_000
+    descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            sample_rate >> 14,
+            (sample_rate >> 6) & 0xFF,
+            ((sample_rate & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
+    malformed_audio = (
+        b"\x90\xe8\x00\x01\x00\x00\x00\x00\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+        b"\x00\x10\x00"
+    )
+    descriptor_frame = (
+        b"\x90\xf0\x00\x02\x00\x00\x00\x01\x55\x66\x77\x88"
+        b"\x00\x01\x00\x03"
+        + descriptor
+    )
+
+    assert _idmx_audio_metadata(
+        [malformed_audio, descriptor_frame],
+        IDMX_MEDIA_KEY,
+    ) == (sample_rate, 1)
+
+
+def test_idmx_audio_metadata_requires_native_descriptor() -> None:
+    assert _idmx_audio_metadata([], IDMX_MEDIA_KEY) is None
+
+
+def test_decrypt_idmx_aac_rejects_access_unit_too_large_for_adts() -> None:
+    access_unit_length = 0x1FFF - 6
+    access_unit = (
+        b"\x00\x10"
+        + (access_unit_length << 3).to_bytes(2, "big")
+        + b"x" * access_unit_length
+    )
+    audio_frame = (
+        b"\x90\xe8\x00\x01\x00\x00\x00\x00\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+        + access_unit
+    )
+
+    assert (
+        _decrypt_idmx_local_packets_to_adts_aac(
+            [audio_frame],
+            IDMX_MEDIA_KEY,
+            audio_metadata=(16_000, 1),
+        )
+        is None
+    )
+
+
+def test_idmx_packets_from_selected_annexb_keeps_audio_between_vcl_fragments() -> None:
+    def frame(payload_type: int, body: bytes, *, sequence: int, timestamp: int) -> bytes:
+        rtp = (
+            b"\x80"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    first_nal = b"\x00\x00\x00\x01\x41before"
+    selected_nal = b"\x00\x00\x00\x01\x65first-last"
+    packets = [
+        frame(96, b"\x41before", sequence=1, timestamp=100),
+        frame(96, b"\x7c\x85first-", sequence=2, timestamp=200),
+        frame(104, b"audio", sequence=10, timestamp=0),
+        frame(96, b"\x7c\x45last", sequence=3, timestamp=200),
+    ]
+
+    assert _idmx_packets_from_selected_annexb(
+        packets,
+        full_annexb=first_nal + selected_nal,
+        selected_annexb=selected_nal,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=None,
+        video_input_format="h264",
+    ) == packets[1:]
+
+
+def test_idmx_packets_from_selected_annexb_starts_at_first_vcl_after_parameters() -> None:
+    def frame(payload_type: int, body: bytes, *, sequence: int, timestamp: int) -> bytes:
+        rtp = (
+            b"\x80"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    parameters = b"\x00\x00\x00\x01\x67sps"
+    selected_vcl = b"\x00\x00\x00\x01\x65selected"
+    old_vcl = selected_vcl
+    packets = [
+        frame(96, b"\x65selected", sequence=1, timestamp=100),
+        frame(96, b"\x67sps", sequence=2, timestamp=200),
+        frame(104, b"audio-before-vcl", sequence=9, timestamp=0),
+        frame(96, b"\x65selected", sequence=3, timestamp=200),
+    ]
+
+    assert _idmx_packets_from_selected_annexb(
+        packets,
+        full_annexb=old_vcl + parameters + selected_vcl,
+        selected_annexb=parameters + selected_vcl,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=None,
+        video_input_format="h264",
+    ) == packets[3:]
+
+
+def test_idmx_packets_from_selected_annexb_anchors_hevc_after_synthesized_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame(body: bytes, *, sequence: int, timestamp: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    irap = b"\x00\x00\x00\x01\x26\x01same"
+    middle = b"\x00\x00\x00\x01\x02\x01middle"
+    tail = b"\x00\x00\x00\x01\x02\x01tail"
+    parameters = b"\x00\x00\x00\x01\x40\x01vps"
+    full_annexb = irap + middle + irap + tail
+    selected_annexb = parameters + irap + tail
+    second_irap_offset = len(irap + middle)
+    packets = [
+        frame(b"old", sequence=1, timestamp=100),
+        frame(b"middle", sequence=2, timestamp=200),
+        frame(b"retained", sequence=3, timestamp=300),
+        frame(b"tail", sequence=4, timestamp=300),
+    ]
+    spans = [
+        (0, len(irap), 0, 0, 19, 0, 0),
+        (len(irap), second_irap_offset, 1, 1, 1, 0, 0),
+        (
+            second_irap_offset,
+            second_irap_offset + len(irap),
+            2,
+            2,
+            19,
+            0,
+            0,
+        ),
+        (len(full_annexb) - len(tail), len(full_annexb), 3, 3, 1, 0, 0),
+    ]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_hevc_annexb_packet_spans",
+        lambda *_args, **_kwargs: (full_annexb, spans),
+    )
+
+    assert _idmx_packets_from_selected_annexb(
+        packets,
+        full_annexb=full_annexb,
+        selected_annexb=selected_annexb,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=None,
+        video_input_format="hevc",
+    ) == packets[2:]
+
+
+def test_idmx_hevc_span_map_records_fragment_flushed_at_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x64"
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+    packets = [
+        frame(b"\x62\x01\x93slice-", sequence=1),
+        frame(b"\x62\x01payload", sequence=2),
+    ]
+
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01slice-payload"
+    annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert annexb == expected_annexb
+    assert spans == [(0, len(annexb), 0, 1, 19, 0, 0)]
+
+
+def test_idmx_hevc_span_map_preserves_pending_fragment_across_standalone_nal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame(body: bytes, *, sequence: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x64"
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+    vps = b"\x40\x01vps"
+    packets = [
+        frame(b"\x62\x01\x93slice", sequence=1),
+        frame(vps, sequence=2),
+    ]
+
+    annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+    vps_end = len(b"\x00\x00\x00\x01" + vps)
+
+    assert annexb == b"\x00\x00\x00\x01" + vps + b"\x00\x00\x00\x01\x26\x01slice"
+    assert spans == [
+        (0, vps_end, 1, 1, 32, 0, 0),
+        (vps_end, len(annexb), 0, 0, 19, 0, 0),
+    ]
+
+
+def test_idmx_h264_selected_packets_stop_at_selected_video_endpoint() -> None:
+    def frame(payload_type: int, body: bytes, *, sequence: int, timestamp: int) -> bytes:
+        rtp = (
+            b"\x80"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    selected = b"\x00\x00\x00\x01\x65selected"
+    packets = [
+        frame(96, b"\x65selected", sequence=1, timestamp=100),
+        frame(104, b"trailing-audio", sequence=2, timestamp=1024),
+    ]
+
+    assert _idmx_h264_packets_from_selected_annexb(
+        packets,
+        full_annexb=selected,
+        selected_annexb=selected,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=None,
+        stream_is_clear=True,
+    ) == packets[:1]
+
+
+def test_idmx_h264_selected_packets_track_vcl_inside_aggregate_packet() -> None:
+    def frame(payload_type: int, body: bytes, *, sequence: int, timestamp: int) -> bytes:
+        rtp = (
+            b"\x80"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + body
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    selected = b"\x00\x00\x00\x01\x65first-last"
+    next_nal = b"\x00\x00\x00\x01\x41next"
+    start_fu = frame(96, b"\x7c\x85first-", sequence=1, timestamp=100)
+    middle_audio = frame(104, b"audio", sequence=9, timestamp=0)
+    end_fu = frame(96, b"\x7c\x45last", sequence=2, timestamp=100)
+    packets = [
+        frame(104, b"audio-before", sequence=8, timestamp=0) + start_fu,
+        middle_audio,
+        end_fu
+        + frame(104, b"audio-after", sequence=10, timestamp=1024)
+        + frame(96, b"\x41next", sequence=3, timestamp=200),
+    ]
+
+    assert _idmx_h264_packets_from_selected_annexb(
+        packets,
+        full_annexb=selected + next_nal,
+        selected_annexb=selected,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=None,
+        stream_is_clear=True,
+    ) == [start_fu, middle_audio, end_fu]
+
+
+def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"audio-before", b"first-vcl", b"audio", b"last-vcl", b"audio-after"]
+    full_annexb = (
+        b"\x00\x00\x00\x01\x65first"
+        b"\x00\x00\x00\x01\x41last"
+    )
+    selected_packets = packets[1:4]
+    selected_calls: list[tuple[bytes, bytes]] = []
+    audio_calls: list[tuple[list[bytes], tuple[int, int] | None]] = []
+    audio = SimpleNamespace(adts=b"aac", sample_rate=16_000, channels=1)
+    mux_calls: list[tuple[bytes, Any]] = []
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == len(packets)
+            return [SimpleNamespace(body=packet) for packet in packets]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._local_stream_packets_are_idmx",
+        lambda _packets: True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        lambda *_args, **_kwargs: full_annexb,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_have_aac",
+        lambda _packets: True,
+    )
+
+    def fake_select(
+        _packets: list[bytes],
+        *,
+        full_annexb: bytes,
+        selected_annexb: bytes,
+        **_kwargs: Any,
+    ) -> list[bytes]:
+        selected_calls.append((full_annexb, selected_annexb))
+        return selected_packets
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_packets_from_selected_annexb",
+        fake_select,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_audio_metadata",
+        lambda *_args, **_kwargs: (16_000, 1),
+    )
+
+    def fake_audio(
+        candidate_packets: list[bytes],
+        _media_key: str | bytes,
+        *,
+        audio_metadata: tuple[int, int] | None = None,
+    ) -> Any:
+        audio_calls.append((candidate_packets, audio_metadata))
+        return audio
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        fake_audio,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._copy_idmx_audio_video_to_mpegts",
+        lambda video, selected_audio, *_args, **_kwargs: mux_calls.append(
+            (video, selected_audio)
+        ),
+    )
+
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        io.BytesIO(),
+        IDMX_MEDIA_KEY,
+        max_packets=len(packets),
+    )
+
+    assert selected_calls == [(full_annexb, full_annexb)]
+    assert audio_calls == [(selected_packets, (16_000, 1))]
+    assert mux_calls == [(full_annexb, audio)]
+
+
+def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"startup", b"selected"]
+    full_annexb = b"\x00\x00\x00\x01\x65startup\x00\x00\x00\x01\x65selected"
+    selected_annexb = b"\x00\x00\x00\x01\x65selected"
+    audio = SimpleNamespace(sample_rate=16_000, channels=1, adts=b"aac")
+    audio_calls: list[tuple[list[bytes], dict[str, Any]]] = []
+    mux_calls: list[tuple[bytes, Any]] = []
+
+    def fake_iter_payloads(*_args: Any, **_kwargs: Any) -> Iterator[bytes]:
+        yield from packets
+
+    def fake_collect(payloads: Iterator[bytes], *_args: Any, **_kwargs: Any) -> bytes:
+        assert list(payloads) == packets
+        return selected_annexb
+
+    def fake_audio(candidate_packets: list[bytes], *_args: Any, **kwargs: Any) -> Any:
+        audio_calls.append((candidate_packets, kwargs))
+        return audio
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        fake_iter_payloads,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
+        fake_collect,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        lambda *_args, **_kwargs: full_annexb,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        lambda *_args, **_kwargs: packets[1:],
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        fake_audio,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_audio_metadata",
+        lambda *_args, **_kwargs: (16_000, 1),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._copy_idmx_audio_video_to_mpegts",
+        lambda video, selected_audio, *_args, **_kwargs: mux_calls.append(
+            (video, selected_audio)
+        ),
+    )
+
+    copy_local_stream_to_decrypted_mpegts(
+        object(),
+        io.BytesIO(),
+        IDMX_MEDIA_KEY,
+        duration_seconds=1.0,
+        h264_wait_for_clean_idr_window=True,
+    )
+
+    assert audio_calls == [(packets[1:], {"audio_metadata": (16_000, 1)})]
+    assert mux_calls == [(selected_annexb, audio)]
+
+
+def test_copy_local_stream_to_decrypted_mpegts_wait_path_without_selected_aac(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"startup", b"selected"]
+    full_annexb = b"\x00\x00\x00\x01\x65startup\x00\x00\x00\x01\x65selected"
+    selected_annexb = b"\x00\x00\x00\x01\x65selected"
+    video_calls: list[bytes] = []
+    process = object()
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        lambda *_args, **_kwargs: iter(packets),
+    )
+
+    def fake_collect(payloads: Iterator[bytes], *_args: Any, **_kwargs: Any) -> bytes:
+        assert list(payloads) == packets
+        return selected_annexb
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
+        fake_collect,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        lambda *_args, **_kwargs: full_annexb,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        lambda *_args, **_kwargs: packets[1:],
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_audio_metadata",
+        lambda *_args, **_kwargs: (16_000, 1),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._open_local_h264_mpegts_remux_process",
+        lambda _path: process,
+    )
+
+    def fake_copy(
+        payloads: Iterator[bytes] | list[bytes],
+        _output: Any,
+        *,
+        process: Any,
+    ) -> None:
+        assert process is not None
+        video_calls.extend(payloads)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._copy_mpegps_payloads_to_mpegts",
+        fake_copy,
+    )
+
+    copy_local_stream_to_decrypted_mpegts(
+        object(),
+        io.BytesIO(),
+        IDMX_MEDIA_KEY,
+        duration_seconds=1.0,
+        h264_wait_for_clean_idr_window=True,
+    )
+
+    assert video_calls == [selected_annexb]
+
+
+def test_copy_local_stream_to_decrypted_mpegts_wait_path_aligns_clear_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [b"startup", b"selected"]
+    selected_annexb = b"\x00\x00\x00\x01\x65" + b"clear" * 8
+    clear_annexb = b"\x00\x00\x00\x01\x41startup" + selected_annexb
+    decrypted_annexb = b"\x00\x00\x00\x01\x41startup\x00\x00\x00\x01\x65wrong"
+    mapped_full_streams: list[bytes] = []
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._iter_local_stream_payloads",
+        lambda *_args, **_kwargs: iter(packets),
+    )
+
+    def fake_collect(payloads: Iterator[bytes], *_args: Any, **_kwargs: Any) -> bytes:
+        assert list(payloads) == packets
+        return selected_annexb
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window",
+        fake_collect,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
+        lambda *_args, **_kwargs: decrypted_annexb,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_local_packets_to_h264_annexb",
+        lambda *_args, **_kwargs: clear_annexb,
+    )
+
+    def fake_selected_packets(
+        candidate_packets: list[bytes],
+        *,
+        full_annexb: bytes,
+        **_kwargs: Any,
+    ) -> list[bytes]:
+        mapped_full_streams.append(full_annexb)
+        return candidate_packets[1:]
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        fake_selected_packets,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_adts_aac",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._open_local_h264_mpegts_remux_process",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._copy_mpegps_payloads_to_mpegts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    copy_local_stream_to_decrypted_mpegts(
+        object(),
+        io.BytesIO(),
+        IDMX_MEDIA_KEY,
+        duration_seconds=1.0,
+        h264_wait_for_clean_idr_window=True,
+    )
+
+    assert mapped_full_streams == [clear_annexb]
+
+
 def test_copy_local_stream_to_decrypted_mpegts_decrypts_direct_hevc_idmx_payload(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2454,6 +3213,10 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
         "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
         fake_decrypt_idmx_local_packets_to_annexb,
     )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_h264_packets_from_selected_annexb",
+        lambda candidate_packets, **_kwargs: candidate_packets,
+    )
 
     output = io.BytesIO()
     stream = object()
@@ -2474,7 +3237,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
     assert seen["stream"] is stream
     assert seen["max_packets"] is None
     assert seen["duration_seconds"] == requested_duration + wait_seconds
-    assert [len(call) for call in decrypt_probe_calls] == [1, 2, 3, 4]
+    assert [len(call) for call in decrypt_probe_calls] == [1, 2, 3, 4, 6]
     assert output.getvalue() == (
         b"ts:\x00\x00\x00\x01"
         + sps

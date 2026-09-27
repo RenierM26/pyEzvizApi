@@ -286,7 +286,11 @@ def derive_ezviz_local_sdk_ecdh_chacha20_key(
         raise PyEzvizError("EZVIZ local SDK ECDH shared secret must be 32 bytes")
     if len(encrypted_key) != LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH:
         raise PyEzvizError("EZVIZ local SDK ECDH encrypted session key must be 32 bytes")
-    return AES.new(shared_secret, AES.MODE_ECB).decrypt(encrypted_key)
+    cipher = AES.new(  # codeql[py/weak-cryptographic-algorithm]
+        shared_secret,
+        AES.MODE_ECB,
+    )
+    return cipher.decrypt(encrypted_key)
 
 
 def _ezviz_local_sdk_ecdh_verification_input(

@@ -97,6 +97,14 @@ def _public_key_der(private_key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
+def _encrypt_session_key(shared_secret: bytes, session_key: bytes) -> bytes:
+    cipher = AES.new(  # codeql[py/weak-cryptographic-algorithm]
+        shared_secret,
+        AES.MODE_ECB,
+    )
+    return cipher.encrypt(session_key)
+
+
 def _handshake_payload(
     *,
     encrypted_key: bytes,
@@ -183,7 +191,7 @@ def test_ezviz_local_sdk_ecdh_key_derivation_matches_native_shape() -> None:
         client_key_pair.private_key,
         camera_public_key_der,
     )
-    encrypted_key = AES.new(shared_secret, AES.MODE_ECB).encrypt(bytes(range(32)))
+    encrypted_key = _encrypt_session_key(shared_secret, bytes(range(32)))
 
     client_public_key = serialization.load_der_public_key(client_key_pair.public_key_der)
     assert isinstance(client_public_key, ec.EllipticCurvePublicKey)
@@ -381,7 +389,7 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_derives_key_and_waits_for_keyframe(
         camera_public_key_der,
     )
     chacha20_key = b"C" * 32
-    encrypted_key = AES.new(shared_secret, AES.MODE_ECB).encrypt(chacha20_key)
+    encrypted_key = _encrypt_session_key(shared_secret, chacha20_key)
     decoder = EzvizLocalSdkEcdhStreamDecoder(client_key_pair.private_key)
     handshake = _handshake_payload(
         encrypted_key=encrypted_key,
@@ -419,7 +427,7 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering() -> No
     )
     payload = bytearray(
         _handshake_payload(
-            encrypted_key=AES.new(shared_secret, AES.MODE_ECB).encrypt(b"S" * 32),
+            encrypted_key=_encrypt_session_key(shared_secret, b"S" * 32),
             peer_public_key_der=camera_public_key_der,
             verification_key=shared_secret,
         )
@@ -443,7 +451,7 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_replay_and_stale_sequence()
     decoder.feed_payload(
         0,
         _handshake_payload(
-            encrypted_key=AES.new(shared_secret, AES.MODE_ECB).encrypt(chacha20_key),
+            encrypted_key=_encrypt_session_key(shared_secret, chacha20_key),
             peer_public_key_der=camera_public_key_der,
             nonce=b"\x00\x00\x00\x01",
             verification_key=shared_secret,
@@ -481,7 +489,7 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_accepts_h264_keyframe() -> None:
         camera_public_key_der,
     )
     chacha20_key = b"H" * 32
-    encrypted_key = AES.new(shared_secret, AES.MODE_ECB).encrypt(chacha20_key)
+    encrypted_key = _encrypt_session_key(shared_secret, chacha20_key)
     decoder = EzvizLocalSdkEcdhStreamDecoder(client_key_pair.private_key)
     nonce = b"\x10\x11\x12\x13"
     plaintext = b"lead" + LOCAL_SDK_ECDH_H264_SPS_4B + b"frame"

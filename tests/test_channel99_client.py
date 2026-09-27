@@ -400,6 +400,7 @@ def test_login_and_push_snapshots_are_serialized(monkeypatch):
 
     entered, release, attempted, pushed = Event(), Event(), Event(), Event()
     written = []
+    push_errors = []
 
     def persist(snapshot):
         if not entered.is_set():
@@ -420,8 +421,12 @@ def test_login_and_push_snapshots_are_serialized(monkeypatch):
 
     def save_push():
         attempted.set()
-        session.save({"device_id": "new-device"})
-        pushed.set()
+        try:
+            session.save({"device_id": "new-device"})
+        except Exception as error:
+            push_errors.append(error)
+        else:
+            pushed.set()
 
     login_thread = Thread(target=client.login)
     push_thread = Thread(target=save_push)
@@ -437,11 +442,14 @@ def test_login_and_push_snapshots_are_serialized(monkeypatch):
         login_thread.join(2)
         push_thread.join(2)
     assert not login_thread.is_alive() and not push_thread.is_alive()
-    assert len(written) == 2
-    assert written[-1]["session_id"] == "rotated"
-    assert written[-1]["push_state"]["device_id"] == "new-device"
+    assert len(written) == 1
+    assert written[0]["session_id"] == "rotated"
+    assert not pushed.is_set()
+    assert len(push_errors) == 1
+    assert isinstance(push_errors[0], PyEzvizError)
+    assert "credentials changed" in str(push_errors[0])
     session.state["unsaved"] = True
-    assert "unsaved" not in client.export_token()["push_state"]
+    assert "push_state" not in client.export_token()
 
 
 def test_migrated_login_discards_old_discovery_and_recovers_after_restart(monkeypatch):
@@ -559,14 +567,21 @@ def test_identity_change_refreshes_factory_and_rejects_old_session_save(monkeypa
     assert old.is_current()
     assert old.credentials_input() == saved["session_id"]
     saved["session_id"] = "same-account-refreshed"
-    assert old.credentials_input() == "same-account-refreshed"
+    assert not old.is_current()
+    with pytest.raises(PyEzvizError, match="credentials changed"):
+        old.credentials_input()
+    with pytest.raises(PyEzvizError, match="credentials changed"):
+        old.save({"device_id": "old-device"})
+    refreshed = push_session(client)
+    assert refreshed.is_current()
+    assert refreshed.credentials_input() == "same-account-refreshed"
     saved["user_id"] = "new-user"
     saved["session_id"] = "new-account-session"
     saved.pop("push_state")
     assert not old.is_current()
-    with pytest.raises(PyEzvizError, match="identity changed"):
+    with pytest.raises(PyEzvizError, match="credentials changed"):
         old.credentials_input()
-    with pytest.raises(PyEzvizError, match="identity changed"):
+    with pytest.raises(PyEzvizError, match="credentials changed"):
         old.save({"device_id": "old-device"})
     assert "push_state" not in saved
     assert snapshots == []

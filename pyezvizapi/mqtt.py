@@ -250,27 +250,33 @@ class MQTTClient:
 
         def new_session() -> Channel99Session:
             # Logins may replace discovery or the user; bind each attempt to one
-            # identity and never let an obsolete attempt overwrite the new token.
+            # identity and HTTPS credential. An obsolete attempt must neither
+            # overwrite current state nor turn a stale rejection into a fatal error.
             with self._token_lock:
                 user_id = token["user_id"]
+                session_id = cast(str, token["session_id"])
                 serial = _push_serial(user_id)
                 state = deepcopy(token.get("push_state", {}))
                 if not isinstance(state, dict):
                     raise PyEzvizError("Invalid saved push state")
 
                 def current() -> bool:
-                    return token.get("user_id") == user_id
+                    with self._token_lock:
+                        return (
+                            token.get("user_id") == user_id
+                            and token.get("session_id") == session_id
+                        )
 
                 def credentials_input() -> str:
                     with self._token_lock:
                         if not current():
-                            raise PyEzvizError("Push identity changed; reconnect required")
-                        return cast(str, token["session_id"])
+                            raise PyEzvizError("Push credentials changed; reconnect required")
+                        return session_id
 
                 def save(snapshot: dict[str, Any]) -> None:
                     with self._token_lock:
                         if not current():
-                            raise PyEzvizError("Push identity changed; reconnect required")
+                            raise PyEzvizError("Push credentials changed; reconnect required")
                         # Stage a detached snapshot: a failed pre-allocation save
                         # must not poison the shared token with creation_pending.
                         # After allocation, the previously committed pending guard
@@ -280,7 +286,7 @@ class MQTTClient:
                         candidate["push_state"] = deepcopy(committed_state)
                         save_token(candidate)
                         if not current():
-                            raise PyEzvizError("Push identity changed; reconnect required")
+                            raise PyEzvizError("Push credentials changed; reconnect required")
                         token["push_state"] = committed_state
 
                 return Channel99Session(

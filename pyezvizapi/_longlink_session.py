@@ -98,7 +98,12 @@ class Channel99Session:
         if stopped.is_set() or self._closed.is_set() or not self.is_current():
             return
         if self.prepare is not None:
-            self.prepare()
+            try:
+                self.prepare()
+            except EzvizPushFatalError:
+                if not self.is_current():
+                    return
+                raise
         if stopped.is_set() or self._closed.is_set() or not self.is_current():
             return
         with LbsConnection(socket.create_connection(self.endpoint, timeout=10)) as lbs:
@@ -107,9 +112,17 @@ class Channel99Session:
             try:
                 if stopped.is_set() or self._closed.is_set() or not self.is_current():
                     return
-                credentials = authenticate(
-                    lbs, self.serial, self.credentials_input(), self.state, self.save
-                )
+                try:
+                    credentials = authenticate(
+                        lbs, self.serial, self.credentials_input(), self.state, self.save
+                    )
+                except EzvizPushFatalError:
+                    # A polling refresh can supersede the credential while the
+                    # remote peer is answering. Retry with a fresh factory rather
+                    # than publishing the stale rejection as a permanent failure.
+                    if not self.is_current():
+                        return
+                    raise
             finally:
                 with self._lock:
                     self._lbs = None

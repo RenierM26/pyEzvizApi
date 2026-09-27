@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import logging
 from threading import Event, Lock, Thread, current_thread
-from typing import Protocol
+from typing import Any, Protocol
 
 from .exceptions import EzvizPushFatalError
 
@@ -41,6 +41,10 @@ class PushWorker:
         self._stopped = Event()
         self._thread: Thread | None = None
         self._session: PushSession | None = None
+        self._state = "idle"
+        self._attempts = 0
+        self._transient_failures = 0
+        self._last_error_type: str | None = None
 
     def start(self) -> None:
         with self._lock:
@@ -50,8 +54,33 @@ class PushWorker:
                     raise RuntimeError("Previous push worker is still stopping")
                 return
             self._stopped.clear()
+            self._state = "starting"
             self._thread = Thread(target=self._run, name="ezviz-channel99", daemon=True)
             self._thread.start()
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return worker health without endpoints, identifiers, or credentials."""
+        with self._lock:
+            thread = self._thread
+            session = self._session
+            snapshot: dict[str, Any] = {
+                "state": self._state,
+                "worker_alive": thread is not None and thread.is_alive(),
+                "retry_delay_seconds": self.retry_delay,
+                "attempts": self._attempts,
+                "transient_failures": self._transient_failures,
+                "last_error_type": self._last_error_type,
+                "fatal_error_type": type(self.failure).__name__ if self.failure else None,
+            }
+        diagnostics = getattr(session, "diagnostics", None)
+        snapshot["session"] = diagnostics() if callable(diagnostics) else None
+        if (
+            snapshot["state"] == "connecting"
+            and isinstance(snapshot["session"], dict)
+            and snapshot["session"].get("ready")
+        ):
+            snapshot["state"] = "connected"
+        return snapshot
 
     def raise_if_failed(self) -> None:
         """Expose fatal background errors without logging credential-bearing causes."""
@@ -62,6 +91,7 @@ class PushWorker:
         """Signal stop and interrupt I/O; never join the callback's own thread."""
         with self._lock:
             self._stopped.set()
+            self._state = "stopping"
             session, thread = self._session, self._thread
         if session is not None:
             self._close(session)
@@ -69,6 +99,8 @@ class PushWorker:
             thread.join(timeout)
             if thread.is_alive():
                 raise TimeoutError("Push worker did not stop within deadline")
+        with self._lock:
+            self._state = "stopped"
 
     @staticmethod
     def _close(session: PushSession) -> None:
@@ -85,15 +117,27 @@ class PushWorker:
                 with self._lock:
                     if self._stopped.is_set():
                         return
+                    self._attempts += 1
+                    self._state = "connecting"
                     session = self.factory()
                     self._session = session
                 session.run(self._stopped)
-            except EzvizPushFatalError as error:
-                self.failure = error
-                self._stopped.set()
-                _LOGGER.error("Channel-99 stopped; caller intervention required (%s)", type(error).__name__)
-            except Exception:
                 if not self._stopped.is_set():
+                    with self._lock:
+                        self._state = "retry_wait"
+            except EzvizPushFatalError as error:
+                with self._lock:
+                    self.failure = error
+                    self._last_error_type = type(error).__name__
+                    self._state = "fatal"
+                    self._stopped.set()
+                _LOGGER.error("Channel-99 stopped; caller intervention required (%s)", type(error).__name__)
+            except Exception as error:
+                if not self._stopped.is_set():
+                    with self._lock:
+                        self._transient_failures += 1
+                        self._last_error_type = type(error).__name__
+                        self._state = "retry_wait"
                     _LOGGER.warning("Channel-99 connection interrupted; retry scheduled")
             finally:
                 if session is not None:
@@ -102,3 +146,6 @@ class PushWorker:
                     self._session = None
             if self._stopped.wait(self.retry_delay):
                 return
+        with self._lock:
+            if self._state != "fatal":
+                self._state = "stopped"

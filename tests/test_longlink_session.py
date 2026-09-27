@@ -43,6 +43,25 @@ def test_native_connect_profile() -> None:
     assert will["SubSerial"] == SERIAL.decode()
 
 
+def test_diagnostics_exclude_endpoint_identity_and_credentials() -> None:
+    connection = session(Mock())
+    connection.ready.set()
+    connection.last_connect_reason = 0
+    snapshot = connection.diagnostics()
+    assert snapshot == {
+        "transport": "idle",
+        "ready": True,
+        "closed": False,
+        "connect_reason": 0,
+        "subscribe_reasons": None,
+        "disconnect_reason": None,
+        "loop_result": None,
+        "failure_type": None,
+    }
+    assert "serial" not in snapshot
+    assert "endpoint" not in snapshot
+
+
 def test_direct_event_delivery_does_not_publish_application_reply() -> None:
     callback = Mock()
     client = Mock()

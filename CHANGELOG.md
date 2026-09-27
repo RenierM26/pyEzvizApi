@@ -23,6 +23,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Added credential-free channel-99 worker/session diagnostics for integrations to report connection, retry, acknowledgement, and fatal-error health without exposing endpoints or identities.
 - Added HCNetSDK `NET_DVR_STDXMLConfig` request-shape helpers and local EZVIZ ISAPI builders for `servicesSwitch`, `connectMode`, and `netConfigAndVoiceFileUpload`.
 - Added HCNetSDK local PTZ and preset request-shape helpers based on the EZVIZ Android `ptzControlLan` mappings.
 - Added HCNetSDK `NET_DVR_GetDeviceAbility` request-shape helpers, EZVIZ LAN ability XML builders, and PTZ ability parsing.

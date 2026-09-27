@@ -209,6 +209,21 @@ class MQTTClient:
         if self._push_worker is not None:
             self._push_worker.raise_if_failed()
 
+    def get_push_diagnostics(self) -> dict[str, Any]:
+        """Return credential-free channel-99 worker health."""
+        if self._push_worker is None:
+            return {
+                "state": "idle",
+                "worker_alive": False,
+                "retry_delay_seconds": None,
+                "attempts": 0,
+                "transient_failures": 0,
+                "last_error_type": None,
+                "fatal_error_type": None,
+                "session": None,
+            }
+        return self._push_worker.diagnostics()
+
     def stop(self) -> None:
         """Cancel push without calling the obsolete HTTP stop endpoint.
 

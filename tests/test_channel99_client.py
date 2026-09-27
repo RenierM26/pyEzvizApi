@@ -106,6 +106,20 @@ def test_channel99_requires_persistence_callback():
         client.connect()
 
 
+def test_push_diagnostics_are_idle_before_worker_creation():
+    client = MQTTClient(token(), requests.Session(), on_token_updated=lambda snapshot: None)
+    assert client.get_push_diagnostics() == {
+        "state": "idle",
+        "worker_alive": False,
+        "retry_delay_seconds": None,
+        "attempts": 0,
+        "transient_failures": 0,
+        "last_error_type": None,
+        "fatal_error_type": None,
+        "session": None,
+    }
+
+
 def test_background_start_and_full_token_snapshot(monkeypatch):
     saved = token()
     snapshots: list[dict[str, Any]] = []

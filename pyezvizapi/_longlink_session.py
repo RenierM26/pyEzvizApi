@@ -63,6 +63,27 @@ class Channel99Session:
         self._lbs: LbsConnection | None = None
         self._mqtt: mqtt.Client | None = None
 
+    def diagnostics(self) -> dict[str, Any]:
+        """Return a credential-free snapshot of this connection attempt."""
+        with self._lock:
+            transport = (
+                "mqtt"
+                if self._mqtt is not None
+                else "lbs"
+                if self._lbs is not None
+                else "idle"
+            )
+        return {
+            "transport": transport,
+            "ready": self.ready.is_set(),
+            "closed": self._closed.is_set(),
+            "connect_reason": self.last_connect_reason,
+            "subscribe_reasons": self.last_subscribe_reasons,
+            "disconnect_reason": self.last_disconnect_reason,
+            "loop_result": self.last_loop_result,
+            "failure_type": type(self._failure).__name__ if self._failure else None,
+        }
+
     def close(self) -> None:
         self._closed.set()
         self.ready.clear()

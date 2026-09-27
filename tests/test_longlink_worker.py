@@ -21,6 +21,9 @@ class Session:
     def close(self) -> None:
         self.closed.set()
 
+    def diagnostics(self):
+        return {"ready": self.running.is_set() and not self.closed.is_set()}
+
 
 def test_disconnect_creates_fresh_session_and_stop_interrupts_it() -> None:
     sessions = [Session(), Session()]
@@ -34,6 +37,21 @@ def test_disconnect_creates_fresh_session_and_stop_interrupts_it() -> None:
     finally:
         worker.stop()
     assert sessions[1].closed.is_set()
+
+
+def test_diagnostics_report_connection_without_session_secrets() -> None:
+    session = Session()
+    worker = PushWorker(lambda: session)
+    worker.start()
+    assert session.running.wait(2)
+    snapshot = worker.diagnostics()
+    assert snapshot["state"] == "connected"
+    assert snapshot["worker_alive"] is True
+    assert snapshot["attempts"] == 1
+    assert snapshot["transient_failures"] == 0
+    assert snapshot["session"] == {"ready": True}
+    worker.stop()
+    assert worker.diagnostics()["state"] == "stopped"
 
 
 def test_callback_can_stop_its_own_worker() -> None:
@@ -107,3 +125,7 @@ def test_fatal_persistence_failure_stops_and_is_observable_without_retry():
         worker.raise_if_failed()
     with pytest.raises(EzvizTokenPersistenceError):
         worker.start()
+    snapshot = worker.diagnostics()
+    assert snapshot["state"] == "stopped"
+    assert snapshot["fatal_error_type"] == "EzvizTokenPersistenceError"
+    assert snapshot["last_error_type"] == "EzvizTokenPersistenceError"

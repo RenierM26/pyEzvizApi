@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Callable
+import ctypes
 from datetime import date, datetime
 import errno
 import hashlib
@@ -14,6 +15,7 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 import pytest
 
+from pyezvizapi import _windows_tcp
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizLocalSdkDeadlineExpired,
@@ -259,7 +261,7 @@ from pyezvizapi.hcnetsdk import (
     _connect_with_optional_source_address,
     _create_reusable_source_connection,
     _windows_concrete_source_address,
-    _windows_source_port_has_listener,
+    _windows_source_port_is_time_wait_only,
     build_encrypted_ezviz_local_sdk_frame,
     build_ezviz_cas_encrypted_local_sdk_frame,
     build_ezviz_cas_ssl_local_sdk_frame,
@@ -4338,19 +4340,13 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     )
     reusable_socket = ConnectSocket()
     sockets.extend((exclusive_socket, reusable_socket))
-    listener_probes: list[tuple[str, int]] = []
-
-    def record_listener_probe(address: tuple[str, int], _family: int) -> bool:
-        listener_probes.append(address)
-        return False
-
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
         True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._windows_source_port_has_listener",
-        record_listener_probe,
+        "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
+        lambda _port, _family: True,
     )
     monkeypatch.setattr(
         "pyezvizapi.hcnetsdk._windows_concrete_source_address",
@@ -4380,7 +4376,6 @@ def test_local_sdk_source_port_retries_time_wait_with_reuse_on_windows(
     assert reusable_socket.option_calls == [
         (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     ]
-    assert listener_probes == [("192.0.2.25", 10103)]
 
 
 def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
@@ -4400,17 +4395,109 @@ def test_local_sdk_source_port_maps_established_connection_conflict() -> None:
         )
 
 
-def test_windows_source_port_listener_probe_detects_active_listener() -> None:
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    try:
-        assert _windows_source_port_has_listener(
-            listener.getsockname(),
-            socket.AF_INET,
+def test_windows_bound_source_port_does_not_fall_back_to_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bind_error = OSError(errno.EADDRINUSE, "actively bound")
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        True,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(bind_error),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
+        lambda _port, _family: False,
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010))
+        ],
+    )
+
+    with pytest.raises(OSError) as error:
+        _create_reusable_source_connection(
+            ("192.0.2.10", 9010),
+            1.0,
+            source_address=("", 10103),
         )
-    finally:
-        listener.close()
+
+    assert error.value is bind_error
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [({11}, True), ({2}, False), ({5, 11}, False), (set(), False)],
+)
+def test_windows_source_port_requires_time_wait_only(
+    monkeypatch: pytest.MonkeyPatch,
+    states: set[int],
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._windows_tcp_states_for_port",
+        lambda _port, _family: states,
+    )
+
+    assert _windows_source_port_is_time_wait_only(10103, socket.AF_INET) is expected
+
+
+def test_windows_tcp_table_reads_states_for_requested_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Tcp4Row(ctypes.Structure):
+        _fields_ = [
+            ("state", ctypes.c_uint32),
+            ("local_addr", ctypes.c_uint32),
+            ("local_port", ctypes.c_uint32),
+            ("remote_addr", ctypes.c_uint32),
+            ("remote_port", ctypes.c_uint32),
+            ("owning_pid", ctypes.c_uint32),
+        ]
+
+    matching_row = Tcp4Row(
+        state=11,
+        local_port=socket.htons(10103),
+    )
+    other_row = Tcp4Row(
+        state=5,
+        local_port=socket.htons(10104),
+    )
+    payload = bytes(ctypes.c_uint32(2)) + bytes(matching_row) + bytes(other_row)
+
+    def get_extended_tcp_table(
+        buffer: Any,
+        size_pointer: Any,
+        _sorted: bool,
+        _family: int,
+        _table_class: int,
+        _reserved: int,
+    ) -> int:
+        size = ctypes.cast(size_pointer, ctypes.POINTER(ctypes.c_uint32))
+        if buffer is None:
+            size.contents.value = len(payload)
+            return 122
+        ctypes.memmove(buffer, payload, len(payload))
+        return 0
+
+    iphlpapi = type(
+        "IpHelperApi",
+        (),
+        {"GetExtendedTcpTable": staticmethod(get_extended_tcp_table)},
+    )()
+    monkeypatch.setattr(
+        _windows_tcp.ctypes,
+        "windll",
+        type("Windll", (), {"iphlpapi": iphlpapi})(),
+        raising=False,
+    )
+
+    assert _windows_tcp.tcp_states_for_port(10103, socket.AF_INET) == {11}
 
 
 def test_windows_wildcard_source_uses_target_route_interface(
@@ -4486,8 +4573,8 @@ def test_windows_source_address_is_resolved_per_connection_candidate(
         concrete_source_address,
     )
     monkeypatch.setattr(
-        "pyezvizapi.hcnetsdk._windows_source_port_has_listener",
-        lambda _address, _family: False,
+        "pyezvizapi.hcnetsdk._windows_source_port_is_time_wait_only",
+        lambda _port, _family: True,
     )
     monkeypatch.setattr(
         socket,

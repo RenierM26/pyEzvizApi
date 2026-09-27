@@ -23,6 +23,7 @@ from enum import IntEnum
 import errno
 import hashlib
 import hmac
+from importlib import import_module
 import ipaddress
 import json
 import math
@@ -9049,16 +9050,16 @@ def _create_reusable_source_connection(
                 except OSError as err:
                     if err.errno != errno.EADDRINUSE:
                         raise
+                    if not _windows_source_port_is_time_wait_only(
+                        candidate_source_address[1],
+                        family,
+                    ):
+                        raise
                     candidate_source_address = _windows_concrete_source_address(
                         candidate_source_address,
                         family,
                         target,
                     )
-                    if _windows_source_port_has_listener(
-                        candidate_source_address,
-                        family,
-                    ):
-                        raise
             return _connect_bound_source_socket(
                 family,
                 sock_type,
@@ -9112,23 +9113,21 @@ def _connect_bound_source_socket(
         raise
 
 
-def _windows_source_port_has_listener(
-    source_address: tuple[str, int],
+def _windows_source_port_is_time_wait_only(
+    port: int,
     family: int,
 ) -> bool:
-    """Return whether a local listener actively owns a Windows source port."""
+    """Return whether Windows reports only stale TIME_WAIT users of a port."""
 
-    host, port = source_address
-    if family == socket.AF_INET6:
-        probe_host = "::1" if host in {"", "::"} else host
-    else:
-        probe_host = "127.0.0.1" if host in {"", "0.0.0.0"} else host
-    probe = socket.socket(family, socket.SOCK_STREAM)
-    try:
-        probe.settimeout(0.1)
-        return probe.connect_ex((probe_host, port)) == 0
-    finally:
-        probe.close()
+    states = _windows_tcp_states_for_port(port, family)
+    return bool(states) and states == {11}
+
+
+def _windows_tcp_states_for_port(port: int, family: int) -> set[int]:
+    """Read Windows' TCP owner table without loading native APIs here."""
+
+    windows_tcp = import_module("pyezvizapi._windows_tcp")
+    return cast(set[int], windows_tcp.tcp_states_for_port(port, family))
 
 
 def _windows_concrete_source_address(

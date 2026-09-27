@@ -141,6 +141,28 @@ def test_idmx_infer_aac_sample_rate_compares_audio_and_video_clocks() -> None:
     assert _idmx_infer_aac_sample_rate(packets) == 16_000
 
 
+def test_idmx_infer_aac_sample_rate_uses_common_48khz_interval() -> None:
+    def frame(payload_type: int, timestamp: int, sequence: int) -> bytes:
+        return (
+            b"\x80"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+        )
+
+    events = [
+        *((index / 15, 96, index * 6000) for index in range(9)),
+        *((index * 1024 / 48_000, 104, index * 1024) for index in range(26)),
+    ]
+    packets = [
+        frame(payload_type, timestamp, sequence)
+        for sequence, (_time, payload_type, timestamp) in enumerate(sorted(events))
+    ]
+
+    assert _idmx_infer_aac_sample_rate(packets) == 48_000
+
+
 def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
     return (
         b"\x80\x60"

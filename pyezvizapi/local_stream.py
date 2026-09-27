@@ -1091,6 +1091,12 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                         monotonic=send_monotonic,
                     )
                 except Exception as err:
+                    deadline_failure = (
+                        send_deadline is not None
+                        and isinstance(err, EzvizLocalSdkDeadlineExpired)
+                    )
+                    if deadline_failure:
+                        media_client.shutdown()
                     self.keepalive_events.append(
                         HcNetSdkCommandPortKeepaliveEvent(
                             index=index,
@@ -1100,6 +1106,8 @@ class HcNetSdkCommandPortMultiSocketMediaStream:
                             error=str(err),
                         )
                     )
+                    if deadline_failure:
+                        return
                 else:
                     self.keepalive_events.append(
                         HcNetSdkCommandPortKeepaliveEvent(

@@ -4641,6 +4641,57 @@ def test_hostname_resolution_obeys_absolute_deadline(
     assert elapsed < max_elapsed
 
 
+def test_hostname_resolution_uses_bounded_shared_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    max_elapsed = 0.1
+    resolution_started = Event()
+    second_resolution_started = Event()
+    release = Event()
+    calls = 0
+
+    def getaddrinfo(*_args: object, **_kwargs: object) -> list[tuple[Any, ...]]:
+        nonlocal calls
+        calls += 1
+        resolution_started.set()
+        if calls == 2:
+            second_resolution_started.set()
+        release.wait(timeout=1.0)
+        return []
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=time.monotonic() + 0.02,
+        )
+    assert resolution_started.wait(timeout=1.0)
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=time.monotonic() + 0.02,
+        )
+    started_at = time.monotonic()
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="resolver is still busy"):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=time.monotonic() + 0.5,
+        )
+    elapsed = time.monotonic() - started_at
+
+    assert calls == 1
+    assert elapsed < max_elapsed
+    release.set()
+    assert second_resolution_started.wait(timeout=1.0)
+
+
 def test_deadline_expiry_between_addresses_does_not_allocate_socket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

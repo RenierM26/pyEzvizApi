@@ -772,6 +772,52 @@ def test_hcnetsdk_background_keepalive_uses_updated_capture_deadline() -> None:
     ]
 
 
+def test_hcnetsdk_background_deadline_failure_invalidates_media_client() -> None:
+    send_started = Event()
+    release_send = Event()
+
+    class DeadlineMediaClient:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
+        def send_command_frame(self, _frame: bytes, **_kwargs: object) -> None:
+            send_started.set()
+            assert release_send.wait(timeout=1.0)
+            raise EzvizLocalSdkDeadlineExpired("write deadline expired")
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"keepalive"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(build_hcnetsdk_tcp_frame(b"keepalive"),),
+        keepalive_initial_delay_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    client = DeadlineMediaClient()
+    stream._media_client = cast(Any, client)  # noqa: SLF001
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=11.0,
+        monotonic=lambda: 10.0,
+    )
+    assert send_started.wait(timeout=1.0)
+
+    stream._set_keepalive_deadline(None, time.monotonic)  # noqa: SLF001
+    release_send.set()
+    assert stream._keepalive_thread is not None  # noqa: SLF001
+    stream._keepalive_thread.join(timeout=1.0)  # noqa: SLF001
+
+    assert client.shutdown_called
+    assert len(stream.keepalive_events) == 1
+    assert stream.keepalive_events[0].sent is False
+
+
 def test_hcnetsdk_close_interrupts_in_flight_keepalive_before_join() -> None:
     send_started = Event()
     socket_closed = Event()

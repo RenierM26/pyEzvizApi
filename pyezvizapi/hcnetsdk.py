@@ -26,7 +26,7 @@ import hmac
 import ipaddress
 import json
 import math
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 import re
 import select
 import socket
@@ -48,6 +48,11 @@ HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
 HCNETSDK_DEFAULT_RTSP_PORT = 554
 _WINDOWS_EXCLUSIVE_SOURCE_BIND = sys.platform == "win32"
+_RESOLVER_REQUESTS: Queue[
+    tuple[str, int, Queue[tuple[bool, object]]]
+] = Queue(maxsize=1)
+_RESOLVER_THREAD_LOCK = Lock()
+_RESOLVER_THREAD: Thread | None = None
 HCNETSDK_EZVIZ_DEFAULT_USERNAME = "admin"
 HCNETSDK_EZVIZ_LOCAL_USERNAME = "EZ_LOCAL_USER"
 HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX = "_lan_device_space-"
@@ -9520,16 +9525,13 @@ def _getaddrinfo_before_deadline(
     remaining = _remaining_timeout(deadline, monotonic)
     assert remaining is not None
     results: Queue[tuple[bool, object]] = Queue(maxsize=1)
-
-    def resolve() -> None:
-        try:
-            results.put(
-                (True, socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
-            )
-        except Exception as err:
-            results.put((False, err))
-
-    Thread(target=resolve, daemon=True).start()
+    _ensure_resolver_worker()
+    try:
+        _RESOLVER_REQUESTS.put_nowait((host, port, results))
+    except Full as err:
+        raise EzvizLocalSdkDeadlineExpired(
+            "EZVIZ local SDK hostname resolver is still busy"
+        ) from err
     try:
         succeeded, value = results.get(timeout=remaining)
     except Empty as err:
@@ -9539,6 +9541,28 @@ def _getaddrinfo_before_deadline(
     if not succeeded:
         raise cast(Exception, value)
     return cast(list[tuple[Any, ...]], value)
+
+
+def _ensure_resolver_worker() -> None:
+    """Start the single bounded hostname resolver worker when first needed."""
+    global _RESOLVER_THREAD  # noqa: PLW0603
+    with _RESOLVER_THREAD_LOCK:
+        if _RESOLVER_THREAD is not None and _RESOLVER_THREAD.is_alive():
+            return
+        _RESOLVER_THREAD = Thread(target=_resolver_worker, daemon=True)
+        _RESOLVER_THREAD.start()
+
+
+def _resolver_worker() -> None:
+    """Resolve queued hosts without allowing callers to create more threads."""
+    while True:
+        host, port, results = _RESOLVER_REQUESTS.get()
+        try:
+            addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except Exception as err:
+            results.put((False, err))
+        else:
+            results.put((True, addresses))
 
 
 def _connect_bound_source_socket(

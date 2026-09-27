@@ -23,7 +23,6 @@ from enum import IntEnum
 import errno
 import hashlib
 import hmac
-from importlib import import_module
 import ipaddress
 import json
 import math
@@ -4332,7 +4331,6 @@ class SadpBatchResult:
 
 
 SocketSourceAddress = tuple[str, int] | None
-SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
 SocketFactory = Callable[[tuple[str, int], float | None], Any]
 SourceAddressSocketFactory = Callable[
     [tuple[str, int], float | None, SocketSourceAddress],
@@ -9033,7 +9031,7 @@ def _create_reusable_source_connection(
     *,
     source_address: tuple[str, int],
 ) -> socket.socket:
-    """Connect from an exact reusable source port for rapid stream reopen."""
+    """Connect from an exact source port with platform-safe ownership."""
 
     last_error: OSError | None = None
     host, port = address
@@ -9042,55 +9040,15 @@ def _create_reusable_source_connection(
         port,
         type=socket.SOCK_STREAM,
     ):
-        candidate_source_address: SocketBindAddress = source_address
         try:
-            if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
-                try:
-                    return _connect_bound_source_socket(
-                        family,
-                        sock_type,
-                        protocol,
-                        target,
-                        timeout,
-                        source_address=candidate_source_address,
-                        exclusive=True,
-                    )
-                except OSError as err:
-                    if err.errno != errno.EADDRINUSE:
-                        raise
-                    wildcard_source_address = candidate_source_address
-                    candidate_source_address = _windows_concrete_source_address(
-                        candidate_source_address,
-                        family,
-                        target,
-                    )
-                    if candidate_source_address != wildcard_source_address:
-                        try:
-                            return _connect_bound_source_socket(
-                                family,
-                                sock_type,
-                                protocol,
-                                target,
-                                timeout,
-                                source_address=candidate_source_address,
-                                exclusive=True,
-                            )
-                        except OSError as routed_err:
-                            if routed_err.errno != errno.EADDRINUSE:
-                                raise
-                    if not _windows_source_port_is_time_wait_only(
-                        candidate_source_address,
-                        family,
-                    ):
-                        raise
             return _connect_bound_source_socket(
                 family,
                 sock_type,
                 protocol,
                 target,
                 timeout,
-                source_address=candidate_source_address,
-                exclusive=False,
+                source_address=source_address,
+                exclusive=_WINDOWS_EXCLUSIVE_SOURCE_BIND,
             )
         except OSError as err:
             last_error = err
@@ -9107,7 +9065,7 @@ def _connect_bound_source_socket(
     target: Any,
     timeout: float | None,
     *,
-    source_address: SocketBindAddress,
+    source_address: tuple[str, int],
     exclusive: bool,
 ) -> socket.socket:
     """Bind and connect one source socket with the requested ownership mode."""
@@ -9139,52 +9097,6 @@ def _connect_bound_source_socket(
     except Exception:
         sock.close()
         raise
-
-
-def _windows_source_port_is_time_wait_only(
-    source_address: SocketBindAddress,
-    family: int,
-) -> bool:
-    """Return whether Windows reports only stale TIME_WAIT users of a port."""
-
-    states = _windows_tcp_states_for_source(source_address, family)
-    return bool(states) and states == {11}
-
-
-def _windows_tcp_states_for_source(
-    source_address: SocketBindAddress,
-    family: int,
-) -> set[int]:
-    """Read matching Windows TCP states without loading native APIs here."""
-
-    windows_tcp = import_module("pyezvizapi._windows_tcp")
-    return cast(
-        set[int],
-        windows_tcp.tcp_states_for_source(source_address, family),
-    )
-
-
-def _windows_concrete_source_address(
-    source_address: SocketBindAddress,
-    family: int,
-    target: Any,
-) -> SocketBindAddress:
-    """Resolve a wildcard source to the interface selected for the target."""
-
-    host, port = source_address[:2]
-    wildcard_hosts = {"", "::"} if family == socket.AF_INET6 else {"", "0.0.0.0"}
-    if host not in wildcard_hosts:
-        return source_address
-    route_probe = socket.socket(family, socket.SOCK_DGRAM)
-    try:
-        route_probe.connect(target)
-        routed_address = route_probe.getsockname()
-        routed_host = str(routed_address[0])
-    finally:
-        route_probe.close()
-    if family == socket.AF_INET6:
-        return routed_host, port, int(routed_address[2]), int(routed_address[3])
-    return routed_host, port
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:

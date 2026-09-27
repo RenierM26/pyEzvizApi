@@ -9,6 +9,7 @@ import hmac
 from pathlib import Path
 import socket
 from threading import Event, Thread
+import time
 from typing import Any
 
 from Crypto.Cipher import PKCS1_v1_5
@@ -4073,6 +4074,75 @@ def test_hcnetsdk_command_port_media_read_restores_socket_timeout() -> None:
     assert 1.0 in sock.timeout_history
 
 
+def test_hcnetsdk_command_port_serializes_media_reads_and_keepalive_writes() -> None:
+    expected_timeout = 3.0
+    read_started = Event()
+    release_read = Event()
+    write_attempted = Event()
+    write_sent = Event()
+    errors: list[Exception] = []
+    media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
+    media_frame = (
+        b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+
+    class BlockingReadSocket(_FakeSocket):
+        read_released = False
+
+        def recv(self, length: int) -> bytes:
+            if not self.read_released:
+                read_started.set()
+                assert release_read.wait(timeout=1.0)
+                self.read_released = True
+            return super().recv(length)
+
+        def sendall(self, data: bytes) -> None:
+            write_sent.set()
+            super().sendall(data)
+
+    sock = BlockingReadSocket([media_frame])
+    sock.timeout = expected_timeout
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=expected_timeout,
+        socket_factory=lambda _address, _timeout: sock,
+    )
+
+    def read_media() -> None:
+        try:
+            client.read_media_frame_after_prefix(timeout=1.0)
+        except Exception as err:
+            errors.append(err)
+
+    def send_keepalive() -> None:
+        write_attempted.set()
+        try:
+            client.send_command_frame(b"keepalive", timeout=1.0)
+        except Exception as err:
+            errors.append(err)
+
+    reader = Thread(target=read_media)
+    writer = Thread(target=send_keepalive)
+    reader.start()
+    assert read_started.wait(timeout=1.0)
+    writer.start()
+    assert write_attempted.wait(timeout=1.0)
+    time.sleep(0.02)
+    assert not write_sent.is_set()
+
+    release_read.set()
+    reader.join(timeout=1.0)
+    writer.join(timeout=1.0)
+
+    assert not reader.is_alive()
+    assert not writer.is_alive()
+    assert write_sent.is_set()
+    assert errors == []
+    assert sock.timeout == expected_timeout
+
+
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
     pre_start_response = build_ezviz_local_sdk_frame(
         command=0x2014,
@@ -4485,7 +4555,7 @@ def test_source_connection_recomputes_timeout_between_addresses(
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
         ],
     )
-    clock = iter((0.0, 0.4)).__next__
+    clock = iter((0.0, 0.0, 0.4)).__next__
 
     assert _create_reusable_source_connection(
         ("camera.example", 9010),
@@ -4495,6 +4565,77 @@ def test_source_connection_recomputes_timeout_between_addresses(
         monotonic=clock,
     ) is connected_socket
     assert timeouts == [1.0, 0.6]
+
+
+def test_hostname_resolution_obeys_absolute_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = Event()
+    max_elapsed = 0.5
+
+    def getaddrinfo(*_args: object, **_kwargs: object) -> list[tuple[Any, ...]]:
+        release.wait(timeout=1.0)
+        return []
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    started_at = time.monotonic()
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="resolution"):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=started_at + 0.02,
+        )
+    elapsed = time.monotonic() - started_at
+    release.set()
+
+    assert elapsed < max_elapsed
+
+
+def test_deadline_expiry_between_addresses_does_not_allocate_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[Any] = []
+
+    class ConnectSocket:
+        closed = False
+
+        def settimeout(self, _timeout: float | None) -> None:
+            return
+
+        def connect(self, _target: Any) -> None:
+            raise OSError(errno.ETIMEDOUT, "first address timed out")
+
+        def close(self) -> None:
+            self.closed = True
+
+    def socket_factory(*_args: object) -> ConnectSocket:
+        sock = ConnectSocket()
+        created.append(sock)
+        return sock
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    monkeypatch.setattr(socket, "socket", socket_factory)
+    clock = iter((0.0, 0.5, 1.1)).__next__
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=1.0,
+            monotonic=clock,
+        )
+
+    assert len(created) == 1
+    assert created[0].closed is True
 
 
 def test_windows_ipv6_wildcard_source_preserves_route_scope(

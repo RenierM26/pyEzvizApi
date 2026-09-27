@@ -26,11 +26,12 @@ import hmac
 import ipaddress
 import json
 import math
+from queue import Empty, Queue
 import re
 import socket
 import ssl
 import sys
-from threading import Lock
+from threading import Lock, Thread
 import time
 from typing import Any, cast
 import xml.etree.ElementTree as ET
@@ -9278,10 +9279,11 @@ def _create_reusable_source_connection(
 
     last_error: OSError | None = None
     host, port = address
-    for family, sock_type, protocol, _, target in socket.getaddrinfo(
+    for family, sock_type, protocol, _, target in _getaddrinfo_before_deadline(
         host,
         port,
-        type=socket.SOCK_STREAM,
+        deadline=deadline,
+        monotonic=monotonic,
     ):
         try:
             attempt_timeout = _connect_attempt_timeout(
@@ -9364,20 +9366,20 @@ def _create_deadline_connection(
     """Connect to resolved addresses without renewing an absolute deadline."""
     last_error: OSError | None = None
     host, port = address
-    for family, sock_type, protocol, _, target in socket.getaddrinfo(
+    for family, sock_type, protocol, _, target in _getaddrinfo_before_deadline(
         host,
         port,
-        type=socket.SOCK_STREAM,
+        deadline=deadline,
+        monotonic=monotonic,
     ):
+        attempt_timeout = _connect_attempt_timeout(
+            timeout,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
         sock = socket.socket(family, sock_type, protocol)
         try:
-            sock.settimeout(
-                _connect_attempt_timeout(
-                    timeout,
-                    deadline=deadline,
-                    monotonic=monotonic,
-                )
-            )
+            sock.settimeout(attempt_timeout)
             sock.connect(target)
             return sock
         except OSError as err:
@@ -9386,6 +9388,41 @@ def _create_deadline_connection(
     if last_error is not None:
         raise last_error
     raise OSError("getaddrinfo returned no addresses")
+
+
+def _getaddrinfo_before_deadline(
+    host: str,
+    port: int,
+    *,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> list[tuple[Any, ...]]:
+    """Resolve a host without allowing DNS to exceed an absolute deadline."""
+    if deadline is None:
+        return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+
+    remaining = _remaining_timeout(deadline, monotonic)
+    assert remaining is not None
+    results: Queue[tuple[bool, object]] = Queue(maxsize=1)
+
+    def resolve() -> None:
+        try:
+            results.put(
+                (True, socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+            )
+        except Exception as err:
+            results.put((False, err))
+
+    Thread(target=resolve, daemon=True).start()
+    try:
+        succeeded, value = results.get(timeout=remaining)
+    except Empty as err:
+        raise EzvizLocalSdkDeadlineExpired(
+            "EZVIZ local SDK hostname resolution exceeded its deadline"
+        ) from err
+    if not succeeded:
+        raise cast(Exception, value)
+    return cast(list[tuple[Any, ...]], value)
 
 
 def _connect_bound_source_socket(
@@ -9983,6 +10020,7 @@ class HcNetSdkCommandPortClient:
         self.socket_factory = socket_factory
         self._socket: Any | None = None
         self._state_lock = Lock()
+        self._io_lock = Lock()
         self._allow_reconnect = True
 
     def __enter__(self) -> HcNetSdkCommandPortClient:
@@ -10082,6 +10120,22 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """Send one complete command-port frame."""
+        with self._io_lock:
+            self._send_command_frame_unlocked(
+                frame,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+
+    def _send_command_frame_unlocked(
+        self,
+        frame: bytes,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         effective_timeout = (
             _remaining_timeout(deadline, monotonic)
             if deadline is not None
@@ -10108,6 +10162,20 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkTcpFrame:
         """Read one non-media command-port response frame."""
+        with self._io_lock:
+            return self._read_tcp_frame_unlocked(
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+
+    def _read_tcp_frame_unlocked(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkTcpFrame:
         effective_timeout = (
             _remaining_timeout(deadline, monotonic)
             if deadline is not None
@@ -10144,6 +10212,22 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next command-port media frame."""
+        with self._io_lock:
+            return self._read_media_frame_after_prefix_unlocked(
+                max_prefix_bytes=max_prefix_bytes,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+
+    def _read_media_frame_after_prefix_unlocked(
+        self,
+        *,
+        max_prefix_bytes: int = 4096,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> EzvizInterleavedRtpFrameWithPrefix:
         effective_timeout = (
             _remaining_timeout(deadline, monotonic)
             if deadline is not None

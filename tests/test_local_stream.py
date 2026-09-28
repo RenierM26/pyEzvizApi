@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date
 import io
 import subprocess
@@ -43,11 +43,13 @@ from pyezvizapi.local_stream import (
     _decrypt_idmx_local_packets_to_adts_aac,
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
+    _h264_annexb_packet_end_offsets,
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
     _idmx_audio_metadata,
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
+    _idmx_local_packets_to_annexb_with_codec,
     _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     _start_ffmpeg_stderr_drain,
@@ -97,6 +99,20 @@ LOCAL_DECRYPTED_PAYLOAD = b"decrypted"
 LOCAL_DECRYPTED_TS_PAYLOAD = b"ts:decrypted"
 LOCAL_DECRYPTED_WITH_KEY_PAYLOAD = b"decrypted:encrypted-payload:media-secret"
 IDMX_MEDIA_KEY = b"0123456789abcdef"
+
+
+def _sequential_idmx_frame_factory(
+    header: bytes,
+) -> Callable[[bytes], bytes]:
+    sequence = int.from_bytes(header[2:4], "big")
+
+    def idmx_frame(body: bytes) -> bytes:
+        nonlocal sequence
+        frame = header[:2] + sequence.to_bytes(2, "big") + header[4:] + body
+        sequence = (sequence + 1) & 0xFFFF
+        return len(frame).to_bytes(4, "little") + frame
+
+    return idmx_frame
 
 
 def test_idmx_local_video_frame_rate_uses_rtp_timestamp_clock() -> None:
@@ -3358,9 +3374,7 @@ def test_copy_local_stream_to_decrypted_mpegts_honors_h264_encrypted_header_with
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
     ambiguous_encrypted_idr = b"\x02\x01cipher"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -3417,9 +3431,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_idmx_payload(
     pps = b"\x68\xee\x38"
     non_idr = b"\x41cipher"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -3550,9 +3562,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_h264_encrypted_header_id
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
     encrypted_idr = b"\xaecipher"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -3673,9 +3683,7 @@ def test_copy_local_stream_to_decrypted_mpegts_applies_h264_startup_trim(
     first_idr = b"\x65bad"
     second_idr = b"\x65good"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -3714,9 +3722,7 @@ def test_copy_local_stream_to_decrypted_mpegts_prefers_h264_vcl_before_hevc_prob
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
     h264_non_idr = b"\x41\x01h264-slice"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -3763,9 +3769,7 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_for_clean_idr_bounds_output(
     second_idr = b"\x65second"
     after_duration = b"\x41drop"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     packets = [
         idmx_frame(body)
@@ -4524,9 +4528,7 @@ def test_copy_local_stream_to_mpegts_prefers_hevc_idr_over_h264_sei_shape(
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
     hevc_idr_with_h264_sei_shape = b"\x26\x01idr"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -4669,9 +4671,7 @@ def test_copy_local_stream_to_mpegts_remuxes_clear_h264_idmx_payload(tmp_path) -
     sps = b"\x67\x4d\x00"
     pps = b"\x68\xee\x38"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -4711,9 +4711,7 @@ def test_copy_local_stream_to_mpegts_preserves_default_h264_idmx_codec(
     sps = b"\x67\x4d\x00"
     h264_p_slice_with_hevc_shape = b"\x41\x01p"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -4799,9 +4797,7 @@ def test_copy_local_stream_to_mpegts_can_skip_initial_h264_idr_windows(
     non_idr = b"\x41delta"
     idr_good = b"\x65good"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
@@ -4858,9 +4854,7 @@ def test_copy_local_stream_to_mpegts_can_preroll_before_clean_idr_trim(
     late_non_idr = b"\x41late"
     times = iter([100.0, 101.0, 102.0, 103.1])
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> Iterator[Any]:
@@ -4936,9 +4930,7 @@ def test_copy_local_stream_to_mpegts_can_wait_for_clean_idr_before_duration(
         ]
     )
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> Iterator[Any]:
@@ -5131,9 +5123,7 @@ def test_collect_h264_idmx_annexb_after_clean_idr_excludes_deadline_packet(
     )
     post_deadline_body = b"\x41at-deadline"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     annexb = collect_h264_idmx_annexb_after_first_clean_idr_window(
         (
@@ -5183,9 +5173,7 @@ def test_collect_idmx_annexb_after_clean_video_window_selects_hevc_irap(
     clean_delta = b"\x02\x01clean-delta"
     next_irap = b"\x26\x01next-irap"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
         (
@@ -5258,9 +5246,7 @@ def test_collect_idmx_annexb_after_clean_video_window_keeps_hevc_probe_prefix(
         b"\x00\x00\x00\x01\x26\x01next-irap"
     )
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     annexb, codec = collect_idmx_annexb_after_first_clean_video_window(
         (
@@ -5393,9 +5379,7 @@ def test_collect_h264_idmx_annexb_after_clean_idr_times_out(tmp_path) -> None:
     fake_ffmpeg.chmod(0o755)
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     with pytest.raises(PyEzvizError) as exc_info:
         collect_h264_idmx_annexb_after_first_clean_idr_window(
@@ -5502,9 +5486,7 @@ def test_copy_local_stream_to_mpegts_passes_clean_idr_max_windows(
     idr = b"\x65clean"
     calls: list[dict[str, Any]] = []
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     def fake_trim(data: bytes, *, ffmpeg_path: str, max_windows: int) -> bytes:
         calls.append(
@@ -6191,9 +6173,7 @@ def test_collect_idmx_annexb_after_first_clean_video_window_trims_hevc_suffix(
 ) -> None:
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     packets = [
         idmx_frame(b"\x40\x01vps"),
@@ -6261,9 +6241,7 @@ def test_collect_idmx_annexb_after_first_clean_video_window_starts_hevc_duration
 ) -> None:
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     first_irap_marker = b"first-irap"
     second_irap_marker = b"second-irap"
@@ -6302,9 +6280,7 @@ def test_collect_h264_after_clean_idr_waits_for_clean_final_suffix(
 ) -> None:
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     packets = [idmx_frame(b"\x65first-idr")] + [
         idmx_frame(b"\x41tail-%03d" % index) for index in range(258)
@@ -6424,9 +6400,7 @@ def test_collect_h264_after_clean_idr_propagates_dirty_final_suffix(
 ) -> None:
     idmx_header = b"\x80\x60\x02\x03\x04\x05\x06\x07\x55\x66\x77\x88"
 
-    def idmx_frame(body: bytes) -> bytes:
-        frame = idmx_header + body
-        return len(frame).to_bytes(4, "little") + frame
+    idmx_frame = _sequential_idmx_frame_factory(idmx_header)
 
     packets = [idmx_frame(b"\x65first-idr")] + [
         idmx_frame(b"\x41tail-%03d" % index) for index in range(258)
@@ -6878,6 +6852,55 @@ def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> 
         + next_fu[2:]
         + last_fu[2:]
     )
+
+
+def test_idmx_incomplete_h264_fu_is_not_mislabeled_as_hevc() -> None:
+    rtp_timestamp = 0x7D522A3E
+    sequence = 0x5D5C
+    payload = b"\x7c\x85incomplete"
+    rtp = (
+        b"\x80\x60"
+        + sequence.to_bytes(2, "big")
+        + rtp_timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88"
+        + payload
+    )
+    frame = len(rtp).to_bytes(4, "little") + rtp
+
+    with pytest.raises(PyEzvizError, match=r"clear H\.264 media frames"):
+        _idmx_local_packets_to_annexb_with_codec([frame])
+
+
+def test_idmx_ordinary_hevc_slice_is_not_mislabeled_as_h264() -> None:
+    payload = b"\x02\x01ordinary-hevc-slice"
+    rtp = (
+        b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+        + payload
+    )
+    frame = len(rtp).to_bytes(4, "little") + rtp
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec([frame])
+
+    assert codec == "hevc"
+    assert annexb == b"\x00\x00\x00\x01" + payload
+
+
+def test_h264_packet_offsets_ignore_non_h264_payloads() -> None:
+    def frame(payload: bytes, *, sequence: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+            + payload
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    packets = [
+        frame(b"\x02corrupt-type-2", sequence=1),
+        frame(b"\x65idr", sequence=2),
+    ]
+
+    assert _h264_annexb_packet_end_offsets(packets) == [0, 8]
 
 
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(

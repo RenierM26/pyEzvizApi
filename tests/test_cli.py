@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import importlib.util
 import io
 import json
@@ -53,6 +54,20 @@ APP_RECEIVER_INFO_XML_PREFIX = b'<ReceiverInfo Address='
 
 _format_cell = cli_module._format_cell  # noqa: SLF001
 _write_table = cli_module._write_table  # noqa: SLF001
+
+
+def _rtp_frames_with_sequential_sequences(
+    header: bytes,
+    payloads: Iterable[bytes],
+) -> list[bytes]:
+    sequence = int.from_bytes(header[2:4], "big")
+    return [
+        header[:2]
+        + ((sequence + index) & 0xFFFF).to_bytes(2, "big")
+        + header[4:]
+        + payload
+        for index, payload in enumerate(payloads)
+    ]
 
 
 def test_cli_imports_without_pandas_installed() -> None:
@@ -2684,6 +2699,49 @@ def test_rtp_payload_video_codec_keeps_h264_slice_bytes_before_hevc_ap_fu() -> N
     assert cli_module._rtp_payload_video_codec(b"\x62\x01\x85hevc-fu") == "hevc"  # noqa: SLF001
 
 
+def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> None:
+    def rtp(
+        payload: bytes,
+        *,
+        payload_type: int,
+        sequence: int,
+        ssrc: int,
+        marker: bool = False,
+    ) -> bytes:
+        return (
+            b"\x80"
+            + bytes([payload_type | (0x80 if marker else 0)])
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x01"
+            + ssrc.to_bytes(4, "big")
+            + payload
+        )
+
+    bodies = [
+        rtp(b"\x7c\x85hello", payload_type=96, sequence=65535, ssrc=1),
+        rtp(b"aac", payload_type=104, sequence=7, ssrc=2),
+        rtp(b"metadata", payload_type=112, sequence=9, ssrc=3),
+        rtp(
+            b"\x7c\x45-world",
+            payload_type=96,
+            sequence=0,
+            ssrc=1,
+            marker=True,
+        ),
+    ]
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+    expected_annexb = b"\x00\x00\x00\x01\x65hello-world"
+
+    assert cli_module._detect_rtp_video_codec(packets) == "h264"  # noqa: SLF001
+    assert (
+        cli_module._rtp_packets_to_annexb(packets, codec="h264")  # noqa: SLF001
+        == expected_annexb
+    )
+
+
 def test_parse_stream_dump_duration_units() -> None:
     cases = {
         "30": 30.0,
@@ -4112,11 +4170,10 @@ def test_hcnetsdk_command_dump_summary_runs_without_credentials(tmp_path, capsys
     )
 
     idmx_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
-    idmx_frames = [
-        idmx_header + b"\x67\x4d\x00\x29",
-        idmx_header + b"\x68\xee\x38\x80",
-        idmx_header + b"\x65idr",
-    ]
+    idmx_frames = _rtp_frames_with_sequential_sequences(
+        idmx_header,
+        (b"\x67\x4d\x00\x29", b"\x68\xee\x38\x80", b"\x65idr"),
+    )
     media_payload = b"".join(
         len(idmx_frame).to_bytes(4, "little") + idmx_frame
         for idmx_frame in idmx_frames
@@ -4186,12 +4243,10 @@ def test_hcnetsdk_command_dump_summary_reports_hevc_playm4_input(
     dump_dir = tmp_path / "dumps"
     dump_dir.mkdir()
     rtp_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
-    hevc_frames = [
-        rtp_header + b"\x40\x01vps",
-        rtp_header + b"\x42\x01sps",
-        rtp_header + b"\x44\x01pps",
-        rtp_header + b"\x26\x01idr",
-    ]
+    hevc_frames = _rtp_frames_with_sequential_sequences(
+        rtp_header,
+        (b"\x40\x01vps", b"\x42\x01sps", b"\x44\x01pps", b"\x26\x01idr"),
+    )
     for index, idmx_frame in enumerate(hevc_frames):
         (dump_dir / f"20260613070000-{index:04d}-playm4-input-16.bin").write_bytes(
             idmx_frame

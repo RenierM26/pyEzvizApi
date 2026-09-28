@@ -24,6 +24,7 @@ from .media import (
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
 )
+from .rtp import rtp_payload as _rtp_payload
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
@@ -45,6 +46,12 @@ CLOUD_REPLAY_HEARTBEAT_CMD = 0x5010
 CLOUD_REPLAY_HEADER_SIZE = 32
 XML_PREFIX = b"<?xml"
 _XML_END_RE = re.compile(br"</(Request|Response)>")
+
+
+def rtp_payload(data: bytes) -> bytes:
+    """Compatibility wrapper for the shared RTP parser."""
+
+    return _rtp_payload(data)
 
 
 def _ezviz_md5_hex(data: bytes) -> str:
@@ -2043,41 +2050,6 @@ def _cloud_replay_recv(tls_socket: ssl.SSLSocket) -> bytes:
 def _cloud_xml_attr_int(xml: bytes, tag: bytes, attr: bytes) -> int | None:
     match = re.search(rb"<" + tag + rb" [^>]*" + attr + rb'="(-?\d+)"', xml)
     return int(match.group(1)) if match else None
-
-
-def rtp_payload(data: bytes) -> bytes:
-    """Return the RTP payload after fixed, CSRC, extension, and padding headers."""
-
-    if len(data) < 12:
-        raise PyEzvizError("RTP packet is too short")
-    if data[0] >> 6 != 2:
-        raise PyEzvizError("Unsupported RTP version")
-
-    has_padding = bool(data[0] & 0x20)
-    has_extension = bool(data[0] & 0x10)
-    csrc_count = data[0] & 0x0F
-    offset = 12 + (csrc_count * 4)
-    if len(data) < offset:
-        raise PyEzvizError("RTP CSRC header exceeds packet length")
-
-    if has_extension:
-        if len(data) < offset + 4:
-            raise PyEzvizError("RTP extension header exceeds packet length")
-        extension_words = int.from_bytes(data[offset + 2 : offset + 4], "big")
-        offset += 4 + (extension_words * 4)
-        if len(data) < offset:
-            raise PyEzvizError("RTP extension payload exceeds packet length")
-
-    payload = data[offset:]
-    if has_padding:
-        if not payload:
-            raise PyEzvizError("RTP padding set without payload")
-        padding_len = payload[-1]
-        if padding_len == 0 or padding_len > len(payload):
-            raise PyEzvizError("Invalid RTP padding length")
-        payload = payload[:-padding_len]
-
-    return payload
 
 
 def _proto_key(field: int, wire_type: int) -> bytes:

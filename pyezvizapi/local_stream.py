@@ -54,6 +54,13 @@ from .media import (
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
 )
+from .rtp import (
+    RtpPacket,
+    RtpVideoDepacketizer,
+    parse_rtp_packet,
+    rtp_media_kind,
+    rtp_payload,
+)
 from .stream import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
@@ -61,7 +68,6 @@ from .stream import (
     MPEG_START_CODE_PREFIX,
     _hikvision_aes_ecb_cipher,
     decrypt_hikvision_ps_video,
-    rtp_payload,
 )
 
 HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = "app-lan-live-view"
@@ -5251,7 +5257,7 @@ def _is_complete_idmx_rtp_frame(frame: bytes) -> bool:
     if len(frame) < 12 or frame[0] >> 6 != 2 or frame[8:12] != IDMX_LOCAL_FRAME_SENTINEL:
         return False
     try:
-        rtp_payload(frame)
+        parse_rtp_packet(frame)
     except PyEzvizError:
         return False
     return True
@@ -5263,6 +5269,27 @@ def _idmx_local_frame_media_body(frame: bytes, header_size: int) -> bytes:
     if _is_complete_idmx_rtp_frame(frame):
         return rtp_payload(frame)
     return _strip_idmx_command_h264_record_trailer(frame[header_size:])
+
+
+def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | None:
+    """Normalize standards-shaped and legacy IDMX headers into one RTP model."""
+
+    if _is_complete_idmx_rtp_frame(frame):
+        return parse_rtp_packet(frame)
+    transport = _idmx_local_frame_transport_fields(frame, header_size)
+    payload_type = transport.get("rtp_payload_type")
+    sequence = transport.get("sequence_number")
+    timestamp = transport.get("rtp_timestamp")
+    if not all(isinstance(value, int) for value in (payload_type, sequence, timestamp)):
+        return None
+    return RtpPacket(
+        payload=_idmx_local_frame_media_body(frame, header_size),
+        payload_type=cast(int, payload_type),
+        sequence=cast(int, sequence),
+        timestamp=cast(int, timestamp),
+        ssrc=0,
+        marker=bool(transport.get("rtp_marker")),
+    )
 
 
 def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
@@ -5318,6 +5345,15 @@ def _idmx_local_frame_transport_fields(
 ) -> dict[str, Any]:
     """Return sanitized RTP-like fields from an IDMX local frame header."""
 
+    if _is_complete_idmx_rtp_frame(frame):
+        packet = parse_rtp_packet(frame)
+        return {
+            "rtp_marker": packet.marker,
+            "rtp_payload_type": packet.payload_type,
+            "sequence_number": packet.sequence,
+            "rtp_timestamp": packet.timestamp,
+        }
+
     sentinel_offset = header_size - len(IDMX_LOCAL_FRAME_SENTINEL)
     rtp_header_offset = sentinel_offset - 8
     if rtp_header_offset < 0 or len(frame) < sentinel_offset:
@@ -5359,17 +5395,12 @@ def _idmx_local_frame_rtp_marker(frame: bytes, header_size: int) -> bool:
 def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
     """Return the profile and bytes from a complete RTP header extension."""
 
-    if not _is_complete_idmx_rtp_frame(frame) or not frame[0] & 0x10:
+    if not _is_complete_idmx_rtp_frame(frame):
         return None
-    offset = 12 + (frame[0] & 0x0F) * 4
-    if len(frame) < offset + 4:
+    packet = parse_rtp_packet(frame)
+    if packet.extension_profile is None:
         return None
-    profile = int.from_bytes(frame[offset : offset + 2], "big")
-    extension_length = int.from_bytes(frame[offset + 2 : offset + 4], "big") * 4
-    extension_end = offset + 4 + extension_length
-    if extension_end > len(frame):
-        return None
-    return profile, frame[offset + 4 : extension_end]
+    return packet.extension_profile, packet.extension_data
 
 
 def _idmx_rtp_extension_is_audio(frame: bytes) -> bool:
@@ -5430,8 +5461,8 @@ def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
-        transport = _idmx_local_frame_transport_fields(frame, header_size)
-        if transport.get("rtp_payload_type") == IDMX_AAC_RTP_PAYLOAD_TYPE:
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None and rtp_media_kind(packet) == "audio":
             return True
     return False
 
@@ -5442,11 +5473,13 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
     timestamps: list[int] = []
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
-        if header_size is None or not _idmx_local_frame_is_h264_transport(frame, header_size):
+        if header_size is None:
             continue
-        timestamp = _idmx_local_frame_rtp_timestamp(frame, header_size)
-        if timestamp is not None and (not timestamps or timestamps[-1] != timestamp):
-            timestamps.append(timestamp)
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None and rtp_media_kind(packet) == "video" and (
+            not timestamps or timestamps[-1] != packet.timestamp
+        ):
+            timestamps.append(packet.timestamp)
     deltas = sorted(
         delta
         for previous, current in pairwise(timestamps)
@@ -6100,17 +6133,15 @@ def _decrypt_idmx_local_packets_to_adts_aac(  # noqa: PLR0911
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None or not _is_complete_idmx_rtp_frame(frame):
             continue
-        transport = _idmx_local_frame_transport_fields(frame, header_size)
-        if transport.get("rtp_payload_type") != IDMX_AAC_RTP_PAYLOAD_TYPE:
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is None or rtp_media_kind(packet) != "audio":
             continue
         if not _idmx_rtp_extension_is_audio(frame):
             return None
-        access_unit = _idmx_aac_access_unit(rtp_payload(frame))
+        access_unit = _idmx_aac_access_unit(packet.payload)
         if access_unit is None:
             return None
-        timestamp = transport.get("rtp_timestamp")
-        if isinstance(timestamp, int):
-            timestamps.append(timestamp)
+        timestamps.append(packet.timestamp)
         encrypted_access_units.append(access_unit)
     if not encrypted_access_units:
         return None
@@ -6152,26 +6183,21 @@ def _decrypt_idmx_local_packets_to_adts_aac(  # noqa: PLR0911
 
 def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
     output = bytearray()
-    active_h264_fu: _RtpFragmentedNal | None = None
+    depacketizer = RtpVideoDepacketizer("h264")
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
-        body = _idmx_local_frame_media_body(frame, header_size)
-        if not _idmx_local_frame_is_h264_transport(frame, header_size):
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is None or packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
             continue
-        if _looks_like_idmx_h264_fu_a_frame(body):
-            active_h264_fu = _append_idmx_h264_fu_a_payload(
-                output,
-                body,
-                active_fu=active_h264_fu,
-                sequence_number=_idmx_local_frame_sequence_number(frame, header_size),
-                rtp_timestamp=_idmx_local_frame_rtp_timestamp(frame, header_size),
-            )
+        if not (
+            _looks_like_idmx_h264_fu_a_frame(packet.payload)
+            or _looks_like_idmx_h264_clear_nal(packet.payload)
+        ):
             continue
-        if _looks_like_idmx_h264_clear_nal(body):
-            active_h264_fu = None
-            _append_h264_nal(output, body)
+        for nal in depacketizer.push(packet):
+            _append_h264_nal(output, nal)
     if not output:
         raise PyEzvizError("EZVIZ local IDMX stream did not include clear H.264 media frames")
     return _trim_trailing_h264_non_vcl_nals(bytes(output))
@@ -6179,34 +6205,26 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
 
 def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     output = bytearray()
-    active_h264_fu: _RtpFragmentedNal | None = None
+    depacketizer = RtpVideoDepacketizer("h264")
     end_offsets: list[int] = []
     for packet in packets:
         for frame in _iter_idmx_local_packet_frame(packet):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
-            body = _idmx_local_frame_media_body(frame, header_size)
-            if not _idmx_local_frame_is_h264_transport(frame, header_size):
+            rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
+            if (
+                rtp_packet is None
+                or rtp_packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE
+            ):
                 continue
-            if _looks_like_idmx_h264_fu_a_frame(body):
-                active_h264_fu = _append_idmx_h264_fu_a_payload(
-                    output,
-                    body,
-                    active_fu=active_h264_fu,
-                    sequence_number=_idmx_local_frame_sequence_number(
-                        frame,
-                        header_size,
-                    ),
-                    rtp_timestamp=_idmx_local_frame_rtp_timestamp(
-                        frame,
-                        header_size,
-                    ),
-                )
+            if not (
+                _looks_like_idmx_h264_fu_a_frame(rtp_packet.payload)
+                or _looks_like_idmx_h264_clear_nal(rtp_packet.payload)
+            ):
                 continue
-            if _looks_like_idmx_h264_clear_nal(body):
-                active_h264_fu = None
-                _append_h264_nal(output, body)
+            for nal in depacketizer.push(rtp_packet):
+                _append_h264_nal(output, nal)
         end_offsets.append(len(output))
     return end_offsets
 
@@ -6217,24 +6235,21 @@ def _idmx_local_packets_to_hevc_annexb(
     trim_trailing_non_vcl: bool = True,
 ) -> bytes:
     output = bytearray()
-    active_fu: _RtpFragmentedNal | None = None
+    depacketizer = RtpVideoDepacketizer(
+        "hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+    )
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
-        body = _idmx_local_frame_media_body(frame, header_size)
-        if not _idmx_local_frame_is_h264_transport(frame, header_size):
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is None or packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
             continue
-        if not _looks_like_idmx_hevc_direct_frame(body):
+        if not _looks_like_idmx_hevc_direct_frame(packet.payload):
             continue
-        active_fu = _append_idmx_hevc_clear_payload(
-            output,
-            body,
-            active_fu=active_fu,
-            sequence_number=_idmx_local_frame_sequence_number(frame, header_size),
-            rtp_timestamp=_idmx_local_frame_rtp_timestamp(frame, header_size),
-            rtp_marker=_idmx_local_frame_rtp_marker(frame, header_size),
-        )
+        for nal in depacketizer.push(packet):
+            _append_hevc_nal(output, nal)
     if not output:
         raise PyEzvizError("EZVIZ local IDMX stream did not include clear HEVC media frames")
     annexb = bytes(output)
@@ -6245,26 +6260,25 @@ def _idmx_local_packets_to_hevc_annexb(
 
 def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     output = bytearray()
-    active_fu: _RtpFragmentedNal | None = None
+    depacketizer = RtpVideoDepacketizer(
+        "hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+    )
     end_offsets: list[int] = []
     for packet in packets:
         for frame in _iter_idmx_local_packet_frame(packet):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
-            body = _idmx_local_frame_media_body(frame, header_size)
-            if not _idmx_local_frame_is_h264_transport(frame, header_size):
+            rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
+            if (
+                rtp_packet is None
+                or rtp_packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE
+                or not _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
+            ):
                 continue
-            if not _looks_like_idmx_hevc_direct_frame(body):
-                continue
-            active_fu = _append_idmx_hevc_clear_payload(
-                output,
-                body,
-                active_fu=active_fu,
-                sequence_number=_idmx_local_frame_sequence_number(frame, header_size),
-                rtp_timestamp=_idmx_local_frame_rtp_timestamp(frame, header_size),
-                rtp_marker=_idmx_local_frame_rtp_marker(frame, header_size),
-            )
+            for nal in depacketizer.push(rtp_packet):
+                _append_hevc_nal(output, nal)
         end_offsets.append(len(output))
     return end_offsets
 
@@ -6449,63 +6463,6 @@ def _append_idmx_hevc_media_payload(
         not has_fu_header and rtp_marker
     ):
         _append_decrypted_hevc_nal(output, bytes(active_fu.data), aes_key)
-        return None
-    return active_fu
-
-
-def _append_idmx_hevc_clear_payload(
-    output: bytearray,
-    payload: bytes,
-    *,
-    active_fu: _RtpFragmentedNal | None,
-    sequence_number: int | None = None,
-    rtp_timestamp: int | None = None,
-    rtp_marker: bool = False,
-) -> _RtpFragmentedNal | None:
-    if len(payload) < HEVC_NAL_HEADER_SIZE:
-        return active_fu
-    nal_type = _hevc_nal_type(payload)
-    if nal_type != 49:
-        _append_hevc_nal(output, payload)
-        return active_fu
-    if len(payload) < 3:
-        return active_fu
-
-    fu_header = payload[2]
-    is_start = bool(fu_header & 0x80)
-    original_type = fu_header & 0x3F
-    if not is_start and not _rtp_fragment_continues(
-        active_fu,
-        sequence_number=sequence_number,
-        rtp_timestamp=rtp_timestamp,
-    ):
-        return None
-    reconstructed_header = bytes(
-        [
-            (payload[0] & 0x81) | (original_type << 1),
-            payload[1],
-        ]
-    )
-    if is_start:
-        active_fu = _RtpFragmentedNal(
-            data=bytearray(reconstructed_header),
-            last_sequence=sequence_number,
-            rtp_timestamp=rtp_timestamp,
-        )
-    assert active_fu is not None
-    active_original_type = _hevc_nal_type(bytes(active_fu.data[:HEVC_NAL_HEADER_SIZE]))
-    active_header0 = active_fu.data[0] if active_fu.data else 0
-    has_ezviz_pseudo_header = fu_header in {active_header0, active_header0 | 0x40}
-    has_fu_header = (
-        is_start or original_type == active_original_type or has_ezviz_pseudo_header
-    )
-    active_fu.data.extend(payload[3:] if has_fu_header else payload[2:])
-    active_fu.last_sequence = sequence_number
-    active_fu.rtp_timestamp = rtp_timestamp
-    if (has_fu_header and bool(fu_header & 0x40)) or (
-        not has_fu_header and rtp_marker
-    ):
-        _append_hevc_nal(output, bytes(active_fu.data))
         return None
     return active_fu
 

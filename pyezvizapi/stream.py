@@ -51,7 +51,12 @@ if TYPE_CHECKING:
         vtm_media_packet_source,
         vtm_packet_to_media_packet,
     )
-    _compatibility_exports = (
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Make compatibility re-exports visible to static analyzers."""
+
+        del exports
+
+    _declare_compatibility_exports(
         rtp_payload,
         HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
         decrypt_hikvision_ps_video,
@@ -90,6 +95,5 @@ if TYPE_CHECKING:
         vtm_media_packet_source,
         vtm_packet_to_media_packet,
     )
-    del _compatibility_exports
 
 sys.modules[__name__] = _implementation

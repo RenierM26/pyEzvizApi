@@ -5,42 +5,40 @@ media helpers from :mod:`local_stream_media`, and ECDH helpers from
 :mod:`local_stream_ecdh`.
 """
 
-# ruff: noqa: F401
-
 import sys
 from typing import TYPE_CHECKING
 
-from . import _local_stream as _implementation
+from . import _local_stream as _implementation, local_stream_ecdh as _local_stream_ecdh
 from .constants import (
     LOCAL_SDK_ECDH_CONTROL_PORT,
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     LOCAL_SDK_ECDH_STREAM_PORT,
 )
-from .local_stream_ecdh import (
-    EzvizLocalSdkEcdhDataPacket,
-    EzvizLocalSdkEcdhHandshakePacket,
-    EzvizLocalSdkEcdhKeyPair,
-    EzvizLocalSdkEcdhMediaStream,
-    EzvizLocalSdkEcdhStreamDecoder,
-    EzvizLocalSdkEcdhStreamPacket,
-    build_ezviz_local_sdk_ecdh_init_request_body,
-    copy_local_sdk_ecdh_stream_from_client,
-    copy_local_sdk_ecdh_stream_to_mpegps,
-    decrypt_ezviz_local_sdk_ecdh_data_packet,
-    derive_ezviz_local_sdk_ecdh_chacha20_key,
-    derive_ezviz_local_sdk_ecdh_shared_secret,
-    ezviz_local_sdk_ecdh_chacha20_nonce,
-    generate_ezviz_local_sdk_ecdh_keypair,
-    local_ecdh_media_packet_source,
-    local_ecdh_packet_to_media_packet,
-    open_local_sdk_ecdh_stream,
-    open_local_sdk_ecdh_stream_from_client,
-    parse_ezviz_local_sdk_ecdh_data_packet,
-    parse_ezviz_local_sdk_ecdh_handshake_packet,
-    transform_ezviz_local_sdk_ecdh_nonce,
-)
 
 if TYPE_CHECKING:
+    from .local_stream_ecdh import (
+        EzvizLocalSdkEcdhDataPacket,
+        EzvizLocalSdkEcdhHandshakePacket,
+        EzvizLocalSdkEcdhKeyPair,
+        EzvizLocalSdkEcdhMediaStream,
+        EzvizLocalSdkEcdhStreamDecoder,
+        EzvizLocalSdkEcdhStreamPacket,
+        build_ezviz_local_sdk_ecdh_init_request_body,
+        copy_local_sdk_ecdh_stream_from_client,
+        copy_local_sdk_ecdh_stream_to_mpegps,
+        decrypt_ezviz_local_sdk_ecdh_data_packet,
+        derive_ezviz_local_sdk_ecdh_chacha20_key,
+        derive_ezviz_local_sdk_ecdh_shared_secret,
+        ezviz_local_sdk_ecdh_chacha20_nonce,
+        generate_ezviz_local_sdk_ecdh_keypair,
+        local_ecdh_media_packet_source,
+        local_ecdh_packet_to_media_packet,
+        open_local_sdk_ecdh_stream,
+        open_local_sdk_ecdh_stream_from_client,
+        parse_ezviz_local_sdk_ecdh_data_packet,
+        parse_ezviz_local_sdk_ecdh_handshake_packet,
+        transform_ezviz_local_sdk_ecdh_nonce,
+    )
     from .local_stream_media import (  # codeql[py/unused-import]
         LocalSdkOutputFormat,
         collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
@@ -89,7 +87,12 @@ if TYPE_CHECKING:
         open_local_sdk_stream,
         open_local_sdk_stream_from_client,
     )
-    _compatibility_exports = (
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Make compatibility re-exports visible to static analyzers."""
+
+        del exports
+
+    _declare_compatibility_exports(
         LocalSdkOutputFormat,
         collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
         collect_h264_idmx_annexb_after_first_clean_idr_window,
@@ -134,8 +137,28 @@ if TYPE_CHECKING:
         open_hcnetsdk_command_port_stream,
         open_local_sdk_stream,
         open_local_sdk_stream_from_client,
+        EzvizLocalSdkEcdhDataPacket,
+        EzvizLocalSdkEcdhHandshakePacket,
+        EzvizLocalSdkEcdhKeyPair,
+        EzvizLocalSdkEcdhMediaStream,
+        EzvizLocalSdkEcdhStreamDecoder,
+        EzvizLocalSdkEcdhStreamPacket,
+        build_ezviz_local_sdk_ecdh_init_request_body,
+        copy_local_sdk_ecdh_stream_from_client,
+        copy_local_sdk_ecdh_stream_to_mpegps,
+        decrypt_ezviz_local_sdk_ecdh_data_packet,
+        derive_ezviz_local_sdk_ecdh_chacha20_key,
+        derive_ezviz_local_sdk_ecdh_shared_secret,
+        ezviz_local_sdk_ecdh_chacha20_nonce,
+        generate_ezviz_local_sdk_ecdh_keypair,
+        local_ecdh_media_packet_source,
+        local_ecdh_packet_to_media_packet,
+        open_local_sdk_ecdh_stream,
+        open_local_sdk_ecdh_stream_from_client,
+        parse_ezviz_local_sdk_ecdh_data_packet,
+        parse_ezviz_local_sdk_ecdh_handshake_packet,
+        transform_ezviz_local_sdk_ecdh_nonce,
     )
-    del _compatibility_exports
 
 _ECDH_EXPORTS = (
     "EzvizLocalSdkEcdhDataPacket",
@@ -162,7 +185,7 @@ _ECDH_EXPORTS = (
 )
 
 for _name in _ECDH_EXPORTS:
-    setattr(_implementation, _name, globals()[_name])
+    setattr(_implementation, _name, getattr(_local_stream_ecdh, _name))
 
 for _name, _value in {
     "LOCAL_SDK_ECDH_CONTROL_PORT": LOCAL_SDK_ECDH_CONTROL_PORT,

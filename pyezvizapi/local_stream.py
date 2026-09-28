@@ -5,29 +5,12 @@ media helpers from :mod:`local_stream_media`, and ECDH helpers from
 :mod:`local_stream_ecdh`.
 """
 
-# ruff: noqa: F401, F403, PLC0414
+# ruff: noqa: F401
 
 import sys
+from typing import TYPE_CHECKING
 
 from . import _local_stream as _implementation
-from ._local_stream import *
-from ._local_stream import (
-    _decrypt_idmx_local_packets_to_adts_aac as _decrypt_idmx_local_packets_to_adts_aac,
-    _ffmpeg_h264_decode_errors as _ffmpeg_h264_decode_errors,
-    _ffmpeg_stderr_tail as _ffmpeg_stderr_tail,
-    _h264_annexb_packet_end_offsets as _h264_annexb_packet_end_offsets,
-    _hcnetsdk_command_port_media_packet as _hcnetsdk_command_port_media_packet,
-    _hcnetsdk_command_port_media_payload as _hcnetsdk_command_port_media_payload,
-    _idmx_audio_metadata as _idmx_audio_metadata,
-    _idmx_h264_packets_from_selected_annexb as _idmx_h264_packets_from_selected_annexb,
-    _idmx_hevc_annexb_packet_spans as _idmx_hevc_annexb_packet_spans,
-    _idmx_local_packets_to_annexb_with_codec as _idmx_local_packets_to_annexb_with_codec,
-    _idmx_local_video_frame_rate as _idmx_local_video_frame_rate,
-    _idmx_packets_from_selected_annexb as _idmx_packets_from_selected_annexb,
-    _iter_local_stream_payloads as _iter_local_stream_payloads,
-    _start_ffmpeg_stderr_drain as _start_ffmpeg_stderr_drain,
-    _try_first_clean_hevc_annexb_irap_window_offset as _try_first_clean_hevc_annexb_irap_window_offset,
-)
 from .constants import (
     LOCAL_SDK_ECDH_CONTROL_PORT,
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
@@ -56,6 +39,56 @@ from .local_stream_ecdh import (
     parse_ezviz_local_sdk_ecdh_handshake_packet,
     transform_ezviz_local_sdk_ecdh_nonce,
 )
+
+if TYPE_CHECKING:
+    from .local_stream_media import (
+        LocalSdkOutputFormat,
+        collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
+        collect_h264_idmx_annexb_after_first_clean_idr_window,
+        collect_idmx_annexb_after_first_clean_video_window,
+        collect_local_stream_media_packets,
+        collect_local_stream_mpegps,
+        copy_hcnetsdk_real_data_to_mpegts,
+        copy_local_stream_to_decrypted_mpegps,
+        copy_local_stream_to_decrypted_mpegts,
+        copy_local_stream_to_mpegps,
+        copy_local_stream_to_mpegts,
+        skip_h264_annexb_initial_idr_windows,
+        skip_hevc_annexb_initial_irap_windows,
+        summarize_h264_annexb_idr_windows,
+        summarize_h264_annexb_units,
+        summarize_hevc_annexb_irap_windows,
+        summarize_idmx_h264_local_packets,
+        trim_h264_annexb_to_first_clean_idr_window,
+        trim_h264_annexb_to_first_error_free_suffix,
+        trim_hevc_annexb_to_first_clean_irap_window,
+        trim_hevc_annexb_to_first_error_free_suffix,
+    )
+    from .local_stream_transport import (
+        HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
+        EzvizLocalSdkCredentials,
+        EzvizLocalSdkMediaStream,
+        EzvizLocalStreamPacket,
+        HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
+        HcNetSdkCommandPortGeneratedMultiSocketPlan,
+        HcNetSdkCommandPortGeneratedSocketStep,
+        HcNetSdkCommandPortKeepaliveEvent,
+        HcNetSdkCommandPortMediaStream,
+        HcNetSdkCommandPortMultiSocketMediaStream,
+        HcNetSdkCommandPortMultiSocketPlan,
+        HcNetSdkCommandPortSocketStep,
+        copy_local_sdk_stream_from_client,
+        get_local_sdk_stream_credentials_from_client,
+        hcnetsdk_command_port_generated_plan_from_socket_plan,
+        hcnetsdk_command_port_native_lan_live_view_plan,
+        local_media_packet_source,
+        local_stream_packet_to_media_packet,
+        open_hcnetsdk_command_port_generated_multi_socket_stream,
+        open_hcnetsdk_command_port_multi_socket_stream,
+        open_hcnetsdk_command_port_stream,
+        open_local_sdk_stream,
+        open_local_sdk_stream_from_client,
+    )
 
 _ECDH_EXPORTS = (
     "EzvizLocalSdkEcdhDataPacket",

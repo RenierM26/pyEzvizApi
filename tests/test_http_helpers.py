@@ -11,6 +11,12 @@ from typing import Any, BinaryIO, cast
 import pytest
 import requests
 
+from pyezvizapi._local_stream import (
+    HcNetSdkCommandPortMultiSocketPlan,
+    HcNetSdkCommandPortSocketStep,
+    _iter_local_stream_payloads,
+    local_media_packet_source,
+)
 from pyezvizapi.api_endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
@@ -30,12 +36,6 @@ from pyezvizapi.exceptions import (
     EzvizAuthVerificationCode,
     HTTPError,
     PyEzvizError,
-)
-from pyezvizapi.local_stream import (
-    HcNetSdkCommandPortMultiSocketPlan,
-    HcNetSdkCommandPortSocketStep,
-    _iter_local_stream_payloads,
-    local_media_packet_source,
 )
 from pyezvizapi.media import (
     CaptureLimits,

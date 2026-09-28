@@ -3070,6 +3070,10 @@ class EzvizClient:
 
         if output_format is None:
             output_format = "mpegps" if source == "local-sdk-ecdh" else "mpegts"
+        mux_options = MediaMuxOptions(
+            output_format=output_format,
+            ffmpeg_path=ffmpeg_path,
+        )
 
         source_options: ClipSourceOptions
         if source == "local-sdk":
@@ -3118,6 +3122,18 @@ class EzvizClient:
                 if hcnetsdk_video_clean_window_wait_seconds is None
                 else hcnetsdk_video_clean_window_wait_seconds
             )
+            mux_options = MediaMuxOptions(
+                output_format=output_format,
+                ffmpeg_path=ffmpeg_path,
+                h264_skip_initial_idr_windows=(
+                    hcnetsdk_h264_skip_initial_idr_windows
+                ),
+                h264_trim_to_clean_idr_window=trim_to_clean_window,
+                h264_clean_idr_preroll_seconds=clean_window_preroll_seconds,
+                h264_clean_idr_max_windows=clean_window_max_windows,
+                h264_wait_for_clean_idr_window=wait_for_clean_window,
+                h264_clean_idr_wait_seconds=clean_window_wait_seconds,
+            )
             source_options = HcNetSdkCommandPortClipSource(
                 timeout=timeout,
                 host=host,
@@ -3155,30 +3171,7 @@ class EzvizClient:
                     media_key=media_key,
                     nalu_header_size=nalu_header_size,
                 ),
-                mux=MediaMuxOptions(
-                    output_format=output_format,
-                    ffmpeg_path=ffmpeg_path,
-                    h264_skip_initial_idr_windows=(
-                        hcnetsdk_h264_skip_initial_idr_windows
-                        if source == "hcnetsdk-command-port"
-                        else 0
-                    ),
-                    h264_trim_to_clean_idr_window=(
-                        trim_to_clean_window if source == "hcnetsdk-command-port" else False
-                    ),
-                    h264_clean_idr_preroll_seconds=(
-                        clean_window_preroll_seconds if source == "hcnetsdk-command-port" else 0.0
-                    ),
-                    h264_clean_idr_max_windows=(
-                        clean_window_max_windows if source == "hcnetsdk-command-port" else 32
-                    ),
-                    h264_wait_for_clean_idr_window=(
-                        wait_for_clean_window if source == "hcnetsdk-command-port" else False
-                    ),
-                    h264_clean_idr_wait_seconds=(
-                        clean_window_wait_seconds if source == "hcnetsdk-command-port" else 60.0
-                    ),
-                ),
+                mux=mux_options,
                 channel=channel,
             ),
         )

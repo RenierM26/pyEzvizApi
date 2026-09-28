@@ -13,17 +13,7 @@ import pytest
 import requests
 
 import pyezvizapi
-from pyezvizapi.client import EzvizClient
-from pyezvizapi.cloud_stream import (
-    copy_cloud_stream_to_mpegps,
-    copy_cloud_stream_to_mpegts,
-    get_cloud_stream_info,
-    get_vtdu_token_v2,
-    get_vtm_info,
-    open_cloud_stream,
-)
-from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
-from pyezvizapi.stream import (
+from pyezvizapi._stream import (
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
     VtmChannel,
@@ -56,6 +46,16 @@ from pyezvizapi.stream import (
     rtp_payload,
     summarize_vtm_packet,
 )
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.cloud_stream import (
+    copy_cloud_stream_to_mpegps,
+    copy_cloud_stream_to_mpegts,
+    get_cloud_stream_info,
+    get_vtdu_token_v2,
+    get_vtm_info,
+    open_cloud_stream,
+)
+from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
 
 BODY = b"abc"
 cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")

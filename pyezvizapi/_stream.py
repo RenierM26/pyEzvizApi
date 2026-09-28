@@ -1424,8 +1424,10 @@ def detect_hikvision_ps_video_nalu_header_size(
                     data[header_pos] & 0x1F,
                 )
             if header_pos + AES.block_size <= payload_end:
-                cipher = _hikvision_aes_ecb_cipher(aes_key)
-                decrypted_header = cipher.decrypt(
+                cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+                    aes_key
+                )
+                decrypted_header = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
                     bytes(data[header_pos : header_pos + AES.block_size]),
                 )
                 first_byte = decrypted_header[0]
@@ -1534,8 +1536,10 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
             encrypted_header = start_code_pos + start_code_len
             if encrypted_header + AES.block_size > end:
                 continue
-            cipher = _hikvision_aes_ecb_cipher(aes_key)
-            decrypted_header = cipher.decrypt(
+            cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+                aes_key
+            )
+            decrypted_header = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
                 bytes(data[encrypted_header : encrypted_header + AES.block_size])
             )
             first_byte = decrypted_header[0]
@@ -1582,8 +1586,12 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 active_nal_decrypted += 1
                 if len(pending_block) != AES.block_size:
                     continue
-                cipher = _hikvision_aes_ecb_cipher(aes_key)
-                decrypted = cipher.decrypt(bytes(pending_block))
+                cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+                    aes_key
+                )
+                decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
+                    bytes(pending_block)
+                )
                 for block_pos, decrypted_byte in zip(
                     pending_block_positions,
                     decrypted,
@@ -1690,8 +1698,12 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 active_nal_decrypted += 1
                 if len(pending_block) != AES.block_size:
                     continue
-                cipher = _hikvision_aes_ecb_cipher(aes_key)
-                decrypted = cipher.decrypt(bytes(pending_block))
+                cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+                    aes_key
+                )
+                decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
+                    bytes(pending_block)
+                )
                 for block_pos, decrypted_byte in zip(
                     pending_block_positions,
                     decrypted,
@@ -1704,8 +1716,10 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
         def starts_plausible_encrypted_nal(start: int, end: int) -> bool:
             if end - start < AES.block_size:
                 return False
-            cipher = _hikvision_aes_ecb_cipher(aes_key)
-            decrypted_header = cipher.decrypt(
+            cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+                aes_key
+            )
+            decrypted_header = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm]
                 bytes(payload_output[start : start + AES.block_size])
             )
             h264_nal_type = decrypted_header[0] & 0x1F
@@ -2188,3 +2202,6 @@ def _maybe_int(value: int | str | None) -> int | None:
 
 def _maybe_str(value: int | str | None) -> str | None:
     return value if isinstance(value, str) else None
+
+
+__all__ = [name for name in globals() if not name.startswith("_")]

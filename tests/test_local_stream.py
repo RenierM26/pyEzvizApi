@@ -6870,6 +6870,20 @@ def test_idmx_incomplete_h264_fu_is_not_mislabeled_as_hevc() -> None:
         _idmx_local_packets_to_annexb_with_codec([frame])
 
 
+def test_idmx_ordinary_hevc_slice_is_not_mislabeled_as_h264() -> None:
+    payload = b"\x02\x01ordinary-hevc-slice"
+    rtp = (
+        b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+        + payload
+    )
+    frame = len(rtp).to_bytes(4, "little") + rtp
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec([frame])
+
+    assert codec == "hevc"
+    assert annexb == b"\x00\x00\x00\x01" + payload
+
+
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(
     tmp_path,
 ) -> None:

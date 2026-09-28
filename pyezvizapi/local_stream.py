@@ -6191,6 +6191,11 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is None or packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
             continue
+        if not (
+            _looks_like_idmx_h264_fu_a_frame(packet.payload)
+            or _looks_like_idmx_h264_clear_nal(packet.payload)
+        ):
+            continue
         for nal in depacketizer.push(packet):
             _append_h264_nal(output, nal)
     if not output:

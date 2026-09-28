@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from threading import RLock
@@ -3168,7 +3169,8 @@ class EzvizClient:
                 ),
                 duration_seconds=(
                     duration_seconds
-                    if duration_seconds is None or duration_seconds > 0
+                    if duration_seconds is None
+                    or (duration_seconds > 0 and math.isfinite(duration_seconds))
                     else None
                 ),
             ),
@@ -3181,7 +3183,8 @@ class EzvizClient:
             channel=channel,
         )
         if (max_packets is not None and max_packets <= 0) or (
-            duration_seconds is not None and duration_seconds <= 0
+            duration_seconds is not None
+            and (duration_seconds <= 0 or not math.isfinite(duration_seconds))
         ):
             clip_options = _LegacyClipOptions.from_options(
                 clip_options,

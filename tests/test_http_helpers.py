@@ -2937,7 +2937,7 @@ def test_save_clip_with_options_rejects_source_incompatible_mux_options() -> Non
 
 @pytest.mark.parametrize(
     ("max_packets", "duration_seconds"),
-    [(0, 10.0), (None, 0.0)],
+    [(0, 10.0), (None, 0.0), (1, float("inf"))],
 )
 def test_save_clip_preserves_legacy_nonpositive_capture_limits(
     monkeypatch,

@@ -211,6 +211,51 @@ def test_copy_remuxed_output_preserves_consumer_disconnect_and_cancels_input() -
     assert process.terminated is True
 
 
+def test_consumer_disconnect_terminates_ffmpeg_before_cross_thread_stdin_close() -> None:
+    process = _FakeStreamingProcess(stdout=TRANSPORT_STREAM, return_code=None)
+    terminated = Event()
+    write_started = Event()
+    close_after_terminate = Event()
+
+    class BlockingInput(io.BytesIO):
+        def write(self, _data: Any) -> int:
+            write_started.set()
+            terminated.wait(timeout=1)
+            raise BrokenPipeError
+
+        def close(self) -> None:
+            if not terminated.is_set():
+                raise AssertionError("stdin closed before FFmpeg terminated")
+            close_after_terminate.set()
+            super().close()
+
+    class BrokenOutput(io.BytesIO):
+        def write(self, _data: Any) -> int:
+            write_started.wait(timeout=1)
+            raise BrokenPipeError("consumer disconnected")
+
+    process.stdin = BlockingInput()
+    original_terminate = process.terminate
+
+    def terminate() -> None:
+        original_terminate()
+        terminated.set()
+
+    def write_input(stdin: Any) -> None:
+        stdin.write(PROGRAM_STREAM)
+
+    process.terminate = terminate  # type: ignore[method-assign]
+
+    with pytest.raises(BrokenPipeError, match="consumer disconnected"):
+        copy_remuxed_output(
+            _as_popen(process),
+            BrokenOutput(),
+            write_input=write_input,
+        )
+
+    assert close_after_terminate.is_set()
+
+
 def test_copy_remuxed_output_cancels_stalled_source_after_ffmpeg_exit() -> None:
     process = _FakeStreamingProcess(return_code=4, stderr=b"bad input")
     cancelled = Event()

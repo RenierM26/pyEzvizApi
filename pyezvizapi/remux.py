@@ -199,8 +199,6 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
         if cancel_input is not None and input_cancelled:
             with suppress(Exception):
                 cancel_input()
-        with suppress(OSError):
-            stdin.close()
         return_code, terminated = _wait_for_process(process)
         if cancel_input is not None and terminated and not input_cancelled:
             with suppress(Exception):
@@ -210,6 +208,9 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
             with suppress(Exception):
                 cancel_input()
             writer.join(timeout=FFMPEG_STOP_TIMEOUT_SECONDS)
+        if not writer.is_alive():
+            with suppress(OSError):
+                stdin.close()
         if stderr_reader is not None:
             stderr_reader.join(timeout=FFMPEG_STOP_TIMEOUT_SECONDS)
         with suppress(OSError):

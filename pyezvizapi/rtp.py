@@ -173,7 +173,12 @@ def detect_rtp_video_codec(
 
 
 class RtpVideoDepacketizer:
-    """Reassemble H.264 or HEVC NAL units while enforcing RTP continuity."""
+    """Reassemble H.264 or HEVC NAL units while enforcing RTP continuity.
+
+    ``allow_ezviz_headerless_hevc_fu`` accepts the non-standard continuation
+    layout observed on local IDMX streams. Keep the strict default for ordinary
+    RTP sources, where a changed FU NAL type invalidates the active fragment.
+    """
 
     def __init__(
         self,

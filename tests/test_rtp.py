@@ -120,7 +120,9 @@ def test_codec_detection_rejects_only_ambiguous_packets() -> None:
     ("codec", "start", "truncated", "end"),
     [
         ("h264", b"\x7c\x85start", b"\x7c", b"\x7c\x45end"),
+        ("h264", b"\x7c\x85start", b"\x00corrupt", b"\x7c\x45end"),
         ("hevc", b"\x62\x01\x93start", b"\x62", b"\x62\x01\x53end"),
+        ("hevc", b"\x62\x01\x93start", b"\x00", b"\x62\x01\x53end"),
     ],
 )
 def test_truncated_fu_discards_active_fragment(

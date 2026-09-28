@@ -232,6 +232,7 @@ class RtpVideoDepacketizer:
     def _push_h264(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
         payload = packet.payload
         if not payload:
+            self._discard_fragment(packet.ssrc)
             return ()
         nal_type = payload[0] & 0x1F
         if 1 <= nal_type <= 23:
@@ -241,6 +242,7 @@ class RtpVideoDepacketizer:
             self._discard_fragment(packet.ssrc)
             return _aggregation_units(payload, header_size=1)
         if nal_type != 28:
+            self._discard_fragment(packet.ssrc)
             return ()
         if len(payload) < 2:
             self._discard_fragment(packet.ssrc)
@@ -272,12 +274,14 @@ class RtpVideoDepacketizer:
     def _push_hevc(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
         payload = packet.payload
         if not payload:
+            self._discard_fragment(packet.ssrc)
             return ()
         nal_type = (payload[0] >> 1) & 0x3F
         if nal_type == 49 and len(payload) < 3:
             self._discard_fragment(packet.ssrc)
             return ()
         if len(payload) < 2:
+            self._discard_fragment(packet.ssrc)
             return ()
         if nal_type == 48:
             self._discard_fragment(packet.ssrc)

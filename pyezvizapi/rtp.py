@@ -175,8 +175,14 @@ def detect_rtp_video_codec(
 class RtpVideoDepacketizer:
     """Reassemble H.264 or HEVC NAL units while enforcing RTP continuity."""
 
-    def __init__(self, codec: RtpVideoCodec) -> None:
+    def __init__(
+        self,
+        codec: RtpVideoCodec,
+        *,
+        allow_ezviz_headerless_hevc_fu: bool = False,
+    ) -> None:
         self.codec = codec
+        self.allow_ezviz_headerless_hevc_fu = allow_ezviz_headerless_hevc_fu
         self.stats = RtpContinuityStats()
         self._last_sequence_by_ssrc: dict[int, int] = {}
         self._last_identity_by_ssrc: dict[int, tuple[int, int, bool, bytes]] = {}
@@ -318,8 +324,14 @@ class RtpVideoDepacketizer:
             original_type = fu_header & 0x3F
             active_type = (fragment.data[0] >> 1) & 0x3F
             active_header0 = fragment.data[0]
-            has_pseudo_header = fu_header in {active_header0, active_header0 | 0x40}
+            has_pseudo_header = (
+                self.allow_ezviz_headerless_hevc_fu
+                and fu_header in {active_header0, active_header0 | 0x40}
+            )
             has_fu_header = original_type == active_type or has_pseudo_header
+            if not has_fu_header and not self.allow_ezviz_headerless_hevc_fu:
+                self._discard_fragment(packet.ssrc)
+                return ()
             fragment.data.extend(payload[3:] if has_fu_header else payload[2:])
             fragment.last_sequence = packet.sequence
             is_end = is_end if has_fu_header else packet.marker

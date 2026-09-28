@@ -6230,7 +6230,10 @@ def _idmx_local_packets_to_hevc_annexb(
     trim_trailing_non_vcl: bool = True,
 ) -> bytes:
     output = bytearray()
-    depacketizer = RtpVideoDepacketizer("hevc")
+    depacketizer = RtpVideoDepacketizer(
+        "hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+    )
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
@@ -6252,7 +6255,10 @@ def _idmx_local_packets_to_hevc_annexb(
 
 def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     output = bytearray()
-    depacketizer = RtpVideoDepacketizer("hevc")
+    depacketizer = RtpVideoDepacketizer(
+        "hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+    )
     end_offsets: list[int] = []
     for packet in packets:
         for frame in _iter_idmx_local_packet_frame(packet):

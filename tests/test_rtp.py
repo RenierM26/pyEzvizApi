@@ -121,6 +121,20 @@ def test_h264_fu_type_change_invalidates_active_fragment() -> None:
     assert depacketizer.stats.discarded_fragments >= 2
 
 
+def test_hevc_fu_type_change_invalidates_active_fragment() -> None:
+    depacketizer = RtpVideoDepacketizer("hevc")
+    packets = [
+        parse_rtp_packet(_rtp(b"\x62\x01\x93start-type-19", sequence=1)),
+        parse_rtp_packet(_rtp(b"\x62\x01\x01middle-type-1", sequence=2)),
+        parse_rtp_packet(
+            _rtp(b"\x62\x01\x53end-type-19", sequence=3, marker=True)
+        ),
+    ]
+
+    assert [nal for packet in packets for nal in depacketizer.push(packet)] == []
+    assert depacketizer.stats.discarded_fragments >= 2
+
+
 def test_timestamp_change_discards_incomplete_fu() -> None:
     depacketizer = RtpVideoDepacketizer("hevc")
     start = parse_rtp_packet(_rtp(b"\x62\x01\x93start", sequence=1, timestamp=10))

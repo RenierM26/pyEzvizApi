@@ -24,7 +24,7 @@ from .media import (
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
 )
-from .rtp import rtp_payload  # noqa: F401
+from .rtp import rtp_payload as _rtp_payload
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
@@ -46,6 +46,12 @@ CLOUD_REPLAY_HEARTBEAT_CMD = 0x5010
 CLOUD_REPLAY_HEADER_SIZE = 32
 XML_PREFIX = b"<?xml"
 _XML_END_RE = re.compile(br"</(Request|Response)>")
+
+
+def rtp_payload(data: bytes) -> bytes:
+    """Compatibility wrapper for the shared RTP parser."""
+
+    return _rtp_payload(data)
 
 
 def _ezviz_md5_hex(data: bytes) -> str:

@@ -101,3 +101,51 @@ class ClipOptions:
         if isinstance(self.source, LocalSdkEcdhClipSource):
             return MediaMuxOptions(output_format="mpegps")
         return MediaMuxOptions()
+
+    @property
+    def max_packets(self) -> int | None:
+        """Return the configured packet bound."""
+
+        return self.capture.max_packets
+
+    @property
+    def duration_seconds(self) -> float | None:
+        """Return the configured duration bound."""
+
+        return self.capture.duration_seconds
+
+
+@dataclass(frozen=True)
+class _LegacyClipOptions(ClipOptions):
+    """Compatibility carrier for historically accepted nonpositive limits."""
+
+    legacy_max_packets: int | None = None
+    legacy_duration_seconds: float | None = None
+
+    @classmethod
+    def from_options(
+        cls,
+        options: ClipOptions,
+        *,
+        max_packets: int | None,
+        duration_seconds: float | None,
+    ) -> _LegacyClipOptions:
+        """Copy public options while retaining raw legacy capture bounds."""
+
+        return cls(
+            source=options.source,
+            capture=options.capture,
+            decode=options.decode,
+            mux=options.mux,
+            channel=options.channel,
+            legacy_max_packets=max_packets,
+            legacy_duration_seconds=duration_seconds,
+        )
+
+    @property
+    def max_packets(self) -> int | None:
+        return self.legacy_max_packets
+
+    @property
+    def duration_seconds(self) -> float | None:
+        return self.legacy_duration_seconds

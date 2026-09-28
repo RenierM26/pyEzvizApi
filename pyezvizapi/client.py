@@ -143,6 +143,7 @@ from .clip import (
     HcNetSdkCommandPortClipSource,
     LocalSdkClipSource,
     LocalSdkEcdhClipSource,
+    _LegacyClipOptions,
 )
 from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
 from .constants import (
@@ -3157,24 +3158,37 @@ class EzvizClient:
         else:
             raise PyEzvizError(f"Unsupported clip source: {source}")
 
-        return self.save_clip_with_options(
-            serial,
-            output,
-            ClipOptions(
-                source=source_options,
-                capture=CaptureLimits(
-                    max_packets=max_packets,
-                    duration_seconds=duration_seconds,
+        clip_options = ClipOptions(
+            source=source_options,
+            capture=CaptureLimits(
+                max_packets=(
+                    max_packets
+                    if max_packets is None or max_packets > 0
+                    else None
                 ),
-                decode=MediaDecodeOptions(
-                    decrypt_video=decrypt_video,
-                    media_key=media_key,
-                    nalu_header_size=nalu_header_size,
+                duration_seconds=(
+                    duration_seconds
+                    if duration_seconds is None or duration_seconds > 0
+                    else None
                 ),
-                mux=mux_options,
-                channel=channel,
             ),
+            decode=MediaDecodeOptions(
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+            ),
+            mux=mux_options,
+            channel=channel,
         )
+        if (max_packets is not None and max_packets <= 0) or (
+            duration_seconds is not None and duration_seconds <= 0
+        ):
+            clip_options = _LegacyClipOptions.from_options(
+                clip_options,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+            )
+        return self.save_clip_with_options(serial, output, clip_options)
 
     def save_clip_with_options(
         self,
@@ -3193,7 +3207,6 @@ class EzvizClient:
             )
 
         source = options.source
-        capture = options.capture
         decode = options.decode
         mux = options.resolved_mux()
         default_mux = MediaMuxOptions()
@@ -3216,8 +3229,8 @@ class EzvizClient:
                 serial,
                 output,
                 output_format=mux.output_format,
-                duration_seconds=capture.duration_seconds,
-                max_packets=capture.max_packets,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
                 channel=options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,
@@ -3234,8 +3247,8 @@ class EzvizClient:
                 serial,
                 output,
                 output_format=mux.output_format,
-                duration_seconds=capture.duration_seconds,
-                max_packets=capture.max_packets,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
                 max_frames=source.max_frames,
                 channel=options.channel,
                 cas_serial=source.cas_serial,
@@ -3256,8 +3269,8 @@ class EzvizClient:
                 serial,
                 output,
                 output_format=mux.output_format,
-                duration_seconds=capture.duration_seconds,
-                max_packets=capture.max_packets,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
                 channel=options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,
@@ -3285,8 +3298,8 @@ class EzvizClient:
                 serial,
                 output,
                 output_format=mux.output_format,
-                duration_seconds=capture.duration_seconds,
-                max_packets=capture.max_packets,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
                 channel=options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,

@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 from . import _stream as _implementation
 
 if TYPE_CHECKING:
-    from .rtp import rtp_payload
-    from .stream_media import (
+    from .rtp import rtp_payload  # codeql[py/unused-import]
+    from .stream_media import (  # codeql[py/unused-import]
         HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
         decrypt_hikvision_ps_video,
         detect_hikvision_ps_video_nalu_header_size,
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
         mpeg_ps_complete_prefix_length,
         mpeg_ps_decryptable_prefix_length,
     )
-    from .stream_transport import (
+    from .stream_transport import (  # codeql[py/unused-import]
         StopStreamResponse,
         StreamInfoResponse,
         StreamTransport,

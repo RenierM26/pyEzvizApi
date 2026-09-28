@@ -41,7 +41,7 @@ from .local_stream_ecdh import (
 )
 
 if TYPE_CHECKING:
-    from .local_stream_media import (
+    from .local_stream_media import (  # codeql[py/unused-import]
         LocalSdkOutputFormat,
         collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window,
         collect_h264_idmx_annexb_after_first_clean_idr_window,
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
         trim_hevc_annexb_to_first_clean_irap_window,
         trim_hevc_annexb_to_first_error_free_suffix,
     )
-    from .local_stream_transport import (
+    from .local_stream_transport import (  # codeql[py/unused-import]
         HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
         EzvizLocalSdkCredentials,
         EzvizLocalSdkMediaStream,

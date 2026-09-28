@@ -279,7 +279,8 @@ class RtpVideoDepacketizer:
             if fragment is None:
                 self.stats.discarded_fragments += 1
                 return ()
-            if fu_header & 0x1F != fragment.data[0] & 0x1F:
+            reconstructed_header = (payload[0] & 0xE0) | (fu_header & 0x1F)
+            if reconstructed_header != fragment.data[0]:
                 self._discard_fragment(packet.ssrc)
                 return ()
             fragment.data.extend(payload[2:])

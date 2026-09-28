@@ -79,6 +79,20 @@ def test_h264_depacketizer_accepts_sequence_wrap() -> None:
     assert rtp_packets_to_annexb(packets, codec="h264") == H264_WRAPPED_NAL
 
 
+def test_sequence_collision_invalidates_active_fragment() -> None:
+    depacketizer = RtpVideoDepacketizer("h264")
+    packets = [
+        parse_rtp_packet(_rtp(b"\x7c\x85start", sequence=1)),
+        parse_rtp_packet(_rtp(b"\x7c\x05middle", sequence=2)),
+        parse_rtp_packet(_rtp(b"\x7c\x05altered", sequence=2)),
+        parse_rtp_packet(_rtp(b"\x7c\x45end", sequence=3)),
+    ]
+
+    assert [nal for packet in packets for nal in depacketizer.push(packet)] == []
+    assert depacketizer.stats.sequence_conflicts == 1
+    assert depacketizer.stats.discarded_fragments >= 2
+
+
 def test_timestamp_change_discards_incomplete_fu() -> None:
     depacketizer = RtpVideoDepacketizer("hevc")
     start = parse_rtp_packet(_rtp(b"\x62\x01\x93start", sequence=1, timestamp=10))

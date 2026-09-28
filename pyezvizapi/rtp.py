@@ -36,6 +36,7 @@ class RtpContinuityStats:
     """Observable discontinuities rejected by an RTP video depacketizer."""
 
     duplicates: int = 0
+    sequence_conflicts: int = 0
     reordered: int = 0
     sequence_gaps: int = 0
     timestamp_changes: int = 0
@@ -187,6 +188,9 @@ class RtpVideoDepacketizer:
         continuity = self._continuity(packet)
         if continuity in {"duplicate", "reordered"}:
             return ()
+        if continuity == "conflict":
+            self._discard_fragment(packet.ssrc)
+            return ()
         if continuity == "gap":
             self._discard_fragment(packet.ssrc)
 
@@ -213,8 +217,8 @@ class RtpVideoDepacketizer:
             if self._last_identity_by_ssrc.get(packet.ssrc) == identity:
                 self.stats.duplicates += 1
                 return "duplicate"
-            self._last_identity_by_ssrc[packet.ssrc] = identity
-            return "next"
+            self.stats.sequence_conflicts += 1
+            return "conflict"
         if delta >= 0x8000:
             self.stats.reordered += 1
             return "reordered"

@@ -177,6 +177,7 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
         try:
             write_input(cast(BinaryIO, stdin))
         except (BrokenPipeError, ConnectionResetError):
+            # FFmpeg may close stdin after producing all output the caller needs.
             pass
         except Exception as err:  # pragma: no cover - defensive thread handoff
             writer_errors.append(err)

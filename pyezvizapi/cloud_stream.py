@@ -5,11 +5,9 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterator
-from contextlib import suppress
 from dataclasses import dataclass
 import json
 import subprocess
-from threading import Thread
 import time
 from typing import Any, BinaryIO, TypedDict, cast
 from urllib.parse import urlparse
@@ -17,6 +15,7 @@ from urllib.parse import urlparse
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError
+from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .stream import (
     SocketFactory,
     VtmStreamClient,
@@ -481,54 +480,23 @@ def _copy_cloud_stream_payloads_to_mpegts(
     """Pipe clear VTM MPEG-PS payloads through FFmpeg and write MPEG-TS."""
 
     process = _open_cloud_mpegts_remux_process(ffmpeg_path)
-    stdin = process.stdin
-    stdout = process.stdout
-    if stdin is None or stdout is None:
-        raise PyEzvizError("Could not open FFmpeg pipes")
 
-    writer_errors: list[Exception] = []
+    def _write_input(stdin: BinaryIO) -> None:
+        _write_cloud_stream_payloads(
+            stream,
+            stdin,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+            flush_each=True,
+        )
 
-    def _write_input() -> None:
-        try:
-            _write_cloud_stream_payloads(
-                stream,
-                cast(BinaryIO, stdin),
-                max_packets=max_packets,
-                duration_seconds=duration_seconds,
-                monotonic=monotonic,
-                flush_each=True,
-            )
-        except (BrokenPipeError, ConnectionResetError):
-            return
-        except Exception as err:  # pragma: no cover - defensive thread handoff
-            writer_errors.append(err)
-        finally:
-            with suppress(OSError):
-                stdin.close()
-
-    writer = Thread(target=_write_input, daemon=True)
-    writer.start()
-    try:
-        while True:
-            chunk = stdout.read(65536)
-            if not chunk:
-                break
-            output.write(chunk)
-            output.flush()
-    finally:
-        if process.poll() is None:
-            process.terminate()
-        writer.join(timeout=2)
-        try:
-            return_code = process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait()
-
-    if writer_errors:
-        raise writer_errors[0]
-    if return_code not in (0, -15):
-        raise PyEzvizError(f"FFmpeg exited with status {return_code}")
+    copy_remuxed_output(
+        process,
+        output,
+        write_input=_write_input,
+        cancel_input=getattr(stream, "close", None),
+    )
 
 
 def _remux_cloud_mpegps_bytes_to_mpegts(
@@ -540,39 +508,13 @@ def _remux_cloud_mpegps_bytes_to_mpegts(
     """Remux in-memory MPEG-PS bytes to MPEG-TS."""
 
     process = _open_cloud_mpegts_remux_process(ffmpeg_path)
-    stdout, _stderr = process.communicate(data)
-    if process.returncode != 0:
-        raise PyEzvizError(f"FFmpeg exited with status {process.returncode}")
-    output.write(stdout)
-    output.flush()
+    remux_bytes(process, data, output)
 
 
 def _open_cloud_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
     """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS."""
 
-    try:
-        return subprocess.Popen(
-            [
-                ffmpeg_path,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "mpeg",
-                "-i",
-                "pipe:0",
-                "-c",
-                "copy",
-                "-f",
-                "mpegts",
-                "pipe:1",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as err:
-        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    return open_mpegts_remux_process(ffmpeg_path, popen=subprocess.Popen)
 
 
 def parse_vtm_server_public_key(vtm: JsonDict) -> VtmServerPublicKey | None:

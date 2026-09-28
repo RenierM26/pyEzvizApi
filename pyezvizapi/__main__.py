@@ -19,7 +19,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from threading import Thread
 import time
 from typing import Any, BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
@@ -77,6 +76,7 @@ from .local_stream_ecdh import (
     copy_local_sdk_ecdh_stream_to_media,
     open_local_sdk_ecdh_stream,
 )
+from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     detect_rtp_video_codec,
     parse_rtp_packet,
@@ -3197,11 +3197,7 @@ def _remux_elementary_video_bytes_to_mpegts(
     """Remux Annex B HEVC/H.264 elementary stream bytes to MPEG-TS."""
 
     process = _open_mpegts_remux_process(ffmpeg_path, input_format=codec)
-    stdout, _stderr = process.communicate(data)
-    if process.returncode != 0:
-        raise PyEzvizError(f"FFmpeg exited with status {process.returncode}")
-    output.write(stdout)
-    output.flush()
+    remux_bytes(process, data, output)
 
 
 def _decrypt_stream_payload_bytes(
@@ -3307,11 +3303,7 @@ def _remux_mpegps_bytes_to_mpegts(
     """Remux in-memory MPEG-PS bytes to MPEG-TS."""
 
     process = _open_mpegts_remux_process(ffmpeg_path)
-    stdout, _stderr = process.communicate(data)
-    if process.returncode != 0:
-        raise PyEzvizError(f"FFmpeg exited with status {process.returncode}")
-    output.write(stdout)
-    output.flush()
+    remux_bytes(process, data, output)
 
 
 def _remux_stream_payloads_to_mpegts(
@@ -3343,29 +3335,11 @@ def _open_mpegts_remux_process(
 ) -> subprocess.Popen[bytes]:
     """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS stdout."""
 
-    try:
-        return subprocess.Popen(
-            [
-                ffmpeg_path,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                input_format,
-                "-i",
-                "pipe:0",
-                "-c",
-                "copy",
-                "-f",
-                "mpegts",
-                "pipe:1",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as err:
-        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    return open_mpegts_remux_process(
+        ffmpeg_path,
+        input_format=input_format,
+        popen=subprocess.Popen,
+    )
 
 
 def _copy_stream_payloads_to_mpegts(
@@ -3380,55 +3354,23 @@ def _copy_stream_payloads_to_mpegts(
 ) -> None:
     """Copy stream payloads through an already-started FFmpeg remuxer."""
 
-    stdin = process.stdin
-    stdout = process.stdout
-    if stdin is None or stdout is None:
-        raise PyEzvizError("Could not open FFmpeg pipes")
+    def _write_input(stdin: BinaryIO) -> None:
+        _write_stream_payloads(
+            stream,
+            stdin,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+            allow_encrypted=allow_encrypted,
+            transform_payload=transform_payload,
+            flush_each=True,
+        )
 
-    writer_errors: list[Exception] = []
-
-    def _write_input() -> None:
-        try:
-            _write_stream_payloads(
-                stream,
-                cast(BinaryIO, stdin),
-                max_packets=max_packets,
-                duration_seconds=duration_seconds,
-                allow_encrypted=allow_encrypted,
-                transform_payload=transform_payload,
-                flush_each=True,
-            )
-        except (BrokenPipeError, ConnectionResetError):
-            _LOGGER.debug("FFmpeg closed its input pipe")
-        except Exception as err:  # pragma: no cover - defensive thread handoff
-            writer_errors.append(err)
-        finally:
-            with suppress(OSError):
-                stdin.close()
-
-    writer = Thread(target=_write_input, daemon=True)
-    writer.start()
-    try:
-        while True:
-            chunk = stdout.read(65536)
-            if not chunk:
-                break
-            output.write(chunk)
-            output.flush()
-    finally:
-        if process.poll() is None:
-            process.terminate()
-        writer.join(timeout=2)
-        try:
-            return_code = process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait()
-
-    if writer_errors:
-        raise writer_errors[0]
-    if return_code not in (0, -15):
-        raise PyEzvizError(f"FFmpeg exited with status {return_code}")
+    copy_remuxed_output(
+        process,
+        output,
+        write_input=_write_input,
+        cancel_input=getattr(stream, "close", None),
+    )
 
 
 def _default_stream_proxy_path(serial: str) -> str:

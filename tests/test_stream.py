@@ -3069,11 +3069,32 @@ def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
             )
 
     class FakeRemuxProcess:
-        returncode = 0
+        def __init__(self) -> None:
+            class RecordingInput(io.BytesIO):
+                def close(self) -> None:
+                    if self.closed:
+                        return
+                    calls["remux_input"] = self.getvalue()
+                    super().close()
 
-        def communicate(self, data: bytes) -> tuple[bytes, bytes]:
-            calls["remux_input"] = data
-            return (b"ts:" + data, b"")
+            self.stdin = RecordingInput()
+            self.stdout = io.BytesIO(expected_payload)
+            self.stderr = io.BytesIO()
+            self.returncode = 0
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
 
     def fake_decrypt(
         data: bytes,
@@ -3190,7 +3211,7 @@ def test_open_cloud_mpegts_remux_process_builds_ffmpeg_command(monkeypatch) -> N
             ],
             "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,
-            "stderr": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
         }
     ]
 

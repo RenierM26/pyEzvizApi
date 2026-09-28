@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import datetime as dt
 import io
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
@@ -2937,7 +2938,7 @@ def test_save_clip_with_options_rejects_source_incompatible_mux_options() -> Non
 
 @pytest.mark.parametrize(
     ("max_packets", "duration_seconds"),
-    [(0, 10.0), (None, 0.0), (1, float("inf"))],
+    [(0, 10.0), (None, 0.0), (1, float("inf")), (cast(Any, float("nan")), None)],
 )
 def test_save_clip_preserves_legacy_nonpositive_capture_limits(
     monkeypatch,
@@ -2965,7 +2966,10 @@ def test_save_clip_preserves_legacy_nonpositive_capture_limits(
     )
 
     assert result == {"ok": True}
-    assert calls[0]["max_packets"] == max_packets
+    if max_packets is not None and math.isnan(max_packets):
+        assert math.isnan(calls[0]["max_packets"])
+    else:
+        assert calls[0]["max_packets"] == max_packets
     assert calls[0]["duration_seconds"] == duration_seconds
 
 

@@ -3164,7 +3164,8 @@ class EzvizClient:
             capture=CaptureLimits(
                 max_packets=(
                     max_packets
-                    if max_packets is None or max_packets > 0
+                    if max_packets is None
+                    or (max_packets > 0 and math.isfinite(max_packets))
                     else None
                 ),
                 duration_seconds=(
@@ -3182,7 +3183,10 @@ class EzvizClient:
             mux=mux_options,
             channel=channel,
         )
-        if (max_packets is not None and max_packets <= 0) or (
+        if (
+            max_packets is not None
+            and (max_packets <= 0 or not math.isfinite(max_packets))
+        ) or (
             duration_seconds is not None
             and (duration_seconds <= 0 or not math.isfinite(duration_seconds))
         ):

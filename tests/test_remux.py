@@ -275,6 +275,26 @@ def test_copy_remuxed_output_cancels_stalled_source_after_ffmpeg_exit() -> None:
     assert writer_stopped.is_set()
 
 
+def test_cleanup_induced_source_error_does_not_mask_ffmpeg_failure() -> None:
+    process = _FakeStreamingProcess(return_code=5, stderr=b"unsupported codec")
+    cancelled = Event()
+
+    def write_input(_stdin: Any) -> None:
+        cancelled.wait(timeout=1)
+        raise PyEzvizError("socket closed during cancellation")
+
+    with pytest.raises(
+        PyEzvizError,
+        match="FFmpeg exited with status 5: unsupported codec",
+    ):
+        copy_remuxed_output(
+            _as_popen(process),
+            io.BytesIO(),
+            write_input=write_input,
+            cancel_input=cancelled.set,
+        )
+
+
 def test_copy_remuxed_output_escalates_from_terminate_to_kill() -> None:
     process = _FakeStreamingProcess(return_code=None, wait_timeout=True)
 

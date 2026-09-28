@@ -3071,10 +3071,10 @@ def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
     class FakeRemuxProcess:
         def __init__(self) -> None:
             class RecordingInput(io.BytesIO):
-                def close(inner_self) -> None:
-                    if inner_self.closed:
+                def close(self) -> None:
+                    if self.closed:
                         return
-                    calls["remux_input"] = inner_self.getvalue()
+                    calls["remux_input"] = self.getvalue()
                     super().close()
 
             self.stdin = RecordingInput()

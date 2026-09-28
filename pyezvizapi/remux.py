@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import suppress
 import subprocess
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any, BinaryIO, cast
 
 from .exceptions import PyEzvizError
@@ -170,7 +170,8 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
             _wait_for_process(process)
         raise PyEzvizError("Could not open FFmpeg pipes")
 
-    writer_errors: list[Exception] = []
+    cleanup_started = Event()
+    writer_errors: list[tuple[Exception, bool]] = []
     stderr_tail, stderr_reader = start_stderr_drain(process)
 
     def _writer() -> None:
@@ -180,7 +181,7 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
             # FFmpeg may close stdin after producing all output the caller needs.
             pass
         except Exception as err:  # pragma: no cover - defensive thread handoff
-            writer_errors.append(err)
+            writer_errors.append((err, cleanup_started.is_set()))
         finally:
             with suppress(OSError):
                 stdin.close()
@@ -195,6 +196,7 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
     except (BrokenPipeError, ConnectionResetError) as err:
         output_error = err
     finally:
+        cleanup_started.set()
         input_cancelled = output_error is not None or process.poll() is not None
         if cancel_input is not None and input_cancelled:
             with suppress(Exception):
@@ -223,8 +225,9 @@ def copy_remuxed_output(  # noqa: PLR0912,PLR0915
         raise output_error
     if writer.is_alive():
         raise PyEzvizError("FFmpeg input writer did not stop after cancellation")
-    if writer_errors:
-        raise writer_errors[0]
+    for writer_error, during_cleanup in writer_errors:
+        if not during_cleanup:
+            raise writer_error
     if return_code != 0 and not (terminated and return_code == -15):
         raise _ffmpeg_exit_error(return_code, stderr_tail.text())
 

@@ -90,7 +90,8 @@ if TYPE_CHECKING:
     def _declare_compatibility_exports(*exports: object) -> None:
         """Make compatibility re-exports visible to static analyzers."""
 
-        del exports
+        if not exports:
+            raise AssertionError("compatibility exports must not be empty")
 
     _declare_compatibility_exports(
         LocalSdkOutputFormat,

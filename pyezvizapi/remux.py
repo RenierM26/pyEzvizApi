@@ -236,10 +236,7 @@ def remux_bytes(
 ) -> None:
     """Run an in-memory FFmpeg remux and surface bounded stderr on failure."""
 
-    stdout, stderr = process.communicate(data)
-    if process.returncode != 0:
-        tail = BoundedStderrTail()
-        tail.append(stderr or b"")
-        raise _ffmpeg_exit_error(process.returncode, tail.text())
-    output.write(stdout)
-    output.flush()
+    def _write_input(stdin: BinaryIO) -> None:
+        stdin.write(data)
+
+    copy_remuxed_output(process, output, write_input=_write_input)

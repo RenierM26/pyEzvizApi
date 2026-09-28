@@ -31,7 +31,8 @@ class _FakeStreamingProcess:
         return_code: int | None = 0,
         wait_timeout: bool = False,
     ) -> None:
-        self.stdin = io.BytesIO()
+        self.input = bytearray()
+        self.stdin: io.BytesIO = _RecordingInput(self.input)
         self.stdout = io.BytesIO(stdout)
         self.stderr = io.BytesIO(stderr)
         self.returncode = return_code
@@ -57,16 +58,14 @@ class _FakeStreamingProcess:
         return self.returncode
 
 
-class _FakeCommunicateProcess:
-    def __init__(self, stdout: bytes, stderr: bytes, return_code: int) -> None:
-        self._stdout = stdout
-        self._stderr = stderr
-        self.returncode = return_code
-        self.input: bytes | None = None
+class _RecordingInput(io.BytesIO):
+    def __init__(self, sink: bytearray) -> None:
+        super().__init__()
+        self._sink = sink
 
-    def communicate(self, data: bytes) -> tuple[bytes, bytes]:
-        self.input = data
-        return self._stdout, self._stderr
+    def write(self, data: Any) -> int:
+        self._sink.extend(data)
+        return len(data)
 
 
 def _as_popen(process: Any) -> subprocess.Popen[bytes]:
@@ -115,20 +114,19 @@ def test_open_mpegts_remux_process_wraps_launch_failure() -> None:
 
 
 def test_remux_bytes_writes_successful_output() -> None:
-    process = _FakeCommunicateProcess(TRANSPORT_STREAM, b"", 0)
+    process = _FakeStreamingProcess(stdout=TRANSPORT_STREAM)
     output = io.BytesIO()
 
     remux_bytes(_as_popen(process), PROGRAM_STREAM, output)
 
-    assert process.input == PROGRAM_STREAM
+    assert bytes(process.input) == PROGRAM_STREAM
     assert output.getvalue() == TRANSPORT_STREAM
 
 
 def test_remux_bytes_reports_only_bounded_stderr_tail() -> None:
-    process = _FakeCommunicateProcess(
-        b"",
-        b"discarded-prefix:" + (b"x" * 70_000) + b":useful-tail",
-        2,
+    process = _FakeStreamingProcess(
+        stderr=b"discarded-prefix:" + (b"x" * 70_000) + b":useful-tail",
+        return_code=2,
     )
 
     with pytest.raises(PyEzvizError) as error:

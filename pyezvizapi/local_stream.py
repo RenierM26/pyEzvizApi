@@ -54,6 +54,12 @@ from .media import (
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
 )
+from .remux import (
+    BoundedStderrTail,
+    copy_remuxed_output,
+    open_mpegts_remux_process,
+    start_stderr_drain,
+)
 from .rtp import (
     RtpPacket,
     RtpVideoDepacketizer,
@@ -2669,29 +2675,7 @@ def _local_sdk_endpoint_from_client(client: Any, serial: str) -> HcNetSdkLanEndp
 
 
 def _open_local_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
-    try:
-        return subprocess.Popen(
-            [
-                ffmpeg_path,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "mpeg",
-                "-i",
-                "pipe:0",
-                "-c",
-                "copy",
-                "-f",
-                "mpegts",
-                "pipe:1",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as err:
-        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    return open_mpegts_remux_process(ffmpeg_path, popen=subprocess.Popen)
 
 
 def _open_local_hevc_mpegts_remux_process(
@@ -2699,59 +2683,22 @@ def _open_local_hevc_mpegts_remux_process(
     *,
     frame_rate: str = str(IDMX_DEFAULT_VIDEO_FRAME_RATE),
 ) -> subprocess.Popen[bytes]:
-    try:
-        return subprocess.Popen(
-            [
-                ffmpeg_path,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "hevc",
-                "-r",
-                frame_rate,
-                "-i",
-                "pipe:0",
-                "-c",
-                "copy",
-                "-f",
-                "mpegts",
-                "pipe:1",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as err:
-        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    return open_mpegts_remux_process(
+        ffmpeg_path,
+        input_format="hevc",
+        frame_rate=frame_rate,
+        popen=subprocess.Popen,
+    )
 
 
 def _open_local_h264_mpegts_remux_process(
     ffmpeg_path: str,
 ) -> subprocess.Popen[bytes]:
-    try:
-        return subprocess.Popen(
-            [
-                ffmpeg_path,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "h264",
-                "-i",
-                "pipe:0",
-                "-c",
-                "copy",
-                "-f",
-                "mpegts",
-                "pipe:1",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as err:
-        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    return open_mpegts_remux_process(
+        ffmpeg_path,
+        input_format="h264",
+        popen=subprocess.Popen,
+    )
 
 
 def _open_local_idmx_audio_video_mpegts_remux_process(
@@ -2761,44 +2708,13 @@ def _open_local_idmx_audio_video_mpegts_remux_process(
     audio_path: str,
     video_frame_rate: str | None,
 ) -> subprocess.Popen[bytes]:
-    command = [
+    return open_mpegts_remux_process(
         ffmpeg_path,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        video_input_format,
-    ]
-    if video_frame_rate is not None:
-        command.extend(("-r", video_frame_rate))
-    command.extend(
-        (
-            "-i",
-            "pipe:0",
-            "-f",
-            "aac",
-            "-i",
-            audio_path,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
-            "-c",
-            "copy",
-            "-f",
-            "mpegts",
-            "pipe:1",
-        )
+        input_format=video_input_format,
+        frame_rate=video_frame_rate,
+        audio_path=audio_path,
+        popen=subprocess.Popen,
     )
-    try:
-        return subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as err:
-        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
 
 
 IDMX_LOCAL_FRAME_SENTINEL = b"\x55\x66\x77\x88"
@@ -6755,57 +6671,12 @@ def _copy_mpegps_payloads_to_mpegts(
     *,
     process: subprocess.Popen[bytes],
 ) -> None:
-    stdin = process.stdin
-    stdout = process.stdout
-    if stdin is None or stdout is None:
-        raise PyEzvizError("Could not open FFmpeg pipes")
+    def _write_input(stdin: BinaryIO) -> None:
+        for payload in payloads:
+            stdin.write(payload)
+            stdin.flush()
 
-    writer_errors: list[Exception] = []
-    stderr_chunks, stderr_reader = _start_ffmpeg_stderr_drain(process)
-
-    def _write_input() -> None:
-        try:
-            for payload in payloads:
-                stdin.write(payload)
-                stdin.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            # FFmpeg may close stdin after producing enough output for the caller.
-            return
-        except Exception as err:  # pragma: no cover - defensive thread handoff
-            writer_errors.append(err)
-        finally:
-            with suppress(OSError):
-                stdin.close()
-
-    writer = Thread(target=_write_input, daemon=True)
-    writer.start()
-    try:
-        while True:
-            chunk = stdout.read(65536)
-            if not chunk:
-                break
-            output.write(chunk)
-            output.flush()
-    finally:
-        if process.poll() is None:
-            process.terminate()
-        writer.join(timeout=2)
-        try:
-            return_code = process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return_code = process.wait()
-        if stderr_reader is not None:
-            stderr_reader.join(timeout=2)
-
-    if writer_errors:
-        raise writer_errors[0]
-    if return_code not in (0, -15):
-        stderr_tail = _ffmpeg_stderr_tail(stderr_chunks)
-        message = f"FFmpeg exited with status {return_code}"
-        if stderr_tail:
-            message = f"{message}: {stderr_tail}"
-        raise PyEzvizError(message)
+    copy_remuxed_output(process, output, write_input=_write_input)
 
 
 def _copy_idmx_audio_video_to_mpegts(
@@ -6835,34 +6706,18 @@ def _start_ffmpeg_stderr_drain(
     process: subprocess.Popen[bytes],
     *,
     max_bytes: int = 65536,
-) -> tuple[list[bytes], Thread | None]:
-    stderr = process.stderr
-    if stderr is None:
-        return [], None
-
-    chunks: list[bytes] = []
-
-    def _drain_stderr() -> None:
-        with suppress(OSError):
-            while True:
-                chunk = stderr.read(4096)
-                if not chunk:
-                    return
-                if max_bytes <= 0:
-                    continue
-                data = b"".join(chunks) + chunk
-                chunks[:] = [data[-max_bytes:]]
-
-    reader = Thread(target=_drain_stderr, daemon=True)
-    reader.start()
-    return chunks, reader
+) -> tuple[BoundedStderrTail, Thread | None]:
+    tail, reader = start_stderr_drain(process, max_bytes=max_bytes)
+    return tail, reader
 
 
 def _ffmpeg_stderr_tail(
-    chunks: list[bytes],
+    chunks: list[bytes] | BoundedStderrTail,
     *,
     max_chars: int = 1200,
 ) -> str:
+    if isinstance(chunks, BoundedStderrTail):
+        return chunks.text(max_chars=max_chars)
     text = b"".join(chunks).decode("utf-8", errors="replace").strip()
     return text[-max_chars:]
 

@@ -3190,7 +3190,7 @@ def test_open_cloud_mpegts_remux_process_builds_ffmpeg_command(monkeypatch) -> N
             ],
             "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,
-            "stderr": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
         }
     ]
 

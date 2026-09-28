@@ -1,0 +1,246 @@
+"""Tests for shared FFmpeg remux process lifecycle handling."""
+
+from __future__ import annotations
+
+import io
+import subprocess
+from threading import Event
+from typing import Any, cast
+
+import pytest
+
+from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.remux import (
+    BoundedStderrTail,
+    copy_remuxed_output,
+    ffmpeg_mpegts_command,
+    open_mpegts_remux_process,
+    remux_bytes,
+)
+
+PROGRAM_STREAM = b"program-stream"
+TRANSPORT_STREAM = b"transport-stream"
+
+
+class _FakeStreamingProcess:
+    def __init__(
+        self,
+        *,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        return_code: int | None = 0,
+        wait_timeout: bool = False,
+    ) -> None:
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO(stdout)
+        self.stderr = io.BytesIO(stderr)
+        self.returncode = return_code
+        self.wait_timeout = wait_timeout
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.wait_timeout and not self.killed and timeout is not None:
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
+        if self.returncode is None:
+            self.returncode = -15 if self.terminated else 0
+        return self.returncode
+
+
+class _FakeCommunicateProcess:
+    def __init__(self, stdout: bytes, stderr: bytes, return_code: int) -> None:
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = return_code
+        self.input: bytes | None = None
+
+    def communicate(self, data: bytes) -> tuple[bytes, bytes]:
+        self.input = data
+        return self._stdout, self._stderr
+
+
+def _as_popen(process: Any) -> subprocess.Popen[bytes]:
+    return cast(subprocess.Popen[bytes], process)
+
+
+def test_ffmpeg_mpegts_command_maps_video_and_audio() -> None:
+    assert ffmpeg_mpegts_command(
+        "/bin/ffmpeg",
+        input_format="hevc",
+        frame_rate="15",
+        audio_path="audio.aac",
+    ) == [
+        "/bin/ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "hevc",
+        "-r",
+        "15",
+        "-i",
+        "pipe:0",
+        "-f",
+        "aac",
+        "-i",
+        "audio.aac",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c",
+        "copy",
+        "-f",
+        "mpegts",
+        "pipe:1",
+    ]
+
+
+def test_open_mpegts_remux_process_wraps_launch_failure() -> None:
+    def fail_launch(_args: list[str], **_kwargs: Any) -> None:
+        raise OSError("not installed")
+
+    with pytest.raises(PyEzvizError, match=r"Could not launch FFmpeg.*not installed"):
+        open_mpegts_remux_process("/missing/ffmpeg", popen=fail_launch)
+
+
+def test_remux_bytes_writes_successful_output() -> None:
+    process = _FakeCommunicateProcess(TRANSPORT_STREAM, b"", 0)
+    output = io.BytesIO()
+
+    remux_bytes(_as_popen(process), PROGRAM_STREAM, output)
+
+    assert process.input == PROGRAM_STREAM
+    assert output.getvalue() == TRANSPORT_STREAM
+
+
+def test_remux_bytes_reports_only_bounded_stderr_tail() -> None:
+    process = _FakeCommunicateProcess(
+        b"",
+        b"discarded-prefix:" + (b"x" * 70_000) + b":useful-tail",
+        2,
+    )
+
+    with pytest.raises(PyEzvizError) as error:
+        remux_bytes(_as_popen(process), b"input", io.BytesIO())
+
+    message = str(error.value)
+    assert message.startswith("FFmpeg exited with status 2: ")
+    assert message.endswith(":useful-tail")
+    assert "discarded-prefix" not in message
+    assert len(message) < 1300
+
+
+def test_bounded_stderr_tail_keeps_latest_bytes() -> None:
+    tail = BoundedStderrTail(max_bytes=8)
+
+    tail.append(b"old-")
+    tail.append(b"new-tail")
+
+    assert tail.text() == "new-tail"
+
+
+def test_copy_remuxed_output_streams_input_and_output() -> None:
+    process = _FakeStreamingProcess(stdout=TRANSPORT_STREAM)
+    output = io.BytesIO()
+
+    def write_input(stdin: Any) -> None:
+        stdin.write(PROGRAM_STREAM)
+
+    copy_remuxed_output(_as_popen(process), output, write_input=write_input)
+
+    assert output.getvalue() == TRANSPORT_STREAM
+    assert process.terminated is False
+
+
+def test_copy_remuxed_output_surfaces_source_error_before_ffmpeg_exit() -> None:
+    process = _FakeStreamingProcess(return_code=1, stderr=b"secondary ffmpeg error")
+
+    def fail_source(_stdin: Any) -> None:
+        raise ValueError("source failed")
+
+    with pytest.raises(ValueError, match="source failed"):
+        copy_remuxed_output(
+            _as_popen(process),
+            io.BytesIO(),
+            write_input=fail_source,
+        )
+
+
+def test_copy_remuxed_output_reports_nonzero_exit_with_stderr_tail() -> None:
+    process = _FakeStreamingProcess(return_code=7, stderr=b"invalid stream")
+
+    with pytest.raises(
+        PyEzvizError,
+        match="FFmpeg exited with status 7: invalid stream",
+    ):
+        copy_remuxed_output(
+            _as_popen(process),
+            io.BytesIO(),
+            write_input=lambda _stdin: None,
+        )
+
+
+def test_copy_remuxed_output_preserves_consumer_disconnect_and_cancels_input() -> None:
+    process = _FakeStreamingProcess(stdout=TRANSPORT_STREAM, return_code=None)
+    cancelled = Event()
+
+    class BrokenOutput(io.BytesIO):
+        def write(self, _data: Any) -> int:
+            raise BrokenPipeError("consumer disconnected")
+
+    with pytest.raises(BrokenPipeError, match="consumer disconnected"):
+        copy_remuxed_output(
+            _as_popen(process),
+            BrokenOutput(),
+            write_input=lambda _stdin: None,
+            cancel_input=cancelled.set,
+        )
+
+    assert cancelled.is_set()
+    assert process.terminated is True
+
+
+def test_copy_remuxed_output_cancels_stalled_source_after_ffmpeg_exit() -> None:
+    process = _FakeStreamingProcess(return_code=4, stderr=b"bad input")
+    cancelled = Event()
+    writer_stopped = Event()
+
+    def write_input(_stdin: Any) -> None:
+        cancelled.wait(timeout=1)
+        writer_stopped.set()
+
+    with pytest.raises(PyEzvizError, match="FFmpeg exited with status 4"):
+        copy_remuxed_output(
+            _as_popen(process),
+            io.BytesIO(),
+            write_input=write_input,
+            cancel_input=cancelled.set,
+        )
+
+    assert cancelled.is_set()
+    assert writer_stopped.is_set()
+
+
+def test_copy_remuxed_output_escalates_from_terminate_to_kill() -> None:
+    process = _FakeStreamingProcess(return_code=None, wait_timeout=True)
+
+    with pytest.raises(PyEzvizError, match="FFmpeg exited with status -9"):
+        copy_remuxed_output(
+            _as_popen(process),
+            io.BytesIO(),
+            write_input=lambda _stdin: None,
+        )
+
+    assert process.terminated is True
+    assert process.killed is True

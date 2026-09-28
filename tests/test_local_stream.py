@@ -5,6 +5,7 @@ from datetime import date
 import io
 import subprocess
 import sys
+from threading import Event
 import time
 from types import SimpleNamespace
 from typing import Any, cast
@@ -31,6 +32,7 @@ from pyezvizapi.hcnetsdk import (
 )
 from pyezvizapi.local_stream import (
     EzvizLocalSdkMediaStream,
+    EzvizLocalStreamPacket,
     HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortGeneratedSocketStep,
@@ -63,6 +65,7 @@ from pyezvizapi.local_stream import (
     get_local_sdk_stream_credentials_from_client,
     hcnetsdk_command_port_generated_plan_from_socket_plan,
     hcnetsdk_command_port_native_lan_live_view_plan,
+    local_media_packet_source,
     open_hcnetsdk_command_port_generated_multi_socket_stream,
     open_local_sdk_stream,
     open_local_sdk_stream_from_client,
@@ -78,6 +81,7 @@ from pyezvizapi.local_stream import (
     trim_hevc_annexb_to_first_clean_irap_window,
     trim_hevc_annexb_to_first_error_free_suffix,
 )
+from pyezvizapi.media import CaptureLimits
 
 FIRST_PREFIX = b"preface"
 STREAM_TIMEOUT = 3.0
@@ -317,6 +321,93 @@ def test_local_sdk_media_stream_bounds_blocking_read_after_first_packet() -> Non
         list(stream.iter_packets(max_packets=1))
 
 
+def test_local_sdk_media_stream_can_include_startup_in_duration() -> None:
+    """The shared adapter can bound startup without changing legacy defaults."""
+
+    class StartupDeadlineSdkClient(_FakeSdkClient):
+        read_called = False
+
+        def bootstrap_preview_from_fields(self, **kwargs: Any) -> Any:
+            self.bootstrap_calls.append(kwargs)
+            return SimpleNamespace(first_media=None)
+
+        def read_stream_frame_after_prefix(self, **kwargs: Any) -> Any:
+            self.read_called = True
+            return super().read_stream_frame_after_prefix(**kwargs)
+
+    sdk = StartupDeadlineSdkClient(_media(b"\x00\x00\x01\xbaabc"))
+    stream = EzvizLocalSdkMediaStream(sdk, _preview_request())  # type: ignore[arg-type]
+    expected_deadline = 11.0
+    times = iter((10.0, 10.0, 11.0))
+
+    packets = list(
+        local_media_packet_source(stream).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
+            monotonic=lambda: next(times),
+        )
+    )
+
+    assert packets == []
+    assert sdk.bootstrap_calls[0]["read_first_media"] is False
+    assert sdk.bootstrap_calls[0]["deadline"] == expected_deadline
+    assert sdk.read_called is False
+
+
+@pytest.mark.parametrize(
+    "stream_type",
+    (
+        EzvizLocalSdkMediaStream,
+        HcNetSdkCommandPortMediaStream,
+        HcNetSdkCommandPortMultiSocketMediaStream,
+        HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
+    ),
+)
+def test_all_local_packet_sources_include_startup_in_shared_duration(
+    stream_type: type[Any],
+) -> None:
+    """Every supported local source opts into the shared startup deadline."""
+
+    stream = object.__new__(stream_type)
+
+    assert local_media_packet_source(stream).duration_from_start is True
+
+
+@pytest.mark.parametrize("stream_kind", ("direct", "command", "multi"))
+def test_exact_byte_limit_commits_cached_first_packet(stream_kind: str) -> None:
+    """Closing the adapter at an exact byte limit cannot replay cached media."""
+    first_body = b"\x00\x00\x01\xbaabc"
+    second_body = b"\x00\x00\x01\xbadef"
+    first_media = _media(first_body)
+    client = _FakeCommandPortClient(_media(second_body))
+
+    if stream_kind == "direct":
+        sdk_client = _FakeSdkClient(_media(second_body))
+        stream: Any = EzvizLocalSdkMediaStream(sdk_client, _preview_request())  # type: ignore[arg-type]
+    elif stream_kind == "command":
+        stream = HcNetSdkCommandPortMediaStream(cast(Any, client), ())
+    else:
+        media_step = HcNetSdkCommandPortSocketStep(
+            (build_hcnetsdk_tcp_frame(b"preview"),),
+            response_reads_after_each=0,
+            media_socket=True,
+        )
+        stream = HcNetSdkCommandPortMultiSocketMediaStream(
+            HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+            HcNetSdkCommandPortMultiSocketPlan((media_step,)),
+        )
+        stream._media_client = cast(Any, client)  # noqa: SLF001
+
+    stream.bootstrap = cast(Any, object())
+    stream._first_media = first_media  # noqa: SLF001
+    source = local_media_packet_source(stream)
+
+    first = list(source.iter_media_packets(limits=CaptureLimits(max_bytes=len(first_body))))
+    second = list(source.iter_media_packets(limits=CaptureLimits(max_packets=1)))
+
+    assert [packet.body for packet in first] == [first_body]
+    assert [packet.body for packet in second] == [second_body]
+
+
 def test_hcnetsdk_multi_socket_stream_runs_control_then_media_socket() -> None:
     control_request = build_hcnetsdk_tcp_frame(b"auth", field_4=90)
     preview_request = build_hcnetsdk_tcp_frame(b"preview", field_4=99)
@@ -483,6 +574,70 @@ def test_hcnetsdk_multi_socket_stream_can_drain_media_before_later_steps(
     assert events.index("media.recv") < events.index("keyframe.send")
 
 
+def test_hcnetsdk_multi_socket_short_drain_expiry_continues_bootstrap() -> None:
+    class QuietMediaClient:
+        def __init__(self) -> None:
+            self.reads = 0
+            self.invalidate_values: list[object] = []
+            self.connected = True
+
+        def read_media_frame_after_prefix(self, **kwargs: object) -> object:
+            self.reads += 1
+            self.invalidate_values.append(kwargs.get("invalidate_on_deadline"))
+            raise EzvizLocalSdkDeadlineExpired("drain complete")
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        drain_media_before_next_step_seconds=0.5,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    quiet_client = QuietMediaClient()
+    stream._media_client = cast(Any, quiet_client)  # noqa: SLF001
+
+    stream._drain_media_before_next_step(  # noqa: SLF001
+        step,
+        step_index=0,
+        capture_deadline=10.0,
+        monotonic=lambda: 0.0,
+    )
+
+    assert quiet_client.reads == 1
+    assert quiet_client.invalidate_values == [False]
+
+
+def test_hcnetsdk_multi_socket_partial_drain_expiry_aborts_bootstrap() -> None:
+    class InvalidatedMediaClient:
+        connected = False
+
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> object:
+            raise EzvizLocalSdkDeadlineExpired("partial drain")
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        drain_media_before_next_step_seconds=0.5,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    stream._media_client = cast(Any, InvalidatedMediaClient())  # noqa: SLF001
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="partial drain"):
+        stream._drain_media_before_next_step(  # noqa: SLF001
+            step,
+            step_index=0,
+            capture_deadline=10.0,
+            monotonic=lambda: 0.0,
+        )
+
+
 def test_hcnetsdk_multi_socket_stream_checks_deadline_between_drained_media() -> None:
     first_payload = b"\x00\x00\x01\xbaabc"
     second_payload = b"\x00\x00\x01\xbadef"
@@ -556,8 +711,277 @@ def test_hcnetsdk_multi_socket_stream_records_keepalive_events() -> None:
     assert len(stream.keepalive_events) == 1
     assert stream.keepalive_events[0].command_id == 0x30006
     assert stream.keepalive_events[0].sent is True
+
+
+def test_hcnetsdk_background_keepalive_inherits_capture_deadline() -> None:
+    deadline = 11.0
+    sent: list[dict[str, object]] = []
+
+    class FakeMediaClient:
+        def send_command_frame(self, _frame: bytes, **kwargs: object) -> None:
+            sent.append(kwargs)
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(build_hcnetsdk_tcp_frame(b"keepalive"),),
+        keepalive_initial_delay_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    stream._media_client = cast(Any, FakeMediaClient())  # noqa: SLF001
+
+    def clock() -> float:
+        return 10.0
+
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=deadline,
+        monotonic=clock,
+    )
+    assert stream._keepalive_thread is not None  # noqa: SLF001
+    stream._keepalive_thread.join(timeout=1.0)  # noqa: SLF001
+
+    assert sent == [{"deadline": deadline, "monotonic": clock}]
     assert stream.keepalive_events[0].error is None
     assert stream.keepalive_events[0].elapsed_seconds >= 0.0
+
+
+def test_hcnetsdk_background_keepalive_uses_updated_capture_deadline() -> None:
+    first_sent = Event()
+    release_first = Event()
+    sent: list[dict[str, object]] = []
+
+    class FakeMediaClient:
+        def send_command_frame(self, _frame: bytes, **kwargs: object) -> None:
+            sent.append(kwargs)
+            if len(sent) == 1:
+                first_sent.set()
+                assert release_first.wait(timeout=1.0)
+
+    step = HcNetSdkCommandPortSocketStep(
+        (
+            build_hcnetsdk_tcp_frame(b"keepalive-1"),
+            build_hcnetsdk_tcp_frame(b"keepalive-2"),
+        ),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(
+            build_hcnetsdk_tcp_frame(b"keepalive-1"),
+            build_hcnetsdk_tcp_frame(b"keepalive-2"),
+        ),
+        keepalive_initial_delay_seconds=0.0,
+        keepalive_interval_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    stream._media_client = cast(Any, FakeMediaClient())  # noqa: SLF001
+    first_clock = lambda: 10.0  # noqa: E731
+    second_clock = lambda: 20.0  # noqa: E731
+
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=11.0,
+        monotonic=first_clock,
+    )
+    assert first_sent.wait(timeout=1.0)
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=21.0,
+        monotonic=second_clock,
+    )
+    release_first.set()
+    assert stream._keepalive_thread is not None  # noqa: SLF001
+    stream._keepalive_thread.join(timeout=1.0)  # noqa: SLF001
+
+    assert sent == [
+        {"deadline": 11.0, "monotonic": first_clock},
+        {"deadline": 21.0, "monotonic": second_clock},
+    ]
+
+
+def test_hcnetsdk_background_deadline_failure_invalidates_media_client() -> None:
+    send_started = Event()
+    release_send = Event()
+
+    class DeadlineMediaClient:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
+        def send_command_frame(self, _frame: bytes, **_kwargs: object) -> None:
+            send_started.set()
+            assert release_send.wait(timeout=1.0)
+            raise EzvizLocalSdkDeadlineExpired("write deadline expired")
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"keepalive"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(build_hcnetsdk_tcp_frame(b"keepalive"),),
+        keepalive_initial_delay_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    client = DeadlineMediaClient()
+    stream._media_client = cast(Any, client)  # noqa: SLF001
+    stream._start_keepalives(  # noqa: SLF001
+        step,
+        deadline=11.0,
+        monotonic=lambda: 10.0,
+    )
+    assert send_started.wait(timeout=1.0)
+
+    stream._set_keepalive_deadline(None, time.monotonic)  # noqa: SLF001
+    release_send.set()
+    assert stream._keepalive_thread is not None  # noqa: SLF001
+    stream._keepalive_thread.join(timeout=1.0)  # noqa: SLF001
+
+    assert client.shutdown_called
+    assert len(stream.keepalive_events) == 1
+    assert stream.keepalive_events[0].sent is False
+
+
+def test_hcnetsdk_keepalive_deadline_socket_close_ends_capture_normally() -> None:
+    """A deadline-limited keepalive may close an in-flight media read."""
+
+    class ClosedMediaClient:
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> Any:
+            stream._keepalive_deadline_expired.set()  # noqa: SLF001
+            raise OSError("socket closed by keepalive")
+
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan(
+            steps=(
+                HcNetSdkCommandPortSocketStep(
+                    (build_hcnetsdk_tcp_frame(b"preview"),),
+                    response_reads_after_each=0,
+                    media_socket=True,
+                ),
+            )
+        ),
+    )
+    stream.bootstrap = cast(Any, object())
+    stream._media_client = cast(Any, ClosedMediaClient())  # noqa: SLF001
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            monotonic=lambda: 0.0,
+        )
+    )
+
+    assert packets == []
+    assert stream._read_interrupted is True  # noqa: SLF001
+
+
+def test_hcnetsdk_unrelated_socket_close_before_deadline_still_fails() -> None:
+    """An early socket failure is not hidden merely because capture is bounded."""
+
+    class ClosedMediaClient:
+        def read_media_frame_after_prefix(self, **_kwargs: object) -> Any:
+            raise OSError("remote closed")
+
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan(
+            steps=(
+                HcNetSdkCommandPortSocketStep(
+                    (build_hcnetsdk_tcp_frame(b"preview"),),
+                    response_reads_after_each=0,
+                    media_socket=True,
+                ),
+            )
+        ),
+    )
+    stream.bootstrap = cast(Any, object())
+    stream._media_client = cast(Any, ClosedMediaClient())  # noqa: SLF001
+
+    with pytest.raises(PyEzvizError, match="media packet read failed: remote closed"):
+        list(
+            stream.iter_packets(
+                duration_seconds=1.0,
+                duration_from_start=True,
+                monotonic=lambda: 0.0,
+            )
+        )
+
+
+def test_hcnetsdk_close_interrupts_in_flight_keepalive_before_join() -> None:
+    send_started = Event()
+    socket_closed = Event()
+    max_elapsed = 0.5
+
+    class BlockingMediaClient:
+        def send_command_frame(self, _frame: bytes, **_kwargs: object) -> None:
+            send_started.set()
+            assert socket_closed.wait(timeout=1.0)
+
+        def shutdown(self) -> None:
+            socket_closed.set()
+
+    step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+        keepalive_frames=(build_hcnetsdk_tcp_frame(b"keepalive"),),
+        keepalive_initial_delay_seconds=0.0,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((step,)),
+    )
+    client = BlockingMediaClient()
+    stream._media_client = cast(Any, client)  # noqa: SLF001
+    stream._clients = [cast(Any, client)]  # noqa: SLF001
+    stream._start_keepalives(step)  # noqa: SLF001
+    assert send_started.wait(timeout=1.0)
+
+    started_at = time.monotonic()
+    stream.close()
+    elapsed = time.monotonic() - started_at
+
+    assert socket_closed.is_set()
+    assert elapsed < max_elapsed
+    assert stream._keepalive_thread is None  # noqa: SLF001
+
+
+def test_hcnetsdk_packet_limited_capture_clears_keepalive_deadline() -> None:
+    media_step = HcNetSdkCommandPortSocketStep(
+        (build_hcnetsdk_tcp_frame(b"preview"),),
+        response_reads_after_each=0,
+        media_socket=True,
+    )
+    stream = HcNetSdkCommandPortMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortMultiSocketPlan((media_step,)),
+    )
+    stream.bootstrap = cast(Any, object())
+    stream._media_client = cast(Any, object())  # noqa: SLF001
+    stream._first_media = _media(b"\x00\x00\x01\xbaabc")  # noqa: SLF001
+
+    packets = list(
+        stream.iter_packets(
+            max_packets=1,
+            duration_seconds=10.0,
+            duration_from_start=True,
+            monotonic=lambda: 5.0,
+        )
+    )
+
+    assert len(packets) == 1
+    assert stream._keepalive_deadline is None  # noqa: SLF001
 
 
 def test_hcnetsdk_multi_socket_plan_rejects_immediate_read_without_media_socket() -> None:
@@ -942,6 +1366,90 @@ def test_hcnetsdk_generated_multi_socket_stream_skips_start_for_empty_duration(
 
     assert packets == []
     assert stream.bootstrap is None
+
+
+def test_generated_stream_ends_normally_when_bootstrap_uses_capture_budget() -> None:
+    class RenderedStream:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def iter_packets(self, **_kwargs: object) -> Iterator[EzvizLocalStreamPacket]:
+            raise AssertionError("expired capture must not request a packet")
+
+    rendered = RenderedStream()
+    stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
+    stream.bootstrap = cast(Any, object())
+    stream._stream = cast(Any, rendered)  # noqa: SLF001
+    stream.rsa_key = object()
+    ticks = iter((0.0, 1.0))
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            monotonic=lambda: next(ticks),
+        )
+    )
+
+    assert packets == []
+    assert rendered.closed is True
+
+
+def test_generated_stream_creates_rsa_key_before_startup_budget(monkeypatch) -> None:
+    stream = HcNetSdkCommandPortGeneratedMultiSocketMediaStream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        HcNetSdkCommandPortGeneratedMultiSocketPlan(steps=()),
+        password=b"123456",
+    )
+    now = [0.0]
+    generated_key = object()
+    deadlines: list[float | None] = []
+
+    def generate() -> object:
+        now[0] = 5.0
+        return generated_key
+
+    def start(**kwargs: object) -> None:
+        deadlines.append(cast(float | None, kwargs["deadline"]))
+        raise EzvizLocalSdkDeadlineExpired
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",
+        generate,
+    )
+    monkeypatch.setattr(stream, "start", start)
+
+    packets = list(
+        local_media_packet_source(stream).iter_media_packets(
+            limits=CaptureLimits(duration_seconds=1.0),
+            monotonic=lambda: now[0],
+        )
+    )
+
+    assert packets == []
+    assert stream.rsa_key is generated_key
+    assert deadlines == [6.0]
+
+
+def test_prestarted_generated_stream_skips_unused_rsa_key(monkeypatch) -> None:
+    class RenderedStream:
+        def iter_packets(self, **_kwargs: object) -> Iterator[EzvizLocalStreamPacket]:
+            return iter(())
+
+    stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
+    stream.bootstrap = cast(Any, object())
+    stream._stream = cast(Any, RenderedStream())  # noqa: SLF001
+    stream.rsa_key = None
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",
+        lambda: pytest.fail("pre-started stream must not generate an unused RSA key"),
+    )
+
+    packets = list(stream.iter_packets(duration_seconds=1.0))
+
+    assert packets == []
 
 
 def test_hcnetsdk_multi_socket_stream_reports_response_step_context() -> None:

@@ -34,7 +34,9 @@ from pyezvizapi.local_stream import (
     HcNetSdkCommandPortMultiSocketPlan,
     HcNetSdkCommandPortSocketStep,
     _iter_local_stream_payloads,
+    local_media_packet_source,
 )
+from pyezvizapi.media import CaptureLimits
 
 DEFAULT_SAVE_TIMEOUT = 10.0
 HCNETSDK_SAVE_DURATION = 3.0
@@ -86,6 +88,7 @@ class _PacketStream:
                 prefix=b"",
                 channel=0,
                 length=len(body),
+                encrypted=False,
             )
 
 
@@ -159,6 +162,18 @@ def test_local_stream_metadata_recorder_forwards_deadline_capability() -> None:
             "monotonic": monotonic,
         }
     ]
+
+
+def test_local_stream_metadata_recorder_does_not_claim_startup_deadline() -> None:
+    """Deadline forwarding alone does not imply a duration_from_start keyword."""
+    recorder = _LocalStreamPacketMetadataRecorder(_DeadlinePacketStream([b"packet"]))
+    source = local_media_packet_source(recorder)
+
+    assert source.duration_from_start is False
+    assert [
+        packet.body
+        for packet in source.iter_media_packets(limits=CaptureLimits(max_packets=1))
+    ] == [b"packet"]
 
 
 def test_parse_json_raises_contextual_error_for_invalid_json() -> None:

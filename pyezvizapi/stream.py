@@ -18,6 +18,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 from Crypto.Cipher import AES
 
 from .exceptions import DeviceException, PyEzvizError
+from .media import (
+    DeadlineLegacyPacketSource,
+    MediaPacket,
+    MediaPacketMetadata,
+    MediaPacketSourceAdapter,
+)
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
@@ -105,6 +111,33 @@ class VtmPacket:
             VtmChannel.ENCRYPTED_MESSAGE,
             VtmChannel.ENCRYPTED_STREAM,
         )
+
+
+def vtm_packet_to_media_packet(packet: VtmPacket) -> MediaPacket:
+    """Normalize a cloud VTM packet without changing its wire model."""
+
+    return MediaPacket(
+        body=packet.body,
+        metadata=MediaPacketMetadata(
+            source="cloud_vtm",
+            channel=packet.channel,
+            encrypted=packet.encrypted,
+            sequence=packet.sequence,
+            message_code=packet.message_code,
+        ),
+    )
+
+
+def vtm_media_packet_source(
+    stream: DeadlineLegacyPacketSource[VtmPacket],
+) -> MediaPacketSourceAdapter[VtmPacket]:
+    """Adapt an existing VTM stream to the shared media packet contract."""
+
+    return MediaPacketSourceAdapter(
+        stream,
+        vtm_packet_to_media_packet,
+        duration_from_start=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -256,6 +289,8 @@ class VtmStreamClient:
         *,
         channel: int = VtmChannel.MESSAGE,
         message_code: int = VtmMessageCode.STREAMINFO_REQ,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> int:
         """Send a VTM packet and return the sequence number used."""
 
@@ -267,7 +302,32 @@ class VtmStreamClient:
             message_code=message_code,
             sequence=sequence,
         )
-        sock.sendall(packet)
+        configured_timeout = sock.gettimeout()
+        if deadline is None:
+            sock.sendall(packet)
+        else:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise _VtmReadDeadlineExpired
+            effective_timeout = (
+                remaining
+                if configured_timeout is None
+                else min(configured_timeout, remaining)
+            )
+            deadline_limits_write = (
+                configured_timeout is None or remaining <= configured_timeout
+            )
+            sock.settimeout(effective_timeout)
+            try:
+                sock.sendall(packet)
+            except TimeoutError as err:
+                if deadline_limits_write:
+                    self.close()
+                    raise _VtmReadDeadlineExpired from err
+                raise
+            finally:
+                if self._socket is sock:
+                    cast(Any, sock).settimeout(configured_timeout)
         self._sequence = (self._sequence + 1) & 0xFFFF
         return sequence
 
@@ -355,6 +415,8 @@ class VtmStreamClient:
         stream_ssn: str | None = None,
         *,
         message_code: int = VtmMessageCode.KEEPALIVE_REQ,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> int:
         """Send a VTM stream keepalive request."""
 
@@ -366,13 +428,16 @@ class VtmStreamClient:
         return self.send_packet(
             build_stream_keepalive_request(stream_ssn),
             message_code=message_code,
+            deadline=deadline,
+            monotonic=monotonic,
         )
 
-    def iter_packets(  # noqa: PLR0912
+    def iter_packets(  # noqa: PLR0912, PLR0915
         self,
         *,
         max_packets: int | None = None,
         duration_seconds: float | None = None,
+        duration_from_start: bool = False,
         first_packet_timeout: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
@@ -393,7 +458,11 @@ class VtmStreamClient:
 
         seen = 0
         started_at = monotonic()
-        capture_deadline: float | None = None
+        capture_deadline = (
+            started_at + duration_seconds
+            if duration_from_start and duration_seconds is not None
+            else None
+        )
         first_packet_deadline = (
             None
             if first_packet_timeout is None
@@ -413,7 +482,14 @@ class VtmStreamClient:
             if next_keepalive is not None and now >= next_keepalive:
                 assert keepalive_interval is not None
                 if self.stream_info is not None and self.stream_info.streamssn:
-                    self.send_keepalive()
+                    try:
+                        self.send_keepalive(
+                            deadline=capture_deadline,
+                            monotonic=monotonic,
+                        )
+                    except _VtmReadDeadlineExpired:
+                        self._read_inactivity_deadline = None
+                        break
                 next_keepalive = now + keepalive_interval
 
             read_deadlines = [
@@ -432,7 +508,15 @@ class VtmStreamClient:
             except _VtmReadDeadlineExpired:
                 continue
             if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
-                self.send_keepalive(message_code=VtmMessageCode.KEEPALIVE_RSP)
+                try:
+                    self.send_keepalive(
+                        message_code=VtmMessageCode.KEEPALIVE_RSP,
+                        deadline=capture_deadline,
+                        monotonic=monotonic,
+                    )
+                except _VtmReadDeadlineExpired:
+                    self._read_inactivity_deadline = None
+                    break
                 if keepalive_interval is not None:
                     next_keepalive = monotonic() + keepalive_interval
                 if include_control:

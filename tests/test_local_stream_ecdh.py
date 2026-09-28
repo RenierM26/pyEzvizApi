@@ -1015,10 +1015,12 @@ def test_ezviz_local_sdk_ecdh_stream_applies_duration_before_first_media_read() 
     class FakeSdkClient:
         def __init__(self) -> None:
             self.read_first_media: bool | None = None
+            self.deadline: float | None = None
             self.reads = 0
 
         def bootstrap_preview_from_fields(self, **kwargs: object) -> object:
             self.read_first_media = cast(bool, kwargs["read_first_media"])
+            self.deadline = cast(float, kwargs["deadline"])
             return EzvizLocalSdkStreamBootstrap(
                 preview=cast(Any, object()),
                 stream_setup=cast(Any, object()),
@@ -1055,6 +1057,7 @@ def test_ezviz_local_sdk_ecdh_stream_applies_duration_before_first_media_read() 
 
     assert packets == []
     assert sdk_client.read_first_media is False
+    assert sdk_client.deadline == pytest.approx(1.0)
     assert sdk_client.reads == 0
 
 
@@ -1063,6 +1066,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
         def __init__(self) -> None:
             self.read_timeout: float | None = None
             self.timeout = 5.0
+            self.closed = 0
 
         def bootstrap_preview_from_fields(self, **_kwargs: object) -> object:
             return EzvizLocalSdkStreamBootstrap(
@@ -1076,7 +1080,7 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
             raise EzvizLocalSdkDeadlineExpired("timed out")
 
         def close(self) -> None:
-            return None
+            self.closed += 1
 
     ticks = iter([0.0, 0.25])
     sdk_client = FakeSdkClient()
@@ -1102,6 +1106,8 @@ def test_ezviz_local_sdk_ecdh_stream_bounds_blocking_read_by_duration() -> None:
         == []
     )
     assert sdk_client.read_timeout == pytest.approx(0.75)
+    assert sdk_client.closed == 1
+    assert stream.bootstrap is None
 
 
 def test_ezviz_local_sdk_ecdh_stream_preserves_earlier_socket_timeout() -> None:

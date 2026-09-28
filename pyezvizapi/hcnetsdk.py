@@ -26,10 +26,13 @@ import hmac
 import ipaddress
 import json
 import math
+from queue import Empty, Full, Queue
 import re
+import select
 import socket
 import ssl
 import sys
+from threading import Lock, Thread
 import time
 from typing import Any, cast
 import xml.etree.ElementTree as ET
@@ -39,11 +42,17 @@ from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
 from .exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .media import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
 HCNETSDK_DEFAULT_RTSP_PORT = 554
 _WINDOWS_EXCLUSIVE_SOURCE_BIND = sys.platform == "win32"
+_RESOLVER_REQUESTS: Queue[
+    tuple[str, int, Queue[tuple[bool, object]]]
+] = Queue(maxsize=1)
+_RESOLVER_THREAD_LOCK = Lock()
+_RESOLVER_THREAD: Thread | None = None
 HCNETSDK_EZVIZ_DEFAULT_USERNAME = "admin"
 HCNETSDK_EZVIZ_LOCAL_USERNAME = "EZ_LOCAL_USER"
 HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX = "_lan_device_space-"
@@ -2549,6 +2558,39 @@ class HcNetSdkRealDataPacket:
     def payload_kind(self) -> str:
         """Return a small, non-secret classification of the callback body."""
         return classify_hcnetsdk_real_data_payload(self.body)
+
+
+def hcnetsdk_real_data_to_media_packet(
+    packet: HcNetSdkRealDataPacket,
+) -> MediaPacket:
+    """Normalize an HCNetSDK callback packet without changing its SDK model."""
+
+    return MediaPacket(
+        body=packet.body,
+        metadata=MediaPacketMetadata(
+            source="hcnetsdk",
+            data_type=packet.data_type,
+            attributes={
+                "real_handle": packet.real_handle,
+                "payload_kind": packet.payload_kind,
+            },
+        ),
+    )
+
+
+def hcnetsdk_media_packet_source(
+    packets: Iterable[HcNetSdkRealDataPacket],
+    *,
+    cancel: Callable[[], None] | None = None,
+) -> IterableMediaPacketSource[HcNetSdkRealDataPacket]:
+    """Adapt HCNetSDK callback media packets to the shared packet contract."""
+
+    return IterableMediaPacketSource(
+        packets,
+        hcnetsdk_real_data_to_media_packet,
+        predicate=lambda packet: packet.is_media,
+        cancel=cancel,
+    )
 
 
 @dataclass(frozen=True)
@@ -8192,6 +8234,15 @@ def hcnetsdk_command_port_public_key_der(rsa_key: Any) -> bytes:
     return bytes(DerSequence([public_key.n, public_key.e]).encode())
 
 
+def hcnetsdk_command_port_rsa_key() -> Any:
+    """Generate the protocol-mandated RSA key for command-port login."""
+    # The native SDK handshake requires 1024-bit RSA; larger generated keys are
+    # rejected by the device-side command-port login framing.
+    return RSA.generate(  # codeql[py/weak-crypto-key]
+        HCNETSDK_COMMAND_PORT_RSA_BITS
+    )
+
+
 def decode_hcnetsdk_command_port_login_challenge(
     response: HcNetSdkTcpFrame,
     rsa_key: Any,
@@ -8699,6 +8750,7 @@ class _DeadlineBoundRecvSocket:
         self._deadline = deadline
         self._configured_timeout = configured_timeout
         self._monotonic = monotonic
+        self.bytes_received = 0
 
     def recv(self, length: int) -> bytes:
         remaining = self._deadline - self._monotonic()
@@ -8715,15 +8767,181 @@ class _DeadlineBoundRecvSocket:
             if self._configured_timeout is None
             else min(self._configured_timeout, remaining)
         )
+        readable = _wait_for_socket_io(
+            self._sock,
+            readable=True,
+            timeout=effective_timeout,
+        )
+        if readable is not None:
+            if not readable:
+                if deadline_limits_receive:
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "EZVIZ local SDK frame read exceeded its deadline"
+                    )
+                raise TimeoutError("timed out")
+            data = self._sock.recv(length)
+            self.bytes_received += len(data)
+            return data
+
+        previous_timeout = self._sock.gettimeout()
         self._sock.settimeout(effective_timeout)
         try:
-            return self._sock.recv(length)
+            data = self._sock.recv(length)
         except TimeoutError as err:
             if deadline_limits_receive:
                 raise EzvizLocalSdkDeadlineExpired(
                     "EZVIZ local SDK frame read exceeded its deadline"
                 ) from err
             raise
+        finally:
+            self._sock.settimeout(previous_timeout)
+        self.bytes_received += len(data)
+        return data
+
+
+def _wait_for_socket_io(
+    sock: Any,
+    *,
+    readable: bool,
+    timeout: float,
+) -> bool | None:
+    """Wait for real socket readiness without changing its shared timeout."""
+    try:
+        file_descriptor = sock.fileno()
+    except (AttributeError, TypeError):
+        return None
+    if file_descriptor < 0:
+        raise OSError(errno.EBADF, "Bad file descriptor")
+    read_list = [sock] if readable else []
+    write_list = [] if readable else [sock]
+    ready_read, ready_write, _ = select.select(
+        read_list,
+        write_list,
+        [],
+        timeout,
+    )
+    return bool(ready_read if readable else ready_write)
+
+
+def _remaining_timeout(
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    """Return time left before an absolute local-stream deadline."""
+    if deadline is None:
+        return None
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise EzvizLocalSdkDeadlineExpired(
+            "EZVIZ local SDK operation exceeded its deadline"
+        )
+    return remaining
+
+
+def _send_all_with_timeout(
+    sock: Any,
+    data: bytes,
+    *,
+    timeout: float | None,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> None:
+    """Send a frame without letting writes exceed an optional deadline."""
+    effective_timeout = (
+        _remaining_timeout(deadline, monotonic)
+        if deadline is not None
+        else timeout
+    )
+    if effective_timeout is None:
+        _send_all(sock, data)
+        return
+    previous_timeout = sock.gettimeout()
+    operation_deadline = (
+        deadline if deadline is not None else monotonic() + effective_timeout
+    )
+    if callable(getattr(sock, "fileno", None)) and _send_all_before_deadline(
+            sock,
+            data,
+            operation_deadline=operation_deadline,
+            configured_timeout=previous_timeout,
+            capture_deadline=deadline is not None,
+            monotonic=monotonic,
+        ):
+        return
+
+    write_timeout = (
+        effective_timeout
+        if previous_timeout is None
+        else min(previous_timeout, effective_timeout)
+    )
+    deadline_limits_write = deadline is not None and (
+        previous_timeout is None or effective_timeout <= previous_timeout
+    )
+    sock.settimeout(write_timeout)
+    try:
+        _send_all(sock, data)
+    except TimeoutError as err:
+        if deadline_limits_write:
+            raise EzvizLocalSdkDeadlineExpired(
+                "EZVIZ local SDK frame write exceeded its deadline"
+            ) from err
+        raise
+    finally:
+        sock.settimeout(previous_timeout)
+
+
+def _send_all_before_deadline(
+    sock: Any,
+    data: bytes,
+    *,
+    operation_deadline: float,
+    configured_timeout: float | None,
+    capture_deadline: bool,
+    monotonic: Callable[[], float],
+) -> bool:
+    """Partially send on a real socket while recomputing its deadline."""
+    remaining_data = memoryview(data)
+    while remaining_data:
+        remaining = operation_deadline - monotonic()
+        if remaining <= 0:
+            if capture_deadline:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                )
+            raise TimeoutError("timed out")
+        write_timeout = (
+            remaining
+            if configured_timeout is None
+            else min(configured_timeout, remaining)
+        )
+        deadline_limits_write = capture_deadline and (
+            configured_timeout is None or remaining <= configured_timeout
+        )
+        writable = _wait_for_socket_io(
+            sock,
+            readable=False,
+            timeout=write_timeout,
+        )
+        if writable is None:
+            return False
+        if not writable:
+            if deadline_limits_write:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                )
+            raise TimeoutError("timed out")
+        try:
+            sent = sock.send(remaining_data)
+        except TimeoutError as err:
+            if deadline_limits_write:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK frame write exceeded its deadline"
+                ) from err
+            raise
+        if sent <= 0:
+            raise PyEzvizError("Socket closed before EZVIZ frame was sent")
+        remaining_data = remaining_data[sent:]
+    return True
 
 
 class EzvizLocalSdkClient:
@@ -8778,6 +8996,15 @@ class EzvizLocalSdkClient:
         self._command_sock = None
         self._stream_sock = None
 
+    def _invalidate_socket(self, sock: Any) -> None:
+        """Detach and close a socket whose protocol framing may be corrupt."""
+        if self._command_sock is sock:
+            self._command_sock = None
+        if self._stream_sock is sock:
+            self._stream_sock = None
+        with suppress(Exception):
+            sock.close()
+
     def send_encrypted_command(
         self,
         command: int,
@@ -8785,9 +9012,31 @@ class EzvizLocalSdkClient:
         *,
         sequence: int = 0,
         stream_socket: bool = False,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkExchange:
         """Send one encrypted local SDK frame and read its response frame."""
-        sock = self._stream() if stream_socket else self._command()
+        effective_timeout = (
+            _remaining_timeout(deadline, monotonic)
+            if deadline is not None
+            else timeout
+        )
+        sock = (
+            self._stream(
+                timeout=effective_timeout,
+                deadline_limited=deadline is not None,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+            if stream_socket
+            else self._command(
+                timeout=effective_timeout,
+                deadline_limited=deadline is not None,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        )
         request = build_ezviz_cas_ssl_local_sdk_frame(
             command=command,
             body=body,
@@ -8795,14 +9044,40 @@ class EzvizLocalSdkClient:
             iv=self._request_iv,
             sequence=sequence,
         )
-        _send_all(sock, request)
-        return EzvizLocalSdkExchange(
-            request=request,
-            response=read_ezviz_local_sdk_frame(
+        try:
+            _send_all_with_timeout(
                 sock,
+                request,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
+        read_socket = sock
+        previous_timeout = None
+        if effective_timeout is not None:
+            previous_timeout = sock.gettimeout()
+            read_socket = _DeadlineBoundRecvSocket(
+                sock,
+                deadline=(
+                    deadline
+                    if deadline is not None
+                    else monotonic() + effective_timeout
+                ),
+                configured_timeout=previous_timeout,
+                monotonic=monotonic,
+            )
+        try:
+            response = read_ezviz_local_sdk_frame(
+                read_socket,
                 trailer_length=self.response_trailer_length,
-            ),
-        )
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
+        return EzvizLocalSdkExchange(request=request, response=response)
 
     def bootstrap_preview(
         self,
@@ -8815,6 +9090,8 @@ class EzvizLocalSdkClient:
         stream_setup_sequence: int = 0,
         read_first_media: bool = False,
         max_prefix_bytes: int = 4096,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Run the confirmed direct-local setup shape.
 
@@ -8829,6 +9106,8 @@ class EzvizLocalSdkClient:
                 EZVIZ_LOCAL_SDK_PRE_START_COMMAND,
                 pre_start_body,
                 sequence=pre_start_sequence,
+                deadline=deadline,
+                monotonic=monotonic,
             )
             if pre_start.response.header.command != EZVIZ_LOCAL_SDK_PRE_START_RESPONSE:
                 raise PyEzvizError("EZVIZ local pre-start returned unexpected command")
@@ -8837,6 +9116,8 @@ class EzvizLocalSdkClient:
             EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
             preview_body,
             sequence=preview_sequence,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if preview.response.header.command != EZVIZ_LOCAL_SDK_PREVIEW_RESPONSE:
             raise PyEzvizError("EZVIZ local preview setup returned unexpected command")
@@ -8846,12 +9127,18 @@ class EzvizLocalSdkClient:
             stream_setup_body,
             sequence=stream_setup_sequence,
             stream_socket=True,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if stream_setup.response.header.command != EZVIZ_LOCAL_SDK_STREAM_SETUP_RESPONSE:
             raise PyEzvizError("EZVIZ local stream setup returned unexpected command")
 
         first_media = (
-            self.read_first_stream_frame(max_prefix_bytes=max_prefix_bytes)
+            self.read_stream_frame_after_prefix(
+                max_prefix_bytes=max_prefix_bytes,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
             if read_first_media
             else None
         )
@@ -8862,7 +9149,7 @@ class EzvizLocalSdkClient:
             first_media=first_media,
         )
 
-    def bootstrap_preview_from_fields(
+    def bootstrap_preview_from_fields(  # noqa: PLR0913
         self,
         *,
         preview_request: EzvizLocalPreviewRequest,
@@ -8874,6 +9161,8 @@ class EzvizLocalSdkClient:
         stream_mode: str | int = 0,
         read_first_media: bool = False,
         max_prefix_bytes: int = 4096,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap preview and build 0x3105 from the 0x2012 Session."""
         pre_start = None
@@ -8882,6 +9171,8 @@ class EzvizLocalSdkClient:
                 EZVIZ_LOCAL_SDK_PRE_START_COMMAND,
                 pre_start_body,
                 sequence=pre_start_sequence,
+                deadline=deadline,
+                monotonic=monotonic,
             )
             if pre_start.response.header.command != EZVIZ_LOCAL_SDK_PRE_START_RESPONSE:
                 raise PyEzvizError("EZVIZ local pre-start returned unexpected command")
@@ -8890,6 +9181,8 @@ class EzvizLocalSdkClient:
             EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
             preview_request.to_xml(),
             sequence=preview_sequence,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if preview.response.header.command != EZVIZ_LOCAL_SDK_PREVIEW_RESPONSE:
             raise PyEzvizError("EZVIZ local preview setup returned unexpected command")
@@ -8912,12 +9205,18 @@ class EzvizLocalSdkClient:
             ),
             sequence=stream_setup_sequence,
             stream_socket=True,
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if stream_setup.response.header.command != EZVIZ_LOCAL_SDK_STREAM_SETUP_RESPONSE:
             raise PyEzvizError("EZVIZ local stream setup returned unexpected command")
 
         first_media = (
-            self.read_first_stream_frame(max_prefix_bytes=max_prefix_bytes)
+            self.read_stream_frame_after_prefix(
+                max_prefix_bytes=max_prefix_bytes,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
             if read_first_media
             else None
         )
@@ -8944,11 +9243,22 @@ class EzvizLocalSdkClient:
         *,
         max_prefix_bytes: int = 4096,
         timeout: float | None = None,
+        deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next local stream frame, tolerating any binary preface."""
-        sock = self._stream()
-        if timeout is None:
+        effective_timeout = (
+            _remaining_timeout(deadline, monotonic)
+            if deadline is not None
+            else timeout
+        )
+        sock = self._stream(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
+        if effective_timeout is None:
             return read_ezviz_interleaved_rtp_frame_after_prefix(
                 sock,
                 max_prefix_bytes=max_prefix_bytes,
@@ -8957,7 +9267,9 @@ class EzvizLocalSdkClient:
         previous_timeout = sock.gettimeout()
         deadline_socket = _DeadlineBoundRecvSocket(
             sock,
-            deadline=monotonic() + timeout,
+            deadline=(
+                deadline if deadline is not None else monotonic() + effective_timeout
+            ),
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
@@ -8966,30 +9278,90 @@ class EzvizLocalSdkClient:
                 deadline_socket,
                 max_prefix_bytes=max_prefix_bytes,
             )
-        finally:
-            sock.settimeout(previous_timeout)
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
 
-    def _command(self) -> Any:
+    def _command(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline_limited: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> Any:
         if self._command_sock is None:
             source_address = (
                 (self.command_source_host, self.command_source_port)
                 if self.command_source_port is not None
                 else None
             )
-            self._command_sock = _connect_with_optional_source_address(
-                self.socket_factory,
-                (self.endpoint.host, self.endpoint.command_port),
-                self.timeout,
-                source_address=source_address,
-            )
+            connect_timeout = self.timeout
+            if timeout is not None:
+                connect_timeout = (
+                    timeout
+                    if connect_timeout is None
+                    else min(connect_timeout, timeout)
+                )
+            try:
+                command_sock = _connect_with_optional_source_address(
+                    self.socket_factory,
+                    (self.endpoint.host, self.endpoint.command_port),
+                    connect_timeout,
+                    source_address=source_address,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except TimeoutError as err:
+                if deadline_limited and (
+                    self.timeout is None
+                    or (timeout is not None and timeout <= self.timeout)
+                ):
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "EZVIZ local SDK command connect exceeded its deadline"
+                    ) from err
+                raise
+            if timeout is not None:
+                command_sock.settimeout(self.timeout)
+            self._command_sock = command_sock
         return self._command_sock
 
-    def _stream(self) -> Any:
+    def _stream(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline_limited: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> Any:
         if self._stream_sock is None:
-            self._stream_sock = self.socket_factory(
-                (self.endpoint.host, self.endpoint.stream_port or 0),
-                self.timeout,
-            )
+            connect_timeout = self.timeout
+            if timeout is not None:
+                connect_timeout = (
+                    timeout
+                    if connect_timeout is None
+                    else min(connect_timeout, timeout)
+                )
+            try:
+                stream_sock = _connect_with_optional_source_address(
+                    self.socket_factory,
+                    (self.endpoint.host, self.endpoint.stream_port or 0),
+                    connect_timeout,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except TimeoutError as err:
+                if deadline_limited and (
+                    self.timeout is None
+                    or (timeout is not None and timeout <= self.timeout)
+                ):
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "EZVIZ local SDK stream connect exceeded its deadline"
+                    ) from err
+                raise
+            if timeout is not None:
+                stream_sock.settimeout(self.timeout)
+            self._stream_sock = stream_sock
         return self._stream_sock
 
 
@@ -9003,8 +9375,17 @@ def _connect_with_optional_source_address(
     timeout: float | None,
     *,
     source_address: SocketSourceAddress = None,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> Any:
     if source_address is None:
+        if socket_factory is socket.create_connection and deadline is not None:
+            return _create_deadline_connection(
+                address,
+                timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
         return socket_factory(address, timeout)
     try:
         if socket_factory is socket.create_connection:
@@ -9012,6 +9393,8 @@ def _connect_with_optional_source_address(
                 address,
                 timeout,
                 source_address=source_address,
+                deadline=deadline,
+                monotonic=monotonic,
             )
         source_socket_factory = cast(SourceAddressSocketFactory, socket_factory)
         return source_socket_factory(address, timeout, source_address)
@@ -9031,17 +9414,25 @@ def _create_reusable_source_connection(
     timeout: float | None,
     *,
     source_address: tuple[str, int],
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> socket.socket:
     """Connect from an exact source port with platform-safe ownership."""
 
     last_error: OSError | None = None
     host, port = address
-    for family, sock_type, protocol, _, target in socket.getaddrinfo(
+    for family, sock_type, protocol, _, target in _getaddrinfo_before_deadline(
         host,
         port,
-        type=socket.SOCK_STREAM,
+        deadline=deadline,
+        monotonic=monotonic,
     ):
         try:
+            attempt_timeout, deadline_limits_attempt = _connect_attempt_settings(
+                timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
             if _WINDOWS_EXCLUSIVE_SOURCE_BIND:
                 try:
                     return _connect_bound_source_socket(
@@ -9049,7 +9440,7 @@ def _create_reusable_source_connection(
                         sock_type,
                         protocol,
                         target,
-                        timeout,
+                        attempt_timeout,
                         source_address=source_address,
                         exclusive=True,
                     )
@@ -9063,12 +9454,20 @@ def _create_reusable_source_connection(
                     )
                     if concrete_source_address == source_address:
                         raise
+                    (
+                        concrete_timeout,
+                        deadline_limits_attempt,
+                    ) = _connect_attempt_settings(
+                        timeout,
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
                     return _connect_bound_source_socket(
                         family,
                         sock_type,
                         protocol,
                         target,
-                        timeout,
+                        concrete_timeout,
                         source_address=concrete_source_address,
                         exclusive=True,
                     )
@@ -9077,16 +9476,128 @@ def _create_reusable_source_connection(
                 sock_type,
                 protocol,
                 target,
-                timeout,
+                attempt_timeout,
                 source_address=source_address,
                 exclusive=False,
             )
         except OSError as err:
+            if isinstance(err, TimeoutError) and deadline_limits_attempt:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK connect exceeded its deadline"
+                ) from err
             last_error = err
 
     if last_error is not None:
         raise last_error
     raise OSError("getaddrinfo returned no addresses")
+
+
+def _connect_attempt_settings(
+    timeout: float | None,
+    *,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> tuple[float | None, bool]:
+    """Return the timeout and whether the absolute deadline constrains it."""
+    if deadline is None:
+        return timeout, False
+    remaining = _remaining_timeout(deadline, monotonic)
+    assert remaining is not None
+    return (
+        remaining if timeout is None else min(timeout, remaining),
+        timeout is None or remaining <= timeout,
+    )
+
+
+def _create_deadline_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> socket.socket:
+    """Connect to resolved addresses without renewing an absolute deadline."""
+    last_error: OSError | None = None
+    host, port = address
+    for family, sock_type, protocol, _, target in _getaddrinfo_before_deadline(
+        host,
+        port,
+        deadline=deadline,
+        monotonic=monotonic,
+    ):
+        remaining = _remaining_timeout(deadline, monotonic)
+        assert remaining is not None
+        attempt_timeout = remaining if timeout is None else min(timeout, remaining)
+        deadline_limits_attempt = timeout is None or remaining <= timeout
+        sock = socket.socket(family, sock_type, protocol)
+        try:
+            sock.settimeout(attempt_timeout)
+            sock.connect(target)
+            return sock
+        except OSError as err:
+            last_error = err
+            sock.close()
+            if isinstance(err, TimeoutError) and deadline_limits_attempt:
+                raise EzvizLocalSdkDeadlineExpired(
+                    "EZVIZ local SDK connect exceeded its deadline"
+                ) from err
+    if last_error is not None:
+        raise last_error
+    raise OSError("getaddrinfo returned no addresses")
+
+
+def _getaddrinfo_before_deadline(
+    host: str,
+    port: int,
+    *,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> list[tuple[Any, ...]]:
+    """Resolve a host without allowing DNS to exceed an absolute deadline."""
+    if deadline is None:
+        return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+
+    remaining = _remaining_timeout(deadline, monotonic)
+    assert remaining is not None
+    results: Queue[tuple[bool, object]] = Queue(maxsize=1)
+    _ensure_resolver_worker()
+    try:
+        _RESOLVER_REQUESTS.put_nowait((host, port, results))
+    except Full as err:
+        raise EzvizLocalSdkDeadlineExpired(
+            "EZVIZ local SDK hostname resolver is still busy"
+        ) from err
+    try:
+        succeeded, value = results.get(timeout=remaining)
+    except Empty as err:
+        raise EzvizLocalSdkDeadlineExpired(
+            "EZVIZ local SDK hostname resolution exceeded its deadline"
+        ) from err
+    if not succeeded:
+        raise cast(Exception, value)
+    return cast(list[tuple[Any, ...]], value)
+
+
+def _ensure_resolver_worker() -> None:
+    """Start the single bounded hostname resolver worker when first needed."""
+    global _RESOLVER_THREAD  # noqa: PLW0603
+    with _RESOLVER_THREAD_LOCK:
+        if _RESOLVER_THREAD is not None and _RESOLVER_THREAD.is_alive():
+            return
+        _RESOLVER_THREAD = Thread(target=_resolver_worker, daemon=True)
+        _RESOLVER_THREAD.start()
+
+
+def _resolver_worker() -> None:
+    """Resolve queued hosts without allowing callers to create more threads."""
+    while True:
+        host, port, results = _RESOLVER_REQUESTS.get()
+        try:
+            addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except Exception as err:
+            results.put((False, err))
+        else:
+            results.put((True, addresses))
 
 
 def _connect_bound_source_socket(
@@ -9683,6 +10194,10 @@ class HcNetSdkCommandPortClient:
         self.timeout = timeout
         self.socket_factory = socket_factory
         self._socket: Any | None = None
+        self._state_lock = Lock()
+        self._read_lock = Lock()
+        self._write_lock = Lock()
+        self._allow_reconnect = True
 
     def __enter__(self) -> HcNetSdkCommandPortClient:
         self.connect()
@@ -9696,41 +10211,234 @@ class HcNetSdkCommandPortClient:
         """Return the connected socket, opening it lazily."""
         return self.connect()
 
-    def connect(self) -> Any:
+    @property
+    def connected(self) -> bool:
+        """Return whether a command-port socket is currently attached."""
+        with self._state_lock:
+            return self._socket is not None
+
+    def connect(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline_limited: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> Any:
         """Open the command-port TCP socket if needed."""
-        if self._socket is None:
-            self._socket = self.socket_factory(
-                (self.endpoint.host, self.endpoint.command_port),
-                self.timeout,
-            )
-        return self._socket
+        with self._state_lock:
+            existing_socket = self._socket
+            if existing_socket is not None:
+                return existing_socket
+            if not self._allow_reconnect:
+                raise PyEzvizError("HCNetSDK command-port client is shut down")
+        if existing_socket is None:
+            connect_timeout = self.timeout
+            if timeout is not None:
+                connect_timeout = (
+                    timeout
+                    if connect_timeout is None
+                    else min(connect_timeout, timeout)
+                )
+            try:
+                command_sock = _connect_with_optional_source_address(
+                    self.socket_factory,
+                    (self.endpoint.host, self.endpoint.command_port),
+                    connect_timeout,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+            except TimeoutError as err:
+                if deadline_limited and (
+                    self.timeout is None
+                    or (timeout is not None and timeout <= self.timeout)
+                ):
+                    raise EzvizLocalSdkDeadlineExpired(
+                        "HCNetSDK command-port connect exceeded its deadline"
+                    ) from err
+                raise
+            if timeout is not None:
+                command_sock.settimeout(self.timeout)
+            with self._state_lock:
+                if not self._allow_reconnect:
+                    with suppress(Exception):
+                        command_sock.close()
+                    raise PyEzvizError("HCNetSDK command-port client is shut down")
+                if self._socket is None:
+                    self._socket = command_sock
+                    return command_sock
+                existing_socket = self._socket
+            with suppress(Exception):
+                command_sock.close()
+            return existing_socket
+        raise AssertionError("unreachable command-port connection state")
 
     def close(self) -> None:
         """Close the command-port socket."""
-        if self._socket is None:
+        with self._state_lock:
+            command_sock = self._socket
+            self._socket = None
+        if command_sock is None:
             return
         with suppress(Exception):
-            self._socket.close()
-        self._socket = None
+            command_sock.close()
 
-    def send_command_frame(self, frame: bytes) -> None:
+    def shutdown(self) -> None:
+        """Close the socket and permanently reject lazy reconnection."""
+        with self._state_lock:
+            self._allow_reconnect = False
+            command_sock = self._socket
+            self._socket = None
+        if command_sock is not None:
+            with suppress(Exception):
+                command_sock.close()
+
+    def _invalidate_socket(self, sock: Any) -> None:
+        """Detach and close a socket whose protocol framing may be corrupt."""
+        with self._state_lock:
+            if self._socket is sock:
+                self._socket = None
+        with suppress(Exception):
+            sock.close()
+
+    def send_command_frame(
+        self,
+        frame: bytes,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         """Send one complete command-port frame."""
-        _send_all(self.sock, frame)
+        with self._write_lock:
+            self._send_command_frame_unlocked(
+                frame,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
 
-    def read_tcp_frame(self) -> HcNetSdkTcpFrame:
+    def _send_command_frame_unlocked(
+        self,
+        frame: bytes,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        effective_timeout = (
+            _remaining_timeout(deadline, monotonic)
+            if deadline is not None
+            else timeout
+        )
+        sock = self.connect(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
+        try:
+            _send_all_with_timeout(
+                sock,
+                frame,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
+
+    def read_tcp_frame(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkTcpFrame:
         """Read one non-media command-port response frame."""
-        return read_hcnetsdk_tcp_frame(self.sock)
+        with self._read_lock:
+            return self._read_tcp_frame_unlocked(
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+
+    def _read_tcp_frame_unlocked(
+        self,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> HcNetSdkTcpFrame:
+        effective_timeout = (
+            _remaining_timeout(deadline, monotonic)
+            if deadline is not None
+            else timeout
+        )
+        sock = self.connect(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
+        if effective_timeout is None:
+            return read_hcnetsdk_tcp_frame(sock)
+        previous_timeout = sock.gettimeout()
+        deadline_socket = _DeadlineBoundRecvSocket(
+            sock,
+            deadline=(
+                deadline if deadline is not None else monotonic() + effective_timeout
+            ),
+            configured_timeout=previous_timeout,
+            monotonic=monotonic,
+        )
+        try:
+            return read_hcnetsdk_tcp_frame(deadline_socket)
+        except EzvizLocalSdkDeadlineExpired:
+            self._invalidate_socket(sock)
+            raise
 
     def read_media_frame_after_prefix(
         self,
         *,
         max_prefix_bytes: int = 4096,
         timeout: float | None = None,
+        deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        invalidate_on_deadline: bool = True,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next command-port media frame."""
-        sock = self.sock
-        if timeout is None:
+        with self._read_lock:
+            return self._read_media_frame_after_prefix_unlocked(
+                max_prefix_bytes=max_prefix_bytes,
+                timeout=timeout,
+                deadline=deadline,
+                monotonic=monotonic,
+                invalidate_on_deadline=invalidate_on_deadline,
+            )
+
+    def _read_media_frame_after_prefix_unlocked(
+        self,
+        *,
+        max_prefix_bytes: int = 4096,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        invalidate_on_deadline: bool = True,
+    ) -> EzvizInterleavedRtpFrameWithPrefix:
+        effective_timeout = (
+            _remaining_timeout(deadline, monotonic)
+            if deadline is not None
+            else timeout
+        )
+        sock = self.connect(
+            timeout=effective_timeout,
+            deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
+        if effective_timeout is None:
             return read_hcnetsdk_command_port_interleaved_frame_after_prefix(
                 sock,
                 max_prefix_bytes=max_prefix_bytes,
@@ -9739,7 +10447,9 @@ class HcNetSdkCommandPortClient:
         previous_timeout = sock.gettimeout()
         deadline_socket = _DeadlineBoundRecvSocket(
             sock,
-            deadline=monotonic() + timeout,
+            deadline=(
+                deadline if deadline is not None else monotonic() + effective_timeout
+            ),
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
@@ -9748,8 +10458,10 @@ class HcNetSdkCommandPortClient:
                 deadline_socket,
                 max_prefix_bytes=max_prefix_bytes,
             )
-        finally:
-            sock.settimeout(previous_timeout)
+        except EzvizLocalSdkDeadlineExpired:
+            if invalidate_on_deadline or deadline_socket.bytes_received:
+                self._invalidate_socket(sock)
+            raise
 
     def login(
         self,
@@ -9758,9 +10470,21 @@ class HcNetSdkCommandPortClient:
         username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
         local_ip: str | None = None,
         rsa_key: Any | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortLoginSession:
         """Run the generated RSA/challenge command-port login handshake."""
-        sock = self.sock
+        if deadline is not None and rsa_key is None:
+            raise PyEzvizError(
+                "Deadline-aware HCNetSDK command-port login requires a "
+                "pre-generated rsa_key"
+            )
+        sock = self.connect(
+            timeout=_remaining_timeout(deadline, monotonic),
+            deadline_limited=deadline is not None,
+            deadline=deadline,
+            monotonic=monotonic,
+        )
         if local_ip is None:
             try:
                 local_ip = str(sock.getsockname()[0])
@@ -9770,23 +10494,20 @@ class HcNetSdkCommandPortClient:
                     "socket does not expose getsockname()"
                 ) from err
 
-        key = (
-            rsa_key
-            if rsa_key is not None
-            # The native SDK handshake uses 1024-bit RSA; larger generated keys
-            # are rejected by the device-side command-port login framing.
-            else RSA.generate(  # codeql[py/weak-key-size]
-                HCNETSDK_COMMAND_PORT_RSA_BITS
-            )
-        )
+        key = rsa_key if rsa_key is not None else hcnetsdk_command_port_rsa_key()
         self.send_command_frame(
             hcnetsdk_command_port_login_request_frame(
                 hcnetsdk_command_port_public_key_der(key),
                 username=username,
                 local_ip=local_ip,
-            )
+            ),
+            deadline=deadline,
+            monotonic=monotonic,
         )
-        first_response = self.read_tcp_frame()
+        first_response = self.read_tcp_frame(
+            deadline=deadline,
+            monotonic=monotonic,
+        )
         challenge = decode_hcnetsdk_command_port_login_challenge(first_response, key)
         self.send_command_frame(
             hcnetsdk_command_port_login_proof_frame(
@@ -9795,9 +10516,14 @@ class HcNetSdkCommandPortClient:
                 challenge=challenge.challenge,
                 password_seed=challenge.password_seed,
                 local_ip=local_ip,
-            )
+            ),
+            deadline=deadline,
+            monotonic=monotonic,
         )
-        second_response = self.read_tcp_frame()
+        second_response = self.read_tcp_frame(
+            deadline=deadline,
+            monotonic=monotonic,
+        )
         return parse_hcnetsdk_command_port_login_session(
             first_response,
             second_response,
@@ -9812,6 +10538,8 @@ class HcNetSdkCommandPortClient:
         read_response_after_each: bool | Iterable[bool] = True,
         read_first_media: bool = True,
         max_prefix_bytes: int = 4096,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortStreamBootstrap:
         """Send command frames and optionally read the first media frame."""
         frames = tuple(command_frames)
@@ -9827,15 +10555,30 @@ class HcNetSdkCommandPortClient:
 
         exchanges: list[HcNetSdkCommandPortExchange] = []
         for index, frame in enumerate(frames):
-            self.send_command_frame(frame)
+            self.send_command_frame(
+                frame,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
             should_read = (
                 read_response_after_each if response_flags is None else response_flags[index]
             )
-            response = self.read_tcp_frame() if should_read else None
+            response = (
+                self.read_tcp_frame(
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
+                if should_read
+                else None
+            )
             exchanges.append(HcNetSdkCommandPortExchange(frame, response))
 
         first_media = (
-            self.read_media_frame_after_prefix(max_prefix_bytes=max_prefix_bytes)
+            self.read_media_frame_after_prefix(
+                max_prefix_bytes=max_prefix_bytes,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
             if read_first_media
             else None
         )

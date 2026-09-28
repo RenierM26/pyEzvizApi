@@ -8,6 +8,8 @@ import hashlib
 import hmac
 from pathlib import Path
 import socket
+from threading import Event, Thread
+import time
 from typing import Any
 
 from Crypto.Cipher import PKCS1_v1_5
@@ -4004,6 +4006,43 @@ def test_hcnetsdk_command_port_client_bootstraps_first_media() -> None:
     assert bootstrap.first_media.frame.payload == media_payload
 
 
+def test_hcnetsdk_command_port_shutdown_rejects_late_connect() -> None:
+    connect_started = Event()
+    release_connect = Event()
+    sock = _FakeSocket([])
+    errors: list[Exception] = []
+
+    def socket_factory(_address: tuple[str, int], _timeout: float | None) -> _FakeSocket:
+        connect_started.set()
+        assert release_connect.wait(timeout=1.0)
+        return sock
+
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        socket_factory=socket_factory,
+    )
+
+    def connect() -> None:
+        try:
+            client.connect()
+        except Exception as err:
+            errors.append(err)
+
+    thread = Thread(target=connect)
+    thread.start()
+    assert connect_started.wait(timeout=1.0)
+    client.shutdown()
+    release_connect.set()
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert sock.closed is True
+    assert len(errors) == 1
+    assert isinstance(errors[0], PyEzvizError)
+    with pytest.raises(PyEzvizError, match="shut down"):
+        client.connect()
+
+
 def test_hcnetsdk_command_port_media_read_restores_socket_timeout() -> None:
     expected_prefix = b"preface"
     expected_timeout = 3.0
@@ -4033,6 +4072,75 @@ def test_hcnetsdk_command_port_media_read_restores_socket_timeout() -> None:
     assert sock.timeout == expected_timeout
     assert sock.timeout_history[-1] == expected_timeout
     assert 1.0 in sock.timeout_history
+
+
+def test_hcnetsdk_command_port_allows_keepalive_during_media_read() -> None:
+    expected_timeout = 3.0
+    keepalive = b"keepalive"
+    read_started = Event()
+    errors: list[Exception] = []
+    media_payload = b"\x80\x60\x00\x01" + (b"\x00" * 8) + b"\x00\x00\x01\xbaabc"
+    media_frame = (
+        b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    client_sock, peer_sock = socket.socketpair()
+    client_sock.settimeout(expected_timeout)
+    peer_sock.settimeout(1.0)
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=expected_timeout,
+        socket_factory=lambda _address, _timeout: client_sock,
+    )
+
+    def read_media() -> None:
+        read_started.set()
+        try:
+            client.read_media_frame_after_prefix(timeout=1.0)
+        except Exception as err:
+            errors.append(err)
+
+    reader = Thread(target=read_media)
+    reader.start()
+    assert read_started.wait(timeout=1.0)
+    time.sleep(0.02)
+    client.send_command_frame(keepalive, timeout=1.0)
+
+    assert peer_sock.recv(len(keepalive)) == keepalive
+    assert reader.is_alive()
+
+    peer_sock.sendall(media_frame)
+    reader.join(timeout=1.0)
+
+    assert not reader.is_alive()
+    assert errors == []
+    assert client_sock.gettimeout() == expected_timeout
+    client.close()
+    peer_sock.close()
+
+
+def test_hcnetsdk_command_port_write_obeys_deadline_under_backpressure() -> None:
+    max_elapsed = 0.5
+    client_sock, peer_sock = socket.socketpair()
+    client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10"),
+        timeout=5.0,
+        socket_factory=lambda _address, _timeout: client_sock,
+    )
+    started_at = time.monotonic()
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="write"):
+        client.send_command_frame(
+            b"x" * (1024 * 1024),
+            deadline=started_at + 0.02,
+        )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < max_elapsed
+    client.close()
+    peer_sock.close()
 
 
 def test_ezviz_local_sdk_client_bootstraps_preview_and_first_media() -> None:
@@ -4409,6 +4517,265 @@ def test_windows_wildcard_source_retries_exclusive_bind_on_route_interface(
     ]
 
 
+def test_source_connection_recomputes_timeout_between_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_socket = object()
+    timeouts: list[float | None] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        del source_address, exclusive
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            raise OSError(errno.ETIMEDOUT, "first address timed out")
+        return connected_socket
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        False,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    clock = iter((0.0, 0.0, 0.5)).__next__
+
+    assert _create_reusable_source_connection(
+        ("camera.example", 9010),
+        1.0,
+        source_address=("", 10103),
+        deadline=1.1,
+        monotonic=clock,
+    ) is connected_socket
+    assert timeouts == pytest.approx([1.0, 0.6])
+
+
+def test_source_connection_final_timeout_uses_deadline_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float | None] = []
+
+    def connect_bound_source_socket(
+        _family: int,
+        _sock_type: int,
+        _protocol: int,
+        _target: Any,
+        timeout: float | None,
+        *,
+        source_address: tuple[Any, ...],
+        exclusive: bool,
+    ) -> Any:
+        del source_address, exclusive
+        timeouts.append(timeout)
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._WINDOWS_EXCLUSIVE_SOURCE_BIND",
+        False,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk._connect_bound_source_socket",
+        connect_bound_source_socket,
+    )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    clock = iter((0.0, 0.5, 1.5)).__next__
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="connect"):
+        _create_reusable_source_connection(
+            ("camera.example", 9010),
+            1.0,
+            source_address=("", 10103),
+            deadline=2.0,
+            monotonic=clock,
+        )
+
+    assert timeouts == [1.0, 0.5]
+
+
+def test_hostname_resolution_obeys_absolute_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = Event()
+    max_elapsed = 0.5
+
+    def getaddrinfo(*_args: object, **_kwargs: object) -> list[tuple[Any, ...]]:
+        release.wait(timeout=1.0)
+        return []
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    started_at = time.monotonic()
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="resolution"):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=started_at + 0.02,
+        )
+    elapsed = time.monotonic() - started_at
+    release.set()
+
+    assert elapsed < max_elapsed
+
+
+def test_hostname_resolution_uses_bounded_shared_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    max_elapsed = 0.1
+    resolution_started = Event()
+    second_resolution_started = Event()
+    release = Event()
+    calls = 0
+
+    def getaddrinfo(*_args: object, **_kwargs: object) -> list[tuple[Any, ...]]:
+        nonlocal calls
+        calls += 1
+        resolution_started.set()
+        if calls == 2:
+            second_resolution_started.set()
+        release.wait(timeout=1.0)
+        return []
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=time.monotonic() + 0.02,
+        )
+    assert resolution_started.wait(timeout=1.0)
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=time.monotonic() + 0.02,
+        )
+    started_at = time.monotonic()
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="resolver is still busy"):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=time.monotonic() + 0.5,
+        )
+    elapsed = time.monotonic() - started_at
+
+    assert calls == 1
+    assert elapsed < max_elapsed
+    release.set()
+    assert second_resolution_started.wait(timeout=1.0)
+
+
+def test_deadline_expiry_between_addresses_does_not_allocate_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[Any] = []
+
+    class ConnectSocket:
+        closed = False
+
+        def settimeout(self, _timeout: float | None) -> None:
+            return
+
+        def connect(self, _target: Any) -> None:
+            raise OSError(errno.ETIMEDOUT, "first address timed out")
+
+        def close(self) -> None:
+            self.closed = True
+
+    def socket_factory(*_args: object) -> ConnectSocket:
+        sock = ConnectSocket()
+        created.append(sock)
+        return sock
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    monkeypatch.setattr(socket, "socket", socket_factory)
+    clock = iter((0.0, 0.5, 1.1)).__next__
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=1.0,
+            monotonic=clock,
+        )
+
+    assert len(created) == 1
+    assert created[0].closed is True
+
+
+def test_final_address_timeout_uses_deadline_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float | None] = []
+
+    class ConnectSocket:
+        def settimeout(self, timeout: float | None) -> None:
+            timeouts.append(timeout)
+
+        def connect(self, _target: Any) -> None:
+            raise TimeoutError
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.10", 9010)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.0.2.11", 9010)),
+        ],
+    )
+    monkeypatch.setattr(socket, "socket", lambda *_args: ConnectSocket())
+    clock = iter((0.0, 0.5, 1.5)).__next__
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="connect"):
+        _connect_with_optional_source_address(
+            socket.create_connection,
+            ("camera.example", 9010),
+            1.0,
+            deadline=2.0,
+            monotonic=clock,
+        )
+
+    assert timeouts == [1.0, 0.5]
+
+
 def test_windows_ipv6_wildcard_source_preserves_route_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4586,10 +4953,10 @@ def test_ezviz_local_sdk_client_temporarily_bounds_stream_read_timeout(
         )
 
     assert result == stream_byte
-    assert stream_sock.timeout_history == [0.75, 3.0]
+    assert stream_sock.timeout_history == [5.0, 0.75, 5.0]
 
 
-def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) -> None:
+def test_ezviz_local_sdk_client_preserves_configured_stream_timeout(monkeypatch) -> None:
     stream_byte = b"x"
     stream_sock = _FakeSocket([stream_byte])
     stream_sock.timeout = 3.0
@@ -4621,7 +4988,7 @@ def test_ezviz_local_sdk_client_preserves_shorter_stream_timeout(monkeypatch) ->
         )
 
     assert result == stream_byte
-    assert stream_sock.timeout_history == [3.0, 3.0]
+    assert stream_sock.timeout_history == [5.0, 5.0, 5.0]
 
 
 def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
@@ -4662,7 +5029,402 @@ def test_ezviz_local_sdk_client_enforces_total_stream_read_deadline(
             monotonic=lambda: next(ticks),
         )
 
-    assert stream_sock.timeout_history == [0.9, 0.4, 5.0]
+    assert stream_sock.timeout_history == [5.0, 0.9, 5.0, 0.4, 5.0]
+
+
+def test_ezviz_local_sdk_command_response_uses_absolute_capture_deadline(
+    monkeypatch,
+) -> None:
+    command_sock = _FakeSocket([])
+    command_sock.timeout = 5.0
+    connect_timeouts: list[float | None] = []
+
+    def read_fragmented(sock, *, trailer_length):
+        del trailer_length
+        sock.recv(1)
+        return sock.recv(1)
+
+    monkeypatch.setattr(
+        "pyezvizapi.hcnetsdk.read_ezviz_local_sdk_frame",
+        read_fragmented,
+    )
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    device_info = EzvizCasDeviceInfo(
+        serial="CAM123456",
+        operation_code="0123456",
+        key="1234567890abcdef",
+    )
+    ticks = iter([0.0, 0.25, 1.1])
+
+    def socket_factory(_address, timeout):
+        connect_timeouts.append(timeout)
+        return command_sock
+
+    with EzvizLocalSdkClient(
+        endpoint,
+        device_info,
+        socket_factory=socket_factory,
+    ) as client, pytest.raises(EzvizLocalSdkDeadlineExpired):
+        client.send_encrypted_command(
+            EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            b"<Request/>",
+            deadline=1.0,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert connect_timeouts == [1.0]
+    assert command_sock.timeout_history == [5.0, 0.75, 5.0]
+
+
+@pytest.mark.parametrize("read_kind", ("command_response", "stream_media"))
+def test_local_deadline_read_invalidates_socket(read_kind: str) -> None:
+    response = build_ezviz_local_sdk_frame(
+        command=EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+        body=b"<Response><Result>0</Result></Response>",
+    ) + LOCAL_SDK_RESPONSE_TRAILER
+    media_payload = b"media"
+    media = b"\x24\x00" + len(media_payload).to_bytes(2, "big") + media_payload
+    first_data = response[:1] if read_kind == "command_response" else media[:2]
+    replacement_data = response if read_kind == "command_response" else media
+    interrupted_sock = _FakeSocket([first_data])
+    replacement_sock = _FakeSocket([replacement_data])
+    sockets = iter([interrupted_sock, replacement_sock])
+    client = EzvizLocalSdkClient(
+        HcNetSdkLanEndpoint(
+            serial="CAM123456",
+            host="192.0.2.10",
+            command_port=9010,
+            stream_port=9020,
+        ),
+        EzvizCasDeviceInfo(
+            serial="CAM123456",
+            operation_code="0123456",
+            key="1234567890abcdef",
+        ),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: next(sockets),
+    )
+    ticks = iter([0.0, 0.1, 0.2, 1.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        if read_kind == "command_response":
+            client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                b"<Request/>",
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        else:
+            client.read_stream_frame_after_prefix(
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+
+    assert interrupted_sock.closed is True
+    if read_kind == "command_response":
+        exchange = client.send_encrypted_command(
+            EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            b"<Request/>",
+        )
+        assert exchange.response.header.command == EZVIZ_LOCAL_SDK_PREVIEW_COMMAND
+    else:
+        frame = client.read_stream_frame_after_prefix()
+        assert frame.frame.payload == media_payload
+
+
+@pytest.mark.parametrize("read_kind", ("tcp", "media"))
+def test_command_port_deadline_read_invalidates_socket(read_kind: str) -> None:
+    tcp_payload = b"ok"
+    tcp_frame = build_hcnetsdk_tcp_frame(tcp_payload)
+    media_payload = b"media"
+    media_frame = (
+        b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    expected_frame = tcp_frame if read_kind == "tcp" else media_frame
+    interrupted_sock = _FakeSocket(
+        [expected_frame[:1] if read_kind == "tcp" else expected_frame[:2]]
+    )
+    replacement_sock = _FakeSocket([expected_frame])
+    sockets = iter([interrupted_sock, replacement_sock])
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: next(sockets),
+    )
+    ticks = iter([0.0, 0.2, 1.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        if read_kind == "tcp":
+            client.read_tcp_frame(
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        else:
+            client.read_media_frame_after_prefix(
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+
+    assert interrupted_sock.closed is True
+    if read_kind == "tcp":
+        assert client.read_tcp_frame().body == tcp_payload
+    else:
+        assert client.read_media_frame_after_prefix().frame.payload == media_payload
+
+
+def test_command_port_expected_media_timeout_preserves_socket() -> None:
+    class QuietSocket(_FakeSocket):
+        def recv(self, _length: int) -> bytes:
+            raise TimeoutError
+
+    sock = QuietSocket([])
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: sock,
+    )
+    ticks = iter([0.0, 0.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        client.read_media_frame_after_prefix(
+            deadline=1.0,
+            monotonic=lambda: next(ticks),
+            invalidate_on_deadline=False,
+        )
+
+    assert sock.closed is False
+    assert client.connected is True
+    client.send_command_frame(b"keepalive")
+    assert sock.sent == [b"keepalive"]
+
+
+def test_deadline_aware_command_port_login_requires_pre_generated_key() -> None:
+    def unexpected_socket_factory(
+        _address: tuple[str, int],
+        _timeout: float | None,
+    ) -> Any:
+        pytest.fail("invalid deadline login must fail before connecting")
+
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        socket_factory=unexpected_socket_factory,
+    )
+
+    with pytest.raises(PyEzvizError, match="pre-generated rsa_key"):
+        client.login(
+            password=b"123456",
+            local_ip="192.0.2.20",
+            deadline=1.0,
+            monotonic=lambda: 0.0,
+        )
+
+
+def test_command_port_partial_expected_media_timeout_invalidates_socket() -> None:
+    media_payload = b"media"
+    media_frame = (
+        b"\x24\x00"
+        + (len(media_payload) + 4).to_bytes(2, "little")
+        + media_payload
+    )
+    interrupted_sock = _FakeSocket([media_frame[:2]])
+    replacement_sock = _FakeSocket([media_frame])
+    sockets = iter([interrupted_sock, replacement_sock])
+    client = HcNetSdkCommandPortClient(
+        HcNetSdkLanEndpoint(serial="CAM123456", host="192.0.2.10"),
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: next(sockets),
+    )
+    ticks = iter([0.0, 0.1, 1.1])
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="read"):
+        client.read_media_frame_after_prefix(
+            deadline=1.0,
+            monotonic=lambda: next(ticks),
+            invalidate_on_deadline=False,
+        )
+
+    assert interrupted_sock.closed is True
+    assert client.connected is False
+    assert client.read_media_frame_after_prefix().frame.payload == media_payload
+
+
+@pytest.mark.parametrize("client_kind", ("local", "command_port"))
+def test_local_command_writes_use_remaining_capture_deadline(client_kind: str) -> None:
+    configured_timeout = 10.0
+    remaining_timeout = 0.75
+
+    class BlockingSendSocket(_FakeSocket):
+        def sendall(self, data: bytes) -> None:
+            del data
+            raise TimeoutError
+
+    command_sock = BlockingSendSocket([])
+    command_sock.timeout = configured_timeout
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    ticks = iter([0.0, 0.25])
+
+    def clock() -> float:
+        return next(ticks)
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        if client_kind == "local":
+            device_info = EzvizCasDeviceInfo(
+                serial="CAM123456",
+                operation_code="0123456",
+                key="1234567890abcdef",
+            )
+            with EzvizLocalSdkClient(
+                endpoint,
+                device_info,
+                timeout=configured_timeout,
+                socket_factory=lambda _address, _timeout: command_sock,
+            ) as local_client:
+                local_client.send_encrypted_command(
+                    EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                    b"<Request/>",
+                    deadline=1.0,
+                    monotonic=clock,
+                )
+        else:
+            with HcNetSdkCommandPortClient(
+                endpoint,
+                timeout=configured_timeout,
+                socket_factory=lambda _address, _timeout: command_sock,
+            ) as command_client:
+                command_client.send_command_frame(
+                    b"request",
+                    deadline=1.0,
+                    monotonic=clock,
+                )
+
+    assert remaining_timeout in command_sock.timeout_history
+    assert command_sock.timeout_history[-1] == configured_timeout
+
+
+@pytest.mark.parametrize("client_kind", ("local", "command_port"))
+def test_partial_deadline_write_invalidates_local_socket(client_kind: str) -> None:
+    class PartialWriteSocket(_FakeSocket):
+        def sendall(self, data: bytes) -> None:
+            self.sent.append(data[:1])
+            raise TimeoutError
+
+    command_sock = PartialWriteSocket([])
+    command_sock.timeout = 10.0
+    replacement_sock = _FakeSocket(
+        [
+            build_ezviz_local_sdk_frame(
+                command=EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                body=b"<Response><Result>0</Result></Response>",
+            )
+            + LOCAL_SDK_RESPONSE_TRAILER
+        ]
+    )
+    sockets = iter([command_sock, replacement_sock])
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+    ticks = iter([0.0, 0.25])
+    client: EzvizLocalSdkClient | HcNetSdkCommandPortClient
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="write"):
+        if client_kind == "local":
+            client = EzvizLocalSdkClient(
+                endpoint,
+                EzvizCasDeviceInfo(
+                    serial="CAM123456",
+                    operation_code="0123456",
+                    key="1234567890abcdef",
+                ),
+                timeout=10.0,
+                socket_factory=lambda _address, _timeout: next(sockets),
+            )
+            client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                b"<Request/>",
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+        else:
+            client = HcNetSdkCommandPortClient(
+                endpoint,
+                timeout=10.0,
+                socket_factory=lambda _address, _timeout: next(sockets),
+            )
+            client.send_command_frame(
+                b"request",
+                deadline=1.0,
+                monotonic=lambda: next(ticks),
+            )
+
+    assert command_sock.sent
+    assert command_sock.closed is True
+    if isinstance(client, EzvizLocalSdkClient):
+        exchange = client.send_encrypted_command(
+            EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+            b"<Request/>",
+        )
+        assert exchange.response.header.command == EZVIZ_LOCAL_SDK_PREVIEW_COMMAND
+    else:
+        assert client.connect() is replacement_sock
+
+
+@pytest.mark.parametrize("client_kind", ("local", "command_port"))
+def test_local_connect_timeout_uses_capture_deadline_exception(client_kind: str) -> None:
+    endpoint = HcNetSdkLanEndpoint(
+        serial="CAM123456",
+        host="192.0.2.10",
+        command_port=9010,
+        stream_port=9020,
+    )
+
+    def socket_factory(_address: tuple[str, int], _timeout: float | None) -> Any:
+        raise TimeoutError
+
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        if client_kind == "local":
+            device_info = EzvizCasDeviceInfo(
+                serial="CAM123456",
+                operation_code="0123456",
+                key="1234567890abcdef",
+            )
+            local_client = EzvizLocalSdkClient(
+                endpoint,
+                device_info,
+                timeout=10.0,
+                socket_factory=socket_factory,
+            )
+            local_client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_PREVIEW_COMMAND,
+                b"<Request/>",
+                deadline=1.0,
+                monotonic=lambda: 0.0,
+            )
+        else:
+            command_client = HcNetSdkCommandPortClient(
+                endpoint,
+                timeout=10.0,
+                socket_factory=socket_factory,
+            )
+            command_client.send_command_frame(
+                b"request",
+                deadline=1.0,
+                monotonic=lambda: 0.0,
+            )
 
 
 def test_apk_observed_command_ids_are_named() -> None:

@@ -146,6 +146,37 @@ image = client.save_image(
 )
 ```
 
+For integrations with several stream modes, use the typed configuration API so
+source-specific connection settings stay separate from capture, decode, and mux
+settings:
+
+```python
+from pyezvizapi import (
+    CaptureLimits,
+    ClipOptions,
+    CloudClipSource,
+    MediaDecodeOptions,
+    MediaMuxOptions,
+)
+
+result = client.save_clip_with_options(
+    "ABC123",
+    "/config/www/ezviz/front.ts",
+    ClipOptions(
+        source=CloudClipSource(client_type=9, refresh_vtm=True),
+        capture=CaptureLimits(duration_seconds=10),
+        decode=MediaDecodeOptions(decrypt_video=False),
+        mux=MediaMuxOptions(output_format="mpegts"),
+        channel=1,
+    ),
+)
+```
+
+The original `save_clip(...)` keywords and imports from `pyezvizapi.stream` or
+`pyezvizapi.local_stream` remain compatible. New lower-level code should import
+from `stream_transport`, `stream_media`, `local_stream_transport`,
+`local_stream_media`, or `local_stream_ecdh` according to responsibility.
+
 Use `source="hcnetsdk-command-port"`, `host="192.0.2.10"`, `command_port=8000`,
 and `hcnetsdk_command_frames=(...)` when an integration already has the complete
 full-local HCNetSDK port-8000 command bootstrap frames. For native-style flows

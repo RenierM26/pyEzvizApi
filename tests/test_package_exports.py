@@ -1,6 +1,16 @@
 from __future__ import annotations
 
 import pyezvizapi
+from pyezvizapi.clip import ClipOptions
+from pyezvizapi.local_stream import (
+    EzvizLocalSdkEcdhStreamDecoder as LegacyEcdhDecoder,
+)
+from pyezvizapi.local_stream_ecdh import EzvizLocalSdkEcdhStreamDecoder
+from pyezvizapi.local_stream_media import copy_local_stream_to_mpegts
+from pyezvizapi.local_stream_transport import EzvizLocalSdkMediaStream
+from pyezvizapi.stream import VtmStreamClient as LegacyVtmStreamClient
+from pyezvizapi.stream_media import decrypt_hikvision_ps_video
+from pyezvizapi.stream_transport import VtmStreamClient
 
 
 def test_package_all_exports_resolve() -> None:
@@ -76,3 +86,22 @@ def test_dir_includes_lazy_exports() -> None:
     visible = set(dir(pyezvizapi))
 
     assert exported <= visible
+
+
+def test_stream_exports_have_focused_runtime_owners() -> None:
+    expected_exports = {
+        "ClipOptions": ClipOptions,
+        "VtmStreamClient": VtmStreamClient,
+        "decrypt_hikvision_ps_video": decrypt_hikvision_ps_video,
+        "EzvizLocalSdkMediaStream": EzvizLocalSdkMediaStream,
+        "copy_local_stream_to_mpegts": copy_local_stream_to_mpegts,
+        "EzvizLocalSdkEcdhStreamDecoder": EzvizLocalSdkEcdhStreamDecoder,
+    }
+
+    for name, expected in expected_exports.items():
+        assert getattr(pyezvizapi, name) is expected
+
+
+def test_legacy_stream_modules_keep_existing_imports() -> None:
+    assert LegacyEcdhDecoder is EzvizLocalSdkEcdhStreamDecoder
+    assert LegacyVtmStreamClient is VtmStreamClient

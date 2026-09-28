@@ -135,6 +135,7 @@ if TYPE_CHECKING:
         open_local_sdk_stream,
         open_local_sdk_stream_from_client,
     )
+    del _compatibility_exports
 
 _ECDH_EXPORTS = (
     "EzvizLocalSdkEcdhDataPacket",

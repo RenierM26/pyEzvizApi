@@ -90,5 +90,6 @@ if TYPE_CHECKING:
         vtm_media_packet_source,
         vtm_packet_to_media_packet,
     )
+    del _compatibility_exports
 
 sys.modules[__name__] = _implementation

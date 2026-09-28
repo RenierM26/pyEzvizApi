@@ -77,6 +77,12 @@ from .local_stream_ecdh import (
     copy_local_sdk_ecdh_stream_to_media,
     open_local_sdk_ecdh_stream,
 )
+from .rtp import (
+    detect_rtp_video_codec,
+    parse_rtp_packet,
+    rtp_packets_to_annexb,
+    rtp_payload_video_codec,
+)
 from .stream import (
     StreamTransport,
     decrypt_hikvision_ps_video,
@@ -84,7 +90,6 @@ from .stream import (
     detect_transport,
     download_ezviz_cloud_replay,
     mpeg_ps_decryptable_prefix_length,
-    rtp_payload,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -3133,158 +3138,30 @@ def _detect_stream_packets_transport(packets: list[Any]) -> StreamTransport:
 
 
 def _rtp_payload_video_codec(payload: bytes) -> str | None:
-    """Best-effort codec detection for EZVIZ RTP video payloads."""
+    """Compatibility wrapper for the shared RTP codec detector."""
 
-    if len(payload) < 2:
-        return None
-    h264_type = payload[0] & 0x1F
-    hevc_type = (payload[0] >> 1) & 0x3F
-    if hevc_type in {48, 49} and _is_plausible_hevc_rtp_header(payload):
-        return "hevc"
-    if 1 <= h264_type <= 5:
-        return "h264"
-    if hevc_type in {32, 33, 34, 39, 40}:
-        return "hevc"
-    if h264_type in {7, 8, 24, 28}:
-        return "h264"
-    return None
-
-
-def _is_plausible_hevc_rtp_header(payload: bytes) -> bool:
-    """Return True when the RTP payload begins with a plausible HEVC NAL header."""
-
-    if len(payload) < 2:
-        return False
-    forbidden_zero = payload[0] & 0x80 == 0
-    layer_id = ((payload[0] & 0x01) << 5) | (payload[1] >> 3)
-    temporal_id_plus1 = payload[1] & 0x07
-    nal_type = (payload[0] >> 1) & 0x3F
-    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 49
+    return rtp_payload_video_codec(payload)
 
 
 def _detect_rtp_video_codec(packets: list[Any]) -> str:
-    """Detect whether RTP stream packets carry HEVC or H.264 video."""
+    """Detect RTP video codec through the shared parser and router."""
 
-    fallback: str | None = None
+    parsed = []
     for packet in packets:
         try:
-            payload = rtp_payload(packet.body)
+            parsed.append(parse_rtp_packet(packet.body))
         except PyEzvizError:
             continue
-        codec = _rtp_payload_video_codec(payload)
-        if codec in {"hevc", "h264"}:
-            return codec
-        if len(payload) >= 2 and fallback is None:
-            hevc_type = (payload[0] >> 1) & 0x3F
-            h264_type = payload[0] & 0x1F
-            if 0 <= hevc_type <= 50:
-                fallback = "hevc"
-            elif 1 <= h264_type <= 23:
-                fallback = "h264"
-    if fallback:
-        return fallback
-    raise PyEzvizError("Could not detect RTP video codec")
+    return detect_rtp_video_codec(parsed)
 
 
 def _rtp_packets_to_annexb(packets: list[Any], *, codec: str) -> bytes:
-    """Convert RTP HEVC/H.264 packets to Annex B elementary-stream bytes."""
+    """Convert RTP video through the shared continuity state machine."""
 
-    output = bytearray()
-    fragmented_nal = bytearray()
-    in_fragment = False
-
-    def append_nal(nal: bytes) -> None:
-        if nal:
-            output.extend(b"\x00\x00\x00\x01")
-            output.extend(nal)
-
-    for packet in packets:
-        payload = rtp_payload(packet.body)
-        if codec == "hevc":
-            if len(payload) < 2:
-                continue
-            nal_type = (payload[0] >> 1) & 0x3F
-            if nal_type == 48:
-                # Aggregation packet. The streams observed here do not include DONL.
-                offset = 2
-                while offset + 2 <= len(payload):
-                    nal_size = int.from_bytes(payload[offset : offset + 2], "big")
-                    offset += 2
-                    if nal_size <= 0 or offset + nal_size > len(payload):
-                        break
-                    append_nal(payload[offset : offset + nal_size])
-                    offset += nal_size
-                in_fragment = False
-                fragmented_nal.clear()
-            elif nal_type == 49 and len(payload) >= 3:
-                fu_header = payload[2]
-                starts_fragment = bool(fu_header & 0x80)
-                ends_fragment = bool(fu_header & 0x40)
-                original_type = fu_header & 0x3F
-                if starts_fragment:
-                    fragmented_nal = bytearray()
-                    fragmented_nal.append((payload[0] & 0x81) | (original_type << 1))
-                    fragmented_nal.append(payload[1])
-                    fragmented_nal.extend(payload[3:])
-                    in_fragment = True
-                    if ends_fragment:
-                        append_nal(bytes(fragmented_nal))
-                        fragmented_nal.clear()
-                        in_fragment = False
-                elif in_fragment:
-                    fragmented_nal.extend(payload[3:])
-                    if ends_fragment:
-                        append_nal(bytes(fragmented_nal))
-                        fragmented_nal.clear()
-                        in_fragment = False
-            else:
-                append_nal(payload)
-                in_fragment = False
-                fragmented_nal.clear()
-            continue
-
-        if codec == "h264":
-            nal_type = payload[0] & 0x1F if payload else 0
-            if 1 <= nal_type <= 23:
-                append_nal(payload)
-                in_fragment = False
-                fragmented_nal.clear()
-            elif nal_type == 24:
-                offset = 1
-                while offset + 2 <= len(payload):
-                    nal_size = int.from_bytes(payload[offset : offset + 2], "big")
-                    offset += 2
-                    if nal_size <= 0 or offset + nal_size > len(payload):
-                        break
-                    append_nal(payload[offset : offset + nal_size])
-                    offset += nal_size
-                in_fragment = False
-                fragmented_nal.clear()
-            elif nal_type == 28 and len(payload) >= 2:
-                fu_indicator = payload[0]
-                fu_header = payload[1]
-                starts_fragment = bool(fu_header & 0x80)
-                ends_fragment = bool(fu_header & 0x40)
-                original_type = fu_header & 0x1F
-                if starts_fragment:
-                    fragmented_nal = bytearray([(fu_indicator & 0xE0) | original_type])
-                    fragmented_nal.extend(payload[2:])
-                    in_fragment = True
-                    if ends_fragment:
-                        append_nal(bytes(fragmented_nal))
-                        fragmented_nal.clear()
-                        in_fragment = False
-                elif in_fragment:
-                    fragmented_nal.extend(payload[2:])
-                    if ends_fragment:
-                        append_nal(bytes(fragmented_nal))
-                        fragmented_nal.clear()
-                        in_fragment = False
-            continue
-
+    if codec not in {"h264", "hevc"}:
         raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
-
-    return bytes(output)
+    parsed = [parse_rtp_packet(packet.body) for packet in packets]
+    return rtp_packets_to_annexb(parsed, codec=cast(Any, codec))
 
 
 def _decrypt_annexb_video_bytes(

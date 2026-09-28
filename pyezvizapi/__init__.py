@@ -679,6 +679,17 @@ if TYPE_CHECKING:
         build_device_records_map,
     )
     from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
+    from .rtp import (
+        RtpContinuityStats,
+        RtpPacket,
+        RtpVideoDepacketizer,
+        detect_rtp_video_codec,
+        parse_rtp_packet,
+        rtp_media_kind,
+        rtp_packets_to_annexb,
+        rtp_payload,
+        rtp_payload_video_codec,
+    )
     from .smart_plug import EzvizSmartPlug
     from .stream import (
         StopStreamResponse,
@@ -713,7 +724,6 @@ if TYPE_CHECKING:
         parse_stop_stream_response,
         parse_stream_info_response,
         parse_vtm_url,
-        rtp_payload,
         summarize_vtm_packet,
         vtm_media_packet_source,
         vtm_packet_to_media_packet,
@@ -727,6 +737,9 @@ _EXPORTS = {
     "BatteryCameraWorkMode": "constants",
     "CaptureLimits": "media",
     "DeadlineLegacyPacketSource": "media",
+    "RtpContinuityStats": "rtp",
+    "RtpPacket": "rtp",
+    "RtpVideoDepacketizer": "rtp",
     "build_ezviz_local_sdk_ecdh_init_request_body": "local_stream",
     "DefenseModeType": "constants",
     "DeviceCatagories": "constants",
@@ -1365,7 +1378,12 @@ _EXPORTS = {
     "port_security_has_port": "feature",
     "port_security_port_enabled": "feature",
     "resolve_channel": "feature",
-    "rtp_payload": "stream",
+    "detect_rtp_video_codec": "rtp",
+    "parse_rtp_packet": "rtp",
+    "rtp_media_kind": "rtp",
+    "rtp_packets_to_annexb": "rtp",
+    "rtp_payload": "rtp",
+    "rtp_payload_video_codec": "rtp",
     "read_ezviz_interleaved_rtp_frame": "hcnetsdk",
     "read_ezviz_interleaved_rtp_frame_after_prefix": "hcnetsdk",
     "read_ezviz_local_sdk_frame": "hcnetsdk",

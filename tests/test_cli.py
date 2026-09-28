@@ -2684,6 +2684,49 @@ def test_rtp_payload_video_codec_keeps_h264_slice_bytes_before_hevc_ap_fu() -> N
     assert cli_module._rtp_payload_video_codec(b"\x62\x01\x85hevc-fu") == "hevc"  # noqa: SLF001
 
 
+def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> None:
+    def rtp(
+        payload: bytes,
+        *,
+        payload_type: int,
+        sequence: int,
+        ssrc: int,
+        marker: bool = False,
+    ) -> bytes:
+        return (
+            b"\x80"
+            + bytes([payload_type | (0x80 if marker else 0)])
+            + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x01"
+            + ssrc.to_bytes(4, "big")
+            + payload
+        )
+
+    bodies = [
+        rtp(b"\x7c\x85hello", payload_type=96, sequence=65535, ssrc=1),
+        rtp(b"aac", payload_type=104, sequence=7, ssrc=2),
+        rtp(b"metadata", payload_type=112, sequence=9, ssrc=3),
+        rtp(
+            b"\x7c\x45-world",
+            payload_type=96,
+            sequence=0,
+            ssrc=1,
+            marker=True,
+        ),
+    ]
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+    expected_annexb = b"\x00\x00\x00\x01\x65hello-world"
+
+    assert cli_module._detect_rtp_video_codec(packets) == "h264"  # noqa: SLF001
+    assert (
+        cli_module._rtp_packets_to_annexb(packets, codec="h264")  # noqa: SLF001
+        == expected_annexb
+    )
+
+
 def test_parse_stream_dump_duration_units() -> None:
     cases = {
         "30": 30.0,

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
+from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.rtp import (
+    RtpVideoCodec,
     RtpVideoDepacketizer,
     detect_rtp_video_codec,
     parse_rtp_packet,
@@ -94,3 +98,40 @@ def test_codec_detection_ignores_audio_and_metadata() -> None:
     ]
 
     assert detect_rtp_video_codec(packets) == "hevc"
+
+
+def test_codec_detection_defers_ambiguous_hevc_sps() -> None:
+    packets = [
+        parse_rtp_packet(_rtp(b"\x42\x01sps", sequence=1)),
+        parse_rtp_packet(_rtp(b"\x40\x01vps", sequence=2)),
+    ]
+
+    assert detect_rtp_video_codec(packets) == "hevc"
+
+
+def test_codec_detection_rejects_only_ambiguous_packets() -> None:
+    packet = parse_rtp_packet(_rtp(b"\x42\x01ambiguous", sequence=1))
+
+    with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
+        detect_rtp_video_codec([packet])
+
+
+@pytest.mark.parametrize(
+    ("codec", "start", "truncated", "end"),
+    [
+        ("h264", b"\x7c\x85start", b"\x7c", b"\x7c\x45end"),
+        ("hevc", b"\x62\x01\x93start", b"\x62", b"\x62\x01\x53end"),
+    ],
+)
+def test_truncated_fu_discards_active_fragment(
+    codec: RtpVideoCodec,
+    start: bytes,
+    truncated: bytes,
+    end: bytes,
+) -> None:
+    depacketizer = RtpVideoDepacketizer(codec)
+
+    assert depacketizer.push(parse_rtp_packet(_rtp(start, sequence=1))) == ()
+    assert depacketizer.push(parse_rtp_packet(_rtp(truncated, sequence=2))) == ()
+    assert depacketizer.push(parse_rtp_packet(_rtp(end, sequence=3))) == ()
+    assert depacketizer.stats.discarded_fragments >= 2

@@ -6233,6 +6233,8 @@ def _idmx_local_packets_to_hevc_annexb(
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is None or packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
             continue
+        if not _looks_like_idmx_hevc_direct_frame(packet.payload):
+            continue
         for nal in depacketizer.push(packet):
             _append_hevc_nal(output, nal)
     if not output:
@@ -6256,6 +6258,7 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             if (
                 rtp_packet is None
                 or rtp_packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE
+                or not _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
             ):
                 continue
             for nal in depacketizer.push(rtp_packet):

@@ -48,6 +48,7 @@ from pyezvizapi.local_stream import (
     _idmx_audio_metadata,
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
+    _idmx_local_packets_to_annexb_with_codec,
     _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     _start_ffmpeg_stderr_drain,
@@ -6878,6 +6879,23 @@ def test_copy_local_stream_to_mpegts_models_command_port_h264_fu_a(tmp_path) -> 
         + next_fu[2:]
         + last_fu[2:]
     )
+
+
+def test_idmx_incomplete_h264_fu_is_not_mislabeled_as_hevc() -> None:
+    rtp_timestamp = 0x7D522A3E
+    sequence = 0x5D5C
+    payload = b"\x7c\x85incomplete"
+    rtp = (
+        b"\x80\x60"
+        + sequence.to_bytes(2, "big")
+        + rtp_timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88"
+        + payload
+    )
+    frame = len(rtp).to_bytes(4, "little") + rtp
+
+    with pytest.raises(PyEzvizError, match=r"clear H\.264 media frames"):
+        _idmx_local_packets_to_annexb_with_codec([frame])
 
 
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(

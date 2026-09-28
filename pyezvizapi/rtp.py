@@ -129,14 +129,18 @@ def rtp_payload_video_codec(payload: bytes) -> RtpVideoCodec | None:
     h264_type = payload[0] & 0x1F
     hevc_type = (payload[0] >> 1) & 0x3F
     if hevc_type in {48, 49} and _is_plausible_hevc_header(payload):
-        return "hevc"
-    if 1 <= h264_type <= 5:
-        return "h264"
-    if hevc_type in {32, 33, 34, 39, 40}:
-        return "hevc"
-    if h264_type in {7, 8, 24, 28}:
-        return "h264"
-    return None
+        codec: RtpVideoCodec | None = "hevc"
+    elif _is_ambiguous_h264_hevc_payload(payload):
+        codec = None
+    elif 1 <= h264_type <= 5:
+        codec = "h264"
+    elif hevc_type in {32, 33, 34, 39, 40}:
+        codec = "hevc"
+    elif h264_type in {7, 8, 24, 28}:
+        codec = "h264"
+    else:
+        codec = None
+    return codec
 
 
 def detect_rtp_video_codec(
@@ -153,6 +157,8 @@ def detect_rtp_video_codec(
         codec = rtp_payload_video_codec(packet.payload)
         if codec is not None:
             return codec
+        if _is_ambiguous_h264_hevc_payload(packet.payload):
+            continue
         if len(packet.payload) >= 2 and fallback is None:
             hevc_type = (packet.payload[0] >> 1) & 0x3F
             h264_type = packet.payload[0] & 0x1F
@@ -234,7 +240,10 @@ class RtpVideoDepacketizer:
         if nal_type == 24:
             self._discard_fragment(packet.ssrc)
             return _aggregation_units(payload, header_size=1)
-        if nal_type != 28 or len(payload) < 2:
+        if nal_type != 28:
+            return ()
+        if len(payload) < 2:
+            self._discard_fragment(packet.ssrc)
             return ()
 
         fu_header = payload[1]
@@ -262,18 +271,20 @@ class RtpVideoDepacketizer:
 
     def _push_hevc(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
         payload = packet.payload
-        if len(payload) < 2:
+        if not payload:
             return ()
         nal_type = (payload[0] >> 1) & 0x3F
+        if nal_type == 49 and len(payload) < 3:
+            self._discard_fragment(packet.ssrc)
+            return ()
+        if len(payload) < 2:
+            return ()
         if nal_type == 48:
             self._discard_fragment(packet.ssrc)
             return _aggregation_units(payload, header_size=2)
         if nal_type != 49:
             self._discard_fragment(packet.ssrc)
             return (payload,)
-        if len(payload) < 3:
-            return ()
-
         fu_header = payload[2]
         is_start = bool(fu_header & 0x80)
         is_end = bool(fu_header & 0x40)
@@ -346,3 +357,11 @@ def _is_plausible_hevc_header(payload: bytes) -> bool:
     temporal_id_plus1 = payload[1] & 0x07
     nal_type = (payload[0] >> 1) & 0x3F
     return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 49
+
+
+def _is_ambiguous_h264_hevc_payload(payload: bytes) -> bool:
+    if len(payload) < 2 or not _is_plausible_hevc_header(payload):
+        return False
+    h264_type = payload[0] & 0x1F
+    hevc_type = (payload[0] >> 1) & 0x3F
+    return 1 <= h264_type <= 5 and 0 <= hevc_type <= 40

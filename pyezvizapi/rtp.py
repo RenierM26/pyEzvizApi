@@ -179,7 +179,7 @@ class RtpVideoDepacketizer:
         self.codec = codec
         self.stats = RtpContinuityStats()
         self._last_sequence_by_ssrc: dict[int, int] = {}
-        self._last_identity_by_ssrc: dict[int, tuple[int, int, bytes]] = {}
+        self._last_identity_by_ssrc: dict[int, tuple[int, int, bool, bytes]] = {}
         self._fragment_by_ssrc: dict[int, _FragmentedNal] = {}
 
     def push(self, packet: RtpPacket) -> tuple[bytes, ...]:
@@ -207,7 +207,7 @@ class RtpVideoDepacketizer:
 
     def _continuity(self, packet: RtpPacket) -> str:
         previous = self._last_sequence_by_ssrc.get(packet.ssrc)
-        identity = (packet.sequence, packet.timestamp, packet.payload)
+        identity = (packet.sequence, packet.timestamp, packet.marker, packet.payload)
         if previous is None:
             self._last_sequence_by_ssrc[packet.ssrc] = packet.sequence
             self._last_identity_by_ssrc[packet.ssrc] = identity

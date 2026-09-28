@@ -6218,6 +6218,11 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
                 or rtp_packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE
             ):
                 continue
+            if not (
+                _looks_like_idmx_h264_fu_a_frame(rtp_packet.payload)
+                or _looks_like_idmx_h264_clear_nal(rtp_packet.payload)
+            ):
+                continue
             for nal in depacketizer.push(rtp_packet):
                 _append_h264_nal(output, nal)
         end_offsets.append(len(output))

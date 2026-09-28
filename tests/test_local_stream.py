@@ -43,6 +43,7 @@ from pyezvizapi.local_stream import (
     _decrypt_idmx_local_packets_to_adts_aac,
     _ffmpeg_h264_decode_errors,
     _ffmpeg_stderr_tail,
+    _h264_annexb_packet_end_offsets,
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
     _idmx_audio_metadata,
@@ -6882,6 +6883,24 @@ def test_idmx_ordinary_hevc_slice_is_not_mislabeled_as_h264() -> None:
 
     assert codec == "hevc"
     assert annexb == b"\x00\x00\x00\x01" + payload
+
+
+def test_h264_packet_offsets_ignore_non_h264_payloads() -> None:
+    def frame(payload: bytes, *, sequence: int) -> bytes:
+        rtp = (
+            b"\x80\x60"
+            + sequence.to_bytes(2, "big")
+            + b"\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+            + payload
+        )
+        return len(rtp).to_bytes(4, "little") + rtp
+
+    packets = [
+        frame(b"\x02corrupt-type-2", sequence=1),
+        frame(b"\x65idr", sequence=2),
+    ]
+
+    assert _h264_annexb_packet_end_offsets(packets) == [0, 8]
 
 
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(

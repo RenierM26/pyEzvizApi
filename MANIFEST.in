@@ -3,4 +3,6 @@ graft examples
 global-exclude __pycache__/*
 global-exclude *.py[cod]
 include docs/channel99.md
+include docs/streaming.md
 include tests/fixtures/longlink_native.json
+recursive-include tests/fixtures/stream *.hex

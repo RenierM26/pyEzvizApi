@@ -14,6 +14,7 @@ from cli_fakes import (
     install_fake_client as _install_fake_client,
     token_file as _token_file,
 )
+import pytest
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.constants import MAX_RETRIES
@@ -2752,6 +2753,43 @@ def test_parse_stream_dump_duration_units() -> None:
     for value, expected in cases.items():
         assert cli_module._parse_duration_seconds(value) == expected  # noqa: SLF001
     assert cli_module._parse_duration_seconds("0") is None  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("duration", "max_packets"),
+    [
+        (None, None),
+        (0.0, None),
+        (-1.0, None),
+        (float("nan"), None),
+        (float("inf"), None),
+        (None, 0),
+        (None, -1),
+        (None, float("nan")),
+        (None, float("inf")),
+    ],
+)
+def test_stream_dump_rejects_unsafe_decrypt_bound_before_open(
+    monkeypatch: pytest.MonkeyPatch,
+    duration: float | None,
+    max_packets: int | float | None,
+) -> None:
+    def fail_open(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid decrypt bounds must fail before stream open")
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", fail_open)
+    args = argparse.Namespace(
+        stream_action="dump",
+        decrypt_video=True,
+        duration=duration,
+        max_packets=max_packets,
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="requires a positive finite --duration or --max-packets",
+    ):
+        cli_module._handle_stream(args, cast(Any, object()))  # noqa: SLF001
 
 
 def test_write_stream_payloads_stops_after_duration() -> None:

@@ -55,8 +55,9 @@ is not emitted.
 - FFmpeg stdin, stdout, and stderr are coordinated. Consumer disconnects,
   blocked writers, launch failures, and nonzero exits terminate the process and
   preserve bounded diagnostic stderr.
-- Decryption paths must be bounded. Unbounded encrypted capture is rejected
-  before network or FFmpeg work begins.
+- Decryption paths that collect encrypted input before transforming it must be
+  bounded. They reject unsafe capture limits before network or FFmpeg work
+  begins. The HTTP proxy decrypts incrementally instead of buffering a capture.
 - Descriptor-free IDMX AAC stays video-only. Packet cadence is not sufficient
   evidence for a reliable sample-rate guess.
 

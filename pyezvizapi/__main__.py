@@ -3836,6 +3836,15 @@ def _handle_local_sdk_stream_dump(
 ) -> int:
     """Dump direct-local SDK media with caller-supplied local fields."""
 
+    if args.decrypt_video and not has_positive_finite_capture_bound(
+        args.max_packets,
+        args.duration,
+    ):
+        raise PyEzvizError(
+            "--decrypt-video requires a positive finite --duration or "
+            "--max-packets before opening a local SDK stream"
+        )
+
     if args.format is None:
         args.format = "mpegps" if args.local_sdk_ecdh else "mpegts"
 

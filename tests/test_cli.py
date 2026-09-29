@@ -2792,6 +2792,48 @@ def test_stream_dump_rejects_unsafe_decrypt_bound_before_open(
         cli_module._handle_stream(args, cast(Any, object()))  # noqa: SLF001
 
 
+@pytest.mark.parametrize(
+    ("duration", "max_packets"),
+    [
+        (None, None),
+        (0.0, None),
+        (-1.0, None),
+        (float("nan"), None),
+        (float("inf"), None),
+        (None, 0),
+        (None, -1),
+        (None, float("nan")),
+        (None, float("inf")),
+    ],
+)
+def test_local_sdk_dump_rejects_unsafe_decrypt_bound_before_build(
+    monkeypatch: pytest.MonkeyPatch,
+    duration: float | None,
+    max_packets: int | float | None,
+) -> None:
+    def fail_build(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid decrypt bounds must fail before stream build")
+
+    monkeypatch.setattr(cli_module, "_build_local_sdk_cli_stream", fail_build)
+    monkeypatch.setattr(cli_module, "_build_local_sdk_ecdh_cli_stream", fail_build)
+    args = argparse.Namespace(
+        format="mpegts",
+        local_sdk_ecdh=False,
+        decrypt_video=True,
+        duration=duration,
+        max_packets=max_packets,
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="requires a positive finite --duration or --max-packets",
+    ):
+        cli_module._handle_local_sdk_stream_dump(  # noqa: SLF001
+            args,
+            cast(Any, object()),
+        )
+
+
 def test_write_stream_payloads_stops_after_duration() -> None:
     expected_payload = b"abc"
 

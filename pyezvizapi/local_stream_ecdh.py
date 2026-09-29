@@ -18,7 +18,6 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 import hashlib
 import hmac
-import math
 import socket
 import time
 from typing import Any, BinaryIO
@@ -86,6 +85,7 @@ from .media import (
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
+    has_positive_finite_capture_bound,
 )
 from .rtp import rtp_payload
 
@@ -1030,19 +1030,10 @@ def _validate_ecdh_copy_options(
     """Reject invalid ECDH copy options before credentials or sockets are used."""
     if output_format not in {"mpegps", "mpegts"}:
         raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
-    has_packet_bound = (
-        max_packets is not None and math.isfinite(max_packets) and max_packets > 0
-    )
-    has_frame_bound = (
-        max_frames is not None and math.isfinite(max_frames) and max_frames > 0
-    )
-    has_duration_bound = (
-        duration_seconds is not None
-        and math.isfinite(duration_seconds)
-        and duration_seconds > 0
-    )
-    if decrypt_video and not (
-        has_packet_bound or has_frame_bound or has_duration_bound
+    if decrypt_video and not has_positive_finite_capture_bound(
+        max_packets,
+        max_frames,
+        duration_seconds,
     ):
         raise PyEzvizError(
             "Encrypted local stream decrypt requires a positive finite "

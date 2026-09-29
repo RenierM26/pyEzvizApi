@@ -52,6 +52,7 @@ from .media import (
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
+    has_positive_finite_capture_bound,
 )
 from .remux import (
     BoundedStderrTail,
@@ -2342,9 +2343,10 @@ def _require_bounded_decrypt_capture(
     max_packets: int | None,
     duration_seconds: float | None,
 ) -> None:
-    if max_packets is None and duration_seconds is None:
+    if not has_positive_finite_capture_bound(max_packets, duration_seconds):
         raise PyEzvizError(
-            "Encrypted local stream decrypt requires duration_seconds or max_packets"
+            "Encrypted local stream decrypt requires a positive finite "
+            "duration_seconds or max_packets"
         )
 
 

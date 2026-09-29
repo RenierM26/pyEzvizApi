@@ -27,6 +27,15 @@ _ITERATOR_TIMED_OUT = object()
 _ITERATOR_CLOSE_TIMEOUT_SECONDS = 0.05
 
 
+def has_positive_finite_capture_bound(*limits: int | float | None) -> bool:
+    """Return whether any legacy capture limit is a usable safety bound."""
+
+    return any(
+        limit is not None and math.isfinite(limit) and limit > 0
+        for limit in limits
+    )
+
+
 class _IteratorProducer[PacketT]:
     """Manage one request-driven worker for a potentially blocking iterator."""
 

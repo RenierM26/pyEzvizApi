@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError
+from .media import has_positive_finite_capture_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .stream_media import decrypt_hikvision_ps_video
 from .stream_transport import SocketFactory, VtmStreamClient, build_vtm_url
@@ -380,9 +381,10 @@ def _require_bounded_cloud_decrypt_capture(
     max_packets: int | None,
     duration_seconds: float | None,
 ) -> None:
-    if max_packets is None and duration_seconds is None:
+    if not has_positive_finite_capture_bound(max_packets, duration_seconds):
         raise PyEzvizError(
-            "Encrypted cloud stream decrypt requires duration_seconds or max_packets"
+            "Encrypted cloud stream decrypt requires a positive finite "
+            "duration_seconds or max_packets"
         )
 
 

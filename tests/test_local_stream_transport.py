@@ -2005,15 +2005,35 @@ def test_copy_local_sdk_stream_from_client_rejects_bad_output_format() -> None:
             output_format="mp4",  # type: ignore[arg-type]
         )
 
-def test_copy_local_sdk_stream_from_client_rejects_unbounded_decrypt_early() -> None:
+@pytest.mark.parametrize(
+    "unsafe_bounds",
+    [
+        {},
+        {"duration_seconds": 0.0},
+        {"duration_seconds": -1.0},
+        {"duration_seconds": float("nan")},
+        {"duration_seconds": float("inf")},
+        {"max_packets": 0},
+        {"max_packets": -1},
+        {"max_packets": float("nan")},
+        {"max_packets": float("inf")},
+    ],
+)
+def test_copy_local_sdk_stream_from_client_rejects_unsafe_decrypt_bound_early(
+    unsafe_bounds: dict[str, Any],
+) -> None:
     class FakeClient:
         def get_device_infos(self, serial: str) -> dict[str, Any]:
             raise AssertionError("should not fetch device info for invalid decrypt bounds")
 
-    with pytest.raises(PyEzvizError, match="duration_seconds or max_packets"):
+    with pytest.raises(
+        PyEzvizError,
+        match="requires a positive finite duration_seconds or max_packets",
+    ):
         copy_local_sdk_stream_from_client(
             FakeClient(),
             "CAM123456",
             io.BytesIO(),
             decrypt_video=True,
+            **unsafe_bounds,
         )

@@ -1389,16 +1389,34 @@ def test_copy_cloud_stream_to_mpegps_fetches_media_key_with_smscode(monkeypatch)
     assert calls == {"get_cam_key": {"serial": "CAM123", "smscode": "123456"}}
     assert output.getvalue() == expected_payload
 
-def test_copy_cloud_stream_to_mpegps_requires_bounded_decrypt() -> None:
-    with pytest.raises(PyEzvizError, match="requires duration_seconds or max_packets"):
+@pytest.mark.parametrize(
+    "unsafe_bounds",
+    [
+        {},
+        {"duration_seconds": 0.0},
+        {"duration_seconds": -1.0},
+        {"duration_seconds": float("nan")},
+        {"duration_seconds": float("inf")},
+        {"max_packets": 0},
+        {"max_packets": -1},
+        {"max_packets": float("nan")},
+        {"max_packets": float("inf")},
+    ],
+)
+def test_copy_cloud_stream_to_mpegps_requires_safe_decrypt_bound(
+    unsafe_bounds: dict[str, Any],
+) -> None:
+    with pytest.raises(
+        PyEzvizError,
+        match="requires a positive finite duration_seconds or max_packets",
+    ):
         copy_cloud_stream_to_mpegps(
             _client(),
             "CAM123",
             io.BytesIO(),
-            duration_seconds=None,
-            max_packets=None,
             decrypt_video=True,
             media_key="MEDIAKEY",
+            **unsafe_bounds,
         )
 
 def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:

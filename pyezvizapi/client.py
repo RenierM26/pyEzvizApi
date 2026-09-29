@@ -186,7 +186,12 @@ from .local_stream_transport import (
     open_hcnetsdk_command_port_multi_socket_stream,
     open_hcnetsdk_command_port_stream,
 )
-from .media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
+from .media import (
+    CaptureLimits,
+    MediaDecodeOptions,
+    MediaMuxOptions,
+    has_positive_finite_capture_bound,
+)
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .utils import convert_to_dict, decrypt_image, deep_merge
@@ -3531,6 +3536,14 @@ class EzvizClient:
             raise PyEzvizError("source='hcnetsdk-command-port' currently writes MPEG-TS only")
         if decrypt_video and media_key is None:
             raise PyEzvizError("source='hcnetsdk-command-port' decrypt_video requires media_key")
+        if decrypt_video and not has_positive_finite_capture_bound(
+            max_packets,
+            duration_seconds,
+        ):
+            raise PyEzvizError(
+                "source='hcnetsdk-command-port' encrypted capture requires a positive "
+                "finite duration_seconds or max_packets"
+            )
 
         frames = tuple(command_frames or ())
         supplied_modes = sum(

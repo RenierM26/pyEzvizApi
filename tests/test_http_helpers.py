@@ -3337,6 +3337,47 @@ def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
+@pytest.mark.parametrize(
+    "unsafe_bounds",
+    [
+        {"duration_seconds": None, "max_packets": None},
+        {"duration_seconds": 0.0, "max_packets": None},
+        {"duration_seconds": -1.0, "max_packets": None},
+        {"duration_seconds": float("nan"), "max_packets": None},
+        {"duration_seconds": float("inf"), "max_packets": None},
+        {"duration_seconds": None, "max_packets": 0},
+        {"duration_seconds": None, "max_packets": -1},
+        {"duration_seconds": None, "max_packets": float("nan")},
+        {"duration_seconds": None, "max_packets": float("inf")},
+    ],
+)
+def test_save_clip_rejects_unsafe_hcnetsdk_decrypt_bound_before_endpoint_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_bounds: dict[str, Any],
+) -> None:
+    client = _client()
+
+    def fail_endpoint_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid decrypt bounds must fail before endpoint lookup")
+
+    monkeypatch.setattr(client, "_hcnetsdk_command_port_endpoint", fail_endpoint_lookup)
+
+    with pytest.raises(
+        PyEzvizError,
+        match="encrypted capture requires a positive finite",
+    ):
+        client.save_clip(
+            "CAM123",
+            io.BytesIO(),
+            source="hcnetsdk-command-port",
+            host="192.0.2.10",
+            hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+            **unsafe_bounds,
+        )
+
+
 def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(
     monkeypatch,
     tmp_path,

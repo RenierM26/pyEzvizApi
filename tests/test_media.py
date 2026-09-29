@@ -90,9 +90,24 @@ def test_capture_bound_accepts_arbitrary_size_integers() -> None:
 
     huge_limit = 10**309
 
-    assert has_positive_finite_capture_bound(huge_limit)
-    assert has_positive_finite_capture_bound(huge_limit, 1.0)
+    assert has_positive_finite_capture_bound(max_packets=huge_limit)
+    assert has_positive_finite_capture_bound(
+        max_packets=huge_limit,
+        duration_seconds=1.0,
+    )
     assert CaptureLimits(max_packets=huge_limit).max_packets == huge_limit
+
+
+def test_capture_bound_rejects_arbitrary_size_integer_duration() -> None:
+    """Durations must fit the floating-point arithmetic used by deadlines."""
+
+    huge_duration = 10**309
+
+    assert not has_positive_finite_capture_bound(
+        duration_seconds=huge_duration,
+    )
+    with pytest.raises(PyEzvizError, match="finite"):
+        CaptureLimits(duration_seconds=huge_duration)
 
 
 @pytest.mark.parametrize("duration", [float("inf"), float("nan")])

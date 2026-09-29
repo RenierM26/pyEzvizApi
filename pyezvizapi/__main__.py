@@ -3837,8 +3837,8 @@ def _handle_local_sdk_stream_dump(
     """Dump direct-local SDK media with caller-supplied local fields."""
 
     if args.decrypt_video and not has_positive_finite_capture_bound(
-        args.max_packets,
-        args.duration,
+        max_packets=args.max_packets,
+        duration_seconds=args.duration,
     ):
         raise PyEzvizError(
             "--decrypt-video requires a positive finite --duration or "
@@ -4856,7 +4856,10 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
     if (
         args.stream_action == "dump"
         and args.decrypt_video
-        and not has_positive_finite_capture_bound(args.max_packets, args.duration)
+        and not has_positive_finite_capture_bound(
+            max_packets=args.max_packets,
+            duration_seconds=args.duration,
+        )
     ):
         raise PyEzvizError(
             "--decrypt-video requires a positive finite --duration or "

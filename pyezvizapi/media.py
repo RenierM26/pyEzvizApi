@@ -27,18 +27,38 @@ _ITERATOR_TIMED_OUT = object()
 _ITERATOR_CLOSE_TIMEOUT_SECONDS = 0.05
 
 
-def is_positive_finite_capture_bound(limit: int | float | None) -> bool:
-    """Return whether one legacy capture limit is a usable safety bound."""
+def is_positive_capture_count_bound(limit: int | None) -> bool:
+    """Return whether one packet, frame, or byte count is a usable bound."""
 
     if limit is None or limit <= 0:
         return False
     return isinstance(limit, int) or math.isfinite(limit)
 
 
-def has_positive_finite_capture_bound(*limits: int | float | None) -> bool:
+def is_positive_finite_duration_bound(limit: float | None) -> bool:
+    """Return whether a duration is usable in floating-point deadline math."""
+
+    if limit is None or limit <= 0:
+        return False
+    try:
+        return math.isfinite(limit)
+    except OverflowError:
+        return False
+
+
+def has_positive_finite_capture_bound(
+    *,
+    max_packets: int | None = None,
+    max_frames: int | None = None,
+    duration_seconds: float | None = None,
+) -> bool:
     """Return whether any legacy capture limit is a usable safety bound."""
 
-    return any(is_positive_finite_capture_bound(limit) for limit in limits)
+    return (
+        is_positive_capture_count_bound(max_packets)
+        or is_positive_capture_count_bound(max_frames)
+        or is_positive_finite_duration_bound(duration_seconds)
+    )
 
 
 class _IteratorProducer[PacketT]:
@@ -177,8 +197,7 @@ class CaptureLimits:
                 raise PyEzvizError(f"{name} must be positive or None")
         if (
             self.duration_seconds is not None
-            and not isinstance(self.duration_seconds, int)
-            and not math.isfinite(self.duration_seconds)
+            and not is_positive_finite_duration_bound(self.duration_seconds)
         ):
             raise PyEzvizError("duration_seconds must be finite or None")
 

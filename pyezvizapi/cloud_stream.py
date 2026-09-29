@@ -381,7 +381,10 @@ def _require_bounded_cloud_decrypt_capture(
     max_packets: int | None,
     duration_seconds: float | None,
 ) -> None:
-    if not has_positive_finite_capture_bound(max_packets, duration_seconds):
+    if not has_positive_finite_capture_bound(
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+    ):
         raise PyEzvizError(
             "Encrypted cloud stream decrypt requires a positive finite "
             "duration_seconds or max_packets"

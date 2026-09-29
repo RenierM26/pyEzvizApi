@@ -1031,9 +1031,9 @@ def _validate_ecdh_copy_options(
     if output_format not in {"mpegps", "mpegts"}:
         raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
     if decrypt_video and not has_positive_finite_capture_bound(
-        max_packets,
-        max_frames,
-        duration_seconds,
+        max_packets=max_packets,
+        max_frames=max_frames,
+        duration_seconds=duration_seconds,
     ):
         raise PyEzvizError(
             "Encrypted local stream decrypt requires a positive finite "

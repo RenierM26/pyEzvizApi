@@ -190,7 +190,8 @@ from .media import (
     MediaDecodeOptions,
     MediaMuxOptions,
     has_positive_finite_capture_bound,
-    is_positive_finite_capture_bound,
+    is_positive_capture_count_bound,
+    is_positive_finite_duration_bound,
 )
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
@@ -3170,13 +3171,13 @@ class EzvizClient:
                 max_packets=(
                     max_packets
                     if max_packets is None
-                    or is_positive_finite_capture_bound(max_packets)
+                    or is_positive_capture_count_bound(max_packets)
                     else None
                 ),
                 duration_seconds=(
                     duration_seconds
                     if duration_seconds is None
-                    or is_positive_finite_capture_bound(duration_seconds)
+                    or is_positive_finite_duration_bound(duration_seconds)
                     else None
                 ),
             ),
@@ -3190,10 +3191,10 @@ class EzvizClient:
         )
         if (
             max_packets is not None
-            and not is_positive_finite_capture_bound(max_packets)
+            and not is_positive_capture_count_bound(max_packets)
         ) or (
             duration_seconds is not None
-            and not is_positive_finite_capture_bound(duration_seconds)
+            and not is_positive_finite_duration_bound(duration_seconds)
         ):
             clip_options = _LegacyClipOptions.from_options(
                 clip_options,
@@ -3537,8 +3538,8 @@ class EzvizClient:
         if decrypt_video and media_key is None:
             raise PyEzvizError("source='hcnetsdk-command-port' decrypt_video requires media_key")
         if decrypt_video and not has_positive_finite_capture_bound(
-            max_packets,
-            duration_seconds,
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
         ):
             raise PyEzvizError(
                 "source='hcnetsdk-command-port' encrypted capture requires a positive "

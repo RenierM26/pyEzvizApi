@@ -2013,6 +2013,7 @@ def test_copy_local_sdk_stream_from_client_rejects_bad_output_format() -> None:
         {"duration_seconds": -1.0},
         {"duration_seconds": float("nan")},
         {"duration_seconds": float("inf")},
+        {"duration_seconds": 10**309},
         {"max_packets": 0},
         {"max_packets": -1},
         {"max_packets": float("nan")},

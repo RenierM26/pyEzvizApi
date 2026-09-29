@@ -3368,6 +3368,7 @@ def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
         {"duration_seconds": -1.0, "max_packets": None},
         {"duration_seconds": float("nan"), "max_packets": None},
         {"duration_seconds": float("inf"), "max_packets": None},
+        {"duration_seconds": 10**309, "max_packets": None},
         {"duration_seconds": None, "max_packets": 0},
         {"duration_seconds": None, "max_packets": -1},
         {"duration_seconds": None, "max_packets": float("nan")},

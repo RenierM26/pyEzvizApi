@@ -883,6 +883,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
         {"duration_seconds": -1.0},
         {"duration_seconds": float("nan")},
         {"duration_seconds": float("inf")},
+        {"duration_seconds": 10**309},
         {"max_packets": 0, "max_frames": 0},
         {"max_packets": -1, "max_frames": -1},
         {"max_packets": float("nan"), "max_frames": float("nan")},

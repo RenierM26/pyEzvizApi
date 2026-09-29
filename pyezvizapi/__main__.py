@@ -51,30 +51,32 @@ from .hcnetsdk import (
     parse_hcnetsdk_tcp_frame,
 )
 from .light_bulb import EzvizLightBulb
-from .local_stream import (
-    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
-    HcNetSdkCommandPortGeneratedMultiSocketPlan,
-    HcNetSdkCommandPortGeneratedSocketStep,
-    HcNetSdkCommandPortMultiSocketPlan,
-    HcNetSdkCommandPortSocketStep,
+from .local_stream_ecdh import (
+    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    copy_local_sdk_ecdh_stream_to_media,
+    open_local_sdk_ecdh_stream,
+)
+from .local_stream_media import (
     _idmx_local_packets_to_annexb_with_codec,
     copy_local_stream_to_decrypted_mpegps,
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegps,
     copy_local_stream_to_mpegts,
-    get_local_sdk_stream_credentials_from_client,
-    hcnetsdk_command_port_generated_plan_from_socket_plan,
-    hcnetsdk_command_port_native_lan_live_view_plan,
-    open_local_sdk_stream,
     summarize_h264_annexb_idr_windows,
     summarize_h264_annexb_units,
     summarize_hevc_annexb_irap_windows,
     summarize_idmx_h264_local_packets,
 )
-from .local_stream_ecdh import (
-    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
-    copy_local_sdk_ecdh_stream_to_media,
-    open_local_sdk_ecdh_stream,
+from .local_stream_transport import (
+    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    HcNetSdkCommandPortGeneratedSocketStep,
+    HcNetSdkCommandPortMultiSocketPlan,
+    HcNetSdkCommandPortSocketStep,
+    get_local_sdk_stream_credentials_from_client,
+    hcnetsdk_command_port_generated_plan_from_socket_plan,
+    hcnetsdk_command_port_native_lan_live_view_plan,
+    open_local_sdk_stream,
 )
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
@@ -83,14 +85,13 @@ from .rtp import (
     rtp_packets_to_annexb,
     rtp_payload_video_codec,
 )
-from .stream import (
-    StreamTransport,
+from .stream_media import (
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
     detect_transport,
-    download_ezviz_cloud_replay,
     mpeg_ps_decryptable_prefix_length,
 )
+from .stream_transport import StreamTransport, download_ezviz_cloud_replay
 
 _LOGGER = logging.getLogger(__name__)
 _REAL_EZVIZ_CLIENT = EzvizClient
@@ -776,8 +777,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=4096,
         help=(
-            "Maximum pre-media prefix bytes to skip on the local SDK ECDH stream "
-            "(default: 4096)"
+            "Maximum pre-media prefix bytes to skip on the local SDK ECDH stream (default: 4096)"
         ),
     )
     parser_save_clip.add_argument(
@@ -794,8 +794,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         help=(
-            "One complete port-8000 HCNetSDK command frame as hex. May be "
-            "passed more than once."
+            "One complete port-8000 HCNetSDK command frame as hex. May be passed more than once."
         ),
     )
     parser_save_clip.add_argument(
@@ -920,10 +919,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="hcnetsdk_h264_clean_idr_wait_seconds",
         type=float,
         default=60.0,
-        help=(
-            "Maximum seconds to wait for a clean video window "
-            "before failing (default: 60)."
-        ),
+        help=("Maximum seconds to wait for a clean video window before failing (default: 60)."),
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-read-responses",
@@ -1258,10 +1254,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser_stream_local_dump.add_argument(
         "--cas-serial",
-        help=(
-            "Device serial to send to cloud CAS when --fetch-cas is used "
-            "(default: --serial)"
-        ),
+        help=("Device serial to send to cloud CAS when --fetch-cas is used (default: --serial)"),
     )
     parser_stream_local_dump.add_argument(
         "--no-p2p-register",
@@ -1588,10 +1581,7 @@ def _token_has_refresh_session(token: dict[str, Any] | None) -> bool:
     """Return True when a saved token can refresh itself without credentials."""
 
     return bool(
-        token
-        and token.get("session_id")
-        and token.get("rf_session_id")
-        and token.get("api_url")
+        token and token.get("session_id") and token.get("rf_session_id") and token.get("api_url")
     )
 
 
@@ -1634,8 +1624,10 @@ def _login(
     require_service_urls: bool = False,
 ) -> None:
     """Login only when the saved token cannot satisfy the selected action."""
-    if token and token.get("session_id") and (
-        not require_service_urls or _token_has_service_urls(token)
+    if (
+        token
+        and token.get("session_id")
+        and (not require_service_urls or _token_has_service_urls(token))
     ):
         return
 
@@ -2257,7 +2249,11 @@ def _handle_cloud_video_decrypt(
         )
     )
 
-    result = {"input": str(input_path), "output": str(output_path), "bytes": output_path.stat().st_size}
+    result = {
+        "input": str(input_path),
+        "output": str(output_path),
+        "bytes": output_path.stat().st_size,
+    }
     if args.json:
         _write_json(result)
     else:
@@ -2283,9 +2279,7 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
         else None
     )
     command_plan = (
-        _hcnetsdk_command_plan_from_args(args)
-        if args.source == "hcnetsdk-command-port"
-        else None
+        _hcnetsdk_command_plan_from_args(args) if args.source == "hcnetsdk-command-port" else None
     )
     command_frames = (
         _hcnetsdk_command_frames_from_args(args)
@@ -2343,24 +2337,12 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
         "hcnetsdk_local_ip": args.hcnetsdk_local_ip,
         "hcnetsdk_read_response_after_each": read_response_after_each,
         "hcnetsdk_command_metadata_callback": hcnetsdk_command_metadata_callback,
-        "hcnetsdk_h264_skip_initial_idr_windows": (
-            args.hcnetsdk_h264_skip_initial_idr_windows
-        ),
-        "hcnetsdk_h264_trim_to_clean_idr_window": (
-            args.hcnetsdk_h264_trim_to_clean_idr_window
-        ),
-        "hcnetsdk_h264_clean_idr_preroll_seconds": (
-            args.hcnetsdk_h264_clean_idr_preroll_seconds
-        ),
-        "hcnetsdk_h264_clean_idr_max_windows": (
-            args.hcnetsdk_h264_clean_idr_max_windows
-        ),
-        "hcnetsdk_h264_wait_for_clean_idr_window": (
-            args.hcnetsdk_h264_wait_for_clean_idr_window
-        ),
-        "hcnetsdk_h264_clean_idr_wait_seconds": (
-            args.hcnetsdk_h264_clean_idr_wait_seconds
-        ),
+        "hcnetsdk_h264_skip_initial_idr_windows": (args.hcnetsdk_h264_skip_initial_idr_windows),
+        "hcnetsdk_h264_trim_to_clean_idr_window": (args.hcnetsdk_h264_trim_to_clean_idr_window),
+        "hcnetsdk_h264_clean_idr_preroll_seconds": (args.hcnetsdk_h264_clean_idr_preroll_seconds),
+        "hcnetsdk_h264_clean_idr_max_windows": (args.hcnetsdk_h264_clean_idr_max_windows),
+        "hcnetsdk_h264_wait_for_clean_idr_window": (args.hcnetsdk_h264_wait_for_clean_idr_window),
+        "hcnetsdk_h264_clean_idr_wait_seconds": (args.hcnetsdk_h264_clean_idr_wait_seconds),
     }
     if args.source in {"local-sdk", "local-sdk-ecdh"}:
         save_kwargs["register_p2p_session"] = not args.no_p2p_register
@@ -2466,9 +2448,7 @@ def _hcnetsdk_command_generated_plan_from_json(
     """Build a generated command-port socket plan from JSON."""
 
     raw_steps = _hcnetsdk_command_plan_raw_steps(value)
-    steps = tuple(
-        _hcnetsdk_command_generated_plan_step_from_json(item) for item in raw_steps
-    )
+    steps = tuple(_hcnetsdk_command_generated_plan_step_from_json(item) for item in raw_steps)
     return HcNetSdkCommandPortGeneratedMultiSocketPlan(steps=steps)
 
 
@@ -2528,9 +2508,7 @@ def _hcnetsdk_command_plan_step_from_json(
         drain_media_before_next_step_seconds=drain_media_before_next,
         keepalive_frames=keepalive_frames,
         keepalive_interval_seconds=float(interval),
-        keepalive_initial_delay_seconds=(
-            None if initial_delay is None else float(initial_delay)
-        ),
+        keepalive_initial_delay_seconds=(None if initial_delay is None else float(initial_delay)),
         name=name if isinstance(name, str) else None,
     )
 
@@ -2577,9 +2555,7 @@ def _hcnetsdk_command_generated_plan_step_from_json(
         drain_media_before_next_step_seconds=drain_media_before_next,
         keepalive_templates=keepalive_templates,
         keepalive_interval_seconds=float(interval),
-        keepalive_initial_delay_seconds=(
-            None if initial_delay is None else float(initial_delay)
-        ),
+        keepalive_initial_delay_seconds=(None if initial_delay is None else float(initial_delay)),
         name=name if isinstance(name, str) else None,
     )
 
@@ -2738,11 +2714,7 @@ def _hcnetsdk_command_plan_read_policy(
     if isinstance(raw, list):
         return tuple(_hcnetsdk_bool(raw_value) for raw_value in raw)
     if isinstance(raw, str) and "," in raw:
-        return tuple(
-            _hcnetsdk_bool(part.strip())
-            for part in raw.split(",")
-            if part.strip()
-        )
+        return tuple(_hcnetsdk_bool(part.strip()) for part in raw.split(",") if part.strip())
     return _hcnetsdk_bool(raw)
 
 
@@ -2763,11 +2735,7 @@ def _hcnetsdk_command_plan_response_reads(
     if isinstance(raw, list):
         return tuple(_hcnetsdk_int(raw_value) for raw_value in raw)
     if isinstance(raw, str) and "," in raw:
-        return tuple(
-            _hcnetsdk_int(part.strip())
-            for part in raw.split(",")
-            if part.strip()
-        )
+        return tuple(_hcnetsdk_int(part.strip()) for part in raw.split(",") if part.strip())
     return _hcnetsdk_int(raw)
 
 
@@ -2948,9 +2916,7 @@ def _hcnetsdk_read_response_policy(
     parts = [part.strip().lower() for part in value.split(",") if part.strip()]
     flags = tuple(part in {"1", "true", "yes", "y"} for part in parts)
     if len(flags) != frame_count:
-        raise PyEzvizError(
-            "--hcnetsdk-read-responses must include one boolean per command frame"
-        )
+        raise PyEzvizError("--hcnetsdk-read-responses must include one boolean per command frame")
     valid_values = {"1", "0", "true", "false", "yes", "no", "y", "n"}
     unknown = [part for part in parts if part not in valid_values]
     if unknown:
@@ -3570,9 +3536,7 @@ def _required_local_sdk_arg_or_credentials(
     value = _local_sdk_arg_or_credentials(args, attr, path)
     if value in (None, ""):
         option = attr.replace("_", "-")
-        raise PyEzvizError(
-            f"Missing --{option}; provide it explicitly or via --credentials-file"
-        )
+        raise PyEzvizError(f"Missing --{option}; provide it explicitly or via --credentials-file")
     return value
 
 
@@ -3602,9 +3566,7 @@ def _local_sdk_media_key(
     if credential_key:
         return str(credential_key)
     if client is not None:
-        serial = str(
-            _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
-        )
+        serial = str(_required_local_sdk_arg_or_credentials(args, "serial", ("serial",)))
         sms_code = getattr(args, "sms_code", None)
         if sms_code is None:
             cloud_key = client.get_cam_key(serial, max_retries=1)
@@ -3651,9 +3613,7 @@ def _local_sdk_cas_device_info(
     if args.fetch_cas:
         if client is None:
             raise PyEzvizError("--fetch-cas requires --token-file or credentials")
-        serial = str(
-            _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
-        )
+        serial = str(_required_local_sdk_arg_or_credentials(args, "serial", ("serial",)))
         cas_serial = args.cas_serial or serial
         if not args.no_p2p_register:
             register = getattr(client, "register_p2p_session", None)
@@ -3687,9 +3647,7 @@ def _local_sdk_cas_device_info(
             "Missing --cas-key or EZVIZ_LOCAL_CAS_KEY; "
             "provide it explicitly or via --credentials-file"
         )
-    serial = str(
-        _required_local_sdk_arg_or_credentials(args, "serial", ("serial",))
-    )
+    serial = str(_required_local_sdk_arg_or_credentials(args, "serial", ("serial",)))
     encrypt_type = _local_sdk_arg_or_credentials(
         args,
         "encrypt_type",
@@ -3740,9 +3698,7 @@ def _build_local_sdk_cli_stream(
         is_encrypt=args.is_encrypt,
         identifier=args.identifier,
         uuid=(
-            _env_or_arg(args, "uuid", "EZVIZ_LOCAL_UUID")
-            if args.receiver_shape == "app"
-            else None
+            _env_or_arg(args, "uuid", "EZVIZ_LOCAL_UUID") if args.receiver_shape == "app" else None
         ),
         timestamp=(
             _env_or_arg(args, "timestamp", "EZVIZ_LOCAL_TIMESTAMP")
@@ -3770,9 +3726,7 @@ def _build_local_sdk_cli_stream(
         stream_rate=args.stream_rate,
         stream_mode=args.stream_mode,
         max_prefix_bytes=args.max_prefix_bytes,
-        command_source_port=(
-            args.receiver_port if args.receiver_shape == "app" else None
-        ),
+        command_source_port=(args.receiver_port if args.receiver_shape == "app" else None),
     )
 
 
@@ -4128,8 +4082,8 @@ def _hcnetsdk_command_frame_dump_summary(
             tail = frame.body[16:]
             if tail:
                 sample["body_tail_length"] = len(tail)
-                sample["body_tail_word_samples"] = (
-                    _hcnetsdk_command_port_body_tail_word_samples(tail)
+                sample["body_tail_word_samples"] = _hcnetsdk_command_port_body_tail_word_samples(
+                    tail
                 )
         samples.append(sample)
 
@@ -4532,12 +4486,7 @@ def _hcnetsdk_generated_plan_to_json(
 ) -> dict[str, Any]:
     """Return the public JSON shape for a generated command-port plan."""
 
-    return {
-        "steps": [
-            _hcnetsdk_generated_plan_step_to_json(step)
-            for step in plan.steps
-        ]
-    }
+    return {"steps": [_hcnetsdk_generated_plan_step_to_json(step) for step in plan.steps]}
 
 
 def _hcnetsdk_generated_plan_step_to_json(
@@ -4547,8 +4496,7 @@ def _hcnetsdk_generated_plan_step_to_json(
 
     value: dict[str, Any] = {
         "templates": [
-            _hcnetsdk_command_template_to_json(template)
-            for template in step.control_templates
+            _hcnetsdk_command_template_to_json(template) for template in step.control_templates
         ],
     }
     if step.name is not None:
@@ -4564,23 +4512,15 @@ def _hcnetsdk_generated_plan_step_to_json(
     if step.delay_after_commands_seconds:
         value["delay_after_commands_seconds"] = step.delay_after_commands_seconds
     if step.drain_media_before_next_step_seconds:
-        value["drain_media_before_next_step_seconds"] = (
-            step.drain_media_before_next_step_seconds
-        )
+        value["drain_media_before_next_step_seconds"] = step.drain_media_before_next_step_seconds
     if step.keepalive_templates:
         value["keepalive_templates"] = [
-            _hcnetsdk_command_template_to_json(template)
-            for template in step.keepalive_templates
+            _hcnetsdk_command_template_to_json(template) for template in step.keepalive_templates
         ]
-    if (
-        step.keepalive_interval_seconds
-        != HCNETSDK_COMMAND_PLAN_DEFAULT_KEEPALIVE_INTERVAL_SECONDS
-    ):
+    if step.keepalive_interval_seconds != HCNETSDK_COMMAND_PLAN_DEFAULT_KEEPALIVE_INTERVAL_SECONDS:
         value["keepalive_interval_seconds"] = step.keepalive_interval_seconds
     if step.keepalive_initial_delay_seconds is not None:
-        value["keepalive_initial_delay_seconds"] = (
-            step.keepalive_initial_delay_seconds
-        )
+        value["keepalive_initial_delay_seconds"] = step.keepalive_initial_delay_seconds
     return value
 
 
@@ -4814,8 +4754,8 @@ def _hcnetsdk_command_port_exchange_metadata(exchange: Any) -> dict[str, Any]:
     if len(frame) > 32:
         tail = frame[32:]
         metadata["request_body_tail_length"] = len(tail)
-        metadata["request_body_tail_word_samples"] = (
-            _hcnetsdk_command_port_body_tail_word_samples(tail)
+        metadata["request_body_tail_word_samples"] = _hcnetsdk_command_port_body_tail_word_samples(
+            tail
         )
 
     if response is None:
@@ -4833,9 +4773,7 @@ def _hcnetsdk_command_port_exchange_metadata(exchange: Any) -> dict[str, Any]:
         "body_prefix_hex": body[:16].hex(),
     }
     if body:
-        metadata["response"]["body_word_samples"] = (
-            _hcnetsdk_command_port_body_word_samples(body)
-        )
+        metadata["response"]["body_word_samples"] = _hcnetsdk_command_port_body_word_samples(body)
     return metadata
 
 
@@ -5216,8 +5154,10 @@ def main(argv: list[str] | None = None) -> int:
         _LOGGER.error("Provide --token-file (existing) or --username/--password")
         return 2
 
-    persist = args.save_token or args.action == "mqtt" or bool(
-        token and token.get("push_profile") == PUSH_PROFILE
+    persist = (
+        args.save_token
+        or args.action == "mqtt"
+        or bool(token and token.get("push_profile") == PUSH_PROFILE)
     )
 
     def save(snapshot: dict[str, Any]) -> None:
@@ -5225,7 +5165,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         client = EzvizClient(
-            args.username, args.password, args.region, token=token,
+            args.username,
+            args.password,
+            args.region,
+            token=token,
             on_token_updated=save if persist else None,
         )
         if args.action == "mqtt":

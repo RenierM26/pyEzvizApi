@@ -9,11 +9,12 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 from threading import RLock
 import time
-from typing import Any, BinaryIO, ClassVar, Literal, TypedDict, cast
+from typing import Any, BinaryIO, ClassVar, TypedDict, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 import zlib
@@ -134,6 +135,17 @@ from .api_endpoints import (
     API_ENDPOINT_VIDEO_ENCRYPT,
 )
 from .cas import EzvizCAS
+from .clip import (
+    ClipOptions,
+    ClipOutputFormat,
+    ClipSource,
+    ClipSourceOptions,
+    CloudClipSource,
+    HcNetSdkCommandPortClipSource,
+    LocalSdkClipSource,
+    LocalSdkEcdhClipSource,
+    _LegacyClipOptions,
+)
 from .cloud_stream import copy_cloud_stream_to_mpegps, copy_cloud_stream_to_mpegts
 from .constants import (
     ANDROID_PROFILE,
@@ -157,21 +169,24 @@ from .exceptions import (
 )
 from .feature import optionals_mapping
 from .hcnetsdk import HcNetSdkLanEndpoint
-from .local_stream import (
-    HcNetSdkCommandPortGeneratedMultiSocketPlan,
-    HcNetSdkCommandPortMultiSocketPlan,
-    copy_local_sdk_stream_from_client,
-    copy_local_stream_to_decrypted_mpegts,
-    copy_local_stream_to_mpegts,
-    open_hcnetsdk_command_port_generated_multi_socket_stream,
-    open_hcnetsdk_command_port_multi_socket_stream,
-    open_hcnetsdk_command_port_stream,
-    summarize_idmx_h264_local_packets,
-)
 from .local_stream_ecdh import (
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
     copy_local_sdk_ecdh_stream_from_client,
 )
+from .local_stream_media import (
+    copy_local_stream_to_decrypted_mpegts,
+    copy_local_stream_to_mpegts,
+    summarize_idmx_h264_local_packets,
+)
+from .local_stream_transport import (
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    HcNetSdkCommandPortMultiSocketPlan,
+    copy_local_sdk_stream_from_client,
+    open_hcnetsdk_command_port_generated_multi_socket_stream,
+    open_hcnetsdk_command_port_multi_socket_stream,
+    open_hcnetsdk_command_port_stream,
+)
+from .media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .utils import convert_to_dict, decrypt_image, deep_merge
@@ -182,8 +197,6 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
-ClipSource = Literal["local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
-ClipOutputFormat = Literal["mpegps", "mpegts"]
 
 
 class SaveMediaResult(TypedDict, total=False):
@@ -536,7 +549,8 @@ class EzvizClient:
         url: str = "apiieu.ezvizlife.com",
         timeout: int = DEFAULT_TIMEOUT,
         token: JsonDict | None = None,
-        *, on_token_updated: Callable[[dict[str, Any]], None] | None = None,
+        *,
+        on_token_updated: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """Initialize the client object."""
         validate_feature_code(token or {})
@@ -623,21 +637,20 @@ class EzvizClient:
 
         except ValueError as err:
             raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(req.text)
+                "Impossible to decode response: " + str(err) + "\nResponse was: " + str(req.text)
             ) from err
 
         if json_result["meta"]["code"] == 200:
             session_id = str(json_result["loginSession"]["sessionId"])
-            self._token.update({
-                "session_id": session_id,
-                "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
-                "username": str(json_result["loginUser"]["username"]),
-                "api_url": str(json_result["loginArea"]["apiDomain"]),
-                "feature_code": FEATURE_CODE,
-            })
+            self._token.update(
+                {
+                    "session_id": session_id,
+                    "rf_session_id": str(json_result["loginSession"]["rfSessionId"]),
+                    "username": str(json_result["loginUser"]["username"]),
+                    "api_url": str(json_result["loginArea"]["apiDomain"]),
+                    "feature_code": FEATURE_CODE,
+                }
+            )
             synchronize_http_headers(
                 self._session.headers,
                 profile_for_token(self._token),
@@ -679,9 +692,7 @@ class EzvizClient:
 
         if json_result["meta"]["code"] == 6002:
             self.send_mfa_code()
-            raise EzvizAuthVerificationCode(
-                "MFA enabled on account. Please retry with code."
-            )
+            raise EzvizAuthVerificationCode("MFA enabled on account. Please retry with code.")
 
         raise PyEzvizError(f"Login error: {json_result['meta']}")
 
@@ -725,11 +736,7 @@ class EzvizClient:
                 )
             req.raise_for_status()
         except requests.HTTPError as err:
-            if (
-                retry_401
-                and err.response is not None
-                and err.response.status_code == 401
-            ):
+            if retry_401 and err.response is not None and err.response.status_code == 401:
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 # Re-login can also move the account to another regional API.
@@ -767,10 +774,7 @@ class EzvizClient:
             return cast(dict, resp.json())
         except ValueError as err:
             raise PyEzvizError(
-                "Impossible to decode response: "
-                + str(err)
-                + "\nResponse was: "
-                + str(resp.text)
+                "Impossible to decode response: " + str(err) + "\nResponse was: " + str(resp.text)
             ) from err
 
     @staticmethod
@@ -929,11 +933,7 @@ class EzvizClient:
                 req = self._session.send(request=prepared, timeout=self._timeout)
             req.raise_for_status()
         except requests.HTTPError as err:
-            if (
-                retry_401
-                and err.response is not None
-                and err.response.status_code == 401
-            ):
+            if retry_401 and err.response is not None and err.response.status_code == 401:
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 self.login()
@@ -1182,9 +1182,7 @@ class EzvizClient:
             stype_param = DEFAULT_UNIFIEDMSG_STYPE
         elif isinstance(s_type, str):
             stype_param = s_type
-        elif isinstance(s_type, Iterable) and not isinstance(
-            s_type, (bytes, bytearray)
-        ):
+        elif isinstance(s_type, Iterable) and not isinstance(s_type, (bytes, bytearray)):
             parts = [_stringify(item) for item in s_type if item not in (None, "")]
             stype_param = ",".join(parts) if parts else DEFAULT_UNIFIEDMSG_STYPE
         else:
@@ -1519,9 +1517,7 @@ class EzvizClient:
         """Try the v3 switch endpoint, falling back to the legacy API if needed."""
 
         try:
-            return self.set_switch_v3(
-                serial, switch_type, enable, channel, max_retries=max_retries
-            )
+            return self.set_switch_v3(serial, switch_type, enable, channel, max_retries=max_retries)
         except PyEzvizError as first_error:
             try:
                 return self.set_switch_legacy(
@@ -1631,9 +1627,7 @@ class EzvizClient:
             serial=serial,
         )
         if self._meta_code(json_output) != 200:
-            raise PyEzvizError(
-                f"Could not arm or disarm Camera {serial}: Got {json_output})"
-            )
+            raise PyEzvizError(f"Could not arm or disarm Camera {serial}: Got {json_output})")
         return True
 
     def set_battery_camera_work_mode(self, serial: str, value: int) -> bool:
@@ -1685,9 +1679,7 @@ class EzvizClient:
             key="AlgorithmInfo",
         )
 
-    def set_night_vision_mode(
-        self, serial: str, mode: int, luminance: int = 100
-    ) -> bool:
+    def set_night_vision_mode(self, serial: str, mode: int, luminance: int = 100) -> bool:
         """Set night vision mode."""
         return self.set_device_config_by_key(
             serial,
@@ -1697,9 +1689,7 @@ class EzvizClient:
 
     def set_display_mode(self, serial: str, mode: int) -> bool:
         """Change video color and saturation mode."""
-        return self.set_device_config_by_key(
-            serial, value=f'{{"mode":{mode}}}', key="display_mode"
-        )
+        return self.set_device_config_by_key(serial, value=f'{{"mode":{mode}}}', key="display_mode")
 
     def set_dev_config_kv(
         self,
@@ -1898,9 +1888,7 @@ class EzvizClient:
         req = self._send_prepared(req_prep, retry_401=True, max_retries=max_retries)
         json_output = self._parse_json(req)
         if not self._meta_ok(json_output):
-            raise PyEzvizError(
-                f"Could not set iot-feature key '{key}': Got {json_output})"
-            )
+            raise PyEzvizError(f"Could not set iot-feature key '{key}': Got {json_output})")
 
         return True
 
@@ -2138,9 +2126,7 @@ class EzvizClient:
         payload = {
             "value": {
                 "enabled": bool(enabled),
-                "supplementLightSwitchMode": "eventIntelligence"
-                if enabled
-                else "irLight",
+                "supplementLightSwitchMode": "eventIntelligence" if enabled else "irLight",
             }
         }
         body = self._normalize_json_payload(payload)
@@ -2330,9 +2316,7 @@ class EzvizClient:
             serial=serial,
         )
         if str(json_output.get("resultCode")) != "0":
-            raise PyEzvizError(
-                f"Could not get device storage status: Got {json_output})"
-            )
+            raise PyEzvizError(f"Could not get device storage status: Got {json_output})")
         return json_output.get("storageStatus")
 
     def sound_alarm(self, serial: str, enable: int = 1, max_retries: int = 0) -> bool:
@@ -2598,19 +2582,16 @@ class EzvizClient:
         latest_alarms: dict[str, dict[str, Any]] = {}
         if refresh:
             camera_serials = [
-                serial
-                for serial, record in records.items()
-                if _is_supported_camera(record)
+                serial for serial, record in records.items() if _is_supported_camera(record)
             ]
             latest_alarms = self._prefetch_latest_camera_alarms(camera_serials)
 
         for device, rec in records.items():
             if rec.device_category in supported_categories:
                 # Add support for connected HikVision cameras
-                if (
-                    rec.device_category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value
-                    and not (rec.raw.get("deviceInfos") or {}).get("hik")
-                ):
+                if rec.device_category == DeviceCatagories.COMMON_DEVICE_CATEGORY.value and not (
+                    rec.raw.get("deviceInfos") or {}
+                ).get("hik"):
                     continue
 
                 if rec.device_category == DeviceCatagories.LIGHTING.value:
@@ -2636,10 +2617,10 @@ class EzvizClient:
                             self, device, dict(rec.raw)
                         )
                     except (
-                            PyEzvizError,
-                            KeyError,
-                            TypeError,
-                            ValueError,
+                        PyEzvizError,
+                        KeyError,
+                        TypeError,
+                        ValueError,
                     ) as err:
                         _LOGGER.warning(
                             "Load_device_failed: serial=%s code=%s msg=%s",
@@ -2681,9 +2662,7 @@ class EzvizClient:
 
         latest: dict[str, dict[str, Any]] = {}
 
-        def _query_chunk(
-            missing: set[str], limit: int, *, filtered: bool
-        ) -> None:
+        def _query_chunk(missing: set[str], limit: int, *, filtered: bool) -> None:
             """Populate latest alarms for a given chunk, retrying a few times."""
             attempts = 0
             while missing and attempts < MAX_UNIFIEDMSG_PAGES:
@@ -2712,11 +2691,7 @@ class EzvizClient:
                 matched = 0
                 for item in items:
                     serial = item.get("deviceSerial")
-                    if (
-                        isinstance(serial, str)
-                        and serial in missing
-                        and serial not in latest
-                    ):
+                    if isinstance(serial, str) and serial in missing and serial not in latest:
                         latest[serial] = item
                         missing.discard(serial)
                         matched += 1
@@ -2739,11 +2714,7 @@ class EzvizClient:
             remaining_serials.difference_update(satisfied)
 
         for start_idx in range(0, len(serial_list), chunk_size):
-            chunk = [
-                serial
-                for serial in serial_list[start_idx : start_idx + chunk_size]
-                if serial
-            ]
+            chunk = [serial for serial in serial_list[start_idx : start_idx + chunk_size] if serial]
             if not chunk:
                 continue
             remaining = {serial for serial in chunk if serial in remaining_serials}
@@ -2818,9 +2789,7 @@ class EzvizClient:
                 "FEATURE_INFO": devices.get("FEATURE_INFO", {}).get(_serial, {}),
                 "SWITCH": devices.get("SWITCH", {}).get(_serial, {}),
                 "CUSTOM_TAG": devices.get("CUSTOM_TAG", {}).get(_serial, {}),
-                "VIDEO_QUALITY": {
-                    _res_id: devices.get("VIDEO_QUALITY", {}).get(_res_id, {})
-                },
+                "VIDEO_QUALITY": {_res_id: devices.get("VIDEO_QUALITY", {}).get(_res_id, {})},
                 "resourceInfos": [
                     item
                     for item in (devices.get("resourceInfos") or [])
@@ -2833,9 +2802,7 @@ class EzvizClient:
             try:
                 support_ext = result[_serial].get("deviceInfos", {}).get("supportExt")
                 if isinstance(support_ext, str) and support_ext:
-                    result[_serial]["deviceInfos"]["supportExt"] = json.loads(
-                        support_ext
-                    )
+                    result[_serial]["deviceInfos"]["supportExt"] = json.loads(support_ext)
             except (TypeError, ValueError):
                 # Leave as-is if not valid JSON
                 pass
@@ -2868,9 +2835,7 @@ class EzvizClient:
     ) -> JsonDict:
         """Retrieve accessory information linked to a device."""
 
-        path = (
-            f"{API_ENDPOINT_DEVICE_ACCESSORY_LINK}{serial}/{local_index}/1/linked/info"
-        )
+        path = f"{API_ENDPOINT_DEVICE_ACCESSORY_LINK}{serial}/{local_index}/1/linked/info"
         json_output = self._request_json(
             "GET",
             path,
@@ -2901,9 +2866,7 @@ class EzvizClient:
         self._ensure_ok(json_output, "Could not get devconfig value")
         return json_output
 
-    def ptz_control(
-        self, command: str, serial: str, action: str, speed: int = 5
-    ) -> Any:
+    def ptz_control(self, command: str, serial: str, action: str, speed: int = 5) -> Any:
         """PTZ Control by API."""
         if command is None:
             raise PyEzvizError("Trying to call ptzControl without command")
@@ -2995,9 +2958,7 @@ class EzvizClient:
 
             code = str(json_output.get("resultCode"))
             if code == "20002":
-                raise EzvizAuthVerificationCode(
-                    f"MFA code required: Got {json_output})"
-                )
+                raise EzvizAuthVerificationCode(f"MFA code required: Got {json_output})")
             if code == "2009":
                 raise DeviceException(f"Device not reachable: Got {json_output})")
             if code == "0":
@@ -3010,9 +2971,7 @@ class EzvizClient:
                     "cam_key_not_found",
                 )
                 continue
-            raise PyEzvizError(
-                f"Could not get camera encryption key: Got {json_output})"
-            )
+            raise PyEzvizError(f"Could not get camera encryption key: Got {json_output})")
 
         raise PyEzvizError("Could not get camera encryption key: exceeded retries")
 
@@ -3040,19 +2999,13 @@ class EzvizClient:
             max_retries=0,
         )
         image_data = resp.content
-        if (
-            not decrypt
-            or not image_data
-            or HIK_ENCRYPTION_HEADER not in image_data
-        ):
+        if not decrypt or not image_data or HIK_ENCRYPTION_HEADER not in image_data:
             return image_data
 
         key = encryption_key
         if key is None:
             if not serial:
-                raise PyEzvizError(
-                    "Camera serial or encryption key is required to decrypt image"
-                )
+                raise PyEzvizError("Camera serial or encryption key is required to decrypt image")
             key = self.get_cam_key(serial, smscode=smscode, max_retries=max_retries)
         return decrypt_image(image_data, key)
 
@@ -3079,8 +3032,7 @@ class EzvizClient:
         command_port: int | None = None,
         hcnetsdk_command_frames: Iterable[bytes] | None = None,
         hcnetsdk_command_plan: HcNetSdkCommandPortMultiSocketPlan | None = None,
-        hcnetsdk_command_generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan
-        | None = None,
+        hcnetsdk_command_generated_plan: HcNetSdkCommandPortGeneratedMultiSocketPlan | None = None,
         hcnetsdk_command_password: str | bytes | None = None,
         hcnetsdk_local_ip: str | None = None,
         hcnetsdk_read_response_after_each: bool | Iterable[bool] = True,
@@ -3113,54 +3065,40 @@ class EzvizClient:
         port media stream to MPEG-TS.
         When omitted, ``output_format`` defaults to MPEG-PS for
         ``source="local-sdk-ecdh"`` and MPEG-TS for other sources.
+
+        This long-form signature is retained for compatibility. New code can
+        group the same settings with :meth:`save_clip_with_options`.
         """
 
         if output_format is None:
-            output_format = (
-                "mpegps" if source == "local-sdk-ecdh" else "mpegts"
-            )
+            output_format = "mpegps" if source == "local-sdk-ecdh" else "mpegts"
+        mux_options = MediaMuxOptions(
+            output_format=output_format,
+            ffmpeg_path=ffmpeg_path,
+        )
 
+        source_options: ClipSourceOptions
         if source == "local-sdk":
-            return self._save_local_sdk_clip(
-                serial,
-                output,
-                output_format=output_format,
-                duration_seconds=duration_seconds,
-                max_packets=max_packets,
-                channel=channel,
-                ffmpeg_path=ffmpeg_path,
-                decrypt_video=decrypt_video,
-                media_key=media_key,
-                nalu_header_size=nalu_header_size,
+            source_options = LocalSdkClipSource(
                 cas_serial=cas_serial,
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
                 smscode=smscode,
             )
-        if source == "local-sdk-ecdh":
-            return self._save_local_sdk_ecdh_clip(
-                serial,
-                output,
-                output_format=output_format,
-                duration_seconds=duration_seconds,
-                max_packets=max_packets,
-                max_frames=local_sdk_ecdh_max_frames,
-                channel=channel,
+        elif source == "local-sdk-ecdh":
+            source_options = LocalSdkEcdhClipSource(
                 cas_serial=cas_serial,
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
+                smscode=smscode,
                 receiver_port=local_sdk_ecdh_receiver_port,
                 send_init=local_sdk_ecdh_send_init,
                 max_prefix_bytes=local_sdk_ecdh_max_prefix_bytes,
-                ffmpeg_path=ffmpeg_path,
-                decrypt_video=decrypt_video,
-                media_key=media_key,
-                nalu_header_size=nalu_header_size,
-                smscode=smscode,
+                max_frames=local_sdk_ecdh_max_frames,
             )
-        if source == "hcnetsdk-command-port":
+        elif source == "hcnetsdk-command-port":
             trim_to_clean_window = (
                 hcnetsdk_h264_trim_to_clean_idr_window
                 if hcnetsdk_video_trim_to_clean_window is None
@@ -3186,17 +3124,19 @@ class EzvizClient:
                 if hcnetsdk_video_clean_window_wait_seconds is None
                 else hcnetsdk_video_clean_window_wait_seconds
             )
-            return self._save_hcnetsdk_command_port_clip(
-                serial,
-                output,
+            mux_options = MediaMuxOptions(
                 output_format=output_format,
-                duration_seconds=duration_seconds,
-                max_packets=max_packets,
-                channel=channel,
                 ffmpeg_path=ffmpeg_path,
-                decrypt_video=decrypt_video,
-                media_key=media_key,
-                nalu_header_size=nalu_header_size,
+                h264_skip_initial_idr_windows=(
+                    hcnetsdk_h264_skip_initial_idr_windows
+                ),
+                h264_trim_to_clean_idr_window=trim_to_clean_window,
+                h264_clean_idr_preroll_seconds=clean_window_preroll_seconds,
+                h264_clean_idr_max_windows=clean_window_max_windows,
+                h264_wait_for_clean_idr_window=wait_for_clean_window,
+                h264_clean_idr_wait_seconds=clean_window_wait_seconds,
+            )
+            source_options = HcNetSdkCommandPortClipSource(
                 timeout=timeout,
                 host=host,
                 command_port=command_port,
@@ -3207,34 +3147,178 @@ class EzvizClient:
                 local_ip=hcnetsdk_local_ip,
                 read_response_after_each=hcnetsdk_read_response_after_each,
                 metadata_callback=hcnetsdk_command_metadata_callback,
-                h264_skip_initial_idr_windows=(
-                    hcnetsdk_h264_skip_initial_idr_windows
-                ),
-                h264_trim_to_clean_idr_window=trim_to_clean_window,
-                h264_clean_idr_preroll_seconds=clean_window_preroll_seconds,
-                h264_clean_idr_max_windows=clean_window_max_windows,
-                h264_wait_for_clean_idr_window=wait_for_clean_window,
-                h264_clean_idr_wait_seconds=clean_window_wait_seconds,
             )
-        if source == "cloud":
-            return self._save_cloud_clip(
-                serial,
-                output,
-                output_format=output_format,
-                duration_seconds=duration_seconds,
-                max_packets=max_packets,
-                channel=channel,
-                ffmpeg_path=ffmpeg_path,
-                decrypt_video=decrypt_video,
-                media_key=media_key,
-                nalu_header_size=nalu_header_size,
+        elif source == "cloud":
+            source_options = CloudClipSource(
                 timeout=timeout,
                 client_type=cloud_client_type,
                 token_index=cloud_token_index,
                 refresh_vtm=cloud_refresh_vtm,
                 smscode=smscode,
             )
-        raise PyEzvizError(f"Unsupported clip source: {source}")
+        else:
+            raise PyEzvizError(f"Unsupported clip source: {source}")
+
+        clip_options = ClipOptions(
+            source=source_options,
+            capture=CaptureLimits(
+                max_packets=(
+                    max_packets
+                    if max_packets is None
+                    or (max_packets > 0 and math.isfinite(max_packets))
+                    else None
+                ),
+                duration_seconds=(
+                    duration_seconds
+                    if duration_seconds is None
+                    or (duration_seconds > 0 and math.isfinite(duration_seconds))
+                    else None
+                ),
+            ),
+            decode=MediaDecodeOptions(
+                decrypt_video=decrypt_video,
+                media_key=media_key,
+                nalu_header_size=nalu_header_size,
+            ),
+            mux=mux_options,
+            channel=channel,
+        )
+        if (
+            max_packets is not None
+            and (max_packets <= 0 or not math.isfinite(max_packets))
+        ) or (
+            duration_seconds is not None
+            and (duration_seconds <= 0 or not math.isfinite(duration_seconds))
+        ):
+            clip_options = _LegacyClipOptions.from_options(
+                clip_options,
+                max_packets=max_packets,
+                duration_seconds=duration_seconds,
+            )
+        return self.save_clip_with_options(serial, output, clip_options)
+
+    def save_clip_with_options(
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        options: ClipOptions,
+    ) -> SaveMediaResult:
+        """Save a camera clip from a grouped, typed configuration."""
+
+        if options.capture.max_bytes is not None:
+            raise PyEzvizError("save_clip_with_options does not support CaptureLimits.max_bytes")
+        if options.decode.decrypt_hevc_parameter_sets:
+            raise PyEzvizError(
+                "save_clip_with_options does not support "
+                "MediaDecodeOptions.decrypt_hevc_parameter_sets"
+            )
+
+        source = options.source
+        decode = options.decode
+        mux = options.resolved_mux()
+        default_mux = MediaMuxOptions()
+        if not isinstance(source, HcNetSdkCommandPortClipSource) and (
+            mux.h264_skip_initial_idr_windows
+            or mux.h264_trim_to_clean_idr_window
+            or mux.h264_clean_idr_preroll_seconds
+            or mux.h264_clean_idr_max_windows
+            != default_mux.h264_clean_idr_max_windows
+            or mux.h264_wait_for_clean_idr_window
+            or mux.h264_clean_idr_wait_seconds
+            != default_mux.h264_clean_idr_wait_seconds
+        ):
+            raise PyEzvizError(
+                "H.264 clean-window mux options require "
+                "HcNetSdkCommandPortClipSource"
+            )
+        if isinstance(source, LocalSdkClipSource):
+            return self._save_local_sdk_clip(
+                serial,
+                output,
+                output_format=mux.output_format,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
+                channel=options.channel,
+                ffmpeg_path=mux.ffmpeg_path,
+                decrypt_video=decode.decrypt_video,
+                media_key=decode.media_key,
+                nalu_header_size=decode.nalu_header_size,
+                cas_serial=source.cas_serial,
+                register_p2p_session=source.register_p2p_session,
+                p2p_register_max_retries=source.p2p_register_max_retries,
+                timeout=source.timeout,
+                smscode=source.smscode,
+            )
+        if isinstance(source, LocalSdkEcdhClipSource):
+            return self._save_local_sdk_ecdh_clip(
+                serial,
+                output,
+                output_format=mux.output_format,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
+                max_frames=source.max_frames,
+                channel=options.channel,
+                cas_serial=source.cas_serial,
+                register_p2p_session=source.register_p2p_session,
+                p2p_register_max_retries=source.p2p_register_max_retries,
+                timeout=source.timeout,
+                receiver_port=source.receiver_port,
+                send_init=source.send_init,
+                max_prefix_bytes=source.max_prefix_bytes,
+                ffmpeg_path=mux.ffmpeg_path,
+                decrypt_video=decode.decrypt_video,
+                media_key=decode.media_key,
+                nalu_header_size=decode.nalu_header_size,
+                smscode=source.smscode,
+            )
+        if isinstance(source, HcNetSdkCommandPortClipSource):
+            return self._save_hcnetsdk_command_port_clip(
+                serial,
+                output,
+                output_format=mux.output_format,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
+                channel=options.channel,
+                ffmpeg_path=mux.ffmpeg_path,
+                decrypt_video=decode.decrypt_video,
+                media_key=decode.media_key,
+                nalu_header_size=decode.nalu_header_size,
+                timeout=source.timeout,
+                host=source.host,
+                command_port=source.command_port,
+                command_frames=source.command_frames,
+                command_plan=source.command_plan,
+                generated_plan=source.generated_plan,
+                command_password=source.command_password,
+                local_ip=source.local_ip,
+                read_response_after_each=source.read_response_after_each,
+                metadata_callback=source.metadata_callback,
+                h264_skip_initial_idr_windows=mux.h264_skip_initial_idr_windows,
+                h264_trim_to_clean_idr_window=mux.h264_trim_to_clean_idr_window,
+                h264_clean_idr_preroll_seconds=(mux.h264_clean_idr_preroll_seconds),
+                h264_clean_idr_max_windows=mux.h264_clean_idr_max_windows,
+                h264_wait_for_clean_idr_window=mux.h264_wait_for_clean_idr_window,
+                h264_clean_idr_wait_seconds=mux.h264_clean_idr_wait_seconds,
+            )
+        if isinstance(source, CloudClipSource):
+            return self._save_cloud_clip(
+                serial,
+                output,
+                output_format=mux.output_format,
+                duration_seconds=options.duration_seconds,
+                max_packets=options.max_packets,
+                channel=options.channel,
+                ffmpeg_path=mux.ffmpeg_path,
+                decrypt_video=decode.decrypt_video,
+                media_key=decode.media_key,
+                nalu_header_size=decode.nalu_header_size,
+                timeout=source.timeout,
+                client_type=source.client_type,
+                token_index=source.token_index,
+                refresh_vtm=source.refresh_vtm,
+                smscode=source.smscode,
+            )
+        raise PyEzvizError(f"Unsupported clip source options: {type(source).__name__}")
 
     def _save_local_sdk_ecdh_clip(  # noqa: PLR0913
         self,
@@ -3444,13 +3528,9 @@ class EzvizClient:
         """Save a clip through caller-supplied port-8000 HCNetSDK frames."""
 
         if output_format != "mpegts":
-            raise PyEzvizError(
-                "source='hcnetsdk-command-port' currently writes MPEG-TS only"
-            )
+            raise PyEzvizError("source='hcnetsdk-command-port' currently writes MPEG-TS only")
         if decrypt_video and media_key is None:
-            raise PyEzvizError(
-                "source='hcnetsdk-command-port' decrypt_video requires media_key"
-            )
+            raise PyEzvizError("source='hcnetsdk-command-port' decrypt_video requires media_key")
 
         frames = tuple(command_frames or ())
         supplied_modes = sum(
@@ -3469,8 +3549,7 @@ class EzvizClient:
             )
         if generated_plan is not None and command_password is None:
             raise PyEzvizError(
-                "source='hcnetsdk-command-port' generated plans require "
-                "hcnetsdk_command_password"
+                "source='hcnetsdk-command-port' generated plans require hcnetsdk_command_password"
             )
         endpoint = self._hcnetsdk_command_port_endpoint(
             serial,
@@ -3508,19 +3587,11 @@ class EzvizClient:
                             nalu_header_size=nalu_header_size,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
-                            h264_skip_initial_idr_windows=(
-                                h264_skip_initial_idr_windows
-                            ),
-                            h264_trim_to_clean_idr_window=(
-                                h264_trim_to_clean_idr_window
-                            ),
-                            h264_clean_idr_preroll_seconds=(
-                                h264_clean_idr_preroll_seconds
-                            ),
+                            h264_skip_initial_idr_windows=(h264_skip_initial_idr_windows),
+                            h264_trim_to_clean_idr_window=(h264_trim_to_clean_idr_window),
+                            h264_clean_idr_preroll_seconds=(h264_clean_idr_preroll_seconds),
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
-                            h264_wait_for_clean_idr_window=(
-                                h264_wait_for_clean_idr_window
-                            ),
+                            h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
                         )
                     else:
@@ -3530,19 +3601,11 @@ class EzvizClient:
                             ffmpeg_path=ffmpeg_path,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
-                            h264_skip_initial_idr_windows=(
-                                h264_skip_initial_idr_windows
-                            ),
-                            h264_trim_to_clean_idr_window=(
-                                h264_trim_to_clean_idr_window
-                            ),
-                            h264_clean_idr_preroll_seconds=(
-                                h264_clean_idr_preroll_seconds
-                            ),
+                            h264_skip_initial_idr_windows=(h264_skip_initial_idr_windows),
+                            h264_trim_to_clean_idr_window=(h264_trim_to_clean_idr_window),
+                            h264_clean_idr_preroll_seconds=(h264_clean_idr_preroll_seconds),
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
-                            h264_wait_for_clean_idr_window=(
-                                h264_wait_for_clean_idr_window
-                            ),
+                            h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
                         )
                 finally:
@@ -3577,19 +3640,11 @@ class EzvizClient:
                             nalu_header_size=nalu_header_size,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
-                            h264_skip_initial_idr_windows=(
-                                h264_skip_initial_idr_windows
-                            ),
-                            h264_trim_to_clean_idr_window=(
-                                h264_trim_to_clean_idr_window
-                            ),
-                            h264_clean_idr_preroll_seconds=(
-                                h264_clean_idr_preroll_seconds
-                            ),
+                            h264_skip_initial_idr_windows=(h264_skip_initial_idr_windows),
+                            h264_trim_to_clean_idr_window=(h264_trim_to_clean_idr_window),
+                            h264_clean_idr_preroll_seconds=(h264_clean_idr_preroll_seconds),
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
-                            h264_wait_for_clean_idr_window=(
-                                h264_wait_for_clean_idr_window
-                            ),
+                            h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
                         )
                     else:
@@ -3599,19 +3654,11 @@ class EzvizClient:
                             ffmpeg_path=ffmpeg_path,
                             max_packets=max_packets,
                             duration_seconds=duration_seconds,
-                            h264_skip_initial_idr_windows=(
-                                h264_skip_initial_idr_windows
-                            ),
-                            h264_trim_to_clean_idr_window=(
-                                h264_trim_to_clean_idr_window
-                            ),
-                            h264_clean_idr_preroll_seconds=(
-                                h264_clean_idr_preroll_seconds
-                            ),
+                            h264_skip_initial_idr_windows=(h264_skip_initial_idr_windows),
+                            h264_trim_to_clean_idr_window=(h264_trim_to_clean_idr_window),
+                            h264_clean_idr_preroll_seconds=(h264_clean_idr_preroll_seconds),
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
-                            h264_wait_for_clean_idr_window=(
-                                h264_wait_for_clean_idr_window
-                            ),
+                            h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
                         )
                 finally:
@@ -3784,8 +3831,7 @@ class EzvizClient:
                         break
         if not isinstance(device, dict):
             raise PyEzvizError(
-                "Could not find CONNECTION metadata for HCNetSDK command-port stream; "
-                "provide host"
+                "Could not find CONNECTION metadata for HCNetSDK command-port stream; provide host"
             )
         endpoint = HcNetSdkLanEndpoint.from_connection(serial, device.get("CONNECTION"))
         if command_port is None:
@@ -3908,9 +3954,7 @@ class EzvizClient:
             raise DeviceException(f"Device not reachable: Got {json_output}")
 
         if not self._meta_ok(json_output):
-            raise PyEzvizError(
-                f"Could not get camera verification key: Got {json_output}"
-            )
+            raise PyEzvizError(f"Could not get camera verification key: Got {json_output}")
 
         return json_output["devAuthCode"]
 
@@ -3956,9 +4000,7 @@ class EzvizClient:
         )
 
         if not self._meta_ok(json_output):
-            raise PyEzvizError(
-                f"Could not request elevated permission: Got {json_output})"
-            )
+            raise PyEzvizError(f"Could not request elevated permission: Got {json_output})")
 
         return json_output
 
@@ -3990,9 +4032,7 @@ class EzvizClient:
             raise PyEzvizError(
                 f"Could not send command to create panoramic photo: Got {json_output})"
             )
-        raise PyEzvizError(
-            "Could not send command to create panoramic photo: exceeded retries"
-        )
+        raise PyEzvizError("Could not send command to create panoramic photo: exceeded retries")
 
     def return_panoramic(self, serial: str, max_retries: int = 0) -> Any:
         """Return panoramic image url list."""
@@ -4144,9 +4184,7 @@ class EzvizClient:
 
         terminal = max(
             terminal_items,
-            key=lambda item: str(
-                item.get("lastModifytime") or item.get("lastModifyTime") or ""
-            ),
+            key=lambda item: str(item.get("lastModifytime") or item.get("lastModifyTime") or ""),
         )
         sign = str(terminal["sign"]).strip()
         terminal_user_id = str(terminal["userId"]).strip()
@@ -4310,7 +4348,9 @@ class EzvizClient:
             if self._token.get("push_profile") == PUSH_PROFILE:
                 return self.login(sms_code)
             if not self.account or not self.password:
-                raise EzvizAuthTokenExpired("Channel-99 migration requires a fresh credential login")
+                raise EzvizAuthTokenExpired(
+                    "Channel-99 migration requires a fresh credential login"
+                )
             self._token["push_profile"] = PUSH_PROFILE
             self._token["feature_code"] = FEATURE_CODE
             for key in ("push_state", "service_urls", "user_id", "username"):
@@ -4339,16 +4379,23 @@ class EzvizClient:
         if session_id and refresh_session_id:
             try:
                 refresh_credentials(
-                    self._session, cast(dict[str, Any], self._token), self._timeout,
-                    self._notify_token_updated, self.get_service_urls,
+                    self._session,
+                    cast(dict[str, Any], self._token),
+                    self._timeout,
+                    self._notify_token_updated,
+                    self.get_service_urls,
                 )
             except EzvizAuthTokenExpired:
                 if not (self.account and self.password):
                     raise
-                self._token.update({
-                    "session_id": None, "rf_session_id": None,
-                    "username": None, "api_url": self._token["api_url"],
-                })
+                self._token.update(
+                    {
+                        "session_id": None,
+                        "rf_session_id": None,
+                        "username": None,
+                        "api_url": self._token["api_url"],
+                    }
+                )
                 return self.login(sms_code=sms_code)
             return cast(dict[Any, Any], self._token)
 
@@ -4408,13 +4455,7 @@ class EzvizClient:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
         schedulestring = (
-            '{"CN":0,"EL":'
-            + str(enable)
-            + ',"SS":"'
-            + serial
-            + '","WP":['
-            + schedule
-            + "]}]}"
+            '{"CN":0,"EL":' + str(enable) + ',"SS":"' + serial + '","WP":[' + schedule + "]}]}"
         )
         json_output = self._retry_json(
             lambda: self._request_json(
@@ -4568,9 +4609,7 @@ class EzvizClient:
         else:
             raise PyEzvizError(f"Invalid action '{action}'. Use 'add' or 'remove'.")
 
-        json_output = self._request_json(
-            method, url_path, retry_401=True, max_retries=max_retries
-        )
+        json_output = self._request_json(method, url_path, retry_401=True, max_retries=max_retries)
         self._ensure_ok(json_output, f"Could not {action} intelligent app")
 
         return True
@@ -4596,9 +4635,7 @@ class EzvizClient:
         if isinstance(legacy, str) and legacy:
             return legacy
 
-        raise PyEzvizError(
-            "Unable to determine resourceId for intelligent app operation"
-        )
+        raise PyEzvizError("Unable to determine resourceId for intelligent app operation")
 
     def set_intelligent_app_state(
         self,
@@ -4793,9 +4830,7 @@ class EzvizClient:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
         if luminance not in range(1, 101):
-            raise PyEzvizError(
-                "Range of luminance is 1-100, got " + str(luminance) + "."
-            )
+            raise PyEzvizError("Range of luminance is 1-100, got " + str(luminance) + ".")
 
         response_json = self._request_json(
             "POST",
@@ -4858,9 +4893,7 @@ class EzvizClient:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
         if sensibility not in [0, 1, 2, 3, 4, 5, 6] and type_value == 0:
-            raise PyEzvizError(
-                "Unproper sensibility for type 0 (should be within 1 to 6)."
-            )
+            raise PyEzvizError("Unproper sensibility for type 0 (should be within 1 to 6).")
         try:
             with self._token_lock:
                 req = self._session.post(
@@ -4880,9 +4913,7 @@ class EzvizClient:
             if err.response.status_code == 401:
                 # session is wrong, need to re-log-in
                 self.login()
-                return self.detection_sensibility(
-                    serial, sensibility, type_value, max_retries + 1
-                )
+                return self.detection_sensibility(serial, sensibility, type_value, max_retries + 1)
 
             raise HTTPError from err
 
@@ -4900,12 +4931,8 @@ class EzvizClient:
                     max_retries,
                     MAX_RETRIES,
                 )
-                return self.detection_sensibility(
-                    serial, sensibility, type_value, max_retries + 1
-                )
-            raise PyEzvizError(
-                f"Unable to set detection sensibility. Got: {response_json}"
-            )
+                return self.detection_sensibility(serial, sensibility, type_value, max_retries + 1)
+            raise PyEzvizError(f"Unable to set detection sensibility. Got: {response_json}")
 
         return True
 
@@ -4963,9 +4990,7 @@ class EzvizClient:
         if sensitivity_type != 0 and not 1 <= value <= 100:
             raise PyEzvizError("Detection sensitivity must be within 1..100")
 
-        url_path = (
-            f"{API_ENDPOINT_SENSITIVITY}{serial}/{channel}/{sensitivity_type}/{value}"
-        )
+        url_path = f"{API_ENDPOINT_SENSITIVITY}{serial}/{channel}/{sensitivity_type}/{value}"
         json_output = self._request_json(
             "PUT",
             url_path,
@@ -4993,9 +5018,7 @@ class EzvizClient:
             log=f"Camera {serial} is offline or unreachable",
         )
         if str(response_json.get("resultCode")) != "0":
-            raise PyEzvizError(
-                f"Unable to get detection sensibility. Got: {response_json}"
-            )
+            raise PyEzvizError(f"Unable to get detection sensibility. Got: {response_json}")
 
         if response_json.get("algorithmConfig", {}).get("algorithmList"):
             for idx in response_json["algorithmConfig"]["algorithmList"]:
@@ -5014,10 +5037,7 @@ class EzvizClient:
     ) -> JsonDict:
         """Fetch a specific configuration key for an A1S detector."""
 
-        path = (
-            f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/"
-            f"{detector_serial}/{key}"
-        )
+        path = f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/{detector_serial}/{key}"
         json_output = self._request_json(
             "GET",
             path,
@@ -5038,9 +5058,7 @@ class EzvizClient:
     ) -> JsonDict:
         """Update a configuration key for an A1S detector."""
 
-        path = (
-            f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/{detector_serial}"
-        )
+        path = f"{API_ENDPOINT_SPECIAL_BIZS_A1S}{device_serial}/detector/{detector_serial}"
         json_output = self._request_json(
             "POST",
             path,
@@ -5332,9 +5350,7 @@ class EzvizClient:
             entry.setdefault("deviceSerial", serial)
             missing = [field for field in required_fields if field not in entry]
             if missing:
-                raise PyEzvizError(
-                    "channel_whistles entries must include " + ", ".join(missing)
-                )
+                raise PyEzvizError("channel_whistles entries must include " + ", ".join(missing))
             entries.append(entry)
 
         payload = {"channelWhistleList": entries}
@@ -5596,9 +5612,7 @@ class EzvizClient:
         )
         json_output = self._parse_json(resp)
         if not self._meta_ok(json_output):
-            raise PyEzvizError(
-                f"Could not get device encrypt key list: Got {json_output})"
-            )
+            raise PyEzvizError(f"Could not get device encrypt key list: Got {json_output})")
         return json_output
 
     def get_p2p_info(
@@ -6157,10 +6171,13 @@ class EzvizClient:
         url = self._extract_cloud_video_download_url(video)
         if url is None:
             stream_url = video.get("streamUrl")
-            suffix = f" Native streamUrl={stream_url!r} requires the EZVIZ SDK path." if stream_url else ""
+            suffix = (
+                f" Native streamUrl={stream_url!r} requires the EZVIZ SDK path."
+                if stream_url
+                else ""
+            )
             raise PyEzvizError(
-                "Cloud video descriptor does not include a direct HTTP(S) download URL."
-                + suffix
+                "Cloud video descriptor does not include a direct HTTP(S) download URL." + suffix
             )
 
         resp = self._http_request(
@@ -6372,9 +6389,7 @@ class EzvizClient:
             raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
         if sound_type not in [0, 1, 2]:
-            raise PyEzvizError(
-                "Invalid sound_type, should be 0,1,2: " + str(sound_type)
-            )
+            raise PyEzvizError("Invalid sound_type, should be 0,1,2: " + str(sound_type))
 
         voice_id_value = 0 if voice_id is None else voice_id
 

@@ -16,12 +16,8 @@ from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
-from .stream import (
-    SocketFactory,
-    VtmStreamClient,
-    build_vtm_url,
-    decrypt_hikvision_ps_video,
-)
+from .stream_media import decrypt_hikvision_ps_video
+from .stream_transport import SocketFactory, VtmStreamClient, build_vtm_url
 
 JsonDict = dict[str, Any]
 
@@ -550,9 +546,7 @@ def _find_vtm_resource(
     channel: int | None,
 ) -> JsonDict | None:
     serial_resources = [
-        item
-        for item in resources
-        if isinstance(item, dict) and item.get("deviceSerial") == serial
+        item for item in resources if isinstance(item, dict) and item.get("deviceSerial") == serial
     ]
     if channel is None:
         return cast(JsonDict, serial_resources[0]) if serial_resources else None

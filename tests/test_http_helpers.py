@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import datetime as dt
 import io
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
@@ -11,11 +12,18 @@ from typing import Any, BinaryIO, cast
 import pytest
 import requests
 
+from pyezvizapi._local_stream import (
+    HcNetSdkCommandPortMultiSocketPlan,
+    HcNetSdkCommandPortSocketStep,
+    _iter_local_stream_payloads,
+    local_media_packet_source,
+)
 from pyezvizapi.api_endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
 from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
+from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
 from pyezvizapi.constants import (
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
@@ -30,13 +38,11 @@ from pyezvizapi.exceptions import (
     HTTPError,
     PyEzvizError,
 )
-from pyezvizapi.local_stream import (
-    HcNetSdkCommandPortMultiSocketPlan,
-    HcNetSdkCommandPortSocketStep,
-    _iter_local_stream_payloads,
-    local_media_packet_source,
+from pyezvizapi.media import (
+    CaptureLimits,
+    MediaDecodeOptions,
+    MediaMuxOptions,
 )
-from pyezvizapi.media import CaptureLimits
 
 DEFAULT_SAVE_TIMEOUT = 10.0
 HCNETSDK_SAVE_DURATION = 3.0
@@ -59,7 +65,9 @@ def _fixture(name: str) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
-def _response(*, status_code: int = 200, text: str = '{"meta": {"code": 200}}') -> requests.Response:
+def _response(
+    *, status_code: int = 200, text: str = '{"meta": {"code": 200}}'
+) -> requests.Response:
     resp = requests.Response()
     resp.status_code = status_code
     resp._content = text.encode()
@@ -171,8 +179,7 @@ def test_local_stream_metadata_recorder_does_not_claim_startup_deadline() -> Non
 
     assert source.duration_from_start is False
     assert [
-        packet.body
-        for packet in source.iter_media_packets(limits=CaptureLimits(max_packets=1))
+        packet.body for packet in source.iter_media_packets(limits=CaptureLimits(max_packets=1))
     ] == [b"packet"]
 
 
@@ -510,11 +517,15 @@ def test_set_switch_falls_back_to_legacy_and_preserves_first_error(monkeypatch) 
     client = _client()
     calls: list[tuple[str, int]] = []
 
-    def fake_v3(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+    def fake_v3(
+        serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0
+    ) -> dict[str, Any]:
         calls.append(("v3", channel))
         raise PyEzvizError("modern failed")
 
-    def fake_legacy(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+    def fake_legacy(
+        serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0
+    ) -> dict[str, Any]:
         calls.append(("legacy", channel))
         return {"meta": {"code": 200}, "legacy": True}
 
@@ -527,7 +538,9 @@ def test_set_switch_falls_back_to_legacy_and_preserves_first_error(monkeypatch) 
     }
     assert calls == [("v3", 4), ("legacy", 4)]
 
-    def failing_legacy(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+    def failing_legacy(
+        serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0
+    ) -> dict[str, Any]:
         raise PyEzvizError("legacy failed")
 
     monkeypatch.setattr(client, "set_switch_legacy", failing_legacy)
@@ -540,7 +553,9 @@ def test_switch_status_updates_cached_camera_switch_state(monkeypatch) -> None:
     client = _client()
     client._cameras["CAM123"] = {"switches": {7: False}}
 
-    def fake_set_switch(serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0) -> dict[str, Any]:
+    def fake_set_switch(
+        serial: str, switch_type: int, enable: bool | int, channel: int = 0, max_retries: int = 0
+    ) -> dict[str, Any]:
         return {"meta": {"code": 200}}
 
     monkeypatch.setattr(client, "set_switch", fake_set_switch)
@@ -563,14 +578,17 @@ def test_set_camera_defence_retries_transient_timeout(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.set_camera_defence(
-        "CAM123",
-        1,
-        channel_no=2,
-        arm_type="Local",
-        actor="A",
-        max_retries=1,
-    ) is True
+    assert (
+        client.set_camera_defence(
+            "CAM123",
+            1,
+            channel_no=2,
+            arm_type="Local",
+            actor="A",
+            max_retries=1,
+        )
+        is True
+    )
 
     assert len(calls) == 2
     assert calls[0]["method"] == "PUT"
@@ -667,18 +685,24 @@ def test_audition_and_baby_control_build_request_payloads(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.audition_request("CAM123", 1, "play", "payload", max_retries=1)["meta"]["code"] == 200
-    assert client.baby_control(
-        "CAM123",
-        1,
-        2,
-        "move",
-        "START",
-        5,
-        "uuid-1",
-        "pan",
-        "HW1",
-    )["meta"]["code"] == 200
+    assert (
+        client.audition_request("CAM123", 1, "play", "payload", max_retries=1)["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.baby_control(
+            "CAM123",
+            1,
+            2,
+            "move",
+            "START",
+            5,
+            "uuid-1",
+            "pan",
+            "HW1",
+        )["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["method"] == "POST"
     assert calls[0]["data"] == {
@@ -725,7 +749,10 @@ def test_iot_request_builds_prepared_request_with_json_payload(monkeypatch) -> N
     req = captured["req"]
     assert payload == {"meta": {"code": 200}, "ok": True}
     assert req.method == "PUT"
-    assert req.url == "https://apiieu.ezvizlife.com/v3/iot-feature/feature/CAM123/Video/1/Domain/Action"
+    assert (
+        req.url
+        == "https://apiieu.ezvizlife.com/v3/iot-feature/feature/CAM123/Video/1/Domain/Action"
+    )
     assert req.headers["Content-Type"] == "application/json"
     assert req.body == '{"value":{"enabled":true}}'
     assert captured["retry_401"] is True
@@ -744,19 +771,43 @@ def test_iot_get_helpers_build_expected_feature_paths(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_send_prepared", fake_send_prepared)
 
-    assert client.get_low_battery_keep_alive("cam123", "Battery", "0", "Power", "KeepAlive")["meta"]["code"] == 200
-    assert client.get_object_removal_status("cam123", "Video", "1", "Object", "Removal", payload={"q": 1})["meta"]["code"] == 200
-    assert client.get_remote_control_path_list("cam123", "PTZ", "1", "Cruise", "PathList")["meta"]["code"] == 200
-    assert client.get_tracking_status("cam123", "Video", "1", "Track", "Status")["meta"]["code"] == 200
+    assert (
+        client.get_low_battery_keep_alive("cam123", "Battery", "0", "Power", "KeepAlive")["meta"][
+            "code"
+        ]
+        == 200
+    )
+    assert (
+        client.get_object_removal_status(
+            "cam123", "Video", "1", "Object", "Removal", payload={"q": 1}
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.get_remote_control_path_list("cam123", "PTZ", "1", "Cruise", "PathList")["meta"][
+            "code"
+        ]
+        == 200
+    )
+    assert (
+        client.get_tracking_status("cam123", "Video", "1", "Track", "Status")["meta"]["code"] == 200
+    )
     assert client.get_port_security("cam123")["meta"]["code"] == 200
-    assert client.get_device_feature_value("cam123", "Video", "Domain", "Prop", local_index=3)["meta"]["code"] == 200
+    assert (
+        client.get_device_feature_value("cam123", "Video", "Domain", "Prop", local_index=3)["meta"][
+            "code"
+        ]
+        == 200
+    )
 
     assert urls[0].endswith("/v3/iot-feature/feature/CAM123/Battery/0/Power/KeepAlive")
     assert urls[1].endswith("/v3/iot-feature/feature/CAM123/Video/1/Object/Removal")
     assert bodies[1] == '{"q":1}'
     assert urls[2].endswith("/v3/iot-feature/feature/CAM123/PTZ/1/Cruise/PathList")
     assert urls[3].endswith("/v3/iot-feature/feature/CAM123/Video/1/Track/Status")
-    assert urls[4].endswith("/v3/iot-feature/feature/CAM123/Video/1/NetworkSecurityProtection/PortSecurity")
+    assert urls[4].endswith(
+        "/v3/iot-feature/feature/CAM123/Video/1/NetworkSecurityProtection/PortSecurity"
+    )
     assert urls[5].endswith("/v3/iot-feature/feature/CAM123/Video/3/Domain/Prop")
     assert bodies[0] is None
 
@@ -792,7 +843,10 @@ def test_iot_action_and_port_security_wrappers_build_payloads(monkeypatch) -> No
     monkeypatch.setattr(client, "_iot_request", fake_iot_request)
 
     assert client.set_port_security("CAM123", {"https": True}, max_retries=1)["meta"]["code"] == 200
-    assert client.set_iot_action("CAM123", "PTZ", "1", "Move", "Start", {"speed": 3})["meta"]["code"] == 200
+    assert (
+        client.set_iot_action("CAM123", "PTZ", "1", "Move", "Start", {"speed": 3})["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["method"] == "PUT"
     assert calls[0]["resource_identifier"] == "Video"
@@ -833,10 +887,16 @@ def test_iot_feature_user_helpers_normalize_payloads(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_iot_request", fake_iot_request)
 
-    assert client.set_intelligent_fill_light("CAM123", enabled=True, local_index="2")["meta"]["code"] == 200
+    assert (
+        client.set_intelligent_fill_light("CAM123", enabled=True, local_index="2")["meta"]["code"]
+        == 200
+    )
     assert client.set_intelligent_fill_light("CAM123", enabled=False)["meta"]["code"] == 200
     assert client.set_image_flip_iot("CAM123", enabled=True)["meta"]["code"] == 200
-    assert client.set_image_flip_iot("CAM123", payload='{"value":{"enabled":false}}')["meta"]["code"] == 200
+    assert (
+        client.set_image_flip_iot("CAM123", payload='{"value":{"enabled":false}}')["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["domain_id"] == "SupplementLightMgr"
     assert calls[0]["action_id"] == "ImageSupplementLightModeSwitchParams"
@@ -992,18 +1052,24 @@ def test_sound_alarm_and_device_authenticate_build_payloads(monkeypatch) -> None
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
     assert client.sound_alarm("CAM123", enable=0, max_retries=1) is True
-    assert client.device_authenticate(
-        "CAM123",
-        need_check_code=True,
-        check_code="ABCDEF",
-        sender_type=2,
-    )["meta"]["code"] == 200
-    assert client.device_authenticate(
-        "CAM456",
-        need_check_code=False,
-        check_code=None,
-        sender_type=1,
-    )["meta"]["code"] == 200
+    assert (
+        client.device_authenticate(
+            "CAM123",
+            need_check_code=True,
+            check_code="ABCDEF",
+            sender_type=2,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.device_authenticate(
+            "CAM456",
+            need_check_code=False,
+            check_code=None,
+            sender_type=1,
+        )["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["method"] == "PUT"
     assert calls[0]["path"].endswith("CAM123/0/sendAlarm")
@@ -1139,12 +1205,15 @@ def test_set_video_enc_builds_default_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.set_video_enc(
-        "CAM123",
-        enable=1,
-        camera_verification_code="ABCDEF",
-        max_retries=1,
-    ) is True
+    assert (
+        client.set_video_enc(
+            "CAM123",
+            enable=1,
+            camera_verification_code="ABCDEF",
+            max_retries=1,
+        )
+        is True
+    )
     assert captured["method"] == "PUT"
     assert captured["data"] == {
         "deviceSerial": "CAM123",
@@ -1169,12 +1238,15 @@ def test_set_video_enc_builds_password_change_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.set_video_enc(
-        "CAM123",
-        enable=2,
-        old_password="old-pass",
-        new_password="new-pass",
-    ) is True
+    assert (
+        client.set_video_enc(
+            "CAM123",
+            enable=2,
+            old_password="old-pass",
+            new_password="new-pass",
+        )
+        is True
+    )
     assert captured["data"] == {
         "deviceSerial": "CAM123",
         "isEncrypt": 2,
@@ -1223,14 +1295,22 @@ def test_voice_info_helpers_build_request_payloads(monkeypatch) -> None:
 
     assert client.get_voice_config("prod-1", "v1", max_retries=1)["meta"]["code"] == 200
     assert client.get_voice_info("CAM123", local_index="2")["meta"]["code"] == 200
-    assert client.add_voice_info("CAM123", "hello", "https://voice.example/1", local_index="2")["meta"]["code"] == 200
+    assert (
+        client.add_voice_info("CAM123", "hello", "https://voice.example/1", local_index="2")[
+            "meta"
+        ]["code"]
+        == 200
+    )
     assert client.set_voice_info("CAM123", 5, "hello2", local_index="2")["meta"]["code"] == 200
-    assert client.delete_voice_info(
-        "CAM123",
-        5,
-        voice_url="https://voice.example/1",
-        local_index="2",
-    )["meta"]["code"] == 200
+    assert (
+        client.delete_voice_info(
+            "CAM123",
+            5,
+            voice_url="https://voice.example/1",
+            local_index="2",
+        )["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["method"] == "GET"
     assert calls[0]["params"] == {"productId": "prod-1", "version": "v1"}
@@ -1328,9 +1408,18 @@ def test_shared_voice_aliases_forward_local_index(monkeypatch) -> None:
     monkeypatch.setattr(client, "set_voice_info", fake_set_voice_info)
     monkeypatch.setattr(client, "delete_voice_info", fake_delete_voice_info)
 
-    assert client.add_shared_voice_info("CAM123", "hello", "url", "3", max_retries=1)["meta"]["code"] == 200
-    assert client.set_shared_voice_info("CAM123", 7, "hello2", "3", max_retries=2)["meta"]["code"] == 200
-    assert client.delete_shared_voice_info("CAM123", 7, "url", "3", max_retries=3)["meta"]["code"] == 200
+    assert (
+        client.add_shared_voice_info("CAM123", "hello", "url", "3", max_retries=1)["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.set_shared_voice_info("CAM123", 7, "hello2", "3", max_retries=2)["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.delete_shared_voice_info("CAM123", 7, "url", "3", max_retries=3)["meta"]["code"]
+        == 200
+    )
 
     assert calls == [
         {
@@ -1372,12 +1461,17 @@ def test_whistle_helpers_build_requests(monkeypatch) -> None:
 
     assert client.get_whistle_status_by_channel("CAM123")["meta"]["code"] == 200
     assert client.get_whistle_status_by_device("CAM123")["meta"]["code"] == 200
-    assert client.set_channel_whistle(
-        "CAM123",
-        [{"channel": 1, "status": 1, "duration": 10, "volume": 50}],
-        max_retries=1,
-    )["meta"]["code"] == 200
-    assert client.set_device_whistle("CAM123", status=1, duration=10, volume=50)["meta"]["code"] == 200
+    assert (
+        client.set_channel_whistle(
+            "CAM123",
+            [{"channel": 1, "status": 1, "duration": 10, "volume": 50}],
+            max_retries=1,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.set_device_whistle("CAM123", status=1, duration=10, volume=50)["meta"]["code"] == 200
+    )
     assert client.stop_whistle("CAM123")["meta"]["code"] == 200
 
     assert calls[0]["method"] == "GET"
@@ -1422,7 +1516,9 @@ def test_chime_sleep_and_switch_enable_helpers_build_requests(monkeypatch) -> No
 
     assert client.delay_battery_device_sleep("CAM123", 1, 2, max_retries=1)["meta"]["code"] == 200
     assert client.get_device_chime_info("CAM123", 1)["meta"]["code"] == 200
-    assert client.set_device_chime_info("CAM123", 1, sound_type=2, duration=30)["meta"]["code"] == 200
+    assert (
+        client.set_device_chime_info("CAM123", 1, sound_type=2, duration=30)["meta"]["code"] == 200
+    )
     assert client.set_switch_enable_req("CAM123", 1, 0, 7)["meta"]["code"] == 200
 
     assert calls[0]["method"] == "PUT"
@@ -1446,19 +1542,25 @@ def test_detector_helpers_build_request_paths(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_detector_setting_info(
-        "A1S123",
-        "DET456",
-        "sensitivity",
-        max_retries=1,
-    )["meta"]["code"] == 200
-    assert client.set_detector_setting_info(
-        "A1S123",
-        "DET456",
-        "sensitivity",
-        3,
-        max_retries=2,
-    )["meta"]["code"] == 200
+    assert (
+        client.get_detector_setting_info(
+            "A1S123",
+            "DET456",
+            "sensitivity",
+            max_retries=1,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.set_detector_setting_info(
+            "A1S123",
+            "DET456",
+            "sensitivity",
+            3,
+            max_retries=2,
+        )["meta"]["code"]
+        == 200
+    )
     assert client.get_detector_info("DET456", max_retries=3)["meta"]["code"] == 200
     assert client.get_radio_signals("A1S123", "DET456", max_retries=4)["meta"]["code"] == 200
 
@@ -1502,7 +1604,9 @@ def test_detector_helpers_raise_contextual_errors(monkeypatch) -> None:
 
 
 class _JsonResponse:
-    def __init__(self, payload: dict[str, Any] | None = None, *, json_error: Exception | None = None) -> None:
+    def __init__(
+        self, payload: dict[str, Any] | None = None, *, json_error: Exception | None = None
+    ) -> None:
         self._payload = payload or {}
         self._json_error = json_error
 
@@ -1526,7 +1630,9 @@ def test_motion_detection_sensitivity_helpers_build_requests(monkeypatch) -> Non
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
     assert client.get_motion_detect_sensitivity("CAM123", 1, max_retries=1)["meta"]["code"] == 200
-    assert client.get_motion_detect_sensitivity_dp1s("CAM123", 2, max_retries=2)["meta"]["code"] == 200
+    assert (
+        client.get_motion_detect_sensitivity_dp1s("CAM123", 2, max_retries=2)["meta"]["code"] == 200
+    )
     assert client.set_detection_sensitivity("CAM123", 3, 0, 6, max_retries=3) is True
     assert client.set_detection_sensitivity("CAM123", 3, 4, 80) is True
 
@@ -1643,20 +1749,26 @@ def test_manage_intelligent_app_builds_add_and_remove_requests(monkeypatch) -> N
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.manage_intelligent_app(
-        "CAM123",
-        "res-1",
-        "app_human_detect",
-        action="add",
-        max_retries=1,
-    ) is True
-    assert client.manage_intelligent_app(
-        "CAM123",
-        "res-1",
-        "app_human_detect",
-        action="REMOVE",
-        max_retries=2,
-    ) is True
+    assert (
+        client.manage_intelligent_app(
+            "CAM123",
+            "res-1",
+            "app_human_detect",
+            action="add",
+            max_retries=1,
+        )
+        is True
+    )
+    assert (
+        client.manage_intelligent_app(
+            "CAM123",
+            "res-1",
+            "app_human_detect",
+            action="REMOVE",
+            max_retries=2,
+        )
+        is True
+    )
 
     assert calls[0]["method"] == "PUT"
     assert calls[0]["path"].endswith("CAM123/res-1/app_human_detect")
@@ -1703,13 +1815,16 @@ def test_set_intelligent_app_state_resolves_resource_ids(monkeypatch) -> None:
     monkeypatch.setattr(client, "manage_intelligent_app", fake_manage_intelligent_app)
 
     assert client.set_intelligent_app_state("CAM123", "app_car_detect", True, max_retries=1) is True
-    assert client.set_intelligent_app_state(
-        "CAM123",
-        "app_car_detect",
-        False,
-        resource_id="res-explicit",
-        max_retries=2,
-    ) is True
+    assert (
+        client.set_intelligent_app_state(
+            "CAM123",
+            "app_car_detect",
+            False,
+            resource_id="res-explicit",
+            max_retries=2,
+        )
+        is True
+    )
 
     assert calls == [
         {
@@ -1774,14 +1889,20 @@ def test_resolve_osd_text_prefers_name_then_payload_sources() -> None:
 
     assert client._resolve_osd_text("CAM123", name="  Friendly  ") == "Friendly"
     assert client._resolve_osd_text("CAM123", camera_data={"name": "Direct"}) == "Direct"
-    assert client._resolve_osd_text(
-        "CAM123",
-        camera_data={"deviceInfos": {"name": "Device Info"}},
-    ) == "Device Info"
-    assert client._resolve_osd_text(
-        "CAM123",
-        camera_data={"optionals": {"OSD": [{"name": "OSD Name"}]}},
-    ) == "OSD Name"
+    assert (
+        client._resolve_osd_text(
+            "CAM123",
+            camera_data={"deviceInfos": {"name": "Device Info"}},
+        )
+        == "Device Info"
+    )
+    assert (
+        client._resolve_osd_text(
+            "CAM123",
+            camera_data={"optionals": {"OSD": [{"name": "OSD Name"}]}},
+        )
+        == "OSD Name"
+    )
     assert client._resolve_osd_text("CAM123", camera_data={}) == "CAM123"
 
 
@@ -1797,11 +1918,14 @@ def test_set_camera_osd_builds_request_from_text_and_enabled(monkeypatch) -> Non
 
     assert client.set_camera_osd("CAM123", text="Explicit", channel=2, max_retries=1) is True
     assert client.set_camera_osd("CAM123", enabled=False) is True
-    assert client.set_camera_osd(
-        "CAM123",
-        enabled=True,
-        camera_data={"deviceInfos": {"name": "Front Door"}},
-    ) is True
+    assert (
+        client.set_camera_osd(
+            "CAM123",
+            enabled=True,
+            camera_data={"deviceInfos": {"name": "Front Door"}},
+        )
+        is True
+    )
 
     assert calls[0]["method"] == "PUT"
     assert calls[0]["path"].endswith("CAM123/2/osd")
@@ -1828,7 +1952,9 @@ def test_set_floodlight_brightness_builds_request(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.set_floodlight_brightness("CAM123", luminance=75, channelno=2, max_retries=1) is True
+    assert (
+        client.set_floodlight_brightness("CAM123", luminance=75, channelno=2, max_retries=1) is True
+    )
     assert captured["method"] == "POST"
     assert captured["path"].endswith("CAM123/2")
     assert captured["data"] == {"luminance": 75}
@@ -2043,12 +2169,15 @@ def test_api_set_defence_schedule_retries_and_builds_payload(monkeypatch) -> Non
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.api_set_defence_schedule(
-        "CAM123",
-        '{"start":"08:00","stop":"17:00"}',
-        enable=1,
-        max_retries=1,
-    ) is True
+    assert (
+        client.api_set_defence_schedule(
+            "CAM123",
+            '{"start":"08:00","stop":"17:00"}',
+            enable=1,
+            max_retries=1,
+        )
+        is True
+    )
     assert len(calls) == 2
     assert calls[0]["method"] == "POST"
     assert calls[0]["data"] == {
@@ -2083,7 +2212,12 @@ def test_defence_mode_helpers_build_payloads(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.api_set_defence_mode(DefenseModeType.HOME_MODE, visual_alarm=1, sound_mode=2, max_retries=1) is True
+    assert (
+        client.api_set_defence_mode(
+            DefenseModeType.HOME_MODE, visual_alarm=1, sound_mode=2, max_retries=1
+        )
+        is True
+    )
     assert client.api_set_defence_mode(3) is True
     assert client.switch_defence_mode(5, 2, visual_alarm=0, sound_mode=1, max_retries=2) == {
         "meta": {"code": 200},
@@ -2136,16 +2270,19 @@ def test_door_lock_and_remote_lock_helpers_build_requests(monkeypatch) -> None:
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
     assert client.get_door_lock_users("LOCK123", max_retries=1)["meta"]["code"] == 200
-    assert client.remote_unlock(
-        "LOCK123",
-        "user-1",
-        7,
-        resource_id="DoorLock",
-        local_index=2,
-        stream_token="stream-1",
-        lock_type="fingerprint",
-        use_terminal_bind=False,
-    ) is True
+    assert (
+        client.remote_unlock(
+            "LOCK123",
+            "user-1",
+            7,
+            resource_id="DoorLock",
+            local_index=2,
+            stream_token="stream-1",
+            lock_type="fingerprint",
+            use_terminal_bind=False,
+        )
+        is True
+    )
     assert client.remote_lock("LOCK123", "user-1", 7) is True
     assert client.get_remote_unbind_progress("LOCK123", max_retries=2)["meta"]["code"] == 200
 
@@ -2715,6 +2852,127 @@ def test_save_clip_uses_local_sdk_convenience(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_save_clip_delegates_legacy_arguments_to_typed_options(monkeypatch) -> None:
+    client = _client()
+    captured: list[ClipOptions] = []
+
+    def fake_save_clip_with_options(
+        serial: str,
+        output: str | Path | BinaryIO,
+        options: ClipOptions,
+    ) -> dict[str, Any]:
+        assert serial == "CAM123"
+        assert output == "front.ts"
+        captured.append(options)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "save_clip_with_options", fake_save_clip_with_options)
+
+    result = client.save_clip(
+        "CAM123",
+        "front.ts",
+        source="cloud",
+        duration_seconds=4.0,
+        max_packets=8,
+        channel=2,
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+        nalu_header_size=1,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        timeout=5.0,
+        smscode="654321",
+        cloud_client_type=7,
+        cloud_token_index=1,
+        cloud_refresh_vtm=False,
+    )
+
+    assert result == {"ok": True}
+    assert captured == [
+        ClipOptions(
+            source=CloudClipSource(
+                client_type=7,
+                token_index=1,
+                refresh_vtm=False,
+                timeout=5.0,
+                smscode="654321",
+            ),
+            capture=CaptureLimits(max_packets=8, duration_seconds=4.0),
+            decode=MediaDecodeOptions(
+                decrypt_video=True,
+                media_key="MEDIAKEY",
+                nalu_header_size=1,
+            ),
+            mux=MediaMuxOptions(
+                output_format="mpegts",
+                ffmpeg_path="/usr/bin/ffmpeg",
+            ),
+            channel=2,
+        )
+    ]
+
+
+def test_clip_options_use_ecdh_compatible_default_mux() -> None:
+    options = ClipOptions(source=LocalSdkEcdhClipSource())
+
+    assert options.resolved_mux().output_format == "mpegps"
+
+
+def test_save_clip_with_options_rejects_unsupported_byte_limit() -> None:
+    client = _client()
+    options = ClipOptions(capture=CaptureLimits(max_bytes=1024))
+
+    with pytest.raises(PyEzvizError, match=r"does not support CaptureLimits\.max_bytes"):
+        client.save_clip_with_options("CAM123", io.BytesIO(), options)
+
+
+def test_save_clip_with_options_rejects_source_incompatible_mux_options() -> None:
+    client = _client()
+    options = ClipOptions(
+        source=CloudClipSource(),
+        mux=MediaMuxOptions(h264_trim_to_clean_idr_window=True),
+    )
+
+    with pytest.raises(PyEzvizError, match="require HcNetSdkCommandPortClipSource"):
+        client.save_clip_with_options("CAM123", io.BytesIO(), options)
+
+
+@pytest.mark.parametrize(
+    ("max_packets", "duration_seconds"),
+    [(0, 10.0), (None, 0.0), (1, float("inf")), (cast(Any, float("nan")), None)],
+)
+def test_save_clip_preserves_legacy_nonpositive_capture_limits(
+    monkeypatch,
+    max_packets: int | None,
+    duration_seconds: float | None,
+) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_save_local_sdk_clip(
+        serial: str,
+        output: str | Path | BinaryIO,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append({"serial": serial, "output": output, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_local_sdk_clip", fake_save_local_sdk_clip)
+
+    result = client.save_clip(
+        "CAM123",
+        io.BytesIO(),
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+    )
+
+    assert result == {"ok": True}
+    if max_packets is not None and math.isnan(max_packets):
+        assert math.isnan(calls[0]["max_packets"])
+    else:
+        assert calls[0]["max_packets"] == max_packets
+    assert calls[0]["duration_seconds"] == duration_seconds
+
+
 def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ps"
@@ -2960,9 +3218,7 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
         hcnetsdk_command_metadata_callback=metadata_calls.append,
         hcnetsdk_h264_skip_initial_idr_windows=2,
         hcnetsdk_video_trim_to_clean_window=True,
-        hcnetsdk_video_clean_window_preroll_seconds=(
-            HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
-        ),
+        hcnetsdk_video_clean_window_preroll_seconds=(HCNETSDK_CLEAN_IDR_PREROLL_SECONDS),
         hcnetsdk_video_clean_window_max_windows=HCNETSDK_CLEAN_IDR_MAX_WINDOWS,
         duration_seconds=HCNETSDK_SAVE_DURATION,
         max_packets=4,
@@ -2979,13 +3235,8 @@ def test_save_clip_uses_hcnetsdk_command_port_source(monkeypatch, tmp_path) -> N
     assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
     assert calls[1]["h264_skip_initial_idr_windows"] == 2
     assert calls[1]["h264_trim_to_clean_idr_window"] is True
-    assert (
-        calls[1]["h264_clean_idr_preroll_seconds"]
-        == HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
-    )
-    assert (
-        calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
-    )
+    assert calls[1]["h264_clean_idr_preroll_seconds"] == HCNETSDK_CLEAN_IDR_PREROLL_SECONDS
+    assert calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
     assert metadata_calls == [calls[1]["stream"]]
     assert metadata_calls[0].packet_summary["packet_count"] == 1
     assert metadata_calls[0].packet_summary["first_packet_elapsed_seconds"] == 0.0
@@ -3081,9 +3332,7 @@ def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
     assert calls[1]["duration_seconds"] == HCNETSDK_SAVE_DURATION
     assert calls[1]["h264_skip_initial_idr_windows"] == 1
     assert calls[1]["h264_trim_to_clean_idr_window"] is True
-    assert (
-        calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
-    )
+    assert calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
     assert result.get("source") == "hcnetsdk-command-port"
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
@@ -3455,13 +3704,16 @@ def test_get_cam_auth_code_builds_request_and_returns_code(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_cam_auth_code(
-        "CAM123",
-        encrypt_pwd="enc",
-        msg_auth_code=123456,
-        sender_type=3,
-        max_retries=1,
-    ) == "AUTH123"
+    assert (
+        client.get_cam_auth_code(
+            "CAM123",
+            encrypt_pwd="enc",
+            msg_auth_code=123456,
+            sender_type=3,
+            max_retries=1,
+        )
+        == "AUTH123"
+    )
     assert captured["method"] == "GET"
     assert captured["path"].endswith("CAM123")
     assert captured["params"] == {
@@ -3542,7 +3794,10 @@ def test_accessory_and_dev_config_read_helpers_build_requests(monkeypatch) -> No
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
     assert client.get_accessory("CAM123", "2", max_retries=1)["meta"]["code"] == 200
-    assert client.get_dev_config("CAM123", 3, "NightVision_Model", max_retries=2)["meta"]["code"] == 200
+    assert (
+        client.get_dev_config("CAM123", 3, "NightVision_Model", max_retries=2)["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["method"] == "GET"
     assert calls[0]["path"].endswith("CAM123/2/1/linked/info")
@@ -3705,9 +3960,7 @@ def test_register_p2p_session_treats_max_retries_as_retry_limit(monkeypatch) -> 
     monkeypatch.setattr(client, "login", fake_login)
 
     assert (
-        client.register_p2p_session(session_id="stale-session", max_retries=2)["meta"][
-            "code"
-        ]
+        client.register_p2p_session(session_id="stale-session", max_retries=2)["meta"]["code"]
         == 200
     )
 
@@ -3796,82 +4049,106 @@ def test_black_level_time_plan_and_record_helpers_build_requests(monkeypatch) ->
 
     assert client.get_black_level_list("CAM123", max_retries=1)["meta"]["code"] == 200
     assert client.get_time_plan_infos("CAM123", 2, 3, max_retries=2)["meta"]["code"] == 200
-    assert client.set_time_plan_infos(
-        "CAM123",
-        2,
-        3,
-        1,
-        [{"start": "08:00", "stop": "17:00"}],
-        max_retries=3,
-    )["meta"]["code"] == 200
+    assert (
+        client.set_time_plan_infos(
+            "CAM123",
+            2,
+            3,
+            1,
+            [{"start": "08:00", "stop": "17:00"}],
+            max_retries=3,
+        )["meta"]["code"]
+        == 200
+    )
     assert client.set_time_plan_infos("CAM123", 2, 3, 0, "[]")["meta"]["code"] == 200
-    assert client.search_records(
-        "CAM123",
-        2,
-        "CHAN123",
-        "2026-04-27T08:00:00Z",
-        "2026-04-27T09:00:00Z",
-        size=50,
-        max_retries=4,
-    )["meta"]["code"] == 200
-    assert client.search_records_v2(
-        "CAM123",
-        2,
-        "2026-04-27T08:00:00Z",
-        "2026-04-27T09:00:00Z",
-        size=10,
-        sort_by=1,
-        require_label=1,
-        max_retries=5,
-    )["meta"]["code"] == 200
-    assert client.search_common_records(
-        "CAM123",
-        2,
-        "2026-04-27T08:00:00Z",
-        "2026-04-27T09:00:00Z",
-        channel_serial="CHAN123",
-        record_type=2,
-        size=11,
-        version=3,
-        max_retries=6,
-    )["meta"]["code"] == 200
-    assert client.search_intelligent_records(
-        "CAM123",
-        2,
-        "2026-04-27T08:00:00Z",
-        "2026-04-27T09:00:00Z",
-        version=4,
-        record_filter='{"person":true}',
-        max_retries=7,
-    )["meta"]["code"] == 200
-    assert client.get_cloud_videos(
-        "CAM123",
-        2,
-        limit=5,
-        video_type=-1,
-        support_multi_channel_shared_service=1,
-        max_retries=8,
-    )["meta"]["code"] == 200
-    assert client.get_cloud_video_details(
-        "CAM123",
-        2,
-        [
-            {
-                "seqId": 12345,
-                "startTime": "2026-04-27 08:00:00",
-                "stopTime": "2026-04-27 08:01:00",
-                "storageVersion": 2,
-            }
-        ],
-        support_multi_channel_shared_service=1,
-        max_retries=9,
-    )["meta"]["code"] == 200
-    assert client.get_camera_ticket_info(
-        "CAM123",
-        2,
-        support_multi_channel_shared_service=1,
-        max_retries=10,
-    )["meta"]["code"] == 200
+    assert (
+        client.search_records(
+            "CAM123",
+            2,
+            "CHAN123",
+            "2026-04-27T08:00:00Z",
+            "2026-04-27T09:00:00Z",
+            size=50,
+            max_retries=4,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.search_records_v2(
+            "CAM123",
+            2,
+            "2026-04-27T08:00:00Z",
+            "2026-04-27T09:00:00Z",
+            size=10,
+            sort_by=1,
+            require_label=1,
+            max_retries=5,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.search_common_records(
+            "CAM123",
+            2,
+            "2026-04-27T08:00:00Z",
+            "2026-04-27T09:00:00Z",
+            channel_serial="CHAN123",
+            record_type=2,
+            size=11,
+            version=3,
+            max_retries=6,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.search_intelligent_records(
+            "CAM123",
+            2,
+            "2026-04-27T08:00:00Z",
+            "2026-04-27T09:00:00Z",
+            version=4,
+            record_filter='{"person":true}',
+            max_retries=7,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.get_cloud_videos(
+            "CAM123",
+            2,
+            limit=5,
+            video_type=-1,
+            support_multi_channel_shared_service=1,
+            max_retries=8,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.get_cloud_video_details(
+            "CAM123",
+            2,
+            [
+                {
+                    "seqId": 12345,
+                    "startTime": "2026-04-27 08:00:00",
+                    "stopTime": "2026-04-27 08:01:00",
+                    "storageVersion": 2,
+                }
+            ],
+            support_multi_channel_shared_service=1,
+            max_retries=9,
+        )["meta"]["code"]
+        == 200
+    )
+    assert (
+        client.get_camera_ticket_info(
+            "CAM123",
+            2,
+            support_multi_channel_shared_service=1,
+            max_retries=10,
+        )["meta"]["code"]
+        == 200
+    )
 
     assert calls[0]["method"] == "GET"
     assert calls[0]["path"].endswith("CAM123")
@@ -3980,17 +4257,20 @@ def test_get_cloud_video_details_defaults_missing_storage_version(monkeypatch) -
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_cloud_video_details(
-        "CAM123",
-        2,
-        [
-            {
-                "seqId": 12345,
-                "startTime": "2026-04-27 08:00:00",
-                "stopTime": "2026-04-27 08:01:00",
-            }
-        ],
-    )["meta"]["code"] == 200
+    assert (
+        client.get_cloud_video_details(
+            "CAM123",
+            2,
+            [
+                {
+                    "seqId": 12345,
+                    "startTime": "2026-04-27 08:00:00",
+                    "stopTime": "2026-04-27 08:01:00",
+                }
+            ],
+        )["meta"]["code"]
+        == 200
+    )
     assert calls[0]["json_body"]["videos"] == [
         {
             "seqId": 12345,
@@ -4095,19 +4375,27 @@ def test_lower_tail_helpers_build_request_payloads(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_socket_log_info("PLUG123", "2026-04-27", "2026-04-28", max_retries=1)["meta"]["code"] == 200
+    assert (
+        client.get_socket_log_info("PLUG123", "2026-04-27", "2026-04-28", max_retries=1)["meta"][
+            "code"
+        ]
+        == 200
+    )
     assert client.linked_cameras("A1S123", "DET456", max_retries=2)["meta"]["code"] == 200
     assert client.set_microscope("CAM123", 2.5, 10, 20, 1, max_retries=3)["meta"]["code"] == 200
     assert client.share_accept("CAM123", max_retries=4)["meta"]["code"] == 200
     assert client.share_quit("CAM123", max_retries=5)["meta"]["code"] == 200
-    assert client.send_feedback(
-        email="user@example.test",
-        account="account-1",
-        score=5,
-        feedback="works",
-        pic_url="https://image.example/pic.jpg",
-        max_retries=6,
-    )["meta"]["code"] == 200
+    assert (
+        client.send_feedback(
+            email="user@example.test",
+            account="account-1",
+            score=5,
+            feedback="works",
+            pic_url="https://image.example/pic.jpg",
+            max_retries=6,
+        )["meta"]["code"]
+        == 200
+    )
     assert client.upload_device_log("CAM123", max_retries=7)["meta"]["code"] == 200
 
     assert calls[0]["method"] == "GET"

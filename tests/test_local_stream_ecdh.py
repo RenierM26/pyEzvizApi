@@ -875,6 +875,36 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
     assert calls[2]["duration_seconds"] == duration_seconds
 
 
+def test_copy_local_sdk_ecdh_stream_from_client_rejects_unbounded_decrypt_before_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened = False
+
+    def fake_open(*_args: object, **_kwargs: object) -> None:
+        nonlocal opened
+        opened = True
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        fake_open,
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="requires duration_seconds, max_packets, or max_frames",
+    ):
+        copy_local_sdk_ecdh_stream_from_client(
+            object(),
+            "CAM123",
+            BytesIO(),
+            output_format="mpegts",
+            decrypt_video=True,
+            media_key="media-secret",
+        )
+
+    assert opened is False
+
+
 def test_copy_local_sdk_ecdh_stream_to_mpegps_flushes_output() -> None:
     class FlushTrackingOutput(BytesIO):
         flush_calls = 0

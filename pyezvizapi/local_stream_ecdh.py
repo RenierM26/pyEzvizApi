@@ -1030,8 +1030,12 @@ def _validate_ecdh_copy_options(
     """Reject invalid ECDH copy options before credentials or sockets are used."""
     if output_format not in {"mpegps", "mpegts"}:
         raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
-    has_packet_bound = max_packets is not None and max_packets > 0
-    has_frame_bound = max_frames is not None and max_frames > 0
+    has_packet_bound = (
+        max_packets is not None and math.isfinite(max_packets) and max_packets > 0
+    )
+    has_frame_bound = (
+        max_frames is not None and math.isfinite(max_frames) and max_frames > 0
+    )
     has_duration_bound = (
         duration_seconds is not None
         and math.isfinite(duration_seconds)

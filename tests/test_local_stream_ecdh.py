@@ -876,12 +876,22 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
 
 
 @pytest.mark.parametrize(
-    "duration_seconds",
-    [None, 0.0, -1.0, float("nan"), float("inf")],
+    "unsafe_bounds",
+    [
+        {},
+        {"duration_seconds": 0.0},
+        {"duration_seconds": -1.0},
+        {"duration_seconds": float("nan")},
+        {"duration_seconds": float("inf")},
+        {"max_packets": 0, "max_frames": 0},
+        {"max_packets": -1, "max_frames": -1},
+        {"max_packets": float("nan"), "max_frames": float("nan")},
+        {"max_packets": float("inf"), "max_frames": float("inf")},
+    ],
 )
 def test_copy_local_sdk_ecdh_stream_from_client_rejects_unsafe_decrypt_bound_before_open(
     monkeypatch: pytest.MonkeyPatch,
-    duration_seconds: float | None,
+    unsafe_bounds: dict[str, Any],
 ) -> None:
     opened = False
 
@@ -905,7 +915,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_rejects_unsafe_decrypt_bound_bef
             output_format="mpegts",
             decrypt_video=True,
             media_key="media-secret",
-            duration_seconds=duration_seconds,
+            **unsafe_bounds,
         )
 
     assert opened is False

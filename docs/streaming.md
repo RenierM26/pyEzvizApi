@@ -89,10 +89,12 @@ Available source configurations are `LocalSdkClipSource`,
 `CloudClipSource`. Capture, decode, and mux settings are deliberately separate
 so unsupported combinations can fail before opening a connection.
 
-The long `save_clip(...)` signature still delegates to the typed API. It also
-preserves historically accepted zero and non-finite capture values for callers
-that depended on the old loop behavior. New code should use valid positive,
-finite `CaptureLimits` values instead.
+The long `save_clip(...)` signature still delegates to the typed API. For
+non-decrypting captures it preserves historically accepted zero and non-finite
+capture values for callers that depended on the old loop behavior. Decrypting
+captures reject those unsafe values and require at least one positive finite
+bound before network work. New code should use valid positive, finite
+`CaptureLimits` values instead.
 
 ## Transport limitations
 

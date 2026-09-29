@@ -34,6 +34,7 @@ from pyezvizapi.media import (
     MediaMuxOptions,
     MediaPacket,
     MediaPacketSource,
+    has_positive_finite_capture_bound,
 )
 from pyezvizapi.stream import (
     VtmChannel,
@@ -82,6 +83,16 @@ def test_capture_limits_require_a_bound() -> None:
     with pytest.raises(PyEzvizError, match="capture requires"):
         CaptureLimits().require_bounded("capture")
     CaptureLimits(max_packets=1).require_bounded("capture")
+
+
+def test_capture_bound_accepts_arbitrary_size_integers() -> None:
+    """Integer packet bounds remain finite without float conversion."""
+
+    huge_limit = 10**309
+
+    assert has_positive_finite_capture_bound(huge_limit)
+    assert has_positive_finite_capture_bound(huge_limit, 1.0)
+    assert CaptureLimits(max_packets=huge_limit).max_packets == huge_limit
 
 
 @pytest.mark.parametrize("duration", [float("inf"), float("nan")])

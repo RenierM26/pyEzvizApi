@@ -2973,6 +2973,29 @@ def test_save_clip_preserves_legacy_nonpositive_capture_limits(
     assert calls[0]["duration_seconds"] == duration_seconds
 
 
+def test_save_clip_accepts_arbitrary_size_integer_packet_limit(monkeypatch) -> None:
+    """Legacy save_clip must not coerce integer bounds through float."""
+
+    client = _client()
+    huge_limit = 10**309
+    calls: list[dict[str, Any]] = []
+
+    def fake_save_local_sdk_clip(
+        serial: str,
+        output: str | Path | BinaryIO,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append({"serial": serial, "output": output, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_local_sdk_clip", fake_save_local_sdk_clip)
+
+    result = client.save_clip("CAM123", io.BytesIO(), max_packets=huge_limit)
+
+    assert result == {"ok": True}
+    assert calls[0]["max_packets"] == huge_limit
+
+
 def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ps"

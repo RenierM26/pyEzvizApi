@@ -888,6 +888,9 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
         {"max_packets": -1, "max_frames": -1},
         {"max_packets": float("nan"), "max_frames": float("nan")},
         {"max_packets": float("inf"), "max_frames": float("inf")},
+        {"max_packets": 1, "max_frames": 0},
+        {"max_packets": 1, "max_frames": 1, "duration_seconds": float("nan")},
+        {"max_packets": 1, "max_frames": 1, "duration_seconds": 10**309},
     ],
 )
 def test_copy_local_sdk_ecdh_stream_from_client_rejects_unsafe_decrypt_bound_before_open(

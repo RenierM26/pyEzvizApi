@@ -52,13 +52,19 @@ def has_positive_finite_capture_bound(
     max_frames: int | None = None,
     duration_seconds: float | None = None,
 ) -> bool:
-    """Return whether any legacy capture limit is a usable safety bound."""
+    """Return whether supplied legacy limits are safe and at least one exists."""
 
-    return (
-        is_positive_capture_count_bound(max_packets)
-        or is_positive_capture_count_bound(max_frames)
-        or is_positive_finite_duration_bound(duration_seconds)
-    )
+    count_limits = (max_packets, max_frames)
+    if any(
+        limit is not None and not is_positive_capture_count_bound(limit)
+        for limit in count_limits
+    ):
+        return False
+    if duration_seconds is not None and not is_positive_finite_duration_bound(
+        duration_seconds
+    ):
+        return False
+    return any(limit is not None for limit in count_limits) or duration_seconds is not None
 
 
 class _IteratorProducer[PacketT]:

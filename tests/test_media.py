@@ -110,6 +110,22 @@ def test_capture_bound_rejects_arbitrary_size_integer_duration() -> None:
         CaptureLimits(duration_seconds=huge_duration)
 
 
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_packets": 1, "duration_seconds": float("nan")},
+        {"max_packets": 1, "duration_seconds": 10**309},
+        {"max_packets": 1, "max_frames": 0},
+    ],
+)
+def test_capture_bound_rejects_each_unsafe_supplied_limit(
+    limits: dict[str, Any],
+) -> None:
+    """One valid limit cannot mask another supplied unsafe limit."""
+
+    assert not has_positive_finite_capture_bound(**limits)
+
+
 @pytest.mark.parametrize("duration", [float("inf"), float("nan")])
 def test_capture_limits_reject_non_finite_duration(duration: float) -> None:
     """A nominal duration must represent a deadline that can terminate."""

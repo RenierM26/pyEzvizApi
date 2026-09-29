@@ -1402,6 +1402,8 @@ def test_copy_cloud_stream_to_mpegps_fetches_media_key_with_smscode(monkeypatch)
         {"max_packets": -1},
         {"max_packets": float("nan")},
         {"max_packets": float("inf")},
+        {"max_packets": 1, "duration_seconds": float("nan")},
+        {"max_packets": 1, "duration_seconds": 10**309},
     ],
 )
 def test_copy_cloud_stream_to_mpegps_requires_safe_decrypt_bound(

@@ -3374,6 +3374,8 @@ def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
         {"duration_seconds": None, "max_packets": -1},
         {"duration_seconds": None, "max_packets": float("nan")},
         {"duration_seconds": None, "max_packets": float("inf")},
+        {"duration_seconds": float("nan"), "max_packets": 1},
+        {"duration_seconds": 10**309, "max_packets": 1},
     ],
 )
 def test_save_clip_rejects_unsafe_hcnetsdk_decrypt_bound_before_endpoint_lookup(

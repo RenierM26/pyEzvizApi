@@ -2018,6 +2018,8 @@ def test_copy_local_sdk_stream_from_client_rejects_bad_output_format() -> None:
         {"max_packets": -1},
         {"max_packets": float("nan")},
         {"max_packets": float("inf")},
+        {"max_packets": 1, "duration_seconds": float("nan")},
+        {"max_packets": 1, "duration_seconds": 10**309},
     ],
 )
 def test_copy_local_sdk_stream_from_client_rejects_unsafe_decrypt_bound_early(

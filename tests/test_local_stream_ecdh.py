@@ -875,8 +875,13 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
     assert calls[2]["duration_seconds"] == duration_seconds
 
 
-def test_copy_local_sdk_ecdh_stream_from_client_rejects_unbounded_decrypt_before_open(
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [None, 0.0, -1.0, float("nan"), float("inf")],
+)
+def test_copy_local_sdk_ecdh_stream_from_client_rejects_unsafe_decrypt_bound_before_open(
     monkeypatch: pytest.MonkeyPatch,
+    duration_seconds: float | None,
 ) -> None:
     opened = False
 
@@ -891,7 +896,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_rejects_unbounded_decrypt_before
 
     with pytest.raises(
         PyEzvizError,
-        match="requires duration_seconds, max_packets, or max_frames",
+        match="requires a positive finite duration_seconds, max_packets, or max_frames",
     ):
         copy_local_sdk_ecdh_stream_from_client(
             object(),
@@ -900,6 +905,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_rejects_unbounded_decrypt_before
             output_format="mpegts",
             decrypt_video=True,
             media_key="media-secret",
+            duration_seconds=duration_seconds,
         )
 
     assert opened is False

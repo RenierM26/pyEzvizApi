@@ -53,6 +53,7 @@ from .media import (
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
     has_positive_finite_capture_bound,
+    is_positive_finite_duration_bound,
 )
 from .remux import (
     BoundedStderrTail,
@@ -2148,7 +2149,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
 ) -> None:
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
     if h264_wait_for_clean_idr_window:
-        _h264_clean_idr_capture_duration_seconds(
+        _, payload_duration_seconds = h264_clean_idr_capture_budgets(
             duration_seconds=duration_seconds,
             h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
             h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
@@ -2157,8 +2158,6 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
         )
-        assert duration_seconds is not None
-        payload_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
         _require_bounded_decrypt_capture(
             max_packets=max_packets,
             duration_seconds=payload_duration_seconds,
@@ -2229,7 +2228,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
 
-    capture_duration_seconds = _h264_clean_idr_capture_duration_seconds(
+    capture_duration_seconds, _ = h264_clean_idr_capture_budgets(
         duration_seconds=duration_seconds,
         h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
         h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
@@ -2380,7 +2379,7 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
     h264_clean_idr_wait_seconds: float = 60.0,
 ) -> None:
     """Pipe local media payloads through FFmpeg and write MPEG-TS bytes."""
-    capture_duration_seconds = _h264_clean_idr_capture_duration_seconds(
+    _, payload_duration_seconds = h264_clean_idr_capture_budgets(
         duration_seconds=duration_seconds,
         h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
         h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
@@ -2389,10 +2388,6 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
         h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
         h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
     )
-    payload_duration_seconds = capture_duration_seconds
-    if h264_wait_for_clean_idr_window:
-        assert duration_seconds is not None
-        payload_duration_seconds = duration_seconds + h264_clean_idr_wait_seconds
     payloads = _iter_local_stream_payloads(
         stream,
         max_packets=max_packets,
@@ -2495,7 +2490,7 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
     )
 
 
-def _h264_clean_idr_capture_duration_seconds(
+def h264_clean_idr_capture_budgets(
     *,
     duration_seconds: float | None,
     h264_skip_initial_idr_windows: int,
@@ -2504,8 +2499,8 @@ def _h264_clean_idr_capture_duration_seconds(
     h264_clean_idr_max_windows: int,
     h264_wait_for_clean_idr_window: bool,
     h264_clean_idr_wait_seconds: float,
-) -> float | None:
-    """Validate H.264 trim settings and return the capture duration budget."""
+) -> tuple[float | None, float | None]:
+    """Validate H.264 trim settings and return capture and payload budgets."""
 
     if h264_skip_initial_idr_windows < 0:
         raise PyEzvizError("h264_skip_initial_idr_windows cannot be negative")
@@ -2537,10 +2532,43 @@ def _h264_clean_idr_capture_duration_seconds(
         raise PyEzvizError(
             "h264_clean_idr_preroll_seconds requires duration_seconds"
         )
+    capture_duration_seconds = duration_seconds
+    payload_duration_seconds = duration_seconds
     if h264_trim_to_clean_idr_window and h264_clean_idr_preroll_seconds:
         assert duration_seconds is not None
-        return duration_seconds + h264_clean_idr_preroll_seconds
-    return duration_seconds
+        capture_duration_seconds = _checked_h264_duration_sum(
+            duration_seconds,
+            h264_clean_idr_preroll_seconds,
+            context="capture",
+        )
+        payload_duration_seconds = capture_duration_seconds
+    if h264_wait_for_clean_idr_window:
+        assert duration_seconds is not None
+        payload_duration_seconds = _checked_h264_duration_sum(
+            duration_seconds,
+            h264_clean_idr_wait_seconds,
+            context="payload",
+        )
+    return capture_duration_seconds, payload_duration_seconds
+
+
+def _checked_h264_duration_sum(
+    duration_seconds: float,
+    extension_seconds: float,
+    *,
+    context: str,
+) -> float:
+    """Add one startup window without allowing deadline overflow."""
+
+    try:
+        combined = duration_seconds + extension_seconds
+    except OverflowError as err:
+        raise PyEzvizError(
+            f"H.264 clean-IDR {context} duration must be finite"
+        ) from err
+    if not is_positive_finite_duration_bound(combined):
+        raise PyEzvizError(f"H.264 clean-IDR {context} duration must be finite")
+    return combined
 
 
 def _is_ignorable_leading_stream_payload(payload: bytes) -> bool:

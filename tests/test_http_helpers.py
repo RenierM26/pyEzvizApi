@@ -6,6 +6,7 @@ import io
 import json
 import math
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
 
@@ -3399,6 +3400,60 @@ def test_save_clip_rejects_unsafe_hcnetsdk_decrypt_bound_before_endpoint_lookup(
             decrypt_video=True,
             media_key="MEDIAKEY",
             **unsafe_bounds,
+        )
+
+
+@pytest.mark.parametrize(
+    ("duration_seconds", "startup_options"),
+    [
+        (
+            sys.float_info.max,
+            {
+                "hcnetsdk_h264_trim_to_clean_idr_window": True,
+                "hcnetsdk_h264_clean_idr_preroll_seconds": sys.float_info.max,
+            },
+        ),
+        (
+            sys.float_info.max,
+            {
+                "hcnetsdk_h264_wait_for_clean_idr_window": True,
+                "hcnetsdk_h264_clean_idr_wait_seconds": sys.float_info.max,
+            },
+        ),
+        (
+            10**309,
+            {
+                "hcnetsdk_h264_trim_to_clean_idr_window": True,
+                "hcnetsdk_h264_clean_idr_preroll_seconds": 1.0,
+            },
+        ),
+    ],
+)
+def test_save_clip_rejects_overflowing_hcnetsdk_duration_before_endpoint_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    duration_seconds: float,
+    startup_options: dict[str, Any],
+) -> None:
+    """Derived startup budgets must be finite before command-port I/O begins."""
+
+    client = _client()
+
+    def fail_endpoint_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("overflowing duration must fail before endpoint lookup")
+
+    monkeypatch.setattr(client, "_hcnetsdk_command_port_endpoint", fail_endpoint_lookup)
+
+    with pytest.raises(PyEzvizError, match="duration must be finite"):
+        client.save_clip(
+            "CAM123",
+            io.BytesIO(),
+            source="hcnetsdk-command-port",
+            host="192.0.2.10",
+            hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+            duration_seconds=duration_seconds,
+            **startup_options,
         )
 
 

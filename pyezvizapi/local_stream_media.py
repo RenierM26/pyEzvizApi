@@ -15,6 +15,7 @@ from ._local_stream import (  # noqa: F401
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegps,
     copy_local_stream_to_mpegts,
+    h264_clean_idr_capture_budgets,
     skip_h264_annexb_initial_idr_windows,
     skip_hevc_annexb_initial_irap_windows,
     summarize_h264_annexb_idr_windows,

@@ -175,6 +175,7 @@ from .local_stream_ecdh import (
 from .local_stream_media import (
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
+    h264_clean_idr_capture_budgets,
     summarize_idmx_h264_local_packets,
 )
 from .local_stream_transport import (
@@ -3537,6 +3538,16 @@ class EzvizClient:
             raise PyEzvizError("source='hcnetsdk-command-port' currently writes MPEG-TS only")
         if decrypt_video and media_key is None:
             raise PyEzvizError("source='hcnetsdk-command-port' decrypt_video requires media_key")
+        if decrypt_video:
+            h264_clean_idr_capture_budgets(
+                duration_seconds=duration_seconds,
+                h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+                h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+                h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+                h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+                h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+            )
         if decrypt_video and not has_positive_finite_capture_bound(
             max_packets=max_packets,
             duration_seconds=duration_seconds,

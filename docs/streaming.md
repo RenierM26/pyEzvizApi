@@ -33,7 +33,7 @@ use the focused modules above.
 | --- | --- | --- | --- | --- | --- |
 | Cloud VTM | `VtmPacket` | `cloud_vtm` | Yes | MPEG-PS | MPEG-PS or remuxed MPEG-TS |
 | Local SDK | `EzvizLocalStreamPacket` | `local_sdk` | When startup preparation is available | MPEG-PS | MPEG-PS or remuxed MPEG-TS |
-| Local SDK ECDH | `EzvizLocalSdkEcdhStreamPacket` | `local_ecdh` | Supported by the ECDH stream | MPEG-PS | MPEG-PS by default |
+| Local SDK ECDH | `EzvizLocalSdkEcdhStreamPacket` | `local_ecdh` | Supported by the ECDH stream | MPEG-PS or IDMX/RTP | MPEG-PS for PS; decrypted MPEG-TS for IDMX/RTP |
 | HCNetSDK command port | `EzvizLocalStreamPacket` | `local_sdk` | Yes for generated/multi-socket streams | IDMX/RTP or MPEG-PS | Remuxed MPEG-TS |
 
 All adapters preserve the packet body and attach immutable transport-neutral

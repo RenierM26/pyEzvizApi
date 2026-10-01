@@ -735,6 +735,8 @@ def _copy_cloud_rtp_packets_to_mpegts(
         if not packet.body:
             continue
         parsed = parse_rtp_packet(packet.body)
+        if rtp_media_kind(parsed) != "video":
+            continue
         prefix.append(parsed)
         try:
             codec = detect_rtp_video_codec(prefix, allow_fallback=False)

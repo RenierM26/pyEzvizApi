@@ -1621,6 +1621,75 @@ def test_copy_cloud_stream_to_mpegts_defers_codec_fallback_past_h264_aud(
     assert output.getvalue() == b"\x00\x00\x00\x01\x09\xf0" + H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_to_mpegts_excludes_audio_from_codec_probe_limit(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    audio_packet_count = 32
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == audio_packet_count + 1
+            for sequence in range(1, audio_packet_count + 1):
+                body = _rtp_packet(
+                    b"audio",
+                    sequence=sequence,
+                    payload_type=104,
+                )
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+            video_body = _rtp_packet(
+                b"\x67h264-sps",
+                sequence=audio_packet_count + 1,
+                marker=True,
+            )
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(video_body),
+                sequence=audio_packet_count + 1,
+                message_code=0,
+                body=video_body,
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+
+    copy_cloud_stream_to_mpegts(
+        client,
+        "CAM123",
+        output,
+        max_packets=audio_packet_count + 1,
+    )
+
+    assert output.getvalue() == H264_SPS_ANNEXB
+
+
 def test_copy_cloud_stream_to_mpegts_skips_empty_rtp_prelude_and_body(
     monkeypatch,
 ) -> None:

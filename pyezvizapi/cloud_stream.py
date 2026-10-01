@@ -615,10 +615,11 @@ def copy_cloud_stream_packets_to_mpegts(
     max_packets: int | None,
     duration_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    allow_encrypted: bool = False,
     mpegps_transform: Callable[[bytes], bytes] | None = None,
     rtp_transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
 ) -> None:
-    """Route clear VTM payloads by transport and write MPEG-TS."""
+    """Route VTM payloads by transport and write MPEG-TS."""
 
     packets = _iter_bounded_cloud_packets(
         stream,
@@ -626,11 +627,18 @@ def copy_cloud_stream_packets_to_mpegts(
         duration_seconds=duration_seconds,
         monotonic=monotonic,
     )
-    transport, packets = _peek_cloud_transport(packets)
+    transport, packets = _peek_cloud_transport(
+        packets,
+        allow_encrypted=allow_encrypted,
+    )
     if transport == StreamTransport.MPEG_TS:
         if mpegps_transform is not None or rtp_transform is not None:
             raise PyEzvizError("Video decryption does not support MPEG-TS cloud payloads")
-        _write_clear_cloud_packets(packets, output)
+        _write_clear_cloud_packets(
+            packets,
+            output,
+            allow_encrypted=allow_encrypted,
+        )
         return
     if transport == StreamTransport.RTP:
         _copy_cloud_rtp_packets_to_mpegts(
@@ -639,6 +647,7 @@ def copy_cloud_stream_packets_to_mpegts(
             ffmpeg_path=ffmpeg_path,
             cancel_input=getattr(stream, "close", None),
             transform=rtp_transform,
+            allow_encrypted=allow_encrypted,
         )
         return
 
@@ -650,6 +659,7 @@ def copy_cloud_stream_packets_to_mpegts(
             stdin,
             flush_each=True,
             transform=mpegps_transform,
+            allow_encrypted=allow_encrypted,
         )
 
     copy_remuxed_output(
@@ -662,22 +672,29 @@ def copy_cloud_stream_packets_to_mpegts(
 
 def _peek_cloud_transport(
     packets: Iterator[Any],
+    *,
+    allow_encrypted: bool = False,
 ) -> tuple[StreamTransport, Iterator[Any]]:
-    """Peek through empty/unknown packets without losing stream boundaries."""
+    """Discard nonmedia prelude packets until a known transport is found."""
 
     prefix: list[Any] = []
     for packet in packets:
-        _require_clear_cloud_packet(packet)
+        _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         prefix.append(packet)
         if not packet.body:
             continue
         transport = detect_transport(packet.body)
-        return transport, chain(prefix, packets)
+        if transport != StreamTransport.UNKNOWN:
+            return transport, chain((packet,), packets)
     return StreamTransport.UNKNOWN, iter(prefix)
 
 
-def _require_clear_cloud_packet(packet: Any) -> None:
-    if packet.encrypted:
+def _require_clear_cloud_packet(
+    packet: Any,
+    *,
+    allow_encrypted: bool = False,
+) -> None:
+    if packet.encrypted and not allow_encrypted:
         raise PyEzvizError(
             "Received encrypted VTM stream packet; media decryption is not implemented"
         )
@@ -689,9 +706,10 @@ def _write_clear_cloud_packets(
     *,
     flush_each: bool = False,
     transform: Callable[[bytes], bytes] | None = None,
+    allow_encrypted: bool = False,
 ) -> None:
     for packet in packets:
-        _require_clear_cloud_packet(packet)
+        _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         payload = transform(packet.body) if transform else packet.body
         if payload:
             output.write(payload)
@@ -711,13 +729,14 @@ def _copy_cloud_rtp_packets_to_mpegts(
     ffmpeg_path: str,
     cancel_input: Callable[[], None] | None,
     transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
+    allow_encrypted: bool = False,
 ) -> None:
     """Depacketize a clear RTP video stream and remux Annex-B video to MPEG-TS."""
 
     prefix: list[RtpPacket] = []
     codec: RtpVideoCodec | None = None
     for packet in packets:
-        _require_clear_cloud_packet(packet)
+        _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         if not packet.body:
             continue
         parsed = parse_rtp_packet(packet.body)
@@ -732,7 +751,7 @@ def _copy_cloud_rtp_packets_to_mpegts(
 
     def _remaining_rtp_packets() -> Iterator[RtpPacket]:
         for packet in packets:
-            _require_clear_cloud_packet(packet)
+            _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
             if not packet.body:
                 continue
             yield parse_rtp_packet(packet.body)

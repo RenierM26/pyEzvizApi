@@ -2995,6 +2995,47 @@ def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
     assert output.getvalue() == expected_payload
 
 
+def test_remux_stream_payloads_routes_clear_transport_when_encrypted_allowed(
+    monkeypatch,
+) -> None:
+    stream = object()
+    output = io.BytesIO()
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_cloud_stream_packets_to_mpegts(
+        source_stream: object,
+        destination: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"stream": source_stream, "output": destination, **kwargs})
+
+    monkeypatch.setattr(
+        cli_module,
+        "copy_cloud_stream_packets_to_mpegts",
+        fake_copy_cloud_stream_packets_to_mpegts,
+    )
+
+    cli_module._remux_stream_payloads_to_mpegts(  # noqa: SLF001
+        stream,
+        output,
+        ffmpeg_path="ffmpeg-custom",
+        max_packets=4,
+        duration_seconds=3.0,
+        allow_encrypted=True,
+    )
+
+    assert calls == [
+        {
+            "stream": stream,
+            "output": output,
+            "ffmpeg_path": "ffmpeg-custom",
+            "max_packets": 4,
+            "duration_seconds": 3.0,
+            "allow_encrypted": True,
+        }
+    ]
+
+
 def test_remux_stream_payloads_to_mpegts_wraps_ffmpeg_launch_failure() -> None:
     output = io.BytesIO()
 
@@ -4950,6 +4991,80 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
 
     assert handler.responses == []
     assert handler.errors == [(502, "Could not launch FFmpeg")]
+
+
+def test_stream_proxy_routes_clear_transport_when_encrypted_allowed(monkeypatch) -> None:
+    expected_payload = b"mpegts"
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        wfile = io.BytesIO()
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.responses: list[int] = []
+            self.errors: list[tuple[int, str]] = []
+
+        def send_response(self, code: int) -> None:
+            self.responses.append(code)
+
+        def send_header(self, _key: str, _value: str) -> None:
+            return None
+
+        def end_headers(self) -> None:
+            return None
+
+        def send_error(self, code: int, message: str) -> None:
+            self.errors.append((code, message))
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=None,
+        path="/CAM123.ts",
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=True,
+        decrypt_video=False,
+        decrypt_codec="hevc",
+        max_packets=None,
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_cloud_stream_packets_to_mpegts(
+        stream: FakeStream,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"stream": stream, **kwargs})
+        output.write(expected_payload)
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
+    monkeypatch.setattr(
+        cli_module,
+        "copy_cloud_stream_packets_to_mpegts",
+        fake_copy_cloud_stream_packets_to_mpegts,
+    )
+
+    handler = FakeHandler()
+    cli_module._handle_stream_proxy_get(cast(Any, handler), config, cast(Any, object()))  # noqa: SLF001
+
+    assert handler.responses == [200]
+    assert handler.errors == []
+    assert handler.wfile.getvalue() == expected_payload
+    assert calls[0]["allow_encrypted"] is True
 
 
 def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:

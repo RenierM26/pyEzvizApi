@@ -3357,23 +3357,12 @@ def _remux_stream_payloads_to_mpegts(
     duration_seconds: float | None = None,
     allow_encrypted: bool,
 ) -> None:
-    """Route clear VTM media to MPEG-TS, preserving legacy encrypted passthrough."""
+    """Route VTM media to MPEG-TS with optional encrypted-packet passthrough."""
 
-    if not allow_encrypted:
-        copy_cloud_stream_packets_to_mpegts(
-            stream,
-            output,
-            ffmpeg_path=ffmpeg_path,
-            max_packets=max_packets,
-            duration_seconds=duration_seconds,
-        )
-        return
-
-    process = _open_mpegts_remux_process(ffmpeg_path)
-    _copy_stream_payloads_to_mpegts(
+    copy_cloud_stream_packets_to_mpegts(
         stream,
         output,
-        process=process,
+        ffmpeg_path=ffmpeg_path,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
         allow_encrypted=allow_encrypted,
@@ -3484,39 +3473,24 @@ def _handle_stream_proxy_get(
             timeout=config.timeout,
         ) as stream:
             stream.start()
-            if not config.allow_encrypted:
-                mpegps_transform = None
-                rtp_transform = None
-                if config.decrypt_video:
-                    mpegps_transform, rtp_transform = _stream_payload_decryptors(
-                        client,
-                        config.serial,
-                        codec=config.decrypt_codec,
-                    )
-                copy_cloud_stream_packets_to_mpegts(
-                    stream,
-                    cast(BinaryIO, _LazyProxyOutput()),
-                    ffmpeg_path=config.ffmpeg_path,
-                    max_packets=config.max_packets,
-                    mpegps_transform=mpegps_transform,
-                    rtp_transform=rtp_transform,
+            mpegps_transform = None
+            rtp_transform = None
+            if config.decrypt_video:
+                mpegps_transform, rtp_transform = _stream_payload_decryptors(
+                    client,
+                    config.serial,
+                    codec=config.decrypt_codec,
                 )
-                _start_response()
-                return
-            process = _open_mpegts_remux_process(config.ffmpeg_path)
-            _start_response()
-            _copy_stream_payloads_to_mpegts(
+            copy_cloud_stream_packets_to_mpegts(
                 stream,
-                cast(BinaryIO, handler.wfile),
-                process=process,
+                cast(BinaryIO, _LazyProxyOutput()),
+                ffmpeg_path=config.ffmpeg_path,
                 max_packets=config.max_packets,
                 allow_encrypted=config.allow_encrypted,
-                transform_payload=(
-                    _stream_payload_decryptor(client, config.serial, codec=config.decrypt_codec)
-                    if config.decrypt_video
-                    else None
-                ),
+                mpegps_transform=mpegps_transform,
+                rtp_transform=rtp_transform,
             )
+            _start_response()
     except (BrokenPipeError, ConnectionResetError):
         _LOGGER.debug("Stream proxy client disconnected")
     except PyEzvizError as err:

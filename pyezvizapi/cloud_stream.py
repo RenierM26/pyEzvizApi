@@ -718,6 +718,8 @@ def _copy_cloud_rtp_packets_to_mpegts(
     codec: RtpVideoCodec | None = None
     for packet in packets:
         _require_clear_cloud_packet(packet)
+        if not packet.body:
+            continue
         parsed = parse_rtp_packet(packet.body)
         prefix.append(parsed)
         try:
@@ -731,6 +733,8 @@ def _copy_cloud_rtp_packets_to_mpegts(
     def _remaining_rtp_packets() -> Iterator[RtpPacket]:
         for packet in packets:
             _require_clear_cloud_packet(packet)
+            if not packet.body:
+                continue
             yield parse_rtp_packet(packet.body)
 
     process = _open_cloud_elementary_mpegts_remux_process(ffmpeg_path, codec)

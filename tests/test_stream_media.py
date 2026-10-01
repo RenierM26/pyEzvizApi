@@ -1784,6 +1784,53 @@ def test_copy_cloud_stream_to_mpegts_skips_unknown_prelude_before_rtp(
     assert output.getvalue() == H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_body = _rtp_packet(b"\x67h264-sps", marker=True)
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            for sequence, body in enumerate((rtp_body, b"vtm-interleaved"), start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+
+    copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=2)
+
+    assert output.getvalue() == H264_SPS_ANNEXB
+
+
 def test_copy_cloud_stream_to_mpegts_accepts_ezviz_headerless_hevc_fu(
     monkeypatch,
 ) -> None:
@@ -2083,7 +2130,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
             return None
 
         def iter_packets(self, *, max_packets: int | None = None) -> Any:
-            assert max_packets == 2
+            assert max_packets == 3
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
                 length=len(b"vtm-prelude"),
@@ -2097,6 +2144,13 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
                 sequence=2,
                 message_code=0,
                 body=rtp_body,
+            )
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(b"vtm-interleaved"),
+                sequence=3,
+                message_code=0,
+                body=b"vtm-interleaved",
             )
 
     def fake_decrypt(
@@ -2135,7 +2189,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         "CAM123",
         output,
         ffmpeg_path="ffmpeg-custom",
-        max_packets=2,
+        max_packets=3,
         decrypt_video=True,
         media_key="MEDIAKEY",
     )

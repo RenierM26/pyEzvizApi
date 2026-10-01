@@ -550,7 +550,11 @@ def _collect_cloud_stream_packets(
 def _cloud_rtp_packet_nal_units(
     packets: Iterable[Any],
 ) -> tuple[RtpVideoCodec, tuple[bytes, ...]]:
-    parsed = [parse_rtp_packet(packet.body) for packet in packets if packet.body]
+    parsed = [
+        parse_rtp_packet(packet.body)
+        for packet in packets
+        if packet.body and detect_transport(packet.body) == StreamTransport.RTP
+    ]
     codec = detect_rtp_video_codec(parsed)
     return codec, rtp_packets_to_nal_units(
         parsed,
@@ -734,6 +738,8 @@ def _copy_cloud_rtp_packets_to_mpegts(
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         if not packet.body:
             continue
+        if detect_transport(packet.body) != StreamTransport.RTP:
+            continue
         parsed = parse_rtp_packet(packet.body)
         if rtp_media_kind(parsed) != "video":
             continue
@@ -758,6 +764,8 @@ def _copy_cloud_rtp_packets_to_mpegts(
         for packet in packets:
             _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
             if not packet.body:
+                continue
+            if detect_transport(packet.body) != StreamTransport.RTP:
                 continue
             yield parse_rtp_packet(packet.body)
 

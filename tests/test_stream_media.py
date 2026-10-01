@@ -1565,6 +1565,62 @@ def test_copy_cloud_stream_to_mpegts_depacketizes_clear_rtp_video(monkeypatch) -
     assert output.getvalue() == H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_to_mpegts_defers_codec_fallback_past_h264_aud(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_bodies = (
+        _rtp_packet(b"\x09\xf0", sequence=1),
+        _rtp_packet(b"\x67h264-sps", sequence=2, marker=True),
+    )
+    open_calls: list[tuple[str, str]] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        open_calls.append((ffmpeg_path, codec))
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=2)
+
+    assert open_calls == [("ffmpeg", "h264")]
+    assert output.getvalue() == b"\x00\x00\x00\x01\x09\xf0" + H264_SPS_ANNEXB
+
+
 def test_copy_cloud_stream_to_mpegts_skips_empty_rtp_prelude_and_body(
     monkeypatch,
 ) -> None:
@@ -1958,11 +2014,18 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
             return None
 
         def iter_packets(self, *, max_packets: int | None = None) -> Any:
-            assert max_packets == 1
+            assert max_packets == 2
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(b"vtm-prelude"),
+                sequence=1,
+                message_code=0,
+                body=b"vtm-prelude",
+            )
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
                 length=len(rtp_body),
-                sequence=1,
+                sequence=2,
                 message_code=0,
                 body=rtp_body,
             )
@@ -2003,7 +2066,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         "CAM123",
         output,
         ffmpeg_path="ffmpeg-custom",
-        max_packets=1,
+        max_packets=2,
         decrypt_video=True,
         media_key="MEDIAKEY",
     )

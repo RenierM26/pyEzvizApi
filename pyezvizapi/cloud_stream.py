@@ -37,6 +37,7 @@ from .stream_transport import (
 )
 
 JsonDict = dict[str, Any]
+_RTP_CODEC_PROBE_MAX_PACKETS = 32
 
 
 class VtduTokenResponse(TypedDict, total=False):
@@ -284,7 +285,8 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
             )
-        transport = _detect_cloud_packets_transport(packets)
+        transport, media_packets = _peek_cloud_transport(iter(packets))
+        packets = list(media_packets)
         if transport == StreamTransport.RTP:
             raise PyEzvizError(
                 "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
@@ -371,7 +373,8 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
             )
-        transport = _detect_cloud_packets_transport(packets)
+        transport, media_packets = _peek_cloud_transport(iter(packets))
+        packets = list(media_packets)
         if transport == StreamTransport.RTP:
             codec, nal_units = _cloud_rtp_packet_nal_units(packets)
             header_size = nalu_header_size
@@ -542,14 +545,6 @@ def _collect_cloud_stream_packets(
         _require_clear_cloud_packet(packet)
         packets.append(packet)
     return packets
-
-
-def _detect_cloud_packets_transport(packets: Iterable[Any]) -> StreamTransport:
-    for packet in packets:
-        transport = detect_transport(packet.body)
-        if transport != StreamTransport.UNKNOWN:
-            return transport
-    return StreamTransport.UNKNOWN
 
 
 def _cloud_rtp_packet_nal_units(
@@ -742,12 +737,20 @@ def _copy_cloud_rtp_packets_to_mpegts(
         parsed = parse_rtp_packet(packet.body)
         prefix.append(parsed)
         try:
-            codec = detect_rtp_video_codec(prefix)
+            codec = detect_rtp_video_codec(prefix, allow_fallback=False)
         except PyEzvizError:
+            if len(prefix) >= _RTP_CODEC_PROBE_MAX_PACKETS:
+                codec = detect_rtp_video_codec(prefix)
+                break
             continue
         break
     if codec is None:
-        raise PyEzvizError("Could not detect RTP video codec in cloud stream")
+        try:
+            codec = detect_rtp_video_codec(prefix)
+        except PyEzvizError as err:
+            raise PyEzvizError(
+                "Could not detect RTP video codec in cloud stream"
+            ) from err
 
     def _remaining_rtp_packets() -> Iterator[RtpPacket]:
         for packet in packets:

@@ -148,6 +148,7 @@ def detect_rtp_video_codec(
     packets: Iterable[RtpPacket],
     *,
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    allow_fallback: bool = True,
 ) -> RtpVideoCodec:
     """Detect H.264 or HEVC from routed RTP video packets."""
 
@@ -167,7 +168,7 @@ def detect_rtp_video_codec(
                 fallback = "hevc"
             elif 1 <= h264_type <= 23:
                 fallback = "h264"
-    if fallback is not None:
+    if fallback is not None and allow_fallback:
         return fallback
     raise PyEzvizError("Could not detect RTP video codec")
 

@@ -213,6 +213,16 @@ def test_codec_detection_rejects_only_ambiguous_packets() -> None:
         detect_rtp_video_codec([packet])
 
 
+def test_codec_detection_can_defer_fallback_until_more_packets_arrive() -> None:
+    aud = parse_rtp_packet(_rtp(b"\x09\xf0", sequence=1))
+    sps = parse_rtp_packet(_rtp(b"\x67h264-sps", sequence=2))
+
+    with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
+        detect_rtp_video_codec([aud], allow_fallback=False)
+
+    assert detect_rtp_video_codec([aud, sps], allow_fallback=False) == "h264"
+
+
 @pytest.mark.parametrize(
     ("codec", "start", "truncated", "end"),
     [

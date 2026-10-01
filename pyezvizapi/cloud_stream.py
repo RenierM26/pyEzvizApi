@@ -550,17 +550,28 @@ def _collect_cloud_stream_packets(
 def _cloud_rtp_packet_nal_units(
     packets: Iterable[Any],
 ) -> tuple[RtpVideoCodec, tuple[bytes, ...]]:
-    parsed = [
-        parse_rtp_packet(packet.body)
-        for packet in packets
-        if packet.body and detect_transport(packet.body) == StreamTransport.RTP
-    ]
+    parsed: list[RtpPacket] = []
+    for packet in packets:
+        rtp_packet = _parse_cloud_rtp_packet(packet.body)
+        if rtp_packet is not None:
+            parsed.append(rtp_packet)
     codec = detect_rtp_video_codec(parsed)
     return codec, rtp_packets_to_nal_units(
         parsed,
         codec=codec,
         allow_ezviz_headerless_hevc_fu=True,
     )
+
+
+def _parse_cloud_rtp_packet(body: bytes) -> RtpPacket | None:
+    """Return a valid RTP packet or ignore a nonmedia/invalid VTM body."""
+
+    if not body or detect_transport(body) != StreamTransport.RTP:
+        return None
+    try:
+        return parse_rtp_packet(body)
+    except PyEzvizError:
+        return None
 
 
 def _decrypt_cloud_rtp_nal_unit(
@@ -736,11 +747,9 @@ def _copy_cloud_rtp_packets_to_mpegts(
     codec: RtpVideoCodec | None = None
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
-        if not packet.body:
+        parsed = _parse_cloud_rtp_packet(packet.body)
+        if parsed is None:
             continue
-        if detect_transport(packet.body) != StreamTransport.RTP:
-            continue
-        parsed = parse_rtp_packet(packet.body)
         if rtp_media_kind(parsed) != "video":
             continue
         prefix.append(parsed)
@@ -763,11 +772,10 @@ def _copy_cloud_rtp_packets_to_mpegts(
     def _remaining_rtp_packets() -> Iterator[RtpPacket]:
         for packet in packets:
             _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
-            if not packet.body:
+            parsed = _parse_cloud_rtp_packet(packet.body)
+            if parsed is None:
                 continue
-            if detect_transport(packet.body) != StreamTransport.RTP:
-                continue
-            yield parse_rtp_packet(packet.body)
+            yield parsed
 
     process = _open_cloud_elementary_mpegts_remux_process(ffmpeg_path, codec)
 

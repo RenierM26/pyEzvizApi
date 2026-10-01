@@ -1803,7 +1803,7 @@ def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(
 
         def iter_packets(self, *, max_packets: int | None = None) -> Any:
             assert max_packets == 2
-            for sequence, body in enumerate((rtp_body, b"vtm-interleaved"), start=1):
+            for sequence, body in enumerate((rtp_body, b"\x80control"), start=1):
                 yield VtmPacket(
                     channel=VtmChannel.STREAM,
                     length=len(body),
@@ -2147,10 +2147,10 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
             )
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=len(b"vtm-interleaved"),
+                length=len(b"\x80control"),
                 sequence=3,
                 message_code=0,
-                body=b"vtm-interleaved",
+                body=b"\x80control",
             )
 
     def fake_decrypt(

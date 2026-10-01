@@ -9,7 +9,6 @@ import datetime as dt
 import hashlib
 import json
 import logging
-import math
 import os
 from pathlib import Path
 from threading import RLock
@@ -176,6 +175,7 @@ from .local_stream_ecdh import (
 from .local_stream_media import (
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
+    h264_clean_idr_capture_budgets,
     summarize_idmx_h264_local_packets,
 )
 from .local_stream_transport import (
@@ -186,7 +186,14 @@ from .local_stream_transport import (
     open_hcnetsdk_command_port_multi_socket_stream,
     open_hcnetsdk_command_port_stream,
 )
-from .media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
+from .media import (
+    CaptureLimits,
+    MediaDecodeOptions,
+    MediaMuxOptions,
+    has_positive_finite_capture_bound,
+    is_positive_capture_count_bound,
+    is_positive_finite_duration_bound,
+)
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .utils import convert_to_dict, decrypt_image, deep_merge
@@ -3165,13 +3172,13 @@ class EzvizClient:
                 max_packets=(
                     max_packets
                     if max_packets is None
-                    or (max_packets > 0 and math.isfinite(max_packets))
+                    or is_positive_capture_count_bound(max_packets)
                     else None
                 ),
                 duration_seconds=(
                     duration_seconds
                     if duration_seconds is None
-                    or (duration_seconds > 0 and math.isfinite(duration_seconds))
+                    or is_positive_finite_duration_bound(duration_seconds)
                     else None
                 ),
             ),
@@ -3185,10 +3192,10 @@ class EzvizClient:
         )
         if (
             max_packets is not None
-            and (max_packets <= 0 or not math.isfinite(max_packets))
+            and not is_positive_capture_count_bound(max_packets)
         ) or (
             duration_seconds is not None
-            and (duration_seconds <= 0 or not math.isfinite(duration_seconds))
+            and not is_positive_finite_duration_bound(duration_seconds)
         ):
             clip_options = _LegacyClipOptions.from_options(
                 clip_options,
@@ -3531,6 +3538,24 @@ class EzvizClient:
             raise PyEzvizError("source='hcnetsdk-command-port' currently writes MPEG-TS only")
         if decrypt_video and media_key is None:
             raise PyEzvizError("source='hcnetsdk-command-port' decrypt_video requires media_key")
+        if decrypt_video:
+            h264_clean_idr_capture_budgets(
+                duration_seconds=duration_seconds,
+                h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
+                h264_trim_to_clean_idr_window=h264_trim_to_clean_idr_window,
+                h264_clean_idr_preroll_seconds=h264_clean_idr_preroll_seconds,
+                h264_clean_idr_max_windows=h264_clean_idr_max_windows,
+                h264_wait_for_clean_idr_window=h264_wait_for_clean_idr_window,
+                h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+            )
+        if decrypt_video and not has_positive_finite_capture_bound(
+            max_packets=max_packets,
+            duration_seconds=duration_seconds,
+        ):
+            raise PyEzvizError(
+                "source='hcnetsdk-command-port' encrypted capture requires a positive "
+                "finite duration_seconds or max_packets"
+            )
 
         frames = tuple(command_frames or ())
         supplied_modes = sum(

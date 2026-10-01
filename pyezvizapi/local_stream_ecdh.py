@@ -85,6 +85,7 @@ from .media import (
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
+    has_positive_finite_capture_bound,
 )
 from .rtp import rtp_payload
 
@@ -892,6 +893,13 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     smscode: str | int | None = None,
 ) -> None:
     """Write authenticated local SDK ECDH media using an ``EzvizClient``."""
+    _validate_ecdh_copy_options(
+        output_format=output_format,
+        decrypt_video=decrypt_video,
+        max_packets=max_packets,
+        max_frames=max_frames,
+        duration_seconds=duration_seconds,
+    )
     with open_local_sdk_ecdh_stream_from_client(
         client,
         serial,
@@ -952,8 +960,13 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Copy one ECDH stream while enforcing bounds on encrypted input frames."""
-    if output_format not in {"mpegps", "mpegts"}:
-        raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
+    _validate_ecdh_copy_options(
+        output_format=output_format,
+        decrypt_video=decrypt_video,
+        max_packets=max_packets,
+        max_frames=max_frames,
+        duration_seconds=duration_seconds,
+    )
     if decrypt_video and media_key is None:
         raise PyEzvizError("decrypt_video requires a media_key or fetchable camera media key")
     if output_format == "mpegps" and not decrypt_video:
@@ -1003,6 +1016,28 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
             ffmpeg_path=ffmpeg_path,
             max_packets=transformed_max_packets,
             duration_seconds=duration_seconds,
+        )
+
+
+def _validate_ecdh_copy_options(
+    *,
+    output_format: str,
+    decrypt_video: bool,
+    max_packets: int | None,
+    max_frames: int | None,
+    duration_seconds: float | None,
+) -> None:
+    """Reject invalid ECDH copy options before credentials or sockets are used."""
+    if output_format not in {"mpegps", "mpegts"}:
+        raise PyEzvizError(f"Unsupported local SDK ECDH output format: {output_format}")
+    if decrypt_video and not has_positive_finite_capture_bound(
+        max_packets=max_packets,
+        max_frames=max_frames,
+        duration_seconds=duration_seconds,
+    ):
+        raise PyEzvizError(
+            "Encrypted local stream decrypt requires a positive finite "
+            "duration_seconds, max_packets, or max_frames"
         )
 
 

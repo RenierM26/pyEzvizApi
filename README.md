@@ -176,6 +176,9 @@ The original `save_clip(...)` keywords and imports from `pyezvizapi.stream` or
 `pyezvizapi.local_stream` remain compatible. New lower-level code should import
 from `stream_transport`, `stream_media`, `local_stream_transport`,
 `local_stream_media`, or `local_stream_ecdh` according to responsibility.
+See [`docs/streaming.md`](docs/streaming.md) for the source conformance matrix,
+lifecycle/output semantics, compatibility boundaries, golden fixtures, and
+offline/live validation procedure.
 
 Use `source="hcnetsdk-command-port"`, `host="192.0.2.10"`, `command_port=8000`,
 and `hcnetsdk_command_frames=(...)` when an integration already has the complete

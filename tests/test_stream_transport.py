@@ -1,0 +1,1743 @@
+"""Tests for cloud stream discovery, VTM framing, and transport lifecycle."""
+
+from __future__ import annotations
+
+import base64
+import importlib
+import json
+from types import SimpleNamespace
+from typing import Any
+
+from Crypto.Cipher import AES
+import pytest
+import requests
+
+import pyezvizapi
+from pyezvizapi._stream import (
+    VtmChannel,
+    VtmMessageCode,
+    VtmStreamClient,
+    VtmTraceEvent,
+    build_get_vtdu_info_request,
+    build_peer_stream_request,
+    build_start_stream_request,
+    build_stop_stream_request,
+    build_stream_info_request,
+    build_stream_keepalive_request,
+    build_vtm_url,
+    decode_vtm_packet,
+    download_ezviz_cloud_replay,
+    encode_vtm_packet,
+    parse_get_vtdu_info_response,
+    parse_peer_stream_response,
+    parse_start_stream_response,
+    parse_stop_stream_response,
+    parse_stream_info_response,
+    parse_vtm_url,
+    summarize_vtm_packet,
+)
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.cloud_stream import (
+    get_cloud_stream_info,
+    get_vtdu_token_v2,
+    get_vtm_info,
+    open_cloud_stream,
+)
+from pyezvizapi.exceptions import DeviceException, HTTPError, PyEzvizError
+
+BODY = b"abc"
+
+cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
+
+stream_module = importlib.import_module("pyezvizapi.stream")
+
+CAMERA_SERIAL_BYTES = b"CAM123"
+
+KEEPALIVE_REQ = b"\x0a\x07ssn-123"
+
+PEER_HOST_BYTES = b"peerhost"
+
+PUBLIC_KEY_BYTES = b"pub"
+
+STOP_STREAM_REQ = b"\x0a\x07ssn-123\x12\x04info"
+
+STREAM_URL = b"ysproto://vtm:8554/live"
+
+STREAM_KEY = b"key-1"
+
+STREAM_KEY_BYTES = b"stream-key"
+
+VTM_STREAM_URL = b"ysproto://vtm.example.test:8554/live"
+
+VTDU_TOKEN_BYTES = b"token-1"
+
+def _encrypt_hikvision_fixture_blocks(key: bytes, payload: bytes) -> bytes:
+    """Encrypt independent fixture blocks like the legacy media prefix transform."""
+
+    encrypted = bytearray()
+    for pos in range(0, len(payload), AES.block_size):
+        block = payload[pos : pos + AES.block_size]
+        if len(block) != AES.block_size:
+            raise ValueError("fixture payload must contain complete AES blocks")
+        cipher = AES.new(key, AES.MODE_CBC, iv=bytes(AES.block_size))
+        encrypted.extend(cipher.encrypt(block))
+    return bytes(encrypted)
+
+class FakeVtmSocket:
+    def __init__(self, responses: list[bytes]) -> None:
+        self._buffer = b"".join(responses)
+        self.sent = b""
+        self.timeout: float | None = None
+        self.closed = False
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.timeout = timeout
+
+    def gettimeout(self) -> float | None:
+        return self.timeout
+
+    def sendall(self, data: bytes) -> None:
+        self.sent += data
+
+    def recv(self, size: int) -> bytes:
+        chunk = self._buffer[:size]
+        self._buffer = self._buffer[size:]
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+def _jwt(payload: dict[str, Any]) -> str:
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    return f"header.{encoded}.signature"
+
+def _client() -> EzvizClient:
+    return EzvizClient(
+        token={
+            "session_id": _jwt({"s": "sign-value"}),
+            "api_url": "apiieu.ezvizlife.com",
+            "service_urls": {"authAddr": "auth.example.test"},
+        },
+        timeout=1,
+    )
+
+def _http_error(status_code: int) -> HTTPError:
+    response = requests.Response()
+    response.status_code = status_code
+    err = requests.HTTPError(response=response)
+    wrapped = HTTPError()
+    wrapped.__cause__ = err
+    return wrapped
+
+def _decode_sent_packets(data: bytes) -> list[Any]:
+    packets: list[Any] = []
+    offset = 0
+    while offset < len(data):
+        packet_length = int.from_bytes(data[offset + 2 : offset + 4], "big") + 8
+        packets.append(decode_vtm_packet(data[offset : offset + packet_length]))
+        offset += packet_length
+    return packets
+
+def test_package_exports_vtdu_stream_helpers() -> None:
+    assert pyezvizapi.VtduInfoResponse is not None
+    assert pyezvizapi.VtduStreamResponse is not None
+    assert pyezvizapi.StopStreamResponse is not None
+    assert pyezvizapi.VtmTraceEvent is VtmTraceEvent
+    assert pyezvizapi.build_get_vtdu_info_request is build_get_vtdu_info_request
+    assert pyezvizapi.build_start_stream_request is build_start_stream_request
+    assert pyezvizapi.build_peer_stream_request is build_peer_stream_request
+    assert pyezvizapi.build_stop_stream_request is build_stop_stream_request
+    assert pyezvizapi.parse_get_vtdu_info_response is parse_get_vtdu_info_response
+    assert pyezvizapi.parse_start_stream_response is parse_start_stream_response
+    assert pyezvizapi.parse_peer_stream_response is parse_peer_stream_response
+    assert pyezvizapi.parse_stop_stream_response is parse_stop_stream_response
+    assert pyezvizapi.summarize_vtm_packet is summarize_vtm_packet
+
+def test_vtm_packet_roundtrip() -> None:
+    packet = encode_vtm_packet(
+        BODY,
+        channel=VtmChannel.MESSAGE,
+        message_code=VtmMessageCode.STREAMINFO_REQ,
+        sequence=7,
+    )
+
+    decoded = decode_vtm_packet(packet)
+
+    assert decoded.channel == VtmChannel.MESSAGE
+    assert decoded.length == 3
+    assert decoded.sequence == 7
+    assert decoded.message_code == VtmMessageCode.STREAMINFO_REQ
+    assert decoded.body == BODY
+    assert not decoded.encrypted
+
+def test_vtm_packet_sequence_wraps_to_16_bits() -> None:
+    assert decode_vtm_packet(encode_vtm_packet(BODY, sequence=65536)).sequence == 0
+    assert decode_vtm_packet(encode_vtm_packet(BODY, sequence=-1)).sequence == 65535
+
+def test_decode_vtm_packet_rejects_envelope_mismatch() -> None:
+    with pytest.raises(PyEzvizError, match="length mismatch"):
+        decode_vtm_packet(b"\x24\x00\x00\x02\x00\x00\x01\x3bA")
+
+def test_build_and_parse_vtm_url_preserves_required_params() -> None:
+    url = build_vtm_url(
+        "1.2.3.4",
+        8554,
+        "CAM123",
+        "serial=CAM123&streamtag=abc",
+        "token-1",
+        timestamp_ms=123456,
+    )
+
+    host, port, path, params = parse_vtm_url(url)
+
+    assert host == "1.2.3.4"
+    assert port == 8554
+    assert path == "/live"
+    assert params["dev"] == "CAM123"
+    assert params["ssn"] == "token-1"
+    assert params["serial"] == "CAM123"
+    assert params["streamtag"] == "abc"
+    assert params["timestamp"] == "123456"
+
+def test_build_vtm_url_keeps_required_params_authoritative() -> None:
+    url = build_vtm_url(
+        "1.2.3.4",
+        8554,
+        "CAM123",
+        "dev=OLD&chn=9&stream=9&cln=7&isp=1&auth=0&ssn=stale&vip=1&timestamp=1",
+        "token-1",
+        channel=2,
+        client_type=9,
+        timestamp_ms=123456,
+    )
+
+    _host, _port, _path, params = parse_vtm_url(url)
+
+    assert params["dev"] == "CAM123"
+    assert params["chn"] == "2"
+    assert params["stream"] == "1"
+    assert params["cln"] == "9"
+    assert params["isp"] == "0"
+    assert params["auth"] == "1"
+    assert params["ssn"] == "token-1"
+    assert params["vip"] == "0"
+    assert params["timestamp"] == "123456"
+
+def test_build_vtm_url_brackets_ipv6_hosts() -> None:
+    url = build_vtm_url(
+        "2001:db8::1",
+        8554,
+        "CAM123",
+        "",
+        "token-1",
+        timestamp_ms=123456,
+    )
+
+    host, port, _path, params = parse_vtm_url(url)
+
+    assert url.startswith("ysproto://[2001:db8::1]:8554/")
+    assert host == "2001:db8::1"
+    assert port == 8554
+    assert params["dev"] == "CAM123"
+
+@pytest.mark.parametrize(
+    "stream_biz_url",
+    [
+        "?serial=CAM123&streamtag=abc",
+        "/live?serial=CAM123&streamtag=abc",
+        "https://vtm.example.test/live?serial=CAM123&streamtag=abc",
+    ],
+)
+def test_build_vtm_url_parses_stream_biz_query_component(stream_biz_url: str) -> None:
+    url = build_vtm_url(
+        "1.2.3.4",
+        8554,
+        "CAM123",
+        stream_biz_url,
+        "token-1",
+        timestamp_ms=123456,
+    )
+
+    _host, _port, _path, params = parse_vtm_url(url)
+
+    assert "?serial" not in params
+    assert "/live?serial" not in params
+    assert params["serial"] == "CAM123"
+    assert params["streamtag"] == "abc"
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ysproto://host:70000/live",
+        "ysproto://host:abc/live",
+        "ysproto://[::1/live",
+        "ysproto://[v6]/live",
+    ],
+)
+def test_parse_vtm_url_normalizes_invalid_ports(url: str) -> None:
+    with pytest.raises(PyEzvizError, match="host or port"):
+        parse_vtm_url(url)
+
+def test_stream_info_protobuf_helpers_decode_known_fields() -> None:
+    rsp = (
+        b"\x08\x00"
+        b"\x22\x07ssn-123"
+        b"\x2a\x05key-1"
+        b"\x3a\x18ysproto://vtdu:8554/live"
+        b"\x62\x04pds1"
+        b"\x6a\x03::1"
+    )
+
+    decoded = parse_stream_info_response(rsp)
+
+    assert decoded.result == 0
+    assert decoded.streamssn == "ssn-123"
+    assert decoded.vtmstreamkey == "key-1"
+    assert decoded.streamurl == "ysproto://vtdu:8554/live"
+    assert decoded.pdslist == (b"pds1",)
+    assert decoded.srvipv6_addr == "::1"
+
+    req = build_stream_info_request(STREAM_URL.decode(), vtm_stream_key=STREAM_KEY.decode())
+    keepalive = build_stream_keepalive_request("ssn-123")
+
+    assert STREAM_URL in req
+    assert STREAM_KEY in req
+    assert keepalive == KEEPALIVE_REQ
+
+def test_vtdu_info_protobuf_helpers_decode_known_fields() -> None:
+    req = build_get_vtdu_info_request(
+        "CAM123",
+        "token-1",
+        channel=2,
+        stream_type=1,
+        business_type=4,
+        client_isp_type=3,
+        is_proxy=True,
+    )
+    rsp = (
+        b"\x08\x00"
+        b"\x12\x031.2"
+        b"\x18\xea\x42"
+        b"\x22\x0astream-key"
+        b"\x2a\x08peerhost"
+        b"\x30\xd2\x4a"
+        b"\x3a\x07srvinfo"
+    )
+
+    decoded = parse_get_vtdu_info_response(rsp)
+
+    assert CAMERA_SERIAL_BYTES in req
+    assert VTDU_TOKEN_BYTES in req
+    assert decoded.result == 0
+    assert decoded.host == "1.2"
+    assert decoded.port == 8554
+    assert decoded.streamkey == "stream-key"
+    assert decoded.peerhost == "peerhost"
+    assert decoded.peerport == 9554
+    assert decoded.srvinfo == "srvinfo"
+
+def test_start_peer_and_stop_stream_protobuf_helpers() -> None:
+    start_req = build_start_stream_request(
+        "CAM123",
+        "token-1",
+        "stream-key",
+        channel=2,
+        stream_type=1,
+        business_type=4,
+        client_type=9,
+        peer_host="peerhost",
+        peer_port=9554,
+    )
+    peer_req = build_peer_stream_request(
+        "CAM123",
+        "token-1",
+        channel=2,
+        stream_type=1,
+        business_type=4,
+    )
+    stop_req = build_stop_stream_request("ssn-123", ssn_info="info")
+
+    start_rsp = parse_start_stream_response(
+        b"\x08\x00\x12\x06header\x1a\x07ssn-123\x20\x07"
+    )
+    peer_rsp = parse_peer_stream_response(
+        b"\x08\x00\x12\x06header\x1a\x07ssn-123\x20\x08"
+    )
+    stop_rsp = parse_stop_stream_response(b"\x08\x00")
+
+    assert STREAM_KEY_BYTES in start_req
+    assert PEER_HOST_BYTES in start_req
+    assert CAMERA_SERIAL_BYTES in peer_req
+    assert stop_req == STOP_STREAM_REQ
+    assert start_rsp.streamssn == "ssn-123"
+    assert start_rsp.datakey == 7
+    assert peer_rsp.streamhead == "header"
+    assert peer_rsp.datakey == 8
+    assert stop_rsp.result == 0
+
+def test_stream_info_response_rejects_truncated_length_delimited_field() -> None:
+    with pytest.raises(PyEzvizError, match="exceeds payload"):
+        parse_stream_info_response(b"\x22\x07ssn")
+
+def test_download_ezviz_cloud_replay_preserves_type_2_media(monkeypatch) -> None:
+    expected_payload = b"firstsecond"
+    messages = [
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>1</Type></Response>",
+            data=b"first",
+            md5_ok=True,
+            result=0,
+            data_type=1,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>2</Type></Response>",
+            data=b"second",
+            md5_ok=True,
+            result=0,
+            data_type=2,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>100</Type></Response>",
+            data=b"",
+            md5_ok=True,
+            result=0,
+            data_type=100,
+        ),
+    ]
+
+    class FakeSocket:
+        def __enter__(self) -> FakeSocket:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+    class FakeSslContext:
+        minimum_version: object
+
+        def wrap_socket(self, raw_socket: FakeSocket, *, server_hostname: str) -> FakeSocket:
+            assert server_hostname == "cloud.example.test"
+            return raw_socket
+
+    def fake_read_cloud_replay_message(
+        _tls_socket: FakeSocket,
+        _buffer: bytes,
+    ) -> tuple[Any, bytes]:
+        return messages.pop(0), b""
+
+    monkeypatch.setattr(
+        stream_module.socket,
+        "create_connection",
+        lambda address, timeout: FakeSocket(),
+    )
+    monkeypatch.setattr(
+        stream_module.ssl,
+        "create_default_context",
+        FakeSslContext,
+    )
+    monkeypatch.setattr(
+        stream_module,
+        "_read_cloud_replay_message",
+        fake_read_cloud_replay_message,
+    )
+
+    assert (
+        download_ezviz_cloud_replay(
+            stream_url="cloud.example.test:32723",
+            ticket="ticket",
+            serial="CAM123",
+            channel=1,
+            seq_id=123,
+            begin_cas="20260509T215000Z",
+            end_cas="20260509T215010Z",
+        )
+        == expected_payload
+    )
+
+def test_download_ezviz_cloud_replay_rejects_short_download(monkeypatch) -> None:
+    messages = [
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>1</Type></Response>",
+            data=b"short",
+            md5_ok=True,
+            result=0,
+            data_type=1,
+        ),
+        stream_module._CloudReplayMessage(  # noqa: SLF001
+            xml=b"<Response><Result>0</Result><Type>100</Type></Response>",
+            data=b"",
+            md5_ok=True,
+            result=0,
+            data_type=100,
+        ),
+    ]
+
+    class FakeSocket:
+        def __enter__(self) -> FakeSocket:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+    class FakeSslContext:
+        minimum_version: object
+
+        def wrap_socket(self, raw_socket: FakeSocket, *, server_hostname: str) -> FakeSocket:
+            assert server_hostname == "cloud.example.test"
+            return raw_socket
+
+    def fake_read_cloud_replay_message(
+        _tls_socket: FakeSocket,
+        _buffer: bytes,
+    ) -> tuple[Any, bytes]:
+        return messages.pop(0), b""
+
+    monkeypatch.setattr(
+        stream_module.socket,
+        "create_connection",
+        lambda address, timeout: FakeSocket(),
+    )
+    monkeypatch.setattr(
+        stream_module.ssl,
+        "create_default_context",
+        FakeSslContext,
+    )
+    monkeypatch.setattr(
+        stream_module,
+        "_read_cloud_replay_message",
+        fake_read_cloud_replay_message,
+    )
+
+    with pytest.raises(PyEzvizError, match="ended before expected file size"):
+        download_ezviz_cloud_replay(
+            stream_url="cloud.example.test:32723",
+            ticket="ticket",
+            serial="CAM123",
+            channel=1,
+            seq_id=123,
+            begin_cas="20260509T215000Z",
+            end_cas="20260509T215010Z",
+            file_size=6,
+        )
+
+def test_vtm_stream_client_starts_and_reads_payloads() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    responses = [
+        encode_vtm_packet(
+            stream_info_body,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            sequence=7,
+        ),
+        encode_vtm_packet(
+            build_stream_keepalive_request("ssn-123"),
+            message_code=VtmMessageCode.KEEPALIVE_REQ,
+            sequence=8,
+        ),
+        encode_vtm_packet(
+            b"\x47abc",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=9,
+        ),
+    ]
+    fake_socket = FakeVtmSocket(responses)
+    calls: list[tuple[tuple[str, int], float | None]] = []
+
+    def socket_factory(
+        address: tuple[str, int],
+        timeout: float | None,
+    ) -> FakeVtmSocket:
+        calls.append((address, timeout))
+        return fake_socket
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=3,
+        socket_factory=socket_factory,
+    ) as stream:
+        info = stream.start()
+        payloads = list(stream.iter_payloads(max_packets=1))
+
+    first_sent_length = int.from_bytes(fake_socket.sent[2:4], "big") + 8
+    first_sent = decode_vtm_packet(fake_socket.sent[:first_sent_length])
+    second_start = first_sent.length + 8
+    second_sent = decode_vtm_packet(fake_socket.sent[second_start:])
+
+    assert calls == [(("vtm.example.test", 8554), 3)]
+    assert fake_socket.closed
+    assert info.streamssn == "ssn-123"
+    assert info.vtmstreamkey == "key-1"
+    assert STREAM_URL not in first_sent.body
+    assert VTM_STREAM_URL in first_sent.body
+    assert first_sent.message_code == VtmMessageCode.STREAMINFO_REQ
+    assert second_sent.message_code == VtmMessageCode.KEEPALIVE_RSP
+    assert payloads == [b"\x47abc"]
+
+def test_vtm_stream_client_sends_proactive_keepalive_while_streaming() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    responses = [
+        encode_vtm_packet(
+            stream_info_body,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            sequence=7,
+        ),
+        encode_vtm_packet(
+            b"\x47one",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=8,
+        ),
+        encode_vtm_packet(
+            b"\x47two",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=9,
+        ),
+    ]
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class AdvancingSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            chunk = super().recv(size)
+            if self.recv_calls == 4:
+                clock.now = 6.0
+            return chunk
+
+    fake_socket = AdvancingSocket(responses)
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                max_packets=2,
+                keepalive_interval=5.0,
+                monotonic=clock,
+            )
+        )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+
+    assert [packet.body for packet in packets] == [b"\x47one", b"\x47two"]
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+    assert sent_packets[-1].body == build_stream_keepalive_request("ssn-123")
+
+def test_vtm_stream_capture_deadline_bounds_keepalive_write() -> None:
+    configured_timeout = 10.0
+    remaining_timeout = 0.25
+
+    class BlockingSendSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__([])
+            self.timeout = configured_timeout
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def sendall(self, data: bytes) -> None:
+            del data
+            raise TimeoutError
+
+    fake_socket = BlockingSendSocket()
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+    ticks = iter((0.0, 0.5, 0.75))
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=1.0,
+            duration_from_start=True,
+            keepalive_interval=0.5,
+            monotonic=lambda: next(ticks),
+        )
+    )
+
+    assert packets == []
+    assert remaining_timeout in fake_socket.timeout_history
+    assert fake_socket.closed
+    assert not stream.connected
+
+@pytest.mark.parametrize(
+    "message_code",
+    (VtmMessageCode.KEEPALIVE_REQ, VtmMessageCode.KEEPALIVE_RSP),
+)
+def test_vtm_keepalive_deadline_invalidates_partial_write(message_code: int) -> None:
+    class PartialSendSocket(FakeVtmSocket):
+        def sendall(self, data: bytes) -> None:
+            self.sent += data[:4]
+            raise TimeoutError
+
+    fake_socket = PartialSendSocket([])
+    fake_socket.timeout = 10.0
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+
+    with pytest.raises(TimeoutError):
+        stream.send_keepalive(
+            message_code=message_code,
+            deadline=1.0,
+            monotonic=lambda: 0.75,
+        )
+
+    assert fake_socket.sent
+    assert fake_socket.closed
+    assert not stream.connected
+
+@pytest.mark.parametrize("keepalive_interval", [0.0, -1.0])
+def test_vtm_stream_client_rejects_nonpositive_keepalive_interval(
+    keepalive_interval: float,
+) -> None:
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+
+    with pytest.raises(PyEzvizError, match="keepalive_interval must be positive"):
+        list(stream.iter_packets(keepalive_interval=keepalive_interval))
+
+def test_vtm_stream_client_sends_keepalive_while_socket_is_quiet() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47after-idle",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        idle_once = True
+
+        def recv(self, size: int) -> bytes:
+            if not self._buffer and self.idle_once:
+                self.idle_once = False
+                clock.now = 5.0
+                self._buffer = media_packet
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=5.0,
+                monotonic=clock,
+            )
+        )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert [packet.body for packet in packets] == [b"\x47after-idle"]
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+def test_vtm_stream_client_keepalive_does_not_renew_socket_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            self.recv_calls += 1
+            if self.recv_calls > 2:
+                pytest.fail("configured timeout was renewed after keepalive")
+            clock.now = self.recv_calls * 5.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        with pytest.raises(DeviceException, match="timed out waiting for VTM"):
+            next(
+                stream.iter_packets(
+                    keepalive_interval=5.0,
+                    monotonic=clock,
+                )
+            )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert fake_socket.recv_calls == 2
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+def test_vtm_stream_client_preserves_partial_packet_across_keepalive() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47partial-packet",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class PartialIdleSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            if self.recv_calls == 3:
+                return super().recv(8)
+            if self.recv_calls == 4:
+                return super().recv(3)
+            if self.recv_calls == 5:
+                clock.now = 5.0
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = PartialIdleSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            ),
+            media_packet,
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=5.0,
+                monotonic=clock,
+            )
+        )
+
+    sent_packets = _decode_sent_packets(fake_socket.sent)
+    assert [packet.body for packet in packets] == [b"\x47partial-packet"]
+    assert sent_packets[-1].message_code == VtmMessageCode.KEEPALIVE_REQ
+
+def test_vtm_stream_client_resets_inactivity_after_bounded_partial_read() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    media_packet = encode_vtm_packet(
+        b"\x47partial-packet",
+        channel=VtmChannel.STREAM,
+        message_code=0,
+        sequence=8,
+    )
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class PartialDeadlineSocket(FakeVtmSocket):
+        recv_calls = 0
+
+        def recv(self, size: int) -> bytes:
+            self.recv_calls += 1
+            if self.recv_calls == 3:
+                return super().recv(8)
+            if self.recv_calls == 4:
+                return super().recv(3)
+            if self.recv_calls == 5:
+                clock.now = 5.0
+                raise TimeoutError
+            return super().recv(size)
+
+    fake_socket = PartialDeadlineSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            ),
+            media_packet,
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        assert list(
+            stream.iter_packets(
+                first_packet_timeout=5.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        ) == []
+
+        clock.now = 20.0
+        packets = list(
+            stream.iter_packets(
+                max_packets=1,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert [packet.body for packet in packets] == [b"\x47partial-packet"]
+
+def test_vtm_stream_client_keeps_shorter_configured_socket_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    expected_timeout = 2.0
+
+    class QuietSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=expected_timeout,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        with pytest.raises(DeviceException, match="timed out waiting for VTM"):
+            next(stream.iter_packets(keepalive_interval=5.0))
+
+    assert fake_socket.timeout == expected_timeout
+
+def test_vtm_stream_client_stops_quiet_read_at_first_packet_timeout() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            clock.now = 1.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=None,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        packets = list(
+            stream.iter_packets(
+                first_packet_timeout=1.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert packets == []
+    assert fake_socket.timeout is None
+
+def test_vtm_stream_client_start_follows_redirect_response() -> None:
+    redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
+    redirect_key = "redirect-key"
+    redirect_body = (
+        b"\x08\xb6\x29"
+        + b"\x2a"
+        + bytes([len(redirect_key)])
+        + redirect_key.encode()
+        + b"\x3a"
+        + bytes([len(redirect_url)])
+        + redirect_url.encode()
+    )
+    success_body = b"\x08\x00\x22\x07ssn-123"
+    sockets = [
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    redirect_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=7,
+                )
+            ]
+        ),
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    success_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=8,
+                )
+            ]
+        ),
+    ]
+    calls: list[tuple[str, int]] = []
+
+    def socket_factory(
+        address: tuple[str, int],
+        _timeout: float | None,
+    ) -> FakeVtmSocket:
+        calls.append(address)
+        return sockets[len(calls) - 1]
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=socket_factory,
+    ) as stream:
+        info = stream.start()
+
+    second_packets = _decode_sent_packets(sockets[1].sent)
+
+    assert calls == [
+        ("vtm.example.test", 8554),
+        ("redirect.example.test", 6000),
+    ]
+    assert sockets[0].closed
+    assert sockets[1].closed
+    assert stream.stream_url == redirect_url
+    assert info.result == 0
+    assert info.streamssn == "ssn-123"
+    assert second_packets[0].message_code == VtmMessageCode.STREAMINFO_REQ
+    assert redirect_url.encode() in second_packets[0].body
+    assert redirect_key.encode() in second_packets[0].body
+
+def test_vtm_stream_client_traces_sanitized_packet_metadata() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+    responses = [
+        encode_vtm_packet(
+            stream_info_body,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            sequence=7,
+        ),
+        encode_vtm_packet(
+            b"encrypted-control",
+            channel=VtmChannel.ENCRYPTED_MESSAGE,
+            message_code=VtmMessageCode.STREAM_VTMSTREAM_ECDH_NOTIFY,
+            sequence=8,
+        ),
+        encode_vtm_packet(
+            b"\x47abc",
+            channel=VtmChannel.STREAM,
+            message_code=0,
+            sequence=9,
+        ),
+        encode_vtm_packet(
+            build_stream_keepalive_request("ssn-123"),
+            message_code=VtmMessageCode.KEEPALIVE_REQ,
+            sequence=10,
+        ),
+    ]
+    fake_socket = FakeVtmSocket(responses)
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        events = stream.trace_packets(max_packets=4)
+
+    keepalive_sent = decode_vtm_packet(fake_socket.sent[-(len(KEEPALIVE_REQ) + 8) :])
+
+    assert stream.stream_info is not None
+    assert stream.stream_info.streamssn == "ssn-123"
+    assert events == [
+        VtmTraceEvent(
+            index=0,
+            channel=VtmChannel.MESSAGE,
+            channel_name="MESSAGE",
+            length=len(stream_info_body),
+            sequence=7,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            message_name="STREAMINFO_RSP",
+            encrypted=False,
+            transport="UNKNOWN",
+        ),
+        VtmTraceEvent(
+            index=1,
+            channel=VtmChannel.ENCRYPTED_MESSAGE,
+            channel_name="ENCRYPTED_MESSAGE",
+            length=len(b"encrypted-control"),
+            sequence=8,
+            message_code=VtmMessageCode.STREAM_VTMSTREAM_ECDH_NOTIFY,
+            message_name="STREAM_VTMSTREAM_ECDH_NOTIFY",
+            encrypted=True,
+            transport="UNKNOWN",
+        ),
+        VtmTraceEvent(
+            index=2,
+            channel=VtmChannel.STREAM,
+            channel_name="STREAM",
+            length=4,
+            sequence=9,
+            message_code=0,
+            message_name=None,
+            encrypted=False,
+            transport="MPEG_TS",
+        ),
+        VtmTraceEvent(
+            index=3,
+            channel=VtmChannel.MESSAGE,
+            channel_name="MESSAGE",
+            length=len(KEEPALIVE_REQ),
+            sequence=10,
+            message_code=VtmMessageCode.KEEPALIVE_REQ,
+            message_name="KEEPALIVE_REQ",
+            encrypted=False,
+            transport="UNKNOWN",
+        ),
+    ]
+    assert "body" not in events[0].as_dict()
+    assert keepalive_sent.message_code == VtmMessageCode.KEEPALIVE_RSP
+    assert keepalive_sent.body == KEEPALIVE_REQ
+
+def test_vtm_stream_client_trace_follows_redirect_response() -> None:
+    redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
+    redirect_key = "redirect-key"
+    redirect_body = (
+        b"\x08\xb6\x29"
+        + b"\x2a"
+        + bytes([len(redirect_key)])
+        + redirect_key.encode()
+        + b"\x3a"
+        + bytes([len(redirect_url)])
+        + redirect_url.encode()
+    )
+    success_body = b"\x08\x00\x22\x07ssn-123"
+    stream_body = b"\x00\x00\x01\xbaabc"
+    sockets = [
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    redirect_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=7,
+                )
+            ]
+        ),
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    success_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=8,
+                ),
+                encode_vtm_packet(
+                    stream_body,
+                    channel=VtmChannel.STREAM,
+                    message_code=0,
+                    sequence=9,
+                ),
+            ]
+        ),
+    ]
+    calls: list[tuple[str, int]] = []
+
+    def socket_factory(
+        address: tuple[str, int],
+        _timeout: float | None,
+    ) -> FakeVtmSocket:
+        calls.append(address)
+        return sockets[len(calls) - 1]
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=socket_factory,
+    ) as stream:
+        events = stream.trace_packets(max_packets=3)
+
+    second_packets = _decode_sent_packets(sockets[1].sent)
+
+    assert calls == [
+        ("vtm.example.test", 8554),
+        ("redirect.example.test", 6000),
+    ]
+    assert sockets[0].closed
+    assert stream.stream_url == redirect_url
+    assert stream.stream_info is not None
+    assert stream.stream_info.result == 0
+    assert second_packets[0].message_code == VtmMessageCode.STREAMINFO_REQ
+    assert redirect_url.encode() in second_packets[0].body
+    assert redirect_key.encode() in second_packets[0].body
+    assert events == [
+        VtmTraceEvent(
+            index=0,
+            channel=VtmChannel.MESSAGE,
+            channel_name="MESSAGE",
+            length=len(redirect_body),
+            sequence=7,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            message_name="STREAMINFO_RSP",
+            encrypted=False,
+            transport="UNKNOWN",
+        ),
+        VtmTraceEvent(
+            index=1,
+            channel=VtmChannel.MESSAGE,
+            channel_name="MESSAGE",
+            length=len(success_body),
+            sequence=8,
+            message_code=VtmMessageCode.STREAMINFO_RSP,
+            message_name="STREAMINFO_RSP",
+            encrypted=False,
+            transport="UNKNOWN",
+        ),
+        VtmTraceEvent(
+            index=2,
+            channel=VtmChannel.STREAM,
+            channel_name="STREAM",
+            length=len(stream_body),
+            sequence=9,
+            message_code=0,
+            message_name=None,
+            encrypted=False,
+            transport="MPEG_PS",
+        ),
+    ]
+
+def test_vtm_stream_client_trace_follows_redirect_after_keepalive() -> None:
+    redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
+    redirect_key = "redirect-key"
+    redirect_body = (
+        b"\x08\xb6\x29"
+        + b"\x2a"
+        + bytes([len(redirect_key)])
+        + redirect_key.encode()
+        + b"\x3a"
+        + bytes([len(redirect_url)])
+        + redirect_url.encode()
+    )
+    success_body = b"\x08\x00\x22\x07ssn-123"
+    sockets = [
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    build_stream_keepalive_request("ssn-123"),
+                    message_code=VtmMessageCode.KEEPALIVE_REQ,
+                    sequence=6,
+                ),
+                encode_vtm_packet(
+                    redirect_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=7,
+                ),
+            ]
+        ),
+        FakeVtmSocket(
+            [
+                encode_vtm_packet(
+                    success_body,
+                    message_code=VtmMessageCode.STREAMINFO_RSP,
+                    sequence=8,
+                ),
+            ]
+        ),
+    ]
+    calls: list[tuple[str, int]] = []
+
+    def socket_factory(
+        address: tuple[str, int],
+        _timeout: float | None,
+    ) -> FakeVtmSocket:
+        calls.append(address)
+        return sockets[len(calls) - 1]
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=socket_factory,
+    ) as stream:
+        events = stream.trace_packets(max_packets=3)
+
+    first_packets = _decode_sent_packets(sockets[0].sent)
+    second_packets = _decode_sent_packets(sockets[1].sent)
+
+    assert calls == [
+        ("vtm.example.test", 8554),
+        ("redirect.example.test", 6000),
+    ]
+    assert sockets[0].closed
+    assert stream.stream_url == redirect_url
+    assert stream.stream_info is not None
+    assert stream.stream_info.result == 0
+    assert first_packets[-1].message_code == VtmMessageCode.KEEPALIVE_RSP
+    assert second_packets[0].message_code == VtmMessageCode.STREAMINFO_REQ
+    assert redirect_url.encode() in second_packets[0].body
+    assert redirect_key.encode() in second_packets[0].body
+    assert [event.message_code for event in events] == [
+        VtmMessageCode.KEEPALIVE_REQ,
+        VtmMessageCode.STREAMINFO_RSP,
+        VtmMessageCode.STREAMINFO_RSP,
+    ]
+
+def test_vtm_trace_rejects_empty_packet_count() -> None:
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+
+    with pytest.raises(PyEzvizError, match="at least one packet"):
+        stream.trace_packets(max_packets=0)
+
+def test_vtm_stream_client_rejects_closed_socket() -> None:
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+
+    with pytest.raises(PyEzvizError, match="not connected"):
+        stream.read_packet()
+
+def test_vtm_stream_timeout_raises_device_exception() -> None:
+    class TimeoutSocket(FakeVtmSocket):
+        def recv(self, size: int) -> bytes:
+            raise TimeoutError
+
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        socket_factory=lambda *_args: TimeoutSocket([]),
+    )
+    stream.connect()
+
+    with pytest.raises(DeviceException, match="offline or unreachable"):
+        stream.read_packet()
+
+def test_get_vtdu_token_v2_uses_auth_addr_and_session_sign(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers: dict[str, str] = {}
+            self.content = b"{}"
+            self.text = "{}"
+
+        def json(self) -> dict[str, Any]:
+            return {"retcode": 0, "tokens": ["token-1"], "msg": "ok"}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"method": method, "url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert get_vtdu_token_v2(client).get("tokens") == ["token-1"]
+    assert calls[0]["url"] == "https://auth.example.test/vtdutoken2"
+    assert calls[0]["params"]["ssid"] == client.export_token()["session_id"]
+    assert calls[0]["params"]["sign"] == "sign-value"
+
+def test_get_vtdu_token_v2_recomputes_auth_after_login(monkeypatch) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers: dict[str, str] = {}
+            self.content = b"{}"
+            self.text = "{}"
+
+        def json(self) -> dict[str, Any]:
+            return {"retcode": 0, "tokens": ["token-2"], "msg": "ok"}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"method": method, "url": url, **kwargs})
+        if len(calls) == 1:
+            raise _http_error(401)
+        return FakeResponse()
+
+    def fake_login() -> dict[str, Any]:
+        object.__getattribute__(client, "_token")["session_id"] = _jwt(
+            {"s": "fresh-sign"}
+        )
+        return client.export_token()
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+    monkeypatch.setattr(client, "login", fake_login)
+
+    assert get_vtdu_token_v2(client).get("tokens") == ["token-2"]
+    assert len(calls) == 2
+    assert calls[0]["params"]["sign"] == "sign-value"
+    assert calls[1]["params"]["ssid"] == client.export_token()["session_id"]
+    assert calls[1]["params"]["sign"] == "fresh-sign"
+    assert calls[0]["retry_401"] is False
+    assert calls[1]["retry_401"] is False
+
+def test_get_vtdu_token_v2_derives_auth_addr_when_service_returns_null(
+    monkeypatch,
+) -> None:
+    client = EzvizClient(
+        token={
+            "session_id": _jwt({"s": "sign-value"}),
+            "api_url": "apiieu.ezvizlife.com",
+            "service_urls": {"authAddr": "https://null"},
+        },
+        timeout=1,
+    )
+    calls: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers: dict[str, str] = {}
+            self.content = b"{}"
+            self.text = "{}"
+
+        def json(self) -> dict[str, Any]:
+            return {"retcode": 0, "tokens": ["token-1"], "msg": "ok"}
+
+    def fake_get_service_urls() -> dict[str, Any]:
+        return {"authAddr": "https://null"}
+
+    def fake_http_request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        calls.append({"method": method, "url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr(client, "get_service_urls", fake_get_service_urls)
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+
+    assert get_vtdu_token_v2(client).get("tokens") == ["token-1"]
+    assert calls[0]["url"] == "https://euauth.ezvizlife.com/vtdutoken2"
+    assert client.export_token()["service_urls"]["authAddr"] == "https://null"
+
+def test_get_vtdu_token_v2_does_not_relogin_after_non_auth_error(monkeypatch) -> None:
+    client = _client()
+    login_calls = 0
+
+    def fake_http_request(_method: str, _url: str, **_kwargs: Any) -> None:
+        raise _http_error(500)
+
+    def fake_login() -> dict[str, Any]:
+        nonlocal login_calls
+        login_calls += 1
+        return client.export_token()
+
+    monkeypatch.setattr(client, "_http_request", fake_http_request)
+    monkeypatch.setattr(client, "login", fake_login)
+
+    with pytest.raises(HTTPError):
+        get_vtdu_token_v2(client)
+    assert login_calls == 0
+
+def test_get_vtm_info_uses_apk_discovered_endpoint() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def _request_json(self, method: str, path: str) -> dict[str, Any]:
+            calls.append((method, path))
+            return {
+                "streamServerConfig": {
+                    "externalIp": "1.2.3.4",
+                    "port": 8554,
+                    "publicKey": {"version": "2", "key": "cHVi"},
+                }
+            }
+
+    info = get_vtm_info(FakeClient(), "CAM123", channel=0)
+
+    assert calls == [("GET", "/v3/streaming/vtm/CAM123/1")]
+    assert info["externalIp"] == "1.2.3.4"
+    assert info["port"] == 8554
+
+def test_get_cloud_stream_info_builds_bootstrap(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video",
+                    "localIndex": "2",
+                    "streamBizUrl": "serial=CAM123&streamtag=abc",
+                }
+            ],
+            "VTM": {
+                "Video": {
+                    "externalIp": "1.2.3.4",
+                    "port": 8554,
+                    "publicKey": {"version": "2", "key": "cHVi"},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    info = get_cloud_stream_info(client, "CAM123")
+
+    assert info["vtdu_token"] == "token-1"
+    assert info["resource"]["resourceId"] == "Video"
+    assert info["vtm"]["externalIp"] == "1.2.3.4"
+    assert info["vtm_public_key"].version == 2
+    assert info["vtm_public_key"].key_bytes == PUBLIC_KEY_BYTES
+    assert parse_vtm_url(info["stream_url"])[3]["chn"] == "2"
+
+def test_get_cloud_stream_info_can_refresh_vtm_from_app_endpoint(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video",
+                    "localIndex": "2",
+                    "streamBizUrl": "serial=CAM123&streamtag=abc",
+                }
+            ],
+            "VTM": {"Video": {"externalIp": "1.2.3.4", "port": 8554}},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_info",
+        lambda _client, _serial, _channel: {"externalIp": "5.6.7.8", "port": 9554},
+    )
+
+    info = get_cloud_stream_info(client, "CAM123", refresh_vtm=True)
+    host, port, _path, _params = parse_vtm_url(info["stream_url"])
+
+    assert host == "5.6.7.8"
+    assert port == 9554
+
+def test_open_cloud_stream_returns_unstarted_vtm_client(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_cloud_stream_info",
+        lambda *_args, **_kwargs: {
+            "stream_url": "ysproto://vtm.example.test:8554/live?dev=CAM123"
+        },
+    )
+
+    stream = open_cloud_stream(client, "CAM123", timeout=3)
+
+    assert isinstance(stream, VtmStreamClient)
+    assert stream.stream_url == "ysproto://vtm.example.test:8554/live?dev=CAM123"
+    assert stream.timeout == 3
+    assert not stream.connected
+
+def test_get_cloud_stream_info_uses_requested_channel_resource(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video-1",
+                    "localIndex": "1",
+                    "streamBizUrl": "serial=CAM123&streamtag=first",
+                },
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video-2",
+                    "localIndex": "2",
+                    "streamBizUrl": "serial=CAM123&streamtag=second",
+                },
+            ],
+            "VTM": {
+                "Video-1": {"externalIp": "1.2.3.4", "port": 8554},
+                "Video-2": {"externalIp": "5.6.7.8", "port": 9554},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    info = get_cloud_stream_info(client, "CAM123", channel=2)
+    host, port, _path, params = parse_vtm_url(info["stream_url"])
+
+    assert info["resource"]["resourceId"] == "Video-2"
+    assert host == "5.6.7.8"
+    assert port == 9554
+    assert params["chn"] == "2"
+    assert params["streamtag"] == "second"
+
+def test_get_cloud_stream_info_rejects_missing_vtm_endpoint(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [{"deviceSerial": "CAM123", "resourceId": "Video"}],
+            "VTM": {"Video": {"port": 8554}},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    with pytest.raises(PyEzvizError, match="VTM endpoint"):
+        get_cloud_stream_info(client, "CAM123", refresh_vtm=False)
+
+def test_get_cloud_stream_info_refreshes_missing_pagelist_vtm(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [
+                {
+                    "deviceSerial": "CAM123",
+                    "resourceId": "Video",
+                    "localIndex": "1",
+                    "streamBizUrl": "serial=CAM123&streamtag=tag-1",
+                }
+            ],
+            "VTM": {},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_info",
+        lambda _client, serial, channel: {
+            "externalIp": "1.2.3.4",
+            "port": 8554,
+            "serial": serial,
+            "channel": channel,
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    info = get_cloud_stream_info(client, "CAM123", refresh_vtm=True)
+    host, port, _path, params = parse_vtm_url(info["stream_url"])
+
+    assert host == "1.2.3.4"
+    assert port == 8554
+    assert params["streamtag"] == "tag-1"
+
+def test_get_cloud_stream_info_rejects_missing_vtm_port(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [{"deviceSerial": "CAM123", "resourceId": "Video"}],
+            "VTM": {"Video": {"externalIp": "1.2.3.4"}},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    with pytest.raises(PyEzvizError, match="VTM port"):
+        get_cloud_stream_info(client, "CAM123")
+
+def test_get_cloud_stream_info_rejects_out_of_range_vtm_port(monkeypatch) -> None:
+    client = _client()
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtm_page_list",
+        lambda _client: {
+            "resourceInfos": [{"deviceSerial": "CAM123", "resourceId": "Video"}],
+            "VTM": {"Video": {"externalIp": "1.2.3.4", "port": 70000}},
+        },
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.get_vtdu_token_v2",
+        lambda _client: {"retcode": 0, "tokens": ["token-1"]},
+    )
+
+    with pytest.raises(PyEzvizError, match="VTM port"):
+        get_cloud_stream_info(client, "CAM123")

@@ -6,6 +6,7 @@ import io
 import json
 import math
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
 
@@ -2973,6 +2974,29 @@ def test_save_clip_preserves_legacy_nonpositive_capture_limits(
     assert calls[0]["duration_seconds"] == duration_seconds
 
 
+def test_save_clip_accepts_arbitrary_size_integer_packet_limit(monkeypatch) -> None:
+    """Legacy save_clip must not coerce integer bounds through float."""
+
+    client = _client()
+    huge_limit = 10**309
+    calls: list[dict[str, Any]] = []
+
+    def fake_save_local_sdk_clip(
+        serial: str,
+        output: str | Path | BinaryIO,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append({"serial": serial, "output": output, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_local_sdk_clip", fake_save_local_sdk_clip)
+
+    result = client.save_clip("CAM123", io.BytesIO(), max_packets=huge_limit)
+
+    assert result == {"ok": True}
+    assert calls[0]["max_packets"] == huge_limit
+
+
 def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ps"
@@ -3335,6 +3359,104 @@ def test_save_clip_forwards_h264_options_to_decrypted_hcnetsdk_command_port(
     assert calls[1]["h264_clean_idr_max_windows"] == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
     assert result.get("source") == "hcnetsdk-command-port"
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+@pytest.mark.parametrize(
+    "unsafe_bounds",
+    [
+        {"duration_seconds": None, "max_packets": None},
+        {"duration_seconds": 0.0, "max_packets": None},
+        {"duration_seconds": -1.0, "max_packets": None},
+        {"duration_seconds": float("nan"), "max_packets": None},
+        {"duration_seconds": float("inf"), "max_packets": None},
+        {"duration_seconds": 10**309, "max_packets": None},
+        {"duration_seconds": None, "max_packets": 0},
+        {"duration_seconds": None, "max_packets": -1},
+        {"duration_seconds": None, "max_packets": float("nan")},
+        {"duration_seconds": None, "max_packets": float("inf")},
+        {"duration_seconds": float("nan"), "max_packets": 1},
+        {"duration_seconds": 10**309, "max_packets": 1},
+    ],
+)
+def test_save_clip_rejects_unsafe_hcnetsdk_decrypt_bound_before_endpoint_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_bounds: dict[str, Any],
+) -> None:
+    client = _client()
+
+    def fail_endpoint_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid decrypt bounds must fail before endpoint lookup")
+
+    monkeypatch.setattr(client, "_hcnetsdk_command_port_endpoint", fail_endpoint_lookup)
+
+    with pytest.raises(
+        PyEzvizError,
+        match="encrypted capture requires a positive finite",
+    ):
+        client.save_clip(
+            "CAM123",
+            io.BytesIO(),
+            source="hcnetsdk-command-port",
+            host="192.0.2.10",
+            hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+            **unsafe_bounds,
+        )
+
+
+@pytest.mark.parametrize(
+    ("duration_seconds", "startup_options"),
+    [
+        (
+            sys.float_info.max,
+            {
+                "hcnetsdk_h264_trim_to_clean_idr_window": True,
+                "hcnetsdk_h264_clean_idr_preroll_seconds": sys.float_info.max,
+            },
+        ),
+        (
+            sys.float_info.max,
+            {
+                "hcnetsdk_h264_wait_for_clean_idr_window": True,
+                "hcnetsdk_h264_clean_idr_wait_seconds": sys.float_info.max,
+            },
+        ),
+        (
+            10**309,
+            {
+                "hcnetsdk_h264_trim_to_clean_idr_window": True,
+                "hcnetsdk_h264_clean_idr_preroll_seconds": 1.0,
+            },
+        ),
+    ],
+)
+def test_save_clip_rejects_overflowing_hcnetsdk_duration_before_endpoint_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    duration_seconds: float,
+    startup_options: dict[str, Any],
+) -> None:
+    """Derived startup budgets must be finite before command-port I/O begins."""
+
+    client = _client()
+
+    def fail_endpoint_lookup(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("overflowing duration must fail before endpoint lookup")
+
+    monkeypatch.setattr(client, "_hcnetsdk_command_port_endpoint", fail_endpoint_lookup)
+
+    with pytest.raises(PyEzvizError, match="duration must be finite"):
+        client.save_clip(
+            "CAM123",
+            io.BytesIO(),
+            source="hcnetsdk-command-port",
+            host="192.0.2.10",
+            hcnetsdk_command_frames=(bytes.fromhex("00000010"),),
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+            duration_seconds=duration_seconds,
+            **startup_options,
+        )
 
 
 def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(

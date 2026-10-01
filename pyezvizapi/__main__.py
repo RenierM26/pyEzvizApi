@@ -78,6 +78,7 @@ from .local_stream_transport import (
     hcnetsdk_command_port_native_lan_live_view_plan,
     open_local_sdk_stream,
 )
+from .media import has_positive_finite_capture_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     detect_rtp_video_codec,
@@ -3835,6 +3836,15 @@ def _handle_local_sdk_stream_dump(
 ) -> int:
     """Dump direct-local SDK media with caller-supplied local fields."""
 
+    if args.decrypt_video and not has_positive_finite_capture_bound(
+        max_packets=args.max_packets,
+        duration_seconds=args.duration,
+    ):
+        raise PyEzvizError(
+            "--decrypt-video requires a positive finite --duration or "
+            "--max-packets before opening a local SDK stream"
+        )
+
     if args.format is None:
         args.format = "mpegps" if args.local_sdk_ecdh else "mpegts"
 
@@ -4843,6 +4853,19 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
         _serve_stream_proxy(args, client)
         return 0
 
+    if (
+        args.stream_action == "dump"
+        and args.decrypt_video
+        and not has_positive_finite_capture_bound(
+            max_packets=args.max_packets,
+            duration_seconds=args.duration,
+        )
+    ):
+        raise PyEzvizError(
+            "--decrypt-video requires a positive finite --duration or "
+            "--max-packets to bound memory use"
+        )
+
     with open_cloud_stream(
         client,
         args.serial,
@@ -4854,10 +4877,6 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
     ) as stream:
         if args.stream_action == "dump":
             stream.start()
-            if args.decrypt_video and args.duration is None and args.max_packets is None:
-                raise PyEzvizError(
-                    "--decrypt-video requires --duration or --max-packets to bound memory use"
-                )
             collected_packets: list[Any] | None = None
             if args.decrypt_video:
                 collected_packets = _collect_stream_packets(

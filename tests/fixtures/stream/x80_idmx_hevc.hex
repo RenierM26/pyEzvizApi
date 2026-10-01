@@ -1,0 +1,8 @@
+# Synthetic, sanitized X80-shaped length-prefixed IDMX/RTP fixture.
+# No camera identifiers, keys, timestamps from a device, or captured media bytes.
+# RTP PT=96, sequence 0x1200, timestamp 90000, SSRC/sentinel 0x55667788, HEVC VPS
+11000000 80601200 00015f90 55667788 4001767073
+# RTP PT=96, sequence 0x1201, same timestamp, HEVC SPS
+11000000 80601201 00015f90 55667788 4201737073
+# RTP marker + PT=96, sequence 0x1202, same timestamp, HEVC IDR
+17000000 80e01202 00015f90 55667788 26016964722d6672616d65

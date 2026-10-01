@@ -1,0 +1,10 @@
+# Synthetic, sanitized MPEG-PS fixture. No camera identifiers, keys, or captured bytes.
+# MPEG-2 pack header
+000001ba 4400040004010001fff8
+# Bounded video PES containing H.264 SPS, PPS, and IDR Annex-B units
+000001e0 001c 800000
+000000016742001e
+0000000168ce06e2
+0000000165888421a0
+# Bounded audio PES closes the trailing video run
+000001c0 0007 800000 aacc0001

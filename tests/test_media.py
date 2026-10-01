@@ -34,6 +34,7 @@ from pyezvizapi.media import (
     MediaMuxOptions,
     MediaPacket,
     MediaPacketSource,
+    has_positive_finite_capture_bound,
 )
 from pyezvizapi.stream import (
     VtmChannel,
@@ -82,6 +83,47 @@ def test_capture_limits_require_a_bound() -> None:
     with pytest.raises(PyEzvizError, match="capture requires"):
         CaptureLimits().require_bounded("capture")
     CaptureLimits(max_packets=1).require_bounded("capture")
+
+
+def test_capture_bound_accepts_arbitrary_size_integers() -> None:
+    """Integer packet bounds remain finite without float conversion."""
+
+    huge_limit = 10**309
+
+    assert has_positive_finite_capture_bound(max_packets=huge_limit)
+    assert has_positive_finite_capture_bound(
+        max_packets=huge_limit,
+        duration_seconds=1.0,
+    )
+    assert CaptureLimits(max_packets=huge_limit).max_packets == huge_limit
+
+
+def test_capture_bound_rejects_arbitrary_size_integer_duration() -> None:
+    """Durations must fit the floating-point arithmetic used by deadlines."""
+
+    huge_duration = 10**309
+
+    assert not has_positive_finite_capture_bound(
+        duration_seconds=huge_duration,
+    )
+    with pytest.raises(PyEzvizError, match="finite"):
+        CaptureLimits(duration_seconds=huge_duration)
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_packets": 1, "duration_seconds": float("nan")},
+        {"max_packets": 1, "duration_seconds": 10**309},
+        {"max_packets": 1, "max_frames": 0},
+    ],
+)
+def test_capture_bound_rejects_each_unsafe_supplied_limit(
+    limits: dict[str, Any],
+) -> None:
+    """One valid limit cannot mask another supplied unsafe limit."""
+
+    assert not has_positive_finite_capture_bound(**limits)
 
 
 @pytest.mark.parametrize("duration", [float("inf"), float("nan")])

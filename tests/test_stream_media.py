@@ -1756,7 +1756,7 @@ def test_copy_cloud_stream_to_mpegts_skips_unknown_prelude_before_rtp(
 
         def iter_packets(self, *, max_packets: int | None = None) -> Any:
             assert max_packets == 2
-            for sequence, body in enumerate((b"vtm-prelude", rtp_body), start=1):
+            for sequence, body in enumerate((b"\x47control", rtp_body), start=1):
                 yield VtmPacket(
                     channel=VtmChannel.STREAM,
                     length=len(body),
@@ -1935,7 +1935,7 @@ def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
 def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    mpegts_body = b"\x47" + bytes(187)
+    mpegts_body = b"\x47\x00\x00\x10" + bytes(184)
 
     class FakeCloudStream:
         def __enter__(self) -> FakeCloudStream:

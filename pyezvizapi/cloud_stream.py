@@ -644,7 +644,7 @@ def copy_cloud_stream_packets_to_mpegts(
     if transport == StreamTransport.MPEG_TS:
         if mpegps_transform is not None or rtp_transform is not None:
             raise PyEzvizError("Video decryption does not support MPEG-TS cloud payloads")
-        _write_clear_cloud_packets(
+        _write_cloud_mpegts_packets(
             packets,
             output,
             allow_encrypted=allow_encrypted,
@@ -694,6 +694,10 @@ def _peek_cloud_transport(
         if not packet.body:
             continue
         transport = detect_transport(packet.body)
+        if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(
+            packet.body
+        ):
+            continue
         if transport != StreamTransport.UNKNOWN:
             return transport, chain((packet,), packets)
     return StreamTransport.UNKNOWN, iter(prefix)
@@ -729,6 +733,35 @@ def _write_clear_cloud_packets(
         tail = transform.flush()
         if tail:
             output.write(tail)
+    output.flush()
+
+
+def _is_valid_mpegts_body(body: bytes) -> bool:
+    """Return whether a VTM body contains complete 188-byte MPEG-TS packets."""
+
+    packet_size = 188
+    return (
+        len(body) >= packet_size
+        and len(body) % packet_size == 0
+        and all(
+            body[offset] == 0x47 and body[offset + 3] & 0x30
+            for offset in range(0, len(body), packet_size)
+        )
+    )
+
+
+def _write_cloud_mpegts_packets(
+    packets: Iterable[Any],
+    output: BinaryIO,
+    *,
+    allow_encrypted: bool,
+) -> None:
+    """Write only completely framed MPEG-TS VTM packet bodies."""
+
+    for packet in packets:
+        _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
+        if _is_valid_mpegts_body(packet.body):
+            output.write(packet.body)
     output.flush()
 
 

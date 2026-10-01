@@ -35,6 +35,10 @@ from pyezvizapi.cloud_stream import (
 from pyezvizapi.exceptions import HTTPError, PyEzvizError
 
 BODY = b"abc"
+CLEAR_ANNEXB = b"clear-annexb"
+EMPTY_BYTES = b""
+H264_SPS_ANNEXB = b"\x00\x00\x00\x01\x67h264-sps"
+HEVC_FU_ANNEXB = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 
 cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
 
@@ -59,6 +63,25 @@ STREAM_KEY_BYTES = b"stream-key"
 VTM_STREAM_URL = b"ysproto://vtm.example.test:8554/live"
 
 VTDU_TOKEN_BYTES = b"token-1"
+
+
+def _rtp_packet(
+    payload: bytes,
+    *,
+    sequence: int = 1,
+    payload_type: int = 96,
+    marker: bool = False,
+) -> bytes:
+    """Build one minimal RTP v2 packet for cloud transport tests."""
+
+    return (
+        b"\x80"
+        + bytes([payload_type | (0x80 if marker else 0)])
+        + sequence.to_bytes(2, "big")
+        + b"\x00\x01\x5f\x90"
+        + b"\x55\x66\x77\x88"
+        + payload
+    )
 
 def _encrypt_hikvision_fixture_blocks(key: bytes, payload: bytes) -> bytes:
     """Encrypt independent fixture blocks like the legacy media prefix transform."""
@@ -1484,6 +1507,239 @@ def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
     assert open_calls == ["/usr/bin/ffmpeg"]
     assert output.getvalue() == expected_payload
 
+
+def test_copy_cloud_stream_to_mpegts_depacketizes_clear_rtp_video(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_body = _rtp_packet(b"\x67h264-sps", marker=True)
+    open_calls: list[tuple[str, str]] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(rtp_body),
+                sequence=1,
+                message_code=0,
+                body=rtp_body,
+            )
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        open_calls.append((ffmpeg_path, codec))
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+        raising=False,
+    )
+
+    copy_cloud_stream_to_mpegts(
+        client,
+        "CAM123",
+        output,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        max_packets=1,
+    )
+
+    assert open_calls == [("/usr/bin/ffmpeg", "h264")]
+    assert output.getvalue() == H264_SPS_ANNEXB
+
+
+def test_copy_cloud_stream_to_mpegts_accepts_ezviz_headerless_hevc_fu(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_bodies = (
+        _rtp_packet(b"\x62\x01\x93start", sequence=1),
+        _rtp_packet(b"\x62\x01\x26middle", sequence=2),
+        _rtp_packet(b"\x62\x01\x66end", sequence=3, marker=True),
+    )
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 3
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+
+    copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=3)
+
+    assert output.getvalue() == HEVC_FU_ANNEXB
+
+
+def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_body = _rtp_packet(b"\x62\x01\x93incomplete", sequence=1)
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(rtp_body),
+                sequence=1,
+                message_code=0,
+                body=rtp_body,
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="did not contain a complete video NAL unit",
+    ):
+        copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=1)
+
+    assert output.getvalue() == EMPTY_BYTES
+
+
+def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    mpegts_body = b"\x47" + bytes(187)
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(mpegts_body),
+                sequence=1,
+                message_code=0,
+                body=mpegts_body,
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_mpegts_remux_process",
+        lambda *_args, **_kwargs: pytest.fail("MPEG-TS input must not be remuxed"),
+    )
+
+    copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=1)
+
+    assert output.getvalue() == mpegts_body
+
+
+def test_copy_cloud_stream_to_mpegps_rejects_rtp_transport(monkeypatch) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_body = _rtp_packet(b"\x67h264-sps", marker=True)
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(rtp_body),
+                sequence=1,
+                message_code=0,
+                body=rtp_body,
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    with pytest.raises(PyEzvizError, match="RTP/IDMX, not MPEG-PS"):
+        copy_cloud_stream_to_mpegps(client, "CAM123", output, max_packets=1)
+
+    assert output.getvalue() == EMPTY_BYTES
+
 def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
@@ -1586,6 +1842,133 @@ def test_copy_cloud_stream_to_mpegts_decrypts_and_remuxes(monkeypatch) -> None:
         "remux_input": b"clear",
     }
     assert output.getvalue() == expected_payload
+
+
+def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_body = _rtp_packet(b"\x67encrypted-h264", marker=True)
+    decrypt_calls: list[tuple[bytes, str | bytes, int | None]] = []
+    open_calls: list[tuple[str, str]] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(rtp_body),
+                sequence=1,
+                message_code=0,
+                body=rtp_body,
+            )
+
+    def fake_decrypt(
+        data: bytes,
+        key: str | bytes,
+        *,
+        nalu_header_size: int | None,
+    ) -> bytes:
+        decrypt_calls.append((data, key, nalu_header_size))
+        return data[:9] + CLEAR_ANNEXB
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        open_calls.append((ffmpeg_path, codec))
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        fake_decrypt,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_to_mpegts(
+        client,
+        "CAM123",
+        output,
+        ffmpeg_path="ffmpeg-custom",
+        max_packets=1,
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    expected_annexb = b"\x00\x00\x00\x01\x67encrypted-h264"
+    assert decrypt_calls == [
+        (
+            b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + expected_annexb,
+            "MEDIAKEY",
+            1,
+        )
+    ]
+    assert open_calls == [("ffmpeg-custom", "h264")]
+    assert output.getvalue() == CLEAR_ANNEXB
+
+
+def test_copy_cloud_stream_to_mpegps_rejects_decrypted_rtp_transport(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    rtp_body = _rtp_packet(b"\x67encrypted-h264", marker=True)
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            yield VtmPacket(
+                channel=VtmChannel.STREAM,
+                length=len(rtp_body),
+                sequence=1,
+                message_code=0,
+                body=rtp_body,
+            )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    with pytest.raises(PyEzvizError, match="RTP/IDMX, not MPEG-PS"):
+        copy_cloud_stream_to_mpegps(
+            client,
+            "CAM123",
+            output,
+            max_packets=1,
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output.getvalue() == EMPTY_BYTES
 
 def test_copy_cloud_stream_rejects_encrypted_vtm_packets(monkeypatch) -> None:
     class FakeCloudStream:

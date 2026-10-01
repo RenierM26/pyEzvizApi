@@ -358,19 +358,42 @@ def rtp_packets_to_annexb(
     *,
     codec: RtpVideoCodec,
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    allow_ezviz_headerless_hevc_fu: bool = False,
 ) -> bytes:
     """Route RTP video packets and return continuity-checked Annex-B bytes."""
 
-    depacketizer = RtpVideoDepacketizer(codec)
-    output = bytearray()
+    return b"".join(
+        ANNEX_B_START_CODE + nal
+        for nal in rtp_packets_to_nal_units(
+            packets,
+            codec=codec,
+            video_payload_types=video_payload_types,
+            allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+        )
+    )
+
+
+def rtp_packets_to_nal_units(
+    packets: Iterable[RtpPacket],
+    *,
+    codec: RtpVideoCodec,
+    video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    allow_ezviz_headerless_hevc_fu: bool = False,
+) -> tuple[bytes, ...]:
+    """Route RTP video packets and return complete continuity-checked NAL units."""
+
+    depacketizer = RtpVideoDepacketizer(
+        codec,
+        allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+    )
+    output: list[bytes] = []
     for packet in packets:
         if packet.payload_type not in video_payload_types:
             continue
         for nal in depacketizer.push(packet):
             if nal:
-                output.extend(ANNEX_B_START_CODE)
-                output.extend(nal)
-    return bytes(output)
+                output.append(nal)
+    return tuple(output)
 
 
 def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:

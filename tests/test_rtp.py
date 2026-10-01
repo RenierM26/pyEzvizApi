@@ -15,6 +15,7 @@ from pyezvizapi.rtp import (
 )
 
 H264_WRAPPED_NAL = b"\x00\x00\x00\x01\x65hello-world"
+HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 
 
 def _rtp(
@@ -107,6 +108,20 @@ def test_marker_only_sequence_collision_invalidates_hevc_fragment() -> None:
     assert [nal for packet in packets for nal in depacketizer.push(packet)] == []
     assert depacketizer.stats.sequence_conflicts == 1
     assert depacketizer.stats.discarded_fragments >= 2
+
+
+def test_rtp_packets_to_annexb_can_accept_ezviz_headerless_hevc_fu() -> None:
+    packets = [
+        parse_rtp_packet(_rtp(b"\x62\x01\x93start", sequence=1)),
+        parse_rtp_packet(_rtp(b"\x62\x01\x26middle", sequence=2)),
+        parse_rtp_packet(_rtp(b"\x62\x01\x66end", sequence=3, marker=True)),
+    ]
+
+    assert rtp_packets_to_annexb(
+        packets,
+        codec="hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+    ) == HEVC_EZVIZ_WRAPPED_NAL
 
 
 def test_h264_fu_type_change_invalidates_active_fragment() -> None:

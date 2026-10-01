@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from itertools import chain
 import json
 import subprocess
 import time
@@ -17,8 +18,23 @@ from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError
 from .media import has_positive_finite_capture_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
-from .stream_media import decrypt_hikvision_ps_video
-from .stream_transport import SocketFactory, VtmStreamClient, build_vtm_url
+from .rtp import (
+    ANNEX_B_START_CODE,
+    RtpPacket,
+    RtpVideoCodec,
+    RtpVideoDepacketizer,
+    detect_rtp_video_codec,
+    parse_rtp_packet,
+    rtp_media_kind,
+    rtp_packets_to_nal_units,
+)
+from .stream_media import decrypt_hikvision_ps_video, detect_transport
+from .stream_transport import (
+    SocketFactory,
+    StreamTransport,
+    VtmStreamClient,
+    build_vtm_url,
+)
 
 JsonDict = dict[str, Any]
 
@@ -262,12 +278,22 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             timeout=timeout,
         ) as stream:
             stream.start()
-            payload = _collect_cloud_stream_payloads(
+            packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
             )
+        transport = _detect_cloud_packets_transport(packets)
+        if transport == StreamTransport.RTP:
+            raise PyEzvizError(
+                "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
+            )
+        if transport == StreamTransport.MPEG_TS:
+            raise PyEzvizError(
+                "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
+            )
+        payload = b"".join(packet.body for packet in packets)
         output.write(
             decrypt_hikvision_ps_video(
                 payload,
@@ -288,7 +314,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         timeout=timeout,
     ) as stream:
         stream.start()
-        _write_cloud_stream_payloads(
+        _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
             max_packets=max_packets,
@@ -339,12 +365,38 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             timeout=timeout,
         ) as stream:
             stream.start()
-            payload = _collect_cloud_stream_payloads(
+            packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
             )
+        transport = _detect_cloud_packets_transport(packets)
+        if transport == StreamTransport.RTP:
+            codec, nal_units = _cloud_rtp_packet_nal_units(packets)
+            header_size = nalu_header_size
+            if header_size is None:
+                header_size = 2 if codec == "hevc" else 1
+            decrypted_annexb = b"".join(
+                _decrypt_cloud_rtp_nal_unit(
+                    nal_unit,
+                    selected_key,
+                    nalu_header_size=header_size,
+                )
+                for nal_unit in nal_units
+            )
+            _remux_cloud_elementary_bytes_to_mpegts(
+                decrypted_annexb,
+                output,
+                ffmpeg_path=ffmpeg_path,
+                codec=codec,
+            )
+            return
+        if transport == StreamTransport.MPEG_TS:
+            raise PyEzvizError(
+                "decrypt_video does not support MPEG-TS cloud payloads"
+            )
+        payload = b"".join(packet.body for packet in packets)
         _remux_cloud_mpegps_bytes_to_mpegts(
             decrypt_hikvision_ps_video(
                 payload,
@@ -366,7 +418,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         timeout=timeout,
     ) as stream:
         stream.start()
-        _copy_cloud_stream_payloads_to_mpegts(
+        copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
             ffmpeg_path=ffmpeg_path,
@@ -419,6 +471,34 @@ def _write_cloud_stream_payloads(
     output.flush()
 
 
+def _copy_cloud_stream_payloads_to_mpegps(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Copy clear MPEG-PS packets while rejecting known incompatible transports."""
+
+    packets = _iter_bounded_cloud_packets(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+    transport, packets = _peek_cloud_transport(packets)
+    if transport == StreamTransport.RTP:
+        raise PyEzvizError(
+            "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
+        )
+    if transport == StreamTransport.MPEG_TS:
+        raise PyEzvizError(
+            "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
+        )
+    _write_clear_cloud_packets(packets, output)
+
+
 def _collect_cloud_stream_payloads(
     stream: Any,
     *,
@@ -441,6 +521,64 @@ def _collect_cloud_stream_payloads(
             )
         chunks.append(packet.body)
     return b"".join(chunks)
+
+
+def _collect_cloud_stream_packets(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> list[Any]:
+    """Collect clear VTM packets while retaining RTP packet boundaries."""
+
+    packets: list[Any] = []
+    for packet in _iter_bounded_cloud_packets(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    ):
+        _require_clear_cloud_packet(packet)
+        packets.append(packet)
+    return packets
+
+
+def _detect_cloud_packets_transport(packets: Iterable[Any]) -> StreamTransport:
+    for packet in packets:
+        transport = detect_transport(packet.body)
+        if transport != StreamTransport.UNKNOWN:
+            return transport
+    return StreamTransport.UNKNOWN
+
+
+def _cloud_rtp_packet_nal_units(
+    packets: Iterable[Any],
+) -> tuple[RtpVideoCodec, tuple[bytes, ...]]:
+    parsed = [parse_rtp_packet(packet.body) for packet in packets if packet.body]
+    codec = detect_rtp_video_codec(parsed)
+    return codec, rtp_packets_to_nal_units(
+        parsed,
+        codec=codec,
+        allow_ezviz_headerless_hevc_fu=True,
+    )
+
+
+def _decrypt_cloud_rtp_nal_unit(
+    nal_unit: bytes,
+    key: str | bytes,
+    *,
+    nalu_header_size: int,
+) -> bytes:
+    """Decrypt one RTP NAL while retaining its clear codec header."""
+
+    annexb = ANNEX_B_START_CODE + nal_unit
+    video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + annexb
+    return decrypt_hikvision_ps_video(
+        video_pes,
+        key,
+        nalu_header_size=nalu_header_size,
+    )[9:]
 
 
 def _iter_bounded_cloud_packets(
@@ -469,7 +607,7 @@ def _iter_bounded_cloud_packets(
     return _fallback()
 
 
-def _copy_cloud_stream_payloads_to_mpegts(
+def copy_cloud_stream_packets_to_mpegts(
     stream: Any,
     output: BinaryIO,
     *,
@@ -477,19 +615,41 @@ def _copy_cloud_stream_payloads_to_mpegts(
     max_packets: int | None,
     duration_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    mpegps_transform: Callable[[bytes], bytes] | None = None,
+    rtp_transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
 ) -> None:
-    """Pipe clear VTM MPEG-PS payloads through FFmpeg and write MPEG-TS."""
+    """Route clear VTM payloads by transport and write MPEG-TS."""
+
+    packets = _iter_bounded_cloud_packets(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+    transport, packets = _peek_cloud_transport(packets)
+    if transport == StreamTransport.MPEG_TS:
+        if mpegps_transform is not None or rtp_transform is not None:
+            raise PyEzvizError("Video decryption does not support MPEG-TS cloud payloads")
+        _write_clear_cloud_packets(packets, output)
+        return
+    if transport == StreamTransport.RTP:
+        _copy_cloud_rtp_packets_to_mpegts(
+            packets,
+            output,
+            ffmpeg_path=ffmpeg_path,
+            cancel_input=getattr(stream, "close", None),
+            transform=rtp_transform,
+        )
+        return
 
     process = _open_cloud_mpegts_remux_process(ffmpeg_path)
 
     def _write_input(stdin: BinaryIO) -> None:
-        _write_cloud_stream_payloads(
-            stream,
+        _write_clear_cloud_packets(
+            packets,
             stdin,
-            max_packets=max_packets,
-            duration_seconds=duration_seconds,
-            monotonic=monotonic,
             flush_each=True,
+            transform=mpegps_transform,
         )
 
     copy_remuxed_output(
@@ -497,6 +657,109 @@ def _copy_cloud_stream_payloads_to_mpegts(
         output,
         write_input=_write_input,
         cancel_input=getattr(stream, "close", None),
+    )
+
+
+def _peek_cloud_transport(
+    packets: Iterator[Any],
+) -> tuple[StreamTransport, Iterator[Any]]:
+    """Peek through empty/unknown packets without losing stream boundaries."""
+
+    prefix: list[Any] = []
+    for packet in packets:
+        _require_clear_cloud_packet(packet)
+        prefix.append(packet)
+        if not packet.body:
+            continue
+        transport = detect_transport(packet.body)
+        return transport, chain(prefix, packets)
+    return StreamTransport.UNKNOWN, iter(prefix)
+
+
+def _require_clear_cloud_packet(packet: Any) -> None:
+    if packet.encrypted:
+        raise PyEzvizError(
+            "Received encrypted VTM stream packet; media decryption is not implemented"
+        )
+
+
+def _write_clear_cloud_packets(
+    packets: Iterable[Any],
+    output: BinaryIO,
+    *,
+    flush_each: bool = False,
+    transform: Callable[[bytes], bytes] | None = None,
+) -> None:
+    for packet in packets:
+        _require_clear_cloud_packet(packet)
+        payload = transform(packet.body) if transform else packet.body
+        if payload:
+            output.write(payload)
+        if flush_each:
+            output.flush()
+    if transform is not None and hasattr(transform, "flush"):
+        tail = transform.flush()
+        if tail:
+            output.write(tail)
+    output.flush()
+
+
+def _copy_cloud_rtp_packets_to_mpegts(
+    packets: Iterator[Any],
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    cancel_input: Callable[[], None] | None,
+    transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
+) -> None:
+    """Depacketize a clear RTP video stream and remux Annex-B video to MPEG-TS."""
+
+    prefix: list[RtpPacket] = []
+    codec: RtpVideoCodec | None = None
+    for packet in packets:
+        _require_clear_cloud_packet(packet)
+        parsed = parse_rtp_packet(packet.body)
+        prefix.append(parsed)
+        try:
+            codec = detect_rtp_video_codec(prefix)
+        except PyEzvizError:
+            continue
+        break
+    if codec is None:
+        raise PyEzvizError("Could not detect RTP video codec in cloud stream")
+
+    def _remaining_rtp_packets() -> Iterator[RtpPacket]:
+        for packet in packets:
+            _require_clear_cloud_packet(packet)
+            yield parse_rtp_packet(packet.body)
+
+    process = _open_cloud_elementary_mpegts_remux_process(ffmpeg_path, codec)
+
+    def _write_input(stdin: BinaryIO) -> None:
+        depacketizer = RtpVideoDepacketizer(
+            codec,
+            allow_ezviz_headerless_hevc_fu=True,
+        )
+        nal_count = 0
+        for packet in chain(prefix, _remaining_rtp_packets()):
+            if rtp_media_kind(packet) != "video":
+                continue
+            for nal_unit in depacketizer.push(packet):
+                if nal_unit:
+                    annexb = ANNEX_B_START_CODE + nal_unit
+                    stdin.write(transform(annexb, codec) if transform else annexb)
+                    stdin.flush()
+                    nal_count += 1
+        if nal_count == 0:
+            raise PyEzvizError(
+                "RTP cloud stream did not contain a complete video NAL unit"
+            )
+
+    copy_remuxed_output(
+        process,
+        output,
+        write_input=_write_input,
+        cancel_input=cancel_input,
     )
 
 
@@ -512,10 +775,36 @@ def _remux_cloud_mpegps_bytes_to_mpegts(
     remux_bytes(process, data, output)
 
 
+def _remux_cloud_elementary_bytes_to_mpegts(
+    data: bytes,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    codec: RtpVideoCodec,
+) -> None:
+    """Remux in-memory Annex-B H.264 or HEVC bytes to MPEG-TS."""
+
+    process = _open_cloud_elementary_mpegts_remux_process(ffmpeg_path, codec)
+    remux_bytes(process, data, output)
+
+
 def _open_cloud_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
     """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS."""
 
     return open_mpegts_remux_process(ffmpeg_path, popen=subprocess.Popen)
+
+
+def _open_cloud_elementary_mpegts_remux_process(
+    ffmpeg_path: str,
+    codec: RtpVideoCodec,
+) -> subprocess.Popen[bytes]:
+    """Open FFmpeg for a depacketized H.264 or HEVC elementary stream."""
+
+    return open_mpegts_remux_process(
+        ffmpeg_path,
+        input_format=codec,
+        popen=subprocess.Popen,
+    )
 
 
 def parse_vtm_server_public_key(vtm: JsonDict) -> VtmServerPublicKey | None:

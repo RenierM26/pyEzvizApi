@@ -29,6 +29,7 @@ from pyezvizapi.stream import VtmChannel, VtmPacket
 
 MPEGTS_PAYLOAD = b"mpegts"
 CLOUD_VIDEO_PAYLOAD = b"cloud-video-bytes"
+CLEAR_ANNEXB_PAYLOAD = b"clear-annexb"
 NATIVE_ENCRYPTED_PAYLOAD = b"encrypted"
 NATIVE_TRANSFORMED_PAYLOAD = b"decrypted"
 LOCAL_SDK_TEST_PAYLOAD = b"mpeg-ps"
@@ -1956,6 +1957,7 @@ def test_save_clip_cloud_decrypt_keeps_sms_code_key_lookup(
     request = fake_client.instances[0].save_clip_request
     assert request["source"] == "cloud"
     assert request["decrypt_video"] is True
+    assert request["nalu_header_size"] is None
     assert request["smscode"] == "654321"
     assert "media_key" not in request
 
@@ -2419,19 +2421,21 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
 
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt_annexb(
+    def fake_decrypt_rtp_units(
         client: Any,
         serial: str,
-        data: bytes,
+        units: tuple[bytes, ...],
         *,
-        codec: str,
+        detected_codec: str,
+        decrypt_codec: str,
     ) -> bytes:
         decrypt_calls.append(
             {
                 "client": client,
                 "serial": serial,
-                "data": data,
-                "codec": codec,
+                "units": units,
+                "detected_codec": detected_codec,
+                "decrypt_codec": decrypt_codec,
             }
         )
         return b"decrypted-hevc"
@@ -2448,7 +2452,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
         remux_calls.append({"data": data, "ffmpeg_path": ffmpeg_path, "codec": codec})
         output.write(MPEGTS_PAYLOAD)
 
-    monkeypatch.setattr(cli_module, "_decrypt_annexb_video_bytes", fake_decrypt_annexb)
+    monkeypatch.setattr(cli_module, "_decrypt_rtp_annexb_units", fake_decrypt_rtp_units)
     monkeypatch.setattr(
         cli_module,
         "_remux_elementary_video_bytes_to_mpegts",
@@ -2482,8 +2486,9 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
         {
             "client": client,
             "serial": "CAM123",
-            "data": b"\x00\x00\x00\x01\x40\x01vps",
-            "codec": "hevc",
+            "units": (b"\x00\x00\x00\x01\x40\x01vps",),
+            "detected_codec": "hevc",
+            "decrypt_codec": "hevc",
         }
     ]
     assert remux_calls == [
@@ -2532,14 +2537,21 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
     )
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt_annexb(
+    def fake_decrypt_rtp_units(
         _client: Any,
         _serial: str,
-        data: bytes,
+        units: tuple[bytes, ...],
         *,
-        codec: str,
+        detected_codec: str,
+        decrypt_codec: str,
     ) -> bytes:
-        decrypt_calls.append({"data": data, "codec": codec})
+        decrypt_calls.append(
+            {
+                "units": units,
+                "detected_codec": detected_codec,
+                "decrypt_codec": decrypt_codec,
+            }
+        )
         return b"decrypted-h264"
 
     remux_calls: list[dict[str, Any]] = []
@@ -2554,7 +2566,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
         remux_calls.append({"data": data, "ffmpeg_path": ffmpeg_path, "codec": codec})
         output.write(MPEGTS_PAYLOAD)
 
-    monkeypatch.setattr(cli_module, "_decrypt_annexb_video_bytes", fake_decrypt_annexb)
+    monkeypatch.setattr(cli_module, "_decrypt_rtp_annexb_units", fake_decrypt_rtp_units)
     monkeypatch.setattr(
         cli_module,
         "_remux_elementary_video_bytes_to_mpegts",
@@ -2584,7 +2596,11 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
     )
 
     assert decrypt_calls == [
-        {"data": b"\x00\x00\x00\x01\x41h264", "codec": "h264"}
+        {
+            "units": (b"\x00\x00\x00\x01\x41h264",),
+            "detected_codec": "h264",
+            "decrypt_codec": "h264",
+        }
     ]
     assert remux_calls == [
         {"data": b"decrypted-h264", "ffmpeg_path": "ffmpeg", "codec": "h264"}
@@ -2632,14 +2648,21 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
     )
     decrypt_calls: list[dict[str, Any]] = []
 
-    def fake_decrypt_annexb(
+    def fake_decrypt_rtp_units(
         _client: Any,
         _serial: str,
-        data: bytes,
+        units: tuple[bytes, ...],
         *,
-        codec: str,
+        detected_codec: str,
+        decrypt_codec: str,
     ) -> bytes:
-        decrypt_calls.append({"data": data, "codec": codec})
+        decrypt_calls.append(
+            {
+                "units": units,
+                "detected_codec": detected_codec,
+                "decrypt_codec": decrypt_codec,
+            }
+        )
         return b"decrypted-h264"
 
     remux_calls: list[dict[str, Any]] = []
@@ -2654,7 +2677,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
         remux_calls.append({"data": data, "ffmpeg_path": ffmpeg_path, "codec": codec})
         output.write(MPEGTS_PAYLOAD)
 
-    monkeypatch.setattr(cli_module, "_decrypt_annexb_video_bytes", fake_decrypt_annexb)
+    monkeypatch.setattr(cli_module, "_decrypt_rtp_annexb_units", fake_decrypt_rtp_units)
     monkeypatch.setattr(
         cli_module,
         "_remux_elementary_video_bytes_to_mpegts",
@@ -2686,7 +2709,11 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
     )
 
     assert decrypt_calls == [
-        {"data": b"\x00\x00\x00\x01\x41h264", "codec": "encrypted-header"}
+        {
+            "units": (b"\x00\x00\x00\x01\x41h264",),
+            "detected_codec": "h264",
+            "decrypt_codec": "encrypted-header",
+        }
     ]
     assert remux_calls == [
         {"data": b"decrypted-h264", "ffmpeg_path": "ffmpeg", "codec": "h264"}
@@ -4912,8 +4939,10 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
     monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
     monkeypatch.setattr(
         cli_module,
-        "_open_mpegts_remux_process",
-        lambda _path: (_ for _ in ()).throw(PyEzvizError("Could not launch FFmpeg")),
+        "copy_cloud_stream_packets_to_mpegts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PyEzvizError("Could not launch FFmpeg")
+        ),
     )
 
     handler = FakeHandler()
@@ -4983,8 +5012,9 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
 
     copy_calls: list[bytes] = []
 
-    def fake_copy_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
-        transform_payload = kwargs["transform_payload"]
+    def fake_copy_cloud_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
+        transform_payload = kwargs["mpegps_transform"]
+        assert kwargs["rtp_transform"] is not None
         first_video_pes = b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-1"
         second_video_pes = b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-2"
         audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"
@@ -4995,9 +5025,12 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
         copy_calls.extend([first, second, third, tail])
 
     monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
-    monkeypatch.setattr(cli_module, "_open_mpegts_remux_process", lambda _path: object())
     monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
-    monkeypatch.setattr(cli_module, "_copy_stream_payloads_to_mpegts", fake_copy_stream_payloads_to_mpegts)
+    monkeypatch.setattr(
+        cli_module,
+        "copy_cloud_stream_packets_to_mpegts",
+        fake_copy_cloud_stream_payloads_to_mpegts,
+    )
 
     handler = FakeHandler()
     cli_module._handle_stream_proxy_get(cast(Any, handler), config, cast(Any, FakeClient()))  # noqa: SLF001
@@ -5056,6 +5089,44 @@ def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> 
         {"data": pack_chunk, "key": "camera-key", "nalu_header_size": 2},
         {"data": video_chunk, "key": "camera-key", "nalu_header_size": 0},
         {"data": next_chunk, "key": "camera-key", "nalu_header_size": 0},
+    ]
+
+
+def test_stream_rtp_decryptor_uses_detected_codec_and_shared_key(monkeypatch) -> None:
+    class FakeClient:
+        key_calls = 0
+
+        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+            assert serial == "CAM123"
+            assert max_retries == 1
+            self.key_calls += 1
+            return "camera-key"
+
+    decrypt_calls: list[dict[str, Any]] = []
+
+    def fake_decrypt(data: bytes, key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append(
+            {"data": data, "key": key, "nalu_header_size": nalu_header_size}
+        )
+        return data[:9] + CLEAR_ANNEXB_PAYLOAD
+
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+    client = FakeClient()
+
+    _mpegps_decryptor, rtp_decryptor = cli_module._stream_payload_decryptors(  # noqa: SLF001
+        cast(Any, client),
+        "CAM123",
+        codec="auto",
+    )
+
+    assert rtp_decryptor(b"annexb", "h264") == CLEAR_ANNEXB_PAYLOAD
+    assert client.key_calls == 1
+    assert decrypt_calls == [
+        {
+            "data": b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00annexb",
+            "key": "camera-key",
+            "nalu_header_size": 1,
+        }
     ]
 
 

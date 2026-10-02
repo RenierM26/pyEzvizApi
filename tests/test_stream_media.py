@@ -34,13 +34,18 @@ from pyezvizapi.cloud_stream import (
     copy_cloud_stream_to_mpegps,
     copy_cloud_stream_to_mpegts,
 )
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
+from pyezvizapi.exceptions import (
+    HTTPError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
 
 BODY = b"abc"
 CLEAR_ANNEXB = b"clear-annexb"
 EMPTY_BYTES = b""
 H264_SPS_ANNEXB = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_FU_ANNEXB = b"\x00\x00\x00\x01\x26\x01startmiddleend"
+HEVC_DESCRIPTOR_ANNEXB = b"\x00\x00\x00\x01\x26\x01hevc"
 AV_MPEGTS_PAYLOAD = b"av-mpegts"
 AAC_FRAME = b"aac-frame"
 
@@ -1582,6 +1587,131 @@ def test_copy_cloud_stream_to_mpegts_depacketizes_clear_rtp_video(monkeypatch) -
 
     assert open_calls == [("/usr/bin/ffmpeg", "h264")]
     assert output.getvalue() == H264_SPS_ANNEXB
+
+
+def test_copy_cloud_stream_to_mpegts_uses_idmx_codec_and_payload_descriptor(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    descriptor = b"\x45\x0a\x24\x61" + (b"\xff" * 8)
+    rtp_bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=97,
+            marker=True,
+        ),
+    )
+    open_calls: list[tuple[str, str]] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        open_calls.append((ffmpeg_path, codec))
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=2)
+
+    assert open_calls == [("ffmpeg", "hevc")]
+    assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
+
+
+def test_copy_cloud_stream_to_mpegts_reports_descriptor_codec(monkeypatch) -> None:
+    client = _client()
+    descriptor = b"\x45\x0a\xb1\x1a" + (b"\xff" * 8)
+    rtp_bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(
+            b"\xff\xd8\xff\xe0jpeg",
+            sequence=2,
+            payload_type=26,
+            marker=True,
+        ),
+    )
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    with pytest.raises(
+        UnsupportedRtpVideoCodecError,
+        match="advertised by IDMX metadata: mjpeg",
+    ):
+        copy_cloud_stream_to_mpegts(
+            client,
+            "CAM123",
+            io.BytesIO(),
+            max_packets=2,
+        )
 
 
 def test_copy_cloud_stream_to_mpegts_defers_codec_fallback_past_h264_aud(

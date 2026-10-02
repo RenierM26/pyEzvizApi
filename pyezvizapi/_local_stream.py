@@ -69,6 +69,7 @@ from .rtp import (
     idmx_aac_descriptor,
     parse_rtp_packet,
     rtp_media_kind,
+    rtp_packet_is_idmx_aac,
     rtp_payload,
 )
 from .stream_media import (
@@ -5356,7 +5357,7 @@ def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is not None and rtp_media_kind(packet) == "audio":
+        if packet is not None and rtp_packet_is_idmx_aac(packet):
             return True
     return False
 

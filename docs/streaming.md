@@ -63,6 +63,35 @@ is not emitted.
   IDMX AAC stays video-only because packet cadence is not sufficient evidence
   for a reliable sample-rate guess.
 
+### RTP/IDMX codec detection
+
+Codec routing follows the metadata-first behavior of the official EZVIZ
+Android app. Native IDMX descriptor `0x45` advertises a stream type and RTP
+payload type; `pyezvizapi` uses that route before inspecting media bytes.
+Descriptor `0x43` supplies audio parameters such as sample rate and channels,
+but does not identify the codec by itself. When `0x45` is absent, the shared
+RTP layer recognizes the official app's static payload families, rejects known
+MPEG-2/MPEG-4 start codes by name, and only uses NAL-shape probing for the
+remaining H.264/HEVC candidates on shared payload type 96.
+
+The codec inventory was verified against EZVIZ Android 7.6.1.0824, signed by
+`CN=hikvision` (certificate SHA-256
+`45e984f72060dc783490c3905c7efae87397e79fcb033c4e0c54c7acc061e2c5`).
+Its native RTP/IDMX tables cover:
+
+- video: H.264, HEVC/H.265, MPEG-2, MPEG-4, MJPEG, SVAC, and a private `VID4`
+  family;
+- audio: MPEG audio, AAC, AAC-LD, PCM, G.711 A-law/μ-law, G.722, G.723,
+  G.726, G.729, and Opus;
+- static RTP payload families: video 26/32/96/99, audio
+  0/4/8/11/14/18/98/100/102/103/104/115, and metadata 112.
+
+Current media export remains intentionally narrower: H.264 and HEVC video,
+plus descriptor-backed AAC-LC audio. Other advertised video codecs are now
+reported by name instead of being guessed as HEVC. Other audio codecs are
+classified correctly but remain video-only until a tested depacketizer and
+FFmpeg input contract are added for each format.
+
 ## Public clip configuration
 
 Prefer `EzvizClient.save_clip_with_options()` for new integrations:

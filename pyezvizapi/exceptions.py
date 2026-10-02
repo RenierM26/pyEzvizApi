@@ -5,6 +5,10 @@ class PyEzvizError(Exception):
     """Base exception for all Ezviz API related errors."""
 
 
+class UnsupportedRtpVideoCodecError(PyEzvizError):
+    """Raised when IDMX metadata identifies an unsupported RTP video codec."""
+
+
 class InvalidURL(PyEzvizError):
     """Raised when a request fails due to an invalid URL or proxy settings."""
 

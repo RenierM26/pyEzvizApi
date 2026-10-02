@@ -6,11 +6,15 @@ import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.rtp import (
+    KNOWN_AUDIO_PAYLOAD_TYPES,
+    KNOWN_VIDEO_PAYLOAD_TYPES,
     RtpAacStream,
+    RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
+    idmx_rtp_stream_descriptors,
     parse_rtp_packet,
     rtp_media_kind,
     rtp_packets_to_annexb,
@@ -18,6 +22,7 @@ from pyezvizapi.rtp import (
 
 H264_WRAPPED_NAL = b"\x00\x00\x00\x01\x65hello-world"
 HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
+HEVC_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x26\x01hevc"
 
 
 def _rtp(
@@ -126,6 +131,83 @@ def test_decrypt_idmx_aac_packets_requires_native_descriptor() -> None:
     assert decrypt_idmx_aac_packets([packet], b"0123456789abcdef") is None
 
 
+def test_decrypt_idmx_aac_packets_uses_descriptor_payload_route() -> None:
+    key = b"0123456789abcdef"
+    sample_rate = 16_000
+    stream_descriptor = b"\x45\x0a\x0f\x69" + (b"\xff" * 8)
+    audio_descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            sample_rate >> 14,
+            (sample_rate >> 6) & 0xFF,
+            ((sample_rate & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    packets = [
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=1,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=stream_descriptor + audio_descriptor,
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(
+                b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted,
+                sequence=2,
+                timestamp=0,
+                payload_type=105,
+                extension_profile=0x4000,
+                extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
+            )
+        ),
+    ]
+
+    audio = decrypt_idmx_aac_packets(packets, key)
+
+    assert audio is not None
+    assert audio.adts == b"\xff\xf1`@\x03\x7f\xfc" + plain
+
+
+def test_decrypt_idmx_aac_packet_uses_native_extension_after_descriptor_probe() -> None:
+    key = b"0123456789abcdef"
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    packet = parse_rtp_packet(
+        _rtp(
+            b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted,
+            sequence=2,
+            timestamp=0,
+            payload_type=105,
+            extension_profile=0x4000,
+            extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
+        )
+    )
+
+    audio = decrypt_idmx_aac_packets(
+        (packet,),
+        key,
+        audio_metadata=(16_000, 1),
+        audio_payload_types=frozenset({105}),
+        require_contiguous=False,
+    )
+
+    assert audio is not None
+    assert audio.adts == b"\xff\xf1`@\x03\x7f\xfc" + plain
+
+
 def test_parse_and_route_mixed_ezviz_rtp_packets() -> None:
     packets = [
         parse_rtp_packet(_rtp(b"video", sequence=1, payload_type=96)),
@@ -138,6 +220,133 @@ def test_parse_and_route_mixed_ezviz_rtp_packets() -> None:
         "audio",
         "metadata",
     ]
+
+
+def test_official_app_payload_type_families_are_classified() -> None:
+    assert frozenset({26, 32, 96, 99}) == KNOWN_VIDEO_PAYLOAD_TYPES
+    assert frozenset(
+        {0, 4, 8, 11, 14, 18, 98, 100, 102, 103, 104, 115}
+    ) == KNOWN_AUDIO_PAYLOAD_TYPES
+
+
+def test_idmx_stream_descriptor_routes_non_default_hevc_payload_type() -> None:
+    descriptor = b"\x45\x0a\x24\x61" + (b"\xff" * 8)
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            ssrc=3,
+            extension_profile=1,
+            extension_data=descriptor,
+        )
+    )
+    video = parse_rtp_packet(
+        _rtp(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=97,
+            ssrc=2,
+        )
+    )
+
+    streams = idmx_rtp_stream_descriptors([metadata, video])
+
+    assert streams == (
+        RtpStreamDescriptor(
+            stream_type=0x24,
+            payload_type=97,
+            codec="hevc",
+            media_kind="video",
+        ),
+    )
+    assert rtp_media_kind(video, stream_descriptors=streams) == "video"
+    assert detect_rtp_video_codec([metadata, video]) == "hevc"
+    assert rtp_packets_to_annexb(
+        [metadata, video],
+        codec="hevc",
+    ) == HEVC_DESCRIPTOR_ROUTED_NAL
+
+
+def test_codec_detection_reports_metadata_declared_unsupported_video_codec() -> None:
+    descriptor = b"\x45\x0a\xb1\x1a" + (b"\xff" * 8)
+    packet = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        )
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="Unsupported RTP video codec advertised by IDMX metadata: mjpeg",
+    ):
+        detect_rtp_video_codec([packet])
+
+
+def test_codec_detection_rejects_conflicting_video_descriptors() -> None:
+    descriptors = (
+        b"\x45\x02\x1b\x60"
+        b"\x45\x02\x24\x61"
+    )
+    packet = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptors,
+        )
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match=(
+            "Conflicting RTP video codecs advertised by IDMX metadata: h264, hevc"
+        ),
+    ):
+        detect_rtp_video_codec([packet])
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "payload", "codec"),
+    [
+        (26, b"\xff\xd8\xff\xe0jpeg", "mjpeg"),
+        (32, b"\x00\x00\x01\xb3mpeg2", "mpeg2video"),
+        (99, b"\x00\x00\x01svac", "svac"),
+    ],
+)
+def test_codec_detection_rejects_official_unsupported_static_video_payloads(
+    payload_type: int,
+    payload: bytes,
+    codec: str,
+) -> None:
+    packet = parse_rtp_packet(
+        _rtp(payload, sequence=1, payload_type=payload_type)
+    )
+
+    with pytest.raises(PyEzvizError, match=f"Unsupported RTP video codec: {codec}"):
+        detect_rtp_video_codec([packet])
+
+
+@pytest.mark.parametrize(
+    ("payload", "codec"),
+    [
+        (b"\x00\x00\x01\xb6mpeg4-vop", "mpeg4video"),
+        (b"\x00\x00\x01\xb3mpeg2-sequence", "mpeg2video"),
+    ],
+)
+def test_codec_detection_rejects_start_coded_video_on_shared_payload_type(
+    payload: bytes,
+    codec: str,
+) -> None:
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, payload_type=96))
+
+    with pytest.raises(PyEzvizError, match=f"Unsupported RTP video codec: {codec}"):
+        detect_rtp_video_codec([packet])
 
 
 def test_h264_depacketizer_rejects_loss_reorder_and_duplicates() -> None:

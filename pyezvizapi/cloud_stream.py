@@ -21,11 +21,12 @@ from urllib.parse import urlparse
 
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
-from .exceptions import HTTPError, PyEzvizError
+from .exceptions import HTTPError, PyEzvizError, UnsupportedRtpVideoCodecError
 from .media import has_positive_finite_capture_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     ANNEX_B_START_CODE,
+    DEFAULT_AAC_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
     RtpVideoCodec,
@@ -33,6 +34,7 @@ from .rtp import (
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     idmx_aac_descriptor,
+    idmx_rtp_stream_descriptors,
     parse_rtp_packet,
     rtp_media_kind,
     rtp_packets_to_nal_units,
@@ -976,16 +978,27 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         if parsed is None:
             continue
         prefix.append(parsed)
-        kind = rtp_media_kind(parsed)
+        stream_descriptors = idmx_rtp_stream_descriptors(prefix)
+        aac_payload_types = DEFAULT_AAC_PAYLOAD_TYPES | frozenset(
+            descriptor.payload_type
+            for descriptor in stream_descriptors
+            if descriptor.codec == "aac"
+        )
+        kind = rtp_media_kind(
+            parsed,
+            stream_descriptors=stream_descriptors,
+        )
         if audio_metadata is None:
             audio_metadata = idmx_aac_descriptor((parsed,))
         if kind == "video":
             video_probe.append(parsed)
             try:
-                codec = detect_rtp_video_codec(video_probe, allow_fallback=False)
+                codec = detect_rtp_video_codec(prefix, allow_fallback=False)
+            except UnsupportedRtpVideoCodecError:
+                raise
             except PyEzvizError:
                 if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
-                    codec = detect_rtp_video_codec(video_probe)
+                    codec = detect_rtp_video_codec(prefix)
         if (
             audio_key is not None
             and audio_metadata is not None
@@ -997,11 +1010,16 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     (candidate,),
                     audio_key,
                     audio_metadata=audio_metadata,
+                    audio_payload_types=aac_payload_types,
                     require_contiguous=False,
                 )
                 is not None
                 for candidate in prefix
-                if rtp_media_kind(candidate) == "audio"
+                if rtp_media_kind(
+                    candidate,
+                    stream_descriptors=stream_descriptors,
+                )
+                == "audio"
             )
         if codec is None:
             continue
@@ -1011,7 +1029,9 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             break
     if codec is None:
         try:
-            codec = detect_rtp_video_codec(video_probe)
+            codec = detect_rtp_video_codec(prefix)
+        except UnsupportedRtpVideoCodecError:
+            raise
         except PyEzvizError as err:
             raise PyEzvizError(
                 "Could not detect RTP video codec in cloud stream"
@@ -1026,6 +1046,12 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             yield parsed
 
     selected_audio_key = audio_key if audio_decodable else None
+    stream_descriptors = idmx_rtp_stream_descriptors(prefix)
+    aac_payload_types = DEFAULT_AAC_PAYLOAD_TYPES | frozenset(
+        descriptor.payload_type
+        for descriptor in stream_descriptors
+        if descriptor.codec == "aac"
+    )
     audio_input = _CloudRtpAudioInput() if selected_audio_key is not None else None
     if audio_input is not None:
         audio_input.start()
@@ -1073,7 +1099,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
 
         try:
             for packet in chain(prefix, _remaining_rtp_packets()):
-                kind = rtp_media_kind(packet)
+                kind = rtp_media_kind(
+                    packet,
+                    stream_descriptors=stream_descriptors,
+                )
                 if kind == "audio" and audio_enabled and audio_input is not None:
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
@@ -1094,6 +1123,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         (packet,),
                         selected_audio_key,
                         audio_metadata=audio_metadata,
+                        audio_payload_types=aac_payload_types,
                         require_contiguous=False,
                     )
                     if audio is None:

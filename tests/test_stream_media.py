@@ -3415,22 +3415,15 @@ def test_copy_cloud_stream_packets_discards_buffered_video_before_codec_correcti
     monkeypatch,
 ) -> None:
     bodies = (
+        _rtp_packet(b"\x67stale-h264", sequence=1, payload_type=97, marker=True),
         _rtp_packet(
             b"metadata",
-            sequence=1,
-            payload_type=112,
-            extension_profile=1,
-            extension_data=b"\x45\x02\x1b\x61",
-        ),
-        _rtp_packet(b"\x67stale-h264", sequence=2, payload_type=97, marker=True),
-        _rtp_packet(
-            b"metadata",
-            sequence=3,
+            sequence=2,
             payload_type=112,
             extension_profile=1,
             extension_data=b"\x45\x02\x24\x61",
         ),
-        _rtp_packet(b"\x26\x01hevc", sequence=4, payload_type=97, marker=True),
+        _rtp_packet(b"\x26\x01hevc", sequence=3, payload_type=97, marker=True),
     )
 
     class FakeStream:

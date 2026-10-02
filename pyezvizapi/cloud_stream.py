@@ -992,10 +992,12 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         for descriptor in stream_descriptors:
             previous = previous_descriptors.get(descriptor.payload_type)
             if (
-                previous is not None
-                and previous.media_kind == "video"
-                and descriptor.media_kind == "video"
-                and previous.codec != descriptor.codec
+                descriptor.media_kind == "video"
+                and (
+                    previous is None
+                    or previous.media_kind != "video"
+                    or previous.codec != descriptor.codec
+                )
             ):
                 prefix = [
                     candidate

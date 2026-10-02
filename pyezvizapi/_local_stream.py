@@ -73,6 +73,7 @@ from .rtp import (
     parse_rtp_packet,
     rtp_packet_is_idmx_aac,
     rtp_payload,
+    rtp_payload_video_codec,
 )
 from .stream_media import (
     ANNEX_B_LONG_START_CODE,
@@ -6291,7 +6292,10 @@ def _idmx_local_packets_to_hevc_annexb(
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is None or packet.payload_type not in routed_payload_types:
             continue
-        if not _looks_like_idmx_hevc_direct_frame(packet.payload):
+        if (
+            rtp_payload_video_codec(packet.payload) == "h264"
+            or not _looks_like_idmx_hevc_direct_frame(packet.payload)
+        ):
             continue
         for nal in depacketizer.push(packet):
             _append_hevc_nal(output, nal)
@@ -6323,6 +6327,7 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             if (
                 rtp_packet is None
                 or rtp_packet.payload_type not in routed_payload_types
+                or rtp_payload_video_codec(rtp_packet.payload) == "h264"
                 or not _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
             ):
                 continue

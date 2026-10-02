@@ -977,11 +977,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
     audio_decodable = False
+    consumed_packets = 0
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         parsed = _parse_cloud_rtp_packet(packet.body)
         if parsed is None:
             continue
+        consumed_packets += 1
         previous_descriptors = {
             descriptor.payload_type: descriptor
             for descriptor in route_profile.descriptors
@@ -991,13 +993,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         stream_descriptors = route_profile.descriptors
         for descriptor in stream_descriptors:
             previous = previous_descriptors.get(descriptor.payload_type)
+            route_changed = previous is None or (
+                previous.codec != descriptor.codec
+                or previous.media_kind != descriptor.media_kind
+            )
             if (
                 descriptor.media_kind == "video"
-                and (
-                    previous is None
-                    or previous.media_kind != "video"
-                    or previous.codec != descriptor.codec
-                )
+                and route_changed
             ):
                 prefix = [
                     candidate
@@ -1010,6 +1012,17 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         and len(candidate.payload) >= 2
                         and (candidate.payload[0] >> 1) & 0x3F <= 40
                         and candidate.payload[1] & 0x07 != 0
+                    )
+                ]
+            elif descriptor.media_kind == "audio" and route_changed:
+                prefix = [
+                    candidate
+                    for candidate in prefix
+                    if candidate.payload_type != descriptor.payload_type
+                    or (
+                        descriptor.codec == "aac"
+                        and candidate.extension_profile == 0x4000
+                        and candidate.payload.startswith(b"\x00\x10")
                     )
                 ]
         video_route_is_authoritative = any(
@@ -1041,7 +1054,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             codec = None
             if (
                 video_route_is_authoritative
-                or len(prefix) >= _RTP_CODEC_PROBE_MAX_PACKETS
+                or consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS
             ):
                 raise
         except PyEzvizError:
@@ -1073,7 +1086,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         if codec is None:
             continue
         if not video_probe:
-            if len(prefix) >= _RTP_CODEC_PROBE_MAX_PACKETS:
+            if consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
                 raise PyEzvizError(
                     "RTP cloud stream did not include media on its video route"
                 )
@@ -1085,7 +1098,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             continue
         if audio_key is None or audio_decodable:
             break
-        if len(prefix) >= _RTP_AUDIO_PROBE_MAX_PACKETS:
+        if consumed_packets >= _RTP_AUDIO_PROBE_MAX_PACKETS:
             break
     if codec is None:
         try:

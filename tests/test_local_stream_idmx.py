@@ -2846,6 +2846,49 @@ def test_copy_local_stream_to_mpegts_flattens_command_port_idmx_aggregates(
         + last_fu[2:]
     )
 
+
+def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x40\x01vps\x00\x00\x00\x01\x26\x01slice"
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+
+    def nested(packet: bytes) -> bytes:
+        return len(packet).to_bytes(4, "little") + packet
+
+    aggregate = (
+        outer_header
+        + b"\x00\x10aggregate-sidecar"
+        + nested(
+            _rtp_packet(
+                b"metadata",
+                payload_type=112,
+                extension_data=b"\x45\x02\x24\x61",
+                ssrc=b"\x55\x66\x77\x88",
+            )
+        )
+        + nested(
+            _rtp_packet(
+                b"\x40\x01vps",
+                sequence=2,
+                payload_type=97,
+                ssrc=b"\x55\x66\x77\x88",
+            )
+        )
+        + nested(
+            _rtp_packet(
+                b"\x26\x01slice",
+                sequence=3,
+                payload_type=97,
+                ssrc=b"\x55\x66\x77\x88",
+            )
+        )
+    )
+    packet = len(aggregate).to_bytes(4, "little") + aggregate
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec([packet])
+
+    assert codec == "hevc"
+    assert annexb == expected_annexb
+
 def test_copy_local_stream_to_mpegts_splits_offset_zero_idmx_aggregates(
     tmp_path,
 ) -> None:

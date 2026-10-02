@@ -34,7 +34,6 @@ from .rtp import (
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
-    idmx_aac_descriptor,
     idmx_rtp_stream_descriptors,
     parse_rtp_packet,
     rtp_codec_payload_types,
@@ -998,8 +997,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             parsed,
             stream_descriptors=stream_descriptors,
         )
-        if audio_metadata is None:
-            audio_metadata = idmx_aac_descriptor((parsed,))
+        audio_metadata = route_profile.audio_metadata
         video_probe = [
             candidate
             for candidate in prefix

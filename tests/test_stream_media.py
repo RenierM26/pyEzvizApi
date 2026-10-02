@@ -2994,6 +2994,88 @@ def test_copy_cloud_stream_packets_revalidates_buffered_video_probe(
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
 
 
+def test_copy_cloud_stream_packets_refreshes_corrected_audio_metadata(
+    monkeypatch,
+) -> None:
+    def audio_descriptor(sample_rate: int) -> bytes:
+        return bytes(
+            (
+                0x43,
+                10,
+                0,
+                1,
+                2,
+                sample_rate >> 14,
+                (sample_rate >> 6) & 0xFF,
+                ((sample_rate & 0x3F) << 2) | 3,
+                0,
+                0,
+                3,
+                0xFF,
+            )
+        )
+
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=(
+                b"\x45\x02\x1b\x61\x45\x02\x0f\x69" + audio_descriptor(8_000)
+            ),
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=audio_descriptor(16_000),
+        ),
+        _rtp_packet(b"audio", sequence=3, payload_type=105),
+        _rtp_packet(b"\x67h264-sps", sequence=4, payload_type=97, marker=True),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    metadata_calls: list[tuple[int, int] | None] = []
+
+    def fake_decrypt(*_args: Any, **kwargs: Any) -> None:
+        metadata_calls.append(kwargs["audio_metadata"])
+
+    monkeypatch.setattr(cloud_stream_module, "decrypt_idmx_aac_packets", fake_decrypt)
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+        rtp_audio_key=b"0123456789abcdef",
+    )
+
+    assert metadata_calls
+    assert set(metadata_calls) == {(16_000, 1)}
+    assert output.getvalue() == H264_SPS_ANNEXB
+
+
 def test_copy_cloud_stream_packets_replays_buffered_video_before_correction(
     monkeypatch,
 ) -> None:

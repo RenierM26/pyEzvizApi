@@ -5823,7 +5823,7 @@ def _iter_idmx_local_frame_or_nested(frame: bytes) -> Iterator[bytes]:
         yield frame
         return
     nested_frames = tuple(_iter_idmx_local_frames(body))
-    if not any(_idmx_local_frame_contains_media(nested) for nested in nested_frames):
+    if not _idmx_local_frames_contain_routed_media(nested_frames):
         yield frame
         return
     yield from nested_frames
@@ -5861,10 +5861,33 @@ def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes) -> bool:
             or sequence != ((previous_sequence + 1) & 0xFFFF)
         ):
             return False
-        if _idmx_local_frame_contains_media(frame):
-            return True
         previous_sequence = sequence
-    return False
+    return _idmx_local_frames_contain_routed_media(frames)
+
+
+def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...]) -> bool:
+    """Return whether nested frames contain video under their final route profile."""
+
+    parsed: list[tuple[RtpPacket, bytes]] = []
+    profile = RtpRouteProfile()
+    for frame in frames:
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is None:
+            continue
+        parsed.append((packet, _idmx_local_frame_media_body(frame, header_size)))
+        profile.absorb(packet)
+    return any(
+        profile.media_kind(packet) == "video"
+        and (
+            _looks_like_idmx_hevc_direct_frame(body)
+            or _looks_like_idmx_h264_fu_a_frame(body)
+            or _looks_like_idmx_h264_clear_nal(body)
+        )
+        for packet, body in parsed
+    ) or any(_idmx_local_frame_contains_media(frame) for frame in frames)
 
 
 def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:

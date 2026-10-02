@@ -1006,6 +1006,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     or rtp_payload_video_codec(candidate.payload) == descriptor.codec
                     or (
                         descriptor.codec == "hevc"
+                        and rtp_payload_video_codec(candidate.payload) is None
                         and len(candidate.payload) >= 2
                         and (candidate.payload[0] >> 1) & 0x3F <= 40
                         and candidate.payload[1] & 0x07 != 0

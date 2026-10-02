@@ -3446,7 +3446,7 @@ def test_copy_cloud_stream_packets_discards_buffered_video_before_codec_correcti
     monkeypatch,
 ) -> None:
     bodies = (
-        _rtp_packet(b"\x67stale-h264", sequence=1, payload_type=97, marker=True),
+        _rtp_packet(b"\x41\xe1stale-h264", sequence=1, payload_type=97, marker=True),
         _rtp_packet(
             b"metadata",
             sequence=2,

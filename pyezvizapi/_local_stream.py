@@ -69,6 +69,7 @@ from .rtp import (
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
+    idmx_rtp_stream_descriptors,
     parse_rtp_packet,
     rtp_packet_is_idmx_aac,
     rtp_payload,
@@ -5862,14 +5863,22 @@ def _iter_idmx_local_frame_or_nested(
         yield frame
         return
     body = frame[header_size:]
-    if not body.startswith(b"\x00\x10") or body.count(IDMX_LOCAL_FRAME_SENTINEL) <= 1:
+    if not body.startswith(b"\x00\x10") or not body.count(IDMX_LOCAL_FRAME_SENTINEL):
         yield frame
         return
     nested_frames = tuple(_iter_idmx_local_frames(body))
-    if not _idmx_local_frames_contain_routed_media(
+    contains_media = _idmx_local_frames_contain_routed_media(
         nested_frames,
         video_payload_types=video_payload_types,
-    ):
+    )
+    contains_descriptors = any(
+        idmx_rtp_stream_descriptors((packet,))
+        for nested in nested_frames
+        if (nested_header_size := _idmx_local_frame_header_size(nested)) is not None
+        if (packet := _idmx_local_frame_rtp_packet(nested, nested_header_size))
+        is not None
+    )
+    if not contains_media and not contains_descriptors:
         yield frame
         return
     yield from nested_frames

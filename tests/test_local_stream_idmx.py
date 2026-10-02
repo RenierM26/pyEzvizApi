@@ -2969,8 +2969,18 @@ def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
         extension_data=b"\x45\x02\x24\x61",
         ssrc=b"\x55\x66\x77\x88",
     )
+    descriptor_aggregate = (
+        outer_header
+        + b"\x00\x10metadata-sidecar"
+        + nested(descriptor)
+    )
+    descriptor_packet = (
+        len(descriptor_aggregate).to_bytes(4, "little") + descriptor_aggregate
+    )
 
-    annexb, codec = _idmx_local_packets_to_annexb_with_codec([packet, descriptor])
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(
+        [descriptor_packet, packet]
+    )
 
     assert codec == "hevc"
     assert annexb == expected_annexb

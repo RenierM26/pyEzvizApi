@@ -372,6 +372,79 @@ def test_encrypted_local_idmx_rejects_stale_h264_before_hevc_route(
     assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
 
 
+def test_encrypted_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambiguous_h264_sei = b"\x06\x05stale-h264-sei"
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            ambiguous_h264_sei,
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            direct_irap,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    decrypted_hevc: list[bytes] = []
+
+    def decrypt_hevc(nal: bytes, _key: bytes) -> bytes:
+        decrypted_hevc.append(nal)
+        return nal
+
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        decrypt_hevc,
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+    span_annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert decrypted_hevc == [direct_irap, direct_irap]
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+    assert span_annexb == annexb
+    assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
+
+
+def test_encrypted_local_idmx_rejects_unsupported_authoritative_video_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [
+        _rtp_packet(
+            b"\x65looks-like-h264",
+            payload_type=97,
+            extension_data=b"\x45\x02\xb1\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        lambda *_args, **_kwargs: pytest.fail("unsupported route reached H.264"),
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="Unsupported encrypted EZVIZ local video codec: mjpeg",
+    ):
+        _decrypt_idmx_local_packets_to_annexb(
+            packets,
+            IDMX_MEDIA_KEY,
+            nalu_header_size=0,
+        )
+
+
 def test_encrypted_local_idmx_rejects_mixed_authoritative_video_codecs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

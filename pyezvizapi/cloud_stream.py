@@ -1192,6 +1192,17 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 if not buffered:
                     route_profile.absorb(packet)
                 kind = route_profile.media_kind(packet)
+                video_descriptors_are_authoritative = any(
+                    descriptor.media_kind == "video"
+                    for descriptor in route_profile.descriptors
+                )
+                current_video_payload_types = (
+                    route_profile.codec_payload_types(codec)
+                    if video_descriptors_are_authoritative
+                    else frozenset(
+                        candidate.payload_type for candidate in video_probe
+                    )
+                )
                 current_aac_payload_types = rtp_codec_payload_types(
                     route_profile.descriptors,
                     "aac",
@@ -1239,7 +1250,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         packet.timestamp + 1024 * audio.frame_count
                     ) & 0xFFFFFFFF
                     continue
-                if kind != "video":
+                if (
+                    kind != "video"
+                    or packet.payload_type not in current_video_payload_types
+                ):
                     continue
                 route_profile.mark_media(packet, absorb=False)
                 for nal_unit in depacketizer.push(packet):

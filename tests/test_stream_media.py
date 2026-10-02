@@ -8,6 +8,7 @@ import io
 import json
 import socket
 import subprocess
+from types import SimpleNamespace
 from typing import Any, BinaryIO
 
 from Crypto.Cipher import AES
@@ -2755,6 +2756,92 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     assert audio_inputs[0].finish_calls == [True]
     assert len(audio_inputs[0].chunks) == 1
     assert audio_inputs[0].chunks[0].endswith(plain_audio)
+
+
+def test_copy_cloud_stream_packets_accepts_late_aac_fallback_confirmation(
+    monkeypatch,
+) -> None:
+    audio_profile = bytes((0x43, 10, 0, 1, 2, 0, 250, 3, 0, 0, 3, 0xFF))
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x60" + audio_profile,
+        ),
+        _rtp_packet(b"aac", sequence=2, payload_type=104),
+        _rtp_packet(b"\x67h264-sps", sequence=3, marker=True),
+        _rtp_packet(
+            b"metadata",
+            sequence=4,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x0f\x68",
+        ),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    class FakeAudioInput:
+        url = "tcp://127.0.0.1:43210"
+
+        def start(self) -> None:
+            return None
+
+        def write(self, _data: bytes) -> None:
+            return None
+
+        def close_input(self) -> None:
+            return None
+
+        def cancel(self) -> None:
+            return None
+
+        def finish(self, *, raise_errors: bool) -> None:
+            return None
+
+    def fake_decrypt(candidates: Any, *_args: Any, **_kwargs: Any) -> Any:
+        candidate = next(iter(candidates))
+        if candidate.payload_type != 104:
+            return None
+        return SimpleNamespace(
+            adts=b"adts",
+            sample_rate=16_000,
+            channels=1,
+            frame_count=1,
+        )
+
+    monkeypatch.setattr(cloud_stream_module, "_CloudRtpAudioInput", FakeAudioInput)
+    monkeypatch.setattr(cloud_stream_module, "decrypt_idmx_aac_packets", fake_decrypt)
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+        rtp_audio_key=b"0123456789abcdef",
+    )
+
+    assert output.getvalue() == H264_SPS_ANNEXB
 
 
 @pytest.mark.parametrize("reassigned_payload_type", [32, 96])

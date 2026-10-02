@@ -167,7 +167,7 @@ class RtpRouteProfile:
 
     def __init__(self) -> None:
         self._descriptors: dict[int, RtpStreamDescriptor] = {}
-        self._selected_video_fallbacks: dict[int, RtpVideoCodec] = {}
+        self._selected_fallbacks: dict[int, tuple[RtpCodec, RtpMediaKind]] = {}
         self._observed_ssrcs: dict[int, set[int]] = {}
         self._audio_metadata: tuple[int, int] | None = None
         self._media_started = False
@@ -198,16 +198,12 @@ class RtpRouteProfile:
             self._audio_metadata = metadata
         for descriptor in idmx_rtp_stream_descriptors((packet,)):
             current = self._descriptors.get(descriptor.payload_type)
-            selected_fallback = self._selected_video_fallbacks.get(
-                descriptor.payload_type
-            )
+            selected_fallback = self._selected_fallbacks.get(descriptor.payload_type)
             if self._media_started and (
                 (
                     current is None
-                    and (
-                        selected_fallback != descriptor.codec
-                        or descriptor.media_kind != "video"
-                    )
+                    and selected_fallback
+                    != (descriptor.codec, descriptor.media_kind)
                 )
                 or (
                     current is not None
@@ -234,16 +230,27 @@ class RtpRouteProfile:
         ownership or codec once packets have reached the consumer.
         """
 
+        self._select_fallback(payload_type, codec, "video")
+
+    def select_audio_fallback(self, payload_type: int, codec: RtpCodec) -> None:
+        """Record a decrypted descriptor-free audio route before dispatch."""
+
+        self._select_fallback(payload_type, codec, "audio")
+
+    def _select_fallback(
+        self,
+        payload_type: int,
+        codec: RtpCodec,
+        media_kind: RtpMediaKind,
+    ) -> None:
         current = self._descriptors.get(payload_type)
         if self._media_started:
-            raise PyEzvizError("Cannot select RTP video fallback after media began")
+            raise PyEzvizError("Cannot select RTP fallback after media began")
         if current is not None:
-            if current.codec != codec or current.media_kind != "video":
-                raise PyEzvizError(
-                    "Selected RTP video fallback conflicts with its descriptor"
-                )
+            if current.codec != codec or current.media_kind != media_kind:
+                raise PyEzvizError("Selected RTP fallback conflicts with its descriptor")
             return
-        self._selected_video_fallbacks[payload_type] = codec
+        self._selected_fallbacks[payload_type] = (codec, media_kind)
 
     def media_kind(self, packet: RtpPacket) -> RtpMediaKind:
         """Classify a packet using current authoritative ownership."""

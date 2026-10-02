@@ -301,6 +301,14 @@ def test_clear_local_idmx_rejects_nonvideo_epoch_before_h264_route() -> None:
     ]
 
     assert _idmx_local_packets_to_h264_annexb(packets) == expected_annexb
+    span_annexb, spans = _idmx_h264_annexb_packet_spans(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=1,
+        stream_is_clear=True,
+    )
+    assert span_annexb == expected_annexb
+    assert spans == [(0, len(expected_annexb), 2, 2, 5, 0, 0)]
 
 
 def test_clear_local_idmx_rejects_nonvideo_epoch_before_hevc_route() -> None:

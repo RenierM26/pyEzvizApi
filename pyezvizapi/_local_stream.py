@@ -4610,7 +4610,11 @@ def _idmx_h264_annexb_packet_spans(  # noqa: PLR0912, PLR0915
             ):
                 continue
             body = _idmx_local_frame_media_body(frame, frame_header_size)
-            if rtp_packet.payload_type in route_epoch_profile.codec_payload_types("hevc"):
+            if not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                rtp_packet,
+                "h264",
+            ):
                 continue
             if _looks_like_idmx_h264_fu_a_frame(body):
                 is_start = bool(body[1] & 0x80)

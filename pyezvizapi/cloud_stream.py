@@ -1107,7 +1107,12 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     packet,
                     stream_descriptors=stream_descriptors,
                 )
-                if kind == "audio" and audio_enabled and audio_input is not None:
+                if (
+                    kind == "audio"
+                    and packet.payload_type in aac_payload_types
+                    and audio_enabled
+                    and audio_input is not None
+                ):
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:

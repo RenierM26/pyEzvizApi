@@ -2536,7 +2536,7 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
 ) -> None:
     media_key = b"0123456789abcdef"
     sample_rate = 16_000
-    descriptor = bytes(
+    audio_descriptor = bytes(
         (
             0x43,
             10,
@@ -2551,6 +2551,11 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             3,
             0xFF,
         )
+    )
+    descriptor = (
+        b"\x45\x02\x90\x68"
+        b"\x45\x02\x0f\x69"
+        + audio_descriptor
     )
     plain_audio = b"0123456789abcdef" + b"tail"
     encrypted_audio = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain_audio[16:]
@@ -2584,12 +2589,13 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             extension_data=descriptor,
         ),
         _rtp_packet(b"\x67h264-sps", sequence=2, marker=True),
+        _rtp_packet(b"g711-alaw", sequence=3, payload_type=104),
         rtp_with_extension(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")
             + encrypted_audio,
-            sequence=3,
-            payload_type=104,
+            sequence=4,
+            payload_type=105,
             extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
         ),

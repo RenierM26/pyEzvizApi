@@ -1045,6 +1045,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         if codec is None:
             continue
         if not video_probe:
+            if len(prefix) >= _RTP_CODEC_PROBE_MAX_PACKETS:
+                raise PyEzvizError(
+                    "RTP cloud stream did not include media on its video route"
+                )
             continue
         if (
             not video_route_is_authoritative

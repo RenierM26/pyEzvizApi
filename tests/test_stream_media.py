@@ -3289,6 +3289,48 @@ def test_copy_cloud_stream_packets_bounds_missing_routed_video() -> None:
         )
 
 
+def test_copy_cloud_stream_packets_ignores_static_video_during_route_probe() -> None:
+    probe_packet_limit = 64
+    bodies = [
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    ]
+    bodies.extend(
+        _rtp_packet(
+            b"\xff\xd8foreign-mjpeg",
+            sequence=sequence,
+            payload_type=26,
+            marker=True,
+        )
+        for sequence in range(2, probe_packet_limit + 1)
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets is None
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    with pytest.raises(
+        PyEzvizError,
+        match="did not include media on its video route",
+    ):
+        copy_cloud_stream_packets_to_mpegts(
+            FakeStream(),
+            io.BytesIO(),
+            ffmpeg_path="ffmpeg",
+            max_packets=None,
+        )
+
+
 def test_copy_cloud_stream_packets_revalidates_buffered_video_probe(
     monkeypatch,
 ) -> None:

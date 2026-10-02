@@ -1106,6 +1106,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     prefix,
                     stream_descriptors=stream_descriptors,
                 )
+        if codec is not None and video_route_is_authoritative:
+            selected_video_payload_types = route_profile.codec_payload_types(codec)
+            video_probe = [
+                candidate
+                for candidate in video_probe
+                if candidate.payload_type in selected_video_payload_types
+            ]
         if (
             audio_key is not None
             and audio_metadata is not None

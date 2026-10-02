@@ -22,6 +22,7 @@ from pyezvizapi._local_stream import (
     _idmx_hevc_annexb_packet_spans,
     _idmx_local_packets_to_annexb_with_codec,
     _idmx_local_packets_to_h264_annexb,
+    _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
@@ -81,6 +82,7 @@ def _rtp_packet(
     *,
     sequence: int = 1,
     payload_type: int = 96,
+    timestamp: int = 1,
     extension_data: bytes = b"",
     ssrc: bytes = b"\x01\x02\x03\x04",
 ) -> bytes:
@@ -92,7 +94,7 @@ def _rtp_packet(
     return (
         bytes((0x90 if extension_data else 0x80, payload_type))
         + sequence.to_bytes(2, "big")
-        + b"\x00\x00\x00\x01"
+        + timestamp.to_bytes(4, "big")
         + ssrc
         + extension
         + payload
@@ -243,6 +245,55 @@ def test_local_idmx_discards_hevc_before_final_h264_route() -> None:
 
     assert codec == "h264"
     assert annexb == expected_annexb
+
+
+def test_local_idmx_frame_rate_uses_active_video_route_epoch() -> None:
+    packets = [
+        _rtp_packet(
+            b"audio",
+            sequence=sequence,
+            payload_type=97,
+            timestamp=(sequence - 1) * 1024,
+            extension_data=b"\x45\x02\x0f\x61" if sequence == 1 else b"",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+        for sequence in range(1, 6)
+    ]
+    packets.extend(
+        (
+            _rtp_packet(
+                b"metadata",
+                sequence=6,
+                payload_type=112,
+                timestamp=90_000,
+                extension_data=b"\x45\x02\x24\x61",
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+            _rtp_packet(
+                b"\x26\x01hevc-1",
+                sequence=7,
+                payload_type=97,
+                timestamp=90_000,
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+            _rtp_packet(
+                b"\x26\x01hevc-2",
+                sequence=8,
+                payload_type=97,
+                timestamp=96_000,
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+            _rtp_packet(
+                b"\x26\x01hevc-3",
+                sequence=9,
+                payload_type=97,
+                timestamp=102_000,
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+        )
+    )
+
+    assert _idmx_local_video_frame_rate(packets) == "15"
 
 
 def test_local_idmx_h264_route_preserves_ambiguous_sei(

@@ -5504,12 +5504,15 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
             rtp_packets.append(packet)
-    profile = RtpRouteProfile()
-    for packet in rtp_packets:
-        profile.absorb(packet)
+    routed_video_payload_types = _idmx_local_video_payload_types(packets)
+    route_epoch_profile = RtpRouteProfile()
     timestamps: list[int] = []
     for packet in rtp_packets:
-        if profile.media_kind(packet) == "video" and (
+        route_epoch_profile.absorb(packet)
+        if (
+            packet.payload_type in routed_video_payload_types
+            and route_epoch_profile.media_kind(packet) == "video"
+        ) and (
             not timestamps or timestamps[-1] != packet.timestamp
         ):
             timestamps.append(packet.timestamp)

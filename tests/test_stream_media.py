@@ -1876,7 +1876,7 @@ def test_copy_cloud_stream_to_mpegts_accepts_late_fallback_confirmation(
     assert output.getvalue() == H264_SPS_ANNEXB * video_packet_count
 
 
-def test_copy_cloud_stream_to_mpegts_excludes_audio_from_codec_probe_limit(
+def test_copy_cloud_stream_to_mpegts_bounds_codec_probe_by_consumed_packets(
     monkeypatch,
 ) -> None:
     client = _client()
@@ -1935,14 +1935,13 @@ def test_copy_cloud_stream_to_mpegts_excludes_audio_from_codec_probe_limit(
         ),
     )
 
-    copy_cloud_stream_to_mpegts(
-        client,
-        "CAM123",
-        output,
-        max_packets=audio_packet_count + 1,
-    )
-
-    assert output.getvalue() == H264_SPS_ANNEXB
+    with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
+        copy_cloud_stream_to_mpegts(
+            client,
+            "CAM123",
+            output,
+            max_packets=audio_packet_count + 1,
+        )
 
 
 def test_copy_cloud_stream_to_mpegts_skips_empty_rtp_prelude_and_body(

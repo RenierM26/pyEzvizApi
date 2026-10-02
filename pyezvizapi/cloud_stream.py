@@ -1058,7 +1058,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             ):
                 raise
         except PyEzvizError:
-            if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
+            if consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
                 codec = detect_rtp_video_codec(
                     prefix,
                     stream_descriptors=stream_descriptors,

@@ -4605,6 +4605,11 @@ def _idmx_h264_annexb_packet_spans(  # noqa: PLR0912, PLR0915
             ):
                 continue
             body = _idmx_local_frame_media_body(frame, frame_header_size)
+            if (
+                rtp_payload_video_codec(body) != "h264"
+                and _looks_like_idmx_hevc_direct_frame(body)
+            ):
+                continue
             if _looks_like_idmx_h264_fu_a_frame(body):
                 is_start = bool(body[1] & 0x80)
                 nal_type = body[1] & 0x1F
@@ -6100,6 +6105,10 @@ def _decrypt_idmx_local_packets_to_annexb(
     decrypt_hevc_parameter_sets: bool = False,
 ) -> bytes:
     routed_video_payload_types = _idmx_local_video_payload_types(packets)
+    final_route_is_authoritative_h264 = not _idmx_local_video_payload_types(
+        packets,
+        codec="hevc",
+    )
     aes_key = _local_media_aes_key(media_key)
     h264_nalu_header_size = (
         H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
@@ -6118,6 +6127,14 @@ def _decrypt_idmx_local_packets_to_annexb(
             rtp_packet is not None
             and rtp_packet.payload_type in routed_video_payload_types
         )
+        h264_codec_compatible = bool(
+            h264_transport
+            and (
+                not final_route_is_authoritative_h264
+                or rtp_payload_video_codec(body) == "h264"
+                or not _looks_like_idmx_hevc_direct_frame(body)
+            )
+        )
         if _looks_like_idmx_hevc_parameter_frame(body):
             # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
             # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
@@ -6135,7 +6152,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             )
             continue
         if (
-            h264_transport
+            h264_codec_compatible
             and not hevc_evidence_seen
             and _looks_like_idmx_h264_fu_a_frame(body)
         ):
@@ -6150,7 +6167,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             )
             continue
         if (
-            h264_transport
+            h264_codec_compatible
             and not hevc_evidence_seen
             and _looks_like_idmx_h264_clear_nal(body)
         ):
@@ -6178,7 +6195,7 @@ def _decrypt_idmx_local_packets_to_annexb(
                 decrypt_parameter_sets=decrypt_hevc_parameter_sets,
             )
             continue
-        if h264_transport and h264_nalu_header_size == 0 and body:
+        if h264_codec_compatible and h264_nalu_header_size == 0 and body:
             active_h264_fu = None
             _append_decrypted_h264_nal(
                 output,

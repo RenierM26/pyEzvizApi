@@ -993,10 +993,6 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             "aac",
             fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
         )
-        kind = rtp_media_kind(
-            parsed,
-            stream_descriptors=stream_descriptors,
-        )
         audio_metadata = route_profile.audio_metadata
         video_probe = [
             candidate
@@ -1029,8 +1025,6 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         if (
             audio_key is not None
             and audio_metadata is not None
-            and kind in {"audio", "metadata"}
-            and not audio_decodable
         ):
             audio_decodable = any(
                 decrypt_idmx_aac_packets(

@@ -4581,7 +4581,12 @@ def _idmx_h264_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     header_size = H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="h264")
     for packet_index, packet in enumerate(packets):
-        for frame_index, frame in enumerate(_iter_idmx_local_packet_frame(packet)):
+        for frame_index, frame in enumerate(
+            _iter_idmx_local_packet_frame(
+                packet,
+                video_payload_types=routed_payload_types,
+            )
+        ):
             frame_header_size = _idmx_local_frame_header_size(frame)
             if frame_header_size is None:
                 continue
@@ -4695,7 +4700,12 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     aes_key = _local_media_aes_key(media_key)
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
     for packet_index, packet in enumerate(packets):
-        for frame_index, frame in enumerate(_iter_idmx_local_packet_frame(packet)):
+        for frame_index, frame in enumerate(
+            _iter_idmx_local_packet_frame(
+                packet,
+                video_payload_types=routed_payload_types,
+            )
+        ):
             frame_header_size = _idmx_local_frame_header_size(frame)
             if frame_header_size is None:
                 continue
@@ -5812,7 +5822,11 @@ def _idmx_local_frame_header_score(
     return None
 
 
-def _iter_idmx_local_frame_or_nested(frame: bytes) -> Iterator[bytes]:
+def _iter_idmx_local_frame_or_nested(
+    frame: bytes,
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> Iterator[bytes]:
     """Yield one IDMX frame, or nested frames from command-port aggregate records."""
     header_size = _idmx_local_frame_header_size(frame)
     if header_size is None:
@@ -5823,16 +5837,44 @@ def _iter_idmx_local_frame_or_nested(frame: bytes) -> Iterator[bytes]:
         yield frame
         return
     nested_frames = tuple(_iter_idmx_local_frames(body))
-    if not _idmx_local_frames_contain_routed_media(nested_frames):
+    if not _idmx_local_frames_contain_routed_media(
+        nested_frames,
+        video_payload_types=video_payload_types,
+    ):
         yield frame
         return
     yield from nested_frames
 
 
-def _iter_idmx_local_packet_frame(packet: bytes) -> Iterator[bytes]:
+def _iter_idmx_local_packet_frame(
+    packet: bytes,
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> Iterator[bytes]:
+    if len(packet) >= 4:
+        prefixed_length = int.from_bytes(packet[:4], "little")
+        prefixed_frame = packet[4 : 4 + prefixed_length]
+        prefixed_header_size = _idmx_local_frame_header_size(prefixed_frame)
+        if (
+            prefixed_length == len(packet) - 4
+            and prefixed_header_size is not None
+            and _idmx_local_frame_header_score(
+                prefixed_frame,
+                prefixed_header_size,
+            )
+            is not None
+        ):
+            yield from _iter_idmx_local_frame_or_nested(
+                prefixed_frame,
+                video_payload_types=video_payload_types,
+            )
+            return
     if _is_complete_idmx_rtp_frame(
         packet
-    ) and not _idmx_local_packet_contains_aggregate_media_frame(packet):
+    ) and not _idmx_local_packet_contains_aggregate_media_frame(
+        packet,
+        video_payload_types=video_payload_types,
+    ):
         yield packet
         return
     header_size = _idmx_local_frame_header_size(packet)
@@ -5840,15 +5882,25 @@ def _iter_idmx_local_packet_frame(packet: bytes) -> Iterator[bytes]:
         header_size is not None
         and _idmx_local_frame_header_score(packet, header_size) is not None
     ):
-        if _idmx_local_packet_contains_aggregate_media_frame(packet):
+        if _idmx_local_packet_contains_aggregate_media_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        ):
             yield from _iter_idmx_local_frames(packet)
             return
-        yield from _iter_idmx_local_frame_or_nested(packet)
+        yield from _iter_idmx_local_frame_or_nested(
+            packet,
+            video_payload_types=video_payload_types,
+        )
         return
     yield from _iter_idmx_local_frames(packet)
 
 
-def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes) -> bool:
+def _idmx_local_packet_contains_aggregate_media_frame(
+    packet: bytes,
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> bool:
     frames = tuple(_iter_idmx_local_frames(packet))
     if len(frames) <= 1:
         return False
@@ -5862,10 +5914,17 @@ def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes) -> bool:
         ):
             return False
         previous_sequence = sequence
-    return _idmx_local_frames_contain_routed_media(frames)
+    return _idmx_local_frames_contain_routed_media(
+        frames,
+        video_payload_types=video_payload_types,
+    )
 
 
-def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...]) -> bool:
+def _idmx_local_frames_contain_routed_media(
+    frames: tuple[bytes, ...],
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> bool:
     """Return whether nested frames contain video under their final route profile."""
 
     parsed: list[tuple[RtpPacket, bytes]] = []
@@ -5880,7 +5939,7 @@ def _idmx_local_frames_contain_routed_media(frames: tuple[bytes, ...]) -> bool:
         parsed.append((packet, _idmx_local_frame_media_body(frame, header_size)))
         profile.absorb(packet)
     return any(
-        profile.media_kind(packet) == "video"
+        (profile.media_kind(packet) == "video" or packet.payload_type in video_payload_types)
         and (
             _looks_like_idmx_hevc_direct_frame(body)
             or _looks_like_idmx_h264_fu_a_frame(body)
@@ -5898,8 +5957,23 @@ def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
 
 
 def _iter_idmx_local_packet_frames(packets: list[bytes]) -> Iterator[bytes]:
+    profile = RtpRouteProfile()
     for packet in packets:
-        yield from _iter_idmx_local_packet_frame(packet)
+        video_payload_types = frozenset(
+            descriptor.payload_type
+            for descriptor in profile.descriptors
+            if descriptor.media_kind == "video"
+        )
+        for frame in _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        ):
+            header_size = _idmx_local_frame_header_size(frame)
+            if header_size is not None:
+                parsed = _idmx_local_frame_rtp_packet(frame, header_size)
+                if parsed is not None:
+                    profile.absorb(parsed)
+            yield frame
 
 
 def _idmx_local_frame_contains_media(frame: bytes) -> bool:

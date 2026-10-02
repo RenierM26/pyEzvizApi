@@ -2859,14 +2859,6 @@ def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
         + b"\x00\x10aggregate-sidecar"
         + nested(
             _rtp_packet(
-                b"metadata",
-                payload_type=112,
-                extension_data=b"\x45\x02\x24\x61",
-                ssrc=b"\x55\x66\x77\x88",
-            )
-        )
-        + nested(
-            _rtp_packet(
                 b"\x40\x01vps",
                 sequence=2,
                 payload_type=97,
@@ -2883,8 +2875,14 @@ def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
         )
     )
     packet = len(aggregate).to_bytes(4, "little") + aggregate
+    descriptor = _rtp_packet(
+        b"metadata",
+        payload_type=112,
+        extension_data=b"\x45\x02\x24\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
 
-    annexb, codec = _idmx_local_packets_to_annexb_with_codec([packet])
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec([descriptor, packet])
 
     assert codec == "hevc"
     assert annexb == expected_annexb

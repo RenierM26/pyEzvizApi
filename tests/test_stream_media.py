@@ -3033,7 +3033,14 @@ def test_copy_cloud_stream_packets_refreshes_corrected_audio_metadata(
             extension_data=audio_descriptor(16_000),
         ),
         _rtp_packet(b"audio", sequence=3, payload_type=105),
-        _rtp_packet(b"\x67h264-sps", sequence=4, payload_type=97, marker=True),
+        _rtp_packet(
+            b"metadata",
+            sequence=4,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x90\x69",
+        ),
+        _rtp_packet(b"\x67h264-sps", sequence=5, payload_type=97, marker=True),
     )
 
     class FakeStream:
@@ -3047,18 +3054,26 @@ def test_copy_cloud_stream_packets_refreshes_corrected_audio_metadata(
 
     metadata_calls: list[tuple[int, int] | None] = []
 
-    def fake_decrypt(*_args: Any, **kwargs: Any) -> None:
+    def fake_decrypt(candidates: Any, *_args: Any, **kwargs: Any) -> Any:
         metadata_calls.append(kwargs["audio_metadata"])
+        candidate = next(iter(candidates))
+        if candidate.payload_type in kwargs["audio_payload_types"]:
+            return object()
+        return None
 
     monkeypatch.setattr(cloud_stream_module, "decrypt_idmx_aac_packets", fake_decrypt)
     monkeypatch.setattr(
         cloud_stream_module,
         "_open_cloud_elementary_mpegts_remux_process",
-        lambda *_args, **_kwargs: subprocess.Popen(
-            ["cat"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+        lambda *_args, **kwargs: (
+            pytest.fail("stale AAC route started an audio input")
+            if kwargs.get("audio_url") is not None
+            else subprocess.Popen(
+                ["cat"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
         ),
     )
     output = io.BytesIO()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
@@ -74,7 +73,7 @@ def test_decrypt_idmx_aac_packets_uses_native_descriptor() -> None:
         )
     )
     plain = b"0123456789abcdef" + b"tail"
-    encrypted = AES.new(key, AES.MODE_ECB).encrypt(plain[:16]) + plain[16:]  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
     audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
     packets = [
         parse_rtp_packet(

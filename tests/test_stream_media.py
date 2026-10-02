@@ -2234,10 +2234,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
         )
     )
     plain_audio = b"0123456789abcdef" + b"tail"
-    encrypted_audio = (
-        AES.new(media_key, AES.MODE_ECB).encrypt(plain_audio[:16])  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-        + plain_audio[16:]
-    )
+    encrypted_audio = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain_audio[16:]
 
     def rtp_with_extension(
         payload: bytes,
@@ -2380,10 +2377,7 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
         )
     )
     plain_audio = b"0123456789abcdef" + b"tail"
-    encrypted_audio = (
-        AES.new(media_key, AES.MODE_ECB).encrypt(plain_audio[:16])  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-        + plain_audio[16:]
-    )
+    encrypted_audio = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain_audio[16:]
 
     def rtp_with_extension(
         payload: bytes,

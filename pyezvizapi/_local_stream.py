@@ -4862,8 +4862,19 @@ def _annexb_vcl_bounds(
     return (bounds[0][0], bounds[-1][1]) if bounds else None
 
 
-def _idmx_packet_frame_slice(packet: bytes, start: int, stop: int) -> bytes:
-    frames = list(_iter_idmx_local_packet_frame(packet))
+def _idmx_packet_frame_slice(
+    packet: bytes,
+    start: int,
+    stop: int,
+    *,
+    video_payload_types: frozenset[int],
+) -> bytes:
+    frames = list(
+        _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        )
+    )
     if start == 0 and stop == len(frames):
         return packet
     return b"".join(
@@ -4916,22 +4927,40 @@ def _idmx_packets_for_selected_vcl_spans(
     last_span = selected_spans[-1]
     start_packet = first_span[2]
     end_packet = last_span[3]
+    video_payload_types = _idmx_local_video_payload_types(
+        packets,
+        codec=cast(RtpVideoCodec, video_input_format),
+    )
     if start_packet == end_packet:
         return [
             _idmx_packet_frame_slice(
                 packets[start_packet],
                 first_span[5],
                 last_span[6] + 1,
+                video_payload_types=video_payload_types,
             )
         ]
     selected_packets = [
         _idmx_packet_frame_slice(
             packets[start_packet],
             first_span[5],
-            len(list(_iter_idmx_local_packet_frame(packets[start_packet]))),
+            len(
+                list(
+                    _iter_idmx_local_packet_frame(
+                        packets[start_packet],
+                        video_payload_types=video_payload_types,
+                    )
+                )
+            ),
+            video_payload_types=video_payload_types,
         ),
         *packets[start_packet + 1 : end_packet],
-        _idmx_packet_frame_slice(packets[end_packet], 0, last_span[6] + 1),
+        _idmx_packet_frame_slice(
+            packets[end_packet],
+            0,
+            last_span[6] + 1,
+            video_payload_types=video_payload_types,
+        ),
     ]
     return [packet for packet in selected_packets if packet]
 

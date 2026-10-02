@@ -197,7 +197,11 @@ class RtpRouteProfile:
             self._audio_metadata = metadata
         for descriptor in idmx_rtp_stream_descriptors((packet,)):
             current = self._descriptors.get(descriptor.payload_type)
-            if self._media_started and current != descriptor:
+            if self._media_started and (
+                current is None
+                or current.codec != descriptor.codec
+                or current.media_kind != descriptor.media_kind
+            ):
                 raise PyEzvizError(
                     "RTP route mutation after media began: descriptor changes "
                     f"payload type {descriptor.payload_type} ownership or codec"

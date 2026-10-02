@@ -2763,6 +2763,57 @@ def test_h264_packet_offsets_use_descriptor_route_inside_aggregate() -> None:
         20,
     ]
 
+
+def test_h264_selected_packets_slice_descriptor_routed_aggregate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        lambda nal, _key, *, nalu_header_size: nal,
+    )
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    sps = _rtp_packet(
+        b"\x67sps",
+        sequence=2,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    idr = _rtp_packet(
+        b"\x65dynamic",
+        sequence=3,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    aggregate = (
+        outer_header
+        + b"\x00\x10sidecar"
+        + len(sps).to_bytes(4, "little")
+        + sps
+        + len(idr).to_bytes(4, "little")
+        + idr
+    )
+    aggregate_packet = len(aggregate).to_bytes(4, "little") + aggregate
+    descriptor = _rtp_packet(
+        b"metadata",
+        sequence=4,
+        payload_type=112,
+        extension_data=b"\x45\x02\x1b\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    full_annexb = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x65dynamic"
+    selected_annexb = b"\x00\x00\x00\x01\x65dynamic"
+
+    selected = _idmx_packets_from_selected_annexb(
+        [aggregate_packet, descriptor],
+        full_annexb=full_annexb,
+        selected_annexb=selected_annexb,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+        video_input_format="h264",
+    )
+
+    assert selected == [len(idr).to_bytes(4, "little") + idr]
+
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(
     tmp_path,
 ) -> None:

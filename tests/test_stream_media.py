@@ -3537,6 +3537,123 @@ def test_copy_cloud_stream_packets_keeps_epochs_with_buffered_packets(
     assert output.getvalue() == expected_annexb
 
 
+def test_copy_cloud_stream_packets_rejects_ambiguous_h264_before_hevc_route(
+    monkeypatch,
+) -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01hevc"
+    bodies = (
+        _rtp_packet(
+            b"\x22\x01stale-h264",
+            sequence=1,
+            payload_type=97,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x61",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=3,
+            payload_type=97,
+            marker=True,
+        ),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+        rtp_audio_key=b"unused",
+    )
+
+    assert output.getvalue() == expected_annexb
+
+
+def test_copy_cloud_stream_packets_rejects_known_nonvideo_before_h264_route(
+    monkeypatch,
+) -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    bodies = (
+        _rtp_packet(
+            b"\x65stale-nonvideo",
+            sequence=1,
+            payload_type=97,
+            extension_profile=1,
+            extension_data=b"\x45\x02\xaf\x61",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            marker=True,
+        ),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+    )
+
+    assert output.getvalue() == expected_annexb
+
+
 @pytest.mark.parametrize("static_payload_type", [26, 32, 99])
 def test_copy_cloud_stream_packets_ignores_static_video_outside_selected_route(
     monkeypatch,
@@ -3695,8 +3812,6 @@ def test_copy_cloud_stream_packets_replays_buffered_video_before_correction(
             b"metadata",
             sequence=1,
             payload_type=112,
-            extension_profile=1,
-            extension_data=b"\x45\x02\x1b\x61",
         ),
         _rtp_packet(b"\x26\x01hevc", sequence=2, payload_type=97, marker=True),
         _rtp_packet(

@@ -30,6 +30,7 @@ from .rtp import (
     RtpAacStream,
     RtpPacket,
     RtpRouteProfile,
+    RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
@@ -965,10 +966,14 @@ def _cloud_rtp_packet_matches_video_route(
     packet: RtpPacket,
     *,
     route_codec: RtpVideoCodec,
-    epoch_codec: RtpVideoCodec | None,
+    epoch_route: RtpStreamDescriptor | None,
 ) -> bool:
     """Return whether a buffered packet belongs to one video route epoch."""
 
+    if epoch_route is not None:
+        return (
+            epoch_route.media_kind == "video" and epoch_route.codec == route_codec
+        )
     detected_codec = rtp_payload_video_codec(packet.payload)
     if detected_codec is not None:
         return detected_codec == route_codec
@@ -979,8 +984,6 @@ def _cloud_rtp_packet_matches_video_route(
             or hevc_nal_type in {32, 33, 34, 39, 40, 49}
         ) and packet.payload[1] & 0x07 != 0:
             return True
-    if epoch_codec is not None:
-        return epoch_codec == route_codec
     if route_codec == "h264":
         return bool(packet.payload) and packet.payload[0] & 0x1F in {6, 9}
     return (
@@ -1003,7 +1006,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
     prefix: list[RtpPacket] = []
-    prefix_video_route_epochs: list[RtpVideoCodec | None] = []
+    prefix_route_epochs: list[RtpStreamDescriptor | None] = []
     route_profile = RtpRouteProfile()
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
@@ -1021,16 +1024,16 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         }
         route_profile.absorb(parsed)
         stream_descriptors = route_profile.descriptors
-        parsed_video_route_epoch: RtpVideoCodec | None = None
-        for descriptor in stream_descriptors:
-            if descriptor.payload_type != parsed.payload_type:
-                continue
-            if descriptor.codec == "h264":
-                parsed_video_route_epoch = "h264"
-            elif descriptor.codec == "hevc":
-                parsed_video_route_epoch = "hevc"
+        parsed_route_epoch = next(
+            (
+                descriptor
+                for descriptor in stream_descriptors
+                if descriptor.payload_type == parsed.payload_type
+            ),
+            None,
+        )
         prefix.append(parsed)
-        prefix_video_route_epochs.append(parsed_video_route_epoch)
+        prefix_route_epochs.append(parsed_route_epoch)
         for descriptor in stream_descriptors:
             previous = previous_descriptors.get(descriptor.payload_type)
             route_changed = previous is None or (
@@ -1046,34 +1049,34 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     "h264" if descriptor.codec == "h264" else "hevc"
                 )
                 selected_prefix: list[RtpPacket] = []
-                selected_epochs: list[RtpVideoCodec | None] = []
-                for candidate, epoch_codec in zip(
+                selected_epochs: list[RtpStreamDescriptor | None] = []
+                for candidate, epoch_route in zip(
                     prefix,
-                    prefix_video_route_epochs,
+                    prefix_route_epochs,
                     strict=True,
                 ):
                     if candidate.payload_type != descriptor.payload_type:
                         selected_prefix.append(candidate)
-                        selected_epochs.append(epoch_codec)
+                        selected_epochs.append(epoch_route)
                         continue
                     if not _cloud_rtp_packet_matches_video_route(
                         candidate,
                         route_codec=route_codec,
-                        epoch_codec=epoch_codec,
+                        epoch_route=epoch_route,
                     ):
                         continue
                     selected_prefix.append(candidate)
-                    selected_epochs.append(route_codec)
+                    selected_epochs.append(descriptor)
                 prefix = selected_prefix
-                prefix_video_route_epochs = selected_epochs
+                prefix_route_epochs = selected_epochs
             elif descriptor.media_kind == "audio" and route_changed:
                 selected_audio_prefix: list[
-                    tuple[RtpPacket, RtpVideoCodec | None]
+                    tuple[RtpPacket, RtpStreamDescriptor | None]
                 ] = [
-                    (candidate, epoch_codec)
-                    for candidate, epoch_codec in zip(
+                    (candidate, epoch_route)
+                    for candidate, epoch_route in zip(
                         prefix,
-                        prefix_video_route_epochs,
+                        prefix_route_epochs,
                         strict=True,
                     )
                     if candidate.payload_type != descriptor.payload_type
@@ -1083,7 +1086,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     )
                 ]
                 prefix = [candidate for candidate, _epoch in selected_audio_prefix]
-                prefix_video_route_epochs = [
+                prefix_route_epochs = [
                     epoch for _candidate, epoch in selected_audio_prefix
                 ]
         video_route_is_authoritative = any(

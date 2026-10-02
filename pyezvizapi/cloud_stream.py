@@ -974,7 +974,6 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
 
     prefix: list[RtpPacket] = []
     route_profile = RtpRouteProfile()
-    video_probe: list[RtpPacket] = []
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
     audio_decodable = False
@@ -1001,8 +1000,15 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         )
         if audio_metadata is None:
             audio_metadata = idmx_aac_descriptor((parsed,))
-        if kind == "video":
-            video_probe.append(parsed)
+        video_probe = [
+            candidate
+            for candidate in prefix
+            if rtp_media_kind(
+                candidate,
+                stream_descriptors=stream_descriptors,
+            )
+            == "video"
+        ]
         try:
             codec = detect_rtp_video_codec(
                 prefix,

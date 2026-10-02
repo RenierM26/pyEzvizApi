@@ -3833,6 +3833,22 @@ def test_copy_cloud_stream_packets_to_mpegts_keeps_video_after_aac_gap(
             0xFF,
         )
     )
+    changed_descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            8_000 >> 14,
+            (8_000 >> 6) & 0xFF,
+            ((8_000 & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
     plain_audio = b"0123456789abcdef" + b"tail"
     encrypted_audio = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain_audio[16:]
     audio_payload = (
@@ -3866,7 +3882,14 @@ def test_copy_cloud_stream_packets_to_mpegts_keeps_video_after_aac_gap(
             extension_profile=0x4000,
             extension_data=audio_extension,
         ),
-        _rtp_packet(b"\x68h264-pps", sequence=6, marker=True),
+        _rtp_packet(
+            b"metadata",
+            sequence=6,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=changed_descriptor,
+        ),
+        _rtp_packet(b"\x68h264-pps", sequence=7, marker=True),
     )
 
     class FakeStream:

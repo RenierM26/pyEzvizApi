@@ -1221,6 +1221,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 return
             audio_enabled = False
             audio_failed = True
+            route_profile.deactivate_audio()
             try:
                 audio_input.close_input()
             except (BrokenPipeError, PyEzvizError):

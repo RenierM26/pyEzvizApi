@@ -485,6 +485,40 @@ def test_route_profile_reports_audio_metadata_and_sanitized_diagnostics() -> Non
     assert "secret" not in repr(diagnostic)
 
 
+def test_route_profile_accepts_audio_metadata_after_consumer_is_disabled() -> None:
+    profile = RtpRouteProfile()
+    metadata_16k = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=bytes(
+                (0x43, 10, 0, 1, 2, 0, 250, 3, 0, 0, 3, 0xFF)
+            ),
+        )
+    )
+    audio = parse_rtp_packet(_rtp(b"audio", sequence=2, payload_type=104))
+    metadata_8k = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=bytes(
+                (0x43, 10, 0, 1, 2, 0, 125, 3, 0, 0, 3, 0xFF)
+            ),
+        )
+    )
+    profile.absorb(metadata_16k)
+    profile.mark_media(audio)
+    profile.deactivate_audio()
+
+    profile.absorb(metadata_8k)
+
+    assert profile.audio_metadata == (8_000, 1)
+
+
 @pytest.mark.parametrize(
     ("payload_type", "codec", "sample_rate", "channels"),
     [

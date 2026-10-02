@@ -186,6 +186,11 @@ class RtpRouteProfile:
 
         return self._audio_metadata
 
+    def deactivate_audio(self) -> None:
+        """Stop enforcing the audio profile after its consumer is disabled."""
+
+        self._audio_media_started = False
+
     def absorb(self, packet: RtpPacket) -> None:
         """Absorb descriptors carried by one packet without dispatching media."""
 

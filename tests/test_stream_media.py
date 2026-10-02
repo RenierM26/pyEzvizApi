@@ -2597,6 +2597,61 @@ def test_copy_cloud_stream_packets_to_mpegts_ignores_invalid_rtp_audio(
     assert open_calls == [None]
 
 
+def test_copy_cloud_stream_packets_to_mpegts_bounds_video_only_audio_probe(
+    monkeypatch,
+) -> None:
+    probe_limit = cloud_stream_module._RTP_AUDIO_PROBE_MAX_PACKETS  # noqa: SLF001
+    process_opened = False
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == probe_limit + 1
+            for sequence in range(1, probe_limit + 2):
+                if sequence > probe_limit:
+                    assert process_opened is True
+                body = _rtp_packet(
+                    b"\x67h264-sps",
+                    sequence=sequence,
+                    marker=True,
+                )
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    def fake_open_remux(
+        _ffmpeg_path: str,
+        _codec: str,
+        *,
+        audio_url: str | None = None,
+    ) -> subprocess.Popen[bytes]:
+        nonlocal process_opened
+        assert audio_url is None
+        process_opened = True
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        io.BytesIO(),
+        ffmpeg_path="ffmpeg-custom",
+        max_packets=probe_limit + 1,
+        rtp_audio_key=b"0123456789abcdef",
+    )
+
+    assert process_opened is True
+
+
 def test_cloud_rtp_audio_input_streams_and_cancels_active_connection() -> None:
     audio_input = cloud_stream_module._CloudRtpAudioInput()  # noqa: SLF001
     host, port_text = audio_input.url.removeprefix("tcp://").rsplit(":", 1)

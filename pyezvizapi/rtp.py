@@ -190,6 +190,15 @@ class RtpRouteProfile:
         """Stop enforcing the audio profile after its consumer is disabled."""
 
         self._audio_media_started = False
+        for payload_type in tuple(self._observed_ssrcs):
+            descriptor = self._descriptors.get(payload_type)
+            media_kind = (
+                descriptor.media_kind
+                if descriptor is not None
+                else _static_media_kind(payload_type)
+            )
+            if media_kind == "audio":
+                del self._observed_ssrcs[payload_type]
 
     def absorb(self, packet: RtpPacket) -> None:
         """Absorb descriptors carried by one packet without dispatching media."""

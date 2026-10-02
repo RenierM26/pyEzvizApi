@@ -3817,7 +3817,7 @@ def test_copy_cloud_stream_packets_to_mpegts_keeps_video_after_aac_gap(
 ) -> None:
     media_key = b"0123456789abcdef"
     sample_rate = 16_000
-    descriptor = bytes(
+    descriptor = b"\x45\x02\x1b\x60\x45\x02\x0f\x68" + bytes(
         (
             0x43,
             10,
@@ -3833,7 +3833,7 @@ def test_copy_cloud_stream_packets_to_mpegts_keeps_video_after_aac_gap(
             0xFF,
         )
     )
-    changed_descriptor = bytes(
+    changed_descriptor = b"\x45\x02\x90\x68" + bytes(
         (
             0x43,
             10,

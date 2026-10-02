@@ -493,19 +493,19 @@ def test_route_profile_accepts_audio_metadata_after_consumer_is_disabled() -> No
             sequence=1,
             payload_type=112,
             extension_profile=1,
-            extension_data=bytes(
+            extension_data=b"\x45\x02\x0f\x69" + bytes(
                 (0x43, 10, 0, 1, 2, 0, 250, 3, 0, 0, 3, 0xFF)
             ),
         )
     )
-    audio = parse_rtp_packet(_rtp(b"audio", sequence=2, payload_type=104))
+    audio = parse_rtp_packet(_rtp(b"audio", sequence=2, payload_type=105))
     metadata_8k = parse_rtp_packet(
         _rtp(
             b"metadata",
             sequence=3,
             payload_type=112,
             extension_profile=1,
-            extension_data=bytes(
+            extension_data=b"\x45\x02\x90\x69" + bytes(
                 (0x43, 10, 0, 1, 2, 0, 125, 3, 0, 0, 3, 0xFF)
             ),
         )
@@ -517,6 +517,7 @@ def test_route_profile_accepts_audio_metadata_after_consumer_is_disabled() -> No
     profile.absorb(metadata_8k)
 
     assert profile.audio_metadata == (8_000, 1)
+    assert profile.codec_payload_types("g711-alaw") == frozenset({105})
 
 
 @pytest.mark.parametrize(

@@ -4712,6 +4712,13 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     hevc_evidence_seen = False
     aes_key = _local_media_aes_key(media_key)
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
+    routed_h264_payload_types = _idmx_local_video_payload_types(
+        packets,
+        codec="h264",
+    )
+    authoritative_hevc_route = bool(
+        routed_payload_types and not routed_h264_payload_types
+    )
     for packet_index, packet in enumerate(packets):
         for frame_index, frame in enumerate(
             _iter_idmx_local_packet_frame(
@@ -4730,7 +4737,9 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
             )
             wrapped_media = _looks_like_idmx_hevc_media_frame(body)
             direct_media = routed_transport and (
-                hevc_evidence_seen or _looks_like_idmx_hevc_evidence_frame(body)
+                authoritative_hevc_route
+                or hevc_evidence_seen
+                or _looks_like_idmx_hevc_evidence_frame(body)
             ) and _looks_like_idmx_hevc_direct_frame(body)
             if wrapped_media:
                 hevc_evidence_seen = True

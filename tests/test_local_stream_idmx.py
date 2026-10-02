@@ -1060,6 +1060,29 @@ def test_idmx_encrypted_span_maps_use_descriptor_video_payloads(
         (len(expected_vps), len(hevc_annexb), 2, 2, 19, 0, 0),
     ]
 
+
+def test_idmx_hevc_span_map_honors_authoritative_route_before_shape_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            direct_irap,
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+
+    annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+    assert spans == [(0, len(annexb), 0, 0, 19, 0, 0)]
+
 def test_idmx_hevc_span_map_preserves_pending_fragment_across_standalone_nal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

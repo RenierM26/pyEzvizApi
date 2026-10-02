@@ -73,14 +73,54 @@ def _sequential_idmx_frame_factory(
 
     return idmx_frame
 
-def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
+def _rtp_packet(
+    payload: bytes,
+    *,
+    sequence: int = 1,
+    payload_type: int = 96,
+    extension_data: bytes = b"",
+    ssrc: bytes = b"\x01\x02\x03\x04",
+) -> bytes:
+    extension = (
+        b"\x00\x01" + (len(extension_data) // 4).to_bytes(2, "big") + extension_data
+        if extension_data
+        else b""
+    )
     return (
-        b"\x80\x60"
+        bytes((0x90 if extension_data else 0x80, payload_type))
         + sequence.to_bytes(2, "big")
         + b"\x00\x00\x00\x01"
-        + b"\x01\x02\x03\x04"
+        + ssrc
+        + extension
         + payload
     )
+
+
+@pytest.mark.parametrize(
+    ("stream_type", "payload_type", "payload", "codec"),
+    [(0x1B, 97, b"\x65h264", "h264"), (0x24, 98, b"\x26\x01hevc", "hevc")],
+)
+def test_local_idmx_annexb_uses_descriptor_video_payload_route(
+    stream_type: int,
+    payload_type: int,
+    payload: bytes,
+    codec: str,
+) -> None:
+    descriptor = bytes((0x45, 2, stream_type, payload_type))
+    packets = [
+        _rtp_packet(b"metadata", extension_data=descriptor, ssrc=b"\x55\x66\x77\x88"),
+        _rtp_packet(
+            payload,
+            sequence=2,
+            payload_type=payload_type,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, detected_codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert detected_codec == codec
+    assert annexb == b"\x00\x00\x00\x01" + payload
 
 def _media(
     payload: bytes,

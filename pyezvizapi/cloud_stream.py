@@ -29,6 +29,7 @@ from .rtp import (
     DEFAULT_AAC_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
+    RtpRouteProfile,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
@@ -972,6 +973,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
     prefix: list[RtpPacket] = []
+    route_profile = RtpRouteProfile()
     video_probe: list[RtpPacket] = []
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
@@ -982,7 +984,8 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         if parsed is None:
             continue
         prefix.append(parsed)
-        stream_descriptors = idmx_rtp_stream_descriptors(prefix)
+        route_profile.absorb(parsed)
+        stream_descriptors = route_profile.descriptors
         video_route_is_authoritative = any(
             descriptor.media_kind == "video"
             for descriptor in stream_descriptors
@@ -1064,7 +1067,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             yield parsed
 
     selected_audio_key = audio_key if audio_decodable else None
-    stream_descriptors = idmx_rtp_stream_descriptors(prefix)
+    stream_descriptors = route_profile.descriptors
     aac_payload_types = rtp_codec_payload_types(
         stream_descriptors,
         "aac",
@@ -1117,16 +1120,15 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
 
         try:
             for packet in chain(prefix, _remaining_rtp_packets()):
-                kind = rtp_media_kind(
-                    packet,
-                    stream_descriptors=stream_descriptors,
-                )
+                route_profile.absorb(packet)
+                kind = route_profile.media_kind(packet)
                 if (
                     kind == "audio"
                     and packet.payload_type in aac_payload_types
                     and audio_enabled
                     and audio_input is not None
                 ):
+                    route_profile.mark_media(packet)
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:
@@ -1164,6 +1166,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     continue
                 if kind != "video":
                     continue
+                route_profile.mark_media(packet)
                 for nal_unit in depacketizer.push(packet):
                     if nal_unit:
                         annexb = ANNEX_B_START_CODE + nal_unit

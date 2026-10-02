@@ -2747,6 +2747,56 @@ def test_copy_cloud_stream_packets_waits_for_delayed_payload_routes(
     assert output.getvalue() == H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_packets_rejects_midstream_route_mutation(
+    monkeypatch,
+) -> None:
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        ),
+        _rtp_packet(b"\x67h264-sps", sequence=2, payload_type=97, marker=True),
+        _rtp_packet(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x61",
+        ),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="RTP route mutation after media began"):
+        copy_cloud_stream_packets_to_mpegts(
+            FakeStream(),
+            io.BytesIO(),
+            ffmpeg_path="ffmpeg",
+            max_packets=len(bodies),
+        )
+
+
 def test_copy_cloud_stream_packets_to_mpegts_ignores_invalid_rtp_audio(
     monkeypatch,
 ) -> None:

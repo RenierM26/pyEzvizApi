@@ -171,6 +171,7 @@ class RtpRouteProfile:
         self._observed_ssrcs: dict[int, set[int]] = {}
         self._audio_metadata: tuple[int, int] | None = None
         self._media_started = False
+        self._audio_media_started = False
 
     @property
     def descriptors(self) -> tuple[RtpStreamDescriptor, ...]:
@@ -190,7 +191,7 @@ class RtpRouteProfile:
         metadata = idmx_aac_descriptor((packet,))
         if metadata is not None:
             if (
-                self._media_started
+                self._audio_media_started
                 and self._audio_metadata is not None
                 and metadata != self._audio_metadata
             ):
@@ -199,7 +200,7 @@ class RtpRouteProfile:
         for descriptor in idmx_rtp_stream_descriptors((packet,)):
             current = self._descriptors.get(descriptor.payload_type)
             selected_fallback = self._selected_fallbacks.get(descriptor.payload_type)
-            if self._media_started and (
+            if descriptor.payload_type in self._observed_ssrcs and (
                 (
                     current is None
                     and selected_fallback
@@ -284,6 +285,8 @@ class RtpRouteProfile:
         if kind not in {"video", "audio"}:
             return
         self._media_started = True
+        if kind == "audio":
+            self._audio_media_started = True
         self._observed_ssrcs.setdefault(packet.payload_type, set()).add(packet.ssrc)
 
     def streams(self) -> tuple[dict[str, object], ...]:

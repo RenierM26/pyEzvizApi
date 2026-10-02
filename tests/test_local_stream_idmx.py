@@ -213,6 +213,36 @@ def test_local_idmx_discards_conflicting_video_before_final_codec_route() -> Non
     assert annexb == expected_annexb
 
 
+def test_local_idmx_discards_hevc_before_final_h264_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x26\x01stale-hevc",
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "h264"
+    assert annexb == expected_annexb
+
+
 def test_summarize_idmx_routes_accepts_predispatch_correction_on_media() -> None:
     rtp_packets = [
         _rtp_packet(

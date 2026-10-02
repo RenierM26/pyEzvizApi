@@ -6232,6 +6232,11 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is None or packet.payload_type not in routed_payload_types:
             continue
+        if (
+            rtp_payload_video_codec(packet.payload) != "h264"
+            and _looks_like_idmx_hevc_direct_frame(packet.payload)
+        ):
+            continue
         if not (
             _looks_like_idmx_h264_fu_a_frame(packet.payload)
             or _looks_like_idmx_h264_clear_nal(packet.payload)
@@ -6261,6 +6266,11 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             if (
                 rtp_packet is None
                 or rtp_packet.payload_type not in routed_payload_types
+            ):
+                continue
+            if (
+                rtp_payload_video_codec(rtp_packet.payload) != "h264"
+                and _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
             ):
                 continue
             if not (

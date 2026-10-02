@@ -372,6 +372,40 @@ def test_encrypted_local_idmx_rejects_stale_h264_before_hevc_route(
     assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
 
 
+def test_encrypted_local_idmx_rejects_mixed_authoritative_video_codecs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [
+        _rtp_packet(
+            b"\x65h264",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=98,
+            extension_data=b"\x45\x02\x24\x62",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        lambda *_args, **_kwargs: pytest.fail("H.264 decryption must not start"),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        lambda *_args, **_kwargs: pytest.fail("HEVC decryption must not start"),
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match=r"Conflicting H\.264 and HEVC routes",
+    ):
+        _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+
+
 def test_summarize_idmx_routes_accepts_predispatch_correction_on_media() -> None:
     rtp_packets = [
         _rtp_packet(

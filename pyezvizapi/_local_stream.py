@@ -6125,6 +6125,14 @@ def _decrypt_idmx_local_packets_to_annexb(
         packets,
         codec="hevc",
     )
+    if (
+        routed_h264_payload_types
+        and routed_hevc_payload_types
+        and routed_h264_payload_types != routed_hevc_payload_types
+    ):
+        raise PyEzvizError(
+            "Conflicting H.264 and HEVC routes in encrypted EZVIZ local stream"
+        )
     final_route_is_authoritative_h264 = bool(
         routed_h264_payload_types and not routed_hevc_payload_types
     )

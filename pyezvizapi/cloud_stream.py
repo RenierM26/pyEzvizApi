@@ -1178,9 +1178,14 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 if not buffered:
                     route_profile.absorb(packet)
                 kind = route_profile.media_kind(packet)
+                current_aac_payload_types = rtp_codec_payload_types(
+                    route_profile.descriptors,
+                    "aac",
+                    fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
+                )
                 if (
                     kind == "audio"
-                    and packet.payload_type in aac_payload_types
+                    and packet.payload_type in current_aac_payload_types
                     and audio_enabled
                     and audio_input is not None
                 ):
@@ -1204,7 +1209,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         (packet,),
                         selected_audio_key,
                         audio_metadata=audio_metadata,
-                        audio_payload_types=aac_payload_types,
+                        audio_payload_types=current_aac_payload_types,
                         require_contiguous=False,
                     )
                     if audio is None:

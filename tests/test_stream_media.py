@@ -2629,7 +2629,6 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     )
     descriptor = (
         b"\x45\x02\x90\x68"
-        b"\x45\x02\x0f\x69"
         + audio_descriptor
     )
     plain_audio = b"0123456789abcdef" + b"tail"
@@ -2642,12 +2641,13 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
         payload_type: int,
         extension_profile: int,
         extension_data: bytes,
+        timestamp: int = 0,
     ) -> bytes:
         return (
             b"\x90"
             + bytes((payload_type,))
             + sequence.to_bytes(2, "big")
-            + b"\x00\x00\x00\x00"
+            + timestamp.to_bytes(4, "big")
             + b"\x55\x66\x77\x88"
             + extension_profile.to_bytes(2, "big")
             + (len(extension_data) // 4).to_bytes(2, "big")
@@ -2664,7 +2664,22 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             extension_data=descriptor,
         ),
         _rtp_packet(b"\x67h264-sps", sequence=2, marker=True),
-        _rtp_packet(b"g711-alaw", sequence=3, payload_type=104),
+        rtp_with_extension(
+            b"\x00\x10"
+            + (len(encrypted_audio) << 3).to_bytes(2, "big")
+            + encrypted_audio,
+            sequence=3,
+            payload_type=104,
+            extension_profile=0x4000,
+            extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=4,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x0f\x69",
+        ),
         rtp_with_extension(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")
@@ -2673,6 +2688,7 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             payload_type=105,
             extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
+            timestamp=1024,
         ),
     )
 
@@ -2686,6 +2702,15 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             return None
 
     audio_inputs: list[Any] = []
+    decrypt_calls: list[tuple[int, frozenset[int] | None]] = []
+    decrypt_aac = cloud_stream_module.decrypt_idmx_aac_packets
+
+    def tracked_decrypt_aac(packets: Any, *args: Any, **kwargs: Any) -> Any:
+        packet_list = list(packets)
+        decrypt_calls.append(
+            (packet_list[0].payload_type, kwargs.get("audio_payload_types"))
+        )
+        return decrypt_aac(packet_list, *args, **kwargs)
 
     class FakeAudioInput:
         url = "tcp://127.0.0.1:43210"
@@ -2732,6 +2757,11 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     monkeypatch.setattr(cloud_stream_module, "_CloudRtpAudioInput", FakeAudioInput)
     monkeypatch.setattr(
         cloud_stream_module,
+        "decrypt_idmx_aac_packets",
+        tracked_decrypt_aac,
+    )
+    monkeypatch.setattr(
+        cloud_stream_module,
         "_open_cloud_elementary_mpegts_remux_process",
         fake_open_remux,
     )
@@ -2754,8 +2784,9 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     assert audio_inputs[0].closed is True
     assert audio_inputs[0].cancelled is True
     assert audio_inputs[0].finish_calls == [True]
+    assert (105, frozenset({105})) in decrypt_calls
     assert len(audio_inputs[0].chunks) == 1
-    assert audio_inputs[0].chunks[0].endswith(plain_audio)
+    assert all(chunk.endswith(plain_audio) for chunk in audio_inputs[0].chunks)
 
 
 def test_copy_cloud_stream_packets_accepts_late_aac_fallback_confirmation(

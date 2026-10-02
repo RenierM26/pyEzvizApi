@@ -62,8 +62,11 @@ from .remux import (
     start_stderr_drain,
 )
 from .rtp import (
+    RtpAacStream,
     RtpPacket,
     RtpVideoDepacketizer,
+    decrypt_idmx_aac_packets,
+    idmx_aac_descriptor,
     parse_rtp_packet,
     rtp_media_kind,
     rtp_payload,
@@ -189,14 +192,7 @@ class _RtpFragmentedNal:
     rtp_timestamp: int | None
 
 
-@dataclass(frozen=True)
-class _IdmxAacStream:
-    """Decrypted AAC access units framed for an FFmpeg AAC input."""
-
-    adts: bytes
-    sample_rate: int
-    channels: int
-    frame_count: int
+_IdmxAacStream = RtpAacStream
 
 
 @dataclass(frozen=True)
@@ -2756,26 +2752,6 @@ H264_NAL_HEADER_SIZE = 1
 HEVC_NAL_HEADER_SIZE = 2
 IDMX_H264_RTP_PAYLOAD_TYPE = 96
 IDMX_AAC_RTP_PAYLOAD_TYPE = 104
-IDMX_AAC_SAMPLES_PER_FRAME = 1024
-IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE = 2
-IDMX_AAC_ADTS_HEADER_SIZE = 7
-IDMX_AAC_ADTS_MAX_FRAME_LENGTH = 0x1FFF
-IDMX_AUDIO_EXTENSION_VERSION = b"\x00\x01"
-IDMX_AAC_SAMPLE_RATES = (
-    96_000,
-    88_200,
-    64_000,
-    48_000,
-    44_100,
-    32_000,
-    24_000,
-    22_050,
-    16_000,
-    12_000,
-    11_025,
-    8_000,
-    7_350,
-)
 H264_FU_A_NAL_TYPE = 28
 IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = 12
 IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = b"\x24\0"
@@ -5351,48 +5327,18 @@ def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
     return packet.extension_profile, packet.extension_data
 
 
-def _idmx_rtp_extension_is_audio(frame: bytes) -> bool:
-    """Recognize the IDMX media-class extension used on audio RTP packets."""
-
-    extension = _idmx_rtp_extension(frame)
-    if extension is None:
-        return False
-    profile, data = extension
-    return (
-        profile == 0x4000
-        and len(data) >= 8
-        and data[0] == 0x80
-        and data[1] >= 6
-        and data[2:4] == IDMX_AUDIO_EXTENSION_VERSION
-        and data[4] & 0xF0 == 0x20
-    )
-
-
 def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
     """Read sample rate and channels from an IDMX 0x43 audio descriptor."""
 
+    rtp_packets: list[RtpPacket] = []
     for frame in _iter_idmx_local_packet_frames(packets):
-        extension = _idmx_rtp_extension(frame)
-        if extension is None:
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
             continue
-        _profile, data = extension
-        offset = 0
-        while offset + 2 <= len(data):
-            descriptor_length = data[offset + 1]
-            descriptor_end = offset + descriptor_length + 2
-            if descriptor_end > len(data):
-                break
-            if data[offset] == 0x43 and descriptor_length >= 10:
-                channels = (data[offset + 4] & 0x01) + 1
-                sample_rate = (
-                    (data[offset + 5] << 14)
-                    | (data[offset + 6] << 6)
-                    | (data[offset + 7] >> 2)
-                )
-                if sample_rate in IDMX_AAC_SAMPLE_RATES and channels in (1, 2):
-                    return sample_rate, channels
-            offset = descriptor_end
-    return None
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None:
+            rtp_packets.append(packet)
+    return idmx_aac_descriptor(rtp_packets)
 
 
 def _idmx_audio_metadata(
@@ -6011,62 +5957,7 @@ def _decrypt_idmx_local_packets_to_annexb(
     return bytes(output)
 
 
-def _decrypt_idmx_aac_complete_blocks(data: bytes, aes_key: bytes) -> bytes:
-    # codeql[py/weak-cryptographic-algorithm]
-    cipher = AES.new(
-        aes_key,
-        AES.MODE_ECB,
-    )
-    # codeql[py/weak-cryptographic-algorithm]
-    return cipher.decrypt(data)
-
-
-def _decrypt_idmx_aac_access_unit(access_unit: bytes, aes_key: bytes) -> bytes:
-    decrypt_length = len(access_unit) - len(access_unit) % AES.block_size
-    if decrypt_length == 0:
-        return access_unit
-    decrypted_prefix = _decrypt_idmx_aac_complete_blocks(
-        access_unit[:decrypt_length],
-        aes_key,
-    )
-    return decrypted_prefix + access_unit[decrypt_length:]
-
-
-def _idmx_aac_access_unit(body: bytes) -> bytes | None:
-    """Parse one RFC 3640 MPEG4-GENERIC access unit from an RTP payload."""
-
-    if len(body) < 4 or int.from_bytes(body[:2], "big") != 16:
-        return None
-    access_unit_header = int.from_bytes(body[2:4], "big")
-    access_unit_size = access_unit_header >> 3
-    if access_unit_header & 0x07 or access_unit_size != len(body) - 4:
-        return None
-    return body[4:]
-
-
-def _aac_adts_header(payload_length: int, sample_rate: int, channels: int) -> bytes:
-    try:
-        sample_rate_index = IDMX_AAC_SAMPLE_RATES.index(sample_rate)
-    except ValueError as err:
-        raise PyEzvizError(f"Unsupported IDMX AAC sample rate: {sample_rate}") from err
-    frame_length = payload_length + IDMX_AAC_ADTS_HEADER_SIZE
-    if frame_length > IDMX_AAC_ADTS_MAX_FRAME_LENGTH:
-        raise PyEzvizError("IDMX AAC access unit exceeds the ADTS frame limit")
-    profile = IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE - 1
-    return bytes(
-        (
-            0xFF,
-            0xF1,
-            (profile << 6) | (sample_rate_index << 2) | (channels >> 2),
-            ((channels & 0x03) << 6) | (frame_length >> 11),
-            (frame_length >> 3) & 0xFF,
-            ((frame_length & 0x07) << 5) | 0x1F,
-            0xFC,
-        )
-    )
-
-
-def _decrypt_idmx_local_packets_to_adts_aac(  # noqa: PLR0911
+def _decrypt_idmx_local_packets_to_adts_aac(
     packets: list[bytes],
     media_key: str | bytes,
     *,
@@ -6075,57 +5966,19 @@ def _decrypt_idmx_local_packets_to_adts_aac(  # noqa: PLR0911
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
 
-    encrypted_access_units: list[bytes] = []
-    timestamps: list[int] = []
+    rtp_packets: list[RtpPacket] = []
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None or not _is_complete_idmx_rtp_frame(frame):
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is None or rtp_media_kind(packet) != "audio":
-            continue
-        if not _idmx_rtp_extension_is_audio(frame):
-            return None
-        access_unit = _idmx_aac_access_unit(packet.payload)
-        if access_unit is None:
-            return None
-        timestamps.append(packet.timestamp)
-        encrypted_access_units.append(access_unit)
-    if not encrypted_access_units:
-        return None
-    timestamp_deltas = [
-        (current - previous) & 0xFFFFFFFF
-        for previous, current in pairwise(timestamps)
-    ]
-    if require_contiguous and any(
-        delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in timestamp_deltas
-    ):
-        return None
-    if any(
-        len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
-        > IDMX_AAC_ADTS_MAX_FRAME_LENGTH
-        for access_unit in encrypted_access_units
-    ):
-        return None
-
-    aes_key = _local_media_aes_key(media_key)
-    access_units = [
-        _decrypt_idmx_aac_access_unit(access_unit, aes_key)
-        for access_unit in encrypted_access_units
-    ]
-    descriptor = _idmx_audio_descriptor(packets) or audio_metadata
-    if descriptor is None:
-        return None
-    sample_rate, channels = descriptor
-    adts = b"".join(
-        _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
-        for access_unit in access_units
-    )
-    return _IdmxAacStream(
-        adts=adts,
-        sample_rate=sample_rate,
-        channels=channels,
-        frame_count=len(access_units),
+        if packet is not None:
+            rtp_packets.append(packet)
+    return decrypt_idmx_aac_packets(
+        rtp_packets,
+        media_key,
+        audio_metadata=audio_metadata,
+        require_contiguous=require_contiguous,
     )
 
 

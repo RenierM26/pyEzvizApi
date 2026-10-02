@@ -5,10 +5,16 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import suppress
 from dataclasses import dataclass
 from itertools import chain
 import json
+from pathlib import Path
+from queue import Empty, Full, Queue
+import socket
 import subprocess
+import tempfile
+from threading import Event, Lock, Thread
 import time
 from typing import Any, BinaryIO, TypedDict, cast
 from urllib.parse import urlparse
@@ -20,10 +26,13 @@ from .media import has_positive_finite_capture_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     ANNEX_B_START_CODE,
+    RtpAacStream,
     RtpPacket,
     RtpVideoCodec,
     RtpVideoDepacketizer,
+    decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
+    idmx_aac_descriptor,
     parse_rtp_packet,
     rtp_media_kind,
     rtp_packets_to_nal_units,
@@ -38,6 +47,127 @@ from .stream_transport import (
 
 JsonDict = dict[str, Any]
 _RTP_CODEC_PROBE_MAX_PACKETS = 32
+_RTP_AUDIO_PROBE_MAX_PACKETS = 4096
+_RTP_AUDIO_QUEUE_MAX_FRAMES = 128
+_RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
+
+
+class _CloudRtpAudioInput:
+    """Bounded loopback transport for FFmpeg's second elementary input."""
+
+    def __init__(self) -> None:
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(1)
+        self._listener.settimeout(0.25)
+        port = cast("tuple[str, int]", self._listener.getsockname())[1]
+        self.url = f"tcp://127.0.0.1:{port}"
+        self._queue: Queue[bytes | None] = Queue(_RTP_AUDIO_QUEUE_MAX_FRAMES)
+        self._stop = Event()
+        self._connection: socket.socket | None = None
+        self._connection_lock = Lock()
+        self._errors: list[Exception] = []
+        self._thread = Thread(
+            target=self._run,
+            name="pyezvizapi-cloud-rtp-audio",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def write(self, data: bytes) -> None:
+        if not data:
+            return
+        deadline = time.monotonic() + _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS
+        while not self._stop.is_set():
+            try:
+                self._queue.put(data, timeout=0.25)
+                return
+            except Full:
+                if time.monotonic() >= deadline:
+                    self.cancel()
+                    raise PyEzvizError(
+                        "FFmpeg AAC input stopped consuming data"
+                    ) from None
+        raise BrokenPipeError("FFmpeg audio input closed")
+
+    def close_input(self) -> None:
+        deadline = time.monotonic() + _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS
+        while not self._stop.is_set():
+            try:
+                self._queue.put(None, timeout=0.25)
+                return
+            except Full:
+                if time.monotonic() >= deadline:
+                    self.cancel()
+                    raise PyEzvizError("FFmpeg AAC input could not be closed") from None
+
+    def cancel(self) -> None:
+        self._stop.set()
+        with suppress(OSError):
+            self._listener.close()
+        with self._connection_lock:
+            connection = self._connection
+        if connection is not None:
+            with suppress(OSError):
+                connection.shutdown(socket.SHUT_RDWR)
+            with suppress(OSError):
+                connection.close()
+
+    def finish(self, *, raise_errors: bool) -> None:
+        self._thread.join(timeout=2.0)
+        if self._thread.is_alive():
+            self.cancel()
+            self._thread.join(timeout=2.0)
+        if raise_errors and self._thread.is_alive():
+            raise PyEzvizError("FFmpeg audio input writer did not stop")
+        if raise_errors and self._errors:
+            raise self._errors[0]
+
+    def _run(self) -> None:  # noqa: PLR0912
+        connection: socket.socket | None = None
+        try:
+            while not self._stop.is_set():
+                try:
+                    connection, _address = self._listener.accept()
+                    break
+                except TimeoutError:
+                    continue
+                except OSError:
+                    if self._stop.is_set():
+                        return
+                    raise
+            if connection is None:
+                return
+            with self._connection_lock:
+                if self._stop.is_set():
+                    connection.close()
+                    return
+                self._connection = connection
+            with connection:
+                while not self._stop.is_set():
+                    try:
+                        chunk = self._queue.get(timeout=0.25)
+                    except Empty:
+                        continue
+                    if chunk is None:
+                        return
+                    connection.sendall(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            if not self._stop.is_set():
+                self._errors.append(PyEzvizError("FFmpeg closed its AAC input"))
+        except Exception as err:  # pragma: no cover - defensive thread handoff
+            if not self._stop.is_set():
+                self._errors.append(err)
+        finally:
+            self._stop.set()
+            with self._connection_lock:
+                if self._connection is connection:
+                    self._connection = None
+            with suppress(OSError):
+                self._listener.close()
 
 
 class VtduTokenResponse(TypedDict, total=False):
@@ -375,39 +505,13 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
         packets = list(media_packets)
-        if transport == StreamTransport.RTP:
-            codec, nal_units = _cloud_rtp_packet_nal_units(packets)
-            header_size = nalu_header_size
-            if header_size is None:
-                header_size = 2 if codec == "hevc" else 1
-            decrypted_annexb = b"".join(
-                _decrypt_cloud_rtp_nal_unit(
-                    nal_unit,
-                    selected_key,
-                    nalu_header_size=header_size,
-                )
-                for nal_unit in nal_units
-            )
-            _remux_cloud_elementary_bytes_to_mpegts(
-                decrypted_annexb,
-                output,
-                ffmpeg_path=ffmpeg_path,
-                codec=codec,
-            )
-            return
-        if transport == StreamTransport.MPEG_TS:
-            raise PyEzvizError(
-                "decrypt_video does not support MPEG-TS cloud payloads"
-            )
-        payload = b"".join(packet.body for packet in packets)
-        _remux_cloud_mpegps_bytes_to_mpegts(
-            decrypt_hikvision_ps_video(
-                payload,
-                selected_key,
-                nalu_header_size=nalu_header_size,
-            ),
+        copy_decrypted_cloud_stream_packets_to_mpegts(
+            packets,
             output,
             ffmpeg_path=ffmpeg_path,
+            media_key=selected_key,
+            nalu_header_size=nalu_header_size,
+            transport=transport,
         )
         return
 
@@ -550,16 +654,32 @@ def _collect_cloud_stream_packets(
 def _cloud_rtp_packet_nal_units(
     packets: Iterable[Any],
 ) -> tuple[RtpVideoCodec, tuple[bytes, ...]]:
-    parsed: list[RtpPacket] = []
-    for packet in packets:
-        rtp_packet = _parse_cloud_rtp_packet(packet.body)
-        if rtp_packet is not None:
-            parsed.append(rtp_packet)
+    parsed = _cloud_rtp_packets(packets)
+
     codec = detect_rtp_video_codec(parsed)
     return codec, rtp_packets_to_nal_units(
         parsed,
         codec=codec,
         allow_ezviz_headerless_hevc_fu=True,
+    )
+
+
+def _cloud_rtp_packets(packets: Iterable[Any]) -> list[RtpPacket]:
+    """Parse valid RTP packet bodies while ignoring interleaved control data."""
+
+    parsed: list[RtpPacket] = []
+    for packet in packets:
+        rtp_packet = _parse_cloud_rtp_packet(packet.body)
+        if rtp_packet is not None:
+            parsed.append(rtp_packet)
+    return parsed
+
+
+def cloud_rtp_packets_have_audio(packets: Iterable[Any]) -> bool:
+    """Return whether a bounded cloud capture contains routed RTP audio."""
+
+    return any(
+        rtp_media_kind(packet) == "audio" for packet in _cloud_rtp_packets(packets)
     )
 
 
@@ -589,6 +709,72 @@ def _decrypt_cloud_rtp_nal_unit(
         key,
         nalu_header_size=nalu_header_size,
     )[9:]
+
+
+def copy_decrypted_cloud_stream_packets_to_mpegts(
+    packets: Iterable[Any],
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    media_key: str | bytes,
+    nalu_header_size: int | None = None,
+    transport: StreamTransport | None = None,
+) -> None:
+    """Decrypt one bounded cloud capture and remux its supported media to MPEG-TS."""
+
+    packet_list = list(packets)
+    selected_transport = transport
+    if selected_transport is None:
+        selected_transport, media_packets = _peek_cloud_transport(iter(packet_list))
+        packet_list = list(media_packets)
+    if selected_transport == StreamTransport.RTP:
+        parsed = _cloud_rtp_packets(packet_list)
+        codec = detect_rtp_video_codec(parsed)
+        nal_units = rtp_packets_to_nal_units(
+            parsed,
+            codec=codec,
+            allow_ezviz_headerless_hevc_fu=True,
+        )
+        header_size = nalu_header_size
+        if header_size is None:
+            header_size = 2 if codec == "hevc" else 1
+        decrypted_annexb = b"".join(
+            _decrypt_cloud_rtp_nal_unit(
+                nal_unit,
+                media_key,
+                nalu_header_size=header_size,
+            )
+            for nal_unit in nal_units
+        )
+        audio = decrypt_idmx_aac_packets(parsed, media_key)
+        if audio is not None:
+            _remux_cloud_elementary_av_bytes_to_mpegts(
+                decrypted_annexb,
+                audio,
+                output,
+                ffmpeg_path=ffmpeg_path,
+                codec=codec,
+            )
+            return
+        _remux_cloud_elementary_bytes_to_mpegts(
+            decrypted_annexb,
+            output,
+            ffmpeg_path=ffmpeg_path,
+            codec=codec,
+        )
+        return
+    if selected_transport == StreamTransport.MPEG_TS:
+        raise PyEzvizError("decrypt_video does not support MPEG-TS cloud payloads")
+    payload = b"".join(packet.body for packet in packet_list)
+    _remux_cloud_mpegps_bytes_to_mpegts(
+        decrypt_hikvision_ps_video(
+            payload,
+            media_key,
+            nalu_header_size=nalu_header_size,
+        ),
+        output,
+        ffmpeg_path=ffmpeg_path,
+    )
 
 
 def _iter_bounded_cloud_packets(
@@ -628,6 +814,7 @@ def copy_cloud_stream_packets_to_mpegts(
     allow_encrypted: bool = False,
     mpegps_transform: Callable[[bytes], bytes] | None = None,
     rtp_transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
+    rtp_audio_key: str | bytes | None = None,
 ) -> None:
     """Route VTM payloads by transport and write MPEG-TS."""
 
@@ -657,6 +844,7 @@ def copy_cloud_stream_packets_to_mpegts(
             ffmpeg_path=ffmpeg_path,
             cancel_input=getattr(stream, "close", None),
             transform=rtp_transform,
+            audio_key=rtp_audio_key,
             allow_encrypted=allow_encrypted,
         )
         return
@@ -765,38 +953,50 @@ def _write_cloud_mpegts_packets(
     output.flush()
 
 
-def _copy_cloud_rtp_packets_to_mpegts(
+def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     packets: Iterator[Any],
     output: BinaryIO,
     *,
     ffmpeg_path: str,
     cancel_input: Callable[[], None] | None,
     transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
+    audio_key: str | bytes | None = None,
     allow_encrypted: bool = False,
 ) -> None:
-    """Depacketize a clear RTP video stream and remux Annex-B video to MPEG-TS."""
+    """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
     prefix: list[RtpPacket] = []
+    video_probe: list[RtpPacket] = []
     codec: RtpVideoCodec | None = None
+    audio_metadata: tuple[int, int] | None = None
+    audio_seen = False
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         parsed = _parse_cloud_rtp_packet(packet.body)
         if parsed is None:
             continue
-        if rtp_media_kind(parsed) != "video":
-            continue
         prefix.append(parsed)
-        try:
-            codec = detect_rtp_video_codec(prefix, allow_fallback=False)
-        except PyEzvizError:
-            if len(prefix) >= _RTP_CODEC_PROBE_MAX_PACKETS:
-                codec = detect_rtp_video_codec(prefix)
-                break
+        kind = rtp_media_kind(parsed)
+        if audio_metadata is None:
+            audio_metadata = idmx_aac_descriptor((parsed,))
+        if kind == "audio":
+            audio_seen = True
+        elif kind == "video":
+            video_probe.append(parsed)
+            try:
+                codec = detect_rtp_video_codec(video_probe, allow_fallback=False)
+            except PyEzvizError:
+                if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
+                    codec = detect_rtp_video_codec(video_probe)
+        if codec is None:
             continue
-        break
+        if audio_key is None or (audio_metadata is not None and audio_seen):
+            break
+        if len(prefix) >= _RTP_AUDIO_PROBE_MAX_PACKETS:
+            break
     if codec is None:
         try:
-            codec = detect_rtp_video_codec(prefix)
+            codec = detect_rtp_video_codec(video_probe)
         except PyEzvizError as err:
             raise PyEzvizError(
                 "Could not detect RTP video codec in cloud stream"
@@ -810,7 +1010,29 @@ def _copy_cloud_rtp_packets_to_mpegts(
                 continue
             yield parsed
 
-    process = _open_cloud_elementary_mpegts_remux_process(ffmpeg_path, codec)
+    selected_audio_key = (
+        audio_key if audio_metadata is not None and audio_seen else None
+    )
+    audio_input = _CloudRtpAudioInput() if selected_audio_key is not None else None
+    if audio_input is not None:
+        audio_input.start()
+    try:
+        if audio_input is None:
+            process = _open_cloud_elementary_mpegts_remux_process(
+                ffmpeg_path,
+                codec,
+            )
+        else:
+            process = _open_cloud_elementary_mpegts_remux_process(
+                ffmpeg_path,
+                codec,
+                audio_url=audio_input.url,
+            )
+    except Exception:
+        if audio_input is not None:
+            audio_input.cancel()
+            audio_input.finish(raise_errors=False)
+        raise
 
     def _write_input(stdin: BinaryIO) -> None:
         depacketizer = RtpVideoDepacketizer(
@@ -818,26 +1040,77 @@ def _copy_cloud_rtp_packets_to_mpegts(
             allow_ezviz_headerless_hevc_fu=True,
         )
         nal_count = 0
-        for packet in chain(prefix, _remaining_rtp_packets()):
-            if rtp_media_kind(packet) != "video":
-                continue
-            for nal_unit in depacketizer.push(packet):
-                if nal_unit:
-                    annexb = ANNEX_B_START_CODE + nal_unit
-                    stdin.write(transform(annexb, codec) if transform else annexb)
-                    stdin.flush()
-                    nal_count += 1
-        if nal_count == 0:
-            raise PyEzvizError(
-                "RTP cloud stream did not contain a complete video NAL unit"
-            )
+        last_audio_sequence: dict[int, int] = {}
+        next_audio_timestamp: dict[int, int] = {}
+        try:
+            for packet in chain(prefix, _remaining_rtp_packets()):
+                kind = rtp_media_kind(packet)
+                if kind == "audio" and audio_input is not None:
+                    previous_sequence = last_audio_sequence.get(packet.ssrc)
+                    expected_timestamp = next_audio_timestamp.get(packet.ssrc)
+                    if previous_sequence is not None and packet.sequence == previous_sequence:
+                        continue
+                    if previous_sequence is not None and packet.sequence != (
+                        previous_sequence + 1
+                    ) & 0xFFFF:
+                        raise PyEzvizError("Cloud RTP AAC sequence discontinuity")
+                    if expected_timestamp is not None and (
+                        packet.timestamp != expected_timestamp
+                    ):
+                        raise PyEzvizError("Cloud RTP AAC timestamp discontinuity")
+                    assert selected_audio_key is not None
+                    audio = decrypt_idmx_aac_packets(
+                        (packet,),
+                        selected_audio_key,
+                        audio_metadata=audio_metadata,
+                        require_contiguous=False,
+                    )
+                    if audio is None:
+                        raise PyEzvizError(
+                            "Cloud RTP AAC packet is not safely decodable"
+                        )
+                    audio_input.write(audio.adts)
+                    last_audio_sequence[packet.ssrc] = packet.sequence
+                    next_audio_timestamp[packet.ssrc] = (
+                        packet.timestamp + 1024 * audio.frame_count
+                    ) & 0xFFFFFFFF
+                    continue
+                if kind != "video":
+                    continue
+                for nal_unit in depacketizer.push(packet):
+                    if nal_unit:
+                        annexb = ANNEX_B_START_CODE + nal_unit
+                        stdin.write(transform(annexb, codec) if transform else annexb)
+                        stdin.flush()
+                        nal_count += 1
+            if nal_count == 0:
+                raise PyEzvizError(
+                    "RTP cloud stream did not contain a complete video NAL unit"
+                )
+        finally:
+            if audio_input is not None:
+                audio_input.close_input()
 
-    copy_remuxed_output(
-        process,
-        output,
-        write_input=_write_input,
-        cancel_input=cancel_input,
-    )
+    def _cancel_inputs() -> None:
+        if cancel_input is not None:
+            cancel_input()
+        if audio_input is not None:
+            audio_input.cancel()
+
+    remux_error: BaseException | None = None
+    try:
+        copy_remuxed_output(
+            process,
+            output,
+            write_input=_write_input,
+            cancel_input=_cancel_inputs,
+        )
+    except BaseException as err:
+        remux_error = err
+        raise
+    finally:
+        if audio_input is not None:
+            audio_input.finish(raise_errors=remux_error is None)
 
 
 def _remux_cloud_mpegps_bytes_to_mpegts(
@@ -865,6 +1138,28 @@ def _remux_cloud_elementary_bytes_to_mpegts(
     remux_bytes(process, data, output)
 
 
+def _remux_cloud_elementary_av_bytes_to_mpegts(
+    video: bytes,
+    audio: RtpAacStream,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    codec: RtpVideoCodec,
+) -> None:
+    """Remux bounded Annex-B video and descriptor-backed AAC into MPEG-TS."""
+
+    with tempfile.TemporaryDirectory(prefix="pyezvizapi-cloud-rtp-") as directory:
+        audio_path = Path(directory) / "audio.aac"
+        audio_path.write_bytes(audio.adts)
+        process = open_mpegts_remux_process(
+            ffmpeg_path,
+            input_format=codec,
+            audio_path=str(audio_path),
+            popen=subprocess.Popen,
+        )
+        remux_bytes(process, video, output)
+
+
 def _open_cloud_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes]:
     """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS."""
 
@@ -874,12 +1169,15 @@ def _open_cloud_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes
 def _open_cloud_elementary_mpegts_remux_process(
     ffmpeg_path: str,
     codec: RtpVideoCodec,
+    *,
+    audio_url: str | None = None,
 ) -> subprocess.Popen[bytes]:
     """Open FFmpeg for a depacketized H.264 or HEVC elementary stream."""
 
     return open_mpegts_remux_process(
         ffmpeg_path,
         input_format=codec,
+        audio_url=audio_url,
         popen=subprocess.Popen,
     )
 

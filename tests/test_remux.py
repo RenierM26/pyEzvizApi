@@ -105,6 +105,47 @@ def test_ffmpeg_mpegts_command_maps_video_and_audio() -> None:
     ]
 
 
+def test_ffmpeg_mpegts_command_accepts_streaming_audio_url() -> None:
+    command = ffmpeg_mpegts_command(
+        "ffmpeg",
+        input_format="hevc",
+        audio_url="tcp://127.0.0.1:43210",
+    )
+
+    assert command == [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "hevc",
+        "-i",
+        "pipe:0",
+        "-f",
+        "aac",
+        "-i",
+        "tcp://127.0.0.1:43210",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c",
+        "copy",
+        "-f",
+        "mpegts",
+        "pipe:1",
+    ]
+
+
+def test_ffmpeg_mpegts_command_rejects_two_audio_inputs() -> None:
+    with pytest.raises(PyEzvizError, match="mutually exclusive"):
+        ffmpeg_mpegts_command(
+            "ffmpeg",
+            audio_path="audio.aac",
+            audio_url="tcp://127.0.0.1:43210",
+        )
+
+
 def test_open_mpegts_remux_process_wraps_launch_failure() -> None:
     def fail_launch(_args: list[str], **_kwargs: Any) -> None:
         raise OSError("not installed")

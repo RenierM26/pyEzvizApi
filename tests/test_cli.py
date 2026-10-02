@@ -2497,6 +2497,93 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
+def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _install_fake_client(monkeypatch)
+    body = (
+        b"\x80\x60\x00\x01"
+        b"\x00\x00\x00\x01"
+        b"\x00\x00\x00\x02"
+        b"\x40\x01vps"
+    )
+    packet = VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 1
+            return [packet]
+
+    remux_calls: list[dict[str, Any]] = []
+
+    def fake_av_remux(
+        packets: list[VtmPacket],
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        remux_calls.append({"packets": packets, **kwargs})
+        output.write(MPEGTS_PAYLOAD)
+
+    monkeypatch.setattr(
+        cli_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: FakeStream(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "cloud_rtp_packets_have_audio",
+        lambda _packets: True,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "copy_decrypted_cloud_stream_packets_to_mpegts",
+        fake_av_remux,
+    )
+    output_file = tmp_path / "stream.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "stream",
+                "dump",
+                "--serial",
+                "CAM123",
+                "--max-packets",
+                "1",
+                "--duration",
+                "0",
+                "--decrypt-video",
+                "--output",
+                str(output_file),
+            ]
+        )
+        == 0
+    )
+
+    assert remux_calls == [
+        {
+            "packets": [packet],
+            "ffmpeg_path": "ffmpeg",
+            "media_key": "camera-secret",
+            "nalu_header_size": None,
+            "transport": cli_module.StreamTransport.RTP,
+        }
+    ]
+    assert output_file.read_bytes() == MPEGTS_PAYLOAD
+
+
 def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
     monkeypatch,
     tmp_path,
@@ -5130,6 +5217,7 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
     def fake_copy_cloud_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
         transform_payload = kwargs["mpegps_transform"]
         assert kwargs["rtp_transform"] is not None
+        assert kwargs["rtp_audio_key"] == "camera-key"
         first_video_pes = b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-1"
         second_video_pes = b"\x00\x00\x01\xe0\x00\x0e\x80\x00\x00encrypted-2"
         audio_pes = b"\x00\x00\x01\xc0\x00\x08\x80\x00\x00audio"

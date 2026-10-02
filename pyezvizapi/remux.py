@@ -49,8 +49,12 @@ def ffmpeg_mpegts_command(
     input_format: str = "mpeg",
     frame_rate: str | None = None,
     audio_path: str | None = None,
+    audio_url: str | None = None,
 ) -> list[str]:
     """Build an FFmpeg stream-copy command producing MPEG-TS on stdout."""
+
+    if audio_path is not None and audio_url is not None:
+        raise PyEzvizError("FFmpeg audio_path and audio_url are mutually exclusive")
 
     command = [
         ffmpeg_path,
@@ -63,13 +67,14 @@ def ffmpeg_mpegts_command(
     if frame_rate is not None:
         command.extend(("-r", frame_rate))
     command.extend(("-i", "pipe:0"))
-    if audio_path is not None:
+    audio_input = audio_path if audio_path is not None else audio_url
+    if audio_input is not None:
         command.extend(
             (
                 "-f",
                 "aac",
                 "-i",
-                audio_path,
+                audio_input,
                 "-map",
                 "0:v:0",
                 "-map",
@@ -86,6 +91,7 @@ def open_mpegts_remux_process(
     input_format: str = "mpeg",
     frame_rate: str | None = None,
     audio_path: str | None = None,
+    audio_url: str | None = None,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> subprocess.Popen[bytes]:
     """Open one FFmpeg MPEG-TS remux process with captured stderr."""
@@ -97,6 +103,7 @@ def open_mpegts_remux_process(
                 input_format=input_format,
                 frame_rate=frame_rate,
                 audio_path=audio_path,
+                audio_url=audio_url,
             ),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

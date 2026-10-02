@@ -58,8 +58,10 @@ is not emitted.
 - Decryption paths that collect encrypted input before transforming it must be
   bounded. They reject unsafe capture limits before network or FFmpeg work
   begins. The HTTP proxy decrypts incrementally instead of buffering a capture.
-- Descriptor-free IDMX AAC stays video-only. Packet cadence is not sufficient
-  evidence for a reliable sample-rate guess.
+- Descriptor-backed IDMX AAC uses the native sample rate and channel count and
+  is retained in decrypted local and cloud RTP MPEG-TS output. Descriptor-free
+  IDMX AAC stays video-only because packet cadence is not sufficient evidence
+  for a reliable sample-rate guess.
 
 ## Public clip configuration
 
@@ -102,9 +104,13 @@ bound before network work. New code should use valid positive, finite
   camera region. Encrypted VTM channel packets are rejected until a supported
   channel-level decryptor exists.
 - Cloud RTP/IDMX video is depacketized as H.264 or HEVC before MPEG-TS remuxing.
-  RTP audio is currently omitted from this path; raw output remains available
-  when packet-exact diagnostics are required. An RTP or MPEG-TS cloud stream
-  cannot be requested as MPEG-PS because doing so would mislabel its bytes.
+  With `decrypt_video` enabled, supported RFC 3640 AAC is decrypted with the
+  same camera media key and retained when the native `0x43` descriptor provides
+  authoritative sample-rate/channel metadata. Bounded captures remux buffered
+  elementary streams; the HTTP proxy uses a bounded loopback-only second FFmpeg
+  input. Raw output remains available for packet-exact diagnostics. An RTP or
+  MPEG-TS cloud stream cannot be requested as MPEG-PS because doing so would
+  mislabel its bytes.
 - Direct local SDK streaming requires LAN endpoint and CAS data and may require
   P2P registration before CAS lookup.
 - ECDH local streaming requires the native `0x43` metadata descriptor for AAC.

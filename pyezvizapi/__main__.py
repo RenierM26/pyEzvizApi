@@ -27,7 +27,12 @@ from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
-from .cloud_stream import copy_cloud_stream_packets_to_mpegts, open_cloud_stream
+from .cloud_stream import (
+    cloud_rtp_packets_have_audio,
+    copy_cloud_stream_packets_to_mpegts,
+    copy_decrypted_cloud_stream_packets_to_mpegts,
+    open_cloud_stream,
+)
 from .constants import (
     MAX_RETRIES,
     PROFILE as PUSH_PROFILE,
@@ -701,7 +706,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument(
         "--decrypt-video",
         action="store_true",
-        help="Decrypt encrypted local video before writing/remuxing",
+        help=(
+            "Decrypt encrypted media before writing/remuxing; supported cloud "
+            "RTP AAC is retained when native descriptor metadata is present"
+        ),
     )
     parser_save_clip.add_argument(
         "--decrypt-codec",
@@ -1104,8 +1112,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--decrypt-video",
         action="store_true",
         help=(
-            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads with the "
-            "camera encrypt key before writing/remuxing (experimental)"
+            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads and supported "
+            "descriptor-backed AAC with the camera encrypt key before "
+            "writing/remuxing (experimental)"
         ),
     )
     parser_stream_dump.add_argument(
@@ -1193,8 +1202,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--decrypt-video",
         action="store_true",
         help=(
-            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads with the "
-            "camera encrypt key before remuxing (experimental)"
+            "Decrypt Hikvision/EZVIZ encrypted video NAL payloads and supported "
+            "descriptor-backed AAC with the camera encrypt key before remuxing "
+            "(experimental)"
         ),
     )
     parser_stream_proxy.add_argument(
@@ -3313,6 +3323,26 @@ def _stream_payload_decryptors(
 ) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes]]:
     """Return MPEG-PS and RTP decryptors sharing one camera-key lookup."""
 
+    mpegps_decryptor, rtp_decryptor, _key = _stream_payload_decryptors_with_key(
+        client,
+        serial,
+        codec=codec,
+    )
+    return mpegps_decryptor, rtp_decryptor
+
+
+def _stream_payload_decryptors_with_key(
+    client: EzvizClient,
+    serial: str,
+    *,
+    codec: str,
+) -> tuple[
+    Callable[[bytes], bytes],
+    Callable[[bytes, str], bytes],
+    str,
+]:
+    """Return streaming decryptors and their single fetched camera key."""
+
     key = client.get_cam_key(serial, max_retries=1)
     if not key:
         raise PyEzvizError("Could not get camera encryption key")
@@ -3333,6 +3363,7 @@ def _stream_payload_decryptors(
     return (
         _BufferedStreamPayloadDecryptor(selected_key, codec=codec),
         _decrypt_rtp_annexb,
+        selected_key,
     )
 
 
@@ -3475,8 +3506,13 @@ def _handle_stream_proxy_get(
             stream.start()
             mpegps_transform = None
             rtp_transform = None
+            rtp_audio_key = None
             if config.decrypt_video:
-                mpegps_transform, rtp_transform = _stream_payload_decryptors(
+                (
+                    mpegps_transform,
+                    rtp_transform,
+                    rtp_audio_key,
+                ) = _stream_payload_decryptors_with_key(
                     client,
                     config.serial,
                     codec=config.decrypt_codec,
@@ -3489,6 +3525,7 @@ def _handle_stream_proxy_get(
                 allow_encrypted=config.allow_encrypted,
                 mpegps_transform=mpegps_transform,
                 rtp_transform=rtp_transform,
+                rtp_audio_key=rtp_audio_key,
             )
             _start_response()
     except (BrokenPipeError, ConnectionResetError):
@@ -4982,6 +5019,31 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                 )
                 transport = _detect_stream_packets_transport(collected_packets)
                 if transport == StreamTransport.RTP:
+                    if args.format == "mpegts" and cloud_rtp_packets_have_audio(
+                        collected_packets
+                    ):
+                        media_key = client.get_cam_key(args.serial, max_retries=1)
+                        if not media_key:
+                            raise PyEzvizError("Could not get camera encryption key")
+
+                        def _write_rtp_mpegts(selected_output: BinaryIO) -> None:
+                            copy_decrypted_cloud_stream_packets_to_mpegts(
+                                collected_packets,
+                                selected_output,
+                                ffmpeg_path=args.ffmpeg_path,
+                                media_key=str(media_key),
+                                nalu_header_size=_codec_nalu_header_size(
+                                    args.decrypt_codec
+                                ),
+                                transport=transport,
+                            )
+
+                        if args.output == "-":
+                            _write_rtp_mpegts(sys.stdout.buffer)
+                        else:
+                            with Path(args.output).open("wb") as output:
+                                _write_rtp_mpegts(output)
+                        return 0
                     rtp_codec = _detect_rtp_video_codec(collected_packets)
                     decrypt_codec = (
                         rtp_codec if args.decrypt_codec == "auto" else args.decrypt_codec

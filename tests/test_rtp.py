@@ -313,6 +313,36 @@ def test_descriptor_routes_replace_conflicting_default_video_payload_type() -> N
     ) == H264_DESCRIPTOR_ROUTED_NAL
 
 
+def test_unknown_descriptor_claims_shared_payload_from_video_fallback() -> None:
+    descriptor = b"\x45\x02\xaf\x60"
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        )
+    )
+    future_codec = parse_rtp_packet(
+        _rtp(b"\x67not-h264", sequence=2, payload_type=96)
+    )
+
+    routes = idmx_rtp_stream_descriptors((metadata,))
+
+    assert routes == (
+        RtpStreamDescriptor(
+            stream_type=0xAF,
+            payload_type=96,
+            codec="unknown",
+            media_kind="unknown",
+        ),
+    )
+    assert rtp_media_kind(future_codec, stream_descriptors=routes) == "unknown"
+    with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
+        detect_rtp_video_codec((metadata, future_codec))
+
+
 def test_codec_detection_reports_metadata_declared_unsupported_video_codec() -> None:
     descriptor = b"\x45\x0a\xb1\x1a" + (b"\xff" * 8)
     packet = parse_rtp_packet(

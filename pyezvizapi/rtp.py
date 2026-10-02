@@ -44,6 +44,7 @@ IDMX_AAC_SAMPLE_RATES = (
 RtpMediaKind = Literal["video", "audio", "metadata", "unknown"]
 RtpVideoCodec = Literal["h264", "hevc"]
 RtpCodec = Literal[
+    "unknown",
     "h264",
     "hevc",
     "mpeg2video",
@@ -233,7 +234,9 @@ def idmx_rtp_stream_descriptors(
 
     The official app reads the stream type and RTP payload type from bytes two
     and three of this descriptor, then maps the stream type to a codec before
-    inspecting media payloads. Unknown stream types are intentionally ignored.
+    inspecting media payloads. Unknown stream types retain ownership of their
+    payload type so future/private codecs cannot fall through to a conflicting
+    static or default route.
     """
 
     descriptors: list[RtpStreamDescriptor] = []
@@ -249,17 +252,16 @@ def idmx_rtp_stream_descriptors(
             if data[offset] == 0x45 and descriptor_length >= 2:
                 stream_type = data[offset + 2]
                 codec_info = _IDMX_RTP_STREAM_TYPES.get(stream_type)
-                if codec_info is not None:
-                    codec, media_kind = codec_info
-                    descriptor = RtpStreamDescriptor(
-                        stream_type=stream_type,
-                        payload_type=data[offset + 3] & 0x7F,
-                        codec=codec,
-                        media_kind=media_kind,
-                    )
-                    if descriptor not in seen:
-                        descriptors.append(descriptor)
-                        seen.add(descriptor)
+                codec, media_kind = codec_info or ("unknown", "unknown")
+                descriptor = RtpStreamDescriptor(
+                    stream_type=stream_type,
+                    payload_type=data[offset + 3] & 0x7F,
+                    codec=codec,
+                    media_kind=media_kind,
+                )
+                if descriptor not in seen:
+                    descriptors.append(descriptor)
+                    seen.add(descriptor)
             offset = descriptor_end
     return tuple(descriptors)
 

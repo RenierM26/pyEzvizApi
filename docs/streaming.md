@@ -92,6 +92,12 @@ reported by name instead of being guessed as HEVC. Other audio codecs are
 classified correctly but remain video-only until a tested depacketizer and
 FFmpeg input contract are added for each format.
 
+The app's codec table includes Opus (`0x3002`, static RTP payload type 115),
+but its `0x45` stream-type table does not define an Opus entry. Unknown `0x45`
+stream types are therefore preserved as unknown routes: their payload types
+cannot be mistaken for fallback video or audio while remaining safe for future
+codec support.
+
 ## Public clip configuration
 
 Prefer `EzvizClient.save_clip_with_options()` for new integrations:

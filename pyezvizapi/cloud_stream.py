@@ -1129,8 +1129,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 audio_input.cancel()
 
         try:
-            for packet in chain(prefix, _remaining_rtp_packets()):
-                route_profile.absorb(packet)
+            buffered_packets = ((packet, True) for packet in prefix)
+            live_packets = (
+                (packet, False) for packet in _remaining_rtp_packets()
+            )
+            for packet, buffered in chain(buffered_packets, live_packets):
+                if not buffered:
+                    route_profile.absorb(packet)
                 kind = route_profile.media_kind(packet)
                 if (
                     kind == "audio"
@@ -1138,7 +1143,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     and audio_enabled
                     and audio_input is not None
                 ):
-                    route_profile.mark_media(packet)
+                    route_profile.mark_media(packet, absorb=False)
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:
@@ -1176,7 +1181,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     continue
                 if kind != "video":
                     continue
-                route_profile.mark_media(packet)
+                route_profile.mark_media(packet, absorb=False)
                 for nal_unit in depacketizer.push(packet):
                     if nal_unit:
                         annexb = ANNEX_B_START_CODE + nal_unit

@@ -223,10 +223,15 @@ class RtpRouteProfile:
             fallback_payload_types=fallback_payload_types,
         )
 
-    def mark_media(self, packet: RtpPacket) -> None:
-        """Record a packet immediately before it is dispatched as media."""
+    def mark_media(self, packet: RtpPacket, *, absorb: bool = True) -> None:
+        """Record a packet immediately before it is dispatched as media.
 
-        self.absorb(packet)
+        Set ``absorb`` false when the packet was already absorbed during startup
+        buffering or immediately before classification.
+        """
+
+        if absorb:
+            self.absorb(packet)
         kind = self.media_kind(packet)
         if kind not in {"video", "audio"}:
             return

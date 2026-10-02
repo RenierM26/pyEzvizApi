@@ -74,7 +74,10 @@ def test_decrypt_idmx_aac_packets_uses_native_descriptor() -> None:
         )
     )
     plain = b"0123456789abcdef" + b"tail"
-    encrypted = AES.new(key, AES.MODE_ECB).encrypt(plain[:16]) + plain[16:]
+    encrypted = AES.new(  # codeql[py/weak-cryptographic-algorithm]
+        key,
+        AES.MODE_ECB,
+    ).encrypt(plain[:16]) + plain[16:]
     audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
     packets = [
         parse_rtp_packet(

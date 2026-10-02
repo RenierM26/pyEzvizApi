@@ -2726,6 +2726,43 @@ def test_h264_packet_offsets_ignore_non_h264_payloads() -> None:
 
     assert _h264_annexb_packet_end_offsets(packets) == [0, 8]
 
+
+def test_h264_packet_offsets_use_descriptor_route_inside_aggregate() -> None:
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    first_media = _rtp_packet(
+        b"\x67sps",
+        sequence=2,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    last_media = _rtp_packet(
+        b"\x65dynamic",
+        sequence=3,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    aggregate = (
+        outer_header
+        + b"\x00\x10sidecar"
+        + len(first_media).to_bytes(4, "little")
+        + first_media
+        + len(last_media).to_bytes(4, "little")
+        + last_media
+    )
+    aggregate_packet = len(aggregate).to_bytes(4, "little") + aggregate
+    descriptor = _rtp_packet(
+        b"metadata",
+        sequence=4,
+        payload_type=112,
+        extension_data=b"\x45\x02\x1b\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+
+    assert _h264_annexb_packet_end_offsets([aggregate_packet, descriptor]) == [
+        20,
+        20,
+    ]
+
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(
     tmp_path,
 ) -> None:
@@ -2882,7 +2919,7 @@ def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
         ssrc=b"\x55\x66\x77\x88",
     )
 
-    annexb, codec = _idmx_local_packets_to_annexb_with_codec([descriptor, packet])
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec([packet, descriptor])
 
     assert codec == "hevc"
     assert annexb == expected_annexb

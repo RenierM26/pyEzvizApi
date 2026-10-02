@@ -5959,21 +5959,22 @@ def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
 def _iter_idmx_local_packet_frames(packets: list[bytes]) -> Iterator[bytes]:
     profile = RtpRouteProfile()
     for packet in packets:
-        video_payload_types = frozenset(
-            descriptor.payload_type
-            for descriptor in profile.descriptors
-            if descriptor.media_kind == "video"
-        )
-        for frame in _iter_idmx_local_packet_frame(
-            packet,
-            video_payload_types=video_payload_types,
-        ):
+        for frame in _iter_idmx_local_packet_frame(packet):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is not None:
                 parsed = _idmx_local_frame_rtp_packet(frame, header_size)
                 if parsed is not None:
                     profile.absorb(parsed)
-            yield frame
+    video_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in profile.descriptors
+        if descriptor.media_kind == "video"
+    )
+    for packet in packets:
+        yield from _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        )
 
 
 def _idmx_local_frame_contains_media(frame: bytes) -> bool:
@@ -6170,7 +6171,10 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     end_offsets: list[int] = []
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="h264")
     for packet in packets:
-        for frame in _iter_idmx_local_packet_frame(packet):
+        for frame in _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=routed_payload_types,
+        ):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
@@ -6230,7 +6234,10 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     end_offsets: list[int] = []
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
     for packet in packets:
-        for frame in _iter_idmx_local_packet_frame(packet):
+        for frame in _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=routed_payload_types,
+        ):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue

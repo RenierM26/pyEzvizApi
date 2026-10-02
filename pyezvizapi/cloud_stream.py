@@ -1004,7 +1004,11 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         if kind == "video":
             video_probe.append(parsed)
         try:
-            codec = detect_rtp_video_codec(prefix, allow_fallback=False)
+            codec = detect_rtp_video_codec(
+                prefix,
+                allow_fallback=False,
+                stream_descriptors=stream_descriptors,
+            )
         except UnsupportedRtpVideoCodecError:
             codec = None
             if (
@@ -1014,7 +1018,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 raise
         except PyEzvizError:
             if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
-                codec = detect_rtp_video_codec(prefix)
+                codec = detect_rtp_video_codec(
+                    prefix,
+                    stream_descriptors=stream_descriptors,
+                )
         if (
             audio_key is not None
             and audio_metadata is not None
@@ -1050,7 +1057,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             break
     if codec is None:
         try:
-            codec = detect_rtp_video_codec(prefix)
+            codec = detect_rtp_video_codec(
+                prefix,
+                stream_descriptors=route_profile.descriptors,
+            )
         except UnsupportedRtpVideoCodecError:
             raise
         except PyEzvizError as err:

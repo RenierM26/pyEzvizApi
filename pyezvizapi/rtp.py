@@ -663,11 +663,16 @@ def detect_rtp_video_codec(
     *,
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
     allow_fallback: bool = True,
+    stream_descriptors: Iterable[RtpStreamDescriptor] | None = None,
 ) -> RtpVideoCodec:
     """Detect H.264 or HEVC from routed RTP video packets."""
 
     packet_list = list(packets)
-    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    descriptors = (
+        tuple(stream_descriptors)
+        if stream_descriptors is not None
+        else idmx_rtp_stream_descriptors(packet_list)
+    )
     advertised_codec = _advertised_rtp_video_codec(descriptors)
     if advertised_codec is not None:
         return advertised_codec

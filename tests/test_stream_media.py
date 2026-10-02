@@ -2797,6 +2797,72 @@ def test_copy_cloud_stream_packets_rejects_midstream_route_mutation(
         )
 
 
+def test_copy_cloud_stream_packets_accepts_predispatch_video_codec_correction(
+    monkeypatch,
+) -> None:
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x61",
+        ),
+        _rtp_packet(b"\x26\x01hevc", sequence=3, payload_type=97, marker=True),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    open_calls: list[str] = []
+
+    def fake_open_remux(
+        _ffmpeg_path: str,
+        codec: str,
+        *,
+        audio_url: str | None = None,
+    ) -> subprocess.Popen[bytes]:
+        assert audio_url is None
+        open_calls.append(codec)
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+        rtp_audio_key=b"0123456789abcdef",
+    )
+
+    assert open_calls == ["hevc"]
+    assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
+
+
 def test_copy_cloud_stream_packets_to_mpegts_ignores_invalid_rtp_audio(
     monkeypatch,
 ) -> None:

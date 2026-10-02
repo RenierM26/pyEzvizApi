@@ -264,6 +264,25 @@ def idmx_rtp_stream_descriptors(
     return tuple(descriptors)
 
 
+def rtp_codec_payload_types(
+    descriptors: Iterable[RtpStreamDescriptor],
+    codec: RtpCodec,
+    *,
+    fallback_payload_types: frozenset[int] = frozenset(),
+) -> frozenset[int]:
+    """Return payload types for one codec with descriptor routes taking priority."""
+
+    descriptor_tuple = tuple(descriptors)
+    assigned_payload_types = frozenset(
+        descriptor.payload_type for descriptor in descriptor_tuple
+    )
+    return (fallback_payload_types - assigned_payload_types) | frozenset(
+        descriptor.payload_type
+        for descriptor in descriptor_tuple
+        if descriptor.codec == codec
+    )
+
+
 def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
     """Return authoritative sample-rate/channel metadata from descriptor ``0x43``."""
 
@@ -368,10 +387,10 @@ def decrypt_idmx_aac_packets(  # noqa: PLR0911
     descriptors = idmx_rtp_stream_descriptors(packet_list)
     selected_audio_payload_types = audio_payload_types
     if selected_audio_payload_types is None:
-        selected_audio_payload_types = DEFAULT_AAC_PAYLOAD_TYPES | frozenset(
-            descriptor.payload_type
-            for descriptor in descriptors
-            if descriptor.codec == "aac"
+        selected_audio_payload_types = rtp_codec_payload_types(
+            descriptors,
+            "aac",
+            fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
         )
     encrypted_access_units: list[bytes] = []
     timestamps: list[int] = []
@@ -748,10 +767,10 @@ def rtp_packets_to_nal_units(
 
     packet_list = list(packets)
     descriptors = idmx_rtp_stream_descriptors(packet_list)
-    routed_video_payload_types = video_payload_types | frozenset(
-        descriptor.payload_type
-        for descriptor in descriptors
-        if descriptor.media_kind == "video" and descriptor.codec == codec
+    routed_video_payload_types = rtp_codec_payload_types(
+        descriptors,
+        codec,
+        fallback_payload_types=video_payload_types,
     )
     depacketizer = RtpVideoDepacketizer(
         codec,

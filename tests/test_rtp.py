@@ -16,11 +16,13 @@ from pyezvizapi.rtp import (
     detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
     parse_rtp_packet,
+    rtp_codec_payload_types,
     rtp_media_kind,
     rtp_packets_to_annexb,
 )
 
 H264_WRAPPED_NAL = b"\x00\x00\x00\x01\x65hello-world"
+H264_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x65right"
 HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 HEVC_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x26\x01hevc"
 
@@ -134,7 +136,11 @@ def test_decrypt_idmx_aac_packets_requires_native_descriptor() -> None:
 def test_decrypt_idmx_aac_packets_uses_descriptor_payload_route() -> None:
     key = b"0123456789abcdef"
     sample_rate = 16_000
-    stream_descriptor = b"\x45\x0a\x0f\x69" + (b"\xff" * 8)
+    stream_descriptor = (
+        b"\x45\x02\x90\x68"
+        b"\x45\x0a\x0f\x69"
+        + (b"\xff" * 8)
+    )
     audio_descriptor = bytes(
         (
             0x43,
@@ -165,8 +171,16 @@ def test_decrypt_idmx_aac_packets_uses_descriptor_payload_route() -> None:
         ),
         parse_rtp_packet(
             _rtp(
-                b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted,
+                b"g711-alaw",
                 sequence=2,
+                timestamp=0,
+                payload_type=104,
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(
+                b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted,
+                sequence=3,
                 timestamp=0,
                 payload_type=105,
                 extension_profile=0x4000,
@@ -266,6 +280,36 @@ def test_idmx_stream_descriptor_routes_non_default_hevc_payload_type() -> None:
         [metadata, video],
         codec="hevc",
     ) == HEVC_DESCRIPTOR_ROUTED_NAL
+
+
+def test_descriptor_routes_replace_conflicting_default_video_payload_type() -> None:
+    descriptors = b"\x45\x02\x90\x60\x45\x02\x1b\x61"
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptors,
+        )
+    )
+    reassigned_audio = parse_rtp_packet(
+        _rtp(b"\x65wrong", sequence=2, payload_type=96)
+    )
+    video = parse_rtp_packet(
+        _rtp(b"\x65right", sequence=3, payload_type=97)
+    )
+    routes = idmx_rtp_stream_descriptors((metadata,))
+
+    assert rtp_codec_payload_types(
+        routes,
+        "h264",
+        fallback_payload_types=frozenset({96}),
+    ) == frozenset({97})
+    assert rtp_packets_to_annexb(
+        (metadata, reassigned_audio, video),
+        codec="h264",
+    ) == H264_DESCRIPTOR_ROUTED_NAL
 
 
 def test_codec_detection_reports_metadata_declared_unsupported_video_codec() -> None:

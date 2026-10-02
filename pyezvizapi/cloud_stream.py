@@ -36,6 +36,7 @@ from .rtp import (
     idmx_aac_descriptor,
     idmx_rtp_stream_descriptors,
     parse_rtp_packet,
+    rtp_codec_payload_types,
     rtp_media_kind,
     rtp_packets_to_nal_units,
 )
@@ -979,10 +980,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             continue
         prefix.append(parsed)
         stream_descriptors = idmx_rtp_stream_descriptors(prefix)
-        aac_payload_types = DEFAULT_AAC_PAYLOAD_TYPES | frozenset(
-            descriptor.payload_type
-            for descriptor in stream_descriptors
-            if descriptor.codec == "aac"
+        aac_payload_types = rtp_codec_payload_types(
+            stream_descriptors,
+            "aac",
+            fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
         )
         kind = rtp_media_kind(
             parsed,
@@ -1047,10 +1048,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
 
     selected_audio_key = audio_key if audio_decodable else None
     stream_descriptors = idmx_rtp_stream_descriptors(prefix)
-    aac_payload_types = DEFAULT_AAC_PAYLOAD_TYPES | frozenset(
-        descriptor.payload_type
-        for descriptor in stream_descriptors
-        if descriptor.codec == "aac"
+    aac_payload_types = rtp_codec_payload_types(
+        stream_descriptors,
+        "aac",
+        fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
     audio_input = _CloudRtpAudioInput() if selected_audio_key is not None else None
     if audio_input is not None:

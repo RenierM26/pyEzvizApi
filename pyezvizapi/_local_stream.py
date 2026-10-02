@@ -4740,7 +4740,10 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
                 authoritative_hevc_route
                 or hevc_evidence_seen
                 or _looks_like_idmx_hevc_evidence_frame(body)
-            ) and _looks_like_idmx_hevc_direct_frame(body)
+            ) and _idmx_hevc_direct_frame_matches_route(
+                body,
+                authoritative_hevc=authoritative_hevc_route,
+            )
             if wrapped_media:
                 hevc_evidence_seen = True
                 payload = body[IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET:]
@@ -6204,7 +6207,10 @@ def _decrypt_idmx_local_packets_to_annexb(
             final_route_is_authoritative_hevc
             or hevc_evidence_seen
             or hevc_direct_evidence
-        ) and _looks_like_idmx_hevc_direct_frame(body):
+        ) and _idmx_hevc_direct_frame_matches_route(
+            body,
+            authoritative_hevc=final_route_is_authoritative_hevc,
+        ):
             hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(
                 output,
@@ -6500,6 +6506,16 @@ def _looks_like_idmx_hevc_direct_frame(body: bytes) -> bool:
         return False
     nal_type = _hevc_nal_type(body)
     return 0 <= nal_type <= 40 or nal_type == 49
+
+
+def _idmx_hevc_direct_frame_matches_route(
+    body: bytes,
+    *,
+    authoritative_hevc: bool,
+) -> bool:
+    if not _looks_like_idmx_hevc_direct_frame(body):
+        return False
+    return not authoritative_hevc or rtp_payload_video_codec(body) != "h264"
 
 
 def _looks_like_idmx_hevc_evidence_frame(body: bytes) -> bool:

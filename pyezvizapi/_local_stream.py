@@ -4734,17 +4734,34 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
             rtp_packet = _idmx_local_frame_rtp_packet(frame, frame_header_size)
             if rtp_packet is not None:
                 route_epoch_profile.absorb(rtp_packet)
+            active_route_descriptor = next(
+                (
+                    descriptor
+                    for descriptor in route_epoch_profile.descriptors
+                    if rtp_packet is not None
+                    and descriptor.payload_type == rtp_packet.payload_type
+                ),
+                None,
+            )
             routed_transport = bool(
                 rtp_packet is not None
                 and rtp_packet.payload_type in routed_payload_types
+            )
+            hevc_epoch_compatible = bool(
+                active_route_descriptor is None
+                or active_route_descriptor.codec == "hevc"
             )
             conflicting_h264_route = bool(
                 rtp_packet is not None
                 and rtp_packet.payload_type
                 in route_epoch_profile.codec_payload_types("h264")
             )
-            wrapped_media = _looks_like_idmx_hevc_media_frame(body)
-            direct_media = routed_transport and (
+            wrapped_media = (
+                routed_transport
+                and hevc_epoch_compatible
+                and _looks_like_idmx_hevc_media_frame(body)
+            )
+            direct_media = routed_transport and hevc_epoch_compatible and (
                 authoritative_hevc_route
                 or hevc_evidence_seen
                 or _looks_like_idmx_hevc_evidence_frame(body)
@@ -6139,9 +6156,6 @@ def _decrypt_idmx_local_packets_to_annexb(
         raise PyEzvizError(
             "Conflicting H.264 and HEVC routes in encrypted EZVIZ local stream"
         )
-    final_route_is_authoritative_h264 = bool(
-        routed_h264_payload_types and not routed_hevc_payload_types
-    )
     final_route_is_authoritative_hevc = bool(
         routed_hevc_payload_types and not routed_h264_payload_types
     )
@@ -6162,6 +6176,15 @@ def _decrypt_idmx_local_packets_to_annexb(
         rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if rtp_packet is not None:
             route_epoch_profile.absorb(rtp_packet)
+        active_route_descriptor = next(
+            (
+                descriptor
+                for descriptor in route_epoch_profile.descriptors
+                if rtp_packet is not None
+                and descriptor.payload_type == rtp_packet.payload_type
+            ),
+            None,
+        )
         h264_transport = bool(
             rtp_packet is not None
             and rtp_packet.payload_type in routed_h264_payload_types
@@ -6172,18 +6195,17 @@ def _decrypt_idmx_local_packets_to_annexb(
         )
         hevc_codec_compatible = bool(
             hevc_transport
-            and rtp_packet is not None
-            and rtp_packet.payload_type
-            not in route_epoch_profile.codec_payload_types("h264")
+            and (
+                active_route_descriptor is None
+                or active_route_descriptor.codec == "hevc"
+            )
         )
         h264_codec_compatible = bool(
             h264_transport
             and not final_route_is_authoritative_hevc
-            and not (
-                final_route_is_authoritative_h264
-                and rtp_packet is not None
-                and rtp_packet.payload_type
-                in route_epoch_profile.codec_payload_types("hevc")
+            and (
+                active_route_descriptor is None
+                or active_route_descriptor.codec == "h264"
             )
         )
         if _looks_like_idmx_hevc_parameter_frame(body):
@@ -6236,7 +6258,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             and rtp_packet.payload_type
             in route_epoch_profile.codec_payload_types("h264")
         )
-        if hevc_transport and (
+        if hevc_codec_compatible and (
             final_route_is_authoritative_hevc
             or hevc_evidence_seen
             or hevc_direct_evidence

@@ -490,6 +490,73 @@ def test_encrypted_local_idmx_rejects_wrapped_hevc_before_h264_route(
     assert annexb == expected_annexb
 
 
+def test_encrypted_local_idmx_rejects_aac_epoch_before_h264_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x65stale-aac",
+            payload_type=97,
+            extension_data=b"\x45\x02\x0f\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+    )
+
+    assert annexb == expected_annexb
+
+
+def test_encrypted_local_idmx_hevc_spans_reject_wrapped_h264_epoch() -> None:
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+    current_hevc = b"\x26\x01current-hevc"
+    expected_annexb = b"\x00\x00\x00\x01" + current_hevc
+    packets = [
+        _rtp_packet(
+            wrapper + b"\x26\x01stale-hevc",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            wrapper + current_hevc,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+    span_annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert annexb == expected_annexb
+    assert span_annexb == expected_annexb
+    assert {span[2] for span in spans} == {2}
+
+
 def test_encrypted_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

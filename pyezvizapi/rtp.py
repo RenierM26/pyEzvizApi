@@ -9,10 +9,15 @@ from typing import Literal
 
 from Crypto.Cipher import AES
 
-from .exceptions import PyEzvizError
+from .exceptions import PyEzvizError, UnsupportedRtpVideoCodecError
 
 ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
+MPEG_VIDEO_START_CODE_PREFIX = b"\x00\x00\x01"
 DEFAULT_VIDEO_PAYLOAD_TYPES = frozenset({96})
+KNOWN_VIDEO_PAYLOAD_TYPES = frozenset({26, 32, 96, 99})
+KNOWN_AUDIO_PAYLOAD_TYPES = frozenset(
+    {0, 4, 8, 11, 14, 18, 98, 100, 102, 103, 104, 115}
+)
 DEFAULT_AAC_PAYLOAD_TYPES = frozenset({104})
 DEFAULT_METADATA_PAYLOAD_TYPES = frozenset({112})
 IDMX_AAC_SAMPLES_PER_FRAME = 1024
@@ -38,6 +43,59 @@ IDMX_AAC_SAMPLE_RATES = (
 
 RtpMediaKind = Literal["video", "audio", "metadata", "unknown"]
 RtpVideoCodec = Literal["h264", "hevc"]
+RtpCodec = Literal[
+    "unknown",
+    "h264",
+    "hevc",
+    "mpeg2video",
+    "mpeg4video",
+    "mjpeg",
+    "svac",
+    "private-video",
+    "mpeg-audio",
+    "aac",
+    "aac-ld",
+    "pcm",
+    "g711-alaw",
+    "g711-mulaw",
+    "g722",
+    "g723",
+    "g726",
+    "g729",
+    "opus",
+]
+
+# Extracted from the official EZVIZ Android app's
+# rtp_pack_stream_type_to_codec_type() and CodecTypeToMediaType() mappings.
+_IDMX_RTP_STREAM_TYPES: dict[int, tuple[RtpCodec, RtpMediaKind]] = {
+    0x02: ("mpeg2video", "video"),
+    0x03: ("mpeg-audio", "audio"),
+    0x04: ("mpeg-audio", "audio"),
+    0x0F: ("aac", "audio"),
+    0x10: ("mpeg4video", "video"),
+    0x1B: ("h264", "video"),
+    0x24: ("hevc", "video"),
+    0x80: ("svac", "video"),
+    0x90: ("g711-alaw", "audio"),
+    0x91: ("g711-mulaw", "audio"),
+    0x92: ("g722", "audio"),
+    0x93: ("g723", "audio"),
+    0x96: ("g726", "audio"),
+    0x98: ("g726", "audio"),
+    0x99: ("g729", "audio"),
+    0x9C: ("pcm", "audio"),
+    0x9D: ("pcm", "audio"),
+    0x9E: ("private-video", "video"),
+    0xA6: ("aac-ld", "audio"),
+    0xB0: ("h264", "video"),
+    0xB1: ("mjpeg", "video"),
+    0xB2: ("hevc", "video"),
+}
+_IDMX_STATIC_VIDEO_PAYLOAD_CODECS: dict[int, RtpCodec] = {
+    26: "mjpeg",
+    32: "mpeg2video",
+    99: "svac",
+}
 
 
 @dataclass(frozen=True)
@@ -74,6 +132,16 @@ class RtpAacStream:
     sample_rate: int
     channels: int
     frame_count: int
+
+
+@dataclass(frozen=True)
+class RtpStreamDescriptor:
+    """Codec routing advertised by native IDMX RTP descriptor ``0x45``."""
+
+    stream_type: int
+    payload_type: int
+    codec: RtpCodec
+    media_kind: RtpMediaKind
 
 
 @dataclass
@@ -140,12 +208,16 @@ def rtp_payload(data: bytes) -> bytes:
 def rtp_media_kind(
     packet: RtpPacket,
     *,
-    video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
-    audio_payload_types: frozenset[int] = DEFAULT_AAC_PAYLOAD_TYPES,
+    video_payload_types: frozenset[int] = KNOWN_VIDEO_PAYLOAD_TYPES,
+    audio_payload_types: frozenset[int] = KNOWN_AUDIO_PAYLOAD_TYPES,
     metadata_payload_types: frozenset[int] = DEFAULT_METADATA_PAYLOAD_TYPES,
+    stream_descriptors: Iterable[RtpStreamDescriptor] = (),
 ) -> RtpMediaKind:
     """Classify one RTP packet using the EZVIZ dynamic payload mapping."""
 
+    for descriptor in stream_descriptors:
+        if descriptor.payload_type == packet.payload_type:
+            return descriptor.media_kind
     if packet.payload_type in video_payload_types:
         return "video"
     if packet.payload_type in audio_payload_types:
@@ -153,6 +225,64 @@ def rtp_media_kind(
     if packet.payload_type in metadata_payload_types:
         return "metadata"
     return "unknown"
+
+
+def idmx_rtp_stream_descriptors(
+    packets: Iterable[RtpPacket],
+) -> tuple[RtpStreamDescriptor, ...]:
+    """Return native IDMX codec routes from stream descriptor ``0x45``.
+
+    The official app reads the stream type and RTP payload type from bytes two
+    and three of this descriptor, then maps the stream type to a codec before
+    inspecting media payloads. Unknown stream types retain ownership of their
+    payload type so future/private codecs cannot fall through to a conflicting
+    static or default route.
+    """
+
+    descriptors: list[RtpStreamDescriptor] = []
+    seen: set[RtpStreamDescriptor] = set()
+    for packet in packets:
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            descriptor_length = data[offset + 1]
+            descriptor_end = offset + descriptor_length + 2
+            if descriptor_end > len(data):
+                break
+            if data[offset] == 0x45 and descriptor_length >= 2:
+                stream_type = data[offset + 2]
+                codec_info = _IDMX_RTP_STREAM_TYPES.get(stream_type)
+                codec, media_kind = codec_info or ("unknown", "unknown")
+                descriptor = RtpStreamDescriptor(
+                    stream_type=stream_type,
+                    payload_type=data[offset + 3] & 0x7F,
+                    codec=codec,
+                    media_kind=media_kind,
+                )
+                if descriptor not in seen:
+                    descriptors.append(descriptor)
+                    seen.add(descriptor)
+            offset = descriptor_end
+    return tuple(descriptors)
+
+
+def rtp_codec_payload_types(
+    descriptors: Iterable[RtpStreamDescriptor],
+    codec: RtpCodec,
+    *,
+    fallback_payload_types: frozenset[int] = frozenset(),
+) -> frozenset[int]:
+    """Return payload types for one codec with descriptor routes taking priority."""
+
+    descriptor_tuple = tuple(descriptors)
+    assigned_payload_types = frozenset(
+        descriptor.payload_type for descriptor in descriptor_tuple
+    )
+    return (fallback_payload_types - assigned_payload_types) | frozenset(
+        descriptor.payload_type
+        for descriptor in descriptor_tuple
+        if descriptor.codec == codec
+    )
 
 
 def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
@@ -189,6 +319,12 @@ def _idmx_audio_extension_is_aac(packet: RtpPacket) -> bool:
         and data[2:4] == IDMX_AUDIO_EXTENSION_VERSION
         and data[4] & 0xF0 == 0x20
     )
+
+
+def rtp_packet_is_idmx_aac(packet: RtpPacket) -> bool:
+    """Return whether native RTP extension metadata identifies IDMX AAC."""
+
+    return _idmx_audio_extension_is_aac(packet)
 
 
 def _idmx_aac_access_unit(payload: bytes) -> bytes | None:
@@ -244,15 +380,24 @@ def decrypt_idmx_aac_packets(  # noqa: PLR0911
     media_key: str | bytes,
     *,
     audio_metadata: tuple[int, int] | None = None,
+    audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
 ) -> RtpAacStream | None:
     """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
 
     packet_list = list(packets)
+    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    selected_audio_payload_types = audio_payload_types
+    if selected_audio_payload_types is None:
+        selected_audio_payload_types = rtp_codec_payload_types(
+            descriptors,
+            "aac",
+            fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
+        )
     encrypted_access_units: list[bytes] = []
     timestamps: list[int] = []
     for packet in packet_list:
-        if rtp_media_kind(packet) != "audio":
+        if packet.payload_type not in selected_audio_payload_types:
             continue
         if not _idmx_audio_extension_is_aac(packet):
             return None
@@ -317,6 +462,43 @@ def rtp_payload_video_codec(payload: bytes) -> RtpVideoCodec | None:
     return codec
 
 
+def _rtp_payload_unsupported_video_codec(payload: bytes) -> RtpCodec | None:
+    if len(payload) < 4 or payload[:3] != MPEG_VIDEO_START_CODE_PREFIX:
+        return None
+    start_code = payload[3]
+    if start_code in {0xB3, 0xB8}:
+        return "mpeg2video"
+    if start_code <= 0x2F or start_code in {0xB0, 0xB5, 0xB6}:
+        return "mpeg4video"
+    return None
+
+
+def _advertised_rtp_video_codec(
+    descriptors: Iterable[RtpStreamDescriptor],
+) -> RtpVideoCodec | None:
+    advertised_codecs = {
+        descriptor.codec
+        for descriptor in descriptors
+        if descriptor.media_kind == "video"
+    }
+    if not advertised_codecs:
+        return None
+    if len(advertised_codecs) > 1:
+        codecs = ", ".join(sorted(advertised_codecs))
+        raise PyEzvizError(
+            f"Conflicting RTP video codecs advertised by IDMX metadata: {codecs}"
+        )
+    advertised_codec = next(iter(advertised_codecs))
+    if advertised_codec == "h264":
+        return "h264"
+    if advertised_codec == "hevc":
+        return "hevc"
+    raise UnsupportedRtpVideoCodecError(
+        "Unsupported RTP video codec advertised by IDMX metadata: "
+        f"{advertised_codec}"
+    )
+
+
 def detect_rtp_video_codec(
     packets: Iterable[RtpPacket],
     *,
@@ -325,10 +507,47 @@ def detect_rtp_video_codec(
 ) -> RtpVideoCodec:
     """Detect H.264 or HEVC from routed RTP video packets."""
 
+    packet_list = list(packets)
+    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    advertised_codec = _advertised_rtp_video_codec(descriptors)
+    if advertised_codec is not None:
+        return advertised_codec
+    assigned_payload_types = frozenset(
+        descriptor.payload_type for descriptor in descriptors
+    )
+    routed_video_payload_types = (
+        video_payload_types - assigned_payload_types
+    ) | frozenset(
+        descriptor.payload_type
+        for descriptor in descriptors
+        if descriptor.media_kind == "video"
+    )
+    non_video_descriptor_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in descriptors
+        if descriptor.media_kind != "video"
+    )
+    unsupported_static_codecs = {
+        _IDMX_STATIC_VIDEO_PAYLOAD_CODECS[packet.payload_type]
+        for packet in packet_list
+        if packet.payload_type in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS
+        and packet.payload_type not in non_video_descriptor_payload_types
+        and packet.payload_type not in video_payload_types
+    }
+    if unsupported_static_codecs:
+        codecs = ", ".join(sorted(unsupported_static_codecs))
+        raise UnsupportedRtpVideoCodecError(
+            f"Unsupported RTP video codec: {codecs}"
+        )
     fallback: RtpVideoCodec | None = None
-    for packet in packets:
-        if packet.payload_type not in video_payload_types:
+    for packet in packet_list:
+        if packet.payload_type not in routed_video_payload_types:
             continue
+        unsupported_codec = _rtp_payload_unsupported_video_codec(packet.payload)
+        if unsupported_codec is not None:
+            raise UnsupportedRtpVideoCodecError(
+                f"Unsupported RTP video codec: {unsupported_codec}"
+            )
         codec = rtp_payload_video_codec(packet.payload)
         if codec is not None:
             return codec
@@ -556,13 +775,20 @@ def rtp_packets_to_nal_units(
 ) -> tuple[bytes, ...]:
     """Route RTP video packets and return complete continuity-checked NAL units."""
 
+    packet_list = list(packets)
+    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    routed_video_payload_types = rtp_codec_payload_types(
+        descriptors,
+        codec,
+        fallback_payload_types=video_payload_types,
+    )
     depacketizer = RtpVideoDepacketizer(
         codec,
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
-    for packet in packets:
-        if packet.payload_type not in video_payload_types:
+    for packet in packet_list:
+        if packet.payload_type not in routed_video_payload_types:
             continue
         for nal in depacketizer.push(packet):
             if nal:

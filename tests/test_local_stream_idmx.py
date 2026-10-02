@@ -15,6 +15,7 @@ from pyezvizapi._local_stream import (
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
     _idmx_audio_metadata,
+    _idmx_audio_payload_types,
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
     _idmx_local_packets_to_annexb_with_codec,
@@ -428,6 +429,40 @@ def test_decrypt_idmx_aac_rejects_missing_rtp_frame() -> None:
         is None
     )
 
+
+def test_decrypt_idmx_local_aac_uses_preserved_dynamic_payload_route() -> None:
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    access_unit = b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted
+    rtp = (
+        b"\x90\x69\x00\x02\x00\x00\x00\x00\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+        + access_unit
+    )
+    selected_packet = len(rtp).to_bytes(4, "little") + rtp
+
+    audio = _decrypt_idmx_local_packets_to_adts_aac(
+        [selected_packet],
+        IDMX_MEDIA_KEY,
+        audio_metadata=(16_000, 1),
+        audio_payload_types=frozenset({105}),
+    )
+
+    assert audio is not None
+    assert audio.adts.endswith(plain)
+
+
+def test_idmx_audio_payload_types_uses_startup_stream_descriptor() -> None:
+    descriptor = b"\x45\x02\x90\x68\x45\x02\x0f\x69"
+    rtp = (
+        b"\x90\xf0\x00\x01\x00\x00\x00\x00\x55\x66\x77\x88"
+        b"\x00\x01\x00\x02"
+        + descriptor
+    )
+    startup_packet = len(rtp).to_bytes(4, "little") + rtp
+
+    assert _idmx_audio_payload_types([startup_packet]) == frozenset({105})
+
 def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
     sample_rate = 16_000
     descriptor = bytes(
@@ -734,7 +769,9 @@ def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
     )
     selected_packets = packets[1:4]
     selected_calls: list[tuple[bytes, bytes]] = []
-    audio_calls: list[tuple[list[bytes], tuple[int, int] | None]] = []
+    audio_calls: list[
+        tuple[list[bytes], tuple[int, int] | None, frozenset[int] | None]
+    ] = []
     audio = SimpleNamespace(adts=b"aac", sample_rate=16_000, channels=1)
     mux_calls: list[tuple[bytes, Any]] = []
 
@@ -774,14 +811,21 @@ def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
         "pyezvizapi.local_stream._idmx_audio_metadata",
         lambda *_args, **_kwargs: (16_000, 1),
     )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_audio_payload_types",
+        lambda *_args, **_kwargs: frozenset({105}),
+    )
 
     def fake_audio(
         candidate_packets: list[bytes],
         _media_key: str | bytes,
         *,
         audio_metadata: tuple[int, int] | None = None,
+        audio_payload_types: frozenset[int] | None = None,
     ) -> Any:
-        audio_calls.append((candidate_packets, audio_metadata))
+        audio_calls.append(
+            (candidate_packets, audio_metadata, audio_payload_types)
+        )
         return audio
 
     monkeypatch.setattr(
@@ -803,7 +847,7 @@ def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
     )
 
     assert selected_calls == [(full_annexb, full_annexb)]
-    assert audio_calls == [(selected_packets, (16_000, 1))]
+    assert audio_calls == [(selected_packets, (16_000, 1), frozenset({105}))]
     assert mux_calls == [(full_annexb, audio)]
 
 def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(
@@ -852,6 +896,10 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(
         lambda *_args, **_kwargs: (16_000, 1),
     )
     monkeypatch.setattr(
+        "pyezvizapi.local_stream._idmx_audio_payload_types",
+        lambda *_args, **_kwargs: frozenset({105}),
+    )
+    monkeypatch.setattr(
         "pyezvizapi.local_stream._copy_idmx_audio_video_to_mpegts",
         lambda video, selected_audio, *_args, **_kwargs: mux_calls.append(
             (video, selected_audio)
@@ -866,7 +914,15 @@ def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(
         h264_wait_for_clean_idr_window=True,
     )
 
-    assert audio_calls == [(packets[1:], {"audio_metadata": (16_000, 1)})]
+    assert audio_calls == [
+        (
+            packets[1:],
+            {
+                "audio_metadata": (16_000, 1),
+                "audio_payload_types": frozenset({105}),
+            },
+        )
+    ]
     assert mux_calls == [(selected_annexb, audio)]
 
 def test_copy_local_stream_to_decrypted_mpegts_wait_path_without_selected_aac(

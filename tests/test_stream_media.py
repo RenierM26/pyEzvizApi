@@ -30,17 +30,23 @@ from pyezvizapi._stream import (
 )
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_cloud_stream_to_mpegps,
     copy_cloud_stream_to_mpegts,
 )
-from pyezvizapi.exceptions import HTTPError, PyEzvizError
+from pyezvizapi.exceptions import (
+    HTTPError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
 
 BODY = b"abc"
 CLEAR_ANNEXB = b"clear-annexb"
 EMPTY_BYTES = b""
 H264_SPS_ANNEXB = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_FU_ANNEXB = b"\x00\x00\x00\x01\x26\x01startmiddleend"
+HEVC_DESCRIPTOR_ANNEXB = b"\x00\x00\x00\x01\x26\x01hevc"
 AV_MPEGTS_PAYLOAD = b"av-mpegts"
 AAC_FRAME = b"aac-frame"
 
@@ -1584,6 +1590,161 @@ def test_copy_cloud_stream_to_mpegts_depacketizes_clear_rtp_video(monkeypatch) -
     assert output.getvalue() == H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_to_mpegts_uses_idmx_codec_and_payload_descriptor(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    descriptor = b"\x45\x0a\x24\x61" + (b"\xff" * 8)
+    rtp_bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=97,
+            marker=True,
+        ),
+    )
+    open_calls: list[tuple[str, str]] = []
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        open_calls.append((ffmpeg_path, codec))
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=2)
+
+    assert open_calls == [("ffmpeg", "hevc")]
+    assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
+
+
+def test_cloud_rtp_audio_probe_uses_idmx_payload_descriptor() -> None:
+    descriptor = b"\x45\x02\x0f\x69"
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(
+            b"dynamic-aac",
+            sequence=2,
+            payload_type=105,
+        ),
+    )
+    packets = tuple(
+        VtmPacket(
+            channel=VtmChannel.STREAM,
+            length=len(body),
+            sequence=sequence,
+            message_code=0,
+            body=body,
+        )
+        for sequence, body in enumerate(bodies, start=1)
+    )
+
+    assert cloud_rtp_packets_have_audio(packets)
+
+
+def test_copy_cloud_stream_to_mpegts_reports_descriptor_codec(monkeypatch) -> None:
+    client = _client()
+    descriptor = b"\x45\x0a\xb1\x1a" + (b"\xff" * 8)
+    rtp_bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(
+            b"\xff\xd8\xff\xe0jpeg",
+            sequence=2,
+            payload_type=26,
+            marker=True,
+        ),
+    )
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+
+    with pytest.raises(
+        UnsupportedRtpVideoCodecError,
+        match="advertised by IDMX metadata: mjpeg",
+    ):
+        copy_cloud_stream_to_mpegts(
+            client,
+            "CAM123",
+            io.BytesIO(),
+            max_packets=2,
+        )
+
+
 def test_copy_cloud_stream_to_mpegts_defers_codec_fallback_past_h264_aud(
     monkeypatch,
 ) -> None:
@@ -2375,7 +2536,7 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
 ) -> None:
     media_key = b"0123456789abcdef"
     sample_rate = 16_000
-    descriptor = bytes(
+    audio_descriptor = bytes(
         (
             0x43,
             10,
@@ -2390,6 +2551,11 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             3,
             0xFF,
         )
+    )
+    descriptor = (
+        b"\x45\x02\x90\x68"
+        b"\x45\x02\x0f\x69"
+        + audio_descriptor
     )
     plain_audio = b"0123456789abcdef" + b"tail"
     encrypted_audio = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain_audio[16:]
@@ -2423,12 +2589,13 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             extension_data=descriptor,
         ),
         _rtp_packet(b"\x67h264-sps", sequence=2, marker=True),
+        _rtp_packet(b"g711-alaw", sequence=3, payload_type=104),
         rtp_with_extension(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")
             + encrypted_audio,
-            sequence=3,
-            payload_type=104,
+            sequence=4,
+            payload_type=105,
             extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
         ),
@@ -2514,6 +2681,70 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     assert audio_inputs[0].finish_calls == [True]
     assert len(audio_inputs[0].chunks) == 1
     assert audio_inputs[0].chunks[0].endswith(plain_audio)
+
+
+@pytest.mark.parametrize("reassigned_payload_type", [32, 96])
+def test_copy_cloud_stream_packets_waits_for_delayed_payload_routes(
+    monkeypatch,
+    reassigned_payload_type: int,
+) -> None:
+    descriptor = bytes(
+        (
+            0x45,
+            0x02,
+            0x90,
+            reassigned_payload_type,
+            0x45,
+            0x02,
+            0x1B,
+            0x61,
+        )
+    )
+    bodies = (
+        _rtp_packet(
+            b"g711-alaw",
+            sequence=1,
+            payload_type=reassigned_payload_type,
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(b"\x67h264-sps", sequence=3, payload_type=97, marker=True),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+    )
+
+    assert output.getvalue() == H264_SPS_ANNEXB
 
 
 def test_copy_cloud_stream_packets_to_mpegts_ignores_invalid_rtp_audio(

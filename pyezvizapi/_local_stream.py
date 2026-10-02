@@ -6105,9 +6105,19 @@ def _decrypt_idmx_local_packets_to_annexb(
     decrypt_hevc_parameter_sets: bool = False,
 ) -> bytes:
     routed_video_payload_types = _idmx_local_video_payload_types(packets)
-    final_route_is_authoritative_h264 = not _idmx_local_video_payload_types(
+    routed_h264_payload_types = _idmx_local_video_payload_types(
+        packets,
+        codec="h264",
+    )
+    routed_hevc_payload_types = _idmx_local_video_payload_types(
         packets,
         codec="hevc",
+    )
+    final_route_is_authoritative_h264 = bool(
+        routed_h264_payload_types and not routed_hevc_payload_types
+    )
+    final_route_is_authoritative_hevc = bool(
+        routed_hevc_payload_types and not routed_h264_payload_types
     )
     aes_key = _local_media_aes_key(media_key)
     h264_nalu_header_size = (
@@ -6129,6 +6139,7 @@ def _decrypt_idmx_local_packets_to_annexb(
         )
         h264_codec_compatible = bool(
             h264_transport
+            and not final_route_is_authoritative_hevc
             and (
                 not final_route_is_authoritative_h264
                 or rtp_payload_video_codec(body) == "h264"
@@ -6181,7 +6192,9 @@ def _decrypt_idmx_local_packets_to_annexb(
             continue
         hevc_direct_evidence = _looks_like_idmx_hevc_evidence_frame(body)
         if h264_transport and (
-            hevc_evidence_seen or hevc_direct_evidence
+            final_route_is_authoritative_hevc
+            or hevc_evidence_seen
+            or hevc_direct_evidence
         ) and _looks_like_idmx_hevc_direct_frame(body):
             hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(

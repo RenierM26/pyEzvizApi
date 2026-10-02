@@ -11,6 +11,7 @@ import pytest
 
 from pyezvizapi._local_stream import (
     _decrypt_idmx_local_packets_to_adts_aac,
+    _decrypt_idmx_local_packets_to_annexb,
     _h264_annexb_packet_end_offsets,
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
@@ -241,6 +242,49 @@ def test_local_idmx_discards_hevc_before_final_h264_route() -> None:
 
     assert codec == "h264"
     assert annexb == expected_annexb
+
+
+def test_encrypted_local_idmx_honors_authoritative_hevc_before_shape_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            direct_irap,
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+    ]
+    decrypted_hevc: list[bytes] = []
+
+    def decrypt_hevc(nal: bytes, _key: bytes) -> bytes:
+        decrypted_hevc.append(nal)
+        return nal
+
+    def reject_h264(
+        _nal: bytes,
+        _key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        raise AssertionError(
+            f"authoritative HEVC must not use H.264 probing ({nalu_header_size=})"
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        decrypt_hevc,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        reject_h264,
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+
+    assert decrypted_hevc == [direct_irap]
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
 
 
 def test_summarize_idmx_routes_accepts_predispatch_correction_on_media() -> None:

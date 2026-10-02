@@ -2683,6 +2683,51 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     assert audio_inputs[0].chunks[0].endswith(plain_audio)
 
 
+def test_copy_cloud_stream_packets_waits_for_delayed_payload_routes(monkeypatch) -> None:
+    descriptor = b"\x45\x02\x90\x60\x45\x02\x1b\x61"
+    bodies = (
+        _rtp_packet(b"g711-alaw", sequence=1, payload_type=96),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(b"\x67h264-sps", sequence=3, payload_type=97, marker=True),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+    )
+
+    assert output.getvalue() == H264_SPS_ANNEXB
+
+
 def test_copy_cloud_stream_packets_to_mpegts_ignores_invalid_rtp_audio(
     monkeypatch,
 ) -> None:

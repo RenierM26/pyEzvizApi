@@ -996,13 +996,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             audio_metadata = idmx_aac_descriptor((parsed,))
         if kind == "video":
             video_probe.append(parsed)
-            try:
-                codec = detect_rtp_video_codec(prefix, allow_fallback=False)
-            except UnsupportedRtpVideoCodecError:
-                raise
-            except PyEzvizError:
-                if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
-                    codec = detect_rtp_video_codec(prefix)
+        try:
+            codec = detect_rtp_video_codec(prefix, allow_fallback=False)
+        except UnsupportedRtpVideoCodecError:
+            raise
+        except PyEzvizError:
+            if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
+                codec = detect_rtp_video_codec(prefix)
         if (
             audio_key is not None
             and audio_metadata is not None
@@ -1026,6 +1026,15 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 == "audio"
             )
         if codec is None:
+            continue
+        video_route_is_authoritative = any(
+            descriptor.media_kind == "video"
+            for descriptor in stream_descriptors
+        )
+        if (
+            not video_route_is_authoritative
+            and len(video_probe) < _RTP_CODEC_PROBE_MAX_PACKETS
+        ):
             continue
         if audio_key is None or audio_decodable:
             break

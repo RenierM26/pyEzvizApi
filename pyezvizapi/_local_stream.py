@@ -62,12 +62,15 @@ from .remux import (
     start_stderr_drain,
 )
 from .rtp import (
+    DEFAULT_AAC_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
     idmx_aac_descriptor,
+    idmx_rtp_stream_descriptors,
     parse_rtp_packet,
+    rtp_codec_payload_types,
     rtp_media_kind,
     rtp_packet_is_idmx_aac,
     rtp_payload,
@@ -2206,10 +2209,12 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             stream_is_clear=stream_is_clear,
         )
         audio_metadata = _idmx_audio_metadata(recorded_packets, media_key)
+        audio_payload_types = _idmx_audio_payload_types(recorded_packets)
         audio = _decrypt_idmx_local_packets_to_adts_aac(
             selected_packets,
             media_key,
             audio_metadata=audio_metadata,
+            audio_payload_types=audio_payload_types,
         )
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
@@ -2297,6 +2302,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 selected_packets,
                 media_key,
                 audio_metadata=_idmx_audio_metadata(packets, media_key),
+                audio_payload_types=_idmx_audio_payload_types(packets),
             )
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
@@ -5351,6 +5357,24 @@ def _idmx_audio_metadata(
     return _idmx_audio_descriptor(packets)
 
 
+def _idmx_audio_payload_types(packets: list[bytes]) -> frozenset[int]:
+    """Return the AAC payload route advertised by startup stream metadata."""
+
+    rtp_packets: list[RtpPacket] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None:
+            rtp_packets.append(packet)
+    return rtp_codec_payload_types(
+        idmx_rtp_stream_descriptors(rtp_packets),
+        "aac",
+        fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
+    )
+
+
 def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
@@ -5963,6 +5987,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
     media_key: str | bytes,
     *,
     audio_metadata: tuple[int, int] | None = None,
+    audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
@@ -5979,6 +6004,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         rtp_packets,
         media_key,
         audio_metadata=audio_metadata,
+        audio_payload_types=audio_payload_types,
         require_contiguous=require_contiguous,
     )
 

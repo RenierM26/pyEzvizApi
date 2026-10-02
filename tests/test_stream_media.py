@@ -30,6 +30,7 @@ from pyezvizapi._stream import (
 )
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_cloud_stream_to_mpegps,
     copy_cloud_stream_to_mpegts,
@@ -1655,6 +1656,36 @@ def test_copy_cloud_stream_to_mpegts_uses_idmx_codec_and_payload_descriptor(
 
     assert open_calls == [("ffmpeg", "hevc")]
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
+
+
+def test_cloud_rtp_audio_probe_uses_idmx_payload_descriptor() -> None:
+    descriptor = b"\x45\x02\x0f\x69"
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(
+            b"dynamic-aac",
+            sequence=2,
+            payload_type=105,
+        ),
+    )
+    packets = tuple(
+        VtmPacket(
+            channel=VtmChannel.STREAM,
+            length=len(body),
+            sequence=sequence,
+            message_code=0,
+            body=body,
+        )
+        for sequence, body in enumerate(bodies, start=1)
+    )
+
+    assert cloud_rtp_packets_have_audio(packets)
 
 
 def test_copy_cloud_stream_to_mpegts_reports_descriptor_codec(monkeypatch) -> None:

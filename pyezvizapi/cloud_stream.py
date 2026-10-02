@@ -681,8 +681,11 @@ def _cloud_rtp_packets(packets: Iterable[Any]) -> list[RtpPacket]:
 def cloud_rtp_packets_have_audio(packets: Iterable[Any]) -> bool:
     """Return whether a bounded cloud capture contains routed RTP audio."""
 
+    parsed = _cloud_rtp_packets(packets)
+    descriptors = idmx_rtp_stream_descriptors(parsed)
     return any(
-        rtp_media_kind(packet) == "audio" for packet in _cloud_rtp_packets(packets)
+        rtp_media_kind(packet, stream_descriptors=descriptors) == "audio"
+        for packet in parsed
     )
 
 

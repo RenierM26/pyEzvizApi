@@ -66,11 +66,13 @@ from .rtp import (
     RtpAacStream,
     RtpPacket,
     RtpRouteProfile,
+    RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
     idmx_rtp_stream_descriptors,
     parse_rtp_packet,
+    rtp_packet_has_valid_idmx_aac_frame,
     rtp_packet_is_idmx_aac,
     rtp_payload,
     rtp_payload_video_codec,
@@ -5526,9 +5528,16 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
     timestamps: list[int] = []
     for packet in rtp_packets:
         route_epoch_profile.absorb(packet)
+        active_route_descriptor = _rtp_packet_route_descriptor(
+            route_epoch_profile,
+            packet,
+        )
         if (
             packet.payload_type in routed_video_payload_types
-            and route_epoch_profile.media_kind(packet) == "video"
+            and (
+                active_route_descriptor is None
+                or active_route_descriptor.media_kind == "video"
+            )
         ) and (
             not timestamps or timestamps[-1] != packet.timestamp
         ):
@@ -6330,8 +6339,17 @@ def _decrypt_idmx_local_packets_to_adts_aac(
             continue
         if (
             packet.payload_type in descriptor_aac_payload_types
-            and packet.payload_type
-            not in route_epoch_profile.codec_payload_types("aac")
+            and not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                packet,
+                "aac",
+            )
+        ):
+            continue
+        if (
+            packet.payload_type in descriptor_aac_payload_types
+            and _rtp_packet_route_descriptor(route_epoch_profile, packet) is None
+            and not rtp_packet_has_valid_idmx_aac_frame(packet)
         ):
             continue
         rtp_packets.append(packet)
@@ -6358,7 +6376,11 @@ def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
             route_epoch_profile.absorb(packet)
         if packet is None or packet.payload_type not in routed_payload_types:
             continue
-        if packet.payload_type in route_epoch_profile.codec_payload_types("hevc"):
+        if not _rtp_packet_matches_codec_epoch(
+            route_epoch_profile,
+            packet,
+            "h264",
+        ):
             continue
         if not (
             _looks_like_idmx_h264_fu_a_frame(packet.payload)
@@ -6394,7 +6416,11 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
                 or rtp_packet.payload_type not in routed_payload_types
             ):
                 continue
-            if rtp_packet.payload_type in route_epoch_profile.codec_payload_types("hevc"):
+            if not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                rtp_packet,
+                "h264",
+            ):
                 continue
             if not (
                 _looks_like_idmx_h264_fu_a_frame(rtp_packet.payload)
@@ -6429,7 +6455,11 @@ def _idmx_local_packets_to_hevc_annexb(
         if packet is None or packet.payload_type not in routed_payload_types:
             continue
         if (
-            packet.payload_type in route_epoch_profile.codec_payload_types("h264")
+            not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                packet,
+                "hevc",
+            )
             or rtp_payload_video_codec(packet.payload) == "h264"
             or not _looks_like_idmx_hevc_direct_frame(packet.payload)
         ):
@@ -6467,8 +6497,11 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             if (
                 rtp_packet is None
                 or rtp_packet.payload_type not in routed_payload_types
-                or rtp_packet.payload_type
-                in route_epoch_profile.codec_payload_types("h264")
+                or not _rtp_packet_matches_codec_epoch(
+                    route_epoch_profile,
+                    rtp_packet,
+                    "hevc",
+                )
                 or rtp_payload_video_codec(rtp_packet.payload) == "h264"
                 or not _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
             ):
@@ -6517,6 +6550,33 @@ def _idmx_local_route_profile(packets: list[bytes]) -> RtpRouteProfile:
         if packet is not None:
             profile.absorb(packet)
     return profile
+
+
+def _rtp_packet_route_descriptor(
+    profile: RtpRouteProfile,
+    packet: RtpPacket,
+) -> RtpStreamDescriptor | None:
+    """Return the descriptor active for one packet, or None before discovery."""
+
+    return next(
+        (
+            descriptor
+            for descriptor in profile.descriptors
+            if descriptor.payload_type == packet.payload_type
+        ),
+        None,
+    )
+
+
+def _rtp_packet_matches_codec_epoch(
+    profile: RtpRouteProfile,
+    packet: RtpPacket,
+    codec: str,
+) -> bool:
+    """Accept one codec only in its active or genuinely unclassified epoch."""
+
+    descriptor = _rtp_packet_route_descriptor(profile, packet)
+    return descriptor is None or descriptor.codec == codec
 
 
 def _idmx_local_supported_video_payload_types(

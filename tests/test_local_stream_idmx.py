@@ -22,6 +22,7 @@ from pyezvizapi._local_stream import (
     _idmx_hevc_annexb_packet_spans,
     _idmx_local_packets_to_annexb_with_codec,
     _idmx_local_packets_to_h264_annexb,
+    _idmx_local_packets_to_hevc_annexb,
     _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     copy_local_stream_to_decrypted_mpegts,
@@ -275,6 +276,60 @@ def test_local_idmx_discards_hevc_before_final_h264_route() -> None:
     assert annexb == expected_annexb
 
 
+def test_clear_local_idmx_rejects_nonvideo_epoch_before_h264_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x65stale-nonvideo",
+            payload_type=97,
+            extension_data=b"\x45\x02\xaf\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_packets_to_h264_annexb(packets) == expected_annexb
+
+
+def test_clear_local_idmx_rejects_nonvideo_epoch_before_hevc_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01hevc"
+    packets = [
+        _rtp_packet(
+            b"\x26\x01stale-nonvideo",
+            payload_type=97,
+            extension_data=b"\x45\x02\xaf\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_packets_to_hevc_annexb(packets) == expected_annexb
+
+
 def test_local_idmx_frame_rate_uses_active_video_route_epoch() -> None:
     packets = [
         _rtp_packet(
@@ -320,6 +375,41 @@ def test_local_idmx_frame_rate_uses_active_video_route_epoch() -> None:
             ),
         )
     )
+
+    assert _idmx_local_video_frame_rate(packets) == "15"
+
+
+def test_local_idmx_frame_rate_keeps_video_before_delayed_descriptor() -> None:
+    packets = [
+        _rtp_packet(
+            b"\x26\x01hevc-1",
+            payload_type=97,
+            timestamp=90_000,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc-2",
+            sequence=2,
+            payload_type=97,
+            timestamp=96_000,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            timestamp=96_000,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc-3",
+            sequence=4,
+            payload_type=97,
+            timestamp=102_000,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
 
     assert _idmx_local_video_frame_rate(packets) == "15"
 
@@ -1154,6 +1244,38 @@ def test_decrypt_idmx_local_aac_ignores_packets_before_aac_route_epoch() -> None
             )
         ).to_bytes(4, "little")
         + selected_rtp,
+    ]
+
+    audio = _decrypt_idmx_local_packets_to_adts_aac(
+        packets,
+        IDMX_MEDIA_KEY,
+        audio_metadata=(16_000, 1),
+        audio_payload_types=frozenset({105}),
+    )
+
+    assert audio is not None
+    assert audio.frame_count == 1
+    assert audio.adts.endswith(plain)
+
+
+def test_decrypt_idmx_local_aac_keeps_valid_packet_before_descriptor() -> None:
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    access_unit = b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted
+    selected_rtp = (
+        b"\x90\x69\x00\x01\x00\x00\x00\x01\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+        + access_unit
+    )
+    packets = [
+        len(selected_rtp).to_bytes(4, "little") + selected_rtp,
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x0f\x69",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
     ]
 
     audio = _decrypt_idmx_local_packets_to_adts_aac(

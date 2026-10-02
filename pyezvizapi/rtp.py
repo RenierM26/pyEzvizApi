@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
+
+from Crypto.Cipher import AES
 
 from .exceptions import PyEzvizError
 
@@ -12,6 +15,26 @@ ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 DEFAULT_VIDEO_PAYLOAD_TYPES = frozenset({96})
 DEFAULT_AAC_PAYLOAD_TYPES = frozenset({104})
 DEFAULT_METADATA_PAYLOAD_TYPES = frozenset({112})
+IDMX_AAC_SAMPLES_PER_FRAME = 1024
+IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE = 2
+IDMX_AAC_ADTS_HEADER_SIZE = 7
+IDMX_AAC_ADTS_MAX_FRAME_LENGTH = 0x1FFF
+IDMX_AUDIO_EXTENSION_VERSION = b"\x00\x01"
+IDMX_AAC_SAMPLE_RATES = (
+    96_000,
+    88_200,
+    64_000,
+    48_000,
+    44_100,
+    32_000,
+    24_000,
+    22_050,
+    16_000,
+    12_000,
+    11_025,
+    8_000,
+    7_350,
+)
 
 RtpMediaKind = Literal["video", "audio", "metadata", "unknown"]
 RtpVideoCodec = Literal["h264", "hevc"]
@@ -41,6 +64,16 @@ class RtpContinuityStats:
     sequence_gaps: int = 0
     timestamp_changes: int = 0
     discarded_fragments: int = 0
+
+
+@dataclass(frozen=True)
+class RtpAacStream:
+    """Decrypted RFC 3640 AAC access units framed as ADTS."""
+
+    adts: bytes
+    sample_rate: int
+    channels: int
+    frame_count: int
 
 
 @dataclass
@@ -120,6 +153,146 @@ def rtp_media_kind(
     if packet.payload_type in metadata_payload_types:
         return "metadata"
     return "unknown"
+
+
+def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
+    """Return authoritative sample-rate/channel metadata from descriptor ``0x43``."""
+
+    for packet in packets:
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            descriptor_length = data[offset + 1]
+            descriptor_end = offset + descriptor_length + 2
+            if descriptor_end > len(data):
+                break
+            if data[offset] == 0x43 and descriptor_length >= 10:
+                channels = (data[offset + 4] & 0x01) + 1
+                sample_rate = (
+                    (data[offset + 5] << 14)
+                    | (data[offset + 6] << 6)
+                    | (data[offset + 7] >> 2)
+                )
+                if sample_rate in IDMX_AAC_SAMPLE_RATES and channels in (1, 2):
+                    return sample_rate, channels
+            offset = descriptor_end
+    return None
+
+
+def _idmx_audio_extension_is_aac(packet: RtpPacket) -> bool:
+    data = packet.extension_data
+    return (
+        packet.extension_profile == 0x4000
+        and len(data) >= 8
+        and data[0] == 0x80
+        and data[1] >= 6
+        and data[2:4] == IDMX_AUDIO_EXTENSION_VERSION
+        and data[4] & 0xF0 == 0x20
+    )
+
+
+def _idmx_aac_access_unit(payload: bytes) -> bytes | None:
+    """Parse one RFC 3640 MPEG4-GENERIC access unit from an RTP payload."""
+
+    if len(payload) < 4 or int.from_bytes(payload[:2], "big") != 16:
+        return None
+    access_unit_header = int.from_bytes(payload[2:4], "big")
+    access_unit_size = access_unit_header >> 3
+    if access_unit_header & 0x07 or access_unit_size != len(payload) - 4:
+        return None
+    return payload[4:]
+
+
+def _rtp_media_aes_key(media_key: str | bytes) -> bytes:
+    key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
+    return key_bytes.ljust(16, b"\0")[:16]
+
+
+def _decrypt_idmx_aac_access_unit(access_unit: bytes, aes_key: bytes) -> bytes:
+    decrypt_length = len(access_unit) - len(access_unit) % AES.block_size
+    if decrypt_length == 0:
+        return access_unit
+    cipher = AES.new(aes_key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
+    decrypted_prefix = cipher.decrypt(access_unit[:decrypt_length])  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+    return decrypted_prefix + access_unit[decrypt_length:]
+
+
+def _aac_adts_header(payload_length: int, sample_rate: int, channels: int) -> bytes:
+    try:
+        sample_rate_index = IDMX_AAC_SAMPLE_RATES.index(sample_rate)
+    except ValueError as err:
+        raise PyEzvizError(f"Unsupported IDMX AAC sample rate: {sample_rate}") from err
+    frame_length = payload_length + IDMX_AAC_ADTS_HEADER_SIZE
+    if frame_length > IDMX_AAC_ADTS_MAX_FRAME_LENGTH:
+        raise PyEzvizError("IDMX AAC access unit exceeds the ADTS frame limit")
+    profile = IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE - 1
+    return bytes(
+        (
+            0xFF,
+            0xF1,
+            (profile << 6) | (sample_rate_index << 2) | (channels >> 2),
+            ((channels & 0x03) << 6) | (frame_length >> 11),
+            (frame_length >> 3) & 0xFF,
+            ((frame_length & 0x07) << 5) | 0x1F,
+            0xFC,
+        )
+    )
+
+
+def decrypt_idmx_aac_packets(  # noqa: PLR0911
+    packets: Iterable[RtpPacket],
+    media_key: str | bytes,
+    *,
+    audio_metadata: tuple[int, int] | None = None,
+    require_contiguous: bool = True,
+) -> RtpAacStream | None:
+    """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
+
+    packet_list = list(packets)
+    encrypted_access_units: list[bytes] = []
+    timestamps: list[int] = []
+    for packet in packet_list:
+        if rtp_media_kind(packet) != "audio":
+            continue
+        if not _idmx_audio_extension_is_aac(packet):
+            return None
+        access_unit = _idmx_aac_access_unit(packet.payload)
+        if access_unit is None:
+            return None
+        timestamps.append(packet.timestamp)
+        encrypted_access_units.append(access_unit)
+    if not encrypted_access_units:
+        return None
+    if require_contiguous and any(
+        ((current - previous) & 0xFFFFFFFF) != IDMX_AAC_SAMPLES_PER_FRAME
+        for previous, current in pairwise(timestamps)
+    ):
+        return None
+    if any(
+        len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+        > IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        for access_unit in encrypted_access_units
+    ):
+        return None
+
+    descriptor = idmx_aac_descriptor(packet_list) or audio_metadata
+    if descriptor is None:
+        return None
+    sample_rate, channels = descriptor
+    aes_key = _rtp_media_aes_key(media_key)
+    access_units = [
+        _decrypt_idmx_aac_access_unit(access_unit, aes_key)
+        for access_unit in encrypted_access_units
+    ]
+    return RtpAacStream(
+        adts=b"".join(
+            _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
+            for access_unit in access_units
+        ),
+        sample_rate=sample_rate,
+        channels=channels,
+        frame_count=len(access_units),
+    )
 
 
 def rtp_payload_video_codec(payload: bytes) -> RtpVideoCodec | None:

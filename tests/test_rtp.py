@@ -6,8 +6,10 @@ import pytest
 
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.rtp import (
+    RtpAacStream,
     RtpVideoCodec,
     RtpVideoDepacketizer,
+    decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     parse_rtp_packet,
     rtp_media_kind,
@@ -26,15 +28,102 @@ def _rtp(
     payload_type: int = 96,
     marker: bool = False,
     ssrc: int = 1,
+    extension_profile: int | None = None,
+    extension_data: bytes = b"",
 ) -> bytes:
+    extension = b""
+    first_byte = 0x80
+    if extension_profile is not None:
+        if len(extension_data) % 4:
+            raise ValueError("RTP extension data must be 32-bit aligned")
+        first_byte |= 0x10
+        extension = (
+            extension_profile.to_bytes(2, "big")
+            + (len(extension_data) // 4).to_bytes(2, "big")
+            + extension_data
+        )
     return (
-        b"\x80"
+        bytes((first_byte,))
         + bytes([payload_type | (0x80 if marker else 0)])
         + sequence.to_bytes(2, "big")
         + timestamp.to_bytes(4, "big")
         + ssrc.to_bytes(4, "big")
+        + extension
         + payload
     )
+
+
+def test_decrypt_idmx_aac_packets_uses_native_descriptor() -> None:
+    key = b"0123456789abcdef"
+    sample_rate = 16_000
+    descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            sample_rate >> 14,
+            (sample_rate >> 6) & 0xFF,
+            ((sample_rate & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
+    packets = [
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=1,
+                payload_type=112,
+                ssrc=3,
+                extension_profile=1,
+                extension_data=descriptor,
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(
+                b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted,
+                sequence=2,
+                timestamp=0,
+                payload_type=104,
+                ssrc=2,
+                extension_profile=0x4000,
+                extension_data=audio_extension,
+            )
+        ),
+    ]
+
+    audio = decrypt_idmx_aac_packets(packets, key)
+
+    assert audio == RtpAacStream(
+        adts=b"\xff\xf1`@\x03\x7f\xfc" + plain,
+        sample_rate=sample_rate,
+        channels=1,
+        frame_count=1,
+    )
+
+
+def test_decrypt_idmx_aac_packets_requires_native_descriptor() -> None:
+    audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
+    packet = parse_rtp_packet(
+        _rtp(
+            b"\x00\x10\x00\x08x",
+            sequence=1,
+            timestamp=0,
+            payload_type=104,
+            ssrc=2,
+            extension_profile=0x4000,
+            extension_data=audio_extension,
+        )
+    )
+
+    assert decrypt_idmx_aac_packets([packet], b"0123456789abcdef") is None
 
 
 def test_parse_and_route_mixed_ezviz_rtp_packets() -> None:

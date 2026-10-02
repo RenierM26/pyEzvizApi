@@ -67,6 +67,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Preserve descriptor-backed AAC-LC audio in decrypted cloud RTP/IDMX MPEG-TS
+  exports. Bounded dumps and `save_clip` remux captured AAC beside H.264/HEVC,
+  while the HTTP proxy streams audio through a bounded loopback FFmpeg input;
+  descriptor-free or unsupported audio continues to fall back to video-only.
 - Route cloud VTM MPEG-PS, MPEG-TS, and RTP/IDMX payloads through the correct
   export path. Cloud RTP H.264/HEVC is now depacketized before MPEG-TS remuxing,
   supports EZVIZ's headerless HEVC FU continuations, and works through CLI

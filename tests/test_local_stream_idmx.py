@@ -21,6 +21,7 @@ from pyezvizapi._local_stream import (
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
     _idmx_local_packets_to_annexb_with_codec,
+    _idmx_local_packets_to_h264_annexb,
     _idmx_packets_from_selected_annexb,
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
@@ -242,6 +243,45 @@ def test_local_idmx_discards_hevc_before_final_h264_route() -> None:
 
     assert codec == "h264"
     assert annexb == expected_annexb
+
+
+def test_local_idmx_h264_route_preserves_ambiguous_sei(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sei = b"\x06\x05sei"
+    idr = b"\x65h264"
+    packets = [
+        _rtp_packet(
+            sei,
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            idr,
+            sequence=2,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        lambda nal, _key, *, nalu_header_size: nal,
+    )
+    expected = b"\x00\x00\x00\x01" + sei + b"\x00\x00\x00\x01" + idr
+
+    clear_annexb = _idmx_local_packets_to_h264_annexb(packets)
+    encrypted_annexb, spans = _idmx_h264_annexb_packet_spans(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=1,
+        stream_is_clear=False,
+    )
+
+    assert clear_annexb == expected
+    assert encrypted_annexb == expected
+    assert [span[4] for span in spans] == [6, 5]
+    assert _h264_annexb_packet_end_offsets(packets) == [len(expected) - 9, len(expected)]
 
 
 def test_encrypted_local_idmx_honors_authoritative_hevc_before_shape_probe(

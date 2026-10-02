@@ -1778,8 +1778,8 @@ def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
         lambda _packets: True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
-        lambda *_args, **_kwargs: full_annexb,
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb_with_codec",
+        lambda *_args, **_kwargs: (full_annexb, None),
     )
     monkeypatch.setattr(
         "pyezvizapi.local_stream._idmx_local_packets_have_aac",
@@ -2207,6 +2207,48 @@ def test_copy_local_stream_to_decrypted_mpegts_handles_live_padded_extended_hevc
         + vps
         + b"\x00\x00\x00\x01\x26\x01slice-payload\x24\x00X"
     )
+
+
+def test_copy_local_stream_to_decrypted_mpegts_uses_hevc_route_mid_gop(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _aes_key: nal,
+    )
+    mid_gop = b"\x02\x01mid-gop"
+    packet = _rtp_packet(
+        mid_gop,
+        payload_type=97,
+        extension_data=b"\x45\x02\x24\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=packet)]
+
+    output = io.BytesIO()
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == b"hevc:\x00\x00\x00\x01" + mid_gop
 
 def test_copy_local_stream_to_decrypted_mpegts_prefers_direct_hevc_before_h264_encrypted_header_fallback(
     tmp_path,

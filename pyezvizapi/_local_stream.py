@@ -2252,14 +2252,18 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         monotonic=monotonic,
     )
     if _local_stream_packets_are_idmx(packets):
-        annexb = _decrypt_idmx_local_packets_to_annexb(
-            packets,
-            media_key,
-            nalu_header_size=nalu_header_size,
-            decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
+        annexb, authoritative_video_codec = (
+            _decrypt_idmx_local_packets_to_annexb_with_codec(
+                packets,
+                media_key,
+                nalu_header_size=nalu_header_size,
+                decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
+            )
         )
         full_annexb = annexb
-        if _annexb_has_h264_vcl(annexb):
+        if authoritative_video_codec == "h264" or (
+            authoritative_video_codec is None and _annexb_has_h264_vcl(annexb)
+        ):
             annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
                 h264_skip_initial_idr_windows,
@@ -2272,7 +2276,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 )
             video_input_format = "h264"
             video_frame_rate = None
-        elif _annexb_looks_like_hevc(annexb):
+        elif authoritative_video_codec == "hevc" or _annexb_looks_like_hevc(annexb):
             annexb = skip_hevc_annexb_initial_irap_windows(
                 annexb,
                 h264_skip_initial_idr_windows,
@@ -6158,6 +6162,24 @@ def _decrypt_idmx_local_packets_to_annexb(
     nalu_header_size: int | None = None,
     decrypt_hevc_parameter_sets: bool = False,
 ) -> bytes:
+    annexb, _authoritative_codec = _decrypt_idmx_local_packets_to_annexb_with_codec(
+        packets,
+        media_key,
+        nalu_header_size=nalu_header_size,
+        decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
+    )
+    return annexb
+
+
+def _decrypt_idmx_local_packets_to_annexb_with_codec(  # noqa: PLR0912, PLR0915
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    nalu_header_size: int | None = None,
+    decrypt_hevc_parameter_sets: bool = False,
+) -> tuple[bytes, RtpVideoCodec | None]:
+    """Decrypt local video and retain an authoritative descriptor codec."""
+
     routed_h264_payload_types, routed_hevc_payload_types = (
         _idmx_local_supported_video_payload_types(packets)
     )
@@ -6172,6 +6194,11 @@ def _decrypt_idmx_local_packets_to_annexb(
     final_route_is_authoritative_hevc = bool(
         routed_hevc_payload_types and not routed_h264_payload_types
     )
+    authoritative_codec: RtpVideoCodec | None = None
+    if final_route_is_authoritative_hevc:
+        authoritative_codec = "hevc"
+    elif routed_h264_payload_types and not routed_hevc_payload_types:
+        authoritative_codec = "h264"
     aes_key = _local_media_aes_key(media_key)
     h264_nalu_header_size = (
         H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
@@ -6305,7 +6332,7 @@ def _decrypt_idmx_local_packets_to_annexb(
         _append_decrypted_hevc_nal(output, bytes(active_fu.data), aes_key)
     if not output:
         raise PyEzvizError("EZVIZ local IDMX stream did not include media frames")
-    return bytes(output)
+    return bytes(output), authoritative_codec
 
 
 def _decrypt_idmx_local_packets_to_adts_aac(

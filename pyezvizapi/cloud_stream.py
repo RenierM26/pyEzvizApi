@@ -969,7 +969,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     video_probe: list[RtpPacket] = []
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
-    audio_seen = False
+    audio_decodable = False
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         parsed = _parse_cloud_rtp_packet(packet.body)
@@ -979,18 +979,33 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         kind = rtp_media_kind(parsed)
         if audio_metadata is None:
             audio_metadata = idmx_aac_descriptor((parsed,))
-        if kind == "audio":
-            audio_seen = True
-        elif kind == "video":
+        if kind == "video":
             video_probe.append(parsed)
             try:
                 codec = detect_rtp_video_codec(video_probe, allow_fallback=False)
             except PyEzvizError:
                 if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
                     codec = detect_rtp_video_codec(video_probe)
+        if (
+            audio_key is not None
+            and audio_metadata is not None
+            and kind in {"audio", "metadata"}
+            and not audio_decodable
+        ):
+            audio_decodable = any(
+                decrypt_idmx_aac_packets(
+                    (candidate,),
+                    audio_key,
+                    audio_metadata=audio_metadata,
+                    require_contiguous=False,
+                )
+                is not None
+                for candidate in prefix
+                if rtp_media_kind(candidate) == "audio"
+            )
         if codec is None:
             continue
-        if audio_key is None or (audio_metadata is not None and audio_seen):
+        if audio_key is None or audio_decodable:
             break
         if len(prefix) >= _RTP_AUDIO_PROBE_MAX_PACKETS:
             break
@@ -1010,9 +1025,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 continue
             yield parsed
 
-    selected_audio_key = (
-        audio_key if audio_metadata is not None and audio_seen else None
-    )
+    selected_audio_key = audio_key if audio_decodable else None
     audio_input = _CloudRtpAudioInput() if selected_audio_key is not None else None
     if audio_input is not None:
         audio_input.start()

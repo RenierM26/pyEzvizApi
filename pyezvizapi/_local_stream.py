@@ -6509,6 +6509,11 @@ def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
 def _idmx_local_packets_to_annexb_with_codec(
     packets: list[bytes],
 ) -> tuple[bytes, str]:
+    route_profile = _idmx_local_route_profile(packets)
+    authoritative_hevc = any(
+        descriptor.media_kind == "video" and descriptor.codec == "hevc"
+        for descriptor in route_profile.descriptors
+    )
     try:
         h264_annexb = _idmx_local_packets_to_h264_annexb(packets)
     except PyEzvizError as h264_error:
@@ -6518,18 +6523,16 @@ def _idmx_local_packets_to_annexb_with_codec(
             raise h264_error from hevc_error
     if _annexb_has_h264_vcl(h264_annexb):
         return h264_annexb, "h264"
-    if _idmx_local_packets_have_direct_hevc_media(packets):
-        try:
-            return _idmx_local_packets_to_hevc_annexb(packets), "hevc"
-        except PyEzvizError:
-            pass
     try:
         hevc_annexb = _idmx_local_packets_to_hevc_annexb(packets)
     except PyEzvizError:
-        pass
-    else:
-        if _annexb_looks_like_hevc(hevc_annexb):
-            return hevc_annexb, "hevc"
+        return h264_annexb, "h264"
+    if (
+        authoritative_hevc
+        or _idmx_local_packets_have_direct_hevc_media(packets)
+        or _annexb_looks_like_hevc(hevc_annexb)
+    ):
+        return hevc_annexb, "hevc"
     return h264_annexb, "h264"
 
 

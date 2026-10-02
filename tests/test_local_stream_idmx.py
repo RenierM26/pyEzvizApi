@@ -128,6 +128,34 @@ def test_local_idmx_annexb_uses_descriptor_video_payload_route(
     assert annexb == b"\x00\x00\x00\x01" + payload
 
 
+def test_local_idmx_annexb_trusts_descriptor_for_ordinary_hevc_slice() -> None:
+    payload = b"\x02\x01ordinary-hevc-slice"
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            extension_data=b"\x45\x02\x1b\x62\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x67h264-parameter-set",
+            sequence=2,
+            payload_type=98,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            payload,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "hevc"
+    assert annexb == b"\x00\x00\x00\x01" + payload
+
+
 def test_local_idmx_annexb_uses_final_descriptor_snapshot_for_fallback() -> None:
     expected_annexb = b"\x00\x00\x00\x01\x67fallback"
     packets = [

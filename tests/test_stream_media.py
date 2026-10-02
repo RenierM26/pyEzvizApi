@@ -1801,6 +1801,80 @@ def test_copy_cloud_stream_to_mpegts_defers_codec_fallback_past_h264_aud(
     assert output.getvalue() == b"\x00\x00\x00\x01\x09\xf0" + H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_to_mpegts_accepts_late_fallback_confirmation(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+    video_packet_count = 32
+    rtp_bodies = (
+        *(
+            _rtp_packet(
+                b"\x67h264-sps",
+                sequence=sequence,
+                marker=True,
+                timestamp=sequence * 3_000,
+            )
+            for sequence in range(1, video_packet_count + 1)
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=video_packet_count + 1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x60",
+        ),
+    )
+
+    class FakeCloudStream:
+        def __enter__(self) -> FakeCloudStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(rtp_bodies)
+            for sequence, body in enumerate(rtp_bodies, start=1):
+                yield VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=len(body),
+                    sequence=sequence,
+                    message_code=0,
+                    body=body,
+                )
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        assert (ffmpeg_path, codec) == ("ffmpeg", "h264")
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+
+    copy_cloud_stream_to_mpegts(
+        client,
+        "CAM123",
+        output,
+        max_packets=len(rtp_bodies),
+    )
+
+    assert output.getvalue() == H264_SPS_ANNEXB * video_packet_count
+
+
 def test_copy_cloud_stream_to_mpegts_excludes_audio_from_codec_probe_limit(
     monkeypatch,
 ) -> None:

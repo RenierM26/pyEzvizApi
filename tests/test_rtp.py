@@ -374,6 +374,53 @@ def test_route_profile_accepts_codec_alias_repeat_after_media_dispatch() -> None
     assert profile.descriptors[0].codec == "h264"
 
 
+def test_route_profile_rejects_mutation_of_selected_video_fallback() -> None:
+    profile = RtpRouteProfile()
+    video = parse_rtp_packet(_rtp(b"\x67video", sequence=1))
+    mutation = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x60",
+        )
+    )
+    profile.select_video_fallback(96, "h264")
+    profile.mark_media(video)
+
+    with pytest.raises(PyEzvizError, match="RTP route mutation after media began"):
+        profile.absorb(mutation)
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "codec"),
+    ((26, "mjpeg"), (32, "mpeg2video"), (99, "svac")),
+)
+def test_route_profile_reports_static_video_codec(
+    payload_type: int,
+    codec: str,
+) -> None:
+    profile = RtpRouteProfile()
+    video = parse_rtp_packet(
+        _rtp(b"video", sequence=1, payload_type=payload_type, ssrc=7)
+    )
+
+    profile.mark_media(video)
+
+    assert profile.streams() == (
+        {
+            "codec": codec,
+            "media_kind": "video",
+            "payload_type": payload_type,
+            "ssrc": 7,
+            "sample_rate": None,
+            "channels": None,
+            "authoritative": False,
+        },
+    )
+
+
 def test_route_profile_reports_audio_metadata_and_sanitized_diagnostics() -> None:
     profile = RtpRouteProfile()
     descriptor = b"\x45\x02\x0f\x69" + bytes(

@@ -1072,6 +1072,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 "Could not detect RTP video codec in cloud stream"
             ) from err
 
+    if not any(
+        descriptor.media_kind == "video"
+        for descriptor in route_profile.descriptors
+    ):
+        for payload_type in {packet.payload_type for packet in video_probe}:
+            route_profile.select_video_fallback(payload_type, codec)
+
     def _remaining_rtp_packets() -> Iterator[RtpPacket]:
         for packet in packets:
             _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)

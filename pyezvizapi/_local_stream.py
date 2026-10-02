@@ -5955,7 +5955,11 @@ def _iter_idmx_local_packet_frame(
             video_payload_types=video_payload_types,
         )
         return
-    yield from _iter_idmx_local_frames(packet)
+    for frame in _iter_idmx_local_frames(packet):
+        yield from _iter_idmx_local_frame_or_nested(
+            frame,
+            video_payload_types=video_payload_types,
+        )
 
 
 def _idmx_local_packet_contains_aggregate_media_frame(

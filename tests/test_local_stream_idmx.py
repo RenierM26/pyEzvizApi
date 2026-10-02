@@ -2992,7 +2992,13 @@ def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
             )
         )
     )
-    packet = len(aggregate).to_bytes(4, "little") + aggregate
+    unrelated = _rtp_packet(
+        b"sidecar",
+        sequence=1,
+        payload_type=112,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    packet = nested(unrelated) + nested(aggregate)
     descriptor = _rtp_packet(
         b"metadata",
         payload_type=112,

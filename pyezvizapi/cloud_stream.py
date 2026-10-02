@@ -39,6 +39,7 @@ from .rtp import (
     rtp_codec_payload_types,
     rtp_media_kind,
     rtp_packets_to_nal_units,
+    rtp_payload_video_codec,
 )
 from .stream_media import decrypt_hikvision_ps_video, detect_transport
 from .stream_transport import (
@@ -981,9 +982,33 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         parsed = _parse_cloud_rtp_packet(packet.body)
         if parsed is None:
             continue
+        previous_descriptors = {
+            descriptor.payload_type: descriptor
+            for descriptor in route_profile.descriptors
+        }
         prefix.append(parsed)
         route_profile.absorb(parsed)
         stream_descriptors = route_profile.descriptors
+        for descriptor in stream_descriptors:
+            previous = previous_descriptors.get(descriptor.payload_type)
+            if (
+                previous is not None
+                and previous.media_kind == "video"
+                and descriptor.media_kind == "video"
+                and previous.codec != descriptor.codec
+            ):
+                prefix = [
+                    candidate
+                    for candidate in prefix
+                    if candidate.payload_type != descriptor.payload_type
+                    or rtp_payload_video_codec(candidate.payload) == descriptor.codec
+                    or (
+                        descriptor.codec == "hevc"
+                        and len(candidate.payload) >= 2
+                        and (candidate.payload[0] >> 1) & 0x3F <= 40
+                        and candidate.payload[1] & 0x07 != 0
+                    )
+                ]
         video_route_is_authoritative = any(
             descriptor.media_kind == "video"
             for descriptor in stream_descriptors

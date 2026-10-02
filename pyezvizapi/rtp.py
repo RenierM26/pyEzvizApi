@@ -212,13 +212,8 @@ def _decrypt_idmx_aac_access_unit(access_unit: bytes, aes_key: bytes) -> bytes:
     decrypt_length = len(access_unit) - len(access_unit) % AES.block_size
     if decrypt_length == 0:
         return access_unit
-    cipher = AES.new(  # codeql[py/weak-cryptographic-algorithm]
-        aes_key,
-        AES.MODE_ECB,
-    )
-    decrypted_prefix = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-        access_unit[:decrypt_length]
-    )
+    cipher = AES.new(aes_key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
+    decrypted_prefix = cipher.decrypt(access_unit[:decrypt_length])  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
     return decrypted_prefix + access_unit[decrypt_length:]
 
 

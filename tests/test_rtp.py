@@ -393,6 +393,50 @@ def test_static_unsupported_video_is_not_masked_by_shared_payload_packet() -> No
         detect_rtp_video_codec(packets)
 
 
+def test_descriptor_reassignment_overrides_static_video_payload_type() -> None:
+    descriptor = b"\x45\x02\x90\x20"
+    packets = (
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=1,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=descriptor,
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(b"g711-alaw", sequence=2, payload_type=32)
+        ),
+        parse_rtp_packet(
+            _rtp(b"\x67h264-sps", sequence=3, payload_type=96)
+        ),
+    )
+
+    assert detect_rtp_video_codec(packets) == "h264"
+
+
+def test_descriptor_non_video_route_is_excluded_from_codec_fallback() -> None:
+    descriptor = b"\x45\x02\x90\x60"
+    packets = (
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=1,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=descriptor,
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(b"\x67not-video", sequence=2, payload_type=96)
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
+        detect_rtp_video_codec(packets)
+
+
 @pytest.mark.parametrize(
     ("payload", "codec"),
     [

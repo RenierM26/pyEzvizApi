@@ -510,15 +510,26 @@ def detect_rtp_video_codec(
     advertised_codec = _advertised_rtp_video_codec(descriptors)
     if advertised_codec is not None:
         return advertised_codec
-    routed_video_payload_types = video_payload_types | frozenset(
+    assigned_payload_types = frozenset(
+        descriptor.payload_type for descriptor in descriptors
+    )
+    routed_video_payload_types = (
+        video_payload_types - assigned_payload_types
+    ) | frozenset(
         descriptor.payload_type
         for descriptor in descriptors
         if descriptor.media_kind == "video"
+    )
+    non_video_descriptor_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in descriptors
+        if descriptor.media_kind != "video"
     )
     unsupported_static_codecs = {
         _IDMX_STATIC_VIDEO_PAYLOAD_CODECS[packet.payload_type]
         for packet in packet_list
         if packet.payload_type in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS
+        and packet.payload_type not in non_video_descriptor_payload_types
     }
     if unsupported_static_codecs:
         codecs = ", ".join(sorted(unsupported_static_codecs))

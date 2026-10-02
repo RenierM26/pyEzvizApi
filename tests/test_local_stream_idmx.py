@@ -122,6 +122,72 @@ def test_local_idmx_annexb_uses_descriptor_video_payload_route(
     assert detected_codec == codec
     assert annexb == b"\x00\x00\x00\x01" + payload
 
+
+def test_local_idmx_annexb_uses_final_descriptor_snapshot_for_fallback() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x67fallback"
+    packets = [
+        _rtp_packet(
+            b"\x65superseded",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"audio",
+            sequence=2,
+            payload_type=97,
+            extension_data=b"\x45\x02\x90\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x67fallback",
+            sequence=3,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "h264"
+    assert annexb == expected_annexb
+
+
+def test_summarize_idmx_routes_accepts_predispatch_correction_on_media() -> None:
+    rtp_packets = [
+        _rtp_packet(
+            b"\x65superseded",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    packets = [len(packet).to_bytes(4, "little") + packet for packet in rtp_packets]
+
+    profile = summarize_idmx_h264_local_packets(packets)["rtp_profile"]
+
+    assert profile == {
+        "media_started": True,
+        "streams": [
+            {
+                "codec": "hevc",
+                "media_kind": "video",
+                "payload_type": 97,
+                "ssrc": 0x55667788,
+                "sample_rate": None,
+                "channels": None,
+                "authoritative": True,
+            }
+        ],
+    }
+
 def _media(
     payload: bytes,
     *,
@@ -503,6 +569,24 @@ def test_idmx_audio_payload_types_uses_startup_stream_descriptor() -> None:
 
     assert _idmx_audio_payload_types([startup_packet]) == frozenset({105})
 
+
+def test_idmx_audio_payload_types_uses_final_descriptor_snapshot() -> None:
+    first = _rtp_packet(
+        b"metadata",
+        payload_type=112,
+        extension_data=b"\x45\x02\x0f\x69",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    corrected = _rtp_packet(
+        b"metadata",
+        sequence=2,
+        payload_type=112,
+        extension_data=b"\x45\x02\x1b\x69",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+
+    assert _idmx_audio_payload_types([first, corrected]) == frozenset({104})
+
 def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
     sample_rate = 16_000
     descriptor = bytes(
@@ -536,6 +620,44 @@ def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
         [malformed_audio, descriptor_frame],
         IDMX_MEDIA_KEY,
     ) == (sample_rate, 1)
+
+
+def test_idmx_audio_metadata_uses_final_descriptor_snapshot() -> None:
+    def descriptor(sample_rate: int) -> bytes:
+        return bytes(
+            (
+                0x43,
+                10,
+                0,
+                1,
+                2,
+                sample_rate >> 14,
+                (sample_rate >> 6) & 0xFF,
+                ((sample_rate & 0x3F) << 2) | 3,
+                0,
+                0,
+                3,
+                0xFF,
+            )
+        )
+
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=descriptor(8_000),
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=descriptor(16_000),
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_audio_metadata(packets, b"unused") == (16_000, 1)
 
 def test_idmx_audio_metadata_requires_native_descriptor() -> None:
     assert _idmx_audio_metadata([], IDMX_MEDIA_KEY) is None

@@ -69,11 +69,7 @@ from .rtp import (
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
-    idmx_aac_descriptor,
-    idmx_rtp_stream_descriptors,
     parse_rtp_packet,
-    rtp_codec_payload_types,
-    rtp_media_kind,
     rtp_packet_is_idmx_aac,
     rtp_payload,
 )
@@ -2876,7 +2872,7 @@ def _idmx_route_diagnostics(packets: list[bytes]) -> dict[str, object]:
             profile.absorb(packet)
     for packet in parsed:
         if profile.media_kind(packet) in {"video", "audio"}:
-            profile.mark_media(packet)
+            profile.mark_media(packet, absorb=False)
     return profile.diagnostics()
 
 
@@ -5359,15 +5355,15 @@ def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
 def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
     """Read sample rate and channels from an IDMX 0x43 audio descriptor."""
 
-    rtp_packets: list[RtpPacket] = []
+    profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
-            rtp_packets.append(packet)
-    return idmx_aac_descriptor(rtp_packets)
+            profile.absorb(packet)
+    return profile.audio_metadata
 
 
 def _idmx_audio_metadata(
@@ -5382,16 +5378,15 @@ def _idmx_audio_metadata(
 def _idmx_audio_payload_types(packets: list[bytes]) -> frozenset[int]:
     """Return the AAC payload route advertised by startup stream metadata."""
 
-    rtp_packets: list[RtpPacket] = []
+    profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
-            rtp_packets.append(packet)
-    return rtp_codec_payload_types(
-        idmx_rtp_stream_descriptors(rtp_packets),
+            profile.absorb(packet)
+    return profile.codec_payload_types(
         "aac",
         fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
@@ -5419,10 +5414,12 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
             rtp_packets.append(packet)
-    descriptors = idmx_rtp_stream_descriptors(rtp_packets)
+    profile = RtpRouteProfile()
+    for packet in rtp_packets:
+        profile.absorb(packet)
     timestamps: list[int] = []
     for packet in rtp_packets:
-        if rtp_media_kind(packet, stream_descriptors=descriptors) == "video" and (
+        if profile.media_kind(packet) == "video" and (
             not timestamps or timestamps[-1] != packet.timestamp
         ):
             timestamps.append(packet.timestamp)
@@ -6154,29 +6151,27 @@ def _idmx_local_video_payload_types(
 ) -> frozenset[int]:
     """Return descriptor-owned local video routes with legacy PT 96 fallback."""
 
-    rtp_packets: list[RtpPacket] = []
+    profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
-            rtp_packets.append(packet)
-    descriptors = idmx_rtp_stream_descriptors(rtp_packets)
+            profile.absorb(packet)
     if codec is not None:
-        return rtp_codec_payload_types(
-            descriptors,
+        return profile.codec_payload_types(
             codec,
             fallback_payload_types=frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}),
         )
     descriptor_video_payload_types = frozenset(
         descriptor.payload_type
-        for descriptor in descriptors
+        for descriptor in profile.descriptors
         if descriptor.media_kind == "video"
     )
     if descriptor_video_payload_types:
         return descriptor_video_payload_types
-    assigned = frozenset(descriptor.payload_type for descriptor in descriptors)
+    assigned = frozenset(descriptor.payload_type for descriptor in profile.descriptors)
     return frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}) - assigned
 
 

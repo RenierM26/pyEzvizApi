@@ -5389,13 +5389,18 @@ def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
 def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
     """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
 
-    timestamps: list[int] = []
+    rtp_packets: list[RtpPacket] = []
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is not None and rtp_media_kind(packet) == "video" and (
+        if packet is not None:
+            rtp_packets.append(packet)
+    descriptors = idmx_rtp_stream_descriptors(rtp_packets)
+    timestamps: list[int] = []
+    for packet in rtp_packets:
+        if rtp_media_kind(packet, stream_descriptors=descriptors) == "video" and (
             not timestamps or timestamps[-1] != packet.timestamp
         ):
             timestamps.append(packet.timestamp)

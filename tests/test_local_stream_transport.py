@@ -243,6 +243,44 @@ def test_idmx_local_video_frame_rate_uses_rtp_timestamp_clock() -> None:
         == "15"
     )
 
+
+def test_idmx_local_video_frame_rate_honors_descriptor_reassignment() -> None:
+    def frame(
+        timestamp: int,
+        sequence: int,
+        *,
+        payload_type: int,
+        extension_data: bytes = b"",
+    ) -> bytes:
+        return (
+            b"\x90"
+            + bytes((payload_type,))
+            + sequence.to_bytes(2, "big")
+            + timestamp.to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + b"\x00\x01"
+            + (len(extension_data) // 4).to_bytes(2, "big")
+            + extension_data
+            + b"payload"
+        )
+
+    descriptors = b"\x45\x02\x90\x20\x45\x02\x24\x60"
+
+    assert (
+        _idmx_local_video_frame_rate(
+            [
+                frame(0, 1, payload_type=112, extension_data=descriptors),
+                frame(100, 2, payload_type=32),
+                frame(90_000, 3, payload_type=96),
+                frame(200, 4, payload_type=32),
+                frame(96_000, 5, payload_type=96),
+                frame(300, 6, payload_type=32),
+                frame(102_000, 7, payload_type=96),
+            ]
+        )
+        == "15"
+    )
+
 def test_local_sdk_media_stream_yields_mpeg_ps_payloads() -> None:
     first_payload = b"\x00\x00\x01\xbaabc"
     second_payload = b"\x00\x00\x01\xbadef"

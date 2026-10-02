@@ -2683,10 +2683,29 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     assert audio_inputs[0].chunks[0].endswith(plain_audio)
 
 
-def test_copy_cloud_stream_packets_waits_for_delayed_payload_routes(monkeypatch) -> None:
-    descriptor = b"\x45\x02\x90\x60\x45\x02\x1b\x61"
+@pytest.mark.parametrize("reassigned_payload_type", [32, 96])
+def test_copy_cloud_stream_packets_waits_for_delayed_payload_routes(
+    monkeypatch,
+    reassigned_payload_type: int,
+) -> None:
+    descriptor = bytes(
+        (
+            0x45,
+            0x02,
+            0x90,
+            reassigned_payload_type,
+            0x45,
+            0x02,
+            0x1B,
+            0x61,
+        )
+    )
     bodies = (
-        _rtp_packet(b"g711-alaw", sequence=1, payload_type=96),
+        _rtp_packet(
+            b"g711-alaw",
+            sequence=1,
+            payload_type=reassigned_payload_type,
+        ),
         _rtp_packet(
             b"metadata",
             sequence=2,

@@ -6170,6 +6170,12 @@ def _decrypt_idmx_local_packets_to_annexb(
             rtp_packet is not None
             and rtp_packet.payload_type in routed_hevc_payload_types
         )
+        hevc_codec_compatible = bool(
+            hevc_transport
+            and rtp_packet is not None
+            and rtp_packet.payload_type
+            not in route_epoch_profile.codec_payload_types("h264")
+        )
         h264_codec_compatible = bool(
             h264_transport
             and not final_route_is_authoritative_hevc
@@ -6184,7 +6190,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
             # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
             continue
-        if _looks_like_idmx_hevc_media_frame(body):
+        if hevc_codec_compatible and _looks_like_idmx_hevc_media_frame(body):
             hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(
                 output,
@@ -6277,19 +6283,41 @@ def _decrypt_idmx_local_packets_to_adts_aac(
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
 
+    final_profile = _idmx_local_route_profile(packets)
+    descriptor_aac_payload_types = final_profile.codec_payload_types("aac")
+    selected_audio_payload_types = (
+        audio_payload_types
+        if audio_payload_types is not None
+        else final_profile.codec_payload_types(
+            "aac",
+            fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
+        )
+    )
     rtp_packets: list[RtpPacket] = []
+    route_epoch_profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None or not _is_complete_idmx_rtp_frame(frame):
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is not None:
+        if packet is None:
+            continue
+        route_epoch_profile.absorb(packet)
+        if packet.payload_type not in selected_audio_payload_types:
             rtp_packets.append(packet)
+            continue
+        if (
+            packet.payload_type in descriptor_aac_payload_types
+            and packet.payload_type
+            not in route_epoch_profile.codec_payload_types("aac")
+        ):
+            continue
+        rtp_packets.append(packet)
     return decrypt_idmx_aac_packets(
         rtp_packets,
         media_key,
         audio_metadata=audio_metadata,
-        audio_payload_types=audio_payload_types,
+        audio_payload_types=selected_audio_payload_types,
         require_contiguous=require_contiguous,
     )
 

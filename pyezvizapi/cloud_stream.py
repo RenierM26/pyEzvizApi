@@ -1003,7 +1003,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
     prefix: list[RtpPacket] = []
-    prefix_video_route_epochs: dict[int, RtpVideoCodec] = {}
+    prefix_video_route_epochs: list[RtpVideoCodec | None] = []
     route_profile = RtpRouteProfile()
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
@@ -1019,17 +1019,18 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             descriptor.payload_type: descriptor
             for descriptor in route_profile.descriptors
         }
-        prefix.append(parsed)
         route_profile.absorb(parsed)
         stream_descriptors = route_profile.descriptors
+        parsed_video_route_epoch: RtpVideoCodec | None = None
         for descriptor in stream_descriptors:
-            if (
-                descriptor.payload_type == parsed.payload_type
-                and descriptor.codec in {"h264", "hevc"}
-            ):
-                prefix_video_route_epochs[id(parsed)] = (
-                    "h264" if descriptor.codec == "h264" else "hevc"
-                )
+            if descriptor.payload_type != parsed.payload_type:
+                continue
+            if descriptor.codec == "h264":
+                parsed_video_route_epoch = "h264"
+            elif descriptor.codec == "hevc":
+                parsed_video_route_epoch = "hevc"
+        prefix.append(parsed)
+        prefix_video_route_epochs.append(parsed_video_route_epoch)
         for descriptor in stream_descriptors:
             previous = previous_descriptors.get(descriptor.payload_type)
             route_changed = previous is None or (
@@ -1045,28 +1046,45 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     "h264" if descriptor.codec == "h264" else "hevc"
                 )
                 selected_prefix: list[RtpPacket] = []
-                for candidate in prefix:
+                selected_epochs: list[RtpVideoCodec | None] = []
+                for candidate, epoch_codec in zip(
+                    prefix,
+                    prefix_video_route_epochs,
+                    strict=True,
+                ):
                     if candidate.payload_type != descriptor.payload_type:
                         selected_prefix.append(candidate)
+                        selected_epochs.append(epoch_codec)
                         continue
                     if not _cloud_rtp_packet_matches_video_route(
                         candidate,
                         route_codec=route_codec,
-                        epoch_codec=prefix_video_route_epochs.get(id(candidate)),
+                        epoch_codec=epoch_codec,
                     ):
                         continue
-                    prefix_video_route_epochs[id(candidate)] = route_codec
                     selected_prefix.append(candidate)
+                    selected_epochs.append(route_codec)
                 prefix = selected_prefix
+                prefix_video_route_epochs = selected_epochs
             elif descriptor.media_kind == "audio" and route_changed:
-                prefix = [
-                    candidate
-                    for candidate in prefix
+                selected_audio_prefix: list[
+                    tuple[RtpPacket, RtpVideoCodec | None]
+                ] = [
+                    (candidate, epoch_codec)
+                    for candidate, epoch_codec in zip(
+                        prefix,
+                        prefix_video_route_epochs,
+                        strict=True,
+                    )
                     if candidate.payload_type != descriptor.payload_type
                     or (
                         descriptor.codec == "aac"
                         and rtp_packet_has_valid_idmx_aac_frame(candidate)
                     )
+                ]
+                prefix = [candidate for candidate, _epoch in selected_audio_prefix]
+                prefix_video_route_epochs = [
+                    epoch for _candidate, epoch in selected_audio_prefix
                 ]
         video_route_is_authoritative = any(
             descriptor.media_kind == "video"

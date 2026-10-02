@@ -451,6 +451,45 @@ def test_encrypted_local_idmx_rejects_stale_h264_before_hevc_route(
     assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
 
 
+def test_encrypted_local_idmx_rejects_wrapped_hevc_before_h264_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x40\x00\x00\x02\x80\x06wrapped-hevc",
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._append_idmx_hevc_media_payload",
+        lambda *_args, **_kwargs: pytest.fail("stale wrapped HEVC was emitted"),
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+    )
+
+    assert annexb == expected_annexb
+
+
 def test_encrypted_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1020,6 +1059,45 @@ def test_decrypt_idmx_local_aac_uses_preserved_dynamic_payload_route() -> None:
     )
 
     assert audio is not None
+    assert audio.adts.endswith(plain)
+
+
+def test_decrypt_idmx_local_aac_ignores_packets_before_aac_route_epoch() -> None:
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    access_unit = b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted
+    packets = [
+        _rtp_packet(
+            b"not-aac",
+            payload_type=105,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x0f\x69",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        len(
+            selected_rtp := (
+                b"\x90\x69\x00\x03\x00\x00\x00\x01\x55\x66\x77\x88"
+                b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+                + access_unit
+            )
+        ).to_bytes(4, "little")
+        + selected_rtp,
+    ]
+
+    audio = _decrypt_idmx_local_packets_to_adts_aac(
+        packets,
+        IDMX_MEDIA_KEY,
+        audio_metadata=(16_000, 1),
+        audio_payload_types=frozenset({105}),
+    )
+
+    assert audio is not None
+    assert audio.frame_count == 1
     assert audio.adts.endswith(plain)
 
 

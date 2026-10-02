@@ -376,6 +376,23 @@ def test_codec_detection_rejects_official_unsupported_static_video_payloads(
         detect_rtp_video_codec([packet])
 
 
+def test_static_unsupported_video_is_not_masked_by_shared_payload_packet() -> None:
+    packets = (
+        parse_rtp_packet(
+            _rtp(b"\x00\x00\x01\xb3mpeg2", sequence=1, payload_type=32)
+        ),
+        parse_rtp_packet(
+            _rtp(b"dynamic-audio", sequence=2, payload_type=96)
+        ),
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="Unsupported RTP video codec: mpeg2video",
+    ):
+        detect_rtp_video_codec(packets)
+
+
 @pytest.mark.parametrize(
     ("payload", "codec"),
     [

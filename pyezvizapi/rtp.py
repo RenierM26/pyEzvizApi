@@ -520,11 +520,7 @@ def detect_rtp_video_codec(
         for packet in packet_list
         if packet.payload_type in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS
     }
-    if unsupported_static_codecs and not any(
-        packet.payload_type in routed_video_payload_types
-        for packet in packet_list
-        if packet.payload_type not in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS
-    ):
+    if unsupported_static_codecs:
         codecs = ", ".join(sorted(unsupported_static_codecs))
         raise UnsupportedRtpVideoCodecError(
             f"Unsupported RTP video codec: {codecs}"

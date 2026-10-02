@@ -591,6 +591,18 @@ def _idmx_aac_access_unit(payload: bytes) -> bytes | None:
     return payload[4:]
 
 
+def rtp_packet_has_valid_idmx_aac_frame(packet: RtpPacket) -> bool:
+    """Return whether one RTP packet carries a safely framed IDMX AAC unit."""
+
+    access_unit = _idmx_aac_access_unit(packet.payload)
+    return (
+        _idmx_audio_extension_is_aac(packet)
+        and access_unit is not None
+        and len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+        <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+    )
+
+
 def _rtp_media_aes_key(media_key: str | bytes) -> bytes:
     key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
     return key_bytes.ljust(16, b"\0")[:16]
@@ -627,7 +639,7 @@ def _aac_adts_header(payload_length: int, sample_rate: int, channels: int) -> by
     )
 
 
-def decrypt_idmx_aac_packets(  # noqa: PLR0911
+def decrypt_idmx_aac_packets(
     packets: Iterable[RtpPacket],
     media_key: str | bytes,
     *,
@@ -651,11 +663,10 @@ def decrypt_idmx_aac_packets(  # noqa: PLR0911
     for packet in packet_list:
         if packet.payload_type not in selected_audio_payload_types:
             continue
-        if not _idmx_audio_extension_is_aac(packet):
+        if not rtp_packet_has_valid_idmx_aac_frame(packet):
             return None
         access_unit = _idmx_aac_access_unit(packet.payload)
-        if access_unit is None:
-            return None
+        assert access_unit is not None
         timestamps.append(packet.timestamp)
         encrypted_access_units.append(access_unit)
     if not encrypted_access_units:
@@ -665,13 +676,6 @@ def decrypt_idmx_aac_packets(  # noqa: PLR0911
         for previous, current in pairwise(timestamps)
     ):
         return None
-    if any(
-        len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
-        > IDMX_AAC_ADTS_MAX_FRAME_LENGTH
-        for access_unit in encrypted_access_units
-    ):
-        return None
-
     descriptor = idmx_aac_descriptor(packet_list) or audio_metadata
     if descriptor is None:
         return None

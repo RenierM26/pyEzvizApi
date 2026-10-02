@@ -2742,9 +2742,16 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
         ),
+        rtp_with_extension(
+            b"\x00\x10\x00\x08malformed-aac",
+            sequence=4,
+            payload_type=105,
+            extension_profile=0x4000,
+            extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",
+        ),
         _rtp_packet(
             b"metadata",
-            sequence=4,
+            sequence=5,
             payload_type=112,
             extension_profile=1,
             extension_data=b"\x45\x02\x0f\x69",
@@ -2753,7 +2760,7 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")
             + encrypted_audio,
-            sequence=4,
+            sequence=5,
             payload_type=105,
             extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01",

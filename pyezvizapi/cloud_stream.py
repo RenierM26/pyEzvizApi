@@ -38,6 +38,7 @@ from .rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
@@ -1064,8 +1065,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     if candidate.payload_type != descriptor.payload_type
                     or (
                         descriptor.codec == "aac"
-                        and candidate.extension_profile == 0x4000
-                        and candidate.payload.startswith(b"\x00\x10")
+                        and rtp_packet_has_valid_idmx_aac_frame(candidate)
                     )
                 ]
         video_route_is_authoritative = any(

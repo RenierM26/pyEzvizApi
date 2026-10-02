@@ -19,6 +19,7 @@ from pyezvizapi.rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_annexb,
 )
 
@@ -133,6 +134,30 @@ def test_decrypt_idmx_aac_packets_requires_native_descriptor() -> None:
     )
 
     assert decrypt_idmx_aac_packets([packet], b"0123456789abcdef") is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "extension_data"),
+    [
+        (b"\x00\x10\x00\x08malformed", b"\x80\x06\x00\x01\x21\x21\x02\x01"),
+        (b"\x00\x10\x00\x28valid", b"\x00\x06\x00\x01\x21\x21\x02\x01"),
+    ],
+)
+def test_idmx_aac_frame_validation_rejects_malformed_packet(
+    payload: bytes,
+    extension_data: bytes,
+) -> None:
+    packet = parse_rtp_packet(
+        _rtp(
+            payload,
+            sequence=1,
+            payload_type=104,
+            extension_profile=0x4000,
+            extension_data=extension_data,
+        )
+    )
+
+    assert not rtp_packet_has_valid_idmx_aac_frame(packet)
 
 
 def test_decrypt_idmx_aac_packets_uses_descriptor_payload_route() -> None:

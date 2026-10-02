@@ -6365,15 +6365,19 @@ def _idmx_local_packets_to_hevc_annexb(
         allow_ezviz_headerless_hevc_fu=True,
     )
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
+    route_epoch_profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None:
+            route_epoch_profile.absorb(packet)
         if packet is None or packet.payload_type not in routed_payload_types:
             continue
         if (
-            rtp_payload_video_codec(packet.payload) == "h264"
+            packet.payload_type in route_epoch_profile.codec_payload_types("h264")
+            or rtp_payload_video_codec(packet.payload) == "h264"
             or not _looks_like_idmx_hevc_direct_frame(packet.payload)
         ):
             continue
@@ -6395,6 +6399,7 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     )
     end_offsets: list[int] = []
     routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
+    route_epoch_profile = RtpRouteProfile()
     for packet in packets:
         for frame in _iter_idmx_local_packet_frame(
             packet,
@@ -6404,9 +6409,13 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
             if header_size is None:
                 continue
             rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
+            if rtp_packet is not None:
+                route_epoch_profile.absorb(rtp_packet)
             if (
                 rtp_packet is None
                 or rtp_packet.payload_type not in routed_payload_types
+                or rtp_packet.payload_type
+                in route_epoch_profile.codec_payload_types("h264")
                 or rtp_payload_video_codec(rtp_packet.payload) == "h264"
                 or not _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
             ):

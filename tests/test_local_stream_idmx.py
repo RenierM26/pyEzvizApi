@@ -418,6 +418,36 @@ def test_encrypted_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route(
     assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
 
 
+def test_clear_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route() -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            b"\x06\x05stale-h264-sei",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            direct_irap,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "hevc"
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+
+
 def test_encrypted_local_idmx_rejects_unsupported_authoritative_video_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

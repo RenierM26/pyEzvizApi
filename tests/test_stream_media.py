@@ -3348,6 +3348,70 @@ def test_copy_cloud_stream_packets_revalidates_buffered_video_probe(
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
 
 
+@pytest.mark.parametrize("descriptor_on_sei", [False, True])
+def test_copy_cloud_stream_packets_preserves_ambiguous_h264_route_epoch(
+    monkeypatch,
+    descriptor_on_sei: bool,
+) -> None:
+    descriptor = b"\x45\x02\x1b\x61"
+    sei = _rtp_packet(
+        b"\x06\x05captions",
+        sequence=1,
+        payload_type=97,
+        extension_profile=1 if descriptor_on_sei else None,
+        extension_data=descriptor if descriptor_on_sei else b"",
+    )
+    bodies = [sei]
+    if not descriptor_on_sei:
+        bodies.append(
+            _rtp_packet(
+                b"metadata",
+                sequence=2,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=descriptor,
+            )
+        )
+    bodies.append(
+        _rtp_packet(
+            b"\x67h264-sps",
+            sequence=len(bodies) + 1,
+            payload_type=97,
+            marker=True,
+        )
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+    )
+
+    assert output.getvalue() == b"\x00\x00\x00\x01\x06\x05captions" + H264_SPS_ANNEXB
+
+
 @pytest.mark.parametrize("static_payload_type", [26, 32, 99])
 def test_copy_cloud_stream_packets_ignores_static_video_outside_selected_route(
     monkeypatch,

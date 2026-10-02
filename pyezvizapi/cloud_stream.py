@@ -1047,18 +1047,34 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             audio_input.finish(raise_errors=False)
         raise
 
-    def _write_input(stdin: BinaryIO) -> None:
+    audio_failed = False
+
+    def _write_input(stdin: BinaryIO) -> None:  # noqa: PLR0912,PLR0915
+        nonlocal audio_failed
         depacketizer = RtpVideoDepacketizer(
             codec,
             allow_ezviz_headerless_hevc_fu=True,
         )
         nal_count = 0
+        audio_enabled = audio_input is not None
         last_audio_sequence: dict[int, int] = {}
         next_audio_timestamp: dict[int, int] = {}
+
+        def _disable_audio() -> None:
+            nonlocal audio_enabled, audio_failed
+            if not audio_enabled or audio_input is None:
+                return
+            audio_enabled = False
+            audio_failed = True
+            try:
+                audio_input.close_input()
+            except (BrokenPipeError, PyEzvizError):
+                audio_input.cancel()
+
         try:
             for packet in chain(prefix, _remaining_rtp_packets()):
                 kind = rtp_media_kind(packet)
-                if kind == "audio" and audio_input is not None:
+                if kind == "audio" and audio_enabled and audio_input is not None:
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:
@@ -1066,11 +1082,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     if previous_sequence is not None and packet.sequence != (
                         previous_sequence + 1
                     ) & 0xFFFF:
-                        raise PyEzvizError("Cloud RTP AAC sequence discontinuity")
+                        _disable_audio()
+                        continue
                     if expected_timestamp is not None and (
                         packet.timestamp != expected_timestamp
                     ):
-                        raise PyEzvizError("Cloud RTP AAC timestamp discontinuity")
+                        _disable_audio()
+                        continue
                     assert selected_audio_key is not None
                     audio = decrypt_idmx_aac_packets(
                         (packet,),
@@ -1079,10 +1097,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         require_contiguous=False,
                     )
                     if audio is None:
-                        raise PyEzvizError(
-                            "Cloud RTP AAC packet is not safely decodable"
-                        )
-                    audio_input.write(audio.adts)
+                        _disable_audio()
+                        continue
+                    try:
+                        audio_input.write(audio.adts)
+                    except (BrokenPipeError, PyEzvizError):
+                        _disable_audio()
+                        continue
                     last_audio_sequence[packet.ssrc] = packet.sequence
                     next_audio_timestamp[packet.ssrc] = (
                         packet.timestamp + 1024 * audio.frame_count
@@ -1101,7 +1122,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     "RTP cloud stream did not contain a complete video NAL unit"
                 )
         finally:
-            if audio_input is not None:
+            if audio_input is not None and audio_enabled:
                 audio_input.close_input()
 
     def _cancel_inputs() -> None:
@@ -1123,7 +1144,9 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         raise
     finally:
         if audio_input is not None:
-            audio_input.finish(raise_errors=remux_error is None)
+            audio_input.finish(
+                raise_errors=remux_error is None and not audio_failed,
+            )
 
 
 def _remux_cloud_mpegps_bytes_to_mpegts(

@@ -75,6 +75,7 @@ def _rtp_packet(
     sequence: int = 1,
     payload_type: int = 96,
     marker: bool = False,
+    timestamp: int = 90_000,
     extension_profile: int | None = None,
     extension_data: bytes = b"",
 ) -> bytes:
@@ -95,7 +96,7 @@ def _rtp_packet(
         bytes((first_byte,))
         + bytes([payload_type | (0x80 if marker else 0)])
         + sequence.to_bytes(2, "big")
-        + b"\x00\x01\x5f\x90"
+        + timestamp.to_bytes(4, "big")
         + b"\x55\x66\x77\x88"
         + extension
         + payload
@@ -2650,6 +2651,135 @@ def test_copy_cloud_stream_packets_to_mpegts_bounds_video_only_audio_probe(
     )
 
     assert process_opened is True
+
+
+def test_copy_cloud_stream_packets_to_mpegts_keeps_video_after_aac_gap(
+    monkeypatch,
+) -> None:
+    media_key = b"0123456789abcdef"
+    sample_rate = 16_000
+    descriptor = bytes(
+        (
+            0x43,
+            10,
+            0,
+            1,
+            2,
+            sample_rate >> 14,
+            (sample_rate >> 6) & 0xFF,
+            ((sample_rate & 0x3F) << 2) | 3,
+            0,
+            0,
+            3,
+            0xFF,
+        )
+    )
+    plain_audio = b"0123456789abcdef" + b"tail"
+    encrypted_audio = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain_audio[16:]
+    audio_payload = (
+        b"\x00\x10"
+        + (len(encrypted_audio) << 3).to_bytes(2, "big")
+        + encrypted_audio
+    )
+    audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
+    bodies = (
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        ),
+        _rtp_packet(b"\x67h264-sps", sequence=2, marker=True),
+        _rtp_packet(
+            audio_payload,
+            sequence=3,
+            timestamp=0,
+            payload_type=104,
+            extension_profile=0x4000,
+            extension_data=audio_extension,
+        ),
+        _rtp_packet(
+            audio_payload,
+            sequence=5,
+            timestamp=2048,
+            payload_type=104,
+            extension_profile=0x4000,
+            extension_data=audio_extension,
+        ),
+        _rtp_packet(b"\x68h264-pps", sequence=6, marker=True),
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    audio_inputs: list[Any] = []
+
+    class FakeAudioInput:
+        url = "tcp://127.0.0.1:43210"
+
+        def __init__(self) -> None:
+            self.chunks: list[bytes] = []
+            self.close_calls = 0
+            self.finish_calls: list[bool] = []
+            audio_inputs.append(self)
+
+        def start(self) -> None:
+            return None
+
+        def write(self, data: bytes) -> None:
+            self.chunks.append(data)
+
+        def close_input(self) -> None:
+            self.close_calls += 1
+
+        def cancel(self) -> None:
+            return None
+
+        def finish(self, *, raise_errors: bool) -> None:
+            self.finish_calls.append(raise_errors)
+
+    def fake_open_remux(
+        _ffmpeg_path: str,
+        _codec: str,
+        *,
+        audio_url: str | None = None,
+    ) -> subprocess.Popen[bytes]:
+        assert audio_url == FakeAudioInput.url
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(cloud_stream_module, "_CloudRtpAudioInput", FakeAudioInput)
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg-custom",
+        max_packets=len(bodies),
+        rtp_audio_key=media_key,
+    )
+
+    assert output.getvalue() == H264_SPS_ANNEXB + b"\x00\x00\x00\x01\x68h264-pps"
+    assert len(audio_inputs) == 1
+    assert len(audio_inputs[0].chunks) == 1
+    assert audio_inputs[0].close_calls >= 1
+    assert audio_inputs[0].finish_calls == [False]
 
 
 def test_cloud_rtp_audio_input_streams_and_cancels_active_connection() -> None:

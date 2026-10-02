@@ -3004,9 +3004,7 @@ def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
         + b"\x00\x10metadata-sidecar"
         + nested(descriptor)
     )
-    descriptor_packet = (
-        len(descriptor_aggregate).to_bytes(4, "little") + descriptor_aggregate
-    )
+    descriptor_packet = descriptor_aggregate
 
     annexb, codec = _idmx_local_packets_to_annexb_with_codec(
         [descriptor_packet, packet]

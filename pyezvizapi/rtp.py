@@ -169,6 +169,7 @@ class RtpRouteProfile:
         self._descriptors: dict[int, RtpStreamDescriptor] = {}
         self._selected_fallbacks: dict[int, tuple[RtpCodec, RtpMediaKind]] = {}
         self._observed_ssrcs: dict[int, set[int]] = {}
+        self._active_video_codecs: set[RtpCodec] = set()
         self._audio_metadata: tuple[int, int] | None = None
         self._media_started = False
         self._audio_media_started = False
@@ -200,20 +201,25 @@ class RtpRouteProfile:
         for descriptor in idmx_rtp_stream_descriptors((packet,)):
             current = self._descriptors.get(descriptor.payload_type)
             selected_fallback = self._selected_fallbacks.get(descriptor.payload_type)
-            if descriptor.payload_type in self._observed_ssrcs and (
-                (
-                    current is None
-                    and selected_fallback
-                    != (descriptor.codec, descriptor.media_kind)
+            changes_dispatched_route = (
+                current is None
+                and selected_fallback != (descriptor.codec, descriptor.media_kind)
+            ) or (
+                current is not None
+                and (
+                    current.codec != descriptor.codec
+                    or current.media_kind != descriptor.media_kind
                 )
-                or (
-                    current is not None
-                    and (
-                        current.codec != descriptor.codec
-                        or current.media_kind != descriptor.media_kind
-                    )
-                )
-            ):
+            )
+            conflicts_with_video_consumer = (
+                descriptor.media_kind == "video"
+                and bool(self._active_video_codecs)
+                and descriptor.codec not in self._active_video_codecs
+            )
+            if (
+                descriptor.payload_type in self._observed_ssrcs
+                and changes_dispatched_route
+            ) or conflicts_with_video_consumer:
                 raise PyEzvizError(
                     "RTP route mutation after media began: descriptor changes "
                     f"payload type {descriptor.payload_type} ownership or codec"
@@ -287,6 +293,21 @@ class RtpRouteProfile:
         self._media_started = True
         if kind == "audio":
             self._audio_media_started = True
+        elif kind == "video":
+            descriptor = self._descriptors.get(packet.payload_type)
+            selected_fallback = self._selected_fallbacks.get(packet.payload_type)
+            codec = (
+                descriptor.codec
+                if descriptor is not None
+                else selected_fallback[0]
+                if selected_fallback is not None
+                else _IDMX_STATIC_VIDEO_PAYLOAD_CODECS.get(
+                    packet.payload_type,
+                    "unknown",
+                )
+            )
+            if codec != "unknown":
+                self._active_video_codecs.add(codec)
         self._observed_ssrcs.setdefault(packet.payload_type, set()).add(packet.ssrc)
 
     def streams(self) -> tuple[dict[str, object], ...]:

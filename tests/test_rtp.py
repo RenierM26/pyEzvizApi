@@ -344,6 +344,34 @@ def test_route_profile_rejects_descriptor_mutation_after_media_dispatch() -> Non
         profile.absorb(mutation)
 
 
+def test_route_profile_rejects_new_incompatible_video_route_after_dispatch() -> None:
+    profile = RtpRouteProfile()
+    h264_descriptor = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    )
+    video = parse_rtp_packet(_rtp(b"\x67video", sequence=2, payload_type=97))
+    new_hevc_route = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x62",
+        )
+    )
+    profile.absorb(h264_descriptor)
+    profile.mark_media(video)
+
+    with pytest.raises(PyEzvizError, match="RTP route mutation after media began"):
+        profile.absorb(new_hevc_route)
+
+
 def test_route_profile_accepts_codec_alias_repeat_after_media_dispatch() -> None:
     profile = RtpRouteProfile()
     descriptor = parse_rtp_packet(

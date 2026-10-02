@@ -5929,11 +5929,13 @@ def _iter_idmx_local_packet_frame(
                 video_payload_types=video_payload_types,
             )
             return
-    if _is_complete_idmx_rtp_frame(
-        packet
-    ) and not _idmx_local_packet_contains_aggregate_media_frame(
-        packet,
-        video_payload_types=video_payload_types,
+    if (
+        _is_complete_idmx_rtp_frame(packet)
+        and not _idmx_local_packet_contains_aggregate_media_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        )
+        and not _idmx_local_packet_contains_aggregate_descriptors(packet)
     ):
         yield packet
         return
@@ -5977,6 +5979,18 @@ def _idmx_local_packet_contains_aggregate_media_frame(
     return _idmx_local_frames_contain_routed_media(
         frames,
         video_payload_types=video_payload_types,
+    )
+
+
+def _idmx_local_packet_contains_aggregate_descriptors(packet: bytes) -> bool:
+    frames = tuple(_iter_idmx_local_frames(packet))
+    if len(frames) <= 1:
+        return False
+    return any(
+        idmx_rtp_stream_descriptors((parsed,))
+        for frame in frames[1:]
+        if (header_size := _idmx_local_frame_header_size(frame)) is not None
+        if (parsed := _idmx_local_frame_rtp_packet(frame, header_size)) is not None
     )
 
 

@@ -23,6 +23,7 @@ from pyezvizapi.rtp import (
 
 H264_WRAPPED_NAL = b"\x00\x00\x00\x01\x65hello-world"
 H264_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x65right"
+H264_CUSTOM_ROUTED_NAL = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 HEVC_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x26\x01hevc"
 
@@ -435,6 +436,23 @@ def test_descriptor_non_video_route_is_excluded_from_codec_fallback() -> None:
 
     with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
         detect_rtp_video_codec(packets)
+
+
+def test_explicit_video_payload_route_overrides_static_codec_default() -> None:
+    packet = parse_rtp_packet(
+        _rtp(b"\x67h264-sps", sequence=1, payload_type=99)
+    )
+    custom_route = frozenset({99})
+
+    assert detect_rtp_video_codec(
+        (packet,),
+        video_payload_types=custom_route,
+    ) == "h264"
+    assert rtp_packets_to_annexb(
+        (packet,),
+        codec="h264",
+        video_payload_types=custom_route,
+    ) == H264_CUSTOM_ROUTED_NAL
 
 
 @pytest.mark.parametrize(

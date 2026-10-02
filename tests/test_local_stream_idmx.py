@@ -218,6 +218,36 @@ def test_summarize_idmx_routes_accepts_predispatch_correction_on_media() -> None
         ],
     }
 
+
+def test_summarize_idmx_counts_descriptor_routed_h264() -> None:
+    rtp_packets = [
+        _rtp_packet(
+            b"\x67dynamic-sps",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65dynamic-idr",
+            sequence=2,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    packets = [len(packet).to_bytes(4, "little") + packet for packet in rtp_packets]
+
+    summary = summarize_idmx_h264_local_packets(packets)
+
+    assert [sample["kind"] for sample in summary["samples"]] == [
+        "h264_nal",
+        "h264_nal",
+    ]
+    assert summary["h264"]["clear_nal"] == 2
+    assert summary["h264"]["sps"] == 1
+    assert summary["h264"]["idr"] == 1
+    assert summary["h264"]["unknown"] == 0
+    assert len(summary["h264_nal_units"]["samples"]) == 2
+
 def _media(
     payload: bytes,
     *,

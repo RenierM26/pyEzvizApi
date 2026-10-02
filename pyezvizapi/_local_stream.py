@@ -2834,16 +2834,22 @@ def summarize_idmx_h264_local_packets(
     }
     samples = summary["samples"]
     assert isinstance(samples, list)
+    h264_payload_types = _idmx_local_video_payload_types(payloads, codec="h264")
     active_h264_fu: dict[str, Any] | None = None
     for frame_index, frame in enumerate(_iter_idmx_local_packet_frames(payloads)):
         summary["frame_count"] = frame_index + 1
-        frame_summary = _summarize_idmx_h264_local_frame(frame, frame_index)
+        frame_summary = _summarize_idmx_h264_local_frame(
+            frame,
+            frame_index,
+            h264_payload_types=h264_payload_types,
+        )
         _merge_idmx_h264_frame_summary(summary, frame_summary)
         active_h264_fu = _record_idmx_h264_nal_unit_summary(
             summary,
             frame,
             frame_summary,
             active_fu=active_h264_fu,
+            h264_payload_types=h264_payload_types,
         )
         if len(samples) < max_frames:
             samples.append(frame_summary)
@@ -5290,6 +5296,8 @@ def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | 
 def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
     frame: bytes,
     frame_index: int,
+    *,
+    h264_payload_types: frozenset[int],
 ) -> dict[str, Any]:
     header_size = _idmx_local_frame_header_size(frame)
     sample: dict[str, Any] = {
@@ -5308,7 +5316,11 @@ def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
     body = _idmx_local_frame_media_body(frame, header_size)
     sample["body_length"] = len(body)
     sample["body_sha256"] = hashlib.sha256(body).hexdigest()
-    is_h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
+    is_h264_transport = _idmx_local_frame_is_h264_transport(
+        frame,
+        header_size,
+        payload_types=h264_payload_types,
+    )
     if is_h264_transport and _looks_like_idmx_h264_fu_a_frame(body):
         fu_header = body[1]
         sample["kind"] = "h264_fu_a"
@@ -5364,9 +5376,14 @@ def _idmx_local_frame_transport_fields(
     }
 
 
-def _idmx_local_frame_is_h264_transport(frame: bytes, header_size: int) -> bool:
+def _idmx_local_frame_is_h264_transport(
+    frame: bytes,
+    header_size: int,
+    *,
+    payload_types: frozenset[int] = frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}),
+) -> bool:
     transport = _idmx_local_frame_transport_fields(frame, header_size)
-    return transport.get("rtp_payload_type") == IDMX_H264_RTP_PAYLOAD_TYPE
+    return transport.get("rtp_payload_type") in payload_types
 
 
 def _idmx_local_frame_sequence_number(frame: bytes, header_size: int) -> int | None:
@@ -5555,11 +5572,16 @@ def _record_idmx_h264_nal_unit_summary(  # noqa: PLR0911, PLR0912
     frame_summary: dict[str, Any],
     *,
     active_fu: dict[str, Any] | None,
+    h264_payload_types: frozenset[int],
 ) -> dict[str, Any] | None:
     header_size = frame_summary.get("header_size")
     if not isinstance(header_size, int):
         return active_fu
-    if not _idmx_local_frame_is_h264_transport(frame, header_size):
+    if not _idmx_local_frame_is_h264_transport(
+        frame,
+        header_size,
+        payload_types=h264_payload_types,
+    ):
         return active_fu
     body = _idmx_local_frame_media_body(frame, header_size)
     if _looks_like_idmx_h264_clear_nal(body):

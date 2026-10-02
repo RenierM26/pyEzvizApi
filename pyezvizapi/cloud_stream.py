@@ -1046,6 +1046,8 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             )
         if codec is None:
             continue
+        if not video_probe:
+            continue
         if (
             not video_route_is_authoritative
             and len(video_probe) < _RTP_CODEC_PROBE_MAX_PACKETS

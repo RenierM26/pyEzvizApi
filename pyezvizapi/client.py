@@ -200,6 +200,13 @@ from .utils import convert_to_dict, decrypt_image, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class _SourceDefaultNaluHeaderSize(int):
+    """Marker for the legacy source-specific NAL header default."""
+
+
+_SOURCE_DEFAULT_NALU_HEADER_SIZE: int = _SourceDefaultNaluHeaderSize(0)
+
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
@@ -3029,7 +3036,7 @@ class EzvizClient:
         ffmpeg_path: str = "ffmpeg",
         decrypt_video: bool = False,
         media_key: str | bytes | None = None,
-        nalu_header_size: int | None = 0,
+        nalu_header_size: int | None = _SOURCE_DEFAULT_NALU_HEADER_SIZE,
         cas_serial: str | None = None,
         register_p2p_session: bool = True,
         p2p_register_max_retries: int = MAX_RETRIES,
@@ -3075,7 +3082,14 @@ class EzvizClient:
 
         This long-form signature is retained for compatibility. New code can
         group the same settings with :meth:`save_clip_with_options`.
+
+        When ``nalu_header_size`` is omitted, cloud decryption auto-detects the
+        clear codec header while local sources retain the legacy ``0`` default.
+        Passing ``0`` or ``None`` explicitly preserves that exact choice.
         """
+
+        if nalu_header_size is _SOURCE_DEFAULT_NALU_HEADER_SIZE:
+            nalu_header_size = None if source == "cloud" else 0
 
         if output_format is None:
             output_format = "mpegps" if source == "local-sdk-ecdh" else "mpegts"

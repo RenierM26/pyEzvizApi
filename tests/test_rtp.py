@@ -15,6 +15,7 @@ from pyezvizapi.rtp import (
 )
 
 H264_WRAPPED_NAL = b"\x00\x00\x00\x01\x65hello-world"
+HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 
 
 def _rtp(
@@ -109,6 +110,20 @@ def test_marker_only_sequence_collision_invalidates_hevc_fragment() -> None:
     assert depacketizer.stats.discarded_fragments >= 2
 
 
+def test_rtp_packets_to_annexb_can_accept_ezviz_headerless_hevc_fu() -> None:
+    packets = [
+        parse_rtp_packet(_rtp(b"\x62\x01\x93start", sequence=1)),
+        parse_rtp_packet(_rtp(b"\x62\x01\x26middle", sequence=2)),
+        parse_rtp_packet(_rtp(b"\x62\x01\x66end", sequence=3, marker=True)),
+    ]
+
+    assert rtp_packets_to_annexb(
+        packets,
+        codec="hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+    ) == HEVC_EZVIZ_WRAPPED_NAL
+
+
 def test_h264_fu_type_change_invalidates_active_fragment() -> None:
     depacketizer = RtpVideoDepacketizer("h264")
     packets = [
@@ -196,6 +211,16 @@ def test_codec_detection_rejects_only_ambiguous_packets() -> None:
 
     with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
         detect_rtp_video_codec([packet])
+
+
+def test_codec_detection_can_defer_fallback_until_more_packets_arrive() -> None:
+    aud = parse_rtp_packet(_rtp(b"\x09\xf0", sequence=1))
+    sps = parse_rtp_packet(_rtp(b"\x67h264-sps", sequence=2))
+
+    with pytest.raises(PyEzvizError, match="Could not detect RTP video codec"):
+        detect_rtp_video_codec([aud], allow_fallback=False)
+
+    assert detect_rtp_video_codec([aud, sps], allow_fallback=False) == "h264"
 
 
 @pytest.mark.parametrize(

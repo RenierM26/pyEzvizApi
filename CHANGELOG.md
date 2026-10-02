@@ -67,6 +67,14 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Route cloud VTM MPEG-PS, MPEG-TS, and RTP/IDMX payloads through the correct
+  export path. Cloud RTP H.264/HEVC is now depacketized before MPEG-TS remuxing,
+  supports EZVIZ's headerless HEVC FU continuations, and works through CLI
+  dumps, the HTTP proxy, and `save_clip`; incompatible MPEG-PS requests now
+  fail explicitly instead of writing mislabeled bytes.
+- Use cloud-specific automatic NAL-header detection for CLI `save clip`
+  decryption while retaining the legacy encrypted-header default for local
+  stream sources.
 - Fixed `TestRTSPAuth` crashing with `UnicodeDecodeError` when a camera's RTSP
   reply contains bytes that are not valid UTF-8 (seen on an EZVIZ C8C). Replies
   are now decoded as latin-1, so realm and nonce offsets still match the raw

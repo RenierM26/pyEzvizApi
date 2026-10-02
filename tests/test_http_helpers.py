@@ -3606,6 +3606,67 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
+    monkeypatch,
+) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_cloud_stream_to_mpegts(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    client.save_clip(
+        "CAM123",
+        io.BytesIO(),
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert calls[0]["nalu_header_size"] is None
+
+
+def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
+    monkeypatch,
+) -> None:
+    client = _client()
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_cloud_stream_to_mpegts(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append({"client": source_client, "serial": serial, **kwargs})
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    client.save_clip(
+        "CAM123",
+        io.BytesIO(),
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+        nalu_header_size=0,
+    )
+
+    assert calls[0]["nalu_header_size"] == 0
+
+
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "snapshots" / "front.jpg"

@@ -27,7 +27,7 @@ from ._token_store import save_private_token
 from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
-from .cloud_stream import open_cloud_stream
+from .cloud_stream import copy_cloud_stream_packets_to_mpegts, open_cloud_stream
 from .constants import (
     MAX_RETRIES,
     PROFILE as PUSH_PROFILE,
@@ -83,7 +83,7 @@ from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     detect_rtp_video_codec,
     parse_rtp_packet,
-    rtp_packets_to_annexb,
+    rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
 from .stream_media import (
@@ -714,8 +714,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "h264-encrypted-header",
             "encrypted-header",
         ),
-        default="encrypted-header",
-        help="Video codec transform for --decrypt-video (default: encrypted-header)",
+        default=None,
+        help=(
+            "Video codec transform for --decrypt-video; defaults to auto for "
+            "cloud streams and encrypted-header for local streams"
+        ),
     )
     parser_save_clip.add_argument(
         "--media-key",
@@ -2274,6 +2277,12 @@ def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> N
 def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     """Save a short direct-local camera clip to disk."""
 
+    decrypt_codec = args.decrypt_codec or (
+        "auto"
+        if args.source == "cloud" and args.decrypt_video
+        else "encrypted-header"
+    )
+
     command_generated_plan = (
         _hcnetsdk_command_generated_plan_from_args(args)
         if args.source == "hcnetsdk-command-port"
@@ -2325,7 +2334,7 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
         "channel": args.channel,
         "ffmpeg_path": args.ffmpeg_path,
         "decrypt_video": args.decrypt_video,
-        "nalu_header_size": _codec_nalu_header_size(args.decrypt_codec),
+        "nalu_header_size": _codec_nalu_header_size(decrypt_codec),
         "cas_serial": args.cas_serial,
         "timeout": args.timeout,
         "smscode": args.sms_code,
@@ -3125,10 +3134,27 @@ def _detect_rtp_video_codec(packets: list[Any]) -> str:
 def _rtp_packets_to_annexb(packets: list[Any], *, codec: str) -> bytes:
     """Convert RTP video through the shared continuity state machine."""
 
+    return b"".join(_rtp_packets_to_annexb_units(packets, codec=codec))
+
+
+def _rtp_packets_to_annexb_units(
+    packets: list[Any],
+    *,
+    codec: str,
+) -> tuple[bytes, ...]:
+    """Return complete Annex-B units from the shared RTP continuity state machine."""
+
     if codec not in {"h264", "hevc"}:
         raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
     parsed = [parse_rtp_packet(packet.body) for packet in packets]
-    return rtp_packets_to_annexb(parsed, codec=cast(Any, codec))
+    return tuple(
+        b"\x00\x00\x00\x01" + nal_unit
+        for nal_unit in rtp_packets_to_nal_units(
+            parsed,
+            codec=cast(Any, codec),
+            allow_ezviz_headerless_hevc_fu=True,
+        )
+    )
 
 
 def _decrypt_annexb_video_bytes(
@@ -3152,6 +3178,24 @@ def _decrypt_annexb_video_bytes(
         str(key),
         nalu_header_size=header_size,
     )[9:]
+
+
+def _decrypt_rtp_annexb_units(
+    client: EzvizClient,
+    serial: str,
+    units: tuple[bytes, ...],
+    *,
+    detected_codec: str,
+    decrypt_codec: str,
+) -> bytes:
+    """Decrypt RTP Annex-B units with one camera-key lookup."""
+
+    _mpegps_decryptor, rtp_decryptor = _stream_payload_decryptors(
+        client,
+        serial,
+        codec=decrypt_codec,
+    )
+    return b"".join(rtp_decryptor(unit, detected_codec) for unit in units)
 
 
 def _remux_elementary_video_bytes_to_mpegts(
@@ -3261,6 +3305,37 @@ def _stream_payload_decryptor(
     return _BufferedStreamPayloadDecryptor(str(key), codec=codec)
 
 
+def _stream_payload_decryptors(
+    client: EzvizClient,
+    serial: str,
+    *,
+    codec: str,
+) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes]]:
+    """Return MPEG-PS and RTP decryptors sharing one camera-key lookup."""
+
+    key = client.get_cam_key(serial, max_retries=1)
+    if not key:
+        raise PyEzvizError("Could not get camera encryption key")
+    selected_key = str(key)
+
+    def _decrypt_rtp_annexb(data: bytes, detected_codec: str) -> bytes:
+        decrypt_codec = detected_codec if codec == "auto" else codec
+        header_size = _codec_nalu_header_size(decrypt_codec)
+        if header_size is None:
+            header_size = 2 if detected_codec == "hevc" else 1
+        video_pes = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + data
+        return decrypt_hikvision_ps_video(
+            video_pes,
+            selected_key,
+            nalu_header_size=header_size,
+        )[9:]
+
+    return (
+        _BufferedStreamPayloadDecryptor(selected_key, codec=codec),
+        _decrypt_rtp_annexb,
+    )
+
+
 def _remux_mpegps_bytes_to_mpegts(
     data: bytes,
     output: BinaryIO,
@@ -3282,13 +3357,12 @@ def _remux_stream_payloads_to_mpegts(
     duration_seconds: float | None = None,
     allow_encrypted: bool,
 ) -> None:
-    """Remux VTM MPEG-PS payloads to MPEG-TS and write them to output."""
+    """Route VTM media to MPEG-TS with optional encrypted-packet passthrough."""
 
-    process = _open_mpegts_remux_process(ffmpeg_path)
-    _copy_stream_payloads_to_mpegts(
+    copy_cloud_stream_packets_to_mpegts(
         stream,
         output,
-        process=process,
+        ffmpeg_path=ffmpeg_path,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
         allow_encrypted=allow_encrypted,
@@ -3366,6 +3440,28 @@ def _handle_stream_proxy_get(
         return
 
     response_started = False
+
+    def _start_response() -> None:
+        nonlocal response_started
+        if response_started:
+            return
+        handler.send_response(200)
+        response_started = True
+        handler.send_header("Content-Type", "video/MP2T")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+
+    class _LazyProxyOutput:
+        def write(self, data: bytes) -> int:
+            if data:
+                _start_response()
+            return handler.wfile.write(data)
+
+        def flush(self) -> None:
+            if response_started:
+                handler.wfile.flush()
+
     try:
         with open_cloud_stream(
             client,
@@ -3377,25 +3473,24 @@ def _handle_stream_proxy_get(
             timeout=config.timeout,
         ) as stream:
             stream.start()
-            process = _open_mpegts_remux_process(config.ffmpeg_path)
-            handler.send_response(200)
-            response_started = True
-            handler.send_header("Content-Type", "video/MP2T")
-            handler.send_header("Cache-Control", "no-store")
-            handler.send_header("Connection", "close")
-            handler.end_headers()
-            _copy_stream_payloads_to_mpegts(
+            mpegps_transform = None
+            rtp_transform = None
+            if config.decrypt_video:
+                mpegps_transform, rtp_transform = _stream_payload_decryptors(
+                    client,
+                    config.serial,
+                    codec=config.decrypt_codec,
+                )
+            copy_cloud_stream_packets_to_mpegts(
                 stream,
-                cast(BinaryIO, handler.wfile),
-                process=process,
+                cast(BinaryIO, _LazyProxyOutput()),
+                ffmpeg_path=config.ffmpeg_path,
                 max_packets=config.max_packets,
                 allow_encrypted=config.allow_encrypted,
-                transform_payload=(
-                    _stream_payload_decryptor(client, config.serial, codec=config.decrypt_codec)
-                    if config.decrypt_video
-                    else None
-                ),
+                mpegps_transform=mpegps_transform,
+                rtp_transform=rtp_transform,
             )
+            _start_response()
     except (BrokenPipeError, ConnectionResetError):
         _LOGGER.debug("Stream proxy client disconnected")
     except PyEzvizError as err:
@@ -4891,12 +4986,15 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                     decrypt_codec = (
                         rtp_codec if args.decrypt_codec == "auto" else args.decrypt_codec
                     )
-                    payload = _rtp_packets_to_annexb(collected_packets, codec=rtp_codec)
-                    payload = _decrypt_annexb_video_bytes(
+                    payload = _decrypt_rtp_annexb_units(
                         client,
                         args.serial,
-                        payload,
-                        codec=decrypt_codec,
+                        _rtp_packets_to_annexb_units(
+                            collected_packets,
+                            codec=rtp_codec,
+                        ),
+                        detected_codec=rtp_codec,
+                        decrypt_codec=decrypt_codec,
                     )
                     if args.output == "-":
                         if args.format == "raw":

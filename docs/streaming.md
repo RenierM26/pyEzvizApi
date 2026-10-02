@@ -31,7 +31,7 @@ use the focused modules above.
 
 | Source | Wire packet | Normalized source | Startup in duration | Native payload | Typical output |
 | --- | --- | --- | --- | --- | --- |
-| Cloud VTM | `VtmPacket` | `cloud_vtm` | Yes | MPEG-PS | MPEG-PS or remuxed MPEG-TS |
+| Cloud VTM | `VtmPacket` | `cloud_vtm` | Yes | MPEG-PS, MPEG-TS, or RTP/IDMX | MPEG-PS for PS; pass-through/remuxed MPEG-TS for TS/RTP |
 | Local SDK | `EzvizLocalStreamPacket` | `local_sdk` | When startup preparation is available | MPEG-PS | MPEG-PS or remuxed MPEG-TS |
 | Local SDK ECDH | `EzvizLocalSdkEcdhStreamPacket` | `local_ecdh` | Supported by the ECDH stream | MPEG-PS or IDMX/RTP | MPEG-PS for PS; decrypted MPEG-TS for IDMX/RTP |
 | HCNetSDK command port | `EzvizLocalStreamPacket` | `local_sdk` | Yes for generated/multi-socket streams | IDMX/RTP or MPEG-PS | Remuxed MPEG-TS |
@@ -101,6 +101,10 @@ bound before network work. New code should use valid positive, finite
 - Cloud streaming depends on the VTM/VTDU endpoint returned for the account and
   camera region. Encrypted VTM channel packets are rejected until a supported
   channel-level decryptor exists.
+- Cloud RTP/IDMX video is depacketized as H.264 or HEVC before MPEG-TS remuxing.
+  RTP audio is currently omitted from this path; raw output remains available
+  when packet-exact diagnostics are required. An RTP or MPEG-TS cloud stream
+  cannot be requested as MPEG-PS because doing so would mislabel its bytes.
 - Direct local SDK streaming requires LAN endpoint and CAS data and may require
   P2P registration before CAS lookup.
 - ECDH local streaming requires the native `0x43` metadata descriptor for AAC.

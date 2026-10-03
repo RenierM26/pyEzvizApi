@@ -119,6 +119,68 @@ def test_decrypt_idmx_aac_packets_uses_native_descriptor() -> None:
     )
 
 
+def test_decrypt_idmx_aac_packets_uses_latest_corrected_metadata() -> None:
+    key = b"0123456789abcdef"
+
+    def audio_descriptor(sample_rate: int) -> bytes:
+        return bytes(
+            (
+                0x43,
+                10,
+                0,
+                1,
+                2,
+                sample_rate >> 14,
+                (sample_rate >> 6) & 0xFF,
+                ((sample_rate & 0x3F) << 2) | 3,
+                0,
+                0,
+                3,
+                0xFF,
+            )
+        )
+
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
+    packets = [
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=1,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=b"\x45\x02\x0f\x69" + audio_descriptor(8_000),
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=2,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=audio_descriptor(16_000),
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(
+                b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted,
+                sequence=3,
+                timestamp=0,
+                payload_type=105,
+                extension_profile=0x4000,
+                extension_data=audio_extension,
+            )
+        ),
+    ]
+
+    audio = decrypt_idmx_aac_packets(packets, key)
+
+    assert audio is not None
+    assert audio.sample_rate == 16_000
+    assert audio.channels == 1
+
+
 def test_decrypt_idmx_aac_packets_requires_native_descriptor() -> None:
     audio_extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
     packet = parse_rtp_packet(
@@ -307,6 +369,30 @@ def test_idmx_stream_descriptor_routes_non_default_hevc_payload_type() -> None:
         [metadata, video],
         codec="hevc",
     ) == HEVC_DESCRIPTOR_ROUTED_NAL
+
+
+def test_rtp_annexb_discards_conflicting_video_before_delayed_descriptor() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01new-hevc-idr"
+    packets = (
+        parse_rtp_packet(
+            _rtp(b"\x67old-h264-sps", sequence=1, payload_type=97)
+        ),
+        parse_rtp_packet(
+            _rtp(
+                b"metadata",
+                sequence=2,
+                payload_type=112,
+                extension_profile=1,
+                extension_data=b"\x45\x0a\x24\x61" + (b"\xff" * 8),
+            )
+        ),
+        parse_rtp_packet(
+            _rtp(b"\x26\x01new-hevc-idr", sequence=3, payload_type=97)
+        ),
+    )
+
+    assert detect_rtp_video_codec(packets) == "hevc"
+    assert rtp_packets_to_annexb(packets, codec="hevc") == expected_annexb
 
 
 def test_route_profile_absorbs_delayed_descriptor_before_media_dispatch() -> None:

@@ -2406,15 +2406,15 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
     try:
         first_payload = next(payloads)
     except StopIteration:
-        output.flush()
-        return
+        raise PyEzvizError("EZVIZ local stream did not include media payloads") from None
 
     while _is_ignorable_leading_stream_payload(first_payload):
         try:
             first_payload = next(payloads)
         except StopIteration:
-            output.flush()
-            return
+            raise PyEzvizError(
+                "EZVIZ local stream did not include media payloads"
+            ) from None
 
     if _looks_like_idmx_local_payload(first_payload):
         _require_bounded_idmx_capture(

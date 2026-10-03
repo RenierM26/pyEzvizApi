@@ -25,7 +25,7 @@ from pyezvizapi.hcnetsdk import (
     hcnetsdk_command_port_control_frame,
     parse_hcnetsdk_tcp_frame,
 )
-from pyezvizapi.stream import VtmChannel, VtmPacket
+from pyezvizapi.stream import VtmChannel, VtmPacket, VtmStreamClient
 
 MPEGTS_PAYLOAD = b"mpegts"
 CLOUD_VIDEO_PAYLOAD = b"cloud-video-bytes"
@@ -2848,6 +2848,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
         for index, body in enumerate(bodies)
     ]
+    packets.append(VtmPacket(VtmChannel.STREAM, 8, 5, 0, b"\x80control"))
     expected_annexb = b"\x00\x00\x00\x01\x65hello-world"
 
     assert cli_module._detect_rtp_video_codec(packets) == "h264"  # noqa: SLF001
@@ -2855,6 +2856,33 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         cli_module._rtp_packets_to_annexb(packets, codec="h264")  # noqa: SLF001
         == expected_annexb
     )
+
+
+def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
+    class FakeVtmStream(VtmStreamClient):
+        def __init__(self) -> None:
+            self.iterator_kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.iterator_kwargs = kwargs
+            return iter(())
+
+    stream = FakeVtmStream()
+    monotonic = lambda: 10.0  # noqa: E731
+
+    assert cli_module._collect_stream_packets(  # noqa: SLF001
+        stream,
+        max_packets=5,
+        duration_seconds=1.5,
+        allow_encrypted=False,
+        monotonic=monotonic,
+    ) == []
+    assert stream.iterator_kwargs == {
+        "max_packets": 5,
+        "duration_seconds": 1.5,
+        "duration_from_start": True,
+        "monotonic": monotonic,
+    }
 
 
 def test_parse_stream_dump_duration_units() -> None:

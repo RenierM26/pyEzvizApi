@@ -97,7 +97,11 @@ from .stream_media import (
     detect_transport,
     mpeg_ps_decryptable_prefix_length,
 )
-from .stream_transport import StreamTransport, download_ezviz_cloud_replay
+from .stream_transport import (
+    StreamTransport,
+    VtmStreamClient,
+    download_ezviz_cloud_replay,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _REAL_EZVIZ_CLIENT = EzvizClient
@@ -3097,8 +3101,16 @@ def _collect_stream_packets(
     if duration_seconds is not None:
         deadline = monotonic() + duration_seconds
 
+    iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
+    if isinstance(stream, VtmStreamClient):
+        iterator_kwargs.update(
+            duration_seconds=duration_seconds,
+            duration_from_start=True,
+            monotonic=monotonic,
+        )
+
     try:
-        for packet in stream.iter_packets(max_packets=max_packets):
+        for packet in stream.iter_packets(**iterator_kwargs):
             if deadline is not None and monotonic() >= deadline:
                 break
             if packet.encrypted and not allow_encrypted:
@@ -3132,13 +3144,19 @@ def _rtp_payload_video_codec(payload: bytes) -> str | None:
 def _detect_rtp_video_codec(packets: list[Any]) -> str:
     """Detect RTP video codec through the shared parser and router."""
 
+    return detect_rtp_video_codec(_parse_rtp_packets(packets))
+
+
+def _parse_rtp_packets(packets: list[Any]) -> list[Any]:
+    """Parse valid RTP bodies while ignoring interleaved control data."""
+
     parsed = []
     for packet in packets:
         try:
             parsed.append(parse_rtp_packet(packet.body))
         except PyEzvizError:
             continue
-    return detect_rtp_video_codec(parsed)
+    return parsed
 
 
 def _rtp_packets_to_annexb(packets: list[Any], *, codec: str) -> bytes:
@@ -3156,7 +3174,7 @@ def _rtp_packets_to_annexb_units(
 
     if codec not in {"h264", "hevc"}:
         raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
-    parsed = [parse_rtp_packet(packet.body) for packet in packets]
+    parsed = _parse_rtp_packets(packets)
     return tuple(
         b"\x00\x00\x00\x01" + nal_unit
         for nal_unit in rtp_packets_to_nal_units(

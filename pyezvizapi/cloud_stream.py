@@ -886,6 +886,7 @@ def _iter_bounded_cloud_packets(
             "duration_seconds": duration_seconds,
             "duration_from_start": False,
             "first_packet_timeout": selected_first_packet_timeout,
+            "is_media_packet": _is_cloud_media_packet,
             "monotonic": monotonic,
         }
         if first_packet_deadline is not None:
@@ -902,6 +903,17 @@ def _iter_bounded_cloud_packets(
             yield packet
 
     return _fallback()
+
+
+def _is_cloud_media_packet(packet: Any) -> bool:
+    """Return whether a VTM stream packet contains a supported media transport."""
+
+    if not packet.body:
+        return False
+    transport = detect_transport(packet.body)
+    return transport != StreamTransport.UNKNOWN and (
+        transport != StreamTransport.MPEG_TS or _is_valid_mpegts_body(packet.body)
+    )
 
 
 def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913

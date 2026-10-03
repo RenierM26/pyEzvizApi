@@ -2688,6 +2688,7 @@ def test_cloud_packet_iterator_starts_duration_at_first_media() -> None:
         "duration_seconds": 8.0,
         "duration_from_start": False,
         "first_packet_timeout": 3.0,
+        "is_media_packet": cloud_stream_module._is_cloud_media_packet,  # noqa: SLF001
         "monotonic": monotonic,
     }
 

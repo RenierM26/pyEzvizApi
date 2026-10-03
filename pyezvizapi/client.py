@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from threading import RLock
 import time
-from typing import Any, BinaryIO, ClassVar, TypedDict, cast
+from typing import Any, BinaryIO, ClassVar, NamedTuple, TypedDict, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 import zlib
@@ -457,33 +457,64 @@ def _annexb_nals(payload: bytes) -> list[tuple[bytes, bytes]]:
         start = header_start
 
 
+class _H264SpsInfo(NamedTuple):
+    """SPS fields needed to parse a linked H.264 slice header."""
+
+    sps_id: int
+    chroma_format_idc: int
+    separate_colour_plane: bool
+    log2_max_frame_num: int
+    pic_order_cnt_type: int
+    log2_max_pic_order_cnt_lsb: int
+    delta_pic_order_always_zero: bool
+    frame_mbs_only: bool
+
+
+class _H264PpsInfo(NamedTuple):
+    """PPS fields needed to parse a linked H.264 slice header."""
+
+    pps_id: int
+    sps_id: int
+    entropy_coding_mode: bool
+    bottom_field_pic_order_in_frame_present: bool
+    num_ref_idx_l0_default_active_minus1: int
+    num_ref_idx_l1_default_active_minus1: int
+    weighted_pred: bool
+    weighted_bipred_idc: int
+    deblocking_filter_control_present: bool
+    redundant_pic_cnt_present: bool
+
+
 def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
     """Return whether H.264 parameter sets link to a plausible slice."""
 
-    h264_sps_ids: set[int] = set()
-    h264_pps_to_sps: dict[int, int] = {}
-    h264_slice_pps_ids: set[int] = set()
+    h264_sps: dict[int, _H264SpsInfo] = {}
+    h264_pps: dict[int, _H264PpsInfo] = {}
+    slices: list[tuple[int, bytes]] = []
     for header_bytes, nal_body in nals:
         header = header_bytes[0]
         h264_type = header & 0x1F
         if header & 0x80:
             continue
         if h264_type == 7:
-            sps_id = _h264_sps_id(nal_body)
-            if sps_id is not None:
-                h264_sps_ids.add(sps_id)
+            sps_info = _h264_sps_info(nal_body)
+            if sps_info is not None:
+                h264_sps[sps_info.sps_id] = sps_info
         elif h264_type == 8:
-            pps_ids = _h264_pps_ids(nal_body)
-            if pps_ids is not None:
-                h264_pps_to_sps[pps_ids[0]] = pps_ids[1]
+            pps_info = _h264_pps_info(nal_body)
+            if pps_info is not None:
+                h264_pps[pps_info.pps_id] = pps_info
         elif 1 <= h264_type <= 5:
-            pps_id = _h264_slice_pps_id(nal_body)
-            if pps_id is not None:
-                h264_slice_pps_ids.add(pps_id)
+            slices.append((header, nal_body))
     return any(
-        pps_id in h264_pps_to_sps
-        and h264_pps_to_sps[pps_id] in h264_sps_ids
-        for pps_id in h264_slice_pps_ids
+        _h264_slice_pps_id(
+            nal_body,
+            nal_header=header,
+            sps_info=h264_sps,
+            pps_info=h264_pps,
+        )
+        is not None
+        for header, nal_body in slices
     )
 
 
@@ -586,24 +617,35 @@ def _skip_h264_scaling_list(bits: str, offset: int, size: int) -> int | None:
     return offset
 
 
-def _h264_sps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915
-    """Return an SPS id after parsing mandatory H.264 sequence syntax."""
+def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
+    data: bytes,
+) -> _H264SpsInfo | None:
+    """Return fields needed to validate slices after parsing an H.264 SPS."""
 
     if len(data) < 4 or data[0] not in {44, 66, 77, 83, 86, 88, 100, 110, 118, 122, 128, 134, 135, 138, 139, 244}:
         return None
     if data[1] & 0x03 or data[2] == 0:
         return None
     bits = _rbsp_bits(data[3:])
+    trailing_one = bits.rfind("1")
+    if trailing_one < 0:
+        return None
+    bits = bits[:trailing_one]
     decoded = _read_unsigned_exp_golomb(bits, 0)
     if decoded is None or decoded[0] > 31:
         return None
     sps_id, offset = decoded
+    chroma_format_idc = 1
+    separate_colour_plane = False
     if data[0] in {44, 83, 86, 100, 110, 118, 122, 128, 134, 135, 138, 139, 244}:
         decoded = _read_unsigned_exp_golomb(bits, offset)
         if decoded is None or decoded[0] > 3:
             return None
         chroma_format_idc, offset = decoded
         if chroma_format_idc == 3:
+            if offset >= len(bits):
+                return None
+            separate_colour_plane = bits[offset] == "1"
             offset += 1
         for _ in range(2):
             decoded = _read_unsigned_exp_golomb(bits, offset)
@@ -633,17 +675,24 @@ def _h264_sps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915
     decoded = _read_unsigned_exp_golomb(bits, offset)
     if decoded is None or decoded[0] > 12:
         return None
+    log2_max_frame_num = decoded[0] + 4
     offset = decoded[1]
     decoded = _read_unsigned_exp_golomb(bits, offset)
     if decoded is None or decoded[0] > 2:
         return None
     pic_order_cnt_type, offset = decoded
+    log2_max_pic_order_cnt_lsb = 0
+    delta_pic_order_always_zero = False
     if pic_order_cnt_type == 0:
         decoded = _read_unsigned_exp_golomb(bits, offset)
         if decoded is None or decoded[0] > 12:
             return None
+        log2_max_pic_order_cnt_lsb = decoded[0] + 4
         offset = decoded[1]
     elif pic_order_cnt_type == 1:
+        if offset >= len(bits):
+            return None
+        delta_pic_order_always_zero = bits[offset] == "1"
         offset += 1
         for _ in range(2):
             decoded_signed = _read_signed_exp_golomb(bits, offset)
@@ -685,44 +734,199 @@ def _h264_sps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915
             if decoded is None:
                 return None
             offset = decoded[1]
-    return sps_id if offset < len(bits) else None
+    if offset >= len(bits):
+        return None
+    offset += 1  # vui_parameters_present_flag; VUI is not needed for slice parsing.
+    if offset > len(bits):
+        return None
+    return _H264SpsInfo(
+        sps_id=sps_id,
+        chroma_format_idc=chroma_format_idc,
+        separate_colour_plane=separate_colour_plane,
+        log2_max_frame_num=log2_max_frame_num,
+        pic_order_cnt_type=pic_order_cnt_type,
+        log2_max_pic_order_cnt_lsb=log2_max_pic_order_cnt_lsb,
+        delta_pic_order_always_zero=delta_pic_order_always_zero,
+        frame_mbs_only=frame_mbs_only,
+    )
 
 
-def _h264_pps_ids(data: bytes) -> tuple[int, int] | None:
-    """Return linked PPS/SPS ids from a plausible H.264 PPS."""
+def _h264_pps_info(data: bytes) -> _H264PpsInfo | None:  # noqa: PLR0911
+    """Return fields needed to validate slices after parsing an H.264 PPS."""
 
     bits = _rbsp_bits(data)
+    trailing_one = bits.rfind("1")
+    if trailing_one < 0:
+        return None
+    bits = bits[:trailing_one]
     pps = _read_unsigned_exp_golomb(bits, 0)
     if pps is None or pps[0] > 255:
         return None
     sps = _read_unsigned_exp_golomb(bits, pps[1])
     if sps is None or sps[0] > 31:
         return None
-    offset = sps[1] + 2
+    offset = sps[1]
+    if offset + 2 > len(bits):
+        return None
+    entropy_coding_mode = bits[offset] == "1"
+    bottom_field_pic_order_in_frame_present = bits[offset + 1] == "1"
+    offset += 2
     decoded = _read_unsigned_exp_golomb(bits, offset)
     if decoded is None or decoded[0] != 0:
         return None
     offset = decoded[1]
+    default_ref_counts: list[int] = []
     for _ in range(2):
         decoded = _read_unsigned_exp_golomb(bits, offset)
-        if decoded is None:
+        if decoded is None or decoded[0] > 31:
             return None
+        default_ref_counts.append(decoded[0])
         offset = decoded[1]
+    if offset + 3 > len(bits):
+        return None
+    weighted_pred = bits[offset] == "1"
+    weighted_bipred_idc = int(bits[offset + 1 : offset + 3], 2)
     offset += 3
     for _ in range(3):
         decoded_signed = _read_signed_exp_golomb(bits, offset)
         if decoded_signed is None:
             return None
         offset = decoded_signed[1]
-    return (pps[0], sps[0]) if offset + 3 <= len(bits) else None
+    if offset + 3 > len(bits):
+        return None
+    deblocking_filter_control_present = bits[offset] == "1"
+    redundant_pic_cnt_present = bits[offset + 2] == "1"
+    return _H264PpsInfo(
+        pps_id=pps[0],
+        sps_id=sps[0],
+        entropy_coding_mode=entropy_coding_mode,
+        bottom_field_pic_order_in_frame_present=(
+            bottom_field_pic_order_in_frame_present
+        ),
+        num_ref_idx_l0_default_active_minus1=default_ref_counts[0],
+        num_ref_idx_l1_default_active_minus1=default_ref_counts[1],
+        weighted_pred=weighted_pred,
+        weighted_bipred_idc=weighted_bipred_idc,
+        deblocking_filter_control_present=deblocking_filter_control_present,
+        redundant_pic_cnt_present=redundant_pic_cnt_present,
+    )
 
 
-def _h264_slice_pps_id(data: bytes) -> int | None:
-    """Return the referenced PPS id from a plausible H.264 slice header."""
+def _skip_h264_ref_pic_list_modification(
+    bits: str,
+    offset: int,
+) -> int | None:
+    """Skip one H.264 reference-picture-list modification sequence."""
+
+    if offset >= len(bits):
+        return None
+    if bits[offset] == "0":
+        return offset + 1
+    offset += 1
+    while True:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 3:
+            return None
+        modification, offset = decoded
+        if modification == 3:
+            return offset
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None:
+            return None
+        offset = decoded[1]
+
+
+def _skip_h264_pred_weight_table(  # noqa: PLR0911, PLR0912
+    bits: str,
+    offset: int,
+    *,
+    chroma_format_idc: int,
+    ref_counts: tuple[int, ...],
+) -> int | None:
+    """Skip an H.264 prediction weight table."""
+
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None or decoded[0] > 7:
+        return None
+    offset = decoded[1]
+    chroma_present = chroma_format_idc != 0
+    if chroma_present:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 7:
+            return None
+        offset = decoded[1]
+    for ref_count in ref_counts:
+        for _ in range(ref_count + 1):
+            if offset >= len(bits):
+                return None
+            luma_weight_present = bits[offset] == "1"
+            offset += 1
+            if luma_weight_present:
+                for _ in range(2):
+                    decoded_signed = _read_signed_exp_golomb(bits, offset)
+                    if decoded_signed is None:
+                        return None
+                    offset = decoded_signed[1]
+            if chroma_present:
+                if offset >= len(bits):
+                    return None
+                chroma_weight_present = bits[offset] == "1"
+                offset += 1
+                if chroma_weight_present:
+                    for _ in range(4):
+                        decoded_signed = _read_signed_exp_golomb(bits, offset)
+                        if decoded_signed is None:
+                            return None
+                        offset = decoded_signed[1]
+    return offset
+
+
+def _skip_h264_dec_ref_pic_marking(
+    bits: str,
+    offset: int,
+    *,
+    idr: bool,
+) -> int | None:
+    """Skip mandatory H.264 decoded-reference-picture marking syntax."""
+
+    if idr:
+        return offset + 2 if offset + 2 <= len(bits) else None
+    if offset >= len(bits):
+        return None
+    if bits[offset] == "0":
+        return offset + 1
+    offset += 1
+    while True:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 6:
+            return None
+        operation, offset = decoded
+        if operation == 0:
+            return offset
+        operand_count = {1: 1, 2: 1, 3: 2, 4: 1, 5: 0, 6: 1}[operation]
+        for _ in range(operand_count):
+            decoded = _read_unsigned_exp_golomb(bits, offset)
+            if decoded is None:
+                return None
+            offset = decoded[1]
+
+
+def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
+    data: bytes,
+    *,
+    nal_header: int,
+    sps_info: Mapping[int, _H264SpsInfo],
+    pps_info: Mapping[int, _H264PpsInfo],
+) -> int | None:
+    """Return the PPS id after parsing a linked mandatory H.264 slice header."""
 
     if len(data) < 2:
         return None
     bits = _rbsp_bits(data)
+    trailing_one = bits.rfind("1")
+    if trailing_one < 0:
+        return None
+    bits = bits[:trailing_one]
     offset = 0
     values: list[int] = []
     for _ in range(3):
@@ -732,15 +936,138 @@ def _h264_slice_pps_id(data: bytes) -> int | None:
         value, offset = decoded
         values.append(value)
     first_mb, slice_type, pic_parameter_set_id = values
-    trailing_one = bits.rfind("1")
-    if (
-        first_mb <= 65535
-        and slice_type <= 9
-        and pic_parameter_set_id <= 255
-        and trailing_one - offset >= 5
-    ):
-        return pic_parameter_set_id
-    return None
+    if first_mb > 65535 or slice_type > 9 or pic_parameter_set_id > 255:
+        return None
+    pps = pps_info.get(pic_parameter_set_id)
+    if pps is None:
+        return None
+    sps = sps_info.get(pps.sps_id)
+    if sps is None:
+        return None
+    if sps.separate_colour_plane:
+        offset += 2
+    if offset + sps.log2_max_frame_num > len(bits):
+        return None
+    offset += sps.log2_max_frame_num
+    field_pic = False
+    if not sps.frame_mbs_only:
+        if offset >= len(bits):
+            return None
+        field_pic = bits[offset] == "1"
+        offset += 1
+        if field_pic:
+            offset += 1
+    nal_type = nal_header & 0x1F
+    if nal_type == 5:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None:
+            return None
+        offset = decoded[1]
+    if sps.pic_order_cnt_type == 0:
+        if offset + sps.log2_max_pic_order_cnt_lsb > len(bits):
+            return None
+        offset += sps.log2_max_pic_order_cnt_lsb
+        if pps.bottom_field_pic_order_in_frame_present and not field_pic:
+            decoded_signed = _read_signed_exp_golomb(bits, offset)
+            if decoded_signed is None:
+                return None
+            offset = decoded_signed[1]
+    elif sps.pic_order_cnt_type == 1 and not sps.delta_pic_order_always_zero:
+        decoded_signed = _read_signed_exp_golomb(bits, offset)
+        if decoded_signed is None:
+            return None
+        offset = decoded_signed[1]
+        if pps.bottom_field_pic_order_in_frame_present and not field_pic:
+            decoded_signed = _read_signed_exp_golomb(bits, offset)
+            if decoded_signed is None:
+                return None
+            offset = decoded_signed[1]
+    if pps.redundant_pic_cnt_present:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None:
+            return None
+        offset = decoded[1]
+    normalized_slice_type = slice_type % 5
+    if normalized_slice_type == 1:
+        offset += 1
+    ref_counts = [pps.num_ref_idx_l0_default_active_minus1]
+    if normalized_slice_type == 1:
+        ref_counts.append(pps.num_ref_idx_l1_default_active_minus1)
+    if normalized_slice_type in {0, 1, 3}:
+        if offset >= len(bits):
+            return None
+        if bits[offset] == "1":
+            offset += 1
+            decoded = _read_unsigned_exp_golomb(bits, offset)
+            if decoded is None or decoded[0] > 31:
+                return None
+            ref_counts[0], offset = decoded
+            if normalized_slice_type == 1:
+                decoded = _read_unsigned_exp_golomb(bits, offset)
+                if decoded is None or decoded[0] > 31:
+                    return None
+                ref_counts[1], offset = decoded
+        else:
+            offset += 1
+        modification_offset = _skip_h264_ref_pic_list_modification(bits, offset)
+        if modification_offset is None:
+            return None
+        offset = modification_offset
+        if normalized_slice_type == 1:
+            modification_offset = _skip_h264_ref_pic_list_modification(bits, offset)
+            if modification_offset is None:
+                return None
+            offset = modification_offset
+    weighted = (
+        pps.weighted_pred and normalized_slice_type in {0, 3}
+    ) or (pps.weighted_bipred_idc == 1 and normalized_slice_type == 1)
+    if weighted:
+        weighted_offset = _skip_h264_pred_weight_table(
+            bits,
+            offset,
+            chroma_format_idc=sps.chroma_format_idc,
+            ref_counts=tuple(ref_counts),
+        )
+        if weighted_offset is None:
+            return None
+        offset = weighted_offset
+    if nal_header & 0x60:
+        marking_offset = _skip_h264_dec_ref_pic_marking(
+            bits,
+            offset,
+            idr=nal_type == 5,
+        )
+        if marking_offset is None:
+            return None
+        offset = marking_offset
+    if pps.entropy_coding_mode and normalized_slice_type not in {2, 4}:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 2:
+            return None
+        offset = decoded[1]
+    decoded_signed = _read_signed_exp_golomb(bits, offset)
+    if decoded_signed is None:
+        return None
+    offset = decoded_signed[1]
+    if normalized_slice_type in {3, 4}:
+        if normalized_slice_type == 3:
+            offset += 1
+        decoded_signed = _read_signed_exp_golomb(bits, offset)
+        if decoded_signed is None:
+            return None
+        offset = decoded_signed[1]
+    if pps.deblocking_filter_control_present:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 2:
+            return None
+        disable_deblocking_filter_idc, offset = decoded
+        if disable_deblocking_filter_idc != 1:
+            for _ in range(2):
+                decoded_signed = _read_signed_exp_golomb(bits, offset)
+                if decoded_signed is None:
+                    return None
+                offset = decoded_signed[1]
+    return pic_parameter_set_id if offset < len(bits) else None
 
 
 def _hevc_vps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915

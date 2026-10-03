@@ -1312,6 +1312,64 @@ def test_vtm_stream_empty_media_packet_keeps_first_packet_deadline() -> None:
     assert 1.0 in fake_socket.timeout_history
     assert capture_duration not in fake_socket.timeout_history
 
+
+def test_vtm_stream_nonmedia_prelude_keeps_first_packet_deadline() -> None:
+    capture_duration = 30.0
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__(
+                [
+                    encode_vtm_packet(
+                        b"nonmedia-prelude",
+                        channel=VtmChannel.STREAM,
+                        message_code=0,
+                    )
+                ]
+            )
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            clock.now = 1.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket()
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live", timeout=None)
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+    stream._read_inactivity_deadline = None  # noqa: SLF001
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=capture_duration,
+            first_packet_deadline=1.0,
+            keepalive_interval=None,
+            is_media_packet=lambda _packet: False,
+            monotonic=clock,
+        )
+    )
+
+    assert [packet.body for packet in packets] == [b"nonmedia-prelude"]
+    assert 1.0 in fake_socket.timeout_history
+    assert capture_duration not in fake_socket.timeout_history
+
+
 def test_vtm_stream_client_start_follows_redirect_response() -> None:
     redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
     redirect_key = "redirect-key"

@@ -485,6 +485,7 @@ class VtmStreamClient:
         first_packet_deadline: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
+        is_media_packet: Callable[[VtmPacket], bool] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[VtmPacket]:
         """Yield stream packets from the VTM connection.
@@ -585,10 +586,12 @@ class VtmStreamClient:
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
                 if not packet.body:
                     continue
-                if capture_deadline is None and duration_seconds is not None:
-                    capture_deadline = monotonic() + duration_seconds
-                first_packet_deadline = None
-                seen += 1
+                is_media = is_media_packet is None or is_media_packet(packet)
+                if is_media:
+                    if capture_deadline is None and duration_seconds is not None:
+                        capture_deadline = monotonic() + duration_seconds
+                    first_packet_deadline = None
+                    seen += 1
                 yield packet
                 continue
 

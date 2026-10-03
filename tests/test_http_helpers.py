@@ -3837,6 +3837,20 @@ def test_h264_validation_rejects_truncated_linked_structures() -> None:
     assert not _has_linked_h264_video(truncated)
 
 
+def test_h264_validation_rejects_slice_before_mandatory_header_is_complete() -> None:
+    nals = [
+        (
+            b"\x67\x42",
+            b"\x42\xc0\x0a\xda\x7b\x01\x10\x00\x00\x03\x00\x10"
+            b"\x00\x00\x03\x00\x28\xf1\x22\x6a",
+        ),
+        (b"\x68\xce", b"\xce\x0f\xc8"),
+        (b"\x65\x11", b"\x11\x81"),
+    ]
+
+    assert not _has_linked_h264_video(nals)
+
+
 def _unsigned_exp_golomb_bits(value: int) -> str:
     encoded = f"{value + 1:b}"
     return "0" * (len(encoded) - 1) + encoded

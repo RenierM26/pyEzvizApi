@@ -3634,6 +3634,72 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     }
 
 
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_save_cloud_clip_preserves_relative_symlink_destination(
+    monkeypatch,
+    tmp_path,
+    *,
+    target_exists: bool,
+) -> None:
+    client = _client()
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target_path = target_dir / "front.ts"
+    if target_exists:
+        target_path.write_bytes(b"existing-clip")
+        expected_mode = 0o640
+        target_path.chmod(expected_mode)
+    else:
+        reference_path = target_dir / "normal-create"
+        reference_path.write_bytes(b"")
+        expected_mode = stat.S_IMODE(reference_path.stat().st_mode)
+
+    link_dir = tmp_path / "links"
+    link_dir.mkdir()
+    relative_target = Path("../target/front.ts")
+    output_path = link_dir / "front.ts"
+    output_path.symlink_to(relative_target)
+    validation_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    def validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        assert path.parent.parent == target_dir
+        assert output_path.is_symlink()
+        assert output_path.readlink() == relative_target
+        validation_paths.append(path)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        validate,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.is_symlink()
+    assert output_path.readlink() == relative_target
+    assert target_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert stat.S_IMODE(target_path.stat().st_mode) == expected_mode
+    assert result["output"] == str(output_path)
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
+    assert len(validation_paths) == 1
+    assert not validation_paths[0].exists()
+
+
 def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
     monkeypatch,
 ) -> None:

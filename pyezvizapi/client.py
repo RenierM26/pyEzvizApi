@@ -3862,10 +3862,15 @@ class EzvizClient:
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             if decrypt_video:
+                publication_target = (
+                    output_path.resolve(strict=False)
+                    if output_path.is_symlink()
+                    else output_path
+                )
                 suffix = ".ts" if output_format == "mpegts" else ".ps"
                 with tempfile.TemporaryDirectory(
-                    prefix=f".{output_path.name}.",
-                    dir=output_path.parent,
+                    prefix=f".{publication_target.name}.",
+                    dir=publication_target.parent,
                 ) as temp_dir:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
                     with temp_path.open("wb") as path_temp_output:
@@ -3875,12 +3880,12 @@ class EzvizClient:
                         ffmpeg_path=ffmpeg_path,
                     )
                     try:
-                        existing_mode = stat.S_IMODE(output_path.stat().st_mode)
+                        existing_mode = stat.S_IMODE(publication_target.stat().st_mode)
                     except FileNotFoundError:
                         pass
                     else:
                         temp_path.chmod(existing_mode)
-                    os.replace(temp_path, output_path)
+                    os.replace(temp_path, publication_target)
             else:
                 with output_path.open("wb") as output_file:
                     copy_cloud(output_file)

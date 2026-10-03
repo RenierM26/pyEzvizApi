@@ -30,11 +30,15 @@ from pyezvizapi.api_endpoints import (
 from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
+    _h264_slice_pps_id,
+    _H264PpsInfo,
+    _H264SpsInfo,
     _has_linked_h264_video,
     _has_linked_hevc_video,
     _LocalStreamPacketMetadataRecorder,
     _mpegps_video_payload,
     _reserve_existing_clip_space,
+    _skip_hevc_short_term_ref_pic_set,
 )
 from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
 from pyezvizapi.constants import (
@@ -3922,6 +3926,12 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     include_slice_chroma_qp_offsets: bool = True,
     deblocking_filter_override_enabled: bool = False,
     include_slice_deblocking_fields: bool = True,
+    separate_colour_plane: bool = False,
+    loop_filter_across_slices_enabled: bool = False,
+    tiles_enabled: bool = False,
+    entropy_coding_sync_enabled: bool = False,
+    slice_header_extension_present: bool = False,
+    include_slice_header_tail: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3945,7 +3955,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         "1"
         + _hevc_profile_tier_level_bits(sub_layer_flags)
         + _unsigned_exp_golomb_bits(0)
-        + _unsigned_exp_golomb_bits(1)
+        + _unsigned_exp_golomb_bits(3 if separate_colour_plane else 1)
+        + ("1" if separate_colour_plane else "")
         + _unsigned_exp_golomb_bits(64)
         + _unsigned_exp_golomb_bits(36)
         + "0"
@@ -3978,15 +3989,22 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + "000"
         + _signed_exp_golomb_bits(0) * 2
         + ("1" if slice_chroma_qp_offsets_present else "0")
-        + "00000"
+        + "000"
+        + ("1" if tiles_enabled else "0")
+        + ("1" if entropy_coding_sync_enabled else "0")
         + (
-            "0"  # pps_loop_filter_across_slices_enabled_flag
+            (
+                _unsigned_exp_golomb_bits(0) * 2 + "10"
+                if tiles_enabled
+                else ""
+            )
+            + ("1" if loop_filter_across_slices_enabled else "0")
             + (
                 "111" if deblocking_filter_override_enabled else "0"
             )  # deblocking control, override, and disabled flags
             + "00"  # scaling-list and list-modification flags
             + _unsigned_exp_golomb_bits(0)  # log2_parallel_merge_level_minus2
-            + "0"  # slice-header extension flag
+            + ("1" if slice_header_extension_present else "0")
             + (
                 "0"
                 if pps_extension_bits is None
@@ -4001,6 +4019,7 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + _unsigned_exp_golomb_bits(slice_pps_id)
         + _unsigned_exp_golomb_bits(slice_type)
         + ("0" if output_flag_present else "")
+        + ("00" if separate_colour_plane else "")
         + "0" * 8  # slice_pic_order_cnt_lsb
         + (
             "0" + _unsigned_exp_golomb_bits(0) * 2
@@ -4016,6 +4035,23 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + (
             "11"
             if deblocking_filter_override_enabled and include_slice_deblocking_fields
+            else ""
+        )
+        + (
+            (
+                ("0" if loop_filter_across_slices_enabled else "")
+                + (
+                    _unsigned_exp_golomb_bits(0)
+                    if tiles_enabled or entropy_coding_sync_enabled
+                    else ""
+                )
+                + (
+                    _unsigned_exp_golomb_bits(0)
+                    if slice_header_extension_present
+                    else ""
+                )
+            )
+            if include_slice_header_tail
             else ""
         )
         + "0"  # at least one slice-data bit before rbsp_stop_one_bit
@@ -4122,6 +4158,33 @@ def test_hevc_validation_requires_declared_slice_deblocking_fields() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "pps_controls",
+    [
+        {"loop_filter_across_slices_enabled": True},
+        {"tiles_enabled": True},
+        {"entropy_coding_sync_enabled": True},
+        {"slice_header_extension_present": True},
+    ],
+)
+def test_hevc_validation_requires_declared_slice_header_tail(
+    pps_controls: dict[str, Any],
+) -> None:
+    assert _has_linked_hevc_video(_valid_hevc_validation_nals(**pps_controls))
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            **pps_controls,
+            include_slice_header_tail=False,
+        )
+    )
+
+
+def test_hevc_validation_supports_separate_colour_plane_slices() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(separate_colour_plane=True)
+    )
+
+
 def test_mpegps_video_payload_rejects_truncated_declared_pes_length() -> None:
     truncated_pes = (
         b"\x00\x00\x01\xe0"
@@ -4146,6 +4209,58 @@ def test_h264_validation_rejects_partition_b_and_c_without_partition_a() -> None
     ]
 
     assert not _has_linked_h264_video(nals)
+
+
+def test_h264_validation_requires_slice_data_after_cabac_alignment() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, True, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + _unsigned_exp_golomb_bits(0)
+        + "00"
+        + _signed_exp_golomb_bits(0)
+    )
+    alignment = "1" * ((-len(header_bits)) % 8)
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + alignment + "0"),
+            nal_header=0x65,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + alignment),
+            nal_header=0x65,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_hevc_slice_inline_rps_parses_delta_reference_index() -> None:
+    bits = (
+        "1"  # inter_ref_pic_set_prediction_flag
+        + _unsigned_exp_golomb_bits(1)  # delta_idx_minus1 selects set zero
+        + "0"  # delta_rps_sign
+        + _unsigned_exp_golomb_bits(0)
+        + "111"  # used_by_curr_pic_flag for all three entries
+    )
+
+    assert _skip_hevc_short_term_ref_pic_set(
+        bits,
+        0,
+        set_index=2,
+        delta_poc_counts=[2, 5],
+        slice_context=True,
+    ) == (len(bits), 3)
 
 
 def test_h264_validation_rejects_truncated_pps_extension() -> None:

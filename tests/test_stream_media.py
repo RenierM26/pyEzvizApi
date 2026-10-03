@@ -2767,6 +2767,24 @@ def test_cloud_media_probe_recognizes_split_transport_signatures(
     assert probe.transport == expected_transport
 
 
+def test_cloud_transport_peek_discards_junk_before_split_mpegps_signature() -> None:
+    expected_media = b"\x00\x00\x01\xba-media"
+    packets = iter(
+        (
+            SimpleNamespace(encrypted=False, body=b"junk-control"),
+            SimpleNamespace(encrypted=False, body=b"\x00\x00"),
+            SimpleNamespace(encrypted=False, body=b"\x01\xba-media"),
+        )
+    )
+
+    transport, replay = cloud_stream_module._peek_cloud_transport(  # noqa: SLF001
+        packets
+    )
+
+    assert transport == StreamTransport.MPEG_PS
+    assert b"".join(packet.body for packet in replay) == expected_media
+
+
 def test_cloud_mpegts_writer_reassembles_split_vtm_bodies() -> None:
     expected_packet = b"\x47\x40\x00\x10" + b"\x00" * 184
     packets = [

@@ -498,6 +498,23 @@ class _HevcSpsInfo(NamedTuple):
     temporal_mvp_enabled: bool
     sample_adaptive_offset_enabled: bool
     chroma_format_idc: int
+    separate_colour_plane: bool
+
+
+class _HevcPpsInfo(NamedTuple):
+    """PPS fields needed to parse a linked HEVC slice header."""
+
+    sps_id: int
+    dependent_slices_enabled: bool
+    output_flag_present: bool
+    extra_slice_header_bits: int
+    slice_chroma_qp_offsets_present: bool
+    deblocking_filter_override_enabled: bool
+    pps_deblocking_filter_disabled: bool
+    loop_filter_across_slices_enabled: bool
+    tiles_enabled: bool
+    entropy_coding_sync_enabled: bool
+    slice_header_extension_present: bool
 
 
 def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
@@ -541,7 +558,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
 
     vps_ids: set[int] = set()
     sps_info: dict[int, _HevcSpsInfo] = {}
-    pps_info: dict[int, tuple[int, bool, bool, int, bool, bool]] = {}
+    pps_info: dict[int, _HevcPpsInfo] = {}
     slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
     for header, body in nals:
@@ -560,7 +577,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
         elif nal_type == 34:
             pps_ids = _hevc_pps_ids(nal_body)
             if pps_ids is not None:
-                pps_info[pps_ids[0]] = pps_ids[1:]
+                pps_info[pps_ids[0]] = pps_ids[1]
         elif nal_type <= 31:
             slices.append((nal_body, nal_type))
     for nal_body, nal_type in slices:
@@ -574,8 +591,8 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
             slice_pps_ids.add(pps_id)
     return any(
         pps_id in pps_info
-        and pps_info[pps_id][0] in sps_info
-        and sps_info[pps_info[pps_id][0]].vps_id in vps_ids
+        and pps_info[pps_id].sps_id in sps_info
+        and sps_info[pps_info[pps_id].sps_id].vps_id in vps_ids
         for pps_id in slice_pps_ids
     )
 
@@ -1235,6 +1252,11 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                 if decoded_signed is None:
                     return None
                 offset = decoded_signed[1]
+    if pps.entropy_coding_mode:
+        while offset % 8:
+            if offset >= len(bits) or bits[offset] != "1":
+                return None
+            offset += 1
     return pic_parameter_set_id if offset < len(bits) else None
 
 
@@ -1525,6 +1547,7 @@ def _skip_hevc_short_term_ref_pic_set(  # noqa: PLR0911, PLR0912
     *,
     set_index: int,
     delta_poc_counts: list[int],
+    slice_context: bool = False,
 ) -> tuple[int, int] | None:
     """Return the offset and delta-POC count after one SPS short-term RPS."""
 
@@ -1535,6 +1558,13 @@ def _skip_hevc_short_term_ref_pic_set(  # noqa: PLR0911, PLR0912
         inter_predicted = bits[offset] == "1"
         offset += 1
     if inter_predicted:
+        reference_index = set_index - 1
+        if slice_context:
+            delta_index = _read_unsigned_exp_golomb(bits, offset)
+            if delta_index is None or delta_index[0] >= set_index:
+                return None
+            reference_index = set_index - (delta_index[0] + 1)
+            offset = delta_index[1]
         if offset >= len(bits):
             return None
         offset += 1  # delta_rps_sign
@@ -1543,7 +1573,7 @@ def _skip_hevc_short_term_ref_pic_set(  # noqa: PLR0911, PLR0912
             return None
         offset = abs_delta[1]
         delta_poc_count = 0
-        for _ in range(delta_poc_counts[set_index - 1] + 1):
+        for _ in range(delta_poc_counts[reference_index] + 1):
             if offset >= len(bits):
                 return None
             used = bits[offset] == "1"
@@ -1702,9 +1732,11 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     if chroma_format is None or chroma_format[0] > 3:
         return None
     offset = chroma_format[1]
+    separate_colour_plane = False
     if chroma_format[0] == 3:
         if offset >= len(bits):
             return None
+        separate_colour_plane = bits[offset] == "1"
         offset += 1
     for _ in range(2):
         dimension = _read_unsigned_exp_golomb(bits, offset)
@@ -1855,13 +1887,14 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             temporal_mvp_enabled=temporal_mvp_enabled,
             sample_adaptive_offset_enabled=sample_adaptive_offset_enabled,
             chroma_format_idc=chroma_format[0],
+            separate_colour_plane=separate_colour_plane,
         ),
     )
 
 
 def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
-) -> tuple[int, int, bool, bool, int, bool, bool] | None:
+) -> tuple[int, _HevcPpsInfo] | None:
     """Return linked IDs and slice controls after mandatory PPS fields."""
 
     bits = _rbsp_bits(data)
@@ -1910,6 +1943,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     offset += 3  # slice chroma offsets, weighted prediction, weighted biprediction
     offset += 1  # transquant_bypass_enabled_flag
     tiles_enabled = bits[offset] == "1"
+    entropy_coding_sync_enabled = bits[offset + 1] == "1"
     offset += 2
     if tiles_enabled:
         tile_columns = _read_unsigned_exp_golomb(bits, offset)
@@ -1932,16 +1966,19 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         offset += 1  # loop_filter_across_tiles_enabled_flag
     if offset + 2 > len(bits):
         return None
-    offset += 1  # pps_loop_filter_across_slices_enabled_flag
+    loop_filter_across_slices_enabled = bits[offset] == "1"
+    offset += 1
     deblocking_filter_control_present = bits[offset] == "1"
     offset += 1
     deblocking_filter_override_enabled = False
+    pps_deblocking_filter_disabled = False
     if deblocking_filter_control_present:
         if offset + 2 > len(bits):
             return None
         deblocking_filter_override_enabled = bits[offset] == "1"
         offset += 1
         deblocking_filter_disabled = bits[offset] == "1"
+        pps_deblocking_filter_disabled = deblocking_filter_disabled
         offset += 1
         if not deblocking_filter_disabled:
             for _ in range(2):
@@ -1967,7 +2004,8 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     offset = parallel_merge_level[1]
     if offset + 2 > len(bits):
         return None
-    offset += 1  # slice_segment_header_extension_present_flag
+    slice_header_extension_present = bits[offset] == "1"
+    offset += 1
     extension_present = bits[offset] == "1"
     offset += 1
     if extension_present:
@@ -1993,12 +2031,19 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         return None
     return (
         pps[0],
-        sps[0],
-        dependent_slices,
-        output_flag_present,
-        extra_slice_header_bits,
-        slice_chroma_qp_offsets_present,
-        deblocking_filter_override_enabled,
+        _HevcPpsInfo(
+            sps_id=sps[0],
+            dependent_slices_enabled=dependent_slices,
+            output_flag_present=output_flag_present,
+            extra_slice_header_bits=extra_slice_header_bits,
+            slice_chroma_qp_offsets_present=slice_chroma_qp_offsets_present,
+            deblocking_filter_override_enabled=deblocking_filter_override_enabled,
+            pps_deblocking_filter_disabled=pps_deblocking_filter_disabled,
+            loop_filter_across_slices_enabled=loop_filter_across_slices_enabled,
+            tiles_enabled=tiles_enabled,
+            entropy_coding_sync_enabled=entropy_coding_sync_enabled,
+            slice_header_extension_present=slice_header_extension_present,
+        ),
     )
 
 
@@ -2007,7 +2052,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     *,
     nal_type: int,
     sps_info: dict[int, _HevcSpsInfo],
-    pps_info: dict[int, tuple[int, bool, bool, int, bool, bool]],
+    pps_info: dict[int, _HevcPpsInfo],
 ) -> int | None:
     """Return a PPS id after parsing mandatory linked HEVC slice fields."""
 
@@ -2028,24 +2073,21 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     if decoded is None or decoded[0] not in pps_info:
         return None
     pps_id, offset = decoded
-    (
-        sps_id,
-        _,
-        output_flag_present,
-        extra_slice_header_bits,
-        slice_chroma_qp_offsets_present,
-        deblocking_filter_override_enabled,
-    ) = pps_info[pps_id]
-    linked_sps = sps_info.get(sps_id)
+    linked_pps = pps_info[pps_id]
+    linked_sps = sps_info.get(linked_pps.sps_id)
     if linked_sps is None:
         return None
-    offset += extra_slice_header_bits
+    offset += linked_pps.extra_slice_header_bits
     slice_type = _read_unsigned_exp_golomb(bits, offset)
     if slice_type is None or slice_type[0] > 2:
         return None
     offset = slice_type[1]
-    if output_flag_present:
+    if linked_pps.output_flag_present:
         offset += 1
+    if linked_sps.separate_colour_plane:
+        if offset + 2 > len(bits):
+            return None
+        offset += 2
     if nal_type not in {19, 20}:
         log2_max_pic_order_cnt_lsb = linked_sps.log2_max_pic_order_cnt_lsb
         if offset + log2_max_pic_order_cnt_lsb > len(bits):
@@ -2073,6 +2115,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                 offset,
                 set_index=len(short_term_counts),
                 delta_poc_counts=short_term_counts,
+                slice_context=True,
             )
             if short_term_set is None:
                 return None
@@ -2118,13 +2161,17 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
             if offset >= len(bits):
                 return None
             offset += 1
+    slice_sao_luma = False
+    slice_sao_chroma = False
     if linked_sps.sample_adaptive_offset_enabled:
         if offset >= len(bits):
             return None
+        slice_sao_luma = bits[offset] == "1"
         offset += 1
         if linked_sps.chroma_format_idc:
             if offset >= len(bits):
                 return None
+            slice_sao_chroma = bits[offset] == "1"
             offset += 1
     # The validation path only needs an independently decodable I slice.  Do
     # not guess over the substantially different P/B reference-list syntax.
@@ -2134,13 +2181,14 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     if slice_qp_delta is None:
         return None
     offset = slice_qp_delta[1]
-    if slice_chroma_qp_offsets_present:
+    if linked_pps.slice_chroma_qp_offsets_present:
         for _ in range(2):
             chroma_offset = _read_signed_exp_golomb(bits, offset)
             if chroma_offset is None:
                 return None
             offset = chroma_offset[1]
-    if deblocking_filter_override_enabled:
+    slice_deblocking_filter_disabled = linked_pps.pps_deblocking_filter_disabled
+    if linked_pps.deblocking_filter_override_enabled:
         if offset >= len(bits):
             return None
         slice_deblocking_filter_override = bits[offset] == "1"
@@ -2156,6 +2204,37 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                     if deblocking_offset is None:
                         return None
                     offset = deblocking_offset[1]
+    if linked_pps.loop_filter_across_slices_enabled and (
+        slice_sao_luma
+        or slice_sao_chroma
+        or not slice_deblocking_filter_disabled
+    ):
+        if offset >= len(bits):
+            return None
+        offset += 1
+    if linked_pps.tiles_enabled or linked_pps.entropy_coding_sync_enabled:
+        entry_points = _read_unsigned_exp_golomb(bits, offset)
+        if entry_points is None or entry_points[0] > 65535:
+            return None
+        num_entry_points, offset = entry_points
+        if num_entry_points:
+            offset_length = _read_unsigned_exp_golomb(bits, offset)
+            if offset_length is None or offset_length[0] > 31:
+                return None
+            offset = offset_length[1]
+            entry_point_bits = num_entry_points * (offset_length[0] + 1)
+            if offset + entry_point_bits > len(bits):
+                return None
+            offset += entry_point_bits
+    if linked_pps.slice_header_extension_present:
+        extension_length = _read_unsigned_exp_golomb(bits, offset)
+        if extension_length is None or extension_length[0] > 4096:
+            return None
+        offset = extension_length[1]
+        extension_bits = extension_length[0] * 8
+        if offset + extension_bits > len(bits):
+            return None
+        offset += extension_bits
     return pps_id if offset < len(bits) else None
 
 
@@ -2313,6 +2392,8 @@ def _publish_unreadable_existing_clip(
             os.replace(temp_path, target)
             return
         except PermissionError:
+            # Parent-directory access may be denied even though the already
+            # opened target descriptor remains writable; use it below.
             pass
         os.chmod(temp_path, staged_mode)
         destination_stat = os.fstat(destination_fd)

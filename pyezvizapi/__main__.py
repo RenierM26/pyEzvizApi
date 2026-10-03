@@ -3073,7 +3073,6 @@ def _write_stream_payloads(
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
     bytes_written = 0
     media_started = False
-    pending_packets: list[Any] = []
     deadline_probe = (
         _CloudMediaProbe(allow_encrypted=allow_encrypted)
         if uses_transport_deadlines
@@ -3110,22 +3109,22 @@ def _write_stream_payloads(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
             )
         if uses_transport_deadlines and not media_started:
-            pending_packets.append(packet)
             assert media_probe is not None
             if not media_probe(packet):
                 continue
             media_started = True
-            selected_packets = (
-                pending_packets if media_probe.cross_packet else [packet]
-            )
-            pending_packets = []
+            if media_probe.cross_packet:
+                assert media_probe.media_prefix is not None
+                selected_bodies = [media_probe.media_prefix]
+            else:
+                selected_bodies = [packet.body]
         else:
-            selected_packets = [packet]
-        for selected_packet in selected_packets:
+            selected_bodies = [packet.body]
+        for selected_body in selected_bodies:
             payload = (
-                transform_payload(selected_packet.body)
+                transform_payload(selected_body)
                 if transform_payload
-                else selected_packet.body
+                else selected_body
             )
             if payload:
                 output.write(payload)

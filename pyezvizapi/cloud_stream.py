@@ -6,7 +6,8 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import dataclass, replace
 from itertools import chain
 import json
 from pathlib import Path
@@ -47,6 +48,7 @@ from .stream_media import decrypt_hikvision_ps_video, detect_transport
 from .stream_transport import (
     SocketFactory,
     StreamTransport,
+    VtmPacket,
     VtmStreamClient,
     build_vtm_url,
 )
@@ -935,6 +937,7 @@ class _CloudMediaProbe:
         self.identified = False
         self.transport = StreamTransport.UNKNOWN
         self.cross_packet = False
+        self.media_prefix: bytes | None = None
         self._tail = b""
 
     def __call__(self, packet: Any) -> bool:
@@ -943,14 +946,17 @@ class _CloudMediaProbe:
         if _is_cloud_media_packet(packet, allow_encrypted=self.allow_encrypted):
             self.identified = True
             self.transport = detect_transport(packet.body)
+            self.media_prefix = packet.body
             return True
         if not packet.body or packet.encrypted:
             return False
         combined = self._tail + packet.body
-        if _MPEG_PS_PACK_START_CODE in combined:
+        ps_offset = combined.find(_MPEG_PS_PACK_START_CODE)
+        if ps_offset >= 0:
             self.identified = True
             self.cross_packet = True
             self.transport = StreamTransport.MPEG_PS
+            self.media_prefix = combined[ps_offset:]
             return True
         for offset, value in enumerate(combined):
             if value != 0x47 or offset + 188 > len(combined):
@@ -959,6 +965,7 @@ class _CloudMediaProbe:
                 self.identified = True
                 self.cross_packet = True
                 self.transport = StreamTransport.MPEG_TS
+                self.media_prefix = combined[offset:]
                 return True
         self._tail = combined[-_CLOUD_MEDIA_PROBE_TAIL_BYTES:]
         return False
@@ -1065,7 +1072,19 @@ def _peek_cloud_transport(
             return transport, chain((packet,), packets)
         prefix.append(packet)
         if media_probe(packet):
-            return media_probe.transport, chain(prefix, packets)
+            assert media_probe.media_prefix is not None
+            if isinstance(packet, VtmPacket):
+                media_packet = replace(
+                    packet,
+                    body=media_probe.media_prefix,
+                    length=len(media_probe.media_prefix),
+                )
+            else:
+                media_packet = copy(packet)
+                media_packet.body = media_probe.media_prefix
+                if hasattr(media_packet, "length"):
+                    media_packet.length = len(media_packet.body)
+            return media_probe.transport, chain((media_packet,), packets)
     return StreamTransport.UNKNOWN, iter(prefix)
 
 

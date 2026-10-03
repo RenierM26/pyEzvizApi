@@ -32,6 +32,7 @@ from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
     _h264_slice_pps_id,
+    _h264_sps_info,
     _H264PpsInfo,
     _H264SpsInfo,
     _has_linked_h264_video,
@@ -4453,6 +4454,112 @@ def test_h264_cavlc_inter_slice_parses_skip_run_before_macroblock_type() -> None
         )
         is None
     )
+
+
+def test_h264_sps_retains_picture_size_and_mbaff_flag() -> None:
+    syntax = (
+        _unsigned_exp_golomb_bits(0)  # seq_parameter_set_id
+        + _unsigned_exp_golomb_bits(0)  # log2_max_frame_num_minus4
+        + _unsigned_exp_golomb_bits(2)  # pic_order_cnt_type
+        + _unsigned_exp_golomb_bits(0)  # max_num_ref_frames
+        + "0"  # gaps_in_frame_num_value_allowed_flag
+        + _unsigned_exp_golomb_bits(1)  # pic_width_in_mbs_minus1
+        + _unsigned_exp_golomb_bits(1)  # pic_height_in_map_units_minus1
+        + "01100"  # frame_mbs_only, MBAFF, direct_8x8, crop, VUI
+    )
+    sps = _h264_sps_info(b"\x42\x00\x0a" + _rbsp_bytes(syntax))
+
+    assert sps is not None
+    assert (sps.pic_width_in_mbs, sps.pic_height_in_map_units) == (2, 2)
+    assert sps.mb_adaptive_frame_field
+
+
+def test_h264_cavlc_skip_run_stays_within_remaining_picture() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+
+    def slice_with_skip(first_mb: int, skip_run: int) -> bytes:
+        header = (
+            _unsigned_exp_golomb_bits(first_mb)
+            + _unsigned_exp_golomb_bits(0)  # P slice
+            + _unsigned_exp_golomb_bits(0)  # PPS
+            + "0000"  # frame_num
+            + "00"  # ref count override and list modification flags
+            + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        )
+        return _rbsp_bytes(header + _unsigned_exp_golomb_bits(skip_run))
+
+    def parsed(first_mb: int, skip_run: int) -> int | None:
+        return _h264_slice_pps_id(
+            slice_with_skip(first_mb, skip_run),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+
+    assert parsed(2, 2) == 0
+    assert parsed(2, 3) is None
+    assert parsed(0, 65535) is None
+    assert parsed(4, 0) is None
+
+
+def test_h264_mbaff_field_flag_precedes_cavlc_macroblock_type() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, False, 2, 2, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    frame_header = (
+        _unsigned_exp_golomb_bits(0)  # first_mb_in_slice
+        + _unsigned_exp_golomb_bits(2)  # I slice
+        + _unsigned_exp_golomb_bits(0)  # PPS
+        + "0000"  # frame_num
+        + "0"  # field_pic_flag: frame-coded MBAFF
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+    )
+
+    def parsed(bits: str) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(bits),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+
+    assert parsed(frame_header + "1" + _unsigned_exp_golomb_bits(0)) == 0
+    assert parsed(frame_header + "0" + _unsigned_exp_golomb_bits(0)) == 0
+    assert parsed(frame_header + "1") is None
+    assert parsed(frame_header + "0") is None
+    field_header = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "000010"  # frame_num, field_pic_flag, bottom_field_flag
+        + _signed_exp_golomb_bits(0)
+    )
+    assert parsed(field_header + _unsigned_exp_golomb_bits(0)) == 0
+
+
+def test_h264_mbaff_skip_run_uses_macroblock_pair_address() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, False, 2, 2, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header = (
+        _unsigned_exp_golomb_bits(3)  # first macroblock pair: address 6 of 8
+        + _unsigned_exp_golomb_bits(0)  # P slice
+        + _unsigned_exp_golomb_bits(0)
+        + "00000"  # frame_num, field_pic_flag
+        + "00"  # ref count override and list modification flags
+        + _signed_exp_golomb_bits(0)
+    )
+
+    def parsed(skip_run: int) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(header + _unsigned_exp_golomb_bits(skip_run)),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+
+    assert parsed(2) == 0
+    assert parsed(3) is None
+
 
 def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:
     sps = _H264SpsInfo(0, 3, True, 4, 2, 0, False, True)

@@ -470,6 +470,9 @@ class _H264SpsInfo(NamedTuple):
     log2_max_pic_order_cnt_lsb: int
     delta_pic_order_always_zero: bool
     frame_mbs_only: bool
+    pic_width_in_mbs: int = 1
+    pic_height_in_map_units: int = 1
+    mb_adaptive_frame_field: bool = False
 
 
 class _H264PpsInfo(NamedTuple):
@@ -854,16 +857,22 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
     if decoded is None:
         return None
     offset = decoded[1] + 1
+    dimensions: list[int] = []
     for _ in range(2):
         decoded = _read_unsigned_exp_golomb(bits, offset)
-        if decoded is None:
+        if decoded is None or decoded[0] > 65535:
             return None
+        dimensions.append(decoded[0] + 1)
         offset = decoded[1]
     if offset >= len(bits):
         return None
     frame_mbs_only = bits[offset] == "1"
     offset += 1
+    mb_adaptive_frame_field = False
     if not frame_mbs_only:
+        if offset >= len(bits):
+            return None
+        mb_adaptive_frame_field = bits[offset] == "1"
         offset += 1
     offset += 1
     if offset >= len(bits):
@@ -896,6 +905,9 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
         log2_max_pic_order_cnt_lsb=log2_max_pic_order_cnt_lsb,
         delta_pic_order_always_zero=delta_pic_order_always_zero,
         frame_mbs_only=frame_mbs_only,
+        pic_width_in_mbs=dimensions[0],
+        pic_height_in_map_units=dimensions[1],
+        mb_adaptive_frame_field=mb_adaptive_frame_field,
     )
 
 
@@ -1142,7 +1154,17 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
         field_pic = bits[offset] == "1"
         offset += 1
         if field_pic:
+            if offset >= len(bits):
+                return None
             offset += 1
+    mbaff_frame = sps.mb_adaptive_frame_field and not field_pic
+    pic_size_in_mbs = sps.pic_width_in_mbs * sps.pic_height_in_map_units
+    if not sps.frame_mbs_only and not field_pic:
+        pic_size_in_mbs *= 2
+    # MBAFF first_mb_in_slice addresses macroblock pairs, not single blocks.
+    first_mb_addr = first_mb * (2 if mbaff_frame else 1)
+    if first_mb_addr >= pic_size_in_mbs:
+        return None
     nal_type = nal_header & 0x1F
     if nal_type == 5:
         decoded = _read_unsigned_exp_golomb(bits, offset)
@@ -1268,11 +1290,15 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
         return pic_parameter_set_id if offset < len(bits) else None
     if normalized_slice_type in {0, 1, 3}:
         skip_run = _read_unsigned_exp_golomb(bits, offset)
-        if skip_run is None or skip_run[0] > 65535:
+        if skip_run is None or skip_run[0] > pic_size_in_mbs - first_mb_addr:
             return None
         if skip_run[0]:
             return pic_parameter_set_id
         offset = skip_run[1]
+    if mbaff_frame:
+        if offset >= len(bits):
+            return None
+        offset += 1  # mb_field_decoding_flag for the first macroblock pair
     first_cavlc_element = _read_unsigned_exp_golomb(bits, offset)
     max_mb_type = {0: 30, 1: 48, 2: 25, 3: 30, 4: 26}[normalized_slice_type]
     if first_cavlc_element is None or first_cavlc_element[0] > max_mb_type:

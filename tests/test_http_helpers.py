@@ -3975,6 +3975,41 @@ def test_save_cloud_clip_rejects_concurrent_target_replacement(
     assert output_path.read_bytes() == replacement_payload
 
 
+def test_save_cloud_clip_rejects_fifo_replacement_without_blocking(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"original")
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+
+    def replace_target_with_fifo(*_args: Any, **_kwargs: Any) -> None:
+        output_path.unlink()
+        os.mkfifo(output_path)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        replace_target_with_fifo,
+    )
+
+    with pytest.raises(PyEzvizError, match="target changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert stat.S_ISFIFO(output_path.stat().st_mode)
+
+
 def test_save_cloud_clip_falls_back_when_hard_links_are_unsupported(
     monkeypatch,
     tmp_path,
@@ -4045,7 +4080,57 @@ def test_save_cloud_clip_fallback_does_not_overwrite_concurrent_target(
     assert output_path.read_bytes() == replacement_payload
 
 
-def test_save_unbounded_clear_cloud_clip_writes_directly(monkeypatch, tmp_path) -> None:
+def test_save_cloud_clip_fallback_detects_replacement_during_copy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    replacement = tmp_path / "replacement.ts"
+    replacement_payload = b"concurrent writer"
+    real_fsync = os.fsync
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        ),
+    )
+
+    def replace_target_after_copy(file_descriptor: int) -> None:
+        real_fsync(file_descriptor)
+        replacement.write_bytes(replacement_payload)
+        os.replace(replacement, output_path)
+
+    monkeypatch.setattr("pyezvizapi.client.os.fsync", replace_target_after_copy)
+
+    with pytest.raises(PyEzvizError, match="changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
+
+
+@pytest.mark.parametrize("duration_seconds", [None, float("inf"), float("nan")])
+def test_save_unbounded_clear_cloud_clip_writes_directly(
+    monkeypatch,
+    tmp_path,
+    duration_seconds: float | None,
+) -> None:
     client = _client()
     output_path = tmp_path / "stream.ps"
     observed_names: list[str] = []
@@ -4066,7 +4151,7 @@ def test_save_unbounded_clear_cloud_clip_writes_directly(monkeypatch, tmp_path) 
         output_path,
         source="cloud",
         output_format="mpegps",
-        duration_seconds=None,
+        duration_seconds=duration_seconds,
     )
 
     assert observed_names == [str(output_path)]

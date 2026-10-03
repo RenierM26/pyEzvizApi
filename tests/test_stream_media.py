@@ -1345,6 +1345,44 @@ def test_copy_cloud_stream_to_mpegps_rejects_empty_startup(monkeypatch) -> None:
             max_packets=2,
         )
 
+
+@pytest.mark.parametrize(
+    ("max_packets", "duration_seconds"),
+    [(0, 10.0), (None, 0.0), (None, -1.0)],
+)
+def test_copy_cloud_stream_to_mpegps_preserves_explicit_zero_capture(
+    monkeypatch,
+    max_packets: int | None,
+    duration_seconds: float,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+
+    class EmptyCloudStream:
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            return iter(())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: EmptyCloudStream(),
+    )
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+    )
+
+    assert not output.getvalue()
+
 def test_copy_cloud_stream_to_mpegps_decrypts_bounded_payloads(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()

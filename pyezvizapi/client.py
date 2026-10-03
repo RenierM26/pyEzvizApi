@@ -10,6 +10,7 @@ import errno
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import stat
@@ -684,20 +685,27 @@ def _publish_validated_cloud_clip(
     # Replacing an inode atomically necessarily loses its ACLs, xattrs, and
     # hard-link identity.  Validation has already succeeded, so update an
     # existing regular file in place just as the legacy save path did.
+    open_flags = os.O_WRONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
-        destination_fd = os.open(target, os.O_WRONLY)
-    except FileNotFoundError as err:
+        destination_fd = os.open(target, open_flags)
+    except OSError as err:
         raise PyEzvizError("Cloud clip output target changed during capture") from err
+    destination_stat = os.fstat(destination_fd)
+    if (
+        not stat.S_ISREG(destination_stat.st_mode)
+        or (destination_stat.st_dev, destination_stat.st_ino) != expected_identity
+    ):
+        os.close(destination_fd)
+        raise PyEzvizError("Cloud clip output target changed during capture")
     with temp_path.open("rb") as source, os.fdopen(destination_fd, "wb") as destination:
-        destination_stat = os.fstat(destination.fileno())
-        if (destination_stat.st_dev, destination_stat.st_ino) != expected_identity:
-            raise PyEzvizError("Cloud clip output target changed during capture")
         destination.truncate(0)
         while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
             destination.write(chunk)
         destination.truncate()
         destination.flush()
         os.fsync(destination.fileno())
+    if not _regular_path_has_identity(target, expected_identity):
+        raise PyEzvizError("Cloud clip output target changed during capture")
     temp_path.unlink()
 
 
@@ -709,15 +717,39 @@ def _copy_validated_clip_to_new_target(temp_path: Path, target: Path) -> None:
         target_fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     except FileExistsError as err:
         raise PyEzvizError("Cloud clip output target changed during capture") from err
+    target_stat = os.fstat(target_fd)
+    target_identity = (target_stat.st_dev, target_stat.st_ino)
+    with temp_path.open("rb") as source, os.fdopen(target_fd, "wb") as destination:
+        while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+            destination.write(chunk)
+        destination.flush()
+        os.fsync(destination.fileno())
+    if not _regular_path_has_identity(target, target_identity):
+        raise PyEzvizError("Cloud clip output target changed during capture")
+
+
+def _regular_path_has_identity(path: Path, identity: tuple[int, int]) -> bool:
+    """Return whether a path still names the expected regular-file inode."""
+
     try:
-        with temp_path.open("rb") as source, os.fdopen(target_fd, "wb") as destination:
-            while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
-                destination.write(chunk)
-            destination.flush()
-            os.fsync(destination.fileno())
-    except BaseException:
-        target.unlink(missing_ok=True)
-        raise
+        path_stat = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(path_stat.st_mode) and (
+        path_stat.st_dev,
+        path_stat.st_ino,
+    ) == identity
+
+
+def _legacy_duration_is_effectively_unbounded(duration_seconds: float | None) -> bool:
+    """Return whether a preserved legacy duration cannot end a capture."""
+
+    if duration_seconds is None:
+        return True
+    try:
+        return not math.isfinite(duration_seconds)
+    except (OverflowError, TypeError):
+        return isinstance(duration_seconds, int) and duration_seconds > 0
 
 
 def _cloud_clip_staging(
@@ -4218,8 +4250,8 @@ class EzvizClient:
             )
             unbounded_clear_capture = (
                 not decrypt_video
-                and duration_seconds is None
                 and max_packets is None
+                and _legacy_duration_is_effectively_unbounded(duration_seconds)
             )
             if unbounded_clear_capture or (
                 not decrypt_video

@@ -2252,6 +2252,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
         ffmpeg_path: str,
         max_packets: int | None,
         duration_seconds: float | None,
+        first_packet_deadline: float | None,
         allow_encrypted: bool,
     ) -> None:
         calls.append(
@@ -2260,6 +2261,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
                 "ffmpeg_path": ffmpeg_path,
                 "max_packets": max_packets,
                 "duration_seconds": duration_seconds,
+                "first_packet_deadline": first_packet_deadline,
                 "allow_encrypted": allow_encrypted,
             }
         )
@@ -2297,6 +2299,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
     assert calls[0]["ffmpeg_path"] == "ffmpeg-custom"
     assert calls[0]["max_packets"] is None
     assert calls[0]["duration_seconds"] == cli_module._parse_duration_seconds("2min")  # noqa: SLF001
+    assert calls[0]["first_packet_deadline"] is None
     assert calls[0]["allow_encrypted"] is False
     assert output_file.read_bytes() == expected_payload
 
@@ -3172,6 +3175,7 @@ def test_remux_stream_payloads_routes_clear_transport_when_encrypted_allowed(
             "ffmpeg_path": "ffmpeg-custom",
             "max_packets": 4,
             "duration_seconds": 3.0,
+            "first_packet_deadline": None,
             "allow_encrypted": True,
         }
     ]

@@ -376,12 +376,12 @@ def _start_bounded_cloud_stream(
     timeout: float | None,
     duration_seconds: float | None,
     monotonic: Callable[[], float],
-) -> None:
+) -> float | None:
     """Start VTM negotiation with one deadline instead of per-read timeouts."""
 
     if not isinstance(stream, VtmStreamClient):
         stream.start()
-        return
+        return None
     startup_seconds = timeout
     if startup_seconds is None or startup_seconds <= 0:
         startup_seconds = duration_seconds
@@ -391,6 +391,7 @@ def _start_bounded_cloud_stream(
         else monotonic() + startup_seconds
     )
     stream.start(deadline=deadline, monotonic=monotonic)
+    return deadline
 
 
 @contextmanager
@@ -454,7 +455,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             timeout=timeout,
         )
         with _closing_unconnected_cloud_stream(stream):
-            _start_bounded_cloud_stream(
+            startup_deadline = _start_bounded_cloud_stream(
                 stream,
                 timeout=timeout,
                 duration_seconds=duration_seconds,
@@ -464,6 +465,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
+                first_packet_deadline=startup_deadline,
                 monotonic=monotonic,
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
@@ -497,7 +499,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         timeout=timeout,
     )
     with _closing_unconnected_cloud_stream(stream):
-        _start_bounded_cloud_stream(
+        startup_deadline = _start_bounded_cloud_stream(
             stream,
             timeout=timeout,
             duration_seconds=duration_seconds,
@@ -508,6 +510,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             output,
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
 
@@ -554,7 +557,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             timeout=timeout,
         )
         with _closing_unconnected_cloud_stream(stream):
-            _start_bounded_cloud_stream(
+            startup_deadline = _start_bounded_cloud_stream(
                 stream,
                 timeout=timeout,
                 duration_seconds=duration_seconds,
@@ -564,6 +567,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
+                first_packet_deadline=startup_deadline,
                 monotonic=monotonic,
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
@@ -588,7 +592,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         timeout=timeout,
     )
     with _closing_unconnected_cloud_stream(stream):
-        _start_bounded_cloud_stream(
+        startup_deadline = _start_bounded_cloud_stream(
             stream,
             timeout=timeout,
             duration_seconds=duration_seconds,
@@ -600,6 +604,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             ffmpeg_path=ffmpeg_path,
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
 
@@ -653,6 +658,7 @@ def _copy_cloud_stream_payloads_to_mpegps(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Copy clear MPEG-PS packets while rejecting known incompatible transports."""
@@ -661,6 +667,7 @@ def _copy_cloud_stream_payloads_to_mpegps(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(packets)
@@ -704,6 +711,7 @@ def _collect_cloud_stream_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> list[Any]:
     """Collect clear VTM packets while retaining RTP packet boundaries."""
@@ -713,6 +721,7 @@ def _collect_cloud_stream_packets(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     ):
         _require_clear_cloud_packet(packet)
@@ -855,6 +864,7 @@ def _iter_bounded_cloud_packets(
     max_packets: int | None,
     duration_seconds: float | None,
     first_packet_timeout: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float],
 ) -> Iterator[Any]:
     """Iterate cloud packets with transport-level deadlines when available."""
@@ -863,13 +873,16 @@ def _iter_bounded_cloud_packets(
         selected_first_packet_timeout = first_packet_timeout
         if selected_first_packet_timeout is None and duration_seconds is None:
             selected_first_packet_timeout = stream.timeout
-        return stream.iter_packets(
-            max_packets=max_packets,
-            duration_seconds=duration_seconds,
-            duration_from_start=True,
-            first_packet_timeout=selected_first_packet_timeout,
-            monotonic=monotonic,
-        )
+        iterator_kwargs: dict[str, Any] = {
+            "max_packets": max_packets,
+            "duration_seconds": duration_seconds,
+            "duration_from_start": True,
+            "first_packet_timeout": selected_first_packet_timeout,
+            "monotonic": monotonic,
+        }
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
+        return stream.iter_packets(**iterator_kwargs)
 
     def _fallback() -> Iterator[Any]:
         deadline = None if duration_seconds is None else monotonic() + duration_seconds
@@ -889,6 +902,7 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
     max_packets: int | None,
     duration_seconds: float | None = None,
     first_packet_timeout: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     allow_encrypted: bool = False,
     mpegps_transform: Callable[[bytes], bytes] | None = None,
@@ -902,6 +916,7 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
         max_packets=max_packets,
         duration_seconds=duration_seconds,
         first_packet_timeout=first_packet_timeout,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(

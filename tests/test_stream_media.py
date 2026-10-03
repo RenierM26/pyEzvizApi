@@ -2714,6 +2714,56 @@ def test_cloud_stream_start_bounds_initial_connect(
     assert fake_socket.closed
 
 
+def test_cloud_copy_reuses_startup_deadline_for_first_media(
+    monkeypatch,
+) -> None:
+    expected_deadline = 110.0
+
+    class Clock:
+        now = 100.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class SlowNegotiationStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=10.0)
+            self.start_deadline: float | None = None
+            self.iterator_kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.start_deadline = kwargs["deadline"]
+            clock.now = 109.0
+            return SimpleNamespace()
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.iterator_kwargs = kwargs
+            return iter(())
+
+    stream = SlowNegotiationStream()
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: stream,
+    )
+
+    copy_cloud_stream_to_mpegps(
+        _client(),
+        "CAM123",
+        io.BytesIO(),
+        timeout=10.0,
+        duration_seconds=30.0,
+        max_packets=1,
+        monotonic=clock,
+    )
+
+    assert stream.start_deadline == expected_deadline
+    assert stream.iterator_kwargs["first_packet_deadline"] == expected_deadline
+    assert stream.iterator_kwargs["first_packet_timeout"] is None
+
+
 def test_unconnected_cloud_stream_context_closes_after_start_failure() -> None:
     class FailingStream:
         closed = False

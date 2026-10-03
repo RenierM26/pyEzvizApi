@@ -476,6 +476,7 @@ class VtmStreamClient:
         duration_seconds: float | None = None,
         duration_from_start: bool = False,
         first_packet_timeout: float | None = None,
+        first_packet_deadline: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
         monotonic: Callable[[], float] = time.monotonic,
@@ -500,11 +501,17 @@ class VtmStreamClient:
             if duration_from_start and duration_seconds is not None
             else None
         )
-        first_packet_deadline = (
+        relative_first_packet_deadline = (
             None
             if first_packet_timeout is None
             else started_at + first_packet_timeout
         )
+        if relative_first_packet_deadline is not None:
+            first_packet_deadline = (
+                relative_first_packet_deadline
+                if first_packet_deadline is None
+                else min(first_packet_deadline, relative_first_packet_deadline)
+            )
         next_keepalive = (
             None if keepalive_interval is None else started_at + keepalive_interval
         )

@@ -3055,6 +3055,7 @@ def _write_stream_payloads(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     allow_encrypted: bool,
     transform_payload: Callable[[bytes], bytes] | None = None,
     flush_each: bool = False,
@@ -3073,6 +3074,8 @@ def _write_stream_payloads(
             duration_from_start=True,
             monotonic=monotonic,
         )
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
         if duration_seconds is None:
             iterator_kwargs["first_packet_timeout"] = stream.timeout
 
@@ -3101,17 +3104,18 @@ def _start_cli_cloud_stream(
     timeout: float | None,
     duration_seconds: float | None,
     monotonic: Callable[[], float] = time.monotonic,
-) -> None:
+) -> float | None:
     """Start a CLI VTM stream with one bounded negotiation deadline."""
 
     if not isinstance(stream, VtmStreamClient):
         stream.start()
-        return
+        return None
     startup_seconds = timeout
     if startup_seconds is None or startup_seconds <= 0:
         startup_seconds = duration_seconds
     deadline = None if startup_seconds is None else monotonic() + startup_seconds
     stream.start(deadline=deadline, monotonic=monotonic)
+    return deadline
 
 
 def _collect_stream_payloads(
@@ -3146,6 +3150,7 @@ def _collect_stream_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     allow_encrypted: bool,
     monotonic: Any = time.monotonic,
 ) -> list[Any]:
@@ -3163,6 +3168,8 @@ def _collect_stream_packets(
             duration_from_start=True,
             monotonic=monotonic,
         )
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
         if duration_seconds is None:
             iterator_kwargs["first_packet_timeout"] = stream.timeout
 
@@ -3498,6 +3505,7 @@ def _remux_stream_payloads_to_mpegts(
     ffmpeg_path: str,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     allow_encrypted: bool,
 ) -> None:
     """Route VTM media to MPEG-TS with optional encrypted-packet passthrough."""
@@ -3508,6 +3516,7 @@ def _remux_stream_payloads_to_mpegts(
         ffmpeg_path=ffmpeg_path,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         allow_encrypted=allow_encrypted,
     )
 
@@ -3616,7 +3625,7 @@ def _handle_stream_proxy_get(
             timeout=config.timeout,
         )
         with _closing_unconnected_cloud_stream(stream):
-            _start_cli_cloud_stream(
+            startup_deadline = _start_cli_cloud_stream(
                 stream,
                 timeout=config.timeout,
                 duration_seconds=None,
@@ -3641,6 +3650,7 @@ def _handle_stream_proxy_get(
                 ffmpeg_path=config.ffmpeg_path,
                 max_packets=config.max_packets,
                 first_packet_timeout=config.timeout,
+                first_packet_deadline=startup_deadline,
                 allow_encrypted=config.allow_encrypted,
                 mpegps_transform=mpegps_transform,
                 rtp_transform=rtp_transform,
@@ -5136,7 +5146,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
     )
     with _closing_unconnected_cloud_stream(stream):
         if args.stream_action == "dump":
-            _start_cli_cloud_stream(
+            startup_deadline = _start_cli_cloud_stream(
                 stream,
                 timeout=args.timeout,
                 duration_seconds=args.duration,
@@ -5147,6 +5157,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                     stream,
                     max_packets=args.max_packets,
                     duration_seconds=args.duration,
+                    first_packet_deadline=startup_deadline,
                     allow_encrypted=args.allow_encrypted,
                 )
                 transport = _detect_stream_packets_transport(collected_packets)
@@ -5238,6 +5249,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         sys.stdout.buffer,
                         max_packets=args.max_packets,
                         duration_seconds=args.duration,
+                        first_packet_deadline=startup_deadline,
                         allow_encrypted=args.allow_encrypted,
                     )
                 else:
@@ -5247,6 +5259,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         ffmpeg_path=args.ffmpeg_path,
                         max_packets=args.max_packets,
                         duration_seconds=args.duration,
+                        first_packet_deadline=startup_deadline,
                         allow_encrypted=args.allow_encrypted,
                     )
             else:
@@ -5275,6 +5288,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                             output,
                             max_packets=args.max_packets,
                             duration_seconds=args.duration,
+                            first_packet_deadline=startup_deadline,
                             allow_encrypted=args.allow_encrypted,
                         )
                     else:
@@ -5284,6 +5298,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                             ffmpeg_path=args.ffmpeg_path,
                             max_packets=args.max_packets,
                             duration_seconds=args.duration,
+                            first_packet_deadline=startup_deadline,
                             allow_encrypted=args.allow_encrypted,
                         )
             return 0

@@ -1047,6 +1047,63 @@ def test_vtm_stream_client_stops_quiet_read_at_first_packet_timeout() -> None:
     assert packets == []
     assert fake_socket.timeout is None
 
+
+def test_vtm_stream_client_first_packet_deadline_uses_remaining_budget() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 109.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self, responses: list[bytes]) -> None:
+            super().__init__(responses)
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            clock.now = 110.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        stream._read_inactivity_deadline = None  # noqa: SLF001
+        packets = list(
+            stream.iter_packets(
+                first_packet_deadline=110.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert packets == []
+    assert 1.0 in fake_socket.timeout_history
+
 def test_vtm_stream_client_start_follows_redirect_response() -> None:
     redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
     redirect_key = "redirect-key"

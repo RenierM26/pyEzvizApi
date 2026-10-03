@@ -28,6 +28,7 @@ from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
 from .cloud_stream import (
+    _closing_unconnected_cloud_stream,
     cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_decrypted_cloud_stream_packets_to_mpegts,
@@ -3605,7 +3606,7 @@ def _handle_stream_proxy_get(
                 handler.wfile.flush()
 
     try:
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             config.serial,
             channel=config.channel,
@@ -3613,7 +3614,8 @@ def _handle_stream_proxy_get(
             token_index=config.token_index,
             refresh_vtm=config.refresh_vtm,
             timeout=config.timeout,
-        ) as stream:
+        )
+        with _closing_unconnected_cloud_stream(stream):
             _start_cli_cloud_stream(
                 stream,
                 timeout=config.timeout,
@@ -5123,7 +5125,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
         else None
     )
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         args.serial,
         channel=args.channel,
@@ -5131,7 +5133,8 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
         token_index=args.token_index,
         refresh_vtm=not args.no_refresh_vtm,
         timeout=args.timeout,
-    ) as stream:
+    )
+    with _closing_unconnected_cloud_stream(stream):
         if args.stream_action == "dump":
             _start_cli_cloud_stream(
                 stream,

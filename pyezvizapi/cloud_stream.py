@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from itertools import chain
 import json
@@ -393,6 +393,22 @@ def _start_bounded_cloud_stream(
     stream.start(deadline=deadline, monotonic=monotonic)
 
 
+@contextmanager
+def _closing_unconnected_cloud_stream(stream: Any) -> Iterator[Any]:
+    """Manage a newly-created stream without triggering eager ``__enter__``."""
+
+    try:
+        yield stream
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+        else:
+            exit_context = getattr(stream, "__exit__", None)
+            if callable(exit_context):
+                exit_context(None, None, None)
+
+
 def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     client: Any,
     serial: str,
@@ -428,7 +444,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             serial,
             channel=channel,
@@ -436,7 +452,8 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
-        ) as stream:
+        )
+        with _closing_unconnected_cloud_stream(stream):
             _start_bounded_cloud_stream(
                 stream,
                 timeout=timeout,
@@ -470,7 +487,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         output.flush()
         return
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         serial,
         channel=channel,
@@ -478,7 +495,8 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
-    ) as stream:
+    )
+    with _closing_unconnected_cloud_stream(stream):
         _start_bounded_cloud_stream(
             stream,
             timeout=timeout,
@@ -526,7 +544,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             serial,
             channel=channel,
@@ -534,7 +552,8 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
-        ) as stream:
+        )
+        with _closing_unconnected_cloud_stream(stream):
             _start_bounded_cloud_stream(
                 stream,
                 timeout=timeout,
@@ -559,7 +578,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         )
         return
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         serial,
         channel=channel,
@@ -567,7 +586,8 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
-    ) as stream:
+    )
+    with _closing_unconnected_cloud_stream(stream):
         _start_bounded_cloud_stream(
             stream,
             timeout=timeout,

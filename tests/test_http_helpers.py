@@ -32,6 +32,7 @@ from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
     _h264_pps_info,
+    _h264_slice_group_map,
     _h264_slice_pps_id,
     _h264_sps_info,
     _H264PpsInfo,
@@ -4564,18 +4565,20 @@ def test_h264_mbaff_skip_run_uses_macroblock_pair_address() -> None:
 
 
 @pytest.mark.parametrize(
-    ("map_type", "map_bits"),
+    ("map_type", "map_bits", "expected_map"),
     [
-        (0, _unsigned_exp_golomb_bits(0) * 2),
-        (1, ""),
-        (2, _unsigned_exp_golomb_bits(0) + _unsigned_exp_golomb_bits(1)),
-        (3, "0" + _unsigned_exp_golomb_bits(0)),
-        (4, "0" + _unsigned_exp_golomb_bits(0)),
-        (5, "0" + _unsigned_exp_golomb_bits(0)),
-        (6, _unsigned_exp_golomb_bits(3) + "0101"),
+        (0, _unsigned_exp_golomb_bits(0) * 2, (0, 1, 0, 1)),
+        (1, "", (0, 1, 1, 0)),
+        (2, _unsigned_exp_golomb_bits(0) + _unsigned_exp_golomb_bits(1), (0, 0, 1, 1)),
+        (3, "0" + _unsigned_exp_golomb_bits(0), (1, 1, 0, 0)),
+        (4, "0" + _unsigned_exp_golomb_bits(0), (0, 0, 1, 1)),
+        (5, "0" + _unsigned_exp_golomb_bits(0), (0, 1, 0, 1)),
+        (6, _unsigned_exp_golomb_bits(3) + "0101", (0, 1, 0, 1)),
     ],
 )
-def test_h264_slice_group_pps_and_slice_headers(map_type: int, map_bits: str) -> None:
+def test_h264_slice_group_pps_and_slice_headers(
+    map_type: int, map_bits: str, expected_map: tuple[int, ...]
+) -> None:
     sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
     pps_bits = (
         _unsigned_exp_golomb_bits(0) * 2  # PPS and SPS IDs
@@ -4591,19 +4594,73 @@ def test_h264_slice_group_pps_and_slice_headers(map_type: int, map_bits: str) ->
     pps = _h264_pps_info(_rbsp_bytes(pps_bits), sps_info={0: sps})
     assert pps is not None
     assert pps.slice_group_map_type == map_type
+    assert _h264_slice_group_map(pps, sps, 2) == expected_map
     slice_bits = (
         _unsigned_exp_golomb_bits(0)
         + _unsigned_exp_golomb_bits(2)  # I slice
         + _unsigned_exp_golomb_bits(0)
         + "0000"  # frame_num
         + _signed_exp_golomb_bits(0)  # slice_qp_delta
-        + ("000" if map_type in {3, 4, 5} else "")
+        + ("010" if map_type in {3, 4, 5} else "")
         + _unsigned_exp_golomb_bits(0)  # first CAVLC macroblock type
     )
     assert _h264_slice_pps_id(
         _rbsp_bytes(slice_bits), nal_header=0x01,
         sps_info={0: sps}, pps_info={0: pps},
     ) == 0
+
+
+@pytest.mark.parametrize("map_type", [0, 4])
+def test_h264_cavlc_skip_run_stays_within_selected_slice_group(map_type: int) -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps = _H264PpsInfo(
+        0, 0, False, False, 0, 0, False, 0, False, False,
+        slice_group_map_type=map_type,
+        slice_group_change_rate=1 if map_type == 4 else 0,
+        slice_group_count=2,
+        slice_group_map=(0, 1, 0, 1) if map_type == 0 else (),
+    )
+    header = (
+        _unsigned_exp_golomb_bits(0) * 3  # first MB, P slice, PPS
+        + "0000"  # frame_num
+        + "00"  # ref count override and list modification flags
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + ("010" if map_type == 4 else "")  # two map units in group 0
+    )
+
+    def parsed(skip_run: int) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(header + _unsigned_exp_golomb_bits(skip_run)),
+            nal_header=0x01, sps_info={0: sps}, pps_info={0: pps},
+        )
+
+    assert parsed(2) == 0
+    assert parsed(3) is None
+
+
+def test_h264_slice_group_change_cycle_rejects_reserved_value() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps = _H264PpsInfo(
+        0, 0, False, False, 0, 0, False, 0, False, False,
+        slice_group_map_type=4, slice_group_change_rate=2,
+        slice_group_count=2,
+    )
+    header = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + _signed_exp_golomb_bits(0)
+    )
+
+    def parsed(cycle_bits: str) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(header + cycle_bits + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x01, sps_info={0: sps}, pps_info={0: pps},
+        )
+
+    assert parsed("10") == 0
+    assert parsed("11") is None
 
 
 def test_rbsp_rejects_forbidden_or_trailing_emulation_prevention() -> None:

@@ -490,6 +490,9 @@ class _H264PpsInfo(NamedTuple):
     redundant_pic_cnt_present: bool
     slice_group_map_type: int = 0
     slice_group_change_rate: int = 0
+    slice_group_count: int = 1
+    slice_group_map: tuple[int, ...] = ()
+    slice_group_change_direction: bool = False
 
 
 class _HevcSpsInfo(NamedTuple):
@@ -917,12 +920,12 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
     )
 
 
-def _skip_h264_slice_groups(  # noqa: PLR0911, PLR0912
+def _skip_h264_slice_groups(  # noqa: PLR0911, PLR0912, PLR0915
     bits: str,
     offset: int,
     group_count: int,
     sps: _H264SpsInfo,
-) -> tuple[int, int, int] | None:
+) -> tuple[int, int, int, tuple[int, ...], bool] | None:
     """Skip a PPS flexible-macroblock-order map and retain slice controls."""
 
     decoded = _read_unsigned_exp_golomb(bits, offset)
@@ -930,30 +933,64 @@ def _skip_h264_slice_groups(  # noqa: PLR0911, PLR0912
         return None
     map_type, offset = decoded
     pic_size = sps.pic_width_in_mbs * sps.pic_height_in_map_units
+    if pic_size > 1_000_000:
+        return None
     change_rate = 0
+    change_direction = False
+    groups = [group_count - 1] * pic_size
     if map_type == 0:
+        runs: list[int] = []
         for _ in range(group_count):
             decoded = _read_unsigned_exp_golomb(bits, offset)
             if decoded is None or decoded[0] >= pic_size:
                 return None
+            runs.append(decoded[0] + 1)
             offset = decoded[1]
+        position = 0
+        while position < pic_size:
+            for group, run in enumerate(runs):
+                end = min(position + run, pic_size)
+                groups[position:end] = [group] * (end - position)
+                position = end
+    elif map_type == 1:
+        width = sps.pic_width_in_mbs
+        groups = [
+            (index % width + ((index // width) * group_count) // 2) % group_count
+            for index in range(pic_size)
+        ]
     elif map_type == 2:
+        rectangles: list[tuple[int, int]] = []
+        width = sps.pic_width_in_mbs
         for _ in range(group_count - 1):
             top_left = _read_unsigned_exp_golomb(bits, offset)
             if top_left is None or top_left[0] >= pic_size:
                 return None
             bottom_right = _read_unsigned_exp_golomb(bits, top_left[1])
-            if bottom_right is None or not top_left[0] <= bottom_right[0] < pic_size:
+            if (
+                bottom_right is None
+                or not top_left[0] <= bottom_right[0] < pic_size
+                or top_left[0] % width > bottom_right[0] % width
+            ):
                 return None
+            rectangles.append((top_left[0], bottom_right[0]))
             offset = bottom_right[1]
+        for group in range(group_count - 2, -1, -1):
+            top_addr, bottom_addr = rectangles[group]
+            for row in range(top_addr // width, bottom_addr // width + 1):
+                left, right = top_addr % width, bottom_addr % width
+                groups[row * width + left : row * width + right + 1] = [group] * (
+                    right - left + 1
+                )
     elif map_type in {3, 4, 5}:
         if group_count != 2 or offset >= len(bits):
             return None
+        change_direction = bits[offset] == "1"
         rate = _read_unsigned_exp_golomb(bits, offset + 1)
         if rate is None or rate[0] >= pic_size:
             return None
         change_rate = rate[0] + 1
         offset = rate[1]
+        groups = []  # Dynamic map depends on slice_group_change_cycle.
     elif map_type == 6:
         declared_size = _read_unsigned_exp_golomb(bits, offset)
         if declared_size is None or declared_size[0] + 1 != pic_size:
@@ -962,11 +999,69 @@ def _skip_h264_slice_groups(  # noqa: PLR0911, PLR0912
         group_bits = (group_count - 1).bit_length()
         if offset + pic_size * group_bits > len(bits):
             return None
-        for _ in range(pic_size):
-            if int(bits[offset : offset + group_bits], 2) >= group_count:
+        for index in range(pic_size):
+            group = int(bits[offset : offset + group_bits], 2)
+            if group >= group_count:
                 return None
+            groups[index] = group
             offset += group_bits
-    return offset, map_type, change_rate
+    return offset, map_type, change_rate, tuple(groups), change_direction
+
+
+def _h264_slice_group_map(  # noqa: PLR0912
+    pps: _H264PpsInfo,
+    sps: _H264SpsInfo,
+    change_cycle: int,
+) -> tuple[int, ...]:
+    """Build a dynamic H.264 FMO map for slice-group types 3, 4 and 5."""
+
+    if pps.slice_group_map:
+        return pps.slice_group_map
+    width, height = sps.pic_width_in_mbs, sps.pic_height_in_map_units
+    pic_size = width * height
+    group_zero_size = min(change_cycle * pps.slice_group_change_rate, pic_size)
+    direction = int(pps.slice_group_change_direction)
+    if pps.slice_group_map_type == 3:
+        groups = [1] * pic_size
+        x, y = (width - direction) // 2, (height - direction) // 2
+        left = right = x
+        top = bottom = y
+        x_dir, y_dir = direction - 1, direction
+        assigned = 0
+        steps = 0
+        while assigned < group_zero_size and steps < 8 * pic_size + 8:
+            steps += 1
+            position = y * width + x
+            if groups[position] == 1:
+                groups[position] = 0
+                assigned += 1
+            if x_dir == -1 and x == left:
+                left = max(left - 1, 0)
+                x, x_dir, y_dir = left, 0, 2 * direction - 1
+            elif x_dir == 1 and x == right:
+                right = min(right + 1, width - 1)
+                x, x_dir, y_dir = right, 0, 1 - 2 * direction
+            elif y_dir == -1 and y == top:
+                top = max(top - 1, 0)
+                y, x_dir, y_dir = top, 1 - 2 * direction, 0
+            elif y_dir == 1 and y == bottom:
+                bottom = min(bottom + 1, height - 1)
+                y, x_dir, y_dir = bottom, 2 * direction - 1, 0
+            else:
+                x += x_dir
+                y += y_dir
+        return tuple(groups) if assigned == group_zero_size else ()
+    upper_left_size = pic_size - group_zero_size if direction else group_zero_size
+    groups = [1 - direction] * pic_size
+    order: Iterable[int]
+    if pps.slice_group_map_type == 4:
+        order = range(pic_size)
+    else:
+        order = (row * width + col for col in range(width) for row in range(height))
+    for index, position in enumerate(order):
+        if index < upper_left_size:
+            groups[position] = direction
+    return tuple(groups)
 
 
 def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
@@ -1002,6 +1097,8 @@ def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
     offset = decoded[1]
     slice_group_map_type = 0
     slice_group_change_rate = 0
+    slice_group_map: tuple[int, ...] = ()
+    slice_group_change_direction = False
     if slice_group_count > 1:
         linked_sps = sps_info.get(sps[0])
         if linked_sps is None:
@@ -1011,7 +1108,10 @@ def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
         )
         if group_syntax is None:
             return None
-        offset, slice_group_map_type, slice_group_change_rate = group_syntax
+        (
+            offset, slice_group_map_type, slice_group_change_rate,
+            slice_group_map, slice_group_change_direction,
+        ) = group_syntax
     default_ref_counts: list[int] = []
     for _ in range(2):
         decoded = _read_unsigned_exp_golomb(bits, offset)
@@ -1082,6 +1182,9 @@ def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
         redundant_pic_cnt_present=redundant_pic_cnt_present,
         slice_group_map_type=slice_group_map_type,
         slice_group_change_rate=slice_group_change_rate,
+        slice_group_count=slice_group_count,
+        slice_group_map=slice_group_map,
+        slice_group_change_direction=slice_group_change_direction,
     )
 
 
@@ -1354,13 +1457,18 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                 if decoded_signed is None:
                     return None
                 offset = decoded_signed[1]
+    change_cycle = 0
     if pps.slice_group_change_rate:
         pic_size_in_map_units = sps.pic_width_in_mbs * sps.pic_height_in_map_units
-        cycle_bits = (
+        max_cycle = (
             (pic_size_in_map_units + pps.slice_group_change_rate - 1)
             // pps.slice_group_change_rate
-        ).bit_length()
+        )
+        cycle_bits = max_cycle.bit_length()
         if offset + cycle_bits > len(bits):
+            return None
+        change_cycle = int(bits[offset : offset + cycle_bits], 2)
+        if change_cycle > max_cycle:
             return None
         offset += cycle_bits
     if nal_type == 2:
@@ -1378,6 +1486,26 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
         skip_run = _read_unsigned_exp_golomb(bits, offset)
         if skip_run is None or skip_run[0] > pic_size_in_mbs - first_mb_addr:
             return None
+        if pps.slice_group_count > 1 and skip_run[0]:
+            groups = _h264_slice_group_map(pps, sps, change_cycle)
+            if not groups:
+                return None
+            width = sps.pic_width_in_mbs
+
+            def map_index(mb_addr: int) -> int:
+                if sps.frame_mbs_only or field_pic:
+                    return mb_addr
+                if mbaff_frame:
+                    return mb_addr // 2
+                return (mb_addr // (2 * width)) * width + mb_addr % width
+
+            selected_group = groups[map_index(first_mb_addr)]
+            remaining_in_group = sum(
+                groups[map_index(addr)] == selected_group
+                for addr in range(first_mb_addr, pic_size_in_mbs)
+            )
+            if skip_run[0] > remaining_in_group:
+                return None
         if skip_run[0]:
             return pic_parameter_set_id
         offset = skip_run[1]

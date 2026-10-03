@@ -1317,6 +1317,34 @@ def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
     ]
     assert output.getvalue() == expected_payload
 
+
+def test_copy_cloud_stream_to_mpegps_rejects_empty_startup(monkeypatch) -> None:
+    client = _client()
+
+    class EmptyCloudStream:
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            return iter(())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: EmptyCloudStream(),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        copy_cloud_stream_to_mpegps(
+            client,
+            "CAM123",
+            io.BytesIO(),
+            max_packets=2,
+        )
+
 def test_copy_cloud_stream_to_mpegps_decrypts_bounded_payloads(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
@@ -2749,15 +2777,16 @@ def test_cloud_copy_reuses_startup_deadline_for_first_media(
         lambda *_args, **_kwargs: stream,
     )
 
-    copy_cloud_stream_to_mpegps(
-        _client(),
-        "CAM123",
-        io.BytesIO(),
-        timeout=10.0,
-        duration_seconds=30.0,
-        max_packets=1,
-        monotonic=clock,
-    )
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        copy_cloud_stream_to_mpegps(
+            _client(),
+            "CAM123",
+            io.BytesIO(),
+            timeout=10.0,
+            duration_seconds=30.0,
+            max_packets=1,
+            monotonic=clock,
+        )
 
     assert stream.start_deadline == expected_deadline
     assert stream.iterator_kwargs["first_packet_deadline"] == expected_deadline

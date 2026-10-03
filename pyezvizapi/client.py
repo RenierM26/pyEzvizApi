@@ -434,15 +434,87 @@ def _require_saved_mpegps_video_payload(path: Path) -> None:
             break
         header = payload[start_code + 3]
         h264_type = header & 0x1F
-        if (header & 0x80) == 0 and 1 <= h264_type <= 5:
+        nal_body_start = start_code + 4
+        next_start = payload.find(b"\x00\x00\x01", nal_body_start)
+        nal_body_end = len(payload) if next_start < 0 else next_start
+        nal_body = payload[nal_body_start:nal_body_end]
+        if (
+            (header & 0x80) == 0
+            and 1 <= h264_type <= 5
+            and _has_plausible_h264_slice_header(nal_body)
+        ):
             return
         if start_code + 4 < len(payload):
             hevc_type = (header >> 1) & 0x3F
             temporal_id = payload[start_code + 4] & 0x07
-            if (header & 0x80) == 0 and hevc_type <= 31 and temporal_id:
+            hevc_body = payload[start_code + 5 : nal_body_end]
+            if (
+                (header & 0x80) == 0
+                and hevc_type <= 31
+                and temporal_id
+                and _has_plausible_hevc_slice_header(hevc_body, nal_type=hevc_type)
+            ):
                 return
         start = start_code + 3
     raise PyEzvizError("Saved cloud MPEG-PS clip did not include clear video payload")
+
+
+def _rbsp_bits(data: bytes) -> str:
+    """Return an RBSP bit string after removing emulation-prevention bytes."""
+
+    rbsp = bytearray()
+    zero_count = 0
+    for value in data:
+        if zero_count >= 2 and value == 0x03:
+            zero_count = 0
+            continue
+        rbsp.append(value)
+        zero_count = zero_count + 1 if value == 0 else 0
+    return "".join(f"{value:08b}" for value in rbsp)
+
+
+def _read_unsigned_exp_golomb(bits: str, offset: int) -> tuple[int, int] | None:
+    """Read one unsigned Exp-Golomb value from ``bits``."""
+
+    leading_zeros = 0
+    while offset + leading_zeros < len(bits) and bits[offset + leading_zeros] == "0":
+        leading_zeros += 1
+    marker = offset + leading_zeros
+    value_end = marker + leading_zeros + 1
+    if marker >= len(bits) or value_end > len(bits):
+        return None
+    suffix = bits[marker + 1 : value_end]
+    value = (1 << leading_zeros) - 1 + (int(suffix, 2) if suffix else 0)
+    return value, value_end
+
+
+def _has_plausible_h264_slice_header(data: bytes) -> bool:
+    """Return whether decrypted bytes contain a plausible H.264 slice header."""
+
+    bits = _rbsp_bits(data)
+    offset = 0
+    values: list[int] = []
+    for _ in range(3):
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None:
+            return False
+        value, offset = decoded
+        values.append(value)
+    first_mb, slice_type, pic_parameter_set_id = values
+    return first_mb <= 65535 and slice_type <= 9 and pic_parameter_set_id <= 255
+
+
+def _has_plausible_hevc_slice_header(data: bytes, *, nal_type: int) -> bool:
+    """Return whether decrypted bytes contain a plausible HEVC slice header."""
+
+    bits = _rbsp_bits(data)
+    if not bits:
+        return False
+    offset = 1  # first_slice_segment_in_pic_flag
+    if 16 <= nal_type <= 23:
+        offset += 1  # no_output_of_prior_pics_flag
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    return decoded is not None and decoded[0] <= 63
 
 
 def _publish_validated_cloud_clip(temp_path: Path, target: Path) -> None:
@@ -454,8 +526,7 @@ def _publish_validated_cloud_clip(temp_path: Path, target: Path) -> None:
         os.replace(temp_path, target)
         return
     if not stat.S_ISREG(target_stat.st_mode):
-        os.replace(temp_path, target)
-        return
+        raise PyEzvizError("Cloud clip output target must be a regular file")
 
     # Replacing an inode atomically necessarily loses its ACLs, xattrs, and
     # hard-link identity.  Validation has already succeeded, so update an
@@ -468,6 +539,29 @@ def _publish_validated_cloud_clip(temp_path: Path, target: Path) -> None:
         destination.flush()
         os.fsync(destination.fileno())
     temp_path.unlink()
+
+
+def _cloud_clip_staging_parent(target: Path) -> Path | None:
+    """Return a sibling staging parent only when the target is missing."""
+
+    try:
+        target_stat = target.stat()
+    except FileNotFoundError:
+        return target.parent
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise PyEzvizError("Cloud clip output target must be a regular file")
+    # Existing files publish through their current inode, so a private system
+    # temp does not require write access to the target's parent directory.
+    return None
+
+
+def _is_existing_non_regular_path(path: Path) -> bool:
+    """Return whether ``path`` exists and is not a regular file."""
+
+    try:
+        return not stat.S_ISREG(path.stat().st_mode)
+    except FileNotFoundError:
+        return False
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -3936,31 +4030,32 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            if decrypt_video:
-                publication_target = (
-                    output_path.resolve(strict=False)
-                    if output_path.is_symlink()
-                    else output_path
-                )
+            publication_target = (
+                output_path.resolve(strict=False)
+                if output_path.is_symlink()
+                else output_path
+            )
+            if not decrypt_video and _is_existing_non_regular_path(publication_target):
+                with output_path.open("wb") as output_file:
+                    copy_cloud(output_file)
+            else:
+                staging_parent = _cloud_clip_staging_parent(publication_target)
                 suffix = ".ts" if output_format == "mpegts" else ".ps"
                 with tempfile.TemporaryDirectory(
                     prefix=f".{publication_target.name}.",
-                    dir=publication_target.parent,
+                    dir=staging_parent,
                 ) as temp_dir:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
                     with temp_path.open("wb") as path_temp_output:
                         copy_cloud(path_temp_output)
-                    if output_format == "mpegts":
+                    if decrypt_video and output_format == "mpegts":
                         _require_decodable_saved_video_frame(
                             temp_path,
                             ffmpeg_path=ffmpeg_path,
                         )
-                    else:
+                    elif decrypt_video:
                         _require_saved_mpegps_video_payload(temp_path)
                     _publish_validated_cloud_clip(temp_path, publication_target)
-            else:
-                with output_path.open("wb") as output_file:
-                    copy_cloud(output_file)
         else:
             start_position = _binary_position(output)
             if decrypt_video:

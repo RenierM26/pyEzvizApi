@@ -470,6 +470,8 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
         packets = list(media_packets)
+        if not packets:
+            raise PyEzvizError("Cloud stream did not provide media before startup expired")
         if transport == StreamTransport.RTP:
             raise PyEzvizError(
                 "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
@@ -479,6 +481,8 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
             )
         payload = b"".join(packet.body for packet in packets)
+        if not payload:
+            raise PyEzvizError("Cloud stream did not provide media before startup expired")
         output.write(
             decrypt_hikvision_ps_video(
                 payload,
@@ -679,7 +683,8 @@ def _copy_cloud_stream_payloads_to_mpegps(
         raise PyEzvizError(
             "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
         )
-    _write_clear_cloud_packets(packets, output)
+    if _write_clear_cloud_packets(packets, output) == 0:
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
 
 
 def _collect_cloud_stream_payloads(
@@ -1006,19 +1011,23 @@ def _write_clear_cloud_packets(
     flush_each: bool = False,
     transform: Callable[[bytes], bytes] | None = None,
     allow_encrypted: bool = False,
-) -> None:
+) -> int:
+    bytes_written = 0
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         payload = transform(packet.body) if transform else packet.body
         if payload:
             output.write(payload)
+            bytes_written += len(payload)
         if flush_each:
             output.flush()
     if transform is not None and hasattr(transform, "flush"):
         tail = transform.flush()
         if tail:
             output.write(tail)
+            bytes_written += len(tail)
     output.flush()
+    return bytes_written
 
 
 def _is_valid_mpegts_body(body: bytes) -> bool:

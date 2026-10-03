@@ -3934,6 +3934,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     *,
     sps_vps_id: int = 0,
     pps_sps_id: int = 0,
+    pps_init_qp_minus26: int = 0,
+    bit_depth_luma_minus8: int = 0,
     slice_pps_id: int = 0,
     slice_type: int = 2,
     output_flag_present: bool = False,
@@ -3990,7 +3992,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + _unsigned_exp_golomb_bits(64)
         + _unsigned_exp_golomb_bits(36)
         + "0"
-        + _unsigned_exp_golomb_bits(0) * 2
+        + _unsigned_exp_golomb_bits(bit_depth_luma_minus8)
+        + _unsigned_exp_golomb_bits(0)  # bit_depth_chroma_minus8
         + _unsigned_exp_golomb_bits(4)
         + (
             "0"  # sps_sub_layer_ordering_info_present_flag
@@ -4024,7 +4027,7 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + ("1" if output_flag_present else "0")
         + "00000"
         + _unsigned_exp_golomb_bits(0) * 2
-        + _signed_exp_golomb_bits(0)
+        + _signed_exp_golomb_bits(pps_init_qp_minus26)
         + "000"
         + _signed_exp_golomb_bits(0) * 2
         + ("1" if slice_chroma_qp_offsets_present else "0")
@@ -4136,6 +4139,18 @@ def test_hevc_validation_links_parameter_sets_to_slice() -> None:
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(sps_vps_id=1))
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(pps_sps_id=1))
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(slice_pps_id=1))
+
+
+def test_hevc_pps_qp_lower_bound_uses_linked_sps_luma_bit_depth() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(bit_depth_luma_minus8=2, pps_init_qp_minus26=-38)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(bit_depth_luma_minus8=2, pps_init_qp_minus26=-39)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(pps_init_qp_minus26=-27)
+    )
 
 
 def test_hevc_validation_requires_data_after_byte_alignment() -> None:
@@ -4696,6 +4711,24 @@ def test_h264_slice_group_change_cycle_rejects_reserved_value() -> None:
 
     assert parsed("10") == 0
     assert parsed("11") is None
+
+
+def test_h264_dispersed_map_uses_slice_group_count_in_row_term() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 3, 3)
+    pps_bits = (
+        _unsigned_exp_golomb_bits(0) * 2  # PPS and SPS IDs
+        + "00"  # entropy and bottom-field POC flags
+        + _unsigned_exp_golomb_bits(2)  # three groups
+        + _unsigned_exp_golomb_bits(1)  # dispersed map
+        + _unsigned_exp_golomb_bits(0) * 2  # reference counts
+        + "000"  # weighting controls
+        + _signed_exp_golomb_bits(0) * 3
+        + "000"  # deblocking, constrained-intra, redundant-count flags
+    )
+    pps = _h264_pps_info(_rbsp_bytes(pps_bits), sps_info={0: sps})
+
+    assert pps is not None
+    assert _h264_slice_group_map(pps, sps, 0) == (0, 1, 2, 1, 2, 0, 0, 1, 2)
 
 
 def test_rbsp_rejects_forbidden_or_trailing_emulation_prevention() -> None:

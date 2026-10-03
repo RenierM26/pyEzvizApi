@@ -534,6 +534,7 @@ class _HevcSpsInfo(NamedTuple):
     sample_adaptive_offset_enabled: bool
     chroma_format_idc: int
     separate_colour_plane: bool
+    qp_bd_offset_y: int = 0
 
 
 class _HevcPpsInfo(NamedTuple):
@@ -595,6 +596,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
     vps_ids: set[int] = set()
     sps_info: dict[int, _HevcSpsInfo] = {}
     pps_info: dict[int, _HevcPpsInfo] = {}
+    pps_nals: list[bytes] = []
     slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
     for header, body in nals:
@@ -611,11 +613,13 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
             if sps_ids is not None:
                 sps_info[sps_ids[0]] = sps_ids[1]
         elif nal_type == 34:
-            pps_ids = _hevc_pps_ids(nal_body)
-            if pps_ids is not None:
-                pps_info[pps_ids[0]] = pps_ids[1]
+            pps_nals.append(nal_body)
         elif nal_type <= 9 or 16 <= nal_type <= 21:
             slices.append((nal_body, nal_type))
+    for nal_body in pps_nals:
+        pps_ids = _hevc_pps_ids(nal_body, sps_info=sps_info)
+        if pps_ids is not None:
+            pps_info[pps_ids[0]] = pps_ids[1]
     for nal_body, nal_type in slices:
         pps_id = _hevc_slice_pps_id(
             nal_body,
@@ -983,6 +987,7 @@ def _skip_h264_slice_groups(  # noqa: PLR0911, PLR0912, PLR0915
                 position = end
     elif map_type == 1:
         width = sps.pic_width_in_mbs
+        # H.264 dispersed map uses (num_slice_groups_minus1 + 1) in both terms.
         groups = [
             (index % width + ((index // width) * group_count) // 2) % group_count
             for index in range(pic_size)
@@ -2181,12 +2186,15 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             sample_adaptive_offset_enabled=sample_adaptive_offset_enabled,
             chroma_format_idc=chroma_format[0],
             separate_colour_plane=separate_colour_plane,
+            qp_bd_offset_y=6 * values[0],
         ),
     )
 
 
 def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
+    *,
+    sps_info: Mapping[int, _HevcSpsInfo],
 ) -> tuple[int, _HevcPpsInfo] | None:
     """Return linked IDs and slice controls after mandatory PPS fields."""
 
@@ -2203,6 +2211,9 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     sps = _read_unsigned_exp_golomb(bits, pps[1])
     if sps is None or sps[0] > 15 or sps[1] + 7 > len(bits):
         return None
+    linked_sps = sps_info.get(sps[0])
+    if linked_sps is None:
+        return None
     offset = sps[1]
     dependent_slices = bits[offset] == "1"
     output_flag_present = bits[offset + 1] == "1"
@@ -2214,7 +2225,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             return None
         offset = ref_count[1]
     init_qp = _read_signed_exp_golomb(bits, offset)
-    if init_qp is None or not -26 <= init_qp[0] <= 25:
+    if init_qp is None or not -(26 + linked_sps.qp_bd_offset_y) <= init_qp[0] <= 25:
         return None
     offset = init_qp[1]
     if offset + 3 > len(bits):

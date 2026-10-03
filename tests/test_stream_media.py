@@ -2405,7 +2405,7 @@ def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
 def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    mpegts_body = b"\x47\x00\x00\x10" + bytes(184)
+    mpegts_body = (b"\x47\x00\x00\x10" + bytes(184)) * 2
 
     class FakeCloudStream:
         def __enter__(self) -> FakeCloudStream:
@@ -2775,8 +2775,8 @@ def test_cloud_packet_iterator_starts_duration_at_first_media() -> None:
         ((b"\x00\x00", b"\x01\xba-media"), StreamTransport.MPEG_PS),
         (
             (
-                (b"\x47\x40\x00\x10" + b"\x00" * 184)[:73],
-                (b"\x47\x40\x00\x10" + b"\x00" * 184)[73:],
+                ((b"\x47\x40\x00\x10" + b"\x00" * 184) * 2)[:73],
+                ((b"\x47\x40\x00\x10" + b"\x00" * 184) * 2)[73:],
             ),
             StreamTransport.MPEG_TS,
         ),
@@ -2801,6 +2801,29 @@ def test_cloud_media_probe_recognizes_split_transport_signatures(
     assert not probe(packets[0])
     assert probe(packets[1])
     assert probe.transport == expected_transport
+
+
+def test_cloud_media_probe_requires_two_ts_sync_bytes_before_selection() -> None:
+    probe = cloud_stream_module._CloudMediaProbe()  # noqa: SLF001
+    ts_packet = b"\x47\x40\x00\x10" + bytes(184)
+    junk = b"prelude" + ts_packet + b"junk"
+
+    def packet(body: bytes, sequence: int) -> VtmPacket:
+        return VtmPacket(
+            channel=VtmChannel.STREAM,
+            length=len(body), sequence=sequence, message_code=0, body=body,
+        )
+
+    assert not probe(packet(junk, 1))
+    assert not probe.identified
+    assert probe(packet(b"\x00\x00\x01\xba-media", 2))
+    assert probe.transport == StreamTransport.MPEG_PS
+
+    probe = cloud_stream_module._CloudMediaProbe()  # noqa: SLF001
+    assert not probe(packet(ts_packet, 1))
+    assert probe(packet(ts_packet, 2))
+    assert probe.transport == StreamTransport.MPEG_TS
+    assert probe.media_prefix == ts_packet * 2
 
 
 def test_cloud_transport_peek_discards_junk_before_split_mpegps_signature() -> None:

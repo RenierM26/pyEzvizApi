@@ -58,7 +58,7 @@ _RTP_CODEC_PROBE_MAX_PACKETS = 32
 _RTP_AUDIO_PROBE_MAX_PACKETS = 256
 _RTP_AUDIO_QUEUE_MAX_FRAMES = 128
 _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
-_CLOUD_MEDIA_PROBE_TAIL_BYTES = 187
+_CLOUD_MEDIA_PROBE_TAIL_BYTES = 375
 _MPEG_PS_PACK_START_CODE = b"\x00\x00\x01\xba"
 
 
@@ -925,7 +925,7 @@ def _is_cloud_media_packet(packet: Any, *, allow_encrypted: bool = False) -> boo
         return True
     transport = detect_transport(packet.body)
     return transport != StreamTransport.UNKNOWN and (
-        transport != StreamTransport.MPEG_TS or _is_valid_mpegts_body(packet.body)
+        transport != StreamTransport.MPEG_TS or _has_mpegts_sync_cadence(packet.body)
     )
 
 
@@ -964,9 +964,9 @@ class _CloudMediaProbe:
             self.media_prefix = combined[ps_offset:]
             return True
         for offset, value in enumerate(combined):
-            if value != 0x47 or offset + 188 > len(combined):
+            if value != 0x47 or offset + 376 > len(combined):
                 continue
-            if _is_valid_mpegts_body(combined[offset : offset + 188]):
+            if _has_mpegts_sync_cadence(combined[offset : offset + 376]):
                 self.identified = True
                 self.cross_packet = True
                 self.transport = StreamTransport.MPEG_TS
@@ -1073,7 +1073,7 @@ def _peek_cloud_transport(
             if packet.encrypted
             else detect_transport(packet.body)
         )
-        if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(
+        if transport == StreamTransport.MPEG_TS and not _has_mpegts_sync_cadence(
             packet.body
         ):
             transport = StreamTransport.UNKNOWN
@@ -1146,6 +1146,12 @@ def _is_valid_mpegts_body(body: bytes) -> bool:
             for offset in range(0, len(body), packet_size)
         )
     )
+
+
+def _has_mpegts_sync_cadence(body: bytes) -> bool:
+    """Require two consecutive TS packets before selecting the transport."""
+
+    return len(body) >= 376 and _is_valid_mpegts_body(body[:376])
 
 
 def _write_cloud_mpegts_packets(

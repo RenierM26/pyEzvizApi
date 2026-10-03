@@ -416,30 +416,45 @@ def _require_saved_mpegps_video_payload(path: Path) -> None:
     raise PyEzvizError("Saved cloud MPEG-PS clip did not include clear video payload")
 
 
-def _mpegps_video_payload(data: bytes) -> bytes:
+def _mpegps_video_payload(data: bytes) -> bytes:  # noqa: PLR0911, PLR0912
     """Return concatenated MPEG-PS video PES payload bytes."""
 
     video_payload = bytearray()
     offset = 0
-    while offset + 9 <= len(data):
+    while offset + 4 <= len(data):
         packet_start = data.find(b"\x00\x00\x01", offset)
-        if packet_start < 0 or packet_start + 9 > len(data):
+        if packet_start < 0 or packet_start + 4 > len(data):
             break
         stream_id = data[packet_start + 3]
-        if not 0xE0 <= stream_id <= 0xEF:
+        if stream_id == 0xB9:  # program_end_code
             offset = packet_start + 4
             continue
-        packet_length = int.from_bytes(data[packet_start + 4 : packet_start + 6], "big")
-        payload_start = packet_start + 9 + data[packet_start + 8]
-        if packet_length:
-            packet_end = packet_start + 6 + packet_length
-            if packet_end > len(data):
+        if stream_id == 0xBA:  # pack_start_code has no PES length field
+            if packet_start + 14 > len(data):
                 return b""
-        else:
-            packet_end = len(data)
+            offset = packet_start + 14 + (data[packet_start + 13] & 0x07)
+            if offset > len(data):
+                return b""
+            continue
+        if packet_start + 6 > len(data):
+            return b""
+        packet_length = int.from_bytes(data[packet_start + 4 : packet_start + 6], "big")
+        if not packet_length and not 0xE0 <= stream_id <= 0xEF:
+            return b""
+        packet_end = packet_start + 6 + packet_length if packet_length else len(data)
+        if packet_end > len(data):
+            return b""
+        if not 0xE0 <= stream_id <= 0xEF:
+            offset = packet_end
+            continue
+        if packet_start + 9 > packet_end:
+            return b""
+        payload_start = packet_start + 9 + data[packet_start + 8]
+        if payload_start > packet_end:
+            return b""
         if payload_start < packet_end:
             video_payload.extend(data[payload_start:packet_end])
-        offset = max(packet_start + 4, packet_end)
+        offset = packet_end
     return bytes(video_payload)
 
 
@@ -455,7 +470,10 @@ def _annexb_nals(payload: bytes) -> list[tuple[bytes, bytes]]:
         header_start = start_code + 3
         next_start = payload.find(b"\x00\x00\x01", header_start + 1)
         nal_end = len(payload) if next_start < 0 else next_start
-        nals.append((payload[header_start : header_start + 2], payload[header_start + 1 : nal_end]))
+        nals.append((
+            payload[header_start : header_start + 2],
+            payload[header_start + 1 : nal_end].rstrip(b"\x00"),
+        ))
         start = header_start
 
 
@@ -612,6 +630,8 @@ def _rbsp_bits(data: bytes) -> str | None:
     rbsp = bytearray()
     zero_count = 0
     for index, value in enumerate(data):
+        if zero_count >= 2 and value < 0x03:
+            return None
         if zero_count >= 2 and value == 0x03:
             if index + 1 >= len(data) or data[index + 1] > 0x03:
                 return None

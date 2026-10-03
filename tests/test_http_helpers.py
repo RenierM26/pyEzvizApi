@@ -3898,6 +3898,20 @@ def _rbsp_bytes(bits: str) -> bytes:
     return int(padded, 2).to_bytes(len(padded) // 8, "big")
 
 
+def _ebsp_bytes(bits: str) -> bytes:
+    """Encode fixture RBSP with required NAL emulation-prevention bytes."""
+
+    output = bytearray()
+    zero_count = 0
+    for value in _rbsp_bytes(bits):
+        if zero_count >= 2 and value <= 3:
+            output.append(3)
+            zero_count = 0
+        output.append(value)
+        zero_count = zero_count + 1 if value == 0 else 0
+    return bytes(output)
+
+
 def _hevc_profile_tier_level_bits(
     sub_layer_flags: tuple[tuple[bool, bool], ...],
 ) -> str:
@@ -4108,10 +4122,10 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     if include_slice_data:
         slice_bits += "0"
     return [
-        (b"\x40\x01", b"\x01" + _rbsp_bytes(vps_bits)),
-        (b"\x42\x01", b"\x01" + _rbsp_bytes(sps_bits)),
-        (b"\x44\x01", b"\x01" + _rbsp_bytes(pps_bits)),
-        (b"\x02\x01", b"\x01" + _rbsp_bytes(slice_bits)),
+        (b"\x40\x01", b"\x01" + _ebsp_bytes(vps_bits)),
+        (b"\x42\x01", b"\x01" + _ebsp_bytes(sps_bits)),
+        (b"\x44\x01", b"\x01" + _ebsp_bytes(pps_bits)),
+        (b"\x02\x01", b"\x01" + _ebsp_bytes(slice_bits)),
     ]
 
 
@@ -4298,6 +4312,16 @@ def test_mpegps_video_payload_rejects_truncated_declared_pes_length() -> None:
     )
 
     assert not _mpegps_video_payload(truncated_pes)
+
+
+def test_mpegps_video_payload_skips_embedded_video_signature_in_audio_pes() -> None:
+    forged_video = b"\x00\x00\x01\xe0\x00\x0c\x80\x00\x00\x00\x00\x01\x65\x88\x84\x3a\x26\x28"
+    audio = b"\x00\x00\x01\xc0" + len(forged_video).to_bytes(2, "big") + forged_video
+    video_nal = b"\x00\x00\x01\x65"
+    actual_video = b"\x00\x00\x01\xe0\x00\x07\x80\x00\x00" + video_nal
+
+    assert not _mpegps_video_payload(audio)
+    assert _mpegps_video_payload(audio + actual_video) == video_nal
 
 
 def test_h264_validation_rejects_partition_b_and_c_without_partition_a() -> None:
@@ -4667,6 +4691,8 @@ def test_rbsp_rejects_forbidden_or_trailing_emulation_prevention() -> None:
     assert _rbsp_bits(b"\x00\x00\x03\x03") == "0" * 16 + "00000011"
     assert _rbsp_bits(b"\x00\x00\x03\x04") is None
     assert _rbsp_bits(b"\x00\x00\x03") is None
+    assert _rbsp_bits(b"\x00\x00\x00\x80") is None
+    assert _rbsp_bits(b"\x00\x00\x02\x80") is None
     sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
     pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
     slice_bits = (

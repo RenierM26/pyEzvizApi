@@ -2594,7 +2594,7 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
     assert output.getvalue() == expected_annexb
 
 
-def test_cloud_packet_iterator_bounds_from_request_start() -> None:
+def test_cloud_packet_iterator_starts_duration_at_first_media() -> None:
     class RecordingStream(VtmStreamClient):
         def __init__(self) -> None:
             super().__init__("ysproto://example.invalid/live")
@@ -2619,7 +2619,7 @@ def test_cloud_packet_iterator_bounds_from_request_start() -> None:
     assert stream.kwargs == {
         "max_packets": 4,
         "duration_seconds": 8.0,
-        "duration_from_start": True,
+        "duration_from_start": False,
         "first_packet_timeout": 3.0,
         "monotonic": monotonic,
     }

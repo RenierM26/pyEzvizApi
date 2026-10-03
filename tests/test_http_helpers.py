@@ -3546,6 +3546,9 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     output_path.parent.mkdir(parents=True)
     output_path.write_bytes(existing_clip)
     output_path.chmod(existing_mode)
+    linked_path = tmp_path / "front-linked.ts"
+    linked_path.hardlink_to(output_path)
+    existing_inode = output_path.stat().st_ino
     calls: list[dict[str, Any]] = []
 
     def fake_copy_cloud_stream_to_mpegts(
@@ -3613,6 +3616,9 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         }
     ]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert linked_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == existing_inode
+    assert linked_path.stat().st_ino == existing_inode
     assert stat.S_IMODE(output_path.stat().st_mode) == existing_mode
     assert len(validation_calls) == 1
     assert validation_calls[0][1] == "/usr/bin/ffmpeg"
@@ -3698,6 +3704,80 @@ def test_save_cloud_clip_preserves_relative_symlink_destination(
     assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
     assert len(validation_paths) == 1
     assert not validation_paths[0].exists()
+
+
+@pytest.mark.parametrize("binary_output", [False, True])
+def test_save_decrypted_cloud_mpegps_without_ffmpeg(
+    monkeypatch,
+    tmp_path,
+    *,
+    binary_output: bool,
+) -> None:
+    client = _client()
+    video_payload = b"\x00\x00\x01\x65clear-frame"
+    pes_payload = b"\x80\x00\x00" + video_payload
+    capture = (
+        b"\x00\x00\x01\xe0"
+        + len(pes_payload).to_bytes(2, "big")
+        + pes_payload
+    )
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(capture)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("MPEG-PS validation must not invoke FFmpeg"),
+    )
+    output: Path | io.BytesIO = io.BytesIO() if binary_output else tmp_path / "clip.ps"
+
+    result = client.save_clip(
+        "CAM123",
+        output,
+        source="cloud",
+        output_format="mpegps",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    saved = output.getvalue() if isinstance(output, io.BytesIO) else output.read_bytes()
+    assert saved == capture
+    assert result["bytes"] == len(capture)
+
+
+def test_save_decrypted_cloud_mpegps_rejects_missing_video(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ps"
+    existing_clip = b"existing"
+    output_path.write_bytes(existing_clip)
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(b"\x00\x00\x01\xba-no-video")
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
+
+    with pytest.raises(PyEzvizError, match="did not include clear video payload"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            output_format="mpegps",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == existing_clip
 
 
 def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(

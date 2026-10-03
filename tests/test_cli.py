@@ -2886,7 +2886,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
     )
 
 
-def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
+def test_collect_stream_packets_starts_duration_at_first_media() -> None:
     class FakeVtmStream(VtmStreamClient):
         def __init__(self) -> None:
             super().__init__("vtm://example.invalid/stream")
@@ -2909,7 +2909,7 @@ def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
     assert stream.iterator_kwargs == {
         "max_packets": 5,
         "duration_seconds": 1.5,
-        "duration_from_start": True,
+        "duration_from_start": False,
         "monotonic": monotonic,
     }
 
@@ -5232,8 +5232,15 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
             return None
 
     class FakeClient:
-        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+        def get_cam_key(
+            self,
+            serial: str,
+            *,
+            smscode: str | int | None = None,
+            max_retries: int = 0,
+        ) -> str:
             assert serial == "CAM123"
+            assert smscode is None
             assert max_retries == 1
             return "camera-key"
 
@@ -5318,6 +5325,97 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
         },
     ]
     assert copy_calls == [b"", b"", b"decrypted", b""]
+
+
+def test_stream_proxy_refreshes_cloud_media_key_for_each_request(monkeypatch) -> None:
+    class FakeStream:
+        def start(self, **_kwargs: Any) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_cam_key(
+            self,
+            serial: str,
+            *,
+            smscode: str | int | None = None,
+            max_retries: int = 0,
+        ) -> str:
+            assert serial == "CAM123"
+            assert smscode == "123456"
+            assert max_retries == 1
+            self.calls += 1
+            return f"camera-key-{self.calls}"
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.wfile = io.BytesIO()
+
+        def send_response(self, _code: int) -> None:
+            return None
+
+        def send_header(self, _key: str, _value: str) -> None:
+            return None
+
+        def end_headers(self) -> None:
+            return None
+
+        def send_error(self, code: int, message: str) -> None:
+            pytest.fail(f"unexpected proxy error {code}: {message}")
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=None,
+        path="/CAM123.ts",
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=False,
+        decrypt_video=True,
+        decrypt_codec="auto",
+        max_packets=None,
+        sms_code="123456",
+    )
+    selected_keys: list[str | bytes] = []
+
+    def fake_decryptors(
+        _client: Any,
+        _serial: str,
+        *,
+        codec: str,
+        media_key: str | bytes,
+    ) -> tuple[None, None, str | bytes]:
+        assert codec == "auto"
+        selected_keys.append(media_key)
+        return None, None, media_key
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_a, **_kw: FakeStream())
+    monkeypatch.setattr(cli_module, "_stream_payload_decryptors_with_key", fake_decryptors)
+    monkeypatch.setattr(
+        cli_module,
+        "copy_cloud_stream_packets_to_mpegts",
+        lambda _stream, output, **_kwargs: output.write(b"mpegts"),
+    )
+    client = FakeClient()
+
+    cli_module._handle_stream_proxy_get(  # noqa: SLF001
+        cast(Any, FakeHandler()), config, cast(Any, client)
+    )
+    cli_module._handle_stream_proxy_get(  # noqa: SLF001
+        cast(Any, FakeHandler()), config, cast(Any, client)
+    )
+
+    assert selected_keys == ["camera-key-1", "camera-key-2"]
 
 
 def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> None:

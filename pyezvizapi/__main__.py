@@ -126,6 +126,7 @@ class StreamProxyConfig:
     decrypt_codec: str
     max_packets: int | None
     media_key: str | bytes | None = field(default=None, repr=False)
+    sms_code: str | int | None = field(default=None, repr=False)
 
 
 class StreamProxyHTTPServer(ThreadingHTTPServer):
@@ -3064,14 +3065,12 @@ def _write_stream_payloads(
     """Write VTM stream packet bodies to a binary file-like object."""
 
     deadline = None
-    if duration_seconds is not None:
-        deadline = monotonic() + duration_seconds
 
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
     if isinstance(stream, VtmStreamClient):
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
-            duration_from_start=True,
+            duration_from_start=False,
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3080,6 +3079,8 @@ def _write_stream_payloads(
             iterator_kwargs["first_packet_timeout"] = stream.timeout
 
     for packet in stream.iter_packets(**iterator_kwargs):
+        if deadline is None and duration_seconds is not None:
+            deadline = monotonic() + duration_seconds
         if deadline is not None and monotonic() >= deadline:
             break
         if packet.encrypted and not allow_encrypted:
@@ -3158,14 +3159,12 @@ def _collect_stream_packets(
 
     packets: list[Any] = []
     deadline = None
-    if duration_seconds is not None:
-        deadline = monotonic() + duration_seconds
 
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
     if isinstance(stream, VtmStreamClient):
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
-            duration_from_start=True,
+            duration_from_start=False,
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3175,6 +3174,8 @@ def _collect_stream_packets(
 
     try:
         for packet in stream.iter_packets(**iterator_kwargs):
+            if deadline is None and duration_seconds is not None:
+                deadline = monotonic() + duration_seconds
             if deadline is not None and monotonic() >= deadline:
                 break
             if packet.encrypted and not allow_encrypted:
@@ -3486,6 +3487,21 @@ def _cloud_cli_media_key(
     return str(cloud_key)
 
 
+def _explicit_cloud_cli_media_key(args: argparse.Namespace) -> str | bytes | None:
+    """Return only a caller-supplied cloud media key, without fetching one."""
+
+    key = getattr(args, "media_key", None)
+    key_hex = getattr(args, "media_key_hex", None)
+    if key and key_hex:
+        raise PyEzvizError("Provide only one of --media-key or --media-key-hex")
+    if key_hex:
+        try:
+            return bytes.fromhex(key_hex)
+        except ValueError as err:
+            raise PyEzvizError("Invalid --media-key-hex") from err
+    return str(key) if key else None
+
+
 def _remux_mpegps_bytes_to_mpegts(
     data: bytes,
     output: BinaryIO,
@@ -3615,6 +3631,15 @@ def _handle_stream_proxy_get(
                 handler.wfile.flush()
 
     try:
+        media_key = config.media_key
+        if config.decrypt_video and media_key is None:
+            media_key = client.get_cam_key(
+                config.serial,
+                smscode=config.sms_code,
+                max_retries=1,
+            )
+        if config.decrypt_video and not media_key:
+            raise PyEzvizError("Could not get camera encryption key")
         stream = open_cloud_stream(
             client,
             config.serial,
@@ -3634,6 +3659,7 @@ def _handle_stream_proxy_get(
             rtp_transform = None
             rtp_audio_key = None
             if config.decrypt_video:
+                assert media_key is not None
                 (
                     mpegps_transform,
                     rtp_transform,
@@ -3642,7 +3668,7 @@ def _handle_stream_proxy_get(
                     client,
                     config.serial,
                     codec=config.decrypt_codec,
-                    media_key=config.media_key,
+                    media_key=media_key,
                 )
             copy_cloud_stream_packets_to_mpegts(
                 stream,
@@ -3671,7 +3697,7 @@ def _handle_stream_proxy_get(
 def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
     """Serve the experimental VTM-to-MPEG-TS HTTP proxy until interrupted."""
 
-    media_key = _cloud_cli_media_key(args, client) if args.decrypt_video else None
+    media_key = _explicit_cloud_cli_media_key(args) if args.decrypt_video else None
     config = StreamProxyConfig(
         serial=args.serial,
         channel=args.channel,
@@ -3686,6 +3712,7 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
         decrypt_codec=args.decrypt_codec,
         max_packets=args.max_packets,
         media_key=media_key,
+        sms_code=getattr(args, "sms_code", None),
     )
 
     class StreamProxyHandler(BaseHTTPRequestHandler):

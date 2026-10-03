@@ -395,6 +395,81 @@ def _require_decodable_saved_video_frame(
         raise PyEzvizError("Saved cloud clip did not include a decodable video frame")
 
 
+def _require_saved_mpegps_video_payload(path: Path) -> None:
+    """Require structurally plausible clear video in an MPEG-PS capture.
+
+    MPEG-PS capture and decryption are implemented in Python and must not gain
+    an undeclared FFmpeg dependency merely for post-capture validation.  This
+    check is deliberately structural; callers that need decoder-level proof
+    can request MPEG-TS, whose remux path already requires FFmpeg.
+    """
+
+    data = path.read_bytes()
+    video_payload = bytearray()
+    offset = 0
+    while offset + 9 <= len(data):
+        packet_start = data.find(b"\x00\x00\x01", offset)
+        if packet_start < 0 or packet_start + 9 > len(data):
+            break
+        stream_id = data[packet_start + 3]
+        if not 0xE0 <= stream_id <= 0xEF:
+            offset = packet_start + 4
+            continue
+        packet_length = int.from_bytes(data[packet_start + 4 : packet_start + 6], "big")
+        payload_start = packet_start + 9 + data[packet_start + 8]
+        packet_end = (
+            len(data)
+            if packet_length == 0
+            else min(len(data), packet_start + 6 + packet_length)
+        )
+        if payload_start < packet_end:
+            video_payload.extend(data[payload_start:packet_end])
+        offset = max(packet_start + 4, packet_end)
+
+    payload = bytes(video_payload)
+    start = 0
+    while True:
+        start_code = payload.find(b"\x00\x00\x01", start)
+        if start_code < 0 or start_code + 3 >= len(payload):
+            break
+        header = payload[start_code + 3]
+        h264_type = header & 0x1F
+        if (header & 0x80) == 0 and 1 <= h264_type <= 5:
+            return
+        if start_code + 4 < len(payload):
+            hevc_type = (header >> 1) & 0x3F
+            temporal_id = payload[start_code + 4] & 0x07
+            if (header & 0x80) == 0 and hevc_type <= 31 and temporal_id:
+                return
+        start = start_code + 3
+    raise PyEzvizError("Saved cloud MPEG-PS clip did not include clear video payload")
+
+
+def _publish_validated_cloud_clip(temp_path: Path, target: Path) -> None:
+    """Publish validated bytes while preserving an existing target inode."""
+
+    try:
+        target_stat = target.stat()
+    except FileNotFoundError:
+        os.replace(temp_path, target)
+        return
+    if not stat.S_ISREG(target_stat.st_mode):
+        os.replace(temp_path, target)
+        return
+
+    # Replacing an inode atomically necessarily loses its ACLs, xattrs, and
+    # hard-link identity.  Validation has already succeeded, so update an
+    # existing regular file in place just as the legacy save path did.
+    with temp_path.open("rb") as source, target.open("r+b") as destination:
+        destination.seek(0)
+        while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+            destination.write(chunk)
+        destination.truncate()
+        destination.flush()
+        os.fsync(destination.fileno())
+    temp_path.unlink()
+
+
 def _positive_int_env(name: str, default: int) -> int:
     """Return a positive integer env override, or the supplied default."""
 
@@ -3875,17 +3950,14 @@ class EzvizClient:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
                     with temp_path.open("wb") as path_temp_output:
                         copy_cloud(path_temp_output)
-                    _require_decodable_saved_video_frame(
-                        temp_path,
-                        ffmpeg_path=ffmpeg_path,
-                    )
-                    try:
-                        existing_mode = stat.S_IMODE(publication_target.stat().st_mode)
-                    except FileNotFoundError:
-                        pass
+                    if output_format == "mpegts":
+                        _require_decodable_saved_video_frame(
+                            temp_path,
+                            ffmpeg_path=ffmpeg_path,
+                        )
                     else:
-                        temp_path.chmod(existing_mode)
-                    os.replace(temp_path, publication_target)
+                        _require_saved_mpegps_video_payload(temp_path)
+                    _publish_validated_cloud_clip(temp_path, publication_target)
             else:
                 with output_path.open("wb") as output_file:
                     copy_cloud(output_file)
@@ -3899,10 +3971,13 @@ class EzvizClient:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
                     with temp_path.open("wb") as binary_temp_output:
                         copy_cloud(binary_temp_output)
-                    _require_decodable_saved_video_frame(
-                        temp_path,
-                        ffmpeg_path=ffmpeg_path,
-                    )
+                    if output_format == "mpegts":
+                        _require_decodable_saved_video_frame(
+                            temp_path,
+                            ffmpeg_path=ffmpeg_path,
+                        )
+                    else:
+                        _require_saved_mpegps_video_payload(temp_path)
                     with temp_path.open("rb") as validated_input:
                         while chunk := validated_input.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
                             output.write(chunk)

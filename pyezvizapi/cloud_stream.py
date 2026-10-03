@@ -876,7 +876,7 @@ def _iter_bounded_cloud_packets(
         iterator_kwargs: dict[str, Any] = {
             "max_packets": max_packets,
             "duration_seconds": duration_seconds,
-            "duration_from_start": True,
+            "duration_from_start": False,
             "first_packet_timeout": selected_first_packet_timeout,
             "monotonic": monotonic,
         }
@@ -885,8 +885,10 @@ def _iter_bounded_cloud_packets(
         return stream.iter_packets(**iterator_kwargs)
 
     def _fallback() -> Iterator[Any]:
-        deadline = None if duration_seconds is None else monotonic() + duration_seconds
+        deadline = None
         for packet in stream.iter_packets(max_packets=max_packets):
+            if deadline is None and duration_seconds is not None:
+                deadline = monotonic() + duration_seconds
             if deadline is not None and monotonic() >= deadline:
                 break
             yield packet

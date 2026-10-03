@@ -1478,6 +1478,46 @@ def _skip_hevc_scaling_list_data(
     return offset
 
 
+def _skip_hevc_pps_range_extension(  # noqa: PLR0911
+    bits: str,
+    offset: int,
+    *,
+    transform_skip_enabled: bool,
+) -> int | None:
+    """Return the bit offset after HEVC pps_range_extension syntax."""
+
+    if transform_skip_enabled:
+        transform_size = _read_unsigned_exp_golomb(bits, offset)
+        if transform_size is None:
+            return None
+        offset = transform_size[1]
+    if offset + 2 > len(bits):
+        return None
+    offset += 1  # cross_component_prediction_enabled_flag
+    chroma_qp_offset_list_enabled = bits[offset] == "1"
+    offset += 1
+    if chroma_qp_offset_list_enabled:
+        depth = _read_unsigned_exp_golomb(bits, offset)
+        if depth is None:
+            return None
+        list_length = _read_unsigned_exp_golomb(bits, depth[1])
+        if list_length is None or list_length[0] > 5:
+            return None
+        offset = list_length[1]
+        for _ in range(list_length[0] + 1):
+            for _ in range(2):
+                chroma_offset = _read_signed_exp_golomb(bits, offset)
+                if chroma_offset is None:
+                    return None
+                offset = chroma_offset[1]
+    for _ in range(2):
+        sao_scale = _read_unsigned_exp_golomb(bits, offset)
+        if sao_scale is None:
+            return None
+        offset = sao_scale[1]
+    return offset
+
+
 def _skip_hevc_short_term_ref_pic_set(  # noqa: PLR0911, PLR0912
     bits: str,
     offset: int,
@@ -1850,6 +1890,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     offset = init_qp[1]
     if offset + 3 > len(bits):
         return None
+    transform_skip_enabled = bits[offset + 1] == "1"
     cu_qp_delta_enabled = bits[offset + 2] == "1"
     offset += 3
     if cu_qp_delta_enabled:
@@ -1930,7 +1971,19 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             return None
         extension_flags = bits[offset : offset + 8]
         offset += 8
-        if "1" in extension_flags:
+        range_extension = extension_flags[0] == "1"
+        if "1" in extension_flags[1:4]:
+            return None
+        if range_extension:
+            range_offset = _skip_hevc_pps_range_extension(
+                bits,
+                offset,
+                transform_skip_enabled=transform_skip_enabled,
+            )
+            if range_offset is None:
+                return None
+            offset = range_offset
+        if "1" in extension_flags[4:]:
             offset = len(bits)
     if offset != len(bits):
         return None
@@ -2122,7 +2175,6 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
         max_size=16 * 1024 * 1024
     )
     read_fd: int | None = None
-    temporarily_added_read_permission = False
     try:
         try:
             read_fd = os.open(
@@ -2133,16 +2185,27 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
             # A legacy save supports an owner-writable, read-disabled target.
             # Temporarily add owner-read access solely to make a rollback copy,
             # then restore the exact mode before touching its contents.
-            os.fchmod(destination_fd, destination_stat.st_mode | stat.S_IRUSR)
-            temporarily_added_read_permission = True
-            read_fd = os.open(
-                target,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-            )
-        finally:
-            if temporarily_added_read_permission:
+            try:
+                os.fchmod(destination_fd, destination_stat.st_mode | stat.S_IRUSR)
+            except PermissionError:
+                # Group/ACL write access may not grant ownership.  In that
+                # case publish the already validated sibling atomically; a
+                # failed replace leaves the unreadable target untouched.
+                os.close(destination_fd)
+                destination_fd = -1
+                _publish_unreadable_existing_clip_atomically(
+                    temp_path,
+                    target,
+                    expected_identity=expected_identity,
+                )
+                return
+            try:
+                read_fd = os.open(
+                    target,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+            finally:
                 os.fchmod(destination_fd, stat.S_IMODE(destination_stat.st_mode))
-                temporarily_added_read_permission = False
         read_stat = os.fstat(read_fd)
         if (read_stat.st_dev, read_stat.st_ino) != expected_identity:
             raise PyEzvizError("Cloud clip output target changed during capture")
@@ -2186,6 +2249,27 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
     if not _regular_path_has_identity(target, expected_identity):
         raise PyEzvizError("Cloud clip output target changed during capture")
     temp_path.unlink()
+
+
+def _publish_unreadable_existing_clip_atomically(
+    temp_path: Path,
+    target: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Replace an unreadable writable target without requiring ownership."""
+
+    if not _regular_path_has_identity(target, expected_identity):
+        raise PyEzvizError("Cloud clip output target changed during capture")
+    # copystat preserves the metadata available to this caller, including
+    # extended attributes on platforms where Python exposes them.
+    shutil.copystat(target, temp_path, follow_symlinks=False)
+    try:
+        os.replace(temp_path, target)
+    except OSError as err:
+        raise PyEzvizError(
+            "Cloud clip output target is unreadable and cannot be replaced atomically"
+        ) from err
 
 
 def _reserve_existing_clip_space(

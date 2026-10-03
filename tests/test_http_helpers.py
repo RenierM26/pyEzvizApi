@@ -3915,6 +3915,7 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     complete_sps: bool = True,
     complete_pps: bool = True,
     sps_extension_bits: str | None = None,
+    pps_extension_bits: str | None = None,
     valid_inline_slice_rps: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
@@ -3975,7 +3976,12 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + (
             "0000"  # loop filter, deblocking, scaling-list, list-modification
             + _unsigned_exp_golomb_bits(0)  # log2_parallel_merge_level_minus2
-            + "00"  # slice-header extension and PPS extension flags
+            + "0"  # slice-header extension flag
+            + (
+                "0"
+                if pps_extension_bits is None
+                else "1" + pps_extension_bits
+            )
             if complete_pps
             else ""
         )
@@ -4054,6 +4060,15 @@ def test_hevc_validation_rejects_truncated_sps_range_extension() -> None:
     )
     assert not _has_linked_hevc_video(
         _valid_hevc_validation_nals(sps_extension_bits="10000000")
+    )
+
+
+def test_hevc_validation_rejects_truncated_pps_range_extension() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(pps_extension_bits="10000000" + "0011")
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(pps_extension_bits="10000000")
     )
 
 
@@ -4139,6 +4154,53 @@ def test_save_decrypted_cloud_clip_supports_write_only_existing_target(
     output_path.chmod(0o600)
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
     assert output_path.stat().st_ino == original_inode
+
+
+def test_save_decrypted_cloud_clip_atomically_replaces_unreadable_acl_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    output_path.chmod(0o220)
+    original_inode = output_path.stat().st_ino
+    original_open = os.open
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def deny_target_read(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(path) == output_path and flags & os.O_ACCMODE == os.O_RDONLY:
+            raise PermissionError(errno.EACCES, "ACL denies content reads")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("pyezvizapi.client.os.open", deny_target_read)
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.fchmod",
+        lambda *_args: (_ for _ in ()).throw(
+            PermissionError(errno.EPERM, "writer does not own target")
+        ),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    output_path.chmod(0o600)
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino != original_inode
 
 
 def test_save_cloud_clip_preserves_existing_target_when_reservation_fails(

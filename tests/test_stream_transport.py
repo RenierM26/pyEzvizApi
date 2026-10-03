@@ -1370,6 +1370,36 @@ def test_vtm_stream_nonmedia_prelude_keeps_first_packet_deadline() -> None:
     assert capture_duration not in fake_socket.timeout_history
 
 
+def test_vtm_stream_counts_continuation_packets_after_media_starts() -> None:
+    bodies = [b"\x00\x00\x01\xba-media", b"continuation-1", b"continuation-2"]
+
+    class PacketStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://vtm.example.test:8554/live", timeout=None)
+            self.read_count = 0
+
+        def read_packet(self, **_kwargs: Any) -> Any:
+            body = bodies[self.read_count]
+            self.read_count += 1
+            return SimpleNamespace(
+                channel=VtmChannel.STREAM,
+                message_code=0,
+                body=body,
+            )
+
+    stream = PacketStream()
+    packets = list(
+        stream.iter_packets(
+            max_packets=2,
+            keepalive_interval=None,
+            is_media_packet=lambda packet: packet.body.startswith(b"\x00\x00\x01\xba"),
+        )
+    )
+
+    assert [packet.body for packet in packets] == bodies[:2]
+    assert stream.read_count == 2
+
+
 def test_vtm_stream_client_start_follows_redirect_response() -> None:
     redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
     redirect_key = "redirect-key"

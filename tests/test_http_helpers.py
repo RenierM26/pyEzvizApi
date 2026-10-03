@@ -3939,6 +3939,9 @@ def _valid_hevc_validation_nals(
         + _unsigned_exp_golomb_bits(slice_pps_id)
         + _unsigned_exp_golomb_bits(slice_type)
         + ("0" if output_flag_present else "")
+        + "0" * 8  # slice_pic_order_cnt_lsb
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + "0"  # at least one slice-data bit before rbsp_stop_one_bit
     )
     return [
         (b"\x40\x01", b"\x01" + _rbsp_bytes(vps_bits)),
@@ -4382,7 +4385,7 @@ def test_save_cloud_clip_fallback_detects_replacement_during_copy(
 
 @pytest.mark.parametrize(
     "duration_seconds",
-    [None, float("inf"), float("nan"), 1e12, sys.float_info.max],
+    [None, float("inf"), float("nan"), 10**309, 1e12, sys.float_info.max],
 )
 def test_save_unbounded_clear_cloud_clip_writes_directly(
     monkeypatch,
@@ -4392,14 +4395,16 @@ def test_save_unbounded_clear_cloud_clip_writes_directly(
     client = _client()
     output_path = tmp_path / "stream.ps"
     observed_names: list[str] = []
+    observed_durations: list[float | None] = []
 
     def fake_copy(
         _client: EzvizClient,
         _serial: str,
         selected_output: BinaryIO,
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> None:
         observed_names.append(str(selected_output.name))
+        observed_durations.append(kwargs["duration_seconds"])
         selected_output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
@@ -4413,6 +4418,7 @@ def test_save_unbounded_clear_cloud_clip_writes_directly(
     )
 
     assert observed_names == [str(output_path)]
+    assert observed_durations == [None]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
 

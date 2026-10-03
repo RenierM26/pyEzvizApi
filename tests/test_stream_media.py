@@ -1247,7 +1247,7 @@ def test_find_hevc_nal_start_codes_ignores_ciphertext_start_code_lookalikes() ->
 def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    expected_payload = b"ps-1ps-2"
+    expected_payload = b"\x00\x00\x01\xba-media-continuation"
     calls: list[dict[str, Any]] = []
 
     class FakeCloudStream:
@@ -1267,17 +1267,17 @@ def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
             assert max_packets == 2
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=4,
+                    length=len(b"\x00\x00\x01\xba-media"),
                 sequence=1,
                 message_code=0,
-                body=b"ps-1",
+                    body=b"\x00\x00\x01\xba-media",
             )
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=4,
+                    length=len(b"-continuation"),
                 sequence=2,
                 message_code=0,
-                body=b"ps-2",
+                    body=b"-continuation",
             )
 
     def fake_open_cloud_stream(
@@ -2177,6 +2177,29 @@ def test_copy_cloud_stream_to_mpegts_skips_unknown_prelude_before_rtp(
     copy_cloud_stream_to_mpegts(client, "CAM123", output, max_packets=2)
 
     assert output.getvalue() == H264_SPS_ANNEXB
+
+
+def test_copy_cloud_stream_to_mpegps_rejects_prelude_only_capture() -> None:
+    prelude = VtmPacket(
+        channel=VtmChannel.STREAM,
+        length=len(b"vtm-prelude"),
+        sequence=1,
+        message_code=0,
+        body=b"vtm-prelude",
+    )
+
+    class PreludeOnlyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            return iter((prelude,))
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cloud_stream_module._copy_cloud_stream_payloads_to_mpegps(  # noqa: SLF001
+            PreludeOnlyStream(),
+            io.BytesIO(),
+            max_packets=1,
+            monotonic=lambda: 0.0,
+        )
 
 
 def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(

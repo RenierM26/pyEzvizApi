@@ -683,9 +683,14 @@ def _copy_cloud_stream_payloads_to_mpegps(
         raise PyEzvizError(
             "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
         )
-    if _write_clear_cloud_packets(packets, output) == 0 and not (
+    empty_capture_requested = (
         (max_packets is not None and max_packets <= 0)
         or (duration_seconds is not None and duration_seconds <= 0)
+    )
+    if transport != StreamTransport.MPEG_PS and not empty_capture_requested:
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
+    if _write_clear_cloud_packets(packets, output) == 0 and not (
+        empty_capture_requested
     ):
         raise PyEzvizError("Cloud stream did not provide media before startup expired")
 

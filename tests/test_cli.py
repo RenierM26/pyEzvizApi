@@ -2940,6 +2940,7 @@ def test_collect_stream_packets_starts_duration_at_first_media() -> None:
         "max_packets": 5,
         "duration_seconds": 1.5,
         "duration_from_start": False,
+        "is_media_packet": cli_module._is_cloud_media_packet,  # noqa: SLF001
         "monotonic": monotonic,
     }
 

@@ -522,6 +522,7 @@ class VtmStreamClient:
         next_keepalive = (
             None if keepalive_interval is None else started_at + keepalive_interval
         )
+        media_started = False
         while max_packets is None or seen < max_packets:
             now = monotonic()
             if capture_deadline is not None and now >= capture_deadline:
@@ -586,11 +587,17 @@ class VtmStreamClient:
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
                 if not packet.body:
                     continue
-                is_media = is_media_packet is None or is_media_packet(packet)
+                is_media = (
+                    media_started
+                    or is_media_packet is None
+                    or is_media_packet(packet)
+                )
                 if is_media:
-                    if capture_deadline is None and duration_seconds is not None:
-                        capture_deadline = monotonic() + duration_seconds
-                    first_packet_deadline = None
+                    if not media_started:
+                        if capture_deadline is None and duration_seconds is not None:
+                            capture_deadline = monotonic() + duration_seconds
+                        first_packet_deadline = None
+                        media_started = True
                     seen += 1
                 yield packet
                 continue

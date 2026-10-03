@@ -522,7 +522,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
     """Return whether HEVC parameter sets accompany a plausible slice."""
 
     vps_ids: set[int] = set()
-    sps_to_vps: dict[int, int] = {}
+    sps_info: dict[int, tuple[int, int]] = {}
     pps_info: dict[int, tuple[int, bool, bool, int]] = {}
     slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
@@ -538,7 +538,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
         elif nal_type == 33:
             sps_ids = _hevc_sps_ids(nal_body)
             if sps_ids is not None:
-                sps_to_vps[sps_ids[0]] = sps_ids[1]
+                sps_info[sps_ids[0]] = sps_ids[1:]
         elif nal_type == 34:
             pps_ids = _hevc_pps_ids(nal_body)
             if pps_ids is not None:
@@ -549,14 +549,15 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
         pps_id = _hevc_slice_pps_id(
             nal_body,
             nal_type=nal_type,
+            sps_info=sps_info,
             pps_info=pps_info,
         )
         if pps_id is not None:
             slice_pps_ids.add(pps_id)
     return any(
         pps_id in pps_info
-        and pps_info[pps_id][0] in sps_to_vps
-        and sps_to_vps[pps_info[pps_id][0]] in vps_ids
+        and pps_info[pps_id][0] in sps_info
+        and sps_info[pps_info[pps_id][0]][0] in vps_ids
         for pps_id in slice_pps_ids
     )
 
@@ -1280,8 +1281,8 @@ def _skip_hevc_profile_tier_level(
 
 def _hevc_sps_ids(  # noqa: PLR0911, PLR0912
     data: bytes,
-) -> tuple[int, int] | None:
-    """Return linked SPS/VPS ids after parsing mandatory SPS fields."""
+) -> tuple[int, int, int] | None:
+    """Return linked IDs and POC width after parsing mandatory SPS fields."""
 
     bits = _rbsp_bits(data)
     if len(bits) < 104:
@@ -1323,12 +1324,14 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912
             offset = window_offset[1]
     else:
         offset += 1
+    values: list[int] = []
     for maximum in (8, 8, 12):
         value = _read_unsigned_exp_golomb(bits, offset)
         if value is None or value[0] > maximum:
             return None
+        values.append(value[0])
         offset = value[1]
-    return (sps[0], vps_id) if bits.rfind("1") >= offset else None
+    return (sps[0], vps_id, values[2] + 4) if bits.rfind("1") >= offset else None
 
 
 def _hevc_pps_ids(  # noqa: PLR0911
@@ -1385,17 +1388,20 @@ def _hevc_pps_ids(  # noqa: PLR0911
     )
 
 
-def _hevc_slice_pps_id(
+def _hevc_slice_pps_id(  # noqa: PLR0911
     data: bytes,
     *,
     nal_type: int,
+    sps_info: dict[int, tuple[int, int]],
     pps_info: dict[int, tuple[int, bool, bool, int]],
 ) -> int | None:
-    """Return a referenced PPS id from a complete first-slice header prefix."""
+    """Return a PPS id after parsing mandatory linked HEVC slice fields."""
 
     bits = _rbsp_bits(data)
-    if not bits:
+    trailing_one = bits.rfind("1")
+    if trailing_one < 0:
         return None
+    bits = bits[:trailing_one]
     first_slice_segment = bits[0] == "1"
     if not first_slice_segment:
         return None
@@ -1406,7 +1412,10 @@ def _hevc_slice_pps_id(
     if decoded is None or decoded[0] not in pps_info:
         return None
     pps_id, offset = decoded
-    _, _, output_flag_present, extra_slice_header_bits = pps_info[pps_id]
+    sps_id, _, output_flag_present, extra_slice_header_bits = pps_info[pps_id]
+    linked_sps = sps_info.get(sps_id)
+    if linked_sps is None:
+        return None
     offset += extra_slice_header_bits
     slice_type = _read_unsigned_exp_golomb(bits, offset)
     if slice_type is None or slice_type[0] > 2:
@@ -1414,7 +1423,16 @@ def _hevc_slice_pps_id(
     offset = slice_type[1]
     if output_flag_present:
         offset += 1
-    return pps_id if bits.rfind("1") >= offset else None
+    if nal_type not in {19, 20}:
+        log2_max_pic_order_cnt_lsb = linked_sps[1]
+        if offset + log2_max_pic_order_cnt_lsb > len(bits):
+            return None
+        offset += log2_max_pic_order_cnt_lsb
+    slice_qp_delta = _read_signed_exp_golomb(bits, offset)
+    if slice_qp_delta is None:
+        return None
+    offset = slice_qp_delta[1]
+    return pps_id if offset < len(bits) else None
 
 
 def _publish_validated_cloud_clip(
@@ -4995,6 +5013,14 @@ class EzvizClient:
         """Save a clip through the EZVIZ VTM cloud live stream path."""
 
         start_position = None
+        unbounded_clear_capture = (
+            not decrypt_video
+            and max_packets is None
+            and _legacy_duration_is_effectively_unbounded(duration_seconds)
+        )
+        capture_duration_seconds = (
+            None if unbounded_clear_capture else duration_seconds
+        )
 
         def copy_cloud(output_file: BinaryIO) -> None:
             if output_format == "mpegts":
@@ -5009,7 +5035,7 @@ class EzvizClient:
                     timeout=timeout,
                     ffmpeg_path=ffmpeg_path,
                     max_packets=max_packets,
-                    duration_seconds=duration_seconds,
+                    duration_seconds=capture_duration_seconds,
                     decrypt_video=decrypt_video,
                     media_key=media_key,
                     nalu_header_size=nalu_header_size,
@@ -5026,7 +5052,7 @@ class EzvizClient:
                 refresh_vtm=refresh_vtm,
                 timeout=timeout,
                 max_packets=max_packets,
-                duration_seconds=duration_seconds,
+                duration_seconds=capture_duration_seconds,
                 decrypt_video=decrypt_video,
                 media_key=media_key,
                 nalu_header_size=nalu_header_size,
@@ -5040,11 +5066,6 @@ class EzvizClient:
                 output_path.resolve(strict=False)
                 if output_path.is_symlink()
                 else output_path
-            )
-            unbounded_clear_capture = (
-                not decrypt_video
-                and max_packets is None
-                and _legacy_duration_is_effectively_unbounded(duration_seconds)
             )
             if unbounded_clear_capture or (
                 not decrypt_video

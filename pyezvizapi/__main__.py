@@ -29,6 +29,7 @@ from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
 from .cloud_stream import (
     _closing_unconnected_cloud_stream,
+    _is_cloud_media_packet,
     cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_decrypted_cloud_stream_packets_to_mpegts,
@@ -3075,6 +3076,7 @@ def _write_stream_payloads(
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
+            is_media_packet=_is_cloud_media_packet,
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3173,6 +3175,7 @@ def _collect_stream_packets(
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
+            is_media_packet=_is_cloud_media_packet,
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:

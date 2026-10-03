@@ -4360,7 +4360,7 @@ def test_h264_partition_a_requires_slice_data_after_slice_id() -> None:
 
     assert (
         _h264_slice_pps_id(
-            _rbsp_bytes(header_bits + slice_id + "0"),
+            _rbsp_bytes(header_bits + slice_id + _unsigned_exp_golomb_bits(0)),
             nal_header=0x42,
             sps_info={0: sps},
             pps_info={0: pps},
@@ -4371,6 +4371,38 @@ def test_h264_partition_a_requires_slice_data_after_slice_id() -> None:
         _h264_slice_pps_id(
             _rbsp_bytes(header_bits + slice_id),
             nal_header=0x42,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_h264_cavlc_requires_complete_first_macroblock_type() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + "0"
+        + _signed_exp_golomb_bits(0)
+    )
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x41,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + "0"),
+            nal_header=0x41,
             sps_info={0: sps},
             pps_info={0: pps},
         )
@@ -4392,7 +4424,7 @@ def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:
         + _unsigned_exp_golomb_bits(0)  # luma_log2_weight_denom
         + "0"  # luma_weight_l0_flag
         + _signed_exp_golomb_bits(0)  # slice_qp_delta
-        + "0"  # slice data
+        + _unsigned_exp_golomb_bits(0)  # first CAVLC mb_type
     )
 
     assert (

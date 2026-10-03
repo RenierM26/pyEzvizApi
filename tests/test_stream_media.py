@@ -2202,6 +2202,22 @@ def test_copy_cloud_stream_to_mpegps_rejects_prelude_only_capture() -> None:
         )
 
 
+def test_cloud_media_predicate_accepts_allowed_encrypted_stream_packet() -> None:
+    packet = VtmPacket(
+        channel=VtmChannel.ENCRYPTED_STREAM,
+        length=len(b"opaque-ciphertext"),
+        sequence=1,
+        message_code=0,
+        body=b"opaque-ciphertext",
+    )
+
+    assert not cloud_stream_module._is_cloud_media_packet(packet)  # noqa: SLF001
+    assert cloud_stream_module._is_cloud_media_packet(  # noqa: SLF001
+        packet,
+        allow_encrypted=True,
+    )
+
+
 def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(
     monkeypatch,
 ) -> None:
@@ -2706,12 +2722,13 @@ def test_cloud_packet_iterator_starts_duration_at_first_media() -> None:
             monotonic=monotonic,
         )
     ) == []
+    media_predicate = stream.kwargs.pop("is_media_packet")
+    assert callable(media_predicate)
     assert stream.kwargs == {
         "max_packets": 4,
         "duration_seconds": 8.0,
         "duration_from_start": False,
         "first_packet_timeout": 3.0,
-        "is_media_packet": cloud_stream_module._is_cloud_media_packet,  # noqa: SLF001
         "monotonic": monotonic,
     }
 

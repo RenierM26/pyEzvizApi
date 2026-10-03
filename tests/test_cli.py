@@ -2936,11 +2936,12 @@ def test_collect_stream_packets_starts_duration_at_first_media() -> None:
             allow_encrypted=False,
             monotonic=monotonic,
         )
+    media_predicate = stream.iterator_kwargs.pop("is_media_packet")
+    assert callable(media_predicate)
     assert stream.iterator_kwargs == {
         "max_packets": 5,
         "duration_seconds": 1.5,
         "duration_from_start": False,
-        "is_media_packet": cli_module._is_cloud_media_packet,  # noqa: SLF001
         "monotonic": monotonic,
     }
 
@@ -2991,6 +2992,26 @@ def test_write_stream_payloads_discards_vtm_prelude_before_media() -> None:
     )
 
     assert output.getvalue() == expected_media
+
+
+def test_write_stream_payloads_allows_explicit_zero_duration() -> None:
+    class EmptyStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(())
+
+    output = io.BytesIO()
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        EmptyStream(),
+        output,
+        max_packets=None,
+        duration_seconds=0.0,
+        allow_encrypted=False,
+    )
+
+    assert not output.getvalue()
 
 
 def test_parse_stream_dump_duration_units() -> None:

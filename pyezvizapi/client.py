@@ -618,6 +618,111 @@ def _skip_h264_scaling_list(bits: str, offset: int, size: int) -> int | None:
     return offset
 
 
+def _skip_h264_hrd_parameters(bits: str, offset: int) -> int | None:
+    """Return the bit offset after H.264 HRD syntax."""
+
+    cpb_count = _read_unsigned_exp_golomb(bits, offset)
+    if cpb_count is None or cpb_count[0] > 31:
+        return None
+    offset = cpb_count[1] + 8  # bit_rate_scale and cpb_size_scale
+    if offset > len(bits):
+        return None
+    for _ in range(cpb_count[0] + 1):
+        for _ in range(2):
+            value = _read_unsigned_exp_golomb(bits, offset)
+            if value is None:
+                return None
+            offset = value[1]
+        offset += 1  # cbr_flag
+    offset += 20  # four five-bit delay/offset length fields
+    return offset if offset <= len(bits) else None
+
+
+def _skip_h264_vui_parameters(  # noqa: PLR0911, PLR0912, PLR0915
+    bits: str,
+    offset: int,
+) -> int | None:
+    """Return the bit offset after mandatory H.264 VUI syntax."""
+
+    if offset >= len(bits):
+        return None
+    aspect_ratio_present = bits[offset] == "1"
+    offset += 1
+    if aspect_ratio_present:
+        if offset + 8 > len(bits):
+            return None
+        aspect_ratio_idc = int(bits[offset : offset + 8], 2)
+        offset += 8
+        if aspect_ratio_idc == 255:
+            offset += 32
+    if offset >= len(bits):
+        return None
+    overscan_present = bits[offset] == "1"
+    offset += 1
+    if overscan_present:
+        offset += 1
+    if offset >= len(bits):
+        return None
+    video_signal_present = bits[offset] == "1"
+    offset += 1
+    if video_signal_present:
+        if offset + 5 > len(bits):
+            return None
+        colour_description = bits[offset + 4] == "1"
+        offset += 5
+        if colour_description:
+            offset += 24
+    if offset >= len(bits):
+        return None
+    chroma_location_present = bits[offset] == "1"
+    offset += 1
+    if chroma_location_present:
+        for _ in range(2):
+            location = _read_unsigned_exp_golomb(bits, offset)
+            if location is None:
+                return None
+            offset = location[1]
+    if offset >= len(bits):
+        return None
+    timing_info_present = bits[offset] == "1"
+    offset += 1
+    if timing_info_present:
+        offset += 65  # num_units_in_tick, time_scale, fixed_frame_rate_flag
+    if offset >= len(bits):
+        return None
+    nal_hrd_present = bits[offset] == "1"
+    offset += 1
+    if nal_hrd_present:
+        hrd_offset = _skip_h264_hrd_parameters(bits, offset)
+        if hrd_offset is None:
+            return None
+        offset = hrd_offset
+    if offset >= len(bits):
+        return None
+    vcl_hrd_present = bits[offset] == "1"
+    offset += 1
+    if vcl_hrd_present:
+        hrd_offset = _skip_h264_hrd_parameters(bits, offset)
+        if hrd_offset is None:
+            return None
+        offset = hrd_offset
+    if nal_hrd_present or vcl_hrd_present:
+        offset += 1  # low_delay_hrd_flag
+    offset += 1  # pic_struct_present_flag
+    if offset >= len(bits):
+        return None
+    bitstream_restriction = bits[offset] == "1"
+    offset += 1
+    if bitstream_restriction:
+        offset += 1  # motion_vectors_over_pic_boundaries_flag
+        for _ in range(6):
+            restriction = _read_unsigned_exp_golomb(bits, offset)
+            if restriction is None:
+                return None
+            offset = restriction[1]
+    return offset if offset <= len(bits) else None
+
+
 def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
 ) -> _H264SpsInfo | None:
@@ -737,8 +842,14 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
             offset = decoded[1]
     if offset >= len(bits):
         return None
-    offset += 1  # vui_parameters_present_flag; VUI is not needed for slice parsing.
-    if offset > len(bits):
+    vui_present = bits[offset] == "1"
+    offset += 1
+    if vui_present:
+        vui_offset = _skip_h264_vui_parameters(bits, offset)
+        if vui_offset is None:
+            return None
+        offset = vui_offset
+    if offset != len(bits):
         return None
     return _H264SpsInfo(
         sps_id=sps_id,
@@ -1624,12 +1735,16 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     return (sps[0], vps_id, values[2] + 4) if offset == len(bits) else None
 
 
-def _hevc_pps_ids(  # noqa: PLR0911
+def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
 ) -> tuple[int, int, bool, bool, int] | None:
     """Return linked IDs and slice controls after mandatory PPS fields."""
 
     bits = _rbsp_bits(data)
+    trailing_one = bits.rfind("1")
+    if trailing_one < 0:
+        return None
+    bits = bits[:trailing_one]
     pps = _read_unsigned_exp_golomb(bits, 0)
     if pps is None or pps[0] > 63:
         return None
@@ -1666,8 +1781,75 @@ def _hevc_pps_ids(  # noqa: PLR0911
         offset = chroma_offset[1]
     if offset + 6 > len(bits):
         return None
-    offset += 6
-    if bits.rfind("1") < offset:
+    offset += 3  # slice chroma offsets, weighted prediction, weighted biprediction
+    offset += 1  # transquant_bypass_enabled_flag
+    tiles_enabled = bits[offset] == "1"
+    offset += 2
+    if tiles_enabled:
+        tile_columns = _read_unsigned_exp_golomb(bits, offset)
+        if tile_columns is None or tile_columns[0] > 19:
+            return None
+        tile_rows = _read_unsigned_exp_golomb(bits, tile_columns[1])
+        if tile_rows is None or tile_rows[0] > 21:
+            return None
+        offset = tile_rows[1]
+        if offset >= len(bits):
+            return None
+        uniform_spacing = bits[offset] == "1"
+        offset += 1
+        if not uniform_spacing:
+            for _ in range(tile_columns[0] + tile_rows[0]):
+                tile_size = _read_unsigned_exp_golomb(bits, offset)
+                if tile_size is None:
+                    return None
+                offset = tile_size[1]
+        offset += 1  # loop_filter_across_tiles_enabled_flag
+    if offset + 2 > len(bits):
+        return None
+    offset += 1  # pps_loop_filter_across_slices_enabled_flag
+    deblocking_filter_control_present = bits[offset] == "1"
+    offset += 1
+    if deblocking_filter_control_present:
+        if offset + 2 > len(bits):
+            return None
+        offset += 1  # deblocking_filter_override_enabled_flag
+        deblocking_filter_disabled = bits[offset] == "1"
+        offset += 1
+        if not deblocking_filter_disabled:
+            for _ in range(2):
+                deblocking_offset = _read_signed_exp_golomb(bits, offset)
+                if deblocking_offset is None:
+                    return None
+                offset = deblocking_offset[1]
+    if offset >= len(bits):
+        return None
+    scaling_list_present = bits[offset] == "1"
+    offset += 1
+    if scaling_list_present:
+        scaling_list_offset = _skip_hevc_scaling_list_data(bits, offset)
+        if scaling_list_offset is None:
+            return None
+        offset = scaling_list_offset
+    if offset >= len(bits):
+        return None
+    offset += 1  # lists_modification_present_flag
+    parallel_merge_level = _read_unsigned_exp_golomb(bits, offset)
+    if parallel_merge_level is None:
+        return None
+    offset = parallel_merge_level[1]
+    if offset + 2 > len(bits):
+        return None
+    offset += 1  # slice_segment_header_extension_present_flag
+    extension_present = bits[offset] == "1"
+    offset += 1
+    if extension_present:
+        if offset + 8 > len(bits):
+            return None
+        extension_flags = bits[offset : offset + 8]
+        offset += 8
+        if "1" in extension_flags:
+            offset = len(bits)
+    if offset != len(bits):
         return None
     return (
         pps[0],
@@ -1692,6 +1874,8 @@ def _hevc_slice_pps_id(  # noqa: PLR0911
     if trailing_one < 0:
         return None
     bits = bits[:trailing_one]
+    if not bits:
+        return None
     first_slice_segment = bits[0] == "1"
     if not first_slice_segment:
         return None
@@ -1772,6 +1956,16 @@ def _publish_validated_cloud_clip(
     ):
         os.close(destination_fd)
         raise PyEzvizError("Cloud clip output target changed during capture")
+    try:
+        _reserve_existing_clip_space(
+            destination_fd,
+            required_size=temp_path.stat().st_size,
+            original_size=destination_stat.st_size,
+            original_allocated_blocks=destination_stat.st_blocks,
+        )
+    except BaseException:
+        os.close(destination_fd)
+        raise
     with temp_path.open("rb") as source, os.fdopen(destination_fd, "wb") as destination:
         destination.truncate(0)
         while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
@@ -1782,6 +1976,32 @@ def _publish_validated_cloud_clip(
     if not _regular_path_has_identity(target, expected_identity):
         raise PyEzvizError("Cloud clip output target changed during capture")
     temp_path.unlink()
+
+
+def _reserve_existing_clip_space(
+    destination_fd: int,
+    *,
+    required_size: int,
+    original_size: int,
+    original_allocated_blocks: int,
+) -> None:
+    """Reserve replacement space before truncating an existing clip."""
+
+    fallocate = getattr(os, "posix_fallocate", None)
+    if callable(fallocate):
+        try:
+            fallocate(destination_fd, 0, required_size)
+            return
+        except OSError as err:
+            with suppress(OSError):
+                os.ftruncate(destination_fd, original_size)
+            if err.errno not in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+                raise
+    filesystem = os.fstatvfs(destination_fd)
+    available_bytes = filesystem.f_bavail * filesystem.f_frsize
+    reclaimable_bytes = original_allocated_blocks * 512
+    if required_size > available_bytes + reclaimable_bytes:
+        raise OSError(errno.ENOSPC, "insufficient space to replace cloud clip safely")
 
 
 def _copy_validated_clip_to_new_target(temp_path: Path, target: Path) -> None:

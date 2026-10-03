@@ -3851,6 +3851,25 @@ def test_h264_validation_rejects_slice_before_mandatory_header_is_complete() -> 
     assert not _has_linked_h264_video(nals)
 
 
+def test_h264_validation_rejects_truncated_vui() -> None:
+    sps_bits = (
+        _unsigned_exp_golomb_bits(0) * 5
+        + "0"
+        + _unsigned_exp_golomb_bits(0) * 2
+        + "1101"
+    )
+    nals = [
+        (b"\x67\x42", b"\x42\x00\x0a" + _rbsp_bytes(sps_bits)),
+        (b"\x68\xce", b"\xce\x0f\xc8"),
+        (
+            b"\x65\x88",
+            b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0",
+        ),
+    ]
+
+    assert not _has_linked_h264_video(nals)
+
+
 def _unsigned_exp_golomb_bits(value: int) -> str:
     encoded = f"{value + 1:b}"
     return "0" * (len(encoded) - 1) + encoded
@@ -3893,6 +3912,7 @@ def _valid_hevc_validation_nals(
     output_flag_present: bool = False,
     complete_vps: bool = True,
     complete_sps: bool = True,
+    complete_pps: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3944,6 +3964,13 @@ def _valid_hevc_validation_nals(
         + "000"
         + _signed_exp_golomb_bits(0) * 2
         + "000000"
+        + (
+            "0000"  # loop filter, deblocking, scaling-list, list-modification
+            + _unsigned_exp_golomb_bits(0)  # log2_parallel_merge_level_minus2
+            + "00"  # slice-header extension and PPS extension flags
+            if complete_pps
+            else ""
+        )
     )
     slice_bits = (
         "1"
@@ -3981,6 +4008,8 @@ def test_hevc_validation_rejects_truncated_linked_structures() -> None:
 
     assert not _has_linked_hevc_video(truncated)
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(complete_sps=False))
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(complete_pps=False))
+    assert not _has_linked_hevc_video([(b"\x02\x01", b"\x01\x80")])
     assert not _has_linked_hevc_video(
         _valid_hevc_validation_nals(complete_vps=False)
     )
@@ -4057,6 +4086,43 @@ def test_save_decrypted_cloud_clip_supports_write_only_existing_target(
 
     output_path.chmod(0o600)
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_save_cloud_clip_preserves_existing_target_when_reservation_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    existing_clip = b"existing-clip"
+    output_path.write_bytes(existing_clip)
+    original_inode = output_path.stat().st_ino
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.posix_fallocate",
+        lambda *_args: (_ for _ in ()).throw(OSError(errno.ENOSPC, "filesystem full")),
+    )
+
+    with pytest.raises(OSError, match="filesystem full"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == existing_clip
     assert output_path.stat().st_ino == original_inode
 
 

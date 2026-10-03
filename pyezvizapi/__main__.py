@@ -3078,7 +3078,10 @@ def _write_stream_payloads(
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
-            is_media_packet=_is_cloud_media_packet,
+            is_media_packet=lambda packet: _is_cloud_media_packet(
+                packet,
+                allow_encrypted=allow_encrypted,
+            ),
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3100,7 +3103,10 @@ def _write_stream_payloads(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
             )
         if uses_transport_deadlines and not media_started:
-            if not _is_cloud_media_packet(packet):
+            if not _is_cloud_media_packet(
+                packet,
+                allow_encrypted=allow_encrypted,
+            ):
                 continue
             media_started = True
         payload = transform_payload(packet.body) if transform_payload else packet.body
@@ -3115,7 +3121,11 @@ def _write_stream_payloads(
             output.write(tail)
             bytes_written += len(tail)
     output.flush()
-    if bytes_written == 0 and not (max_packets is not None and max_packets <= 0):
+    empty_capture_requested = (
+        (max_packets is not None and max_packets <= 0)
+        or (duration_seconds is not None and duration_seconds <= 0)
+    )
+    if bytes_written == 0 and not empty_capture_requested:
         raise PyEzvizError("Cloud stream did not provide media before startup expired")
 
 
@@ -3186,7 +3196,10 @@ def _collect_stream_packets(
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
-            is_media_packet=_is_cloud_media_packet,
+            is_media_packet=lambda packet: _is_cloud_media_packet(
+                packet,
+                allow_encrypted=allow_encrypted,
+            ),
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3215,7 +3228,10 @@ def _collect_stream_packets(
         _LOGGER.warning("%s; using partial captured stream", err)
     if not packets or (
         uses_transport_deadlines
-        and not any(_is_cloud_media_packet(packet) for packet in packets)
+        and not any(
+            _is_cloud_media_packet(packet, allow_encrypted=allow_encrypted)
+            for packet in packets
+        )
     ):
         raise PyEzvizError("Cloud stream did not provide media before startup expired")
     return packets

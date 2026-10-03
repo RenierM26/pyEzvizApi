@@ -28,6 +28,7 @@ from .rtp import rtp_payload as _rtp_payload
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
+VTM_PRE_MEDIA_PACKET_LIMIT = 256
 MPEG_PS_START_CODE = b"\x00\x00\x01\xba"
 MPEG_TS_SYNC_BYTE = b"\x47"
 MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
@@ -523,6 +524,7 @@ class VtmStreamClient:
             None if keepalive_interval is None else started_at + keepalive_interval
         )
         media_started = False
+        pre_media_seen = 0
         while max_packets is None or seen < max_packets:
             now = monotonic()
             if capture_deadline is not None and now >= capture_deadline:
@@ -599,7 +601,12 @@ class VtmStreamClient:
                         first_packet_deadline = None
                         media_started = True
                     seen += 1
+                else:
+                    pre_media_seen += 1
                 yield packet
+                if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                    self._read_inactivity_deadline = None
+                    break
                 continue
 
             if include_control:

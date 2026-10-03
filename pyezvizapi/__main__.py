@@ -3069,10 +3069,12 @@ def _write_stream_payloads(
     """Write VTM stream packet bodies to a binary file-like object."""
 
     deadline = None
+    uses_transport_deadlines = isinstance(stream, VtmStreamClient)
 
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
     bytes_written = 0
-    if isinstance(stream, VtmStreamClient):
+    media_started = False
+    if uses_transport_deadlines:
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
@@ -3085,7 +3087,11 @@ def _write_stream_payloads(
             iterator_kwargs["first_packet_timeout"] = stream.timeout
 
     for packet in stream.iter_packets(**iterator_kwargs):
-        if deadline is None and duration_seconds is not None:
+        if (
+            not uses_transport_deadlines
+            and deadline is None
+            and duration_seconds is not None
+        ):
             deadline = monotonic() + duration_seconds
         if deadline is not None and monotonic() >= deadline:
             break
@@ -3093,6 +3099,10 @@ def _write_stream_payloads(
             raise PyEzvizError(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
             )
+        if uses_transport_deadlines and not media_started:
+            if not _is_cloud_media_packet(packet):
+                continue
+            media_started = True
         payload = transform_payload(packet.body) if transform_payload else packet.body
         if payload:
             output.write(payload)
@@ -3169,9 +3179,10 @@ def _collect_stream_packets(
 
     packets: list[Any] = []
     deadline = None
+    uses_transport_deadlines = isinstance(stream, VtmStreamClient)
 
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
-    if isinstance(stream, VtmStreamClient):
+    if uses_transport_deadlines:
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
@@ -3185,7 +3196,11 @@ def _collect_stream_packets(
 
     try:
         for packet in stream.iter_packets(**iterator_kwargs):
-            if deadline is None and duration_seconds is not None:
+            if (
+                not uses_transport_deadlines
+                and deadline is None
+                and duration_seconds is not None
+            ):
                 deadline = monotonic() + duration_seconds
             if deadline is not None and monotonic() >= deadline:
                 break
@@ -3198,7 +3213,10 @@ def _collect_stream_packets(
         if not packets or "VTM socket closed" not in str(err):
             raise
         _LOGGER.warning("%s; using partial captured stream", err)
-    if not packets:
+    if not packets or (
+        uses_transport_deadlines
+        and not any(_is_cloud_media_packet(packet) for packet in packets)
+    ):
         raise PyEzvizError("Cloud stream did not provide media before startup expired")
     return packets
 

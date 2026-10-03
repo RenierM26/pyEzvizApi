@@ -1279,12 +1279,203 @@ def _skip_hevc_profile_tier_level(
     return offset
 
 
-def _hevc_sps_ids(  # noqa: PLR0911, PLR0912
+def _skip_hevc_scaling_list_data(
+    bits: str,
+    offset: int,
+) -> int | None:
+    """Return the bit offset after HEVC scaling_list_data syntax."""
+
+    for size_id in range(4):
+        matrix_step = 3 if size_id == 3 else 1
+        for _matrix_id in range(0, 6, matrix_step):
+            if offset >= len(bits):
+                return None
+            pred_mode = bits[offset] == "1"
+            offset += 1
+            if not pred_mode:
+                delta = _read_unsigned_exp_golomb(bits, offset)
+                if delta is None:
+                    return None
+                offset = delta[1]
+                continue
+            if size_id > 1:
+                dc_coefficient = _read_signed_exp_golomb(bits, offset)
+                if dc_coefficient is None:
+                    return None
+                offset = dc_coefficient[1]
+            coefficient_count = min(64, 1 << (4 + (size_id << 1)))
+            for _ in range(coefficient_count):
+                coefficient = _read_signed_exp_golomb(bits, offset)
+                if coefficient is None:
+                    return None
+                offset = coefficient[1]
+    return offset
+
+
+def _skip_hevc_short_term_ref_pic_set(  # noqa: PLR0911, PLR0912
+    bits: str,
+    offset: int,
+    *,
+    set_index: int,
+    delta_poc_counts: list[int],
+) -> tuple[int, int] | None:
+    """Return the offset and delta-POC count after one SPS short-term RPS."""
+
+    inter_predicted = False
+    if set_index:
+        if offset >= len(bits):
+            return None
+        inter_predicted = bits[offset] == "1"
+        offset += 1
+    if inter_predicted:
+        if offset >= len(bits):
+            return None
+        offset += 1  # delta_rps_sign
+        abs_delta = _read_unsigned_exp_golomb(bits, offset)
+        if abs_delta is None:
+            return None
+        offset = abs_delta[1]
+        delta_poc_count = 0
+        for _ in range(delta_poc_counts[set_index - 1] + 1):
+            if offset >= len(bits):
+                return None
+            used = bits[offset] == "1"
+            offset += 1
+            use_delta = False
+            if not used:
+                if offset >= len(bits):
+                    return None
+                use_delta = bits[offset] == "1"
+                offset += 1
+            if used or use_delta:
+                delta_poc_count += 1
+        return offset, delta_poc_count
+    negative = _read_unsigned_exp_golomb(bits, offset)
+    if negative is None or negative[0] > 64:
+        return None
+    positive = _read_unsigned_exp_golomb(bits, negative[1])
+    if positive is None or positive[0] > 64:
+        return None
+    offset = positive[1]
+    for _ in range(negative[0] + positive[0]):
+        delta = _read_unsigned_exp_golomb(bits, offset)
+        if delta is None or delta[1] >= len(bits):
+            return None
+        offset = delta[1] + 1  # used_by_curr_pic_s*_flag
+    return offset, negative[0] + positive[0]
+
+
+def _skip_hevc_vui_parameters(  # noqa: PLR0911, PLR0912, PLR0915
+    bits: str,
+    offset: int,
+    *,
+    max_sub_layers_minus1: int,
+) -> int | None:
+    """Return the bit offset after mandatory HEVC VUI syntax."""
+
+    if offset >= len(bits):
+        return None
+    if bits[offset] == "1":
+        if offset + 9 > len(bits):
+            return None
+        aspect_ratio_idc = int(bits[offset + 1 : offset + 9], 2)
+        offset += 9
+        if aspect_ratio_idc == 255:
+            offset += 32
+    else:
+        offset += 1
+    if offset >= len(bits):
+        return None
+    overscan_present = bits[offset] == "1"
+    offset += 1
+    if overscan_present:
+        offset += 1
+    if offset >= len(bits):
+        return None
+    video_signal_present = bits[offset] == "1"
+    offset += 1
+    if video_signal_present:
+        if offset + 5 > len(bits):
+            return None
+        colour_description = bits[offset + 4] == "1"
+        offset += 5
+        if colour_description:
+            offset += 24
+    if offset >= len(bits):
+        return None
+    chroma_location_present = bits[offset] == "1"
+    offset += 1
+    if chroma_location_present:
+        for _ in range(2):
+            location = _read_unsigned_exp_golomb(bits, offset)
+            if location is None:
+                return None
+            offset = location[1]
+    offset += 3  # neutral_chroma_indication, field_seq, frame_field_info
+    if offset >= len(bits):
+        return None
+    default_display_window = bits[offset] == "1"
+    offset += 1
+    if default_display_window:
+        for _ in range(4):
+            window = _read_unsigned_exp_golomb(bits, offset)
+            if window is None:
+                return None
+            offset = window[1]
+    if offset >= len(bits):
+        return None
+    timing_info_present = bits[offset] == "1"
+    offset += 1
+    if timing_info_present:
+        if offset + 65 > len(bits):
+            return None
+        offset += 64
+        if bits[offset] == "1":
+            ticks = _read_unsigned_exp_golomb(bits, offset + 1)
+            if ticks is None:
+                return None
+            offset = ticks[1]
+        else:
+            offset += 1
+        if offset >= len(bits):
+            return None
+        hrd_present = bits[offset] == "1"
+        offset += 1
+        if hrd_present:
+            hrd = _skip_hevc_hrd_parameters(
+                bits,
+                offset,
+                max_sub_layers_minus1=max_sub_layers_minus1,
+                common_info_present=True,
+                inherited_flags=(False, False, False),
+            )
+            if hrd is None:
+                return None
+            offset = hrd[0]
+    if offset >= len(bits):
+        return None
+    bitstream_restriction = bits[offset] == "1"
+    offset += 1
+    if bitstream_restriction:
+        offset += 3
+        for _ in range(5):
+            value = _read_unsigned_exp_golomb(bits, offset)
+            if value is None:
+                return None
+            offset = value[1]
+    return offset if offset <= len(bits) else None
+
+
+def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
 ) -> tuple[int, int, int] | None:
     """Return linked IDs and POC width after parsing mandatory SPS fields."""
 
     bits = _rbsp_bits(data)
+    trailing_one = bits.rfind("1")
+    if trailing_one < 0:
+        return None
+    bits = bits[:trailing_one]
     if len(bits) < 104:
         return None
     vps_id = int(bits[:4], 2)
@@ -1331,7 +1522,106 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912
             return None
         values.append(value[0])
         offset = value[1]
-    return (sps[0], vps_id, values[2] + 4) if bits.rfind("1") >= offset else None
+    if offset >= len(bits):
+        return None
+    ordering_info_present = bits[offset] == "1"
+    offset += 1
+    start_layer = 0 if ordering_info_present else max_sub_layers_minus1
+    for _ in range(start_layer, max_sub_layers_minus1 + 1):
+        for maximum in (16, 16, 16):
+            ordering = _read_unsigned_exp_golomb(bits, offset)
+            if ordering is None or ordering[0] > maximum:
+                return None
+            offset = ordering[1]
+    for maximum in (3, 6, 3, 6, 5, 5):
+        block_value = _read_unsigned_exp_golomb(bits, offset)
+        if block_value is None or block_value[0] > maximum:
+            return None
+        offset = block_value[1]
+    if offset >= len(bits):
+        return None
+    scaling_list_enabled = bits[offset] == "1"
+    offset += 1
+    if scaling_list_enabled:
+        if offset >= len(bits):
+            return None
+        scaling_list_present = bits[offset] == "1"
+        offset += 1
+        if scaling_list_present:
+            scaling_list_offset = _skip_hevc_scaling_list_data(bits, offset)
+            if scaling_list_offset is None:
+                return None
+            offset = scaling_list_offset
+    if offset + 3 > len(bits):
+        return None
+    offset += 2  # amp_enabled_flag and sample_adaptive_offset_enabled_flag
+    pcm_enabled = bits[offset] == "1"
+    offset += 1
+    if pcm_enabled:
+        if offset + 8 > len(bits):
+            return None
+        offset += 8
+        for _ in range(2):
+            pcm_block = _read_unsigned_exp_golomb(bits, offset)
+            if pcm_block is None:
+                return None
+            offset = pcm_block[1]
+        offset += 1
+    short_term_sets = _read_unsigned_exp_golomb(bits, offset)
+    if short_term_sets is None or short_term_sets[0] > 64:
+        return None
+    short_term_count, offset = short_term_sets
+    delta_poc_counts: list[int] = []
+    for set_index in range(short_term_count):
+        short_term_set = _skip_hevc_short_term_ref_pic_set(
+            bits,
+            offset,
+            set_index=set_index,
+            delta_poc_counts=delta_poc_counts,
+        )
+        if short_term_set is None:
+            return None
+        offset, delta_poc_count = short_term_set
+        delta_poc_counts.append(delta_poc_count)
+    if offset >= len(bits):
+        return None
+    long_term_present = bits[offset] == "1"
+    offset += 1
+    if long_term_present:
+        long_term_count = _read_unsigned_exp_golomb(bits, offset)
+        if long_term_count is None or long_term_count[0] > 32:
+            return None
+        offset = long_term_count[1]
+        long_term_bits = long_term_count[0] * (values[2] + 5)
+        if offset + long_term_bits > len(bits):
+            return None
+        offset += long_term_bits
+    if offset + 3 > len(bits):
+        return None
+    offset += 2  # temporal MVP and strong intra smoothing flags
+    vui_present = bits[offset] == "1"
+    offset += 1
+    if vui_present:
+        vui_offset = _skip_hevc_vui_parameters(
+            bits,
+            offset,
+            max_sub_layers_minus1=max_sub_layers_minus1,
+        )
+        if vui_offset is None:
+            return None
+        offset = vui_offset
+    if offset >= len(bits):
+        return None
+    extension_present = bits[offset] == "1"
+    offset += 1
+    if extension_present:
+        if offset + 8 > len(bits):
+            return None
+        extension_flags = bits[offset : offset + 8]
+        offset += 8
+        if "1" in extension_flags:
+            offset = len(bits)
+    return (sps[0], vps_id, values[2] + 4) if offset == len(bits) else None
 
 
 def _hevc_pps_ids(  # noqa: PLR0911

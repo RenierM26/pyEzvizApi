@@ -2945,6 +2945,54 @@ def test_collect_stream_packets_starts_duration_at_first_media() -> None:
     }
 
 
+def test_collect_stream_packets_rejects_vtm_prelude_only_capture() -> None:
+    prelude = argparse.Namespace(
+        encrypted=False,
+        body=b"nonmedia-prelude",
+    )
+
+    class PreludeStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter((prelude,))
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cli_module._collect_stream_packets(  # noqa: SLF001
+            PreludeStream(),
+            max_packets=1,
+            allow_encrypted=True,
+        )
+
+
+def test_write_stream_payloads_discards_vtm_prelude_before_media() -> None:
+    expected_media = b"\x00\x00\x01\xba-media"
+    packets = (
+        argparse.Namespace(encrypted=False, body=b"nonmedia-prelude"),
+        argparse.Namespace(encrypted=False, body=expected_media),
+    )
+
+    class PreludeStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(packets)
+
+    output = io.BytesIO()
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        PreludeStream(),
+        output,
+        max_packets=1,
+        duration_seconds=1.0,
+        allow_encrypted=True,
+        monotonic=lambda: 100.0,
+    )
+
+    assert output.getvalue() == expected_media
+
+
 def test_parse_stream_dump_duration_units() -> None:
     cases = {
         "30": 30.0,

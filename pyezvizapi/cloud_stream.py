@@ -945,11 +945,12 @@ class _CloudMediaProbe:
             return True
         if _is_cloud_media_packet(packet, allow_encrypted=self.allow_encrypted):
             self.identified = True
-            self.transport = detect_transport(packet.body)
-            if self.transport == StreamTransport.UNKNOWN and packet.encrypted:
+            if packet.encrypted:
                 # Ciphertext has no inspectable framing. Route it through the
                 # MPEG-TS output path, which preserves allowed encrypted bodies.
                 self.transport = StreamTransport.MPEG_TS
+            else:
+                self.transport = detect_transport(packet.body)
             self.media_prefix = packet.body
             return True
         if not packet.body or packet.encrypted:
@@ -1067,7 +1068,11 @@ def _peek_cloud_transport(
         if not packet.body:
             prefix.append(packet)
             continue
-        transport = detect_transport(packet.body)
+        transport = (
+            StreamTransport.UNKNOWN
+            if packet.encrypted
+            else detect_transport(packet.body)
+        )
         if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(
             packet.body
         ):

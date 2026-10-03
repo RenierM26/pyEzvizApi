@@ -2218,13 +2218,23 @@ def test_cloud_media_predicate_accepts_allowed_encrypted_stream_packet() -> None
     )
 
 
-def test_cloud_mpegts_router_forwards_allowed_opaque_encrypted_packet() -> None:
+@pytest.mark.parametrize(
+    "ciphertext",
+    [
+        b"opaque-ciphertext",
+        b"\x80\x60rtp-looking-ciphertext",
+        b"\x00\x00\x01\xbaps-looking-ciphertext",
+    ],
+)
+def test_cloud_mpegts_router_forwards_allowed_opaque_encrypted_packet(
+    ciphertext: bytes,
+) -> None:
     packet = VtmPacket(
         channel=VtmChannel.ENCRYPTED_STREAM,
-        length=len(b"opaque-ciphertext"),
+        length=len(ciphertext),
         sequence=1,
         message_code=0,
-        body=b"opaque-ciphertext",
+        body=ciphertext,
     )
 
     class EncryptedStream:

@@ -2152,6 +2152,15 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
             )
             for index in range(num_long_term_sps + num_long_term_pics):
                 if index < num_long_term_sps:
+                    if offset + long_term_index_bits > len(bits):
+                        return None
+                    long_term_index = (
+                        int(bits[offset : offset + long_term_index_bits], 2)
+                        if long_term_index_bits
+                        else 0
+                    )
+                    if long_term_index >= linked_sps.long_term_ref_pics_sps:
+                        return None
                     offset += long_term_index_bits
                 else:
                     offset += log2_max_pic_order_cnt_lsb

@@ -3940,6 +3940,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     include_slice_header_tail: bool = True,
     include_slice_data: bool = True,
     slice_alignment_bits: str | None = None,
+    long_term_ref_pics_sps: int = 0,
+    long_term_sps_index: int | None = None,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3980,7 +3982,14 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             + ("1" if sample_adaptive_offset_enabled else "0")
             + "0"  # PCM flag
             + _unsigned_exp_golomb_bits(0)  # num_short_term_ref_pic_sets
-            + "0000"  # long-term, temporal-MVP, smoothing, and VUI
+            + (
+                "1"
+                + _unsigned_exp_golomb_bits(long_term_ref_pics_sps)
+                + ("0" * 9) * long_term_ref_pics_sps
+                if long_term_ref_pics_sps
+                else "0"
+            )
+            + "000"  # temporal-MVP, smoothing, and VUI
             + (
                 "0"
                 if sps_extension_bits is None
@@ -4037,6 +4046,18 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             "0" + _unsigned_exp_golomb_bits(0) * 2
             if valid_inline_slice_rps
             else "1"
+        )
+        + (
+            _unsigned_exp_golomb_bits(1 if long_term_sps_index is not None else 0)
+            + _unsigned_exp_golomb_bits(0)
+            + (
+                f"{long_term_sps_index:0{(long_term_ref_pics_sps - 1).bit_length()}b}"
+                + "00"
+                if long_term_sps_index is not None
+                else ""
+            )
+            if long_term_ref_pics_sps
+            else ""
         )
         + (
             "0" + ("" if separate_colour_plane else "0")
@@ -4105,6 +4126,21 @@ def test_hevc_validation_requires_data_after_byte_alignment() -> None:
     )
     assert not _has_linked_hevc_video(
         _valid_hevc_validation_nals(slice_alignment_bits="0")
+    )
+
+
+def test_hevc_validation_rejects_reserved_long_term_sps_index() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            long_term_ref_pics_sps=3,
+            long_term_sps_index=2,
+        )
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            long_term_ref_pics_sps=3,
+            long_term_sps_index=3,
+        )
     )
 
 

@@ -56,6 +56,8 @@ _RTP_CODEC_PROBE_MAX_PACKETS = 32
 _RTP_AUDIO_PROBE_MAX_PACKETS = 256
 _RTP_AUDIO_QUEUE_MAX_FRAMES = 128
 _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
+_CLOUD_MEDIA_PROBE_TAIL_BYTES = 187
+_MPEG_PS_PACK_START_CODE = b"\x00\x00\x01\xba"
 
 
 class _CloudRtpAudioInput:
@@ -884,6 +886,7 @@ def _iter_bounded_cloud_packets(
     """Iterate cloud packets with transport-level deadlines when available."""
 
     if isinstance(stream, VtmStreamClient):
+        media_probe = _CloudMediaProbe(allow_encrypted=allow_encrypted)
         selected_first_packet_timeout = first_packet_timeout
         if selected_first_packet_timeout is None and duration_seconds is None:
             selected_first_packet_timeout = stream.timeout
@@ -892,10 +895,7 @@ def _iter_bounded_cloud_packets(
             "duration_seconds": duration_seconds,
             "duration_from_start": False,
             "first_packet_timeout": selected_first_packet_timeout,
-            "is_media_packet": lambda packet: _is_cloud_media_packet(
-                packet,
-                allow_encrypted=allow_encrypted,
-            ),
+            "is_media_packet": media_probe,
             "monotonic": monotonic,
         }
         if first_packet_deadline is not None:
@@ -925,6 +925,43 @@ def _is_cloud_media_packet(packet: Any, *, allow_encrypted: bool = False) -> boo
     return transport != StreamTransport.UNKNOWN and (
         transport != StreamTransport.MPEG_TS or _is_valid_mpegts_body(packet.body)
     )
+
+
+class _CloudMediaProbe:
+    """Recognize the first cloud transport across VTM packet boundaries."""
+
+    def __init__(self, *, allow_encrypted: bool = False) -> None:
+        self.allow_encrypted = allow_encrypted
+        self.identified = False
+        self.transport = StreamTransport.UNKNOWN
+        self.cross_packet = False
+        self._tail = b""
+
+    def __call__(self, packet: Any) -> bool:
+        if self.identified:
+            return True
+        if _is_cloud_media_packet(packet, allow_encrypted=self.allow_encrypted):
+            self.identified = True
+            self.transport = detect_transport(packet.body)
+            return True
+        if not packet.body or packet.encrypted:
+            return False
+        combined = self._tail + packet.body
+        if _MPEG_PS_PACK_START_CODE in combined:
+            self.identified = True
+            self.cross_packet = True
+            self.transport = StreamTransport.MPEG_PS
+            return True
+        for offset, value in enumerate(combined):
+            if value != 0x47 or offset + 188 > len(combined):
+                continue
+            if _is_valid_mpegts_body(combined[offset : offset + 188]):
+                self.identified = True
+                self.cross_packet = True
+                self.transport = StreamTransport.MPEG_TS
+                return True
+        self._tail = combined[-_CLOUD_MEDIA_PROBE_TAIL_BYTES:]
+        return False
 
 
 def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
@@ -1005,18 +1042,22 @@ def _peek_cloud_transport(
     """Discard nonmedia prelude packets until a known transport is found."""
 
     prefix: list[Any] = []
+    media_probe = _CloudMediaProbe(allow_encrypted=allow_encrypted)
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
-        prefix.append(packet)
         if not packet.body:
+            prefix.append(packet)
             continue
         transport = detect_transport(packet.body)
         if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(
             packet.body
         ):
-            continue
+            transport = StreamTransport.UNKNOWN
         if transport != StreamTransport.UNKNOWN:
             return transport, chain((packet,), packets)
+        prefix.append(packet)
+        if media_probe(packet):
+            return media_probe.transport, chain(prefix, packets)
     return StreamTransport.UNKNOWN, iter(prefix)
 
 

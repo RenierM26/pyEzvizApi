@@ -29,7 +29,7 @@ from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
 from .cloud_stream import (
     _closing_unconnected_cloud_stream,
-    _is_cloud_media_packet,
+    _CloudMediaProbe,
     cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_decrypted_cloud_stream_packets_to_mpegts,
@@ -99,7 +99,6 @@ from .rtp import (
 from .stream_media import (
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
-    detect_transport,
     mpeg_ps_decryptable_prefix_length,
 )
 from .stream_transport import (
@@ -3074,14 +3073,22 @@ def _write_stream_payloads(
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
     bytes_written = 0
     media_started = False
+    pending_packets: list[Any] = []
+    deadline_probe = (
+        _CloudMediaProbe(allow_encrypted=allow_encrypted)
+        if uses_transport_deadlines
+        else None
+    )
+    media_probe = (
+        _CloudMediaProbe(allow_encrypted=allow_encrypted)
+        if uses_transport_deadlines
+        else None
+    )
     if uses_transport_deadlines:
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
-            is_media_packet=lambda packet: _is_cloud_media_packet(
-                packet,
-                allow_encrypted=allow_encrypted,
-            ),
+            is_media_packet=deadline_probe,
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3103,18 +3110,28 @@ def _write_stream_payloads(
                 "Received encrypted VTM stream packet; media decryption is not implemented"
             )
         if uses_transport_deadlines and not media_started:
-            if not _is_cloud_media_packet(
-                packet,
-                allow_encrypted=allow_encrypted,
-            ):
+            pending_packets.append(packet)
+            assert media_probe is not None
+            if not media_probe(packet):
                 continue
             media_started = True
-        payload = transform_payload(packet.body) if transform_payload else packet.body
-        if payload:
-            output.write(payload)
-            bytes_written += len(payload)
-        if flush_each:
-            output.flush()
+            selected_packets = (
+                pending_packets if media_probe.cross_packet else [packet]
+            )
+            pending_packets = []
+        else:
+            selected_packets = [packet]
+        for selected_packet in selected_packets:
+            payload = (
+                transform_payload(selected_packet.body)
+                if transform_payload
+                else selected_packet.body
+            )
+            if payload:
+                output.write(payload)
+                bytes_written += len(payload)
+            if flush_each:
+                output.flush()
     if transform_payload and hasattr(transform_payload, "flush"):
         tail = transform_payload.flush()
         if tail:
@@ -3190,16 +3207,23 @@ def _collect_stream_packets(
     packets: list[Any] = []
     deadline = None
     uses_transport_deadlines = isinstance(stream, VtmStreamClient)
+    deadline_probe = (
+        _CloudMediaProbe(allow_encrypted=allow_encrypted)
+        if uses_transport_deadlines
+        else None
+    )
+    media_probe = (
+        _CloudMediaProbe(allow_encrypted=allow_encrypted)
+        if uses_transport_deadlines
+        else None
+    )
 
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
     if uses_transport_deadlines:
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
             duration_from_start=False,
-            is_media_packet=lambda packet: _is_cloud_media_packet(
-                packet,
-                allow_encrypted=allow_encrypted,
-            ),
+            is_media_packet=deadline_probe,
             monotonic=monotonic,
         )
         if first_packet_deadline is not None:
@@ -3221,6 +3245,8 @@ def _collect_stream_packets(
                 raise PyEzvizError(
                     "Received encrypted VTM stream packet; media decryption is not implemented"
                 )
+            if media_probe is not None:
+                media_probe(packet)
             packets.append(packet)
     except PyEzvizError as err:
         if not packets or "VTM socket closed" not in str(err):
@@ -3228,10 +3254,7 @@ def _collect_stream_packets(
         _LOGGER.warning("%s; using partial captured stream", err)
     if not packets or (
         uses_transport_deadlines
-        and not any(
-            _is_cloud_media_packet(packet, allow_encrypted=allow_encrypted)
-            for packet in packets
-        )
+        and (media_probe is None or not media_probe.identified)
     ):
         raise PyEzvizError("Cloud stream did not provide media before startup expired")
     return packets
@@ -3240,10 +3263,10 @@ def _collect_stream_packets(
 def _detect_stream_packets_transport(packets: list[Any]) -> StreamTransport:
     """Return the first known media transport from collected VTM packets."""
 
+    media_probe = _CloudMediaProbe()
     for packet in packets:
-        transport = detect_transport(packet.body)
-        if transport != StreamTransport.UNKNOWN:
-            return transport
+        if media_probe(packet):
+            return media_probe.transport
     return StreamTransport.UNKNOWN
 
 

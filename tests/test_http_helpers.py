@@ -3917,6 +3917,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     sps_extension_bits: str | None = None,
     pps_extension_bits: str | None = None,
     valid_inline_slice_rps: bool = True,
+    slice_chroma_qp_offsets_present: bool = False,
+    include_slice_chroma_qp_offsets: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3972,7 +3974,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + _signed_exp_golomb_bits(0)
         + "000"
         + _signed_exp_golomb_bits(0) * 2
-        + "000000"
+        + ("1" if slice_chroma_qp_offsets_present else "0")
+        + "00000"
         + (
             "0000"  # loop filter, deblocking, scaling-list, list-modification
             + _unsigned_exp_golomb_bits(0)  # log2_parallel_merge_level_minus2
@@ -3998,6 +4001,11 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             else "1"
         )
         + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + (
+            _signed_exp_golomb_bits(0) * 2
+            if slice_chroma_qp_offsets_present and include_slice_chroma_qp_offsets
+            else ""
+        )
         + "0"  # at least one slice-data bit before rbsp_stop_one_bit
     )
     return [
@@ -4076,6 +4084,33 @@ def test_hevc_validation_rejects_invalid_slice_reference_picture_flag() -> None:
     assert not _has_linked_hevc_video(
         _valid_hevc_validation_nals(valid_inline_slice_rps=False)
     )
+
+
+def test_hevc_validation_requires_declared_slice_chroma_qp_offsets() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(slice_chroma_qp_offsets_present=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            slice_chroma_qp_offsets_present=True,
+            include_slice_chroma_qp_offsets=False,
+        )
+    )
+
+
+def test_h264_validation_rejects_partition_b_and_c_without_partition_a() -> None:
+    nals = [
+        (
+            b"\x67\x42",
+            b"\x42\xc0\x0a\xda\x7b\x01\x10\x00\x00\x03\x00\x10"
+            b"\x00\x00\x03\x00\x28\xf1\x22\x6a",
+        ),
+        (b"\x68\xce", b"\xce\x0f\xc8"),
+        (b"\x63\x88", b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0"),
+        (b"\x64\x88", b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0"),
+    ]
+
+    assert not _has_linked_h264_video(nals)
 
 
 def test_h264_validation_rejects_truncated_pps_extension() -> None:
@@ -4454,6 +4489,44 @@ def test_save_cloud_clip_rejects_fifo_replacement_without_blocking(
         )
 
     assert stat.S_ISFIFO(output_path.stat().st_mode)
+
+
+def test_save_cloud_clip_verifies_new_target_after_hard_link(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    replacement_payload = b"concurrent replacement"
+    real_link = os.link
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def replace_after_link(source: Path, target: Path) -> None:
+        real_link(source, target)
+        target.unlink()
+        target.write_bytes(replacement_payload)
+
+    monkeypatch.setattr("pyezvizapi.client.os.link", replace_after_link)
+
+    with pytest.raises(PyEzvizError, match="changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
 
 
 def test_save_cloud_clip_falls_back_when_hard_links_are_unsupported(

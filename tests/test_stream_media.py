@@ -2733,6 +2733,40 @@ def test_cloud_packet_iterator_starts_duration_at_first_media() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("fragments", "expected_transport"),
+    [
+        ((b"\x00\x00", b"\x01\xba-media"), StreamTransport.MPEG_PS),
+        (
+            (
+                (b"\x47\x40\x00\x10" + b"\x00" * 184)[:73],
+                (b"\x47\x40\x00\x10" + b"\x00" * 184)[73:],
+            ),
+            StreamTransport.MPEG_TS,
+        ),
+    ],
+)
+def test_cloud_media_probe_recognizes_split_transport_signatures(
+    fragments: tuple[bytes, bytes],
+    expected_transport: StreamTransport,
+) -> None:
+    probe = cloud_stream_module._CloudMediaProbe()  # noqa: SLF001
+    packets = [
+        VtmPacket(
+            channel=VtmChannel.STREAM,
+            length=len(body),
+            sequence=sequence,
+            message_code=0,
+            body=body,
+        )
+        for sequence, body in enumerate(fragments, start=1)
+    ]
+
+    assert not probe(packets[0])
+    assert probe(packets[1])
+    assert probe.transport == expected_transport
+
+
 def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:
     class RecordingStream(VtmStreamClient):
         def __init__(self) -> None:

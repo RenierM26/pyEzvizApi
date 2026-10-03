@@ -517,7 +517,7 @@ def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
                 h264_sps[sps_info.sps_id] = sps_info
         elif h264_type == 8:
             pps_nals.append(nal_body)
-        elif 1 <= h264_type <= 5:
+        elif h264_type in {1, 2, 5}:
             slices.append((header, nal_body))
     for nal_body in pps_nals:
         pps_info = _h264_pps_info(nal_body, sps_info=h264_sps)
@@ -540,7 +540,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
 
     vps_ids: set[int] = set()
     sps_info: dict[int, _HevcSpsInfo] = {}
-    pps_info: dict[int, tuple[int, bool, bool, int]] = {}
+    pps_info: dict[int, tuple[int, bool, bool, int, bool]] = {}
     slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
     for header, body in nals:
@@ -1860,7 +1860,7 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
 
 def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
-) -> tuple[int, int, bool, bool, int] | None:
+) -> tuple[int, int, bool, bool, int, bool] | None:
     """Return linked IDs and slice controls after mandatory PPS fields."""
 
     bits = _rbsp_bits(data)
@@ -1905,6 +1905,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         offset = chroma_offset[1]
     if offset + 6 > len(bits):
         return None
+    slice_chroma_qp_offsets_present = bits[offset] == "1"
     offset += 3  # slice chroma offsets, weighted prediction, weighted biprediction
     offset += 1  # transquant_bypass_enabled_flag
     tiles_enabled = bits[offset] == "1"
@@ -1993,6 +1994,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         dependent_slices,
         output_flag_present,
         extra_slice_header_bits,
+        slice_chroma_qp_offsets_present,
     )
 
 
@@ -2001,7 +2003,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     *,
     nal_type: int,
     sps_info: dict[int, _HevcSpsInfo],
-    pps_info: dict[int, tuple[int, bool, bool, int]],
+    pps_info: dict[int, tuple[int, bool, bool, int, bool]],
 ) -> int | None:
     """Return a PPS id after parsing mandatory linked HEVC slice fields."""
 
@@ -2022,7 +2024,13 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     if decoded is None or decoded[0] not in pps_info:
         return None
     pps_id, offset = decoded
-    sps_id, _, output_flag_present, extra_slice_header_bits = pps_info[pps_id]
+    (
+        sps_id,
+        _,
+        output_flag_present,
+        extra_slice_header_bits,
+        slice_chroma_qp_offsets_present,
+    ) = pps_info[pps_id]
     linked_sps = sps_info.get(sps_id)
     if linked_sps is None:
         return None
@@ -2121,6 +2129,12 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     if slice_qp_delta is None:
         return None
     offset = slice_qp_delta[1]
+    if slice_chroma_qp_offsets_present:
+        for _ in range(2):
+            chroma_offset = _read_signed_exp_golomb(bits, offset)
+            if chroma_offset is None:
+                return None
+            offset = chroma_offset[1]
     return pps_id if offset < len(bits) else None
 
 
@@ -2133,6 +2147,8 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
     """Publish validated bytes while preserving an existing target inode."""
 
     if expected_identity is None:
+        staged_stat = temp_path.stat()
+        linked_identity = (staged_stat.st_dev, staged_stat.st_ino)
         try:
             os.link(temp_path, target)
         except FileExistsError as err:
@@ -2149,6 +2165,9 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
             } and not unsupported_windows_hard_link:
                 raise
             _copy_validated_clip_to_new_target(temp_path, target)
+        else:
+            if not _regular_path_has_identity(target, linked_identity):
+                raise PyEzvizError("Cloud clip output target changed during capture")
         temp_path.unlink()
         return
 

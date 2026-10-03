@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import datetime as dt
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +28,7 @@ from .camera import EzvizCamera
 from .cas import CasDeviceSession, EzvizCAS
 from .client import EzvizClient
 from .cloud_stream import (
+    _closing_unconnected_cloud_stream,
     cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_decrypted_cloud_stream_packets_to_mpegts,
@@ -124,6 +125,8 @@ class StreamProxyConfig:
     decrypt_video: bool
     decrypt_codec: str
     max_packets: int | None
+    media_key: str | bytes | None = field(default=None, repr=False)
+    sms_code: str | None = field(default=None, repr=False)
 
 
 class StreamProxyHTTPServer(ThreadingHTTPServer):
@@ -1142,6 +1145,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(default: auto)"
         ),
     )
+    parser_stream_dump.add_argument(
+        "--sms-code",
+        help="Optional MFA/elevation code for media key retrieval",
+    )
+    parser_stream_dump.add_argument(
+        "--media-key",
+        help="Camera media decrypt key; used instead of cloud key retrieval",
+    )
+    parser_stream_dump.add_argument(
+        "--media-key-hex",
+        help="Hex-encoded binary camera media decrypt key",
+    )
     parser_stream_proxy = subparsers_stream.add_parser(
         "proxy",
         help="Serve a local HTTP MPEG-TS stream for FFmpeg/Home Assistant",
@@ -1231,6 +1246,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "codec header too "
             "(default: auto)"
         ),
+    )
+    parser_stream_proxy.add_argument(
+        "--sms-code",
+        help="Optional MFA/elevation code for media key retrieval",
+    )
+    parser_stream_proxy.add_argument(
+        "--media-key",
+        help="Camera media decrypt key; used instead of cloud key retrieval",
+    )
+    parser_stream_proxy.add_argument(
+        "--media-key-hex",
+        help="Hex-encoded binary camera media decrypt key",
     )
     parser_stream_proxy.add_argument(
         "--max-packets",
@@ -3029,6 +3056,7 @@ def _write_stream_payloads(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     allow_encrypted: bool,
     transform_payload: Callable[[bytes], bytes] | None = None,
     flush_each: bool = False,
@@ -3040,7 +3068,19 @@ def _write_stream_payloads(
     if duration_seconds is not None:
         deadline = monotonic() + duration_seconds
 
-    for packet in stream.iter_packets(max_packets=max_packets):
+    iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
+    if isinstance(stream, VtmStreamClient):
+        iterator_kwargs.update(
+            duration_seconds=duration_seconds,
+            duration_from_start=True,
+            monotonic=monotonic,
+        )
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
+        if duration_seconds is None:
+            iterator_kwargs["first_packet_timeout"] = stream.timeout
+
+    for packet in stream.iter_packets(**iterator_kwargs):
         if deadline is not None and monotonic() >= deadline:
             break
         if packet.encrypted and not allow_encrypted:
@@ -3057,6 +3097,26 @@ def _write_stream_payloads(
         if tail:
             output.write(tail)
     output.flush()
+
+
+def _start_cli_cloud_stream(
+    stream: Any,
+    *,
+    timeout: float | None,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> float | None:
+    """Start a CLI VTM stream with one bounded negotiation deadline."""
+
+    if not isinstance(stream, VtmStreamClient):
+        stream.start()
+        return None
+    startup_seconds = timeout
+    if startup_seconds is None or startup_seconds <= 0:
+        startup_seconds = duration_seconds
+    deadline = None if startup_seconds is None else monotonic() + startup_seconds
+    stream.start(deadline=deadline, monotonic=monotonic)
+    return deadline
 
 
 def _collect_stream_payloads(
@@ -3091,6 +3151,7 @@ def _collect_stream_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     allow_encrypted: bool,
     monotonic: Any = time.monotonic,
 ) -> list[Any]:
@@ -3108,6 +3169,10 @@ def _collect_stream_packets(
             duration_from_start=True,
             monotonic=monotonic,
         )
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
+        if duration_seconds is None:
+            iterator_kwargs["first_packet_timeout"] = stream.timeout
 
     try:
         for packet in stream.iter_packets(**iterator_kwargs):
@@ -3215,6 +3280,7 @@ def _decrypt_rtp_annexb_units(
     *,
     detected_codec: str,
     decrypt_codec: str,
+    media_key: str | bytes | None = None,
 ) -> bytes:
     """Decrypt RTP Annex-B units with one camera-key lookup."""
 
@@ -3222,6 +3288,7 @@ def _decrypt_rtp_annexb_units(
         client,
         serial,
         codec=decrypt_codec,
+        media_key=media_key,
     )
     return b"".join(rtp_decryptor(unit, detected_codec) for unit in units)
 
@@ -3245,15 +3312,16 @@ def _decrypt_stream_payload_bytes(
     data: bytes,
     *,
     codec: str,
+    media_key: str | bytes | None = None,
 ) -> bytes:
     """Decrypt captured MPEG-PS stream bytes using the camera encrypt key."""
 
-    key = client.get_cam_key(serial, max_retries=1)
+    key = media_key if media_key is not None else client.get_cam_key(serial, max_retries=1)
     if not key:
         raise PyEzvizError("Could not get camera encryption key")
     return decrypt_hikvision_ps_video(
         data,
-        str(key),
+        key,
         nalu_header_size=_codec_nalu_header_size(codec),
     )
 
@@ -3275,7 +3343,7 @@ def _codec_nalu_header_size(codec: str) -> int | None:
 class _BufferedStreamPayloadDecryptor:
     """Decrypt MPEG-PS payloads after buffering across VTM packet splits."""
 
-    def __init__(self, key: str, *, codec: str) -> None:
+    def __init__(self, key: str | bytes, *, codec: str) -> None:
         self._key = key
         self._nalu_header_size = _codec_nalu_header_size(codec)
         self._buffer = bytearray()
@@ -3338,6 +3406,7 @@ def _stream_payload_decryptors(
     serial: str,
     *,
     codec: str,
+    media_key: str | bytes | None = None,
 ) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes]]:
     """Return MPEG-PS and RTP decryptors sharing one camera-key lookup."""
 
@@ -3345,6 +3414,7 @@ def _stream_payload_decryptors(
         client,
         serial,
         codec=codec,
+        media_key=media_key,
     )
     return mpegps_decryptor, rtp_decryptor
 
@@ -3354,17 +3424,18 @@ def _stream_payload_decryptors_with_key(
     serial: str,
     *,
     codec: str,
+    media_key: str | bytes | None = None,
 ) -> tuple[
     Callable[[bytes], bytes],
     Callable[[bytes, str], bytes],
-    str,
+    str | bytes,
 ]:
     """Return streaming decryptors and their single fetched camera key."""
 
-    key = client.get_cam_key(serial, max_retries=1)
+    key = media_key if media_key is not None else client.get_cam_key(serial, max_retries=1)
     if not key:
         raise PyEzvizError("Could not get camera encryption key")
-    selected_key = str(key)
+    selected_key = key
 
     def _decrypt_rtp_annexb(data: bytes, detected_codec: str) -> bytes:
         decrypt_codec = detected_codec if codec == "auto" else codec
@@ -3383,6 +3454,44 @@ def _stream_payload_decryptors_with_key(
         _decrypt_rtp_annexb,
         selected_key,
     )
+
+
+def _cloud_cli_media_key(
+    args: argparse.Namespace,
+    client: EzvizClient,
+) -> str | bytes:
+    """Resolve an explicit or cloud camera key without exposing it."""
+
+    explicit_key = _explicit_cloud_cli_media_key(args)
+    if explicit_key is not None:
+        return explicit_key
+    sms_code = getattr(args, "sms_code", None)
+    if sms_code is None:
+        cloud_key = client.get_cam_key(args.serial, max_retries=1)
+    else:
+        cloud_key = client.get_cam_key(
+            args.serial,
+            smscode=sms_code,
+            max_retries=1,
+        )
+    if not cloud_key:
+        raise PyEzvizError("Could not get camera encryption key")
+    return str(cloud_key)
+
+
+def _explicit_cloud_cli_media_key(args: argparse.Namespace) -> str | bytes | None:
+    """Resolve only a supplied key; proxy cloud lookup happens per request."""
+
+    key = getattr(args, "media_key", None)
+    key_hex = getattr(args, "media_key_hex", None)
+    if key and key_hex:
+        raise PyEzvizError("Provide only one of --media-key or --media-key-hex")
+    if key_hex:
+        try:
+            return bytes.fromhex(key_hex)
+        except ValueError as err:
+            raise PyEzvizError("Invalid --media-key-hex") from err
+    return str(key) if key else None
 
 
 def _remux_mpegps_bytes_to_mpegts(
@@ -3404,6 +3513,7 @@ def _remux_stream_payloads_to_mpegts(
     ffmpeg_path: str,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     allow_encrypted: bool,
 ) -> None:
     """Route VTM media to MPEG-TS with optional encrypted-packet passthrough."""
@@ -3414,6 +3524,7 @@ def _remux_stream_payloads_to_mpegts(
         ffmpeg_path=ffmpeg_path,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         allow_encrypted=allow_encrypted,
     )
 
@@ -3512,7 +3623,19 @@ def _handle_stream_proxy_get(
                 handler.wfile.flush()
 
     try:
-        with open_cloud_stream(
+        media_key = config.media_key
+        if config.decrypt_video and media_key is None:
+            if config.sms_code is None:
+                media_key = client.get_cam_key(config.serial, max_retries=1)
+            else:
+                media_key = client.get_cam_key(
+                    config.serial,
+                    smscode=config.sms_code,
+                    max_retries=1,
+                )
+        if config.decrypt_video and not media_key:
+            raise PyEzvizError("Could not get camera encryption key")
+        stream = open_cloud_stream(
             client,
             config.serial,
             channel=config.channel,
@@ -3520,8 +3643,13 @@ def _handle_stream_proxy_get(
             token_index=config.token_index,
             refresh_vtm=config.refresh_vtm,
             timeout=config.timeout,
-        ) as stream:
-            stream.start()
+        )
+        with _closing_unconnected_cloud_stream(stream):
+            startup_deadline = _start_cli_cloud_stream(
+                stream,
+                timeout=config.timeout,
+                duration_seconds=None,
+            )
             mpegps_transform = None
             rtp_transform = None
             rtp_audio_key = None
@@ -3534,12 +3662,15 @@ def _handle_stream_proxy_get(
                     client,
                     config.serial,
                     codec=config.decrypt_codec,
+                    media_key=media_key,
                 )
             copy_cloud_stream_packets_to_mpegts(
                 stream,
                 cast(BinaryIO, _LazyProxyOutput()),
                 ffmpeg_path=config.ffmpeg_path,
                 max_packets=config.max_packets,
+                first_packet_timeout=config.timeout,
+                first_packet_deadline=startup_deadline,
                 allow_encrypted=config.allow_encrypted,
                 mpegps_transform=mpegps_transform,
                 rtp_transform=rtp_transform,
@@ -3560,6 +3691,7 @@ def _handle_stream_proxy_get(
 def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
     """Serve the experimental VTM-to-MPEG-TS HTTP proxy until interrupted."""
 
+    media_key = _explicit_cloud_cli_media_key(args) if args.decrypt_video else None
     config = StreamProxyConfig(
         serial=args.serial,
         channel=args.channel,
@@ -3573,6 +3705,8 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
         decrypt_video=args.decrypt_video,
         decrypt_codec=args.decrypt_codec,
         max_packets=args.max_packets,
+        media_key=media_key,
+        sms_code=getattr(args, "sms_code", None),
     )
 
     class StreamProxyHandler(BaseHTTPRequestHandler):
@@ -5016,7 +5150,13 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
             "--max-packets to bound memory use"
         )
 
-    with open_cloud_stream(
+    media_key = (
+        _cloud_cli_media_key(args, client)
+        if args.stream_action == "dump" and args.decrypt_video
+        else None
+    )
+
+    stream = open_cloud_stream(
         client,
         args.serial,
         channel=args.channel,
@@ -5024,15 +5164,21 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
         token_index=args.token_index,
         refresh_vtm=not args.no_refresh_vtm,
         timeout=args.timeout,
-    ) as stream:
+    )
+    with _closing_unconnected_cloud_stream(stream):
         if args.stream_action == "dump":
-            stream.start()
+            startup_deadline = _start_cli_cloud_stream(
+                stream,
+                timeout=args.timeout,
+                duration_seconds=args.duration,
+            )
             collected_packets: list[Any] | None = None
             if args.decrypt_video:
                 collected_packets = _collect_stream_packets(
                     stream,
                     max_packets=args.max_packets,
                     duration_seconds=args.duration,
+                    first_packet_deadline=startup_deadline,
                     allow_encrypted=args.allow_encrypted,
                 )
                 transport = _detect_stream_packets_transport(collected_packets)
@@ -5040,16 +5186,14 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                     if args.format == "mpegts" and cloud_rtp_packets_have_audio(
                         collected_packets
                     ):
-                        media_key = client.get_cam_key(args.serial, max_retries=1)
-                        if not media_key:
-                            raise PyEzvizError("Could not get camera encryption key")
+                        assert media_key is not None
 
                         def _write_rtp_mpegts(selected_output: BinaryIO) -> None:
                             copy_decrypted_cloud_stream_packets_to_mpegts(
                                 collected_packets,
                                 selected_output,
                                 ffmpeg_path=args.ffmpeg_path,
-                                media_key=str(media_key),
+                                media_key=media_key,
                                 nalu_header_size=_codec_nalu_header_size(
                                     args.decrypt_codec
                                 ),
@@ -5075,6 +5219,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         ),
                         detected_codec=rtp_codec,
                         decrypt_codec=decrypt_codec,
+                        media_key=media_key,
                     )
                     if args.output == "-":
                         if args.format == "raw":
@@ -5108,6 +5253,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         args.serial,
                         payload,
                         codec=args.decrypt_codec,
+                        media_key=media_key,
                     )
                     if args.format == "raw":
                         sys.stdout.buffer.write(payload)
@@ -5124,6 +5270,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         sys.stdout.buffer,
                         max_packets=args.max_packets,
                         duration_seconds=args.duration,
+                        first_packet_deadline=startup_deadline,
                         allow_encrypted=args.allow_encrypted,
                     )
                 else:
@@ -5133,6 +5280,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         ffmpeg_path=args.ffmpeg_path,
                         max_packets=args.max_packets,
                         duration_seconds=args.duration,
+                        first_packet_deadline=startup_deadline,
                         allow_encrypted=args.allow_encrypted,
                     )
             else:
@@ -5144,6 +5292,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                             args.serial,
                             payload,
                             codec=args.decrypt_codec,
+                            media_key=media_key,
                         )
                         if args.format == "raw":
                             output.write(payload)
@@ -5160,6 +5309,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                             output,
                             max_packets=args.max_packets,
                             duration_seconds=args.duration,
+                            first_packet_deadline=startup_deadline,
                             allow_encrypted=args.allow_encrypted,
                         )
                     else:
@@ -5169,6 +5319,7 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                             ffmpeg_path=args.ffmpeg_path,
                             max_packets=args.max_packets,
                             duration_seconds=args.duration,
+                            first_packet_deadline=startup_deadline,
                             allow_encrypted=args.allow_encrypted,
                         )
             return 0

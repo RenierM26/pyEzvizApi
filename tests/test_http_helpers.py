@@ -3875,6 +3875,8 @@ def _valid_hevc_validation_nals(
     sps_vps_id: int = 0,
     pps_sps_id: int = 0,
     slice_pps_id: int = 0,
+    slice_type: int = 2,
+    output_flag_present: bool = False,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3907,7 +3909,9 @@ def _valid_hevc_validation_nals(
     pps_bits = (
         _unsigned_exp_golomb_bits(0)
         + _unsigned_exp_golomb_bits(pps_sps_id)
-        + "0000000"
+        + "0"
+        + ("1" if output_flag_present else "0")
+        + "00000"
         + _unsigned_exp_golomb_bits(0) * 2
         + _signed_exp_golomb_bits(0)
         + "000"
@@ -3917,7 +3921,8 @@ def _valid_hevc_validation_nals(
     slice_bits = (
         "1"
         + _unsigned_exp_golomb_bits(slice_pps_id)
-        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(slice_type)
+        + ("0" if output_flag_present else "")
     )
     return [
         (b"\x40\x01", b"\x01" + _rbsp_bytes(vps_bits)),
@@ -3945,6 +3950,18 @@ def test_hevc_validation_rejects_truncated_linked_structures() -> None:
     ]
 
     assert not _has_linked_hevc_video(truncated)
+
+
+def test_hevc_validation_parses_slice_type_before_output_flag() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(output_flag_present=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            output_flag_present=True,
+            slice_type=3,
+        )
+    )
 
 
 def test_hevc_validation_parses_interleaved_sub_layer_flags() -> None:
@@ -4344,7 +4361,10 @@ def test_save_cloud_clip_fallback_detects_replacement_during_copy(
     assert output_path.read_bytes() == replacement_payload
 
 
-@pytest.mark.parametrize("duration_seconds", [None, float("inf"), float("nan")])
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [None, float("inf"), float("nan"), 1e12, sys.float_info.max],
+)
 def test_save_unbounded_clear_cloud_clip_writes_directly(
     monkeypatch,
     tmp_path,
@@ -4475,10 +4495,10 @@ def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
         output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
-    run_calls: list[dict[str, Any]] = []
+    run_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
-    def fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
-        run_calls.append(kwargs)
+    def fake_run(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        run_calls.append((args, kwargs))
         return SimpleNamespace(
             returncode=0,
             stdout=b"\x00",
@@ -4501,7 +4521,8 @@ def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
 
     assert result["ok"] is True
     assert stat.S_IMODE(output_path.stat().st_mode) == expected_mode
-    assert run_calls[0]["timeout"] == CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS
+    assert "-nostdin" in run_calls[0][0][0]
+    assert run_calls[0][1]["timeout"] == CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS
 
 
 def test_save_cloud_clip_does_not_decode_validate_encrypted_path(

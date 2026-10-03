@@ -199,6 +199,7 @@ from .media import (
     has_positive_finite_capture_bound,
     is_positive_capture_count_bound,
     is_positive_finite_duration_bound,
+    is_positive_socket_timeout_bound,
 )
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
@@ -370,6 +371,7 @@ def _require_decodable_saved_video_frame(
         completed = subprocess.run(
             [
                 ffmpeg_path,
+                "-nostdin",
                 "-v",
                 "error",
                 "-i",
@@ -929,12 +931,13 @@ def _hevc_slice_pps_id(
     pps_id, offset = decoded
     _, _, output_flag_present, extra_slice_header_bits = pps_info[pps_id]
     offset += extra_slice_header_bits
-    if output_flag_present:
-        offset += 1
     slice_type = _read_unsigned_exp_golomb(bits, offset)
     if slice_type is None or slice_type[0] > 2:
         return None
-    return pps_id if bits.rfind("1") >= slice_type[1] else None
+    offset = slice_type[1]
+    if output_flag_present:
+        offset += 1
+    return pps_id if bits.rfind("1") >= offset else None
 
 
 def _publish_validated_cloud_clip(
@@ -1042,7 +1045,11 @@ def _legacy_duration_is_effectively_unbounded(duration_seconds: float | None) ->
     if duration_seconds is None:
         return True
     try:
-        return not math.isfinite(duration_seconds)
+        if not math.isfinite(duration_seconds):
+            return True
+        return duration_seconds > 0 and not is_positive_socket_timeout_bound(
+            duration_seconds
+        )
     except (OverflowError, TypeError):
         return isinstance(duration_seconds, int) and duration_seconds > 0
 

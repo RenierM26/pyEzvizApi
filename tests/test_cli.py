@@ -2861,6 +2861,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
 def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
     class FakeVtmStream(VtmStreamClient):
         def __init__(self) -> None:
+            super().__init__("vtm://example.invalid/stream")
             self.iterator_kwargs: dict[str, Any] = {}
 
         def iter_packets(self, **kwargs: Any) -> Any:

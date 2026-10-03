@@ -569,6 +569,12 @@ class VtmStreamClient:
                 packet = self.read_packet(deadline=read_deadline, monotonic=monotonic)
             except _VtmReadDeadlineExpired:
                 continue
+            if not media_started:
+                # Bound every packet received before media starts, including
+                # empty stream frames and control traffic that callers elect
+                # not to yield.  Otherwise a max-packet-only capture can be
+                # kept alive forever without consuming its visible budget.
+                pre_media_seen += 1
             if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
                 try:
                     self.send_keepalive(
@@ -584,10 +590,16 @@ class VtmStreamClient:
                 if include_control:
                     seen += 1
                     yield packet
+                if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                    self._read_inactivity_deadline = None
+                    break
                 continue
 
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
                 if not packet.body:
+                    if pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                        self._read_inactivity_deadline = None
+                        break
                     continue
                 is_media = (
                     media_started
@@ -601,8 +613,6 @@ class VtmStreamClient:
                         first_packet_deadline = None
                         media_started = True
                     seen += 1
-                else:
-                    pre_media_seen += 1
                 yield packet
                 if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
                     self._read_inactivity_deadline = None
@@ -612,6 +622,9 @@ class VtmStreamClient:
             if include_control:
                 seen += 1
                 yield packet
+            if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                self._read_inactivity_deadline = None
+                break
 
     def iter_payloads(
         self,

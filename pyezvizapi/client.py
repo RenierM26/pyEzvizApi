@@ -14,6 +14,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -485,11 +486,25 @@ class _H264PpsInfo(NamedTuple):
     redundant_pic_cnt_present: bool
 
 
+class _HevcSpsInfo(NamedTuple):
+    """SPS fields needed to parse a linked HEVC slice header."""
+
+    vps_id: int
+    log2_max_pic_order_cnt_lsb: int
+    short_term_delta_poc_counts: tuple[int, ...]
+    long_term_ref_pics_present: bool
+    long_term_ref_pics_sps: int
+    temporal_mvp_enabled: bool
+    sample_adaptive_offset_enabled: bool
+    chroma_format_idc: int
+
+
 def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
     """Return whether H.264 parameter sets link to a plausible slice."""
 
     h264_sps: dict[int, _H264SpsInfo] = {}
     h264_pps: dict[int, _H264PpsInfo] = {}
+    pps_nals: list[bytes] = []
     slices: list[tuple[int, bytes]] = []
     for header_bytes, nal_body in nals:
         header = header_bytes[0]
@@ -501,11 +516,13 @@ def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
             if sps_info is not None:
                 h264_sps[sps_info.sps_id] = sps_info
         elif h264_type == 8:
-            pps_info = _h264_pps_info(nal_body)
-            if pps_info is not None:
-                h264_pps[pps_info.pps_id] = pps_info
+            pps_nals.append(nal_body)
         elif 1 <= h264_type <= 5:
             slices.append((header, nal_body))
+    for nal_body in pps_nals:
+        pps_info = _h264_pps_info(nal_body, sps_info=h264_sps)
+        if pps_info is not None:
+            h264_pps[pps_info.pps_id] = pps_info
     return any(
         _h264_slice_pps_id(
             nal_body,
@@ -522,7 +539,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
     """Return whether HEVC parameter sets accompany a plausible slice."""
 
     vps_ids: set[int] = set()
-    sps_info: dict[int, tuple[int, int]] = {}
+    sps_info: dict[int, _HevcSpsInfo] = {}
     pps_info: dict[int, tuple[int, bool, bool, int]] = {}
     slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
@@ -538,7 +555,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
         elif nal_type == 33:
             sps_ids = _hevc_sps_ids(nal_body)
             if sps_ids is not None:
-                sps_info[sps_ids[0]] = sps_ids[1:]
+                sps_info[sps_ids[0]] = sps_ids[1]
         elif nal_type == 34:
             pps_ids = _hevc_pps_ids(nal_body)
             if pps_ids is not None:
@@ -557,7 +574,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
     return any(
         pps_id in pps_info
         and pps_info[pps_id][0] in sps_info
-        and sps_info[pps_info[pps_id][0]][0] in vps_ids
+        and sps_info[pps_info[pps_id][0]].vps_id in vps_ids
         for pps_id in slice_pps_ids
     )
 
@@ -863,7 +880,11 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
     )
 
 
-def _h264_pps_info(data: bytes) -> _H264PpsInfo | None:  # noqa: PLR0911
+def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
+    data: bytes,
+    *,
+    sps_info: Mapping[int, _H264SpsInfo],
+) -> _H264PpsInfo | None:
     """Return fields needed to validate slices after parsing an H.264 PPS."""
 
     bits = _rbsp_bits(data)
@@ -908,6 +929,40 @@ def _h264_pps_info(data: bytes) -> _H264PpsInfo | None:  # noqa: PLR0911
         return None
     deblocking_filter_control_present = bits[offset] == "1"
     redundant_pic_cnt_present = bits[offset + 2] == "1"
+    offset += 3
+    if offset < len(bits):
+        if offset + 2 > len(bits):
+            return None
+        transform_8x8_mode = bits[offset] == "1"
+        scaling_matrix_present = bits[offset + 1] == "1"
+        offset += 2
+        if scaling_matrix_present:
+            linked_sps = sps_info.get(sps[0])
+            if linked_sps is None:
+                return None
+            scaling_list_count = 6
+            if transform_8x8_mode:
+                scaling_list_count += 6 if linked_sps.chroma_format_idc == 3 else 2
+            for index in range(scaling_list_count):
+                if offset >= len(bits):
+                    return None
+                scaling_list_present = bits[offset] == "1"
+                offset += 1
+                if scaling_list_present:
+                    skipped = _skip_h264_scaling_list(
+                        bits,
+                        offset,
+                        16 if index < 6 else 64,
+                    )
+                    if skipped is None:
+                        return None
+                    offset = skipped
+        second_chroma_qp = _read_signed_exp_golomb(bits, offset)
+        if second_chroma_qp is None:
+            return None
+        offset = second_chroma_qp[1]
+    if offset != len(bits):
+        return None
     return _H264PpsInfo(
         pps_id=pps[0],
         sps_id=sps[0],
@@ -1579,7 +1634,7 @@ def _skip_hevc_vui_parameters(  # noqa: PLR0911, PLR0912, PLR0915
 
 def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
-) -> tuple[int, int, int] | None:
+) -> tuple[int, _HevcSpsInfo] | None:
     """Return linked IDs and POC width after parsing mandatory SPS fields."""
 
     bits = _rbsp_bits(data)
@@ -1665,7 +1720,9 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             offset = scaling_list_offset
     if offset + 3 > len(bits):
         return None
-    offset += 2  # amp_enabled_flag and sample_adaptive_offset_enabled_flag
+    offset += 1  # amp_enabled_flag
+    sample_adaptive_offset_enabled = bits[offset] == "1"
+    offset += 1
     pcm_enabled = bits[offset] == "1"
     offset += 1
     if pcm_enabled:
@@ -1698,10 +1755,12 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         return None
     long_term_present = bits[offset] == "1"
     offset += 1
+    long_term_ref_pics_sps = 0
     if long_term_present:
         long_term_count = _read_unsigned_exp_golomb(bits, offset)
         if long_term_count is None or long_term_count[0] > 32:
             return None
+        long_term_ref_pics_sps = long_term_count[0]
         offset = long_term_count[1]
         long_term_bits = long_term_count[0] * (values[2] + 5)
         if offset + long_term_bits > len(bits):
@@ -1709,6 +1768,7 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         offset += long_term_bits
     if offset + 3 > len(bits):
         return None
+    temporal_mvp_enabled = bits[offset] == "1"
     offset += 2  # temporal MVP and strong intra smoothing flags
     vui_present = bits[offset] == "1"
     offset += 1
@@ -1730,9 +1790,32 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             return None
         extension_flags = bits[offset : offset + 8]
         offset += 8
-        if "1" in extension_flags:
+        range_extension = extension_flags[0] == "1"
+        unsupported_declared_extension = "1" in extension_flags[1:4]
+        if unsupported_declared_extension:
+            return None
+        if range_extension:
+            if offset + 9 > len(bits):
+                return None
+            offset += 9
+        if "1" in extension_flags[4:]:
+            # sps_extension_data_flag occupies all remaining RBSP data.
             offset = len(bits)
-    return (sps[0], vps_id, values[2] + 4) if offset == len(bits) else None
+    if offset != len(bits):
+        return None
+    return (
+        sps[0],
+        _HevcSpsInfo(
+            vps_id=vps_id,
+            log2_max_pic_order_cnt_lsb=values[2] + 4,
+            short_term_delta_poc_counts=tuple(delta_poc_counts),
+            long_term_ref_pics_present=long_term_present,
+            long_term_ref_pics_sps=long_term_ref_pics_sps,
+            temporal_mvp_enabled=temporal_mvp_enabled,
+            sample_adaptive_offset_enabled=sample_adaptive_offset_enabled,
+            chroma_format_idc=chroma_format[0],
+        ),
+    )
 
 
 def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
@@ -1860,11 +1943,11 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     )
 
 
-def _hevc_slice_pps_id(  # noqa: PLR0911
+def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
     *,
     nal_type: int,
-    sps_info: dict[int, tuple[int, int]],
+    sps_info: dict[int, _HevcSpsInfo],
     pps_info: dict[int, tuple[int, bool, bool, int]],
 ) -> int | None:
     """Return a PPS id after parsing mandatory linked HEVC slice fields."""
@@ -1898,10 +1981,89 @@ def _hevc_slice_pps_id(  # noqa: PLR0911
     if output_flag_present:
         offset += 1
     if nal_type not in {19, 20}:
-        log2_max_pic_order_cnt_lsb = linked_sps[1]
+        log2_max_pic_order_cnt_lsb = linked_sps.log2_max_pic_order_cnt_lsb
         if offset + log2_max_pic_order_cnt_lsb > len(bits):
             return None
         offset += log2_max_pic_order_cnt_lsb
+        if offset >= len(bits):
+            return None
+        short_term_ref_pic_set_sps = bits[offset] == "1"
+        offset += 1
+        short_term_counts = list(linked_sps.short_term_delta_poc_counts)
+        if short_term_ref_pic_set_sps:
+            if not short_term_counts:
+                return None
+            if len(short_term_counts) > 1:
+                index_bits = (len(short_term_counts) - 1).bit_length()
+                if offset + index_bits > len(bits):
+                    return None
+                set_index = int(bits[offset : offset + index_bits], 2)
+                if set_index >= len(short_term_counts):
+                    return None
+                offset += index_bits
+        else:
+            short_term_set = _skip_hevc_short_term_ref_pic_set(
+                bits,
+                offset,
+                set_index=len(short_term_counts),
+                delta_poc_counts=short_term_counts,
+            )
+            if short_term_set is None:
+                return None
+            offset = short_term_set[0]
+        if linked_sps.long_term_ref_pics_present:
+            if linked_sps.long_term_ref_pics_sps:
+                long_term_sps = _read_unsigned_exp_golomb(bits, offset)
+                if (
+                    long_term_sps is None
+                    or long_term_sps[0] > linked_sps.long_term_ref_pics_sps
+                ):
+                    return None
+                num_long_term_sps, offset = long_term_sps
+            else:
+                num_long_term_sps = 0
+            long_term_pics = _read_unsigned_exp_golomb(bits, offset)
+            if long_term_pics is None or long_term_pics[0] > 32:
+                return None
+            num_long_term_pics, offset = long_term_pics
+            long_term_index_bits = (
+                (linked_sps.long_term_ref_pics_sps - 1).bit_length()
+                if linked_sps.long_term_ref_pics_sps > 1
+                else 0
+            )
+            for index in range(num_long_term_sps + num_long_term_pics):
+                if index < num_long_term_sps:
+                    offset += long_term_index_bits
+                else:
+                    offset += log2_max_pic_order_cnt_lsb
+                if offset >= len(bits):
+                    return None
+                offset += 1  # used_by_curr_pic_lt_flag
+                if offset >= len(bits):
+                    return None
+                delta_poc_msb_present = bits[offset] == "1"
+                offset += 1
+                if delta_poc_msb_present:
+                    delta_cycle = _read_unsigned_exp_golomb(bits, offset)
+                    if delta_cycle is None:
+                        return None
+                    offset = delta_cycle[1]
+        if linked_sps.temporal_mvp_enabled:
+            if offset >= len(bits):
+                return None
+            offset += 1
+    if linked_sps.sample_adaptive_offset_enabled:
+        if offset >= len(bits):
+            return None
+        offset += 1
+        if linked_sps.chroma_format_idc:
+            if offset >= len(bits):
+                return None
+            offset += 1
+    # The validation path only needs an independently decodable I slice.  Do
+    # not guess over the substantially different P/B reference-list syntax.
+    if slice_type[0] != 2:
+        return None
     slice_qp_delta = _read_signed_exp_golomb(bits, offset)
     if slice_qp_delta is None:
         return None
@@ -1909,7 +2071,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911
     return pps_id if offset < len(bits) else None
 
 
-def _publish_validated_cloud_clip(
+def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
     temp_path: Path,
     target: Path,
     *,
@@ -1956,23 +2118,71 @@ def _publish_validated_cloud_clip(
     ):
         os.close(destination_fd)
         raise PyEzvizError("Cloud clip output target changed during capture")
+    backup = tempfile.SpooledTemporaryFile(  # noqa: SIM115 - closed in finally
+        max_size=16 * 1024 * 1024
+    )
+    read_fd: int | None = None
+    temporarily_added_read_permission = False
     try:
+        try:
+            read_fd = os.open(
+                target,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except PermissionError:
+            # A legacy save supports an owner-writable, read-disabled target.
+            # Temporarily add owner-read access solely to make a rollback copy,
+            # then restore the exact mode before touching its contents.
+            os.fchmod(destination_fd, destination_stat.st_mode | stat.S_IRUSR)
+            temporarily_added_read_permission = True
+            read_fd = os.open(
+                target,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+        finally:
+            if temporarily_added_read_permission:
+                os.fchmod(destination_fd, stat.S_IMODE(destination_stat.st_mode))
+                temporarily_added_read_permission = False
+        read_stat = os.fstat(read_fd)
+        if (read_stat.st_dev, read_stat.st_ino) != expected_identity:
+            raise PyEzvizError("Cloud clip output target changed during capture")
+        with os.fdopen(read_fd, "rb") as original:
+            read_fd = None
+            while chunk := original.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                backup.write(chunk)
+        backup.seek(0)
         _reserve_existing_clip_space(
             destination_fd,
             required_size=temp_path.stat().st_size,
             original_size=destination_stat.st_size,
-            original_allocated_blocks=destination_stat.st_blocks,
+            original_allocated_blocks=getattr(destination_stat, "st_blocks", None),
+            filesystem_path=target.parent,
         )
-    except BaseException:
-        os.close(destination_fd)
-        raise
-    with temp_path.open("rb") as source, os.fdopen(destination_fd, "wb") as destination:
-        destination.truncate(0)
-        while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
-            destination.write(chunk)
-        destination.truncate()
-        destination.flush()
-        os.fsync(destination.fileno())
+        try:
+            with temp_path.open("rb") as source, os.fdopen(
+                destination_fd,
+                "wb",
+            ) as destination:
+                destination_fd = -1
+                destination.truncate(0)
+                while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                    destination.write(chunk)
+                destination.truncate()
+                destination.flush()
+                os.fsync(destination.fileno())
+        except BaseException:
+            _restore_cloud_clip_after_publication_failure(
+                target,
+                cast(BinaryIO, backup),
+                expected_identity=expected_identity,
+            )
+            raise
+    finally:
+        if read_fd is not None:
+            os.close(read_fd)
+        if destination_fd >= 0:
+            os.close(destination_fd)
+        backup.close()
     if not _regular_path_has_identity(target, expected_identity):
         raise PyEzvizError("Cloud clip output target changed during capture")
     temp_path.unlink()
@@ -1983,25 +2193,62 @@ def _reserve_existing_clip_space(
     *,
     required_size: int,
     original_size: int,
-    original_allocated_blocks: int,
+    original_allocated_blocks: int | None,
+    filesystem_path: Path,
 ) -> None:
-    """Reserve replacement space before truncating an existing clip."""
+    """Conservatively preflight replacement space without changing the target."""
 
-    fallocate = getattr(os, "posix_fallocate", None)
-    if callable(fallocate):
-        try:
-            fallocate(destination_fd, 0, required_size)
-            return
-        except OSError as err:
-            with suppress(OSError):
-                os.ftruncate(destination_fd, original_size)
-            if err.errno not in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
-                raise
-    filesystem = os.fstatvfs(destination_fd)
-    available_bytes = filesystem.f_bavail * filesystem.f_frsize
-    reclaimable_bytes = original_allocated_blocks * 512
+    # Reserving on the destination and then truncating it releases the very
+    # blocks that were reserved.  Keep this check non-mutating; the rollback
+    # copy above is the authority if the subsequent write still fails.
+    if hasattr(os, "fstatvfs"):
+        filesystem = os.fstatvfs(destination_fd)
+        available_bytes = filesystem.f_bavail * filesystem.f_frsize
+    else:
+        available_bytes = shutil.disk_usage(filesystem_path).free
+    reclaimable_bytes = (
+        original_allocated_blocks * 512
+        if original_allocated_blocks is not None
+        else original_size
+    )
     if required_size > available_bytes + reclaimable_bytes:
         raise OSError(errno.ENOSPC, "insufficient space to replace cloud clip safely")
+
+
+def _restore_cloud_clip_after_publication_failure(
+    target: Path,
+    backup: BinaryIO,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Restore an existing clip after a fallible in-place publication."""
+
+    restore_fd = os.open(
+        target,
+        os.O_WRONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        restore_stat = os.fstat(restore_fd)
+        if (restore_stat.st_dev, restore_stat.st_ino) != expected_identity:
+            raise PyEzvizError("Cloud clip output target changed during capture")
+        backup.seek(0)
+        with os.fdopen(restore_fd, "wb") as destination:
+            restore_fd = -1
+            destination.truncate(0)
+            while chunk := backup.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                destination.write(chunk)
+            destination.truncate()
+            destination.flush()
+            os.fsync(destination.fileno())
+    except BaseException as restore_error:
+        raise PyEzvizError(
+            "Cloud clip publication failed and the previous clip could not be restored"
+        ) from restore_error
+    finally:
+        if restore_fd >= 0:
+            os.close(restore_fd)
 
 
 def _copy_validated_clip_to_new_target(temp_path: Path, target: Path) -> None:

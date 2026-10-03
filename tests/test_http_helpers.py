@@ -33,6 +33,7 @@ from pyezvizapi.client import (
     _has_linked_h264_video,
     _has_linked_hevc_video,
     _LocalStreamPacketMetadataRecorder,
+    _reserve_existing_clip_space,
 )
 from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
 from pyezvizapi.constants import (
@@ -3903,7 +3904,7 @@ def _hevc_profile_tier_level_bits(
     return bits
 
 
-def _valid_hevc_validation_nals(
+def _valid_hevc_validation_nals(  # noqa: PLR0913
     *,
     sps_vps_id: int = 0,
     pps_sps_id: int = 0,
@@ -3913,6 +3914,8 @@ def _valid_hevc_validation_nals(
     complete_vps: bool = True,
     complete_sps: bool = True,
     complete_pps: bool = True,
+    sps_extension_bits: str | None = None,
+    valid_inline_slice_rps: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3948,7 +3951,12 @@ def _valid_hevc_validation_nals(
             + _unsigned_exp_golomb_bits(0) * 6
             + "0000"  # scaling-list, AMP, SAO, and PCM flags
             + _unsigned_exp_golomb_bits(0)  # num_short_term_ref_pic_sets
-            + "00000"  # long-term, temporal-MVP, smoothing, VUI, extension
+            + "0000"  # long-term, temporal-MVP, smoothing, and VUI
+            + (
+                "0"
+                if sps_extension_bits is None
+                else "1" + sps_extension_bits
+            )
             if complete_sps
             else ""
         )
@@ -3978,6 +3986,11 @@ def _valid_hevc_validation_nals(
         + _unsigned_exp_golomb_bits(slice_type)
         + ("0" if output_flag_present else "")
         + "0" * 8  # slice_pic_order_cnt_lsb
+        + (
+            "0" + _unsigned_exp_golomb_bits(0) * 2
+            if valid_inline_slice_rps
+            else "1"
+        )
         + _signed_exp_golomb_bits(0)  # slice_qp_delta
         + "0"  # at least one slice-data bit before rbsp_stop_one_bit
     )
@@ -4033,6 +4046,45 @@ def test_hevc_validation_parses_interleaved_sub_layer_flags() -> None:
     )
 
     assert _has_linked_hevc_video(nals)
+
+
+def test_hevc_validation_rejects_truncated_sps_range_extension() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(sps_extension_bits="10000000" + "0" * 9)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(sps_extension_bits="10000000")
+    )
+
+
+def test_hevc_validation_rejects_invalid_slice_reference_picture_flag() -> None:
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(valid_inline_slice_rps=False)
+    )
+
+
+def test_h264_validation_rejects_truncated_pps_extension() -> None:
+    sps = (
+        b"\x67\x42",
+        b"\x42\xc0\x0a\xda\x7b\x01\x10\x00\x00\x03\x00\x10"
+        b"\x00\x00\x03\x00\x28\xf1\x22\x6a",
+    )
+    slice_nal = (b"\x65\x88", b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0")
+    base_pps_bits = (
+        _unsigned_exp_golomb_bits(0) * 2
+        + "00"
+        + _unsigned_exp_golomb_bits(0) * 3
+        + "000"
+        + _signed_exp_golomb_bits(0) * 3
+        + "000"
+    )
+
+    assert _has_linked_h264_video(
+        [sps, (b"\x68\x00", _rbsp_bytes(base_pps_bits)), slice_nal]
+    )
+    assert not _has_linked_h264_video(
+        [sps, (b"\x68\x00", _rbsp_bytes(base_pps_bits + "1")), slice_nal]
+    )
 
 
 def test_save_decrypted_cloud_clip_rejects_fifo_target(monkeypatch, tmp_path) -> None:
@@ -4109,8 +4161,10 @@ def test_save_cloud_clip_preserves_existing_target_when_reservation_fails(
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        "pyezvizapi.client.os.posix_fallocate",
-        lambda *_args: (_ for _ in ()).throw(OSError(errno.ENOSPC, "filesystem full")),
+        "pyezvizapi.client._reserve_existing_clip_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.ENOSPC, "filesystem full")
+        ),
     )
 
     with pytest.raises(OSError, match="filesystem full"):
@@ -4124,6 +4178,75 @@ def test_save_cloud_clip_preserves_existing_target_when_reservation_fails(
 
     assert output_path.read_bytes() == existing_clip
     assert output_path.stat().st_ino == original_inode
+
+
+def test_save_cloud_clip_restores_existing_target_when_publication_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    existing_clip = b"existing-clip"
+    output_path.write_bytes(existing_clip)
+    original_inode = output_path.stat().st_ino
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    real_fsync = os.fsync
+    fsync_calls = 0
+
+    def fail_first_fsync(file_descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 1:
+            raise OSError(errno.EIO, "simulated publication failure")
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr("pyezvizapi.client.os.fsync", fail_first_fsync)
+
+    with pytest.raises(OSError, match="simulated publication failure"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert fsync_calls == 2
+    assert output_path.read_bytes() == existing_clip
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_existing_clip_reservation_has_portable_filesystem_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    descriptor = os.open(output_path, os.O_WRONLY)
+    monkeypatch.delattr("pyezvizapi.client.os.fstatvfs")
+    monkeypatch.setattr(
+        "pyezvizapi.client.shutil.disk_usage",
+        lambda _path: SimpleNamespace(free=1024),
+    )
+    try:
+        _reserve_existing_clip_space(
+            descriptor,
+            required_size=16,
+            original_size=8,
+            original_allocated_blocks=None,
+            filesystem_path=tmp_path,
+        )
+    finally:
+        os.close(descriptor)
 
 
 def test_save_cloud_clip_falls_back_when_parent_cannot_stage(

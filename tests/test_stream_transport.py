@@ -1427,6 +1427,36 @@ def test_vtm_stream_bounds_nonmedia_packets_before_media_starts() -> None:
     assert stream.read_count == 256
 
 
+def test_vtm_stream_bounds_empty_and_ignored_control_packets_before_media() -> None:
+    class EmptyAndControlStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://vtm.example.test:8554/live", timeout=None)
+            self.read_count = 0
+
+        def read_packet(self, **_kwargs: Any) -> Any:
+            self.read_count += 1
+            return SimpleNamespace(
+                channel=(
+                    VtmChannel.STREAM
+                    if self.read_count % 2
+                    else VtmChannel.MESSAGE
+                ),
+                message_code=0,
+                body=b"",
+            )
+
+    stream = EmptyAndControlStream()
+
+    assert list(
+        stream.iter_packets(
+            max_packets=1,
+            keepalive_interval=None,
+            is_media_packet=lambda _packet: False,
+        )
+    ) == []
+    assert stream.read_count == 256
+
+
 def test_vtm_stream_client_start_follows_redirect_response() -> None:
     redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"
     redirect_key = "redirect-key"

@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, TypedDict, cast
@@ -208,6 +209,7 @@ class _SourceDefaultNaluHeaderSize(int):
 
 _SOURCE_DEFAULT_NALU_HEADER_SIZE: int = _SourceDefaultNaluHeaderSize(0)
 CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS = 5.0
+CLOUD_CLIP_COPY_CHUNK_SIZE = 65536
 
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
@@ -3867,7 +3869,24 @@ class EzvizClient:
                 )
         else:
             start_position = _binary_position(output)
-            copy_cloud(output)
+            if decrypt_video:
+                suffix = ".ts" if output_format == "mpegts" else ".ps"
+                with tempfile.TemporaryDirectory(
+                    prefix="pyezvizapi-cloud-clip-"
+                ) as temp_dir:
+                    temp_path = Path(temp_dir) / f"capture{suffix}"
+                    with temp_path.open("wb") as temp_output:
+                        copy_cloud(temp_output)
+                    _require_decodable_saved_video_frame(
+                        temp_path,
+                        ffmpeg_path=ffmpeg_path,
+                    )
+                    with temp_path.open("rb") as validated_input:
+                        while chunk := validated_input.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                            output.write(chunk)
+                    output.flush()
+            else:
+                copy_cloud(output)
 
         return {
             "ok": True,

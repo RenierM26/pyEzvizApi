@@ -3636,6 +3636,10 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
     )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
 
     client.save_clip(
         "CAM123",
@@ -3753,6 +3757,115 @@ def test_save_cloud_clip_does_not_decode_validate_encrypted_path(
     assert result["ok"] is True
 
 
+def test_save_cloud_clip_validates_binary_output_before_copying(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO(b"prefix-")
+    output.seek(0, io.SEEK_END)
+    validation_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    def fake_validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        assert path.read_bytes() == SAVE_CLIP_PAYLOAD
+        validation_paths.append(path)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        fake_validate,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output.getvalue() == b"prefix-" + SAVE_CLIP_PAYLOAD
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
+    assert len(validation_paths) == 1
+    assert not validation_paths[0].exists()
+
+
+def test_save_cloud_clip_invalid_binary_output_is_untouched_and_temp_is_cleaned(
+    monkeypatch,
+) -> None:
+    client = _client()
+    existing_output = b"existing"
+    output = io.BytesIO(existing_output)
+    output.seek(0, io.SEEK_END)
+    validation_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    def reject(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        validation_paths.append(path)
+        raise PyEzvizError("invalid decoded video")
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        reject,
+    )
+
+    with pytest.raises(PyEzvizError, match="invalid decoded video"):
+        client.save_clip(
+            "CAM123",
+            output,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output.getvalue() == existing_output
+    assert len(validation_paths) == 1
+    assert not validation_paths[0].exists()
+
+
+def test_save_cloud_clip_encrypted_binary_output_still_writes_directly(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: pytest.fail("encrypted output must not be decode-validated"),
+    )
+
+    result = client.save_clip("CAM123", output, source="cloud")
+
+    assert output.getvalue() == SAVE_CLIP_PAYLOAD
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
+
+
 def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
     monkeypatch,
 ) -> None:
@@ -3770,6 +3883,10 @@ def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
     )
 
     client.save_clip(

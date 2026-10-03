@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import datetime as dt
+import errno
 import io
 import json
 import math
@@ -28,6 +29,7 @@ from pyezvizapi.api_endpoints import (
 from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
+    _has_linked_hevc_video,
     _LocalStreamPacketMetadataRecorder,
 )
 from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
@@ -3822,6 +3824,26 @@ def test_save_decrypted_cloud_mpegps_rejects_invalid_slice_body(
     assert not output_path.exists()
 
 
+def test_hevc_validation_links_parameter_sets_to_slice() -> None:
+    vps_body = b"\x1c\x01\xff\xff"
+    sps_body = b"\x11" + b"\x00" * 12 + b"\x80"
+    pps_body = b"\xc0"
+    slice_body = b"\xc0"
+    nals = [
+        (b"\x40\x01", b"\x01" + vps_body),
+        (b"\x42\x01", b"\x01" + sps_body),
+        (b"\x44\x01", b"\x01" + pps_body),
+        (b"\x02\x01", b"\x01" + slice_body),
+    ]
+
+    assert _has_linked_hevc_video(nals)
+    assert not _has_linked_hevc_video(
+        [nals[0], (b"\x42\x01", b"\x01\x21" + b"\x00" * 12 + b"\x80"), *nals[2:]]
+    )
+    assert not _has_linked_hevc_video([*nals[:2], (b"\x44\x01", b"\x01\xa0"), nals[3]])
+    assert not _has_linked_hevc_video([*nals[:3], (b"\x02\x01", b"\x01\xa0")])
+
+
 def test_save_decrypted_cloud_clip_rejects_fifo_target(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "clip.ts"
@@ -3937,6 +3959,104 @@ def test_save_cloud_clip_rejects_concurrent_target_replacement(
         )
 
     assert output_path.read_bytes() == replacement_payload
+
+
+def test_save_cloud_clip_falls_back_when_hard_links_are_unsupported(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        ),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_fallback_does_not_overwrite_concurrent_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    replacement_payload = b"concurrent writer"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def unsupported_link(_source: Path, target: Path) -> None:
+        target.write_bytes(replacement_payload)
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    monkeypatch.setattr("pyezvizapi.client.os.link", unsupported_link)
+
+    with pytest.raises(PyEzvizError, match="changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
+
+
+def test_save_unbounded_clear_cloud_clip_writes_directly(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "stream.ps"
+    observed_names: list[str] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        observed_names.append(str(selected_output.name))
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        output_format="mpegps",
+        duration_seconds=None,
+    )
+
+    assert observed_names == [str(output_path)]
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
 def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(

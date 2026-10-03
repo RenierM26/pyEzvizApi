@@ -6,6 +6,7 @@ import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
 import datetime as dt
+import errno
 import hashlib
 import json
 import logging
@@ -485,19 +486,37 @@ def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
 def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
     """Return whether HEVC parameter sets accompany a plausible slice."""
 
-    nal_types: set[int] = set()
-    has_valid_slice = False
+    vps_ids: set[int] = set()
+    sps_to_vps: dict[int, int] = {}
+    pps_to_sps: dict[int, int] = {}
+    slice_pps_ids: set[int] = set()
     for header, body in nals:
         if len(header) < 2 or header[0] & 0x80 or not (header[1] & 0x07):
             continue
         nal_type = (header[0] >> 1) & 0x3F
-        nal_types.add(nal_type)
-        if nal_type <= 31 and _has_plausible_hevc_slice_header(
-            body[1:],
-            nal_type=nal_type,
-        ):
-            has_valid_slice = True
-    return {32, 33, 34}.issubset(nal_types) and has_valid_slice
+        nal_body = body[1:]
+        if nal_type == 32:
+            vps_id = _hevc_vps_id(nal_body)
+            if vps_id is not None:
+                vps_ids.add(vps_id)
+        elif nal_type == 33:
+            sps_ids = _hevc_sps_ids(nal_body)
+            if sps_ids is not None:
+                sps_to_vps[sps_ids[0]] = sps_ids[1]
+        elif nal_type == 34:
+            pps_ids = _hevc_pps_ids(nal_body)
+            if pps_ids is not None:
+                pps_to_sps[pps_ids[0]] = pps_ids[1]
+        elif nal_type <= 31:
+            pps_id = _hevc_slice_pps_id(nal_body, nal_type=nal_type)
+            if pps_id is not None:
+                slice_pps_ids.add(pps_id)
+    return any(
+        pps_id in pps_to_sps
+        and pps_to_sps[pps_id] in sps_to_vps
+        and sps_to_vps[pps_to_sps[pps_id]] in vps_ids
+        for pps_id in slice_pps_ids
+    )
 
 
 def _rbsp_bits(data: bytes) -> str:
@@ -573,17 +592,66 @@ def _h264_slice_pps_id(data: bytes) -> int | None:
     return None
 
 
-def _has_plausible_hevc_slice_header(data: bytes, *, nal_type: int) -> bool:
-    """Return whether decrypted bytes contain a plausible HEVC slice header."""
+def _hevc_vps_id(data: bytes) -> int | None:
+    """Return a VPS id after validating fixed HEVC VPS marker bits."""
+
+    bits = _rbsp_bits(data)
+    if len(bits) < 32 or bits[16:32] != "1" * 16:
+        return None
+    max_sub_layers_minus1 = int(bits[12:15], 2)
+    return int(bits[:4], 2) if max_sub_layers_minus1 <= 6 else None
+
+
+def _hevc_sps_ids(data: bytes) -> tuple[int, int] | None:
+    """Return linked SPS/VPS ids from a plausible HEVC SPS."""
+
+    bits = _rbsp_bits(data)
+    if len(bits) < 104:
+        return None
+    vps_id = int(bits[:4], 2)
+    max_sub_layers_minus1 = int(bits[4:7], 2)
+    if max_sub_layers_minus1 > 6 or (
+        max_sub_layers_minus1 == 0 and bits[7] != "1"
+    ):
+        return None
+    offset = 104
+    profile_flags = bits[offset : offset + max_sub_layers_minus1]
+    offset += max_sub_layers_minus1
+    level_flags = bits[offset : offset + max_sub_layers_minus1]
+    offset += max_sub_layers_minus1
+    if max_sub_layers_minus1:
+        offset += 2 * (8 - max_sub_layers_minus1)
+    for profile_present, level_present in zip(profile_flags, level_flags, strict=True):
+        if profile_present == "1":
+            offset += 88
+        if level_present == "1":
+            offset += 8
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    return (decoded[0], vps_id) if decoded is not None and decoded[0] <= 15 else None
+
+
+def _hevc_pps_ids(data: bytes) -> tuple[int, int] | None:
+    """Return linked PPS/SPS ids from a plausible HEVC PPS."""
+
+    bits = _rbsp_bits(data)
+    pps = _read_unsigned_exp_golomb(bits, 0)
+    if pps is None or pps[0] > 63:
+        return None
+    sps = _read_unsigned_exp_golomb(bits, pps[1])
+    return (pps[0], sps[0]) if sps is not None and sps[0] <= 15 else None
+
+
+def _hevc_slice_pps_id(data: bytes, *, nal_type: int) -> int | None:
+    """Return the referenced PPS id from a plausible HEVC slice header."""
 
     bits = _rbsp_bits(data)
     if not bits:
-        return False
+        return None
     offset = 1  # first_slice_segment_in_pic_flag
     if 16 <= nal_type <= 23:
         offset += 1  # no_output_of_prior_pics_flag
     decoded = _read_unsigned_exp_golomb(bits, offset)
-    return decoded is not None and decoded[0] <= 63
+    return decoded[0] if decoded is not None and decoded[0] <= 63 else None
 
 
 def _publish_validated_cloud_clip(
@@ -599,6 +667,15 @@ def _publish_validated_cloud_clip(
             os.link(temp_path, target)
         except FileExistsError as err:
             raise PyEzvizError("Cloud clip output target changed during capture") from err
+        except OSError as err:
+            if err.errno not in {
+                errno.EPERM,
+                errno.EOPNOTSUPP,
+                errno.ENOSYS,
+                errno.EXDEV,
+            }:
+                raise
+            _copy_validated_clip_to_new_target(temp_path, target)
         temp_path.unlink()
         return
 
@@ -620,6 +697,25 @@ def _publish_validated_cloud_clip(
         destination.flush()
         os.fsync(destination.fileno())
     temp_path.unlink()
+
+
+def _copy_validated_clip_to_new_target(temp_path: Path, target: Path) -> None:
+    """Exclusively create a target when its filesystem cannot hard-link."""
+
+    mode = stat.S_IMODE(temp_path.stat().st_mode)
+    try:
+        target_fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    except FileExistsError as err:
+        raise PyEzvizError("Cloud clip output target changed during capture") from err
+    try:
+        with temp_path.open("rb") as source, os.fdopen(target_fd, "wb") as destination:
+            while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                destination.write(chunk)
+            destination.flush()
+            os.fsync(destination.fileno())
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
 
 
 def _cloud_clip_staging(
@@ -4118,7 +4214,15 @@ class EzvizClient:
                 if output_path.is_symlink()
                 else output_path
             )
-            if not decrypt_video and _is_existing_non_regular_path(publication_target):
+            unbounded_clear_capture = (
+                not decrypt_video
+                and duration_seconds is None
+                and max_packets is None
+            )
+            if unbounded_clear_capture or (
+                not decrypt_video
+                and _is_existing_non_regular_path(publication_target)
+            ):
                 with output_path.open("wb") as output_file:
                     copy_cloud(output_file)
             else:

@@ -2218,6 +2218,32 @@ def test_cloud_media_predicate_accepts_allowed_encrypted_stream_packet() -> None
     )
 
 
+def test_cloud_mpegts_router_forwards_allowed_opaque_encrypted_packet() -> None:
+    packet = VtmPacket(
+        channel=VtmChannel.ENCRYPTED_STREAM,
+        length=len(b"opaque-ciphertext"),
+        sequence=1,
+        message_code=0,
+        body=b"opaque-ciphertext",
+    )
+
+    class EncryptedStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            return iter((packet,))
+
+    output = io.BytesIO()
+    copy_cloud_stream_packets_to_mpegts(
+        EncryptedStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=1,
+        allow_encrypted=True,
+    )
+
+    assert output.getvalue() == packet.body
+
+
 def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(
     monkeypatch,
 ) -> None:

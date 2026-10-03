@@ -3927,6 +3927,7 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     deblocking_filter_override_enabled: bool = False,
     include_slice_deblocking_fields: bool = True,
     separate_colour_plane: bool = False,
+    sample_adaptive_offset_enabled: bool = False,
     loop_filter_across_slices_enabled: bool = False,
     tiles_enabled: bool = False,
     entropy_coding_sync_enabled: bool = False,
@@ -3966,7 +3967,9 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             "0"  # sps_sub_layer_ordering_info_present_flag
             + _unsigned_exp_golomb_bits(0) * 3
             + _unsigned_exp_golomb_bits(0) * 6
-            + "0000"  # scaling-list, AMP, SAO, and PCM flags
+            + "00"  # scaling-list and AMP flags
+            + ("1" if sample_adaptive_offset_enabled else "0")
+            + "0"  # PCM flag
             + _unsigned_exp_golomb_bits(0)  # num_short_term_ref_pic_sets
             + "0000"  # long-term, temporal-MVP, smoothing, and VUI
             + (
@@ -4025,6 +4028,11 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             "0" + _unsigned_exp_golomb_bits(0) * 2
             if valid_inline_slice_rps
             else "1"
+        )
+        + (
+            "0" + ("" if separate_colour_plane else "0")
+            if sample_adaptive_offset_enabled
+            else ""
         )
         + _signed_exp_golomb_bits(0)  # slice_qp_delta
         + (
@@ -4185,6 +4193,15 @@ def test_hevc_validation_supports_separate_colour_plane_slices() -> None:
     )
 
 
+def test_hevc_separate_colour_plane_omits_chroma_sao_flag() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            separate_colour_plane=True,
+            sample_adaptive_offset_enabled=True,
+        )
+    )
+
+
 def test_mpegps_video_payload_rejects_truncated_declared_pes_length() -> None:
     truncated_pes = (
         b"\x00\x00\x01\xe0"
@@ -4242,6 +4259,67 @@ def test_h264_validation_requires_slice_data_after_cabac_alignment() -> None:
             pps_info={0: pps},
         )
         is None
+    )
+
+
+def test_h264_partition_a_requires_slice_data_after_slice_id() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + "0"
+        + _signed_exp_golomb_bits(0)
+    )
+    slice_id = _unsigned_exp_golomb_bits(0)
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + slice_id + "0"),
+            nal_header=0x42,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + slice_id),
+            nal_header=0x42,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:
+    sps = _H264SpsInfo(0, 3, True, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, True, 0, False, False)
+    bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + "00"  # colour_plane_id
+        + "0000"  # frame_num
+        + "0"  # num_ref_idx_active_override_flag
+        + "0"  # ref_pic_list_modification_flag_l0
+        + _unsigned_exp_golomb_bits(0)  # luma_log2_weight_denom
+        + "0"  # luma_weight_l0_flag
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + "0"  # slice data
+    )
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(bits),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
     )
 
 

@@ -1210,7 +1210,9 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
         weighted_offset = _skip_h264_pred_weight_table(
             bits,
             offset,
-            chroma_format_idc=sps.chroma_format_idc,
+            chroma_format_idc=(
+                0 if sps.separate_colour_plane else sps.chroma_format_idc
+            ),
             ref_counts=tuple(ref_counts),
         )
         if weighted_offset is None:
@@ -1252,6 +1254,11 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                 if decoded_signed is None:
                     return None
                 offset = decoded_signed[1]
+    if nal_type == 2:
+        slice_id = _read_unsigned_exp_golomb(bits, offset)
+        if slice_id is None or slice_id[0] > 65535:
+            return None
+        offset = slice_id[1]
     if pps.entropy_coding_mode:
         while offset % 8:
             if offset >= len(bits) or bits[offset] != "1":
@@ -2168,7 +2175,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
             return None
         slice_sao_luma = bits[offset] == "1"
         offset += 1
-        if linked_sps.chroma_format_idc:
+        if linked_sps.chroma_format_idc and not linked_sps.separate_colour_plane:
             if offset >= len(bits):
                 return None
             slice_sao_chroma = bits[offset] == "1"

@@ -946,6 +946,10 @@ class _CloudMediaProbe:
         if _is_cloud_media_packet(packet, allow_encrypted=self.allow_encrypted):
             self.identified = True
             self.transport = detect_transport(packet.body)
+            if self.transport == StreamTransport.UNKNOWN and packet.encrypted:
+                # Ciphertext has no inspectable framing. Route it through the
+                # MPEG-TS output path, which preserves allowed encrypted bodies.
+                self.transport = StreamTransport.MPEG_TS
             self.media_prefix = packet.body
             return True
         if not packet.body or packet.encrypted:
@@ -1150,6 +1154,10 @@ def _write_cloud_mpegts_packets(
     buffer = bytearray()
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
+        if packet.encrypted:
+            output.write(packet.body)
+            output.flush()
+            continue
         buffer.extend(packet.body)
         while buffer:
             sync_offset = buffer.find(b"\x47")

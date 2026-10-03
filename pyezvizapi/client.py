@@ -743,34 +743,184 @@ def _h264_slice_pps_id(data: bytes) -> int | None:
     return None
 
 
-def _hevc_vps_id(data: bytes) -> int | None:  # noqa: PLR0911
+def _hevc_vps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915
     """Return a VPS id after parsing its mandatory syntax prefix."""
 
     bits = _rbsp_bits(data)
-    if len(bits) < 32 or bits[16:32] != "1" * 16:
+    trailing_one = bits.rfind("1")
+    if trailing_one < 32:
         return None
-    max_sub_layers_minus1 = int(bits[12:15], 2)
+    syntax = bits[:trailing_one]
+    if len(syntax) < 32 or syntax[16:32] != "1" * 16:
+        return None
+    max_sub_layers_minus1 = int(syntax[12:15], 2)
     if max_sub_layers_minus1 > 6:
         return None
-    offset = _skip_hevc_profile_tier_level(bits, 32, max_sub_layers_minus1)
-    if offset is None or offset >= len(bits):
+    offset = _skip_hevc_profile_tier_level(syntax, 32, max_sub_layers_minus1)
+    if offset is None or offset >= len(syntax):
         return None
-    ordering_info_present = bits[offset] == "1"
+    ordering_info_present = syntax[offset] == "1"
     offset += 1
     start_layer = 0 if ordering_info_present else max_sub_layers_minus1
     for _ in range(start_layer, max_sub_layers_minus1 + 1):
         for _ in range(3):
-            decoded = _read_unsigned_exp_golomb(bits, offset)
+            decoded = _read_unsigned_exp_golomb(syntax, offset)
             if decoded is None:
                 return None
             offset = decoded[1]
-    if offset + 6 > len(bits):
+    if offset + 6 > len(syntax):
         return None
+    max_layer_id = int(syntax[offset : offset + 6], 2)
     offset += 6  # vps_max_layer_id
-    layer_sets = _read_unsigned_exp_golomb(bits, offset)
+    layer_sets = _read_unsigned_exp_golomb(syntax, offset)
     if layer_sets is None or layer_sets[0] > 1023:
         return None
-    return int(bits[:4], 2) if bits.rfind("1") >= layer_sets[1] else None
+    layer_set_count, offset = layer_sets
+    layer_flags = layer_set_count * (max_layer_id + 1)
+    if offset + layer_flags >= len(syntax):
+        return None
+    offset += layer_flags
+    timing_info_present = syntax[offset] == "1"
+    offset += 1
+    if timing_info_present:
+        if offset + 65 > len(syntax):
+            return None
+        offset += 64  # vps_num_units_in_tick and vps_time_scale
+        if syntax[offset] == "1":
+            ticks = _read_unsigned_exp_golomb(syntax, offset + 1)
+            if ticks is None:
+                return None
+            offset = ticks[1]
+        else:
+            offset += 1
+        hrd_count = _read_unsigned_exp_golomb(syntax, offset)
+        if hrd_count is None or hrd_count[0] > 1024:
+            return None
+        offset = hrd_count[1]
+        hrd_flags = (False, False, False)
+        for hrd_index in range(hrd_count[0]):
+            layer_set_idx = _read_unsigned_exp_golomb(syntax, offset)
+            if layer_set_idx is None or layer_set_idx[0] > layer_set_count:
+                return None
+            offset = layer_set_idx[1]
+            common_info_present = True
+            if hrd_index:
+                if offset >= len(syntax):
+                    return None
+                common_info_present = syntax[offset] == "1"
+                offset += 1
+            hrd_result = _skip_hevc_hrd_parameters(
+                syntax,
+                offset,
+                max_sub_layers_minus1=max_sub_layers_minus1,
+                common_info_present=common_info_present,
+                inherited_flags=hrd_flags,
+            )
+            if hrd_result is None:
+                return None
+            offset, hrd_flags = hrd_result
+    if offset >= len(syntax):
+        return None
+    extension_present = syntax[offset] == "1"
+    offset += 1
+    if extension_present:
+        offset = len(syntax)  # vps_extension_data_flag occupies the remainder
+    return int(syntax[:4], 2) if offset == len(syntax) else None
+
+
+def _skip_hevc_hrd_parameters(  # noqa: PLR0911, PLR0912
+    bits: str,
+    offset: int,
+    *,
+    max_sub_layers_minus1: int,
+    common_info_present: bool,
+    inherited_flags: tuple[bool, bool, bool],
+) -> tuple[int, tuple[bool, bool, bool]] | None:
+    """Return the bit offset after HEVC hrd_parameters syntax."""
+
+    nal_hrd_present, vcl_hrd_present, sub_pic_present = inherited_flags
+    if common_info_present:
+        if offset + 2 > len(bits):
+            return None
+        nal_hrd_present = bits[offset] == "1"
+        vcl_hrd_present = bits[offset + 1] == "1"
+        offset += 2
+        if nal_hrd_present or vcl_hrd_present:
+            if offset >= len(bits):
+                return None
+            sub_pic_present = bits[offset] == "1"
+            offset += 1
+            if sub_pic_present:
+                offset += 19
+            offset += 8
+            if sub_pic_present:
+                offset += 4
+            offset += 15
+            if offset > len(bits):
+                return None
+    for _ in range(max_sub_layers_minus1 + 1):
+        if offset >= len(bits):
+            return None
+        fixed_rate_general = bits[offset] == "1"
+        offset += 1
+        fixed_rate_within_cvs = True
+        if not fixed_rate_general:
+            if offset >= len(bits):
+                return None
+            fixed_rate_within_cvs = bits[offset] == "1"
+            offset += 1
+        low_delay = False
+        if fixed_rate_within_cvs:
+            duration = _read_unsigned_exp_golomb(bits, offset)
+            if duration is None:
+                return None
+            offset = duration[1]
+        else:
+            if offset >= len(bits):
+                return None
+            low_delay = bits[offset] == "1"
+            offset += 1
+        cpb_count = 0
+        if not low_delay:
+            cpb = _read_unsigned_exp_golomb(bits, offset)
+            if cpb is None or cpb[0] > 31:
+                return None
+            cpb_count, offset = cpb
+        for present in (nal_hrd_present, vcl_hrd_present):
+            if not present:
+                continue
+            sub_layer_offset = _skip_hevc_sub_layer_hrd(
+                bits,
+                offset,
+                cpb_count=cpb_count,
+                sub_pic_present=sub_pic_present,
+            )
+            if sub_layer_offset is None:
+                return None
+            offset = sub_layer_offset
+    return offset, (nal_hrd_present, vcl_hrd_present, sub_pic_present)
+
+
+def _skip_hevc_sub_layer_hrd(
+    bits: str,
+    offset: int,
+    *,
+    cpb_count: int,
+    sub_pic_present: bool,
+) -> int | None:
+    """Return the bit offset after one HEVC sub_layer_hrd_parameters block."""
+
+    for _ in range(cpb_count + 1):
+        value_count = 4 if sub_pic_present else 2
+        for _ in range(value_count):
+            value = _read_unsigned_exp_golomb(bits, offset)
+            if value is None:
+                return None
+            offset = value[1]
+        if offset >= len(bits):
+            return None
+        offset += 1  # cbr_flag
+    return offset
 
 
 def _skip_hevc_profile_tier_level(

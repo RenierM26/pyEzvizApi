@@ -3877,6 +3877,7 @@ def _valid_hevc_validation_nals(
     slice_pps_id: int = 0,
     slice_type: int = 2,
     output_flag_present: bool = False,
+    complete_vps: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3892,6 +3893,7 @@ def _valid_hevc_validation_nals(
         + _unsigned_exp_golomb_bits(0) * 3
         + "000000"
         + _unsigned_exp_golomb_bits(0)
+        + ("00" if complete_vps else "")
     )
     sps_bits = (
         f"{sps_vps_id:04b}"
@@ -3950,6 +3952,9 @@ def test_hevc_validation_rejects_truncated_linked_structures() -> None:
     ]
 
     assert not _has_linked_hevc_video(truncated)
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(complete_vps=False)
+    )
 
 
 def test_hevc_validation_parses_slice_type_before_output_flag() -> None:

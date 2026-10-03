@@ -6,6 +6,7 @@ import io
 import json
 import math
 from pathlib import Path
+import stat
 import sys
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
@@ -3541,8 +3542,10 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ts"
     existing_clip = b"existing-clip"
+    existing_mode = 0o640
     output_path.parent.mkdir(parents=True)
     output_path.write_bytes(existing_clip)
+    output_path.chmod(existing_mode)
     calls: list[dict[str, Any]] = []
 
     def fake_copy_cloud_stream_to_mpegts(
@@ -3562,7 +3565,8 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
 
     def validate(path: Path, *, ffmpeg_path: str) -> None:
         assert path != output_path
-        assert path.parent == output_path.parent
+        assert path.parent.parent == output_path.parent
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
         assert path.read_bytes() == SAVE_CLIP_PAYLOAD
         assert output_path.read_bytes() == existing_clip
         validation_calls.append((path, ffmpeg_path))
@@ -3609,6 +3613,7 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         }
     ]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert stat.S_IMODE(output_path.stat().st_mode) == existing_mode
     assert len(validation_calls) == 1
     assert validation_calls[0][1] == "/usr/bin/ffmpeg"
     assert not validation_calls[0][0].exists()
@@ -3714,6 +3719,9 @@ def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
 ) -> None:
     client = _client()
     output_path = tmp_path / "front.ts"
+    reference_path = tmp_path / "normal-create"
+    reference_path.write_bytes(b"")
+    expected_mode = stat.S_IMODE(reference_path.stat().st_mode)
 
     def fake_copy(
         _client: EzvizClient,
@@ -3749,6 +3757,7 @@ def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
     )
 
     assert result["ok"] is True
+    assert stat.S_IMODE(output_path.stat().st_mode) == expected_mode
     assert run_calls[0]["timeout"] == CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS
 
 

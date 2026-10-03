@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 from threading import RLock
@@ -3862,26 +3863,24 @@ class EzvizClient:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             if decrypt_video:
                 suffix = ".ts" if output_format == "mpegts" else ".ps"
-                temp_path: Path | None = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        mode="wb",
-                        prefix=f".{output_path.name}.",
-                        suffix=suffix,
-                        dir=output_path.parent,
-                        delete=False,
-                    ) as path_temp_output:
-                        temp_path = Path(path_temp_output.name)
-                        copy_cloud(cast("BinaryIO", path_temp_output))
-                    assert temp_path is not None
+                with tempfile.TemporaryDirectory(
+                    prefix=f".{output_path.name}.",
+                    dir=output_path.parent,
+                ) as temp_dir:
+                    temp_path = Path(temp_dir) / f"capture{suffix}"
+                    with temp_path.open("wb") as path_temp_output:
+                        copy_cloud(path_temp_output)
                     _require_decodable_saved_video_frame(
                         temp_path,
                         ffmpeg_path=ffmpeg_path,
                     )
+                    try:
+                        existing_mode = stat.S_IMODE(output_path.stat().st_mode)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        temp_path.chmod(existing_mode)
                     os.replace(temp_path, output_path)
-                finally:
-                    if temp_path is not None:
-                        temp_path.unlink(missing_ok=True)
             else:
                 with output_path.open("wb") as output_file:
                     copy_cloud(output_file)

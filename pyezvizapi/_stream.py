@@ -267,13 +267,28 @@ class VtmStreamClient:
 
         return self._socket is not None
 
-    def connect(self) -> VtmStreamClient:
+    def connect(
+        self,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> VtmStreamClient:
         """Open the VTM TCP connection."""
 
         if self._socket is not None:
             return self
         host, port, _path, _params = parse_vtm_url(self.stream_url)
-        sock = self._socket_factory((host, port), self.timeout)
+        connect_timeout = self.timeout
+        if deadline is not None:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise _VtmReadDeadlineExpired
+            connect_timeout = (
+                remaining
+                if connect_timeout is None
+                else min(connect_timeout, remaining)
+            )
+        sock = self._socket_factory((host, port), connect_timeout)
         if self.timeout is not None:
             sock.settimeout(self.timeout)
         self._socket = sock
@@ -383,39 +398,54 @@ class VtmStreamClient:
         vtm_stream_key: str | None = None,
         max_control_packets: int = 20,
         max_redirects: int = 3,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> StreamInfoResponse:
         """Request stream info and return the decoded ``StreamInfoRsp``."""
 
         redirect_count = 0
-        while True:
-            self.connect()
-            request = build_stream_info_request(
-                self.stream_url,
-                vtm_stream_key=vtm_stream_key,
-                client_version=self.client_version,
-            )
-            self.send_packet(request)
+        try:
+            while True:
+                self.connect(deadline=deadline, monotonic=monotonic)
+                request = build_stream_info_request(
+                    self.stream_url,
+                    vtm_stream_key=vtm_stream_key,
+                    client_version=self.client_version,
+                )
+                self.send_packet(
+                    request,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
 
-            for _ in range(max_control_packets):
-                packet = self.read_packet()
-                if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
-                    self.stream_info = parse_stream_info_response(packet.body)
-                    redirect_url = self.stream_info.streamurl
-                    redirect_key = self.stream_info.vtmstreamkey
-                    if (
-                        self.stream_info.result
-                        and redirect_url
-                        and redirect_key
-                        and redirect_count < max_redirects
-                    ):
-                        self.close()
-                        self.stream_url = redirect_url
-                        vtm_stream_key = redirect_key
-                        redirect_count += 1
-                        break
-                    return self.stream_info
-            else:
-                raise PyEzvizError("Timed out waiting for VTM stream info response")
+                for _ in range(max_control_packets):
+                    packet = self.read_packet(
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
+                    if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
+                        self.stream_info = parse_stream_info_response(packet.body)
+                        redirect_url = self.stream_info.streamurl
+                        redirect_key = self.stream_info.vtmstreamkey
+                        if (
+                            self.stream_info.result
+                            and redirect_url
+                            and redirect_key
+                            and redirect_count < max_redirects
+                        ):
+                            self.close()
+                            self.stream_url = redirect_url
+                            vtm_stream_key = redirect_key
+                            redirect_count += 1
+                            break
+                        return self.stream_info
+                else:
+                    raise PyEzvizError("Timed out waiting for VTM stream info response")
+        except _VtmReadDeadlineExpired as err:
+            self.close()
+            raise DeviceException(
+                "Device offline or unreachable: timed out waiting for VTM stream info"
+            ) from err
 
     def send_keepalive(
         self,

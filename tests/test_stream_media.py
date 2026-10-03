@@ -20,6 +20,7 @@ from pyezvizapi._stream import (
     StreamTransport,
     VtmChannel,
     VtmPacket,
+    VtmStreamClient,
     _find_hevc_nal_start_codes,
     decode_vtm_packet,
     decrypt_hikvision_ps_video,
@@ -2589,6 +2590,86 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 
     assert open_calls == [("ffmpeg-custom", "hevc")]
     assert output.getvalue() == expected_annexb
+
+
+def test_cloud_packet_iterator_bounds_from_request_start() -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return iter(())
+
+    stream = RecordingStream()
+    monotonic = lambda: 10.0  # noqa: E731
+
+    assert list(
+        cloud_stream_module._iter_bounded_cloud_packets(  # noqa: SLF001
+            stream,
+            max_packets=4,
+            duration_seconds=8.0,
+            first_packet_timeout=3.0,
+            monotonic=monotonic,
+        )
+    ) == []
+    assert stream.kwargs == {
+        "max_packets": 4,
+        "duration_seconds": 8.0,
+        "duration_from_start": True,
+        "first_packet_timeout": 3.0,
+        "monotonic": monotonic,
+    }
+
+
+def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return SimpleNamespace()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=15.0,
+        duration_seconds=8.0,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": 115.0, "monotonic": monotonic}
+
+
+def test_cloud_packet_iterator_bounds_first_media_for_packet_only_capture() -> None:
+    stream_timeout = 15.0
+
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=stream_timeout)
+            self.kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return iter(())
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    assert list(
+        cloud_stream_module._iter_bounded_cloud_packets(  # noqa: SLF001
+            stream,
+            max_packets=4,
+            duration_seconds=None,
+            monotonic=monotonic,
+        )
+    ) == []
+    assert stream.kwargs["first_packet_timeout"] == stream_timeout
 
 
 def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(

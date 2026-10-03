@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import subprocess
 from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, TypedDict, cast
@@ -349,6 +350,49 @@ def _bytes_written_to_output(
     if start_position is None or end_position is None:
         return None
     return max(0, end_position - start_position)
+
+
+def _require_decodable_saved_video_frame(
+    path: Path,
+    *,
+    ffmpeg_path: str,
+    timeout: float | None,
+) -> None:
+    """Require one decoded frame before reporting a saved clip as successful."""
+
+    probe_timeout = 5.0
+    if timeout is not None and timeout > 0:
+        probe_timeout = min(timeout, probe_timeout)
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg_path,
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=1:1",
+                "-pix_fmt",
+                "gray",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=probe_timeout,
+        )
+    except OSError as err:
+        raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
+    except subprocess.TimeoutExpired as err:
+        raise PyEzvizError("Saved cloud clip video validation timed out") from err
+    if completed.returncode != 0 or not completed.stdout:
+        raise PyEzvizError("Saved cloud clip did not include a decodable video frame")
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -3819,6 +3863,12 @@ class EzvizClient:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with output_path.open("wb") as output_file:
                 copy_cloud(output_file)
+            if decrypt_video:
+                _require_decodable_saved_video_frame(
+                    output_path,
+                    ffmpeg_path=ffmpeg_path,
+                    timeout=timeout,
+                )
         else:
             start_position = _binary_position(output)
             copy_cloud(output)

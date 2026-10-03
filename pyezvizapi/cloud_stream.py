@@ -370,6 +370,29 @@ def open_cloud_stream(
     )
 
 
+def _start_bounded_cloud_stream(
+    stream: Any,
+    *,
+    timeout: float | None,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float],
+) -> None:
+    """Start VTM negotiation with one deadline instead of per-read timeouts."""
+
+    if not isinstance(stream, VtmStreamClient):
+        stream.start()
+        return
+    startup_seconds = timeout
+    if startup_seconds is None or startup_seconds <= 0:
+        startup_seconds = duration_seconds
+    deadline = (
+        None
+        if startup_seconds is None
+        else monotonic() + startup_seconds
+    )
+    stream.start(deadline=deadline, monotonic=monotonic)
+
+
 def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     client: Any,
     serial: str,
@@ -414,7 +437,12 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             refresh_vtm=refresh_vtm,
             timeout=timeout,
         ) as stream:
-            stream.start()
+            _start_bounded_cloud_stream(
+                stream,
+                timeout=timeout,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -451,7 +479,12 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         refresh_vtm=refresh_vtm,
         timeout=timeout,
     ) as stream:
-        stream.start()
+        _start_bounded_cloud_stream(
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
         _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
@@ -502,7 +535,12 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             refresh_vtm=refresh_vtm,
             timeout=timeout,
         ) as stream:
-            stream.start()
+            _start_bounded_cloud_stream(
+                stream,
+                timeout=timeout,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -530,7 +568,12 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         refresh_vtm=refresh_vtm,
         timeout=timeout,
     ) as stream:
-        stream.start()
+        _start_bounded_cloud_stream(
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
         copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
@@ -791,14 +834,20 @@ def _iter_bounded_cloud_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None,
+    first_packet_timeout: float | None = None,
     monotonic: Callable[[], float],
 ) -> Iterator[Any]:
     """Iterate cloud packets with transport-level deadlines when available."""
 
     if isinstance(stream, VtmStreamClient):
+        selected_first_packet_timeout = first_packet_timeout
+        if selected_first_packet_timeout is None and duration_seconds is None:
+            selected_first_packet_timeout = stream.timeout
         return stream.iter_packets(
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            duration_from_start=True,
+            first_packet_timeout=selected_first_packet_timeout,
             monotonic=monotonic,
         )
 
@@ -812,13 +861,14 @@ def _iter_bounded_cloud_packets(
     return _fallback()
 
 
-def copy_cloud_stream_packets_to_mpegts(
+def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
     stream: Any,
     output: BinaryIO,
     *,
     ffmpeg_path: str,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_timeout: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     allow_encrypted: bool = False,
     mpegps_transform: Callable[[bytes], bytes] | None = None,
@@ -831,6 +881,7 @@ def copy_cloud_stream_packets_to_mpegts(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_timeout=first_packet_timeout,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(

@@ -3551,6 +3551,13 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
     )
+    validation_calls: list[tuple[Path, str, float | None]] = []
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda path, *, ffmpeg_path, timeout: validation_calls.append(
+            (path, ffmpeg_path, timeout)
+        ),
+    )
 
     result = client.save_clip(
         "CAM123",
@@ -3589,6 +3596,7 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         }
     ]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert validation_calls == [(output_path, "/usr/bin/ffmpeg", 5.0)]
     assert result == {
         "ok": True,
         "kind": "clip",
@@ -3634,6 +3642,103 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
     )
 
     assert calls[0]["nalu_header_size"] is None
+
+
+def test_save_cloud_clip_rejects_path_without_decodable_video(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ts"
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"",
+            stderr=b"decoder warning",
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not include a decodable video frame"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+
+def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ts"
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"\x00",
+            stderr=b"decoder warning",
+        ),
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert result["ok"] is True
+
+
+def test_save_cloud_clip_does_not_decode_validate_encrypted_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "encrypted.ts"
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: pytest.fail("encrypted output must not be decode-validated"),
+    )
+
+    result = client.save_clip("CAM123", output_path, source="cloud")
+
+    assert result["ok"] is True
 
 
 def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(

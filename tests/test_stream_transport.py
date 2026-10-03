@@ -685,6 +685,22 @@ def test_vtm_stream_capture_deadline_bounds_keepalive_write() -> None:
     assert fake_socket.closed
     assert not stream.connected
 
+
+def test_vtm_stream_start_uses_one_deadline_across_control_reads() -> None:
+    fake_socket = FakeVtmSocket([])
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=15.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    )
+    ticks = iter((0.0, 0.0, 2.0))
+
+    with pytest.raises(DeviceException, match="timed out waiting for VTM stream info"):
+        stream.start(deadline=1.0, monotonic=lambda: next(ticks))
+
+    assert fake_socket.closed
+    assert not stream.connected
+
 @pytest.mark.parametrize(
     "message_code",
     (VtmMessageCode.KEEPALIVE_REQ, VtmMessageCode.KEEPALIVE_RSP),

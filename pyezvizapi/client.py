@@ -1266,6 +1266,13 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                 return None
             offset += 1
         return pic_parameter_set_id if offset < len(bits) else None
+    if normalized_slice_type in {0, 1, 3}:
+        skip_run = _read_unsigned_exp_golomb(bits, offset)
+        if skip_run is None or skip_run[0] > 65535:
+            return None
+        if skip_run[0]:
+            return pic_parameter_set_id
+        offset = skip_run[1]
     first_cavlc_element = _read_unsigned_exp_golomb(bits, offset)
     max_mb_type = {0: 30, 1: 48, 2: 25, 3: 30, 4: 26}[normalized_slice_type]
     if first_cavlc_element is None or first_cavlc_element[0] > max_mb_type:

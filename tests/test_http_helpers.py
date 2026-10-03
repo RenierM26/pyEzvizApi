@@ -4389,7 +4389,6 @@ def test_h264_cavlc_requires_complete_first_macroblock_type() -> None:
         + "0"
         + _signed_exp_golomb_bits(0)
     )
-
     assert (
         _h264_slice_pps_id(
             _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(0)),
@@ -4410,6 +4409,51 @@ def test_h264_cavlc_requires_complete_first_macroblock_type() -> None:
     )
 
 
+def test_h264_cavlc_inter_slice_parses_skip_run_before_macroblock_type() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + "0"  # num_ref_idx_active_override_flag
+        + "0"  # ref_pic_list_modification_flag_l0
+        + _signed_exp_golomb_bits(0)
+    )
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(1)),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(
+                header_bits
+                + _unsigned_exp_golomb_bits(0)
+                + _unsigned_exp_golomb_bits(0)
+            ),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
 def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:
     sps = _H264SpsInfo(0, 3, True, 4, 2, 0, False, True)
     pps = _H264PpsInfo(0, 0, False, False, 0, 0, True, 0, False, False)
@@ -4424,6 +4468,7 @@ def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:
         + _unsigned_exp_golomb_bits(0)  # luma_log2_weight_denom
         + "0"  # luma_weight_l0_flag
         + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + _unsigned_exp_golomb_bits(0)  # mb_skip_run
         + _unsigned_exp_golomb_bits(0)  # first CAVLC mb_type
     )
 

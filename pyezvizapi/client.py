@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import suppress
 from copy import deepcopy
 import datetime as dt
 import errno
@@ -811,12 +812,15 @@ def _publish_validated_cloud_clip(
         except FileExistsError as err:
             raise PyEzvizError("Cloud clip output target changed during capture") from err
         except OSError as err:
+            unsupported_windows_hard_link = (
+                err.errno == errno.EINVAL and getattr(err, "winerror", None) == 1
+            )
             if err.errno not in {
                 errno.EPERM,
                 errno.EOPNOTSUPP,
                 errno.ENOSYS,
                 errno.EXDEV,
-            }:
+            } and not unsupported_windows_hard_link:
                 raise
             _copy_validated_clip_to_new_target(temp_path, target)
         temp_path.unlink()
@@ -863,13 +867,21 @@ def _copy_validated_clip_to_new_target(temp_path: Path, target: Path) -> None:
         raise PyEzvizError("Cloud clip output target changed during capture") from err
     target_stat = os.fstat(target_fd)
     target_identity = (target_stat.st_dev, target_stat.st_ino)
-    with temp_path.open("rb") as source, os.fdopen(target_fd, "wb") as destination:
-        while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
-            destination.write(chunk)
-        destination.flush()
-        os.fsync(destination.fileno())
-    if not _regular_path_has_identity(target, target_identity):
-        raise PyEzvizError("Cloud clip output target changed during capture")
+    try:
+        with os.fdopen(target_fd, "wb") as destination, temp_path.open(
+            "rb"
+        ) as source:
+            while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                destination.write(chunk)
+            destination.flush()
+            os.fsync(destination.fileno())
+        if not _regular_path_has_identity(target, target_identity):
+            raise PyEzvizError("Cloud clip output target changed during capture")
+    except BaseException:
+        if _regular_path_has_identity(target, target_identity):
+            with suppress(OSError):
+                target.unlink()
+        raise
 
 
 def _regular_path_has_identity(path: Path, identity: tuple[int, int]) -> bool:

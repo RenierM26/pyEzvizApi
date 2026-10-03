@@ -4104,6 +4104,81 @@ def test_save_cloud_clip_falls_back_when_hard_links_are_unsupported(
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
+def test_save_cloud_clip_falls_back_for_windows_invalid_function(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    hard_link_error = OSError(errno.EINVAL, "invalid function")
+    hard_link_error.winerror = 1  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(hard_link_error),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_fallback_removes_partial_copy_after_failure(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.fsync",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.ENOSPC, "filesystem full")
+        ),
+    )
+
+    with pytest.raises(OSError, match="filesystem full"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert not output_path.exists()
+
+
 def test_save_cloud_clip_fallback_does_not_overwrite_concurrent_target(
     monkeypatch,
     tmp_path,

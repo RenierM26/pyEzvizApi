@@ -615,13 +615,15 @@ def _hevc_sps_ids(data: bytes) -> tuple[int, int] | None:
     ):
         return None
     offset = 104
-    profile_flags = bits[offset : offset + max_sub_layers_minus1]
-    offset += max_sub_layers_minus1
-    level_flags = bits[offset : offset + max_sub_layers_minus1]
-    offset += max_sub_layers_minus1
+    sub_layer_flags: list[tuple[str, str]] = []
+    for _ in range(max_sub_layers_minus1):
+        if offset + 2 > len(bits):
+            return None
+        sub_layer_flags.append((bits[offset], bits[offset + 1]))
+        offset += 2
     if max_sub_layers_minus1:
         offset += 2 * (8 - max_sub_layers_minus1)
-    for profile_present, level_present in zip(profile_flags, level_flags, strict=True):
+    for profile_present, level_present in sub_layer_flags:
         if profile_present == "1":
             offset += 88
         if level_present == "1":

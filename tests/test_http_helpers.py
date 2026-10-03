@@ -3844,6 +3844,20 @@ def test_hevc_validation_links_parameter_sets_to_slice() -> None:
     assert not _has_linked_hevc_video([*nals[:3], (b"\x02\x01", b"\x01\xa0")])
 
 
+def test_hevc_validation_parses_interleaved_sub_layer_flags() -> None:
+    sps_bits = "00010101" + "0" * 96 + "0100" + "0" * 12 + "0" * 8 + "1"
+    padded_sps_bits = sps_bits.ljust((len(sps_bits) + 7) // 8 * 8, "0")
+    sps_body = int(padded_sps_bits, 2).to_bytes(len(padded_sps_bits) // 8, "big")
+    nals = [
+        (b"\x40\x01", b"\x01\x1c\x01\xff\xff"),
+        (b"\x42\x01", b"\x01" + sps_body),
+        (b"\x44\x01", b"\x01\xc0"),
+        (b"\x02\x01", b"\x01\xc0"),
+    ]
+
+    assert _has_linked_hevc_video(nals)
+
+
 def test_save_decrypted_cloud_clip_rejects_fifo_target(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "clip.ts"

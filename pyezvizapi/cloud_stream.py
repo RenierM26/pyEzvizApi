@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError, UnsupportedRtpVideoCodecError
-from .media import has_positive_finite_capture_bound
+from .media import has_positive_finite_capture_bound, is_positive_finite_duration_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     ANNEX_B_START_CODE,
@@ -382,8 +382,10 @@ def _start_bounded_cloud_stream(
     if not isinstance(stream, VtmStreamClient):
         stream.start()
         return None
-    startup_seconds = timeout
-    if startup_seconds is None or startup_seconds <= 0:
+    startup_seconds = (
+        timeout if is_positive_finite_duration_bound(timeout) else None
+    )
+    if startup_seconds is None and is_positive_finite_duration_bound(duration_seconds):
         startup_seconds = duration_seconds
     deadline = (
         None

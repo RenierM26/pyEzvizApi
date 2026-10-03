@@ -84,7 +84,7 @@ from .local_stream_transport import (
     hcnetsdk_command_port_native_lan_live_view_plan,
     open_local_sdk_stream,
 )
-from .media import has_positive_finite_capture_bound
+from .media import has_positive_finite_capture_bound, is_positive_finite_duration_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     detect_rtp_video_codec,
@@ -3116,8 +3116,10 @@ def _start_cli_cloud_stream(
     if not isinstance(stream, VtmStreamClient):
         stream.start()
         return None
-    startup_seconds = timeout
-    if startup_seconds is None or startup_seconds <= 0:
+    startup_seconds = (
+        timeout if is_positive_finite_duration_bound(timeout) else None
+    )
+    if startup_seconds is None and is_positive_finite_duration_bound(duration_seconds):
         startup_seconds = duration_seconds
     deadline = None if startup_seconds is None else monotonic() + startup_seconds
     stream.start(deadline=deadline, monotonic=monotonic)

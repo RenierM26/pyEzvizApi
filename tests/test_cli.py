@@ -2304,6 +2304,32 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
     assert output_file.read_bytes() == expected_payload
 
 
+@pytest.mark.parametrize("duration_seconds", [float("inf"), float("nan"), 10**309])
+def test_cli_cloud_stream_start_ignores_nonfinite_fallback_duration(
+    duration_seconds: float,
+) -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return object()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cli_module._start_cli_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=None,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": None, "monotonic": monotonic}
+
+
 def test_stream_dump_can_decrypt_before_mpegts_remux(monkeypatch, tmp_path) -> None:
     class EncryptKeyClient(_FakeClient):
         def get_cam_key(

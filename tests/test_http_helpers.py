@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
 
@@ -3571,7 +3572,7 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
 
     def validate(path: Path, *, ffmpeg_path: str) -> None:
         assert path != output_path
-        assert path.parent != output_path.parent
+        assert path.parent.parent == output_path.parent
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
         assert path.read_bytes() == SAVE_CLIP_PAYLOAD
         assert output_path.read_bytes() == existing_clip
@@ -3681,7 +3682,7 @@ def test_save_cloud_clip_preserves_relative_symlink_destination(
     def validate(path: Path, *, ffmpeg_path: str) -> None:
         assert ffmpeg_path == "ffmpeg"
         if target_exists:
-            assert path.parent != target_dir
+            assert path.parent.parent == target_dir
         else:
             assert path.parent.parent == target_dir
         assert output_path.is_symlink()
@@ -3910,6 +3911,53 @@ def test_save_decrypted_cloud_clip_supports_write_only_existing_target(
     output_path.chmod(0o600)
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
     assert output_path.stat().st_ino == original_inode
+
+
+def test_save_cloud_clip_falls_back_when_parent_cannot_stage(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    staging_parents: list[Path | None] = []
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+
+    def temporary_directory(*_args: Any, **kwargs: Any) -> TemporaryDirectory[str]:
+        selected_parent = kwargs.get("dir")
+        staging_parents.append(selected_parent)
+        if selected_parent == tmp_path:
+            raise PermissionError(errno.EACCES, "parent is not writable")
+        return TemporaryDirectory(*_args, **kwargs)
+
+    def validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        assert path.parent.parent != tmp_path
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.tempfile.TemporaryDirectory",
+        temporary_directory,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        validate,
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert staging_parents == [tmp_path, None]
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
 def test_save_cloud_clip_supports_long_destination_name(monkeypatch, tmp_path) -> None:

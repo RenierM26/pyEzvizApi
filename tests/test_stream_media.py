@@ -2714,6 +2714,32 @@ def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> Non
     assert stream.kwargs == {"deadline": 115.0, "monotonic": monotonic}
 
 
+@pytest.mark.parametrize("duration_seconds", [float("inf"), float("nan"), 10**309])
+def test_cloud_stream_start_ignores_nonfinite_fallback_duration(
+    duration_seconds: float,
+) -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return SimpleNamespace()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=None,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": None, "monotonic": monotonic}
+
+
 @pytest.mark.parametrize(
     ("timeout", "duration_seconds", "expected_connect_timeout"),
     ((15.0, 8.0, 15.0), (None, 8.0, 8.0)),

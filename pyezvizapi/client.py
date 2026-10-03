@@ -685,7 +685,11 @@ def _publish_validated_cloud_clip(
     # Replacing an inode atomically necessarily loses its ACLs, xattrs, and
     # hard-link identity.  Validation has already succeeded, so update an
     # existing regular file in place just as the legacy save path did.
-    open_flags = os.O_WRONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    open_flags = (
+        os.O_WRONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         destination_fd = os.open(target, open_flags)
     except OSError as err:
@@ -754,7 +758,7 @@ def _legacy_duration_is_effectively_unbounded(duration_seconds: float | None) ->
 
 def _cloud_clip_staging(
     target: Path,
-) -> tuple[Path | None, tuple[int, int] | None]:
+) -> tuple[Path, tuple[int, int] | None]:
     """Return the staging parent and original target identity."""
 
     try:
@@ -763,9 +767,23 @@ def _cloud_clip_staging(
         return target.parent, None
     if not stat.S_ISREG(target_stat.st_mode):
         raise PyEzvizError("Cloud clip output target must be a regular file")
-    # Existing files publish through their current inode, so a private system
-    # temp does not require write access to the target's parent directory.
-    return None, (target_stat.st_dev, target_stat.st_ino)
+    return target.parent, (target_stat.st_dev, target_stat.st_ino)
+
+
+def _cloud_clip_temporary_directory(
+    preferred_parent: Path,
+) -> tempfile.TemporaryDirectory[str]:
+    """Stage beside the target, falling back when its parent is not writable."""
+
+    try:
+        return tempfile.TemporaryDirectory(
+            prefix=".pyezvizapi-cloud-clip-",
+            dir=preferred_parent,
+        )
+    except OSError as err:
+        if err.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+            raise
+        return tempfile.TemporaryDirectory(prefix=".pyezvizapi-cloud-clip-")
 
 
 def _is_existing_non_regular_path(path: Path) -> bool:
@@ -4262,10 +4280,7 @@ class EzvizClient:
             else:
                 staging_parent, target_identity = _cloud_clip_staging(publication_target)
                 suffix = ".ts" if output_format == "mpegts" else ".ps"
-                with tempfile.TemporaryDirectory(
-                    prefix=".pyezvizapi-cloud-clip-",
-                    dir=staging_parent,
-                ) as temp_dir:
+                with _cloud_clip_temporary_directory(staging_parent) as temp_dir:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
                     with temp_path.open("wb") as path_temp_output:
                         copy_cloud(path_temp_output)

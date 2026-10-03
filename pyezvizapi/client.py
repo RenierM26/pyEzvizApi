@@ -2176,9 +2176,9 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                     offset += long_term_index_bits
                 else:
                     offset += log2_max_pic_order_cnt_lsb
-                if offset >= len(bits):
-                    return None
-                offset += 1  # used_by_curr_pic_lt_flag
+                    if offset >= len(bits):
+                        return None
+                    offset += 1  # used_by_curr_pic_lt_flag
                 if offset >= len(bits):
                     return None
                 delta_poc_msb_present = bits[offset] == "1"

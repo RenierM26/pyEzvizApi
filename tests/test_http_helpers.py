@@ -4052,7 +4052,7 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             + _unsigned_exp_golomb_bits(0)
             + (
                 f"{long_term_sps_index:0{(long_term_ref_pics_sps - 1).bit_length()}b}"
-                + "00"
+                + "0"  # delta_poc_msb_present_flag; used flag comes from SPS
                 if long_term_sps_index is not None
                 else ""
             )

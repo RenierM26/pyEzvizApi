@@ -1545,7 +1545,7 @@ def test_copy_cloud_stream_to_mpegps_requires_safe_decrypt_bound(
 def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    expected_payload = b"ps-1ps-2"
+    expected_payload = b"\x00\x00\x01\xbaps-1ps-2"
     open_calls: list[str] = []
 
     class FakeCloudStream:
@@ -1562,10 +1562,10 @@ def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
             assert max_packets == 2
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=4,
+                length=len(b"\x00\x00\x01\xbaps-1"),
                 sequence=1,
                 message_code=0,
-                body=b"ps-1",
+                body=b"\x00\x00\x01\xbaps-1",
             )
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
@@ -2765,6 +2765,48 @@ def test_cloud_media_probe_recognizes_split_transport_signatures(
     assert not probe(packets[0])
     assert probe(packets[1])
     assert probe.transport == expected_transport
+
+
+def test_cloud_mpegts_writer_reassembles_split_vtm_bodies() -> None:
+    expected_packet = b"\x47\x40\x00\x10" + b"\x00" * 184
+    packets = [
+        SimpleNamespace(encrypted=False, body=expected_packet[:73]),
+        SimpleNamespace(encrypted=False, body=expected_packet[73:]),
+    ]
+    output = io.BytesIO()
+
+    cloud_stream_module._write_cloud_mpegts_packets(  # noqa: SLF001
+        packets,
+        output,
+        allow_encrypted=False,
+    )
+
+    assert output.getvalue() == expected_packet
+
+
+def test_cloud_mpegts_router_rejects_unknown_transport_before_remux(
+    monkeypatch,
+) -> None:
+    packet = SimpleNamespace(encrypted=False, body=b"vtm-prelude")
+
+    class PreludeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            return iter((packet,))
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_mpegts_remux_process",
+        lambda *_args, **_kwargs: pytest.fail("unknown transport must fail first"),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        copy_cloud_stream_packets_to_mpegts(
+            PreludeStream(),
+            io.BytesIO(),
+            ffmpeg_path="ffmpeg",
+            max_packets=1,
+        )
 
 
 def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:

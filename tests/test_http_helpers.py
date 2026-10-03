@@ -33,6 +33,7 @@ from pyezvizapi.client import (
     _has_linked_h264_video,
     _has_linked_hevc_video,
     _LocalStreamPacketMetadataRecorder,
+    _mpegps_video_payload,
     _reserve_existing_clip_space,
 )
 from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
@@ -3919,6 +3920,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     valid_inline_slice_rps: bool = True,
     slice_chroma_qp_offsets_present: bool = False,
     include_slice_chroma_qp_offsets: bool = True,
+    deblocking_filter_override_enabled: bool = False,
+    include_slice_deblocking_fields: bool = True,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -3977,7 +3980,11 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + ("1" if slice_chroma_qp_offsets_present else "0")
         + "00000"
         + (
-            "0000"  # loop filter, deblocking, scaling-list, list-modification
+            "0"  # pps_loop_filter_across_slices_enabled_flag
+            + (
+                "111" if deblocking_filter_override_enabled else "0"
+            )  # deblocking control, override, and disabled flags
+            + "00"  # scaling-list and list-modification flags
             + _unsigned_exp_golomb_bits(0)  # log2_parallel_merge_level_minus2
             + "0"  # slice-header extension flag
             + (
@@ -4004,6 +4011,11 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
         + (
             _signed_exp_golomb_bits(0) * 2
             if slice_chroma_qp_offsets_present and include_slice_chroma_qp_offsets
+            else ""
+        )
+        + (
+            "11"
+            if deblocking_filter_override_enabled and include_slice_deblocking_fields
             else ""
         )
         + "0"  # at least one slice-data bit before rbsp_stop_one_bit
@@ -4096,6 +4108,29 @@ def test_hevc_validation_requires_declared_slice_chroma_qp_offsets() -> None:
             include_slice_chroma_qp_offsets=False,
         )
     )
+
+
+def test_hevc_validation_requires_declared_slice_deblocking_fields() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(deblocking_filter_override_enabled=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            deblocking_filter_override_enabled=True,
+            include_slice_deblocking_fields=False,
+        )
+    )
+
+
+def test_mpegps_video_payload_rejects_truncated_declared_pes_length() -> None:
+    truncated_pes = (
+        b"\x00\x00\x01\xe0"
+        + (20).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + b"partial"
+    )
+
+    assert not _mpegps_video_payload(truncated_pes)
 
 
 def test_h264_validation_rejects_partition_b_and_c_without_partition_a() -> None:
@@ -4236,6 +4271,59 @@ def test_save_decrypted_cloud_clip_atomically_replaces_unreadable_acl_target(
     output_path.chmod(0o600)
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
     assert output_path.stat().st_ino != original_inode
+
+
+def test_save_decrypted_cloud_clip_updates_unreadable_target_without_parent_access(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    output_path.chmod(0o220)
+    original_inode = output_path.stat().st_ino
+    original_open = os.open
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def deny_target_read(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(path) == output_path and flags & os.O_ACCMODE == os.O_RDONLY:
+            raise PermissionError(errno.EACCES, "ACL denies content reads")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("pyezvizapi.client.os.open", deny_target_read)
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.fchmod",
+        lambda *_args: (_ for _ in ()).throw(
+            PermissionError(errno.EPERM, "writer does not own target")
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.replace",
+        lambda *_args: (_ for _ in ()).throw(
+            PermissionError(errno.EACCES, "parent directory is not writable")
+        ),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    output_path.chmod(0o600)
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == original_inode
 
 
 def test_save_cloud_clip_preserves_existing_target_when_reservation_fails(

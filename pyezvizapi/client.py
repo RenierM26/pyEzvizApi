@@ -431,11 +431,12 @@ def _mpegps_video_payload(data: bytes) -> bytes:
             continue
         packet_length = int.from_bytes(data[packet_start + 4 : packet_start + 6], "big")
         payload_start = packet_start + 9 + data[packet_start + 8]
-        packet_end = (
-            len(data)
-            if packet_length == 0
-            else min(len(data), packet_start + 6 + packet_length)
-        )
+        if packet_length:
+            packet_end = packet_start + 6 + packet_length
+            if packet_end > len(data):
+                return b""
+        else:
+            packet_end = len(data)
         if payload_start < packet_end:
             video_payload.extend(data[payload_start:packet_end])
         offset = max(packet_start + 4, packet_end)
@@ -540,7 +541,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
 
     vps_ids: set[int] = set()
     sps_info: dict[int, _HevcSpsInfo] = {}
-    pps_info: dict[int, tuple[int, bool, bool, int, bool]] = {}
+    pps_info: dict[int, tuple[int, bool, bool, int, bool, bool]] = {}
     slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
     for header, body in nals:
@@ -1860,7 +1861,7 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
 
 def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
-) -> tuple[int, int, bool, bool, int, bool] | None:
+) -> tuple[int, int, bool, bool, int, bool, bool] | None:
     """Return linked IDs and slice controls after mandatory PPS fields."""
 
     bits = _rbsp_bits(data)
@@ -1934,10 +1935,12 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     offset += 1  # pps_loop_filter_across_slices_enabled_flag
     deblocking_filter_control_present = bits[offset] == "1"
     offset += 1
+    deblocking_filter_override_enabled = False
     if deblocking_filter_control_present:
         if offset + 2 > len(bits):
             return None
-        offset += 1  # deblocking_filter_override_enabled_flag
+        deblocking_filter_override_enabled = bits[offset] == "1"
+        offset += 1
         deblocking_filter_disabled = bits[offset] == "1"
         offset += 1
         if not deblocking_filter_disabled:
@@ -1995,6 +1998,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
         output_flag_present,
         extra_slice_header_bits,
         slice_chroma_qp_offsets_present,
+        deblocking_filter_override_enabled,
     )
 
 
@@ -2003,7 +2007,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     *,
     nal_type: int,
     sps_info: dict[int, _HevcSpsInfo],
-    pps_info: dict[int, tuple[int, bool, bool, int, bool]],
+    pps_info: dict[int, tuple[int, bool, bool, int, bool, bool]],
 ) -> int | None:
     """Return a PPS id after parsing mandatory linked HEVC slice fields."""
 
@@ -2030,6 +2034,7 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
         output_flag_present,
         extra_slice_header_bits,
         slice_chroma_qp_offsets_present,
+        deblocking_filter_override_enabled,
     ) = pps_info[pps_id]
     linked_sps = sps_info.get(sps_id)
     if linked_sps is None:
@@ -2135,6 +2140,22 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
             if chroma_offset is None:
                 return None
             offset = chroma_offset[1]
+    if deblocking_filter_override_enabled:
+        if offset >= len(bits):
+            return None
+        slice_deblocking_filter_override = bits[offset] == "1"
+        offset += 1
+        if slice_deblocking_filter_override:
+            if offset >= len(bits):
+                return None
+            slice_deblocking_filter_disabled = bits[offset] == "1"
+            offset += 1
+            if not slice_deblocking_filter_disabled:
+                for _ in range(2):
+                    deblocking_offset = _read_signed_exp_golomb(bits, offset)
+                    if deblocking_offset is None:
+                        return None
+                    offset = deblocking_offset[1]
     return pps_id if offset < len(bits) else None
 
 
@@ -2210,12 +2231,14 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
                 # Group/ACL write access may not grant ownership.  In that
                 # case publish the already validated sibling atomically; a
                 # failed replace leaves the unreadable target untouched.
+                unreadable_destination_fd = os.dup(destination_fd)
                 os.close(destination_fd)
                 destination_fd = -1
-                _publish_unreadable_existing_clip_atomically(
+                _publish_unreadable_existing_clip(
                     temp_path,
                     target,
                     expected_identity=expected_identity,
+                    destination_fd=unreadable_destination_fd,
                 )
                 return
             try:
@@ -2270,25 +2293,49 @@ def _publish_validated_cloud_clip(  # noqa: PLR0912, PLR0915
     temp_path.unlink()
 
 
-def _publish_unreadable_existing_clip_atomically(
+def _publish_unreadable_existing_clip(
     temp_path: Path,
     target: Path,
     *,
     expected_identity: tuple[int, int],
+    destination_fd: int,
 ) -> None:
-    """Replace an unreadable writable target without requiring ownership."""
+    """Publish to an unreadable writable target without requiring ownership."""
 
-    if not _regular_path_has_identity(target, expected_identity):
-        raise PyEzvizError("Cloud clip output target changed during capture")
-    # copystat preserves the metadata available to this caller, including
-    # extended attributes on platforms where Python exposes them.
-    shutil.copystat(target, temp_path, follow_symlinks=False)
     try:
-        os.replace(temp_path, target)
-    except OSError as err:
-        raise PyEzvizError(
-            "Cloud clip output target is unreadable and cannot be replaced atomically"
-        ) from err
+        if not _regular_path_has_identity(target, expected_identity):
+            raise PyEzvizError("Cloud clip output target changed during capture")
+        # Prefer atomic publication when directory permissions permit it.
+        staged_mode = stat.S_IMODE(temp_path.stat().st_mode)
+        with suppress(OSError):
+            shutil.copystat(target, temp_path, follow_symlinks=False)
+        try:
+            os.replace(temp_path, target)
+            return
+        except PermissionError:
+            pass
+        os.chmod(temp_path, staged_mode)
+        destination_stat = os.fstat(destination_fd)
+        if (destination_stat.st_dev, destination_stat.st_ino) != expected_identity:
+            raise PyEzvizError("Cloud clip output target changed during capture")
+        # The caller may have content-write permission but neither read nor
+        # parent-directory access.  No rollback snapshot is possible in that
+        # permission model, so preserve the legacy in-place write semantics.
+        with temp_path.open("rb") as source, os.fdopen(
+            destination_fd,
+            "wb",
+        ) as destination:
+            destination_fd = -1
+            destination.truncate(0)
+            while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
+                destination.write(chunk)
+            destination.truncate()
+            destination.flush()
+            os.fsync(destination.fileno())
+        temp_path.unlink()
+    finally:
+        if destination_fd >= 0:
+            os.close(destination_fd)
 
 
 def _reserve_existing_clip_space(

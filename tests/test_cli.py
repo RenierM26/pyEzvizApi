@@ -3229,7 +3229,7 @@ def test_stream_dump_rejects_encrypted_packets_by_default(monkeypatch, tmp_path,
 
 
 def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
-    expected_payload = b"abcdef"
+    expected_payload = b"\x00\x00\x01\xbaabcdef"
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
     fake_ffmpeg.write_text(
         "#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n",
@@ -3243,10 +3243,10 @@ def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
             return [
                 VtmPacket(
                     channel=VtmChannel.STREAM,
-                    length=3,
+                    length=7,
                     sequence=1,
                     message_code=0,
-                    body=b"abc",
+                    body=b"\x00\x00\x01\xbaabc",
                 ),
                 VtmPacket(
                     channel=VtmChannel.STREAM,
@@ -3318,7 +3318,15 @@ def test_remux_stream_payloads_to_mpegts_wraps_ffmpeg_launch_failure() -> None:
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
-            return []
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=8,
+                    sequence=1,
+                    message_code=0,
+                    body=b"\x00\x00\x01\xbamedia",
+                )
+            ]
 
     try:
         cli_module._remux_stream_payloads_to_mpegts(  # noqa: SLF001

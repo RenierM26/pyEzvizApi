@@ -994,6 +994,14 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
         packets,
         allow_encrypted=allow_encrypted,
     )
+    empty_capture_requested = (
+        (max_packets is not None and max_packets <= 0)
+        or (duration_seconds is not None and duration_seconds <= 0)
+    )
+    if transport == StreamTransport.UNKNOWN:
+        if empty_capture_requested:
+            return
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
     if transport == StreamTransport.MPEG_TS:
         if mpegps_transform is not None or rtp_transform is not None:
             raise PyEzvizError("Video decryption does not support MPEG-TS cloud payloads")
@@ -1118,13 +1126,28 @@ def _write_cloud_mpegts_packets(
     *,
     allow_encrypted: bool,
 ) -> None:
-    """Write only completely framed MPEG-TS VTM packet bodies."""
+    """Reframe and write complete MPEG-TS packets across VTM bodies."""
 
+    buffer = bytearray()
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
-        if _is_valid_mpegts_body(packet.body):
-            output.write(packet.body)
-    output.flush()
+        buffer.extend(packet.body)
+        while buffer:
+            sync_offset = buffer.find(b"\x47")
+            if sync_offset < 0:
+                buffer.clear()
+                break
+            if sync_offset:
+                del buffer[:sync_offset]
+            if len(buffer) < 188:
+                break
+            candidate = bytes(buffer[:188])
+            if not _is_valid_mpegts_body(candidate):
+                del buffer[0]
+                continue
+            output.write(candidate)
+            output.flush()
+            del buffer[:188]
 
 
 def _cloud_rtp_packet_matches_video_route(

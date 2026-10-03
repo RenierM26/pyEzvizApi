@@ -2967,6 +2967,32 @@ def test_collect_stream_packets_rejects_vtm_prelude_only_capture() -> None:
         )
 
 
+def test_collect_stream_packets_drops_preludes_and_rebuilds_split_mpegps() -> None:
+    split_suffix = b"\x01\xba-media"
+    packets = (
+        argparse.Namespace(encrypted=False, body=b"control-prelude"),
+        argparse.Namespace(encrypted=False, body=b"junk\x00\x00"),
+        argparse.Namespace(encrypted=False, body=split_suffix),
+        argparse.Namespace(encrypted=False, body=b"next-media"),
+    )
+
+    class SplitMediaStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(packets)
+
+    collected = cli_module._collect_stream_packets(  # noqa: SLF001
+        SplitMediaStream(), max_packets=4, allow_encrypted=False,
+    )
+
+    assert [packet.body for packet in collected] == [
+        b"\x00\x00\x01\xba-media", b"next-media",
+    ]
+    assert packets[2].body == split_suffix
+
+
 def test_write_stream_payloads_discards_vtm_prelude_before_media() -> None:
     expected_media = b"\x00\x00\x01\xba-media"
     packets = (

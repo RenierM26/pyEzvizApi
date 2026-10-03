@@ -8,7 +8,8 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field
+from copy import copy
+from dataclasses import dataclass, field, replace
 import datetime as dt
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -103,6 +104,7 @@ from .stream_media import (
 )
 from .stream_transport import (
     StreamTransport,
+    VtmPacket,
     VtmStreamClient,
     download_ezviz_cloud_replay,
 )
@@ -3244,9 +3246,24 @@ def _collect_stream_packets(
                 raise PyEzvizError(
                     "Received encrypted VTM stream packet; media decryption is not implemented"
                 )
-            if media_probe is not None:
-                media_probe(packet)
-            packets.append(packet)
+            selected_packet = packet
+            if media_probe is not None and not media_probe.identified:
+                if not media_probe(packet):
+                    continue
+                if media_probe.cross_packet:
+                    assert media_probe.media_prefix is not None
+                    if isinstance(packet, VtmPacket):
+                        selected_packet = replace(
+                            packet,
+                            body=media_probe.media_prefix,
+                            length=len(media_probe.media_prefix),
+                        )
+                    else:
+                        selected_packet = copy(packet)
+                        selected_packet.body = media_probe.media_prefix
+                        if hasattr(selected_packet, "length"):
+                            selected_packet.length = len(selected_packet.body)
+            packets.append(selected_packet)
     except PyEzvizError as err:
         if not packets or "VTM socket closed" not in str(err):
             raise

@@ -441,7 +441,16 @@ def _mpegps_video_payload(data: bytes) -> bytes:  # noqa: PLR0911, PLR0912
         packet_length = int.from_bytes(data[packet_start + 4 : packet_start + 6], "big")
         if not packet_length and not 0xE0 <= stream_id <= 0xEF:
             return b""
-        packet_end = packet_start + 6 + packet_length if packet_length else len(data)
+        if packet_length:
+            packet_end = packet_start + 6 + packet_length
+        else:
+            packet_end = len(data)
+            next_start = data.find(b"\x00\x00\x01", packet_start + 9)
+            while next_start >= 0 and next_start + 4 <= len(data):
+                if data[next_start + 3] >= 0xB9:
+                    packet_end = next_start
+                    break
+                next_start = data.find(b"\x00\x00\x01", next_start + 4)
         if packet_end > len(data):
             return b""
         if not 0xE0 <= stream_id <= 0xEF:

@@ -4324,6 +4324,17 @@ def test_mpegps_video_payload_skips_embedded_video_signature_in_audio_pes() -> N
     assert _mpegps_video_payload(audio + actual_video) == video_nal
 
 
+def test_mpegps_zero_length_video_pes_stops_at_following_audio_packet() -> None:
+    zero_length_video = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
+    forged_nal = b"\x00\x00\x01\x65\x88\x84\x3a"
+    audio = b"\x00\x00\x01\xc0" + len(forged_nal).to_bytes(2, "big") + forged_nal
+    actual_nal = b"\x00\x00\x01\x61\x80"
+    actual_video = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + actual_nal
+
+    assert not _mpegps_video_payload(zero_length_video + audio)
+    assert _mpegps_video_payload(zero_length_video + audio + actual_video) == actual_nal
+
+
 def test_h264_validation_rejects_partition_b_and_c_without_partition_a() -> None:
     nals = [
         (

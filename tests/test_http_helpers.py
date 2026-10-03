@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import suppress
 import datetime as dt
+import errno
 import io
 import json
 import math
+import os
 from pathlib import Path
+import stat
 import sys
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
 
@@ -23,7 +28,25 @@ from pyezvizapi.api_endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
-from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
+from pyezvizapi.client import (
+    CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
+    EzvizClient,
+    _h264_pps_info,
+    _h264_slice_group_map,
+    _h264_slice_pps_id,
+    _h264_sps_info,
+    _H264PpsInfo,
+    _H264SpsInfo,
+    _has_linked_h264_video,
+    _has_linked_hevc_video,
+    _LocalStreamPacketMetadataRecorder,
+    _mpegps_video_payload,
+    _publish_unreadable_existing_clip,
+    _rbsp_bits,
+    _regular_path_has_identity,
+    _reserve_existing_clip_space,
+    _skip_hevc_short_term_ref_pic_set,
+)
 from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
 from pyezvizapi.constants import (
     FEATURE_CODE,
@@ -3536,6 +3559,14 @@ def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(
 def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ts"
+    existing_clip = b"existing-clip"
+    existing_mode = 0o640
+    output_path.parent.mkdir(parents=True)
+    output_path.write_bytes(existing_clip)
+    output_path.chmod(existing_mode)
+    linked_path = tmp_path / "front-linked.ts"
+    linked_path.hardlink_to(output_path)
+    existing_inode = output_path.stat().st_ino
     calls: list[dict[str, Any]] = []
 
     def fake_copy_cloud_stream_to_mpegts(
@@ -3550,6 +3581,20 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
+    )
+    validation_calls: list[tuple[Path, str]] = []
+
+    def validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert path != output_path
+        assert path.parent.parent == output_path.parent
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+        assert path.read_bytes() == SAVE_CLIP_PAYLOAD
+        assert output_path.read_bytes() == existing_clip
+        validation_calls.append((path, ffmpeg_path))
+
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        validate,
     )
 
     result = client.save_clip(
@@ -3589,6 +3634,13 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         }
     ]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert linked_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == existing_inode
+    assert linked_path.stat().st_ino == existing_inode
+    assert stat.S_IMODE(output_path.stat().st_mode) == existing_mode
+    assert len(validation_calls) == 1
+    assert validation_calls[0][1] == "/usr/bin/ffmpeg"
+    assert not validation_calls[0][0].exists()
     assert result == {
         "ok": True,
         "kind": "clip",
@@ -3604,6 +3656,1894 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         "cloud_token_index": 1,
         "cloud_refresh_vtm": False,
     }
+
+
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_save_cloud_clip_preserves_relative_symlink_destination(
+    monkeypatch,
+    tmp_path,
+    *,
+    target_exists: bool,
+) -> None:
+    client = _client()
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target_path = target_dir / "front.ts"
+    if target_exists:
+        target_path.write_bytes(b"existing-clip")
+        expected_mode = 0o640
+        target_path.chmod(expected_mode)
+    else:
+        reference_path = target_dir / "normal-create"
+        reference_path.write_bytes(b"")
+        expected_mode = stat.S_IMODE(reference_path.stat().st_mode)
+
+    link_dir = tmp_path / "links"
+    link_dir.mkdir()
+    relative_target = Path("../target/front.ts")
+    output_path = link_dir / "front.ts"
+    output_path.symlink_to(relative_target)
+    validation_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    def validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        if target_exists:
+            assert path.parent.parent == target_dir
+        else:
+            assert path.parent.parent == target_dir
+        assert output_path.is_symlink()
+        assert output_path.readlink() == relative_target
+        validation_paths.append(path)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        validate,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.is_symlink()
+    assert output_path.readlink() == relative_target
+    assert target_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert stat.S_IMODE(target_path.stat().st_mode) == expected_mode
+    assert result["output"] == str(output_path)
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
+    assert len(validation_paths) == 1
+    assert not validation_paths[0].exists()
+
+
+@pytest.mark.parametrize("binary_output", [False, True])
+def test_save_decrypted_cloud_mpegps_without_ffmpeg(
+    monkeypatch,
+    tmp_path,
+    *,
+    binary_output: bool,
+) -> None:
+    client = _client()
+    video_payload = (
+        b"\x00\x00\x01\x67\x42\xc0\x0a\xda\x7b\x01\x10"
+        b"\x00\x00\x03\x00\x10\x00\x00\x03\x00\x28\xf1\x22\x6a"
+        b"\x00\x00\x01\x68\xce\x0f\xc8"
+        b"\x00\x00\x01\x65\x88\x84\x3a\x26\x28\x00\x09\x02\xe0"
+    )
+    pes_payload = b"\x80\x00\x00" + video_payload
+    capture = (
+        b"\x00\x00\x01\xe0"
+        + len(pes_payload).to_bytes(2, "big")
+        + pes_payload
+    )
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(capture)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("MPEG-PS validation must not invoke FFmpeg"),
+    )
+    output: Path | io.BytesIO = io.BytesIO() if binary_output else tmp_path / "clip.ps"
+
+    result = client.save_clip(
+        "CAM123",
+        output,
+        source="cloud",
+        output_format="mpegps",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    saved = output.getvalue() if isinstance(output, io.BytesIO) else output.read_bytes()
+    assert saved == capture
+    assert result["bytes"] == len(capture)
+
+
+def test_save_decrypted_cloud_mpegps_rejects_missing_video(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ps"
+    existing_clip = b"existing"
+    output_path.write_bytes(existing_clip)
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(b"\x00\x00\x01\xba-no-video")
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
+
+    with pytest.raises(PyEzvizError, match="did not include clear video payload"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            output_format="mpegps",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == existing_clip
+
+
+def test_save_decrypted_cloud_mpegps_rejects_invalid_slice_body(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ps"
+    video_payload = b"\x00\x00\x01\x65\xff"
+    pes_payload = b"\x80\x00\x00" + video_payload
+    capture = (
+        b"\x00\x00\x01\xe0"
+        + len(pes_payload).to_bytes(2, "big")
+        + pes_payload
+    )
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegps",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            capture
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not include clear video payload"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            output_format="mpegps",
+            decrypt_video=True,
+            media_key="wrong-key",
+        )
+
+    assert not output_path.exists()
+
+
+def test_h264_validation_rejects_truncated_linked_structures() -> None:
+    truncated = [
+        (b"\x67\x64", b"\x64\x00\x01\x80"),
+        (b"\x68\xc0", b"\xc0"),
+        (b"\x65\xe0", b"\xe0\x00"),
+    ]
+
+    assert not _has_linked_h264_video(truncated)
+
+
+def test_h264_validation_rejects_slice_before_mandatory_header_is_complete() -> None:
+    nals = [
+        (
+            b"\x67\x42",
+            b"\x42\xc0\x0a\xda\x7b\x01\x10\x00\x00\x03\x00\x10"
+            b"\x00\x00\x03\x00\x28\xf1\x22\x6a",
+        ),
+        (b"\x68\xce", b"\xce\x0f\xc8"),
+        (b"\x65\x11", b"\x11\x81"),
+    ]
+
+    assert not _has_linked_h264_video(nals)
+
+
+def test_h264_validation_rejects_truncated_vui() -> None:
+    sps_bits = (
+        _unsigned_exp_golomb_bits(0) * 5
+        + "0"
+        + _unsigned_exp_golomb_bits(0) * 2
+        + "1101"
+    )
+    nals = [
+        (b"\x67\x42", b"\x42\x00\x0a" + _rbsp_bytes(sps_bits)),
+        (b"\x68\xce", b"\xce\x0f\xc8"),
+        (
+            b"\x65\x88",
+            b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0",
+        ),
+    ]
+
+    assert not _has_linked_h264_video(nals)
+
+
+def _unsigned_exp_golomb_bits(value: int) -> str:
+    encoded = f"{value + 1:b}"
+    return "0" * (len(encoded) - 1) + encoded
+
+
+def _signed_exp_golomb_bits(value: int) -> str:
+    code_num = -2 * value if value <= 0 else 2 * value - 1
+    return _unsigned_exp_golomb_bits(code_num)
+
+
+def _rbsp_bytes(bits: str) -> bytes:
+    padded = (bits + "1").ljust((len(bits) + 8) // 8 * 8, "0")
+    return int(padded, 2).to_bytes(len(padded) // 8, "big")
+
+
+def _ebsp_bytes(bits: str) -> bytes:
+    """Encode fixture RBSP with required NAL emulation-prevention bytes."""
+
+    output = bytearray()
+    zero_count = 0
+    for value in _rbsp_bytes(bits):
+        if zero_count >= 2 and value <= 3:
+            output.append(3)
+            zero_count = 0
+        output.append(value)
+        zero_count = zero_count + 1 if value == 0 else 0
+    return bytes(output)
+
+
+def _hevc_profile_tier_level_bits(
+    sub_layer_flags: tuple[tuple[bool, bool], ...],
+) -> str:
+    bits = "0" * 96
+    bits += "".join(
+        ("1" if profile else "0") + ("1" if level else "0")
+        for profile, level in sub_layer_flags
+    )
+    if sub_layer_flags:
+        bits += "00" * (8 - len(sub_layer_flags))
+    for profile, level in sub_layer_flags:
+        if profile:
+            bits += "0" * 88
+        if level:
+            bits += "0" * 8
+    return bits
+
+
+def _valid_hevc_validation_nals(  # noqa: PLR0913
+    *,
+    sps_vps_id: int = 0,
+    pps_sps_id: int = 0,
+    pps_init_qp_minus26: int = 0,
+    bit_depth_luma_minus8: int = 0,
+    slice_pps_id: int = 0,
+    slice_type: int = 2,
+    output_flag_present: bool = False,
+    complete_vps: bool = True,
+    complete_sps: bool = True,
+    complete_pps: bool = True,
+    sps_extension_bits: str | None = None,
+    pps_extension_bits: str | None = None,
+    valid_inline_slice_rps: bool = True,
+    slice_chroma_qp_offsets_present: bool = False,
+    include_slice_chroma_qp_offsets: bool = True,
+    chroma_qp_offset_list_enabled: bool = False,
+    include_cu_chroma_qp_offset_flag: bool = True,
+    deblocking_filter_override_enabled: bool = False,
+    include_slice_deblocking_fields: bool = True,
+    separate_colour_plane: bool = False,
+    sample_adaptive_offset_enabled: bool = False,
+    loop_filter_across_slices_enabled: bool = False,
+    tiles_enabled: bool = False,
+    entropy_coding_sync_enabled: bool = False,
+    slice_header_extension_present: bool = False,
+    include_slice_header_tail: bool = True,
+    include_slice_data: bool = True,
+    slice_alignment_bits: str | None = None,
+    long_term_ref_pics_sps: int = 0,
+    long_term_sps_index: int | None = None,
+    sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
+) -> list[tuple[bytes, bytes]]:
+    max_sub_layers_minus1 = len(sub_layer_flags)
+    if chroma_qp_offset_list_enabled:
+        pps_extension_bits = "10000000" + "01111111"
+    vps_bits = (
+        "0000"  # vps_video_parameter_set_id
+        "11"  # base-layer flags
+        "000000"  # vps_max_layers_minus1
+        "000"  # vps_max_sub_layers_minus1
+        "1"
+        + "1" * 16
+        + _hevc_profile_tier_level_bits(())
+        + "0"  # vps_sub_layer_ordering_info_present_flag
+        + _unsigned_exp_golomb_bits(0) * 3
+        + "000000"
+        + _unsigned_exp_golomb_bits(0)
+        + ("00" if complete_vps else "")
+    )
+    sps_bits = (
+        f"{sps_vps_id:04b}"
+        f"{max_sub_layers_minus1:03b}"
+        "1"
+        + _hevc_profile_tier_level_bits(sub_layer_flags)
+        + _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(3 if separate_colour_plane else 1)
+        + ("1" if separate_colour_plane else "")
+        + _unsigned_exp_golomb_bits(64)
+        + _unsigned_exp_golomb_bits(36)
+        + "0"
+        + _unsigned_exp_golomb_bits(bit_depth_luma_minus8)
+        + _unsigned_exp_golomb_bits(0)  # bit_depth_chroma_minus8
+        + _unsigned_exp_golomb_bits(4)
+        + (
+            "0"  # sps_sub_layer_ordering_info_present_flag
+            + _unsigned_exp_golomb_bits(0) * 3
+            + _unsigned_exp_golomb_bits(0) * 6
+            + "00"  # scaling-list and AMP flags
+            + ("1" if sample_adaptive_offset_enabled else "0")
+            + "0"  # PCM flag
+            + _unsigned_exp_golomb_bits(0)  # num_short_term_ref_pic_sets
+            + (
+                "1"
+                + _unsigned_exp_golomb_bits(long_term_ref_pics_sps)
+                + ("0" * 9) * long_term_ref_pics_sps
+                if long_term_ref_pics_sps
+                else "0"
+            )
+            + "000"  # temporal-MVP, smoothing, and VUI
+            + (
+                "0"
+                if sps_extension_bits is None
+                else "1" + sps_extension_bits
+            )
+            if complete_sps
+            else ""
+        )
+    )
+    pps_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(pps_sps_id)
+        + "0"
+        + ("1" if output_flag_present else "0")
+        + "00000"
+        + _unsigned_exp_golomb_bits(0) * 2
+        + _signed_exp_golomb_bits(pps_init_qp_minus26)
+        + "000"
+        + _signed_exp_golomb_bits(0) * 2
+        + ("1" if slice_chroma_qp_offsets_present else "0")
+        + "000"
+        + ("1" if tiles_enabled else "0")
+        + ("1" if entropy_coding_sync_enabled else "0")
+        + (
+            (
+                _unsigned_exp_golomb_bits(0) * 2 + "10"
+                if tiles_enabled
+                else ""
+            )
+            + ("1" if loop_filter_across_slices_enabled else "0")
+            + (
+                "111" if deblocking_filter_override_enabled else "0"
+            )  # deblocking control, override, and disabled flags
+            + "00"  # scaling-list and list-modification flags
+            + _unsigned_exp_golomb_bits(0)  # log2_parallel_merge_level_minus2
+            + ("1" if slice_header_extension_present else "0")
+            + (
+                "0"
+                if pps_extension_bits is None
+                else "1" + pps_extension_bits
+            )
+            if complete_pps
+            else ""
+        )
+    )
+    slice_header_bits = (
+        "1"
+        + _unsigned_exp_golomb_bits(slice_pps_id)
+        + _unsigned_exp_golomb_bits(slice_type)
+        + ("0" if output_flag_present else "")
+        + ("00" if separate_colour_plane else "")
+        + "0" * 8  # slice_pic_order_cnt_lsb
+        + (
+            "0" + _unsigned_exp_golomb_bits(0) * 2
+            if valid_inline_slice_rps
+            else "1"
+        )
+        + (
+            _unsigned_exp_golomb_bits(1 if long_term_sps_index is not None else 0)
+            + _unsigned_exp_golomb_bits(0)
+            + (
+                f"{long_term_sps_index:0{(long_term_ref_pics_sps - 1).bit_length()}b}"
+                + "0"  # delta_poc_msb_present_flag; used flag comes from SPS
+                if long_term_sps_index is not None
+                else ""
+            )
+            if long_term_ref_pics_sps
+            else ""
+        )
+        + (
+            "0" + ("" if separate_colour_plane else "0")
+            if sample_adaptive_offset_enabled
+            else ""
+        )
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + (
+            _signed_exp_golomb_bits(0) * 2
+            if slice_chroma_qp_offsets_present and include_slice_chroma_qp_offsets
+            else ""
+        )
+        + (
+            "0"
+            if chroma_qp_offset_list_enabled and include_cu_chroma_qp_offset_flag
+            else ""
+        )
+        + (
+            "11"
+            if deblocking_filter_override_enabled and include_slice_deblocking_fields
+            else ""
+        )
+        + (
+            (
+                ("0" if loop_filter_across_slices_enabled else "")
+                + (
+                    _unsigned_exp_golomb_bits(0)
+                    if tiles_enabled or entropy_coding_sync_enabled
+                    else ""
+                )
+                + (
+                    _unsigned_exp_golomb_bits(0)
+                    if slice_header_extension_present
+                    else ""
+                )
+            )
+            if include_slice_header_tail
+            else ""
+        )
+    )
+    if slice_alignment_bits is None:
+        slice_alignment_bits = "1" + "0" * ((-len(slice_header_bits) - 1) % 8)
+    slice_bits = slice_header_bits + slice_alignment_bits
+    if include_slice_data:
+        slice_bits += "0"
+    return [
+        (b"\x40\x01", b"\x01" + _ebsp_bytes(vps_bits)),
+        (b"\x42\x01", b"\x01" + _ebsp_bytes(sps_bits)),
+        (b"\x44\x01", b"\x01" + _ebsp_bytes(pps_bits)),
+        (b"\x02\x01", b"\x01" + _ebsp_bytes(slice_bits)),
+    ]
+
+
+def test_hevc_validation_links_parameter_sets_to_slice() -> None:
+    nals = _valid_hevc_validation_nals()
+
+    assert _has_linked_hevc_video(nals)
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(sps_vps_id=1))
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(pps_sps_id=1))
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(slice_pps_id=1))
+
+
+def test_hevc_pps_qp_lower_bound_uses_linked_sps_luma_bit_depth() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(bit_depth_luma_minus8=2, pps_init_qp_minus26=-38)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(bit_depth_luma_minus8=2, pps_init_qp_minus26=-39)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(pps_init_qp_minus26=-27)
+    )
+
+
+def test_hevc_validation_requires_data_after_byte_alignment() -> None:
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(include_slice_data=False)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(slice_alignment_bits="0")
+    )
+
+
+def test_hevc_validation_rejects_reserved_long_term_sps_index() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            long_term_ref_pics_sps=3,
+            long_term_sps_index=2,
+        )
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            long_term_ref_pics_sps=3,
+            long_term_sps_index=3,
+        )
+    )
+
+
+@pytest.mark.parametrize("nal_type", [10, 15, 22, 31])
+def test_hevc_validation_rejects_reserved_vcl_nal_types(nal_type: int) -> None:
+    nals = _valid_hevc_validation_nals()
+    nals[-1] = (bytes((nal_type << 1, 1)), nals[-1][1])
+
+    assert not _has_linked_hevc_video(nals)
+
+
+def test_hevc_validation_rejects_truncated_linked_structures() -> None:
+    truncated = [
+        (b"\x40\x01", b"\x01\x00\x00\xff\xff"),
+        (b"\x42\x01", b"\x01" + b"\x00" * 13),
+        (b"\x44\x01", b"\x01\xc0"),
+        (b"\x02\x01", b"\x01\xc0"),
+    ]
+
+    assert not _has_linked_hevc_video(truncated)
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(complete_sps=False))
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(complete_pps=False))
+    assert not _has_linked_hevc_video([(b"\x02\x01", b"\x01\x80")])
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(complete_vps=False)
+    )
+
+
+def test_hevc_validation_parses_slice_type_before_output_flag() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(output_flag_present=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            output_flag_present=True,
+            slice_type=3,
+        )
+    )
+
+
+def test_hevc_validation_parses_interleaved_sub_layer_flags() -> None:
+    nals = _valid_hevc_validation_nals(
+        sub_layer_flags=((False, True), (True, False))
+    )
+
+    assert _has_linked_hevc_video(nals)
+
+
+def test_hevc_validation_rejects_truncated_sps_range_extension() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(sps_extension_bits="10000000" + "0" * 9)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(sps_extension_bits="10000000")
+    )
+
+
+def test_hevc_validation_rejects_truncated_pps_range_extension() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(pps_extension_bits="10000000" + "0011")
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(pps_extension_bits="10000000")
+    )
+
+
+def test_hevc_validation_rejects_invalid_slice_reference_picture_flag() -> None:
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(valid_inline_slice_rps=False)
+    )
+
+
+def test_hevc_validation_requires_declared_slice_chroma_qp_offsets() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(slice_chroma_qp_offsets_present=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            slice_chroma_qp_offsets_present=True,
+            include_slice_chroma_qp_offsets=False,
+        )
+    )
+
+
+def test_hevc_validation_requires_range_extension_chroma_offset_flag() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(chroma_qp_offset_list_enabled=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            chroma_qp_offset_list_enabled=True,
+            include_cu_chroma_qp_offset_flag=False,
+        )
+    )
+
+
+def test_hevc_validation_requires_declared_slice_deblocking_fields() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(deblocking_filter_override_enabled=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            deblocking_filter_override_enabled=True,
+            include_slice_deblocking_fields=False,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "pps_controls",
+    [
+        {"loop_filter_across_slices_enabled": True},
+        {"tiles_enabled": True},
+        {"entropy_coding_sync_enabled": True},
+        {"slice_header_extension_present": True},
+    ],
+)
+def test_hevc_validation_requires_declared_slice_header_tail(
+    pps_controls: dict[str, Any],
+) -> None:
+    assert _has_linked_hevc_video(_valid_hevc_validation_nals(**pps_controls))
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            **pps_controls,
+            include_slice_header_tail=False,
+        )
+    )
+
+
+def test_hevc_validation_supports_separate_colour_plane_slices() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(separate_colour_plane=True)
+    )
+
+
+def test_hevc_separate_colour_plane_omits_chroma_sao_flag() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            separate_colour_plane=True,
+            sample_adaptive_offset_enabled=True,
+        )
+    )
+
+
+def test_mpegps_video_payload_rejects_truncated_declared_pes_length() -> None:
+    truncated_pes = (
+        b"\x00\x00\x01\xe0"
+        + (20).to_bytes(2, "big")
+        + b"\x80\x00\x00"
+        + b"partial"
+    )
+
+    assert not _mpegps_video_payload(truncated_pes)
+
+
+def test_mpegps_video_payload_skips_embedded_video_signature_in_audio_pes() -> None:
+    forged_video = b"\x00\x00\x01\xe0\x00\x0c\x80\x00\x00\x00\x00\x01\x65\x88\x84\x3a\x26\x28"
+    audio = b"\x00\x00\x01\xc0" + len(forged_video).to_bytes(2, "big") + forged_video
+    video_nal = b"\x00\x00\x01\x65"
+    actual_video = b"\x00\x00\x01\xe0\x00\x07\x80\x00\x00" + video_nal
+
+    assert not _mpegps_video_payload(audio)
+    assert _mpegps_video_payload(audio + actual_video) == video_nal
+
+
+def test_mpegps_zero_length_video_pes_stops_at_following_audio_packet() -> None:
+    zero_length_video = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
+    forged_nal = b"\x00\x00\x01\x65\x88\x84\x3a"
+    audio = b"\x00\x00\x01\xc0" + len(forged_nal).to_bytes(2, "big") + forged_nal
+    actual_nal = b"\x00\x00\x01\x61\x80"
+    actual_video = b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + actual_nal
+
+    assert not _mpegps_video_payload(zero_length_video + audio)
+    assert _mpegps_video_payload(zero_length_video + audio + actual_video) == actual_nal
+
+
+def test_h264_validation_rejects_partition_b_and_c_without_partition_a() -> None:
+    nals = [
+        (
+            b"\x67\x42",
+            b"\x42\xc0\x0a\xda\x7b\x01\x10\x00\x00\x03\x00\x10"
+            b"\x00\x00\x03\x00\x28\xf1\x22\x6a",
+        ),
+        (b"\x68\xce", b"\xce\x0f\xc8"),
+        (b"\x63\x88", b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0"),
+        (b"\x64\x88", b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0"),
+    ]
+
+    assert not _has_linked_h264_video(nals)
+
+
+def test_h264_validation_requires_slice_data_after_cabac_alignment() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, True, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + _unsigned_exp_golomb_bits(0)
+        + "00"
+        + _signed_exp_golomb_bits(0)
+    )
+    alignment = "1" * ((-len(header_bits)) % 8)
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + alignment + "0"),
+            nal_header=0x65,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + alignment),
+            nal_header=0x65,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_h264_partition_a_requires_slice_data_after_slice_id() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + "0"
+        + _signed_exp_golomb_bits(0)
+    )
+    slice_id = _unsigned_exp_golomb_bits(0)
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + slice_id + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x42,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + slice_id),
+            nal_header=0x42,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_h264_cavlc_requires_complete_first_macroblock_type() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + "0"
+        + _signed_exp_golomb_bits(0)
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x41,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + "0"),
+            nal_header=0x41,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_h264_cavlc_inter_slice_parses_skip_run_before_macroblock_type() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + "0"  # num_ref_idx_active_override_flag
+        + "0"  # ref_pic_list_modification_flag_l0
+        + _signed_exp_golomb_bits(0)
+    )
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(1)),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(
+                header_bits
+                + _unsigned_exp_golomb_bits(0)
+                + _unsigned_exp_golomb_bits(0)
+            ),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(header_bits + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        is None
+    )
+
+
+def test_h264_sps_retains_picture_size_and_mbaff_flag() -> None:
+    syntax = (
+        _unsigned_exp_golomb_bits(0)  # seq_parameter_set_id
+        + _unsigned_exp_golomb_bits(0)  # log2_max_frame_num_minus4
+        + _unsigned_exp_golomb_bits(2)  # pic_order_cnt_type
+        + _unsigned_exp_golomb_bits(0)  # max_num_ref_frames
+        + "0"  # gaps_in_frame_num_value_allowed_flag
+        + _unsigned_exp_golomb_bits(1)  # pic_width_in_mbs_minus1
+        + _unsigned_exp_golomb_bits(1)  # pic_height_in_map_units_minus1
+        + "01100"  # frame_mbs_only, MBAFF, direct_8x8, crop, VUI
+    )
+    sps = _h264_sps_info(b"\x42\x00\x0a" + _rbsp_bytes(syntax))
+
+    assert sps is not None
+    assert (sps.pic_width_in_mbs, sps.pic_height_in_map_units) == (2, 2)
+    assert sps.mb_adaptive_frame_field
+
+
+def test_h264_cavlc_skip_run_stays_within_remaining_picture() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+
+    def slice_with_skip(first_mb: int, skip_run: int) -> bytes:
+        header = (
+            _unsigned_exp_golomb_bits(first_mb)
+            + _unsigned_exp_golomb_bits(0)  # P slice
+            + _unsigned_exp_golomb_bits(0)  # PPS
+            + "0000"  # frame_num
+            + "00"  # ref count override and list modification flags
+            + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        )
+        return _rbsp_bytes(header + _unsigned_exp_golomb_bits(skip_run))
+
+    def parsed(first_mb: int, skip_run: int) -> int | None:
+        return _h264_slice_pps_id(
+            slice_with_skip(first_mb, skip_run),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+
+    assert parsed(2, 2) == 0
+    assert parsed(2, 3) is None
+    assert parsed(0, 65535) is None
+    assert parsed(4, 0) is None
+
+
+def test_h264_mbaff_field_flag_precedes_cavlc_macroblock_type() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, False, 2, 2, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    frame_header = (
+        _unsigned_exp_golomb_bits(0)  # first_mb_in_slice
+        + _unsigned_exp_golomb_bits(2)  # I slice
+        + _unsigned_exp_golomb_bits(0)  # PPS
+        + "0000"  # frame_num
+        + "0"  # field_pic_flag: frame-coded MBAFF
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+    )
+
+    def parsed(bits: str) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(bits),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+
+    assert parsed(frame_header + "1" + _unsigned_exp_golomb_bits(0)) == 0
+    assert parsed(frame_header + "0" + _unsigned_exp_golomb_bits(0)) == 0
+    assert parsed(frame_header + "1") is None
+    assert parsed(frame_header + "0") is None
+    field_header = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "000010"  # frame_num, field_pic_flag, bottom_field_flag
+        + _signed_exp_golomb_bits(0)
+    )
+    assert parsed(field_header + _unsigned_exp_golomb_bits(0)) == 0
+
+
+def test_h264_mbaff_skip_run_uses_macroblock_pair_address() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, False, 2, 2, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    header = (
+        _unsigned_exp_golomb_bits(3)  # first macroblock pair: address 6 of 8
+        + _unsigned_exp_golomb_bits(0)  # P slice
+        + _unsigned_exp_golomb_bits(0)
+        + "00000"  # frame_num, field_pic_flag
+        + "00"  # ref count override and list modification flags
+        + _signed_exp_golomb_bits(0)
+    )
+
+    def parsed(skip_run: int) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(header + _unsigned_exp_golomb_bits(skip_run)),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+
+    assert parsed(2) == 0
+    assert parsed(3) is None
+
+
+@pytest.mark.parametrize(
+    ("map_type", "map_bits", "expected_map"),
+    [
+        (0, _unsigned_exp_golomb_bits(0) * 2, (0, 1, 0, 1)),
+        (1, "", (0, 1, 1, 0)),
+        (2, _unsigned_exp_golomb_bits(0) + _unsigned_exp_golomb_bits(1), (0, 0, 1, 1)),
+        (3, "0" + _unsigned_exp_golomb_bits(0), (1, 1, 0, 0)),
+        (4, "0" + _unsigned_exp_golomb_bits(0), (0, 0, 1, 1)),
+        (5, "0" + _unsigned_exp_golomb_bits(0), (0, 1, 0, 1)),
+        (6, _unsigned_exp_golomb_bits(3) + "0101", (0, 1, 0, 1)),
+    ],
+)
+def test_h264_slice_group_pps_and_slice_headers(
+    map_type: int, map_bits: str, expected_map: tuple[int, ...]
+) -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps_bits = (
+        _unsigned_exp_golomb_bits(0) * 2  # PPS and SPS IDs
+        + "00"  # entropy and bottom-field POC flags
+        + _unsigned_exp_golomb_bits(1)  # two slice groups
+        + _unsigned_exp_golomb_bits(map_type)
+        + map_bits
+        + _unsigned_exp_golomb_bits(0) * 2  # reference counts
+        + "000"  # weighting controls
+        + _signed_exp_golomb_bits(0) * 3  # initial QP/QS and chroma offset
+        + "000"  # deblocking, constrained-intra, redundant-count flags
+    )
+    pps = _h264_pps_info(_rbsp_bytes(pps_bits), sps_info={0: sps})
+    assert pps is not None
+    assert pps.slice_group_map_type == map_type
+    assert _h264_slice_group_map(pps, sps, 2) == expected_map
+    slice_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)  # I slice
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"  # frame_num
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + ("010" if map_type in {3, 4, 5} else "")
+        + _unsigned_exp_golomb_bits(0)  # first CAVLC macroblock type
+    )
+    assert _h264_slice_pps_id(
+        _rbsp_bytes(slice_bits), nal_header=0x01,
+        sps_info={0: sps}, pps_info={0: pps},
+    ) == 0
+
+
+@pytest.mark.parametrize("map_type", [0, 4])
+def test_h264_cavlc_skip_run_stays_within_selected_slice_group(map_type: int) -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps = _H264PpsInfo(
+        0, 0, False, False, 0, 0, False, 0, False, False,
+        slice_group_map_type=map_type,
+        slice_group_change_rate=1 if map_type == 4 else 0,
+        slice_group_count=2,
+        slice_group_map=(0, 1, 0, 1) if map_type == 0 else (),
+    )
+    header = (
+        _unsigned_exp_golomb_bits(0) * 3  # first MB, P slice, PPS
+        + "0000"  # frame_num
+        + "00"  # ref count override and list modification flags
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + ("010" if map_type == 4 else "")  # two map units in group 0
+    )
+
+    def parsed(skip_run: int) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(header + _unsigned_exp_golomb_bits(skip_run)),
+            nal_header=0x01, sps_info={0: sps}, pps_info={0: pps},
+        )
+
+    assert parsed(2) == 0
+    assert parsed(3) is None
+
+
+def test_h264_slice_group_change_cycle_rejects_reserved_value() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps = _H264PpsInfo(
+        0, 0, False, False, 0, 0, False, 0, False, False,
+        slice_group_map_type=4, slice_group_change_rate=2,
+        slice_group_count=2,
+    )
+    header = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + _signed_exp_golomb_bits(0)
+    )
+
+    def parsed(cycle_bits: str) -> int | None:
+        return _h264_slice_pps_id(
+            _rbsp_bytes(header + cycle_bits + _unsigned_exp_golomb_bits(0)),
+            nal_header=0x01, sps_info={0: sps}, pps_info={0: pps},
+        )
+
+    assert parsed("10") == 0
+    assert parsed("11") is None
+
+
+def test_h264_dispersed_map_uses_slice_group_count_in_row_term() -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 3, 3)
+    pps_bits = (
+        _unsigned_exp_golomb_bits(0) * 2  # PPS and SPS IDs
+        + "00"  # entropy and bottom-field POC flags
+        + _unsigned_exp_golomb_bits(2)  # three groups
+        + _unsigned_exp_golomb_bits(1)  # dispersed map
+        + _unsigned_exp_golomb_bits(0) * 2  # reference counts
+        + "000"  # weighting controls
+        + _signed_exp_golomb_bits(0) * 3
+        + "000"  # deblocking, constrained-intra, redundant-count flags
+    )
+    pps = _h264_pps_info(_rbsp_bytes(pps_bits), sps_info={0: sps})
+
+    assert pps is not None
+    assert _h264_slice_group_map(pps, sps, 0) == (0, 1, 2, 1, 2, 0, 0, 1, 2)
+
+
+def test_rbsp_rejects_forbidden_or_trailing_emulation_prevention() -> None:
+    assert _rbsp_bits(b"\x00\x00\x03\x03") == "0" * 16 + "00000011"
+    assert _rbsp_bits(b"\x00\x00\x03\x04") is None
+    assert _rbsp_bits(b"\x00\x00\x03") is None
+    assert _rbsp_bits(b"\x00\x00\x00\x80") is None
+    assert _rbsp_bits(b"\x00\x00\x02\x80") is None
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    slice_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + _signed_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+    )
+    assert _h264_slice_pps_id(
+        _rbsp_bytes(slice_bits) + b"\x00\x00\x03\x04\x80",
+        nal_header=0x01, sps_info={0: sps}, pps_info={0: pps},
+    ) is None
+
+
+def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:
+    sps = _H264SpsInfo(0, 3, True, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, True, 0, False, False)
+    bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+        + "00"  # colour_plane_id
+        + "0000"  # frame_num
+        + "0"  # num_ref_idx_active_override_flag
+        + "0"  # ref_pic_list_modification_flag_l0
+        + _unsigned_exp_golomb_bits(0)  # luma_log2_weight_denom
+        + "0"  # luma_weight_l0_flag
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + _unsigned_exp_golomb_bits(0)  # mb_skip_run
+        + _unsigned_exp_golomb_bits(0)  # first CAVLC mb_type
+    )
+
+    assert (
+        _h264_slice_pps_id(
+            _rbsp_bytes(bits),
+            nal_header=0x01,
+            sps_info={0: sps},
+            pps_info={0: pps},
+        )
+        == 0
+    )
+
+
+def test_hevc_slice_inline_rps_parses_delta_reference_index() -> None:
+    bits = (
+        "1"  # inter_ref_pic_set_prediction_flag
+        + _unsigned_exp_golomb_bits(1)  # delta_idx_minus1 selects set zero
+        + "0"  # delta_rps_sign
+        + _unsigned_exp_golomb_bits(0)
+        + "111"  # used_by_curr_pic_flag for all three entries
+    )
+
+    assert _skip_hevc_short_term_ref_pic_set(
+        bits,
+        0,
+        set_index=2,
+        delta_poc_counts=[2, 5],
+        slice_context=True,
+    ) == (len(bits), 3)
+
+
+def test_h264_validation_rejects_truncated_pps_extension() -> None:
+    sps = (
+        b"\x67\x42",
+        b"\x42\xc0\x0a\xda\x7b\x01\x10\x00\x00\x03\x00\x10"
+        b"\x00\x00\x03\x00\x28\xf1\x22\x6a",
+    )
+    slice_nal = (b"\x65\x88", b"\x88\x84\x3a\x26\x28\x00\x09\x02\xe0")
+    base_pps_bits = (
+        _unsigned_exp_golomb_bits(0) * 2
+        + "00"
+        + _unsigned_exp_golomb_bits(0) * 3
+        + "000"
+        + _signed_exp_golomb_bits(0) * 3
+        + "000"
+    )
+
+    assert _has_linked_h264_video(
+        [sps, (b"\x68\x00", _rbsp_bytes(base_pps_bits)), slice_nal]
+    )
+    assert not _has_linked_h264_video(
+        [sps, (b"\x68\x00", _rbsp_bytes(base_pps_bits + "1")), slice_nal]
+    )
+
+
+def test_save_decrypted_cloud_clip_rejects_fifo_target(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    os.mkfifo(output_path)
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda *_args, **_kwargs: pytest.fail("non-regular target must fail first"),
+    )
+
+    with pytest.raises(PyEzvizError, match="target must be a regular file"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert stat.S_ISFIFO(output_path.stat().st_mode)
+
+
+def test_save_decrypted_cloud_clip_supports_write_only_existing_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    output_path.chmod(0o200)
+    original_inode = output_path.stat().st_ino
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    output_path.chmod(0o600)
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_save_decrypted_cloud_clip_updates_captured_unreadable_acl_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    output_path.chmod(0o220)
+    original_inode = output_path.stat().st_ino
+    original_open = os.open
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def deny_target_read(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(path) == output_path and flags & os.O_ACCMODE == os.O_RDONLY:
+            raise PermissionError(errno.EACCES, "ACL denies content reads")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("pyezvizapi.client.os.open", deny_target_read)
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.fchmod",
+        lambda *_args: (_ for _ in ()).throw(
+            PermissionError(errno.EPERM, "writer does not own target")
+        ),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    output_path.chmod(0o600)
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_unreadable_clip_publication_preserves_concurrent_replacement(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "clip.ts"
+    target.write_bytes(b"original")
+    expected_identity = (target.stat().st_dev, target.stat().st_ino)
+    destination_fd = os.open(target, os.O_WRONLY)
+    staged = tmp_path / "staged.ts"
+    staged.write_bytes(SAVE_CLIP_PAYLOAD)
+    replacement = tmp_path / "replacement.ts"
+    replacement_payload = b"concurrent replacement"
+    replacement.write_bytes(replacement_payload)
+    identity_checks = 0
+    real_identity_check = _regular_path_has_identity
+
+    def replace_after_identity_check(
+        path: Path,
+        identity: tuple[int, int],
+    ) -> bool:
+        nonlocal identity_checks
+        identity_checks += 1
+        if identity_checks == 1:
+            os.replace(replacement, target)
+            return True
+        return real_identity_check(path, identity)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client._regular_path_has_identity",
+        replace_after_identity_check,
+    )
+
+    try:
+        with pytest.raises(PyEzvizError, match="target changed during capture"):
+            _publish_unreadable_existing_clip(
+                staged,
+                target,
+                expected_identity=expected_identity,
+                destination_fd=destination_fd,
+            )
+    finally:
+        with suppress(OSError):
+            os.close(destination_fd)
+
+    assert target.read_bytes() == replacement_payload
+    assert staged.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_decrypted_cloud_clip_updates_unreadable_target_without_parent_access(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    output_path.chmod(0o220)
+    original_inode = output_path.stat().st_ino
+    original_open = os.open
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def deny_target_read(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if Path(path) == output_path and flags & os.O_ACCMODE == os.O_RDONLY:
+            raise PermissionError(errno.EACCES, "ACL denies content reads")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("pyezvizapi.client.os.open", deny_target_read)
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.fchmod",
+        lambda *_args: (_ for _ in ()).throw(
+            PermissionError(errno.EPERM, "writer does not own target")
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.replace",
+        lambda *_args: (_ for _ in ()).throw(
+            PermissionError(errno.EACCES, "parent directory is not writable")
+        ),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    output_path.chmod(0o600)
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_save_cloud_clip_preserves_existing_target_when_reservation_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    existing_clip = b"existing-clip"
+    output_path.write_bytes(existing_clip)
+    original_inode = output_path.stat().st_ino
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._reserve_existing_clip_space",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.ENOSPC, "filesystem full")
+        ),
+    )
+
+    with pytest.raises(OSError, match="filesystem full"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == existing_clip
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_save_cloud_clip_restores_existing_target_when_publication_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    existing_clip = b"existing-clip"
+    output_path.write_bytes(existing_clip)
+    original_inode = output_path.stat().st_ino
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    real_fsync = os.fsync
+    fsync_calls = 0
+
+    def fail_first_fsync(file_descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 1:
+            raise OSError(errno.EIO, "simulated publication failure")
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr("pyezvizapi.client.os.fsync", fail_first_fsync)
+
+    with pytest.raises(OSError, match="simulated publication failure"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert fsync_calls == 2
+    assert output_path.read_bytes() == existing_clip
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_existing_clip_reservation_has_portable_filesystem_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    descriptor = os.open(output_path, os.O_WRONLY)
+    monkeypatch.delattr("pyezvizapi.client.os.fstatvfs")
+    monkeypatch.setattr(
+        "pyezvizapi.client.shutil.disk_usage",
+        lambda _path: SimpleNamespace(free=1024),
+    )
+    try:
+        _reserve_existing_clip_space(
+            descriptor,
+            required_size=16,
+            original_size=8,
+            original_allocated_blocks=None,
+            filesystem_path=tmp_path,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def test_save_cloud_clip_falls_back_when_parent_cannot_stage(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    staging_parents: list[Path | None] = []
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+
+    def temporary_directory(*_args: Any, **kwargs: Any) -> TemporaryDirectory[str]:
+        selected_parent = kwargs.get("dir")
+        staging_parents.append(selected_parent)
+        if selected_parent == tmp_path:
+            raise PermissionError(errno.EACCES, "parent is not writable")
+        return TemporaryDirectory(*_args, **kwargs)
+
+    def validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        assert path.parent.parent != tmp_path
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.tempfile.TemporaryDirectory",
+        temporary_directory,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        validate,
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert staging_parents == [tmp_path, None]
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_supports_long_destination_name(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / ("x" * 240 + ".ts")
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_rejects_concurrent_target_replacement(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"original")
+    replacement = tmp_path / "replacement.ts"
+    replacement_payload = b"rotated-by-another-process"
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+
+    def rotate_target(*_args: Any, **_kwargs: Any) -> None:
+        replacement.write_bytes(replacement_payload)
+        os.replace(replacement, output_path)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        rotate_target,
+    )
+
+    with pytest.raises(PyEzvizError, match="target changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
+
+
+def test_save_cloud_clip_rejects_fifo_replacement_without_blocking(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"original")
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+
+    def replace_target_with_fifo(*_args: Any, **_kwargs: Any) -> None:
+        output_path.unlink()
+        os.mkfifo(output_path)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        replace_target_with_fifo,
+    )
+
+    with pytest.raises(PyEzvizError, match="target changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert stat.S_ISFIFO(output_path.stat().st_mode)
+
+
+def test_save_cloud_clip_verifies_new_target_after_hard_link(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    replacement_payload = b"concurrent replacement"
+    real_link = os.link
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def replace_after_link(source: Path, target: Path) -> None:
+        real_link(source, target)
+        target.unlink()
+        target.write_bytes(replacement_payload)
+
+    monkeypatch.setattr("pyezvizapi.client.os.link", replace_after_link)
+
+    with pytest.raises(PyEzvizError, match="changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
+
+
+def test_save_cloud_clip_falls_back_when_hard_links_are_unsupported(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        ),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_falls_back_for_windows_invalid_function(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    hard_link_error = OSError(errno.EINVAL, "invalid function")
+    hard_link_error.winerror = 1  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(hard_link_error),
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_fallback_removes_partial_copy_after_failure(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.fsync",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.ENOSPC, "filesystem full")
+        ),
+    )
+
+    with pytest.raises(OSError, match="filesystem full"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert not output_path.exists()
+
+
+def test_save_cloud_clip_fallback_does_not_overwrite_concurrent_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    replacement_payload = b"concurrent writer"
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def unsupported_link(_source: Path, target: Path) -> None:
+        target.write_bytes(replacement_payload)
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    monkeypatch.setattr("pyezvizapi.client.os.link", unsupported_link)
+
+    with pytest.raises(PyEzvizError, match="changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
+
+
+def test_save_cloud_clip_fallback_detects_replacement_during_copy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    replacement = tmp_path / "replacement.ts"
+    replacement_payload = b"concurrent writer"
+    real_fsync = os.fsync
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        ),
+    )
+
+    def replace_target_after_copy(file_descriptor: int) -> None:
+        real_fsync(file_descriptor)
+        replacement.write_bytes(replacement_payload)
+        os.replace(replacement, output_path)
+
+    monkeypatch.setattr("pyezvizapi.client.os.fsync", replace_target_after_copy)
+
+    with pytest.raises(PyEzvizError, match="changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
+
+
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [None, float("inf"), float("nan"), 10**309, 1e12, sys.float_info.max],
+)
+def test_save_unbounded_clear_cloud_clip_writes_directly(
+    monkeypatch,
+    tmp_path,
+    duration_seconds: float | None,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "stream.ps"
+    observed_names: list[str] = []
+    observed_durations: list[float | None] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        observed_names.append(str(selected_output.name))
+        observed_durations.append(kwargs["duration_seconds"])
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fake_copy)
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        output_format="mpegps",
+        duration_seconds=duration_seconds,
+    )
+
+    assert observed_names == [str(output_path)]
+    assert observed_durations == [None]
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
 def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
@@ -3624,6 +5564,10 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
     )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
 
     client.save_clip(
         "CAM123",
@@ -3634,6 +5578,266 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
     )
 
     assert calls[0]["nalu_header_size"] is None
+
+
+def test_save_cloud_clip_rejects_path_without_decodable_video(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ts"
+    existing_clip = b"existing-clip"
+    output_path.write_bytes(existing_clip)
+    capture_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        capture_paths.append(Path(str(output.name)))
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"",
+            stderr=b"decoder warning",
+        ),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not include a decodable video frame"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == existing_clip
+    assert len(capture_paths) == 1
+    assert capture_paths[0] != output_path
+    assert not capture_paths[0].exists()
+    assert list(tmp_path.iterdir()) == [output_path]
+
+
+def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ts"
+    reference_path = tmp_path / "normal-create"
+    reference_path.write_bytes(b"")
+    expected_mode = stat.S_IMODE(reference_path.stat().st_mode)
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    run_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def fake_run(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        run_calls.append((args, kwargs))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b"\x00",
+            stderr=b"decoder warning",
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        fake_run,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+        timeout=0.01,
+    )
+
+    assert result["ok"] is True
+    assert stat.S_IMODE(output_path.stat().st_mode) == expected_mode
+    assert "-nostdin" in run_calls[0][0][0]
+    assert run_calls[0][1]["timeout"] == CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS
+
+
+def test_save_cloud_clip_does_not_decode_validate_encrypted_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "encrypted.ts"
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: pytest.fail("encrypted output must not be decode-validated"),
+    )
+
+    result = client.save_clip("CAM123", output_path, source="cloud")
+
+    assert result["ok"] is True
+
+
+def test_save_clear_cloud_clip_failure_preserves_existing_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clear.ps"
+    existing_clip = b"existing-clear-clip"
+    output_path.write_bytes(existing_clip)
+
+    def fail_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(b"partial")
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegps", fail_copy)
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            output_format="mpegps",
+        )
+
+    assert output_path.read_bytes() == existing_clip
+
+
+def test_save_cloud_clip_validates_binary_output_before_copying(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO(b"prefix-")
+    output.seek(0, io.SEEK_END)
+    validation_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    def fake_validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        assert path.read_bytes() == SAVE_CLIP_PAYLOAD
+        validation_paths.append(path)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        fake_validate,
+    )
+
+    result = client.save_clip(
+        "CAM123",
+        output,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output.getvalue() == b"prefix-" + SAVE_CLIP_PAYLOAD
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
+    assert len(validation_paths) == 1
+    assert not validation_paths[0].exists()
+
+
+def test_save_cloud_clip_invalid_binary_output_is_untouched_and_temp_is_cleaned(
+    monkeypatch,
+) -> None:
+    client = _client()
+    existing_output = b"existing"
+    output = io.BytesIO(existing_output)
+    output.seek(0, io.SEEK_END)
+    validation_paths: list[Path] = []
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    def reject(path: Path, *, ffmpeg_path: str) -> None:
+        assert ffmpeg_path == "ffmpeg"
+        validation_paths.append(path)
+        raise PyEzvizError("invalid decoded video")
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        reject,
+    )
+
+    with pytest.raises(PyEzvizError, match="invalid decoded video"):
+        client.save_clip(
+            "CAM123",
+            output,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output.getvalue() == existing_output
+    assert len(validation_paths) == 1
+    assert not validation_paths[0].exists()
+
+
+def test_save_cloud_clip_encrypted_binary_output_still_writes_directly(
+    monkeypatch,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        selected_output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        selected_output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: pytest.fail("encrypted output must not be decode-validated"),
+    )
+
+    result = client.save_clip("CAM123", output, source="cloud")
+
+    assert output.getvalue() == SAVE_CLIP_PAYLOAD
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
 
 
 def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
@@ -3653,6 +5857,10 @@ def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
     )
 
     client.save_clip(

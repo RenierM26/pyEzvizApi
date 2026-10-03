@@ -28,6 +28,7 @@ from .rtp import rtp_payload as _rtp_payload
 
 VTM_MAGIC = 0x24
 VTM_HEADER_SIZE = 8
+VTM_PRE_MEDIA_PACKET_LIMIT = 256
 MPEG_PS_START_CODE = b"\x00\x00\x01\xba"
 MPEG_TS_SYNC_BYTE = b"\x47"
 MPEG_START_CODE_PREFIX = b"\x00\x00\x01"
@@ -267,15 +268,36 @@ class VtmStreamClient:
 
         return self._socket is not None
 
-    def connect(self) -> VtmStreamClient:
+    def connect(
+        self,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> VtmStreamClient:
         """Open the VTM TCP connection."""
 
         if self._socket is not None:
             return self
         host, port, _path, _params = parse_vtm_url(self.stream_url)
-        sock = self._socket_factory((host, port), self.timeout)
-        if self.timeout is not None:
-            sock.settimeout(self.timeout)
+        connect_timeout = self.timeout
+        deadline_limits_connect = False
+        if deadline is not None:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise _VtmReadDeadlineExpired
+            deadline_limits_connect = self.timeout is None or remaining <= self.timeout
+            connect_timeout = (
+                remaining
+                if connect_timeout is None
+                else min(connect_timeout, remaining)
+            )
+        try:
+            sock = self._socket_factory((host, port), connect_timeout)
+        except TimeoutError as err:
+            if deadline_limits_connect:
+                raise _VtmReadDeadlineExpired from err
+            raise
+        sock.settimeout(self.timeout)
         self._socket = sock
         return self
 
@@ -383,39 +405,54 @@ class VtmStreamClient:
         vtm_stream_key: str | None = None,
         max_control_packets: int = 20,
         max_redirects: int = 3,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> StreamInfoResponse:
         """Request stream info and return the decoded ``StreamInfoRsp``."""
 
         redirect_count = 0
-        while True:
-            self.connect()
-            request = build_stream_info_request(
-                self.stream_url,
-                vtm_stream_key=vtm_stream_key,
-                client_version=self.client_version,
-            )
-            self.send_packet(request)
+        try:
+            while True:
+                self.connect(deadline=deadline, monotonic=monotonic)
+                request = build_stream_info_request(
+                    self.stream_url,
+                    vtm_stream_key=vtm_stream_key,
+                    client_version=self.client_version,
+                )
+                self.send_packet(
+                    request,
+                    deadline=deadline,
+                    monotonic=monotonic,
+                )
 
-            for _ in range(max_control_packets):
-                packet = self.read_packet()
-                if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
-                    self.stream_info = parse_stream_info_response(packet.body)
-                    redirect_url = self.stream_info.streamurl
-                    redirect_key = self.stream_info.vtmstreamkey
-                    if (
-                        self.stream_info.result
-                        and redirect_url
-                        and redirect_key
-                        and redirect_count < max_redirects
-                    ):
-                        self.close()
-                        self.stream_url = redirect_url
-                        vtm_stream_key = redirect_key
-                        redirect_count += 1
-                        break
-                    return self.stream_info
-            else:
-                raise PyEzvizError("Timed out waiting for VTM stream info response")
+                for _ in range(max_control_packets):
+                    packet = self.read_packet(
+                        deadline=deadline,
+                        monotonic=monotonic,
+                    )
+                    if packet.message_code == VtmMessageCode.STREAMINFO_RSP:
+                        self.stream_info = parse_stream_info_response(packet.body)
+                        redirect_url = self.stream_info.streamurl
+                        redirect_key = self.stream_info.vtmstreamkey
+                        if (
+                            self.stream_info.result
+                            and redirect_url
+                            and redirect_key
+                            and redirect_count < max_redirects
+                        ):
+                            self.close()
+                            self.stream_url = redirect_url
+                            vtm_stream_key = redirect_key
+                            redirect_count += 1
+                            break
+                        return self.stream_info
+                else:
+                    raise PyEzvizError("Timed out waiting for VTM stream info response")
+        except _VtmReadDeadlineExpired as err:
+            self.close()
+            raise DeviceException(
+                "Device offline or unreachable: timed out waiting for VTM stream info"
+            ) from err
 
     def send_keepalive(
         self,
@@ -446,8 +483,10 @@ class VtmStreamClient:
         duration_seconds: float | None = None,
         duration_from_start: bool = False,
         first_packet_timeout: float | None = None,
+        first_packet_deadline: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
+        is_media_packet: Callable[[VtmPacket], bool] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[VtmPacket]:
         """Yield stream packets from the VTM connection.
@@ -470,14 +509,22 @@ class VtmStreamClient:
             if duration_from_start and duration_seconds is not None
             else None
         )
-        first_packet_deadline = (
+        relative_first_packet_deadline = (
             None
             if first_packet_timeout is None
             else started_at + first_packet_timeout
         )
+        if relative_first_packet_deadline is not None:
+            first_packet_deadline = (
+                relative_first_packet_deadline
+                if first_packet_deadline is None
+                else min(first_packet_deadline, relative_first_packet_deadline)
+            )
         next_keepalive = (
             None if keepalive_interval is None else started_at + keepalive_interval
         )
+        media_started = False
+        pre_media_seen = 0
         while max_packets is None or seen < max_packets:
             now = monotonic()
             if capture_deadline is not None and now >= capture_deadline:
@@ -486,12 +533,20 @@ class VtmStreamClient:
             if first_packet_deadline is not None and now >= first_packet_deadline:
                 self._read_inactivity_deadline = None
                 break
+            active_stream_deadlines = [
+                deadline
+                for deadline in (capture_deadline, first_packet_deadline)
+                if deadline is not None
+            ]
+            keepalive_deadline = (
+                min(active_stream_deadlines) if active_stream_deadlines else None
+            )
             if next_keepalive is not None and now >= next_keepalive:
                 assert keepalive_interval is not None
                 if self.stream_info is not None and self.stream_info.streamssn:
                     try:
                         self.send_keepalive(
-                            deadline=capture_deadline,
+                            deadline=keepalive_deadline,
                             monotonic=monotonic,
                         )
                     except _VtmReadDeadlineExpired:
@@ -514,11 +569,17 @@ class VtmStreamClient:
                 packet = self.read_packet(deadline=read_deadline, monotonic=monotonic)
             except _VtmReadDeadlineExpired:
                 continue
+            if not media_started:
+                # Bound every packet received before media starts, including
+                # empty stream frames and control traffic that callers elect
+                # not to yield.  Otherwise a max-packet-only capture can be
+                # kept alive forever without consuming its visible budget.
+                pre_media_seen += 1
             if packet.message_code == VtmMessageCode.KEEPALIVE_REQ:
                 try:
                     self.send_keepalive(
                         message_code=VtmMessageCode.KEEPALIVE_RSP,
-                        deadline=capture_deadline,
+                        deadline=keepalive_deadline,
                         monotonic=monotonic,
                     )
                 except _VtmReadDeadlineExpired:
@@ -529,19 +590,41 @@ class VtmStreamClient:
                 if include_control:
                     seen += 1
                     yield packet
+                if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                    self._read_inactivity_deadline = None
+                    break
                 continue
 
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
-                if capture_deadline is None and duration_seconds is not None:
-                    capture_deadline = monotonic() + duration_seconds
-                first_packet_deadline = None
-                seen += 1
+                if not packet.body:
+                    if pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                        self._read_inactivity_deadline = None
+                        break
+                    continue
+                is_media = (
+                    media_started
+                    or is_media_packet is None
+                    or is_media_packet(packet)
+                )
+                if is_media:
+                    if not media_started:
+                        if capture_deadline is None and duration_seconds is not None:
+                            capture_deadline = monotonic() + duration_seconds
+                        first_packet_deadline = None
+                        media_started = True
+                    seen += 1
                 yield packet
+                if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                    self._read_inactivity_deadline = None
+                    break
                 continue
 
             if include_control:
                 seen += 1
                 yield packet
+            if not media_started and pre_media_seen >= VTM_PRE_MEDIA_PACKET_LIMIT:
+                self._read_inactivity_deadline = None
+                break
 
     def iter_payloads(
         self,

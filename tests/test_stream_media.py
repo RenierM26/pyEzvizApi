@@ -8,6 +8,7 @@ import io
 import json
 import socket
 import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any, BinaryIO
 
@@ -19,12 +20,15 @@ from pyezvizapi._stream import (
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
     VtmChannel,
+    VtmMessageCode,
     VtmPacket,
+    VtmStreamClient,
     _find_hevc_nal_start_codes,
     decode_vtm_packet,
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
     detect_transport,
+    encode_vtm_packet,
     mpeg_ps_complete_prefix_length,
     mpeg_ps_decryptable_prefix_length,
     rtp_payload,
@@ -1243,7 +1247,7 @@ def test_find_hevc_nal_start_codes_ignores_ciphertext_start_code_lookalikes() ->
 def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    expected_payload = b"ps-1ps-2"
+    expected_payload = b"\x00\x00\x01\xba-media-continuation"
     calls: list[dict[str, Any]] = []
 
     class FakeCloudStream:
@@ -1263,17 +1267,17 @@ def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
             assert max_packets == 2
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=4,
+                    length=len(b"\x00\x00\x01\xba-media"),
                 sequence=1,
                 message_code=0,
-                body=b"ps-1",
+                    body=b"\x00\x00\x01\xba-media",
             )
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=4,
+                    length=len(b"-continuation"),
                 sequence=2,
                 message_code=0,
-                body=b"ps-2",
+                    body=b"-continuation",
             )
 
     def fake_open_cloud_stream(
@@ -1313,6 +1317,72 @@ def test_copy_cloud_stream_to_mpegps_writes_clear_payloads(monkeypatch) -> None:
         }
     ]
     assert output.getvalue() == expected_payload
+
+
+def test_copy_cloud_stream_to_mpegps_rejects_empty_startup(monkeypatch) -> None:
+    client = _client()
+
+    class EmptyCloudStream:
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 2
+            return iter(())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: EmptyCloudStream(),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        copy_cloud_stream_to_mpegps(
+            client,
+            "CAM123",
+            io.BytesIO(),
+            max_packets=2,
+        )
+
+
+@pytest.mark.parametrize(
+    ("max_packets", "duration_seconds"),
+    [(0, 10.0), (None, 0.0), (None, -1.0)],
+)
+def test_copy_cloud_stream_to_mpegps_preserves_explicit_zero_capture(
+    monkeypatch,
+    max_packets: int | None,
+    duration_seconds: float,
+) -> None:
+    client = _client()
+    output = io.BytesIO()
+
+    class EmptyCloudStream:
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            return iter(())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: EmptyCloudStream(),
+    )
+
+    copy_cloud_stream_to_mpegps(
+        client,
+        "CAM123",
+        output,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+    )
+
+    assert not output.getvalue()
 
 def test_copy_cloud_stream_to_mpegps_decrypts_bounded_payloads(monkeypatch) -> None:
     client = _client()
@@ -1475,7 +1545,7 @@ def test_copy_cloud_stream_to_mpegps_requires_safe_decrypt_bound(
 def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    expected_payload = b"ps-1ps-2"
+    expected_payload = b"\x00\x00\x01\xbaps-1ps-2"
     open_calls: list[str] = []
 
     class FakeCloudStream:
@@ -1492,10 +1562,10 @@ def test_copy_cloud_stream_to_mpegts_pipes_clear_payloads(monkeypatch) -> None:
             assert max_packets == 2
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
-                length=4,
+                length=len(b"\x00\x00\x01\xbaps-1"),
                 sequence=1,
                 message_code=0,
-                body=b"ps-1",
+                body=b"\x00\x00\x01\xbaps-1",
             )
             yield VtmPacket(
                 channel=VtmChannel.STREAM,
@@ -2109,6 +2179,81 @@ def test_copy_cloud_stream_to_mpegts_skips_unknown_prelude_before_rtp(
     assert output.getvalue() == H264_SPS_ANNEXB
 
 
+def test_copy_cloud_stream_to_mpegps_rejects_prelude_only_capture() -> None:
+    prelude = VtmPacket(
+        channel=VtmChannel.STREAM,
+        length=len(b"vtm-prelude"),
+        sequence=1,
+        message_code=0,
+        body=b"vtm-prelude",
+    )
+
+    class PreludeOnlyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            return iter((prelude,))
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cloud_stream_module._copy_cloud_stream_payloads_to_mpegps(  # noqa: SLF001
+            PreludeOnlyStream(),
+            io.BytesIO(),
+            max_packets=1,
+            monotonic=lambda: 0.0,
+        )
+
+
+def test_cloud_media_predicate_accepts_allowed_encrypted_stream_packet() -> None:
+    packet = VtmPacket(
+        channel=VtmChannel.ENCRYPTED_STREAM,
+        length=len(b"opaque-ciphertext"),
+        sequence=1,
+        message_code=0,
+        body=b"opaque-ciphertext",
+    )
+
+    assert not cloud_stream_module._is_cloud_media_packet(packet)  # noqa: SLF001
+    assert cloud_stream_module._is_cloud_media_packet(  # noqa: SLF001
+        packet,
+        allow_encrypted=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "ciphertext",
+    [
+        b"opaque-ciphertext",
+        b"\x80\x60rtp-looking-ciphertext",
+        b"\x00\x00\x01\xbaps-looking-ciphertext",
+    ],
+)
+def test_cloud_mpegts_router_forwards_allowed_opaque_encrypted_packet(
+    ciphertext: bytes,
+) -> None:
+    packet = VtmPacket(
+        channel=VtmChannel.ENCRYPTED_STREAM,
+        length=len(ciphertext),
+        sequence=1,
+        message_code=0,
+        body=ciphertext,
+    )
+
+    class EncryptedStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            return iter((packet,))
+
+    output = io.BytesIO()
+    copy_cloud_stream_packets_to_mpegts(
+        EncryptedStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=1,
+        allow_encrypted=True,
+    )
+
+    assert output.getvalue() == packet.body
+
+
 def test_copy_cloud_stream_to_mpegts_skips_interleaved_non_rtp_body(
     monkeypatch,
 ) -> None:
@@ -2260,7 +2405,7 @@ def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
 def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
-    mpegts_body = b"\x47\x00\x00\x10" + bytes(184)
+    mpegts_body = (b"\x47\x00\x00\x10" + bytes(184)) * 2
 
     class FakeCloudStream:
         def __enter__(self) -> FakeCloudStream:
@@ -2589,6 +2734,377 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 
     assert open_calls == [("ffmpeg-custom", "hevc")]
     assert output.getvalue() == expected_annexb
+
+
+def test_cloud_packet_iterator_starts_duration_at_first_media() -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return iter(())
+
+    stream = RecordingStream()
+    monotonic = lambda: 10.0  # noqa: E731
+
+    assert list(
+        cloud_stream_module._iter_bounded_cloud_packets(  # noqa: SLF001
+            stream,
+            max_packets=4,
+            duration_seconds=8.0,
+            first_packet_timeout=3.0,
+            monotonic=monotonic,
+        )
+    ) == []
+    media_predicate = stream.kwargs.pop("is_media_packet")
+    assert callable(media_predicate)
+    assert stream.kwargs == {
+        "max_packets": 4,
+        "duration_seconds": 8.0,
+        "duration_from_start": False,
+        "first_packet_timeout": 3.0,
+        "monotonic": monotonic,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fragments", "expected_transport"),
+    [
+        ((b"\x00\x00", b"\x01\xba-media"), StreamTransport.MPEG_PS),
+        (
+            (
+                ((b"\x47\x40\x00\x10" + b"\x00" * 184) * 2)[:73],
+                ((b"\x47\x40\x00\x10" + b"\x00" * 184) * 2)[73:],
+            ),
+            StreamTransport.MPEG_TS,
+        ),
+    ],
+)
+def test_cloud_media_probe_recognizes_split_transport_signatures(
+    fragments: tuple[bytes, bytes],
+    expected_transport: StreamTransport,
+) -> None:
+    probe = cloud_stream_module._CloudMediaProbe()  # noqa: SLF001
+    packets = [
+        VtmPacket(
+            channel=VtmChannel.STREAM,
+            length=len(body),
+            sequence=sequence,
+            message_code=0,
+            body=body,
+        )
+        for sequence, body in enumerate(fragments, start=1)
+    ]
+
+    assert not probe(packets[0])
+    assert probe(packets[1])
+    assert probe.transport == expected_transport
+
+
+def test_cloud_media_probe_requires_two_ts_sync_bytes_before_selection() -> None:
+    probe = cloud_stream_module._CloudMediaProbe()  # noqa: SLF001
+    ts_packet = b"\x47\x40\x00\x10" + bytes(184)
+    junk = b"prelude" + ts_packet + b"junk"
+
+    def packet(body: bytes, sequence: int) -> VtmPacket:
+        return VtmPacket(
+            channel=VtmChannel.STREAM,
+            length=len(body), sequence=sequence, message_code=0, body=body,
+        )
+
+    assert not probe(packet(junk, 1))
+    assert not probe.identified
+    assert probe(packet(b"\x00\x00\x01\xba-media", 2))
+    assert probe.transport == StreamTransport.MPEG_PS
+
+    probe = cloud_stream_module._CloudMediaProbe()  # noqa: SLF001
+    assert not probe(packet(ts_packet, 1))
+    assert probe(packet(ts_packet, 2))
+    assert probe.transport == StreamTransport.MPEG_TS
+    assert probe.media_prefix == ts_packet * 2
+
+
+def test_cloud_transport_peek_discards_junk_before_split_mpegps_signature() -> None:
+    expected_media = b"\x00\x00\x01\xba-media"
+    packets = iter(
+        (
+            SimpleNamespace(encrypted=False, body=b"junk-control"),
+            SimpleNamespace(encrypted=False, body=b"\x00\x00"),
+            SimpleNamespace(encrypted=False, body=b"\x01\xba-media"),
+        )
+    )
+
+    transport, replay = cloud_stream_module._peek_cloud_transport(  # noqa: SLF001
+        packets
+    )
+
+    assert transport == StreamTransport.MPEG_PS
+    assert b"".join(packet.body for packet in replay) == expected_media
+
+
+def test_cloud_mpegts_writer_reassembles_split_vtm_bodies() -> None:
+    expected_packet = b"\x47\x40\x00\x10" + b"\x00" * 184
+    packets = [
+        SimpleNamespace(encrypted=False, body=expected_packet[:73]),
+        SimpleNamespace(encrypted=False, body=expected_packet[73:]),
+    ]
+    output = io.BytesIO()
+
+    cloud_stream_module._write_cloud_mpegts_packets(  # noqa: SLF001
+        packets,
+        output,
+        allow_encrypted=False,
+    )
+
+    assert output.getvalue() == expected_packet
+
+
+def test_cloud_mpegts_router_rejects_unknown_transport_before_remux(
+    monkeypatch,
+) -> None:
+    packet = SimpleNamespace(encrypted=False, body=b"vtm-prelude")
+
+    class PreludeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == 1
+            return iter((packet,))
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_mpegts_remux_process",
+        lambda *_args, **_kwargs: pytest.fail("unknown transport must fail first"),
+    )
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        copy_cloud_stream_packets_to_mpegts(
+            PreludeStream(),
+            io.BytesIO(),
+            ffmpeg_path="ffmpeg",
+            max_packets=1,
+        )
+
+
+def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return SimpleNamespace()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=15.0,
+        duration_seconds=8.0,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": 115.0, "monotonic": monotonic}
+
+
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [float("inf"), float("nan"), 10**309, 1e12, sys.float_info.max],
+)
+def test_cloud_stream_start_ignores_nonfinite_fallback_duration(
+    duration_seconds: float,
+) -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return SimpleNamespace()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=None,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": None, "monotonic": monotonic}
+
+
+@pytest.mark.parametrize(
+    ("timeout", "duration_seconds", "expected_connect_timeout"),
+    ((15.0, 8.0, 15.0), (None, 8.0, 8.0)),
+)
+def test_cloud_stream_start_bounds_initial_connect(
+    timeout: float | None,
+    duration_seconds: float,
+    expected_connect_timeout: float,
+) -> None:
+    response = encode_vtm_packet(
+        b"\x08\x00\x22\x07ssn-123\x2a\x05key-1",
+        message_code=VtmMessageCode.STREAMINFO_RSP,
+    )
+    connect_timeouts: list[float | None] = []
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.buffer = response
+            self.timeout: float | None = None
+            self.closed = False
+
+        def gettimeout(self) -> float | None:
+            return self.timeout
+
+        def settimeout(self, value: float | None) -> None:
+            self.timeout = value
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+        def recv(self, size: int) -> bytes:
+            chunk = self.buffer[:size]
+            self.buffer = self.buffer[size:]
+            return chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_socket = FakeSocket()
+
+    def socket_factory(
+        _address: tuple[str, int],
+        selected_timeout: float | None,
+    ) -> FakeSocket:
+        connect_timeouts.append(selected_timeout)
+        return fake_socket
+
+    stream = VtmStreamClient(
+        "ysproto://example.invalid:8554/live",
+        timeout=timeout,
+        socket_factory=socket_factory,
+    )
+    monotonic = lambda: 100.0  # noqa: E731
+
+    with cloud_stream_module._closing_unconnected_cloud_stream(stream):  # noqa: SLF001
+        cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+
+    assert connect_timeouts == [expected_connect_timeout]
+    assert fake_socket.closed
+
+
+def test_cloud_copy_reuses_startup_deadline_for_first_media(
+    monkeypatch,
+) -> None:
+    expected_deadline = 110.0
+
+    class Clock:
+        now = 100.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class SlowNegotiationStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=10.0)
+            self.start_deadline: float | None = None
+            self.iterator_kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.start_deadline = kwargs["deadline"]
+            clock.now = 109.0
+            return SimpleNamespace()
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.iterator_kwargs = kwargs
+            return iter(())
+
+    stream = SlowNegotiationStream()
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: stream,
+    )
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        copy_cloud_stream_to_mpegps(
+            _client(),
+            "CAM123",
+            io.BytesIO(),
+            timeout=10.0,
+            duration_seconds=30.0,
+            max_packets=1,
+            monotonic=clock,
+        )
+
+    assert stream.start_deadline == expected_deadline
+    assert stream.iterator_kwargs["first_packet_deadline"] == expected_deadline
+    assert stream.iterator_kwargs["first_packet_timeout"] is None
+
+
+def test_unconnected_cloud_stream_context_closes_after_start_failure() -> None:
+    class FailingStream:
+        closed = False
+
+        def start(self) -> None:
+            raise PyEzvizError("startup failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    stream = FailingStream()
+
+    with (
+        pytest.raises(PyEzvizError, match="startup failed"),
+        cloud_stream_module._closing_unconnected_cloud_stream(stream),  # noqa: SLF001
+    ):
+        cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+            stream,
+            timeout=3.0,
+            duration_seconds=8.0,
+            monotonic=lambda: 100.0,
+        )
+
+    assert stream.closed
+
+
+def test_cloud_packet_iterator_bounds_first_media_for_packet_only_capture() -> None:
+    stream_timeout = 15.0
+
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=stream_timeout)
+            self.kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return iter(())
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    assert list(
+        cloud_stream_module._iter_bounded_cloud_packets(  # noqa: SLF001
+            stream,
+            max_packets=4,
+            duration_seconds=None,
+            monotonic=monotonic,
+        )
+    ) == []
+    assert stream.kwargs["first_packet_timeout"] == stream_timeout
 
 
 def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(

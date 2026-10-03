@@ -5,8 +5,9 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import suppress
-from dataclasses import dataclass
+from contextlib import contextmanager, suppress
+from copy import copy
+from dataclasses import dataclass, replace
 from itertools import chain
 import json
 from pathlib import Path
@@ -22,7 +23,7 @@ from urllib.parse import urlparse
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import HTTPError, PyEzvizError, UnsupportedRtpVideoCodecError
-from .media import has_positive_finite_capture_bound
+from .media import has_positive_finite_capture_bound, is_positive_socket_timeout_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     ANNEX_B_START_CODE,
@@ -47,6 +48,7 @@ from .stream_media import decrypt_hikvision_ps_video, detect_transport
 from .stream_transport import (
     SocketFactory,
     StreamTransport,
+    VtmPacket,
     VtmStreamClient,
     build_vtm_url,
 )
@@ -56,6 +58,8 @@ _RTP_CODEC_PROBE_MAX_PACKETS = 32
 _RTP_AUDIO_PROBE_MAX_PACKETS = 256
 _RTP_AUDIO_QUEUE_MAX_FRAMES = 128
 _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
+_CLOUD_MEDIA_PROBE_TAIL_BYTES = 375
+_MPEG_PS_PACK_START_CODE = b"\x00\x00\x01\xba"
 
 
 class _CloudRtpAudioInput:
@@ -370,6 +374,46 @@ def open_cloud_stream(
     )
 
 
+def _start_bounded_cloud_stream(
+    stream: Any,
+    *,
+    timeout: float | None,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    """Start VTM negotiation with one deadline instead of per-read timeouts."""
+
+    if not isinstance(stream, VtmStreamClient):
+        stream.start()
+        return None
+    startup_seconds = timeout if is_positive_socket_timeout_bound(timeout) else None
+    if startup_seconds is None and is_positive_socket_timeout_bound(duration_seconds):
+        startup_seconds = duration_seconds
+    deadline = (
+        None
+        if startup_seconds is None
+        else monotonic() + startup_seconds
+    )
+    stream.start(deadline=deadline, monotonic=monotonic)
+    return deadline
+
+
+@contextmanager
+def _closing_unconnected_cloud_stream(stream: Any) -> Iterator[Any]:
+    """Manage a newly-created stream without triggering eager ``__enter__``."""
+
+    try:
+        yield stream
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+        else:
+            exit_context = getattr(stream, "__exit__", None)
+            if callable(exit_context):
+                exit_context(None, None, None)
+
+
 def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     client: Any,
     serial: str,
@@ -405,7 +449,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             serial,
             channel=channel,
@@ -413,16 +457,25 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
-        ) as stream:
-            stream.start()
+        )
+        with _closing_unconnected_cloud_stream(stream):
+            startup_deadline = _start_bounded_cloud_stream(
+                stream,
+                timeout=timeout,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
+                first_packet_deadline=startup_deadline,
                 monotonic=monotonic,
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
         packets = list(media_packets)
+        if not packets:
+            raise PyEzvizError("Cloud stream did not provide media before startup expired")
         if transport == StreamTransport.RTP:
             raise PyEzvizError(
                 "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
@@ -432,6 +485,8 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
             )
         payload = b"".join(packet.body for packet in packets)
+        if not payload:
+            raise PyEzvizError("Cloud stream did not provide media before startup expired")
         output.write(
             decrypt_hikvision_ps_video(
                 payload,
@@ -442,7 +497,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         output.flush()
         return
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         serial,
         channel=channel,
@@ -450,13 +505,20 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
-    ) as stream:
-        stream.start()
+    )
+    with _closing_unconnected_cloud_stream(stream):
+        startup_deadline = _start_bounded_cloud_stream(
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
         _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
 
@@ -493,7 +555,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             serial,
             channel=channel,
@@ -501,12 +563,19 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
-        ) as stream:
-            stream.start()
+        )
+        with _closing_unconnected_cloud_stream(stream):
+            startup_deadline = _start_bounded_cloud_stream(
+                stream,
+                timeout=timeout,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
+                first_packet_deadline=startup_deadline,
                 monotonic=monotonic,
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
@@ -521,7 +590,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         )
         return
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         serial,
         channel=channel,
@@ -529,14 +598,21 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
-    ) as stream:
-        stream.start()
+    )
+    with _closing_unconnected_cloud_stream(stream):
+        startup_deadline = _start_bounded_cloud_stream(
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
         copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
             ffmpeg_path=ffmpeg_path,
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
 
@@ -590,6 +666,7 @@ def _copy_cloud_stream_payloads_to_mpegps(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Copy clear MPEG-PS packets while rejecting known incompatible transports."""
@@ -598,6 +675,7 @@ def _copy_cloud_stream_payloads_to_mpegps(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(packets)
@@ -609,7 +687,16 @@ def _copy_cloud_stream_payloads_to_mpegps(
         raise PyEzvizError(
             "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
         )
-    _write_clear_cloud_packets(packets, output)
+    empty_capture_requested = (
+        (max_packets is not None and max_packets <= 0)
+        or (duration_seconds is not None and duration_seconds <= 0)
+    )
+    if transport != StreamTransport.MPEG_PS and not empty_capture_requested:
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
+    if _write_clear_cloud_packets(packets, output) == 0 and not (
+        empty_capture_requested
+    ):
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
 
 
 def _collect_cloud_stream_payloads(
@@ -641,6 +728,7 @@ def _collect_cloud_stream_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> list[Any]:
     """Collect clear VTM packets while retaining RTP packet boundaries."""
@@ -650,6 +738,7 @@ def _collect_cloud_stream_packets(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     ):
         _require_clear_cloud_packet(packet)
@@ -791,20 +880,35 @@ def _iter_bounded_cloud_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None,
+    first_packet_timeout: float | None = None,
+    first_packet_deadline: float | None = None,
+    allow_encrypted: bool = False,
     monotonic: Callable[[], float],
 ) -> Iterator[Any]:
     """Iterate cloud packets with transport-level deadlines when available."""
 
     if isinstance(stream, VtmStreamClient):
-        return stream.iter_packets(
-            max_packets=max_packets,
-            duration_seconds=duration_seconds,
-            monotonic=monotonic,
-        )
+        media_probe = _CloudMediaProbe(allow_encrypted=allow_encrypted)
+        selected_first_packet_timeout = first_packet_timeout
+        if selected_first_packet_timeout is None and duration_seconds is None:
+            selected_first_packet_timeout = stream.timeout
+        iterator_kwargs: dict[str, Any] = {
+            "max_packets": max_packets,
+            "duration_seconds": duration_seconds,
+            "duration_from_start": False,
+            "first_packet_timeout": selected_first_packet_timeout,
+            "is_media_packet": media_probe,
+            "monotonic": monotonic,
+        }
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
+        return stream.iter_packets(**iterator_kwargs)
 
     def _fallback() -> Iterator[Any]:
-        deadline = None if duration_seconds is None else monotonic() + duration_seconds
+        deadline = None
         for packet in stream.iter_packets(max_packets=max_packets):
+            if deadline is None and duration_seconds is not None:
+                deadline = monotonic() + duration_seconds
             if deadline is not None and monotonic() >= deadline:
                 break
             yield packet
@@ -812,13 +916,75 @@ def _iter_bounded_cloud_packets(
     return _fallback()
 
 
-def copy_cloud_stream_packets_to_mpegts(
+def _is_cloud_media_packet(packet: Any, *, allow_encrypted: bool = False) -> bool:
+    """Return whether a VTM stream packet contains a supported media transport."""
+
+    if not packet.body:
+        return False
+    if allow_encrypted and packet.encrypted:
+        return True
+    transport = detect_transport(packet.body)
+    return transport != StreamTransport.UNKNOWN and (
+        transport != StreamTransport.MPEG_TS or _has_mpegts_sync_cadence(packet.body)
+    )
+
+
+class _CloudMediaProbe:
+    """Recognize the first cloud transport across VTM packet boundaries."""
+
+    def __init__(self, *, allow_encrypted: bool = False) -> None:
+        self.allow_encrypted = allow_encrypted
+        self.identified = False
+        self.transport = StreamTransport.UNKNOWN
+        self.cross_packet = False
+        self.media_prefix: bytes | None = None
+        self._tail = b""
+
+    def __call__(self, packet: Any) -> bool:
+        if self.identified:
+            return True
+        if _is_cloud_media_packet(packet, allow_encrypted=self.allow_encrypted):
+            self.identified = True
+            if packet.encrypted:
+                # Ciphertext has no inspectable framing. Route it through the
+                # MPEG-TS output path, which preserves allowed encrypted bodies.
+                self.transport = StreamTransport.MPEG_TS
+            else:
+                self.transport = detect_transport(packet.body)
+            self.media_prefix = packet.body
+            return True
+        if not packet.body or packet.encrypted:
+            return False
+        combined = self._tail + packet.body
+        ps_offset = combined.find(_MPEG_PS_PACK_START_CODE)
+        if ps_offset >= 0:
+            self.identified = True
+            self.cross_packet = True
+            self.transport = StreamTransport.MPEG_PS
+            self.media_prefix = combined[ps_offset:]
+            return True
+        for offset, value in enumerate(combined):
+            if value != 0x47 or offset + 376 > len(combined):
+                continue
+            if _has_mpegts_sync_cadence(combined[offset : offset + 376]):
+                self.identified = True
+                self.cross_packet = True
+                self.transport = StreamTransport.MPEG_TS
+                self.media_prefix = combined[offset:]
+                return True
+        self._tail = combined[-_CLOUD_MEDIA_PROBE_TAIL_BYTES:]
+        return False
+
+
+def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
     stream: Any,
     output: BinaryIO,
     *,
     ffmpeg_path: str,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_timeout: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     allow_encrypted: bool = False,
     mpegps_transform: Callable[[bytes], bytes] | None = None,
@@ -831,12 +997,23 @@ def copy_cloud_stream_packets_to_mpegts(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_timeout=first_packet_timeout,
+        first_packet_deadline=first_packet_deadline,
+        allow_encrypted=allow_encrypted,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(
         packets,
         allow_encrypted=allow_encrypted,
     )
+    empty_capture_requested = (
+        (max_packets is not None and max_packets <= 0)
+        or (duration_seconds is not None and duration_seconds <= 0)
+    )
+    if transport == StreamTransport.UNKNOWN:
+        if empty_capture_requested:
+            return
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
     if transport == StreamTransport.MPEG_TS:
         if mpegps_transform is not None or rtp_transform is not None:
             raise PyEzvizError("Video decryption does not support MPEG-TS cloud payloads")
@@ -885,18 +1062,38 @@ def _peek_cloud_transport(
     """Discard nonmedia prelude packets until a known transport is found."""
 
     prefix: list[Any] = []
+    media_probe = _CloudMediaProbe(allow_encrypted=allow_encrypted)
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
-        prefix.append(packet)
         if not packet.body:
+            prefix.append(packet)
             continue
-        transport = detect_transport(packet.body)
-        if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(
+        transport = (
+            StreamTransport.UNKNOWN
+            if packet.encrypted
+            else detect_transport(packet.body)
+        )
+        if transport == StreamTransport.MPEG_TS and not _has_mpegts_sync_cadence(
             packet.body
         ):
-            continue
+            transport = StreamTransport.UNKNOWN
         if transport != StreamTransport.UNKNOWN:
             return transport, chain((packet,), packets)
+        prefix.append(packet)
+        if media_probe(packet):
+            assert media_probe.media_prefix is not None
+            if isinstance(packet, VtmPacket):
+                media_packet = replace(
+                    packet,
+                    body=media_probe.media_prefix,
+                    length=len(media_probe.media_prefix),
+                )
+            else:
+                media_packet = copy(packet)
+                media_packet.body = media_probe.media_prefix
+                if hasattr(media_packet, "length"):
+                    media_packet.length = len(media_packet.body)
+            return media_probe.transport, chain((media_packet,), packets)
     return StreamTransport.UNKNOWN, iter(prefix)
 
 
@@ -918,19 +1115,23 @@ def _write_clear_cloud_packets(
     flush_each: bool = False,
     transform: Callable[[bytes], bytes] | None = None,
     allow_encrypted: bool = False,
-) -> None:
+) -> int:
+    bytes_written = 0
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         payload = transform(packet.body) if transform else packet.body
         if payload:
             output.write(payload)
+            bytes_written += len(payload)
         if flush_each:
             output.flush()
     if transform is not None and hasattr(transform, "flush"):
         tail = transform.flush()
         if tail:
             output.write(tail)
+            bytes_written += len(tail)
     output.flush()
+    return bytes_written
 
 
 def _is_valid_mpegts_body(body: bytes) -> bool:
@@ -947,19 +1148,44 @@ def _is_valid_mpegts_body(body: bytes) -> bool:
     )
 
 
+def _has_mpegts_sync_cadence(body: bytes) -> bool:
+    """Require two consecutive TS packets before selecting the transport."""
+
+    return len(body) >= 376 and _is_valid_mpegts_body(body[:376])
+
+
 def _write_cloud_mpegts_packets(
     packets: Iterable[Any],
     output: BinaryIO,
     *,
     allow_encrypted: bool,
 ) -> None:
-    """Write only completely framed MPEG-TS VTM packet bodies."""
+    """Reframe and write complete MPEG-TS packets across VTM bodies."""
 
+    buffer = bytearray()
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
-        if _is_valid_mpegts_body(packet.body):
+        if packet.encrypted:
             output.write(packet.body)
-    output.flush()
+            output.flush()
+            continue
+        buffer.extend(packet.body)
+        while buffer:
+            sync_offset = buffer.find(b"\x47")
+            if sync_offset < 0:
+                buffer.clear()
+                break
+            if sync_offset:
+                del buffer[:sync_offset]
+            if len(buffer) < 188:
+                break
+            candidate = bytes(buffer[:188])
+            if not _is_valid_mpegts_body(candidate):
+                del buffer[0]
+                continue
+            output.write(candidate)
+            output.flush()
+            del buffer[:188]
 
 
 def _cloud_rtp_packet_matches_video_route(

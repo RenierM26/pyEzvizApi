@@ -2252,6 +2252,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
         ffmpeg_path: str,
         max_packets: int | None,
         duration_seconds: float | None,
+        first_packet_deadline: float | None,
         allow_encrypted: bool,
     ) -> None:
         calls.append(
@@ -2260,6 +2261,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
                 "ffmpeg_path": ffmpeg_path,
                 "max_packets": max_packets,
                 "duration_seconds": duration_seconds,
+                "first_packet_deadline": first_packet_deadline,
                 "allow_encrypted": allow_encrypted,
             }
         )
@@ -2297,14 +2299,51 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
     assert calls[0]["ffmpeg_path"] == "ffmpeg-custom"
     assert calls[0]["max_packets"] is None
     assert calls[0]["duration_seconds"] == cli_module._parse_duration_seconds("2min")  # noqa: SLF001
+    assert calls[0]["first_packet_deadline"] is None
     assert calls[0]["allow_encrypted"] is False
     assert output_file.read_bytes() == expected_payload
 
 
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [float("inf"), float("nan"), 10**309, 1e12, sys.float_info.max],
+)
+def test_cli_cloud_stream_start_ignores_nonfinite_fallback_duration(
+    duration_seconds: float,
+) -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return object()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cli_module._start_cli_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=None,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": None, "monotonic": monotonic}
+
+
 def test_stream_dump_can_decrypt_before_mpegts_remux(monkeypatch, tmp_path) -> None:
     class EncryptKeyClient(_FakeClient):
-        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+        def get_cam_key(
+            self,
+            serial: str,
+            *,
+            smscode: str | int | None = None,
+            max_retries: int = 0,
+        ) -> str:
             assert serial == "CAM123"
+            assert smscode is None
             assert max_retries == 1
             return "camera-key"
 
@@ -2428,6 +2467,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
         *,
         detected_codec: str,
         decrypt_codec: str,
+        media_key: str | bytes | None = None,
     ) -> bytes:
         decrypt_calls.append(
             {
@@ -2436,6 +2476,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                 "units": units,
                 "detected_codec": detected_codec,
                 "decrypt_codec": decrypt_codec,
+                "media_key": media_key,
             }
         )
         return b"decrypted-hevc"
@@ -2489,6 +2530,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
             "units": (b"\x00\x00\x00\x01\x40\x01vps",),
             "detected_codec": "hevc",
             "decrypt_codec": "hevc",
+            "media_key": "camera-secret",
         }
     ]
     assert remux_calls == [
@@ -2501,7 +2543,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
     monkeypatch,
     tmp_path,
 ) -> None:
-    _install_fake_client(monkeypatch)
+    fake_client = _install_fake_client(monkeypatch)
     body = (
         b"\x80\x60\x00\x01"
         b"\x00\x00\x00\x01"
@@ -2565,6 +2607,8 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
                 "--duration",
                 "0",
                 "--decrypt-video",
+                "--sms-code",
+                "654321",
                 "--output",
                 str(output_file),
             ]
@@ -2581,6 +2625,11 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
             "transport": cli_module.StreamTransport.RTP,
         }
     ]
+    assert fake_client.instances[0].cam_key_request == {
+        "serial": "CAM123",
+        "max_retries": 1,
+        "smscode": "654321",
+    }
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
@@ -2631,12 +2680,14 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
         *,
         detected_codec: str,
         decrypt_codec: str,
+        media_key: str | bytes | None = None,
     ) -> bytes:
         decrypt_calls.append(
             {
                 "units": units,
                 "detected_codec": detected_codec,
                 "decrypt_codec": decrypt_codec,
+                "media_key": media_key,
             }
         )
         return b"decrypted-h264"
@@ -2687,6 +2738,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
             "units": (b"\x00\x00\x00\x01\x41h264",),
             "detected_codec": "h264",
             "decrypt_codec": "h264",
+            "media_key": "camera-secret",
         }
     ]
     assert remux_calls == [
@@ -2742,12 +2794,14 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
         *,
         detected_codec: str,
         decrypt_codec: str,
+        media_key: str | bytes | None = None,
     ) -> bytes:
         decrypt_calls.append(
             {
                 "units": units,
                 "detected_codec": detected_codec,
                 "decrypt_codec": decrypt_codec,
+                "media_key": media_key,
             }
         )
         return b"decrypted-h264"
@@ -2788,6 +2842,8 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                 "--decrypt-video",
                 "--decrypt-codec",
                 "encrypted-header",
+                "--media-key-hex",
+                "000102030405060708090a0b0c0d0e0f",
                 "--output",
                 str(output_file),
             ]
@@ -2800,6 +2856,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
             "units": (b"\x00\x00\x00\x01\x41h264",),
             "detected_codec": "h264",
             "decrypt_codec": "encrypted-header",
+            "media_key": bytes(range(16)),
         }
     ]
     assert remux_calls == [
@@ -2858,7 +2915,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
     )
 
 
-def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
+def test_collect_stream_packets_starts_duration_at_first_media() -> None:
     class FakeVtmStream(VtmStreamClient):
         def __init__(self) -> None:
             super().__init__("vtm://example.invalid/stream")
@@ -2871,19 +2928,116 @@ def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
     stream = FakeVtmStream()
     monotonic = lambda: 10.0  # noqa: E731
 
-    assert cli_module._collect_stream_packets(  # noqa: SLF001
-        stream,
-        max_packets=5,
-        duration_seconds=1.5,
-        allow_encrypted=False,
-        monotonic=monotonic,
-    ) == []
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cli_module._collect_stream_packets(  # noqa: SLF001
+            stream,
+            max_packets=5,
+            duration_seconds=1.5,
+            allow_encrypted=False,
+            monotonic=monotonic,
+        )
+    media_predicate = stream.iterator_kwargs.pop("is_media_packet")
+    assert callable(media_predicate)
     assert stream.iterator_kwargs == {
         "max_packets": 5,
         "duration_seconds": 1.5,
-        "duration_from_start": True,
+        "duration_from_start": False,
         "monotonic": monotonic,
     }
+
+
+def test_collect_stream_packets_rejects_vtm_prelude_only_capture() -> None:
+    prelude = argparse.Namespace(
+        encrypted=False,
+        body=b"nonmedia-prelude",
+    )
+
+    class PreludeStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter((prelude,))
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cli_module._collect_stream_packets(  # noqa: SLF001
+            PreludeStream(),
+            max_packets=1,
+            allow_encrypted=True,
+        )
+
+
+def test_collect_stream_packets_drops_preludes_and_rebuilds_split_mpegps() -> None:
+    split_suffix = b"\x01\xba-media"
+    packets = (
+        argparse.Namespace(encrypted=False, body=b"control-prelude"),
+        argparse.Namespace(encrypted=False, body=b"junk\x00\x00"),
+        argparse.Namespace(encrypted=False, body=split_suffix),
+        argparse.Namespace(encrypted=False, body=b"next-media"),
+    )
+
+    class SplitMediaStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(packets)
+
+    collected = cli_module._collect_stream_packets(  # noqa: SLF001
+        SplitMediaStream(), max_packets=4, allow_encrypted=False,
+    )
+
+    assert [packet.body for packet in collected] == [
+        b"\x00\x00\x01\xba-media", b"next-media",
+    ]
+    assert packets[2].body == split_suffix
+
+
+def test_write_stream_payloads_discards_vtm_prelude_before_media() -> None:
+    expected_media = b"\x00\x00\x01\xba-media"
+    packets = (
+        argparse.Namespace(encrypted=False, body=b"nonmedia-prelude"),
+        argparse.Namespace(encrypted=False, body=expected_media),
+    )
+
+    class PreludeStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(packets)
+
+    output = io.BytesIO()
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        PreludeStream(),
+        output,
+        max_packets=1,
+        duration_seconds=1.0,
+        allow_encrypted=True,
+        monotonic=lambda: 100.0,
+    )
+
+    assert output.getvalue() == expected_media
+
+
+def test_write_stream_payloads_allows_explicit_zero_duration() -> None:
+    class EmptyStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=None)
+
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(())
+
+    output = io.BytesIO()
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        EmptyStream(),
+        output,
+        max_packets=None,
+        duration_seconds=0.0,
+        allow_encrypted=False,
+    )
+
+    assert not output.getvalue()
 
 
 def test_parse_stream_dump_duration_units() -> None:
@@ -3015,6 +3169,38 @@ def test_write_stream_payloads_stops_after_duration() -> None:
     assert output.getvalue() == expected_payload
 
 
+def test_write_stream_payloads_rejects_empty_startup() -> None:
+    class EmptyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 1
+            return []
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cli_module._write_stream_payloads(  # noqa: SLF001
+            EmptyStream(),
+            io.BytesIO(),
+            max_packets=1,
+            allow_encrypted=False,
+        )
+
+
+def test_write_stream_payloads_preserves_explicit_zero_packet_dump() -> None:
+    class EmptyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 0
+            return []
+
+    output = io.BytesIO()
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        EmptyStream(),
+        output,
+        max_packets=0,
+        allow_encrypted=False,
+    )
+
+    assert not output.getvalue()
+
+
 def test_stream_dump_rejects_encrypted_packets_by_default(monkeypatch, tmp_path, caplog) -> None:
     _install_fake_client(monkeypatch)
 
@@ -3069,7 +3255,7 @@ def test_stream_dump_rejects_encrypted_packets_by_default(monkeypatch, tmp_path,
 
 
 def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
-    expected_payload = b"abcdef"
+    expected_payload = b"\x00\x00\x01\xbaabcdef"
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
     fake_ffmpeg.write_text(
         "#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n",
@@ -3083,10 +3269,10 @@ def test_remux_stream_payloads_to_mpegts_pipes_payloads(tmp_path) -> None:
             return [
                 VtmPacket(
                     channel=VtmChannel.STREAM,
-                    length=3,
+                    length=7,
                     sequence=1,
                     message_code=0,
-                    body=b"abc",
+                    body=b"\x00\x00\x01\xbaabc",
                 ),
                 VtmPacket(
                     channel=VtmChannel.STREAM,
@@ -3147,6 +3333,7 @@ def test_remux_stream_payloads_routes_clear_transport_when_encrypted_allowed(
             "ffmpeg_path": "ffmpeg-custom",
             "max_packets": 4,
             "duration_seconds": 3.0,
+            "first_packet_deadline": None,
             "allow_encrypted": True,
         }
     ]
@@ -3157,7 +3344,15 @@ def test_remux_stream_payloads_to_mpegts_wraps_ffmpeg_launch_failure() -> None:
 
     class FakeStream:
         def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
-            return []
+            return [
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=8,
+                    sequence=1,
+                    message_code=0,
+                    body=b"\x00\x00\x01\xbamedia",
+                )
+            ]
 
     try:
         cli_module._remux_stream_payloads_to_mpegts(  # noqa: SLF001
@@ -3193,6 +3388,9 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
                 "decrypt_video": args.decrypt_video,
                 "decrypt_codec": args.decrypt_codec,
                 "max_packets": args.max_packets,
+                "sms_code": args.sms_code,
+                "media_key": args.media_key,
+                "media_key_hex": args.media_key_hex,
             }
         )
 
@@ -3218,6 +3416,8 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
                 "--ffmpeg-path",
                 sys.executable,
                 "--decrypt-video",
+                "--media-key-hex",
+                "000102030405060708090a0b0c0d0e0f",
                 "--max-packets",
                 "4",
                 "--no-refresh-vtm",
@@ -3240,6 +3440,9 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
             "decrypt_video": True,
             "decrypt_codec": "auto",
             "max_packets": 4,
+            "sms_code": None,
+            "media_key": None,
+            "media_key_hex": "000102030405060708090a0b0c0d0e0f",
         }
     ]
     assert client.closed is True
@@ -5195,8 +5398,15 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
             return None
 
     class FakeClient:
-        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+        def get_cam_key(
+            self,
+            serial: str,
+            *,
+            smscode: str | int | None = None,
+            max_retries: int = 0,
+        ) -> str:
             assert serial == "CAM123"
+            assert smscode is None
             assert max_retries == 1
             return "camera-key"
 
@@ -5281,6 +5491,97 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
         },
     ]
     assert copy_calls == [b"", b"", b"decrypted", b""]
+
+
+def test_stream_proxy_refreshes_cloud_media_key_for_each_request(monkeypatch) -> None:
+    class FakeStream:
+        def start(self, **_kwargs: Any) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_cam_key(
+            self,
+            serial: str,
+            *,
+            smscode: str | int | None = None,
+            max_retries: int = 0,
+        ) -> str:
+            assert serial == "CAM123"
+            assert smscode == "123456"
+            assert max_retries == 1
+            self.calls += 1
+            return f"camera-key-{self.calls}"
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.wfile = io.BytesIO()
+
+        def send_response(self, _code: int) -> None:
+            return None
+
+        def send_header(self, _key: str, _value: str) -> None:
+            return None
+
+        def end_headers(self) -> None:
+            return None
+
+        def send_error(self, code: int, message: str) -> None:
+            pytest.fail(f"unexpected proxy error {code}: {message}")
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=None,
+        path="/CAM123.ts",
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=False,
+        decrypt_video=True,
+        decrypt_codec="auto",
+        max_packets=None,
+        sms_code="123456",
+    )
+    selected_keys: list[str | bytes] = []
+
+    def fake_decryptors(
+        _client: Any,
+        _serial: str,
+        *,
+        codec: str,
+        media_key: str | bytes,
+    ) -> tuple[None, None, str | bytes]:
+        assert codec == "auto"
+        selected_keys.append(media_key)
+        return None, None, media_key
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_a, **_kw: FakeStream())
+    monkeypatch.setattr(cli_module, "_stream_payload_decryptors_with_key", fake_decryptors)
+    monkeypatch.setattr(
+        cli_module,
+        "copy_cloud_stream_packets_to_mpegts",
+        lambda _stream, output, **_kwargs: output.write(b"mpegts"),
+    )
+    client = FakeClient()
+
+    cli_module._handle_stream_proxy_get(  # noqa: SLF001
+        cast(Any, FakeHandler()), config, cast(Any, client)
+    )
+    cli_module._handle_stream_proxy_get(  # noqa: SLF001
+        cast(Any, FakeHandler()), config, cast(Any, client)
+    )
+
+    assert selected_keys == ["camera-key-1", "camera-key-2"]
 
 
 def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> None:

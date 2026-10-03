@@ -13,7 +13,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 import math
 from queue import Empty, Full, Queue
-from threading import Event, Lock, Thread
+from threading import TIMEOUT_MAX, Event, Lock, Thread
 import time
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast, runtime_checkable
@@ -44,6 +44,16 @@ def is_positive_finite_duration_bound(limit: float | None) -> bool:
         return math.isfinite(limit)
     except OverflowError:
         return False
+
+
+def is_positive_socket_timeout_bound(limit: float | None) -> bool:
+    """Return whether a duration fits Python's platform timeout representation."""
+
+    return (
+        limit is not None
+        and is_positive_finite_duration_bound(limit)
+        and limit <= TIMEOUT_MAX
+    )
 
 
 def has_positive_finite_capture_bound(

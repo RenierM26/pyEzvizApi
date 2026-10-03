@@ -3540,6 +3540,9 @@ def test_save_clip_uses_hcnetsdk_multi_socket_command_plan(
 def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ts"
+    existing_clip = b"existing-clip"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_bytes(existing_clip)
     calls: list[dict[str, Any]] = []
 
     def fake_copy_cloud_stream_to_mpegts(
@@ -3556,11 +3559,17 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         fake_copy_cloud_stream_to_mpegts,
     )
     validation_calls: list[tuple[Path, str]] = []
+
+    def validate(path: Path, *, ffmpeg_path: str) -> None:
+        assert path != output_path
+        assert path.parent == output_path.parent
+        assert path.read_bytes() == SAVE_CLIP_PAYLOAD
+        assert output_path.read_bytes() == existing_clip
+        validation_calls.append((path, ffmpeg_path))
+
     monkeypatch.setattr(
         "pyezvizapi.client._require_decodable_saved_video_frame",
-        lambda path, *, ffmpeg_path: validation_calls.append(
-            (path, ffmpeg_path)
-        ),
+        validate,
     )
 
     result = client.save_clip(
@@ -3600,7 +3609,9 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         }
     ]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
-    assert validation_calls == [(output_path, "/usr/bin/ffmpeg")]
+    assert len(validation_calls) == 1
+    assert validation_calls[0][1] == "/usr/bin/ffmpeg"
+    assert not validation_calls[0][0].exists()
     assert result == {
         "ok": True,
         "kind": "clip",
@@ -3658,6 +3669,9 @@ def test_save_cloud_clip_rejects_path_without_decodable_video(
 ) -> None:
     client = _client()
     output_path = tmp_path / "front.ts"
+    existing_clip = b"existing-clip"
+    output_path.write_bytes(existing_clip)
+    capture_paths: list[Path] = []
 
     def fake_copy(
         _client: EzvizClient,
@@ -3665,6 +3679,7 @@ def test_save_cloud_clip_rejects_path_without_decodable_video(
         output: BinaryIO,
         **_kwargs: Any,
     ) -> None:
+        capture_paths.append(Path(str(output.name)))
         output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
@@ -3685,6 +3700,12 @@ def test_save_cloud_clip_rejects_path_without_decodable_video(
             decrypt_video=True,
             media_key="MEDIAKEY",
         )
+
+    assert output_path.read_bytes() == existing_clip
+    assert len(capture_paths) == 1
+    assert capture_paths[0] != output_path
+    assert not capture_paths[0].exists()
+    assert list(tmp_path.iterdir()) == [output_path]
 
 
 def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(

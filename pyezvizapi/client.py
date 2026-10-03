@@ -3860,13 +3860,31 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("wb") as output_file:
-                copy_cloud(output_file)
             if decrypt_video:
-                _require_decodable_saved_video_frame(
-                    output_path,
-                    ffmpeg_path=ffmpeg_path,
-                )
+                suffix = ".ts" if output_format == "mpegts" else ".ps"
+                temp_path: Path | None = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode="wb",
+                        prefix=f".{output_path.name}.",
+                        suffix=suffix,
+                        dir=output_path.parent,
+                        delete=False,
+                    ) as path_temp_output:
+                        temp_path = Path(path_temp_output.name)
+                        copy_cloud(cast("BinaryIO", path_temp_output))
+                    assert temp_path is not None
+                    _require_decodable_saved_video_frame(
+                        temp_path,
+                        ffmpeg_path=ffmpeg_path,
+                    )
+                    os.replace(temp_path, output_path)
+                finally:
+                    if temp_path is not None:
+                        temp_path.unlink(missing_ok=True)
+            else:
+                with output_path.open("wb") as output_file:
+                    copy_cloud(output_file)
         else:
             start_position = _binary_position(output)
             if decrypt_video:
@@ -3875,8 +3893,8 @@ class EzvizClient:
                     prefix="pyezvizapi-cloud-clip-"
                 ) as temp_dir:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
-                    with temp_path.open("wb") as temp_output:
-                        copy_cloud(temp_output)
+                    with temp_path.open("wb") as binary_temp_output:
+                        copy_cloud(binary_temp_output)
                     _require_decodable_saved_video_frame(
                         temp_path,
                         ffmpeg_path=ffmpeg_path,

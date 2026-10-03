@@ -97,6 +97,19 @@ _IDMX_STATIC_VIDEO_PAYLOAD_CODECS: dict[int, RtpCodec] = {
     99: "svac",
 }
 
+# RFC 3551 static audio assignments whose codec identity is unambiguous.  The
+# vendor's PT 115 mapping proves Opus ownership, but not its negotiated clock or
+# channel count.  Dynamic/private assignments deliberately remain unknown.
+_STATIC_AUDIO_PROFILES: dict[int, tuple[RtpCodec, int | None, int | None]] = {
+    0: ("g711-mulaw", 8_000, 1),
+    4: ("g723", 8_000, 1),
+    8: ("g711-alaw", 8_000, 1),
+    11: ("pcm", 44_100, 1),
+    14: ("mpeg-audio", None, None),
+    18: ("g729", 8_000, 1),
+    115: ("opus", None, None),
+}
+
 
 @dataclass(frozen=True)
 class RtpPacket:
@@ -142,6 +155,237 @@ class RtpStreamDescriptor:
     payload_type: int
     codec: RtpCodec
     media_kind: RtpMediaKind
+
+
+class RtpRouteProfile:
+    """Evolving authoritative RTP route state for one IDMX stream.
+
+    Descriptor discovery may be delayed during startup.  Once a media packet is
+    handed to a consumer, however, changing payload ownership or codec would
+    make the already-created depacketizer/remux inputs unsafe, so it is rejected.
+    """
+
+    def __init__(self) -> None:
+        self._descriptors: dict[int, RtpStreamDescriptor] = {}
+        self._selected_fallbacks: dict[int, tuple[RtpCodec, RtpMediaKind]] = {}
+        self._observed_ssrcs: dict[int, set[int]] = {}
+        self._active_video_codecs: set[RtpCodec] = set()
+        self._audio_metadata: tuple[int, int] | None = None
+        self._media_started = False
+        self._audio_media_started = False
+
+    @property
+    def descriptors(self) -> tuple[RtpStreamDescriptor, ...]:
+        """Return current descriptor routes in payload order."""
+
+        return tuple(self._descriptors[key] for key in sorted(self._descriptors))
+
+    @property
+    def audio_metadata(self) -> tuple[int, int] | None:
+        """Return authoritative sample rate and channel count when advertised."""
+
+        return self._audio_metadata
+
+    def deactivate_audio(self) -> None:
+        """Stop enforcing the audio profile after its consumer is disabled."""
+
+        self._audio_media_started = False
+        for payload_type in tuple(self._observed_ssrcs):
+            descriptor = self._descriptors.get(payload_type)
+            media_kind = (
+                descriptor.media_kind
+                if descriptor is not None
+                else _static_media_kind(payload_type)
+            )
+            if media_kind == "audio":
+                del self._observed_ssrcs[payload_type]
+
+    def absorb(self, packet: RtpPacket) -> None:
+        """Absorb descriptors carried by one packet without dispatching media."""
+
+        metadata = idmx_aac_descriptor((packet,))
+        if metadata is not None:
+            if (
+                self._audio_media_started
+                and self._audio_metadata is not None
+                and metadata != self._audio_metadata
+            ):
+                raise PyEzvizError("RTP audio profile mutation after media began")
+            self._audio_metadata = metadata
+        for descriptor in idmx_rtp_stream_descriptors((packet,)):
+            current = self._descriptors.get(descriptor.payload_type)
+            selected_fallback = self._selected_fallbacks.get(descriptor.payload_type)
+            changes_dispatched_route = (
+                current is None
+                and selected_fallback != (descriptor.codec, descriptor.media_kind)
+            ) or (
+                current is not None
+                and (
+                    current.codec != descriptor.codec
+                    or current.media_kind != descriptor.media_kind
+                )
+            )
+            conflicts_with_video_consumer = (
+                descriptor.media_kind == "video"
+                and bool(self._active_video_codecs)
+                and descriptor.codec not in self._active_video_codecs
+            )
+            if (
+                descriptor.payload_type in self._observed_ssrcs
+                and changes_dispatched_route
+            ) or conflicts_with_video_consumer:
+                raise PyEzvizError(
+                    "RTP route mutation after media began: descriptor changes "
+                    f"payload type {descriptor.payload_type} ownership or codec"
+                )
+            self._descriptors[descriptor.payload_type] = descriptor
+
+    def select_video_fallback(
+        self,
+        payload_type: int,
+        codec: RtpVideoCodec,
+    ) -> None:
+        """Record a probed descriptor-free route before media dispatch.
+
+        A later descriptor may confirm this exact route, but cannot change its
+        ownership or codec once packets have reached the consumer.
+        """
+
+        self._select_fallback(payload_type, codec, "video")
+
+    def select_audio_fallback(self, payload_type: int, codec: RtpCodec) -> None:
+        """Record a decrypted descriptor-free audio route before dispatch."""
+
+        self._select_fallback(payload_type, codec, "audio")
+
+    def _select_fallback(
+        self,
+        payload_type: int,
+        codec: RtpCodec,
+        media_kind: RtpMediaKind,
+    ) -> None:
+        current = self._descriptors.get(payload_type)
+        if self._media_started:
+            raise PyEzvizError("Cannot select RTP fallback after media began")
+        if current is not None:
+            if current.codec != codec or current.media_kind != media_kind:
+                raise PyEzvizError("Selected RTP fallback conflicts with its descriptor")
+            return
+        self._selected_fallbacks[payload_type] = (codec, media_kind)
+
+    def media_kind(self, packet: RtpPacket) -> RtpMediaKind:
+        """Classify a packet using current authoritative ownership."""
+
+        return rtp_media_kind(packet, stream_descriptors=self.descriptors)
+
+    def codec_payload_types(
+        self,
+        codec: RtpCodec,
+        *,
+        fallback_payload_types: frozenset[int] = frozenset(),
+    ) -> frozenset[int]:
+        """Return current payload ownership for one codec."""
+
+        return rtp_codec_payload_types(
+            self.descriptors,
+            codec,
+            fallback_payload_types=fallback_payload_types,
+        )
+
+    def mark_media(self, packet: RtpPacket, *, absorb: bool = True) -> None:
+        """Record a packet immediately before it is dispatched as media.
+
+        Set ``absorb`` false when the packet was already absorbed during startup
+        buffering or immediately before classification.
+        """
+
+        if absorb:
+            self.absorb(packet)
+        kind = self.media_kind(packet)
+        if kind not in {"video", "audio"}:
+            return
+        self._media_started = True
+        if kind == "audio":
+            self._audio_media_started = True
+        elif kind == "video":
+            descriptor = self._descriptors.get(packet.payload_type)
+            selected_fallback = self._selected_fallbacks.get(packet.payload_type)
+            codec = (
+                descriptor.codec
+                if descriptor is not None
+                else selected_fallback[0]
+                if selected_fallback is not None
+                else _IDMX_STATIC_VIDEO_PAYLOAD_CODECS.get(
+                    packet.payload_type,
+                    "unknown",
+                )
+            )
+            if codec != "unknown":
+                self._active_video_codecs.add(codec)
+        self._observed_ssrcs.setdefault(packet.payload_type, set()).add(packet.ssrc)
+
+    def streams(self) -> tuple[dict[str, object], ...]:
+        """Return byte-free route/profile records suitable for diagnostics."""
+
+        payload_types = set(self._descriptors) | set(self._observed_ssrcs)
+        records: list[dict[str, object]] = []
+        for payload_type in sorted(payload_types):
+            descriptor = self._descriptors.get(payload_type)
+            kind = descriptor.media_kind if descriptor else _static_media_kind(payload_type)
+            codec, sample_rate, channels = _profile_codec_fields(
+                payload_type,
+                descriptor,
+                self._audio_metadata,
+            )
+            observed_ssrcs = self._observed_ssrcs.get(payload_type)
+            ssrcs: tuple[int | None, ...] = (
+                tuple(sorted(observed_ssrcs)) if observed_ssrcs else (None,)
+            )
+            for ssrc in ssrcs:
+                records.append(
+                    {
+                        "codec": codec,
+                        "media_kind": kind,
+                        "payload_type": payload_type,
+                        "ssrc": ssrc,
+                        "sample_rate": sample_rate,
+                        "channels": channels,
+                        "authoritative": descriptor is not None,
+                    }
+                )
+        return tuple(records)
+
+    def diagnostics(self) -> dict[str, object]:
+        """Return sanitized route state containing no media or secrets."""
+
+        return {"media_started": self._media_started, "streams": list(self.streams())}
+
+
+def _static_media_kind(payload_type: int) -> RtpMediaKind:
+    if payload_type in KNOWN_VIDEO_PAYLOAD_TYPES:
+        return "video"
+    if payload_type in KNOWN_AUDIO_PAYLOAD_TYPES:
+        return "audio"
+    if payload_type in DEFAULT_METADATA_PAYLOAD_TYPES:
+        return "metadata"
+    return "unknown"
+
+
+def _profile_codec_fields(
+    payload_type: int,
+    descriptor: RtpStreamDescriptor | None,
+    audio_metadata: tuple[int, int] | None,
+) -> tuple[RtpCodec, int | None, int | None]:
+    codec = descriptor.codec if descriptor else "unknown"
+    sample_rate: int | None = None
+    channels: int | None = None
+    if descriptor is None and payload_type in _STATIC_AUDIO_PROFILES:
+        codec, sample_rate, channels = _STATIC_AUDIO_PROFILES[payload_type]
+    elif descriptor is None and payload_type in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS:
+        codec = _IDMX_STATIC_VIDEO_PAYLOAD_CODECS[payload_type]
+    elif descriptor is not None and descriptor.codec == "aac" and audio_metadata:
+        sample_rate, channels = audio_metadata
+    return codec, sample_rate, channels
 
 
 @dataclass
@@ -215,9 +459,14 @@ def rtp_media_kind(
 ) -> RtpMediaKind:
     """Classify one RTP packet using the EZVIZ dynamic payload mapping."""
 
-    for descriptor in stream_descriptors:
+    descriptor_tuple = tuple(stream_descriptors)
+    for descriptor in descriptor_tuple:
         if descriptor.payload_type == packet.payload_type:
             return descriptor.media_kind
+    if packet.payload_type == 96 and any(
+        descriptor.media_kind == "video" for descriptor in descriptor_tuple
+    ):
+        return "unknown"
     if packet.payload_type in video_payload_types:
         return "video"
     if packet.payload_type in audio_payload_types:
@@ -278,11 +527,14 @@ def rtp_codec_payload_types(
     assigned_payload_types = frozenset(
         descriptor.payload_type for descriptor in descriptor_tuple
     )
-    return (fallback_payload_types - assigned_payload_types) | frozenset(
+    codec_payload_types = frozenset(
         descriptor.payload_type
         for descriptor in descriptor_tuple
         if descriptor.codec == codec
     )
+    if codec_payload_types:
+        return codec_payload_types
+    return fallback_payload_types - assigned_payload_types
 
 
 def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
@@ -339,6 +591,18 @@ def _idmx_aac_access_unit(payload: bytes) -> bytes | None:
     return payload[4:]
 
 
+def rtp_packet_has_valid_idmx_aac_frame(packet: RtpPacket) -> bool:
+    """Return whether one RTP packet carries a safely framed IDMX AAC unit."""
+
+    access_unit = _idmx_aac_access_unit(packet.payload)
+    return (
+        _idmx_audio_extension_is_aac(packet)
+        and access_unit is not None
+        and len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+        <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+    )
+
+
 def _rtp_media_aes_key(media_key: str | bytes) -> bytes:
     key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
     return key_bytes.ljust(16, b"\0")[:16]
@@ -375,7 +639,7 @@ def _aac_adts_header(payload_length: int, sample_rate: int, channels: int) -> by
     )
 
 
-def decrypt_idmx_aac_packets(  # noqa: PLR0911
+def decrypt_idmx_aac_packets(
     packets: Iterable[RtpPacket],
     media_key: str | bytes,
     *,
@@ -399,11 +663,10 @@ def decrypt_idmx_aac_packets(  # noqa: PLR0911
     for packet in packet_list:
         if packet.payload_type not in selected_audio_payload_types:
             continue
-        if not _idmx_audio_extension_is_aac(packet):
+        if not rtp_packet_has_valid_idmx_aac_frame(packet):
             return None
         access_unit = _idmx_aac_access_unit(packet.payload)
-        if access_unit is None:
-            return None
+        assert access_unit is not None
         timestamps.append(packet.timestamp)
         encrypted_access_units.append(access_unit)
     if not encrypted_access_units:
@@ -413,13 +676,6 @@ def decrypt_idmx_aac_packets(  # noqa: PLR0911
         for previous, current in pairwise(timestamps)
     ):
         return None
-    if any(
-        len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
-        > IDMX_AAC_ADTS_MAX_FRAME_LENGTH
-        for access_unit in encrypted_access_units
-    ):
-        return None
-
     descriptor = idmx_aac_descriptor(packet_list) or audio_metadata
     if descriptor is None:
         return None
@@ -504,11 +760,16 @@ def detect_rtp_video_codec(
     *,
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
     allow_fallback: bool = True,
+    stream_descriptors: Iterable[RtpStreamDescriptor] | None = None,
 ) -> RtpVideoCodec:
     """Detect H.264 or HEVC from routed RTP video packets."""
 
     packet_list = list(packets)
-    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    descriptors = (
+        tuple(stream_descriptors)
+        if stream_descriptors is not None
+        else idmx_rtp_stream_descriptors(packet_list)
+    )
     advertised_codec = _advertised_rtp_video_codec(descriptors)
     if advertised_codec is not None:
         return advertised_codec

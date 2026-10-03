@@ -11,14 +11,19 @@ import pytest
 
 from pyezvizapi._local_stream import (
     _decrypt_idmx_local_packets_to_adts_aac,
+    _decrypt_idmx_local_packets_to_annexb,
     _h264_annexb_packet_end_offsets,
     _hcnetsdk_command_port_media_packet,
     _hcnetsdk_command_port_media_payload,
     _idmx_audio_metadata,
     _idmx_audio_payload_types,
+    _idmx_h264_annexb_packet_spans,
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
     _idmx_local_packets_to_annexb_with_codec,
+    _idmx_local_packets_to_h264_annexb,
+    _idmx_local_packets_to_hevc_annexb,
+    _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
@@ -73,14 +78,784 @@ def _sequential_idmx_frame_factory(
 
     return idmx_frame
 
-def _rtp_packet(payload: bytes, *, sequence: int = 1) -> bytes:
+def _rtp_packet(
+    payload: bytes,
+    *,
+    sequence: int = 1,
+    payload_type: int = 96,
+    timestamp: int = 1,
+    extension_data: bytes = b"",
+    ssrc: bytes = b"\x01\x02\x03\x04",
+) -> bytes:
+    extension = (
+        b"\x00\x01" + (len(extension_data) // 4).to_bytes(2, "big") + extension_data
+        if extension_data
+        else b""
+    )
     return (
-        b"\x80\x60"
+        bytes((0x90 if extension_data else 0x80, payload_type))
         + sequence.to_bytes(2, "big")
-        + b"\x00\x00\x00\x01"
-        + b"\x01\x02\x03\x04"
+        + timestamp.to_bytes(4, "big")
+        + ssrc
+        + extension
         + payload
     )
+
+
+@pytest.mark.parametrize(
+    ("stream_type", "payload_type", "payload", "codec"),
+    [(0x1B, 97, b"\x65h264", "h264"), (0x24, 98, b"\x26\x01hevc", "hevc")],
+)
+def test_local_idmx_annexb_uses_descriptor_video_payload_route(
+    stream_type: int,
+    payload_type: int,
+    payload: bytes,
+    codec: str,
+) -> None:
+    descriptor = bytes((0x45, 2, stream_type, payload_type))
+    packets = [
+        _rtp_packet(b"metadata", extension_data=descriptor, ssrc=b"\x55\x66\x77\x88"),
+        _rtp_packet(
+            payload,
+            sequence=2,
+            payload_type=payload_type,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, detected_codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert detected_codec == codec
+    assert annexb == b"\x00\x00\x00\x01" + payload
+
+
+def test_local_idmx_annexb_trusts_descriptor_for_ordinary_hevc_slice() -> None:
+    payload = b"\x02\x01ordinary-hevc-slice"
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            extension_data=b"\x45\x02\x1b\x62\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x67h264-parameter-set",
+            sequence=2,
+            payload_type=98,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            payload,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "hevc"
+    assert annexb == b"\x00\x00\x00\x01" + payload
+
+
+def test_local_idmx_annexb_uses_final_descriptor_snapshot_for_fallback() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x67fallback"
+    packets = [
+        _rtp_packet(
+            b"\x65superseded",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"audio",
+            sequence=2,
+            payload_type=97,
+            extension_data=b"\x45\x02\x90\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x67fallback",
+            sequence=3,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "h264"
+    assert annexb == expected_annexb
+
+
+def test_local_idmx_authoritative_video_suppresses_pt96_fallback() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01hevc"
+    packets = [
+        _rtp_packet(
+            b"\x67stale",
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "hevc"
+    assert annexb == expected_annexb
+
+
+def test_local_idmx_discards_conflicting_video_before_final_codec_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01hevc"
+    packets = [
+        _rtp_packet(
+            b"\x41\xe1stale-h264",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "hevc"
+    assert annexb == expected_annexb
+
+
+def test_local_idmx_discards_hevc_before_final_h264_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x26\x01stale-hevc",
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "h264"
+    assert annexb == expected_annexb
+
+
+def test_clear_local_idmx_rejects_nonvideo_epoch_before_h264_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x65stale-nonvideo",
+            payload_type=97,
+            extension_data=b"\x45\x02\xaf\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_packets_to_h264_annexb(packets) == expected_annexb
+    span_annexb, spans = _idmx_h264_annexb_packet_spans(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=1,
+        stream_is_clear=True,
+    )
+    assert span_annexb == expected_annexb
+    assert spans == [(0, len(expected_annexb), 2, 2, 5, 0, 0)]
+
+
+def test_clear_local_idmx_rejects_nonvideo_epoch_before_hevc_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01hevc"
+    packets = [
+        _rtp_packet(
+            b"\x26\x01stale-nonvideo",
+            payload_type=97,
+            extension_data=b"\x45\x02\xaf\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_packets_to_hevc_annexb(packets) == expected_annexb
+
+
+def test_local_idmx_frame_rate_uses_active_video_route_epoch() -> None:
+    packets = [
+        _rtp_packet(
+            b"audio",
+            sequence=sequence,
+            payload_type=97,
+            timestamp=(sequence - 1) * 1024,
+            extension_data=b"\x45\x02\x0f\x61" if sequence == 1 else b"",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+        for sequence in range(1, 6)
+    ]
+    packets.extend(
+        (
+            _rtp_packet(
+                b"metadata",
+                sequence=6,
+                payload_type=112,
+                timestamp=90_000,
+                extension_data=b"\x45\x02\x24\x61",
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+            _rtp_packet(
+                b"\x26\x01hevc-1",
+                sequence=7,
+                payload_type=97,
+                timestamp=90_000,
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+            _rtp_packet(
+                b"\x26\x01hevc-2",
+                sequence=8,
+                payload_type=97,
+                timestamp=96_000,
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+            _rtp_packet(
+                b"\x26\x01hevc-3",
+                sequence=9,
+                payload_type=97,
+                timestamp=102_000,
+                ssrc=b"\x55\x66\x77\x88",
+            ),
+        )
+    )
+
+    assert _idmx_local_video_frame_rate(packets) == "15"
+
+
+def test_local_idmx_frame_rate_keeps_video_before_delayed_descriptor() -> None:
+    packets = [
+        _rtp_packet(
+            b"\x26\x01hevc-1",
+            payload_type=97,
+            timestamp=90_000,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc-2",
+            sequence=2,
+            payload_type=97,
+            timestamp=96_000,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            timestamp=96_000,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc-3",
+            sequence=4,
+            payload_type=97,
+            timestamp=102_000,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_video_frame_rate(packets) == "15"
+
+
+def test_local_idmx_h264_route_preserves_ambiguous_sei(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sei = b"\x06\x05sei"
+    idr = b"\x65h264"
+    packets = [
+        _rtp_packet(
+            sei,
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            idr,
+            sequence=2,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        lambda nal, _key, *, nalu_header_size: nal,
+    )
+    expected = b"\x00\x00\x00\x01" + sei + b"\x00\x00\x00\x01" + idr
+
+    clear_annexb = _idmx_local_packets_to_h264_annexb(packets)
+    encrypted_annexb, spans = _idmx_h264_annexb_packet_spans(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=1,
+        stream_is_clear=False,
+    )
+
+    assert clear_annexb == expected
+    assert encrypted_annexb == expected
+    assert [span[4] for span in spans] == [6, 5]
+    assert _h264_annexb_packet_end_offsets(packets) == [len(expected) - 9, len(expected)]
+
+
+def test_encrypted_local_idmx_honors_authoritative_hevc_before_shape_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            direct_irap,
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+    ]
+    decrypted_hevc: list[bytes] = []
+
+    def decrypt_hevc(nal: bytes, _key: bytes) -> bytes:
+        decrypted_hevc.append(nal)
+        return nal
+
+    def reject_h264(
+        _nal: bytes,
+        _key: bytes,
+        *,
+        nalu_header_size: int = 1,
+    ) -> bytes:
+        raise AssertionError(
+            f"authoritative HEVC must not use H.264 probing ({nalu_header_size=})"
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        decrypt_hevc,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        reject_h264,
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+
+    assert decrypted_hevc == [direct_irap]
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+
+
+def test_encrypted_local_idmx_rejects_stale_h264_before_hevc_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            b"\x41\xe1stale-h264",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            direct_irap,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    decrypted_hevc: list[bytes] = []
+
+    def decrypt_hevc(nal: bytes, _key: bytes) -> bytes:
+        decrypted_hevc.append(nal)
+        return nal
+
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        decrypt_hevc,
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+    span_annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert decrypted_hevc == [direct_irap, direct_irap]
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+    assert span_annexb == annexb
+    assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
+
+
+def test_encrypted_local_idmx_rejects_wrapped_hevc_before_h264_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x40\x00\x00\x02\x80\x06wrapped-hevc",
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._append_idmx_hevc_media_payload",
+        lambda *_args, **_kwargs: pytest.fail("stale wrapped HEVC was emitted"),
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+    )
+
+    assert annexb == expected_annexb
+
+
+def test_encrypted_local_idmx_rejects_aac_epoch_before_h264_route() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x65h264"
+    packets = [
+        _rtp_packet(
+            b"\x65stale-aac",
+            payload_type=97,
+            extension_data=b"\x45\x02\x0f\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65h264",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(
+        packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+    )
+
+    assert annexb == expected_annexb
+
+
+def test_encrypted_local_idmx_hevc_spans_reject_wrapped_h264_epoch() -> None:
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+    current_hevc = b"\x26\x01current-hevc"
+    expected_annexb = b"\x00\x00\x00\x01" + current_hevc
+    packets = [
+        _rtp_packet(
+            wrapper + b"\x26\x01stale-hevc",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            wrapper + current_hevc,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+    span_annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert annexb == expected_annexb
+    assert span_annexb == expected_annexb
+    assert {span[2] for span in spans} == {2}
+
+
+def test_encrypted_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambiguous_h264_sei = b"\x06\x05stale-h264-sei"
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            ambiguous_h264_sei,
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            direct_irap,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    decrypted_hevc: list[bytes] = []
+
+    def decrypt_hevc(nal: bytes, _key: bytes) -> bytes:
+        decrypted_hevc.append(nal)
+        return nal
+
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        decrypt_hevc,
+    )
+
+    annexb = _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+    span_annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert decrypted_hevc == [direct_irap, direct_irap]
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+    assert span_annexb == annexb
+    assert spans == [(0, len(annexb), 2, 2, 19, 0, 0)]
+
+
+def test_clear_local_idmx_rejects_ambiguous_h264_epoch_before_hevc_route() -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            b"\x06\x05stale-h264-sei",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            direct_irap,
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(packets)
+
+    assert codec == "hevc"
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+
+
+def test_encrypted_local_idmx_rejects_unsupported_authoritative_video_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [
+        _rtp_packet(
+            b"\x65looks-like-h264",
+            payload_type=97,
+            extension_data=b"\x45\x02\xb1\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        lambda *_args, **_kwargs: pytest.fail("unsupported route reached H.264"),
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match="Unsupported encrypted EZVIZ local video codec: mjpeg",
+    ):
+        _decrypt_idmx_local_packets_to_annexb(
+            packets,
+            IDMX_MEDIA_KEY,
+            nalu_header_size=0,
+        )
+
+
+def test_encrypted_local_idmx_rejects_mixed_authoritative_video_codecs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = [
+        _rtp_packet(
+            b"\x65h264",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=98,
+            extension_data=b"\x45\x02\x24\x62",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_h264_nal_prefix",
+        lambda *_args, **_kwargs: pytest.fail("H.264 decryption must not start"),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi._local_stream._decrypt_hevc_nal_prefix",
+        lambda *_args, **_kwargs: pytest.fail("HEVC decryption must not start"),
+    )
+
+    with pytest.raises(
+        PyEzvizError,
+        match=r"Conflicting H\.264 and HEVC routes",
+    ):
+        _decrypt_idmx_local_packets_to_annexb(packets, IDMX_MEDIA_KEY)
+
+
+def test_summarize_idmx_routes_accepts_predispatch_correction_on_media() -> None:
+    rtp_packets = [
+        _rtp_packet(
+            b"\x65superseded",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01hevc",
+            sequence=2,
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    packets = [len(packet).to_bytes(4, "little") + packet for packet in rtp_packets]
+
+    profile = summarize_idmx_h264_local_packets(packets)["rtp_profile"]
+
+    assert profile == {
+        "media_started": True,
+        "streams": [
+            {
+                "codec": "hevc",
+                "media_kind": "video",
+                "payload_type": 97,
+                "ssrc": 0x55667788,
+                "sample_rate": None,
+                "channels": None,
+                "authoritative": True,
+            }
+        ],
+    }
+
+
+def test_summarize_idmx_counts_descriptor_routed_h264() -> None:
+    rtp_packets = [
+        _rtp_packet(
+            b"\x67dynamic-sps",
+            payload_type=97,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65dynamic-idr",
+            sequence=2,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    packets = [len(packet).to_bytes(4, "little") + packet for packet in rtp_packets]
+
+    summary = summarize_idmx_h264_local_packets(packets)
+
+    assert [sample["kind"] for sample in summary["samples"]] == [
+        "h264_nal",
+        "h264_nal",
+    ]
+    assert summary["h264"]["clear_nal"] == 2
+    assert summary["h264"]["sps"] == 1
+    assert summary["h264"]["idr"] == 1
+    assert summary["h264"]["unknown"] == 0
+    assert len(summary["h264_nal_units"]["samples"]) == 2
 
 def _media(
     payload: bytes,
@@ -452,6 +1227,77 @@ def test_decrypt_idmx_local_aac_uses_preserved_dynamic_payload_route() -> None:
     assert audio.adts.endswith(plain)
 
 
+def test_decrypt_idmx_local_aac_ignores_packets_before_aac_route_epoch() -> None:
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    access_unit = b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted
+    packets = [
+        _rtp_packet(
+            b"not-aac",
+            payload_type=105,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x0f\x69",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        len(
+            selected_rtp := (
+                b"\x90\x69\x00\x03\x00\x00\x00\x01\x55\x66\x77\x88"
+                b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+                + access_unit
+            )
+        ).to_bytes(4, "little")
+        + selected_rtp,
+    ]
+
+    audio = _decrypt_idmx_local_packets_to_adts_aac(
+        packets,
+        IDMX_MEDIA_KEY,
+        audio_metadata=(16_000, 1),
+        audio_payload_types=frozenset({105}),
+    )
+
+    assert audio is not None
+    assert audio.frame_count == 1
+    assert audio.adts.endswith(plain)
+
+
+def test_decrypt_idmx_local_aac_keeps_valid_packet_before_descriptor() -> None:
+    plain = b"0123456789abcdef" + b"tail"
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565") + plain[16:]
+    access_unit = b"\x00\x10" + (len(encrypted) << 3).to_bytes(2, "big") + encrypted
+    selected_rtp = (
+        b"\x90\x69\x00\x01\x00\x00\x00\x01\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+        + access_unit
+    )
+    packets = [
+        len(selected_rtp).to_bytes(4, "little") + selected_rtp,
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=b"\x45\x02\x0f\x69",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    audio = _decrypt_idmx_local_packets_to_adts_aac(
+        packets,
+        IDMX_MEDIA_KEY,
+        audio_metadata=(16_000, 1),
+        audio_payload_types=frozenset({105}),
+    )
+
+    assert audio is not None
+    assert audio.frame_count == 1
+    assert audio.adts.endswith(plain)
+
+
 def test_idmx_audio_payload_types_uses_startup_stream_descriptor() -> None:
     descriptor = b"\x45\x02\x90\x68\x45\x02\x0f\x69"
     rtp = (
@@ -462,6 +1308,24 @@ def test_idmx_audio_payload_types_uses_startup_stream_descriptor() -> None:
     startup_packet = len(rtp).to_bytes(4, "little") + rtp
 
     assert _idmx_audio_payload_types([startup_packet]) == frozenset({105})
+
+
+def test_idmx_audio_payload_types_uses_final_descriptor_snapshot() -> None:
+    first = _rtp_packet(
+        b"metadata",
+        payload_type=112,
+        extension_data=b"\x45\x02\x0f\x69",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    corrected = _rtp_packet(
+        b"metadata",
+        sequence=2,
+        payload_type=112,
+        extension_data=b"\x45\x02\x1b\x69",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+
+    assert _idmx_audio_payload_types([first, corrected]) == frozenset({104})
 
 def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
     sample_rate = 16_000
@@ -496,6 +1360,44 @@ def test_idmx_audio_metadata_ignores_malformed_aac_before_descriptor() -> None:
         [malformed_audio, descriptor_frame],
         IDMX_MEDIA_KEY,
     ) == (sample_rate, 1)
+
+
+def test_idmx_audio_metadata_uses_final_descriptor_snapshot() -> None:
+    def descriptor(sample_rate: int) -> bytes:
+        return bytes(
+            (
+                0x43,
+                10,
+                0,
+                1,
+                2,
+                sample_rate >> 14,
+                (sample_rate >> 6) & 0xFF,
+                ((sample_rate & 0x3F) << 2) | 3,
+                0,
+                0,
+                3,
+                0xFF,
+            )
+        )
+
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=descriptor(8_000),
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_data=descriptor(16_000),
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_audio_metadata(packets, b"unused") == (16_000, 1)
 
 def test_idmx_audio_metadata_requires_native_descriptor() -> None:
     assert _idmx_audio_metadata([], IDMX_MEDIA_KEY) is None
@@ -666,6 +1568,97 @@ def test_idmx_hevc_span_map_records_fragment_flushed_at_eof(
     assert annexb == expected_annexb
     assert spans == [(0, len(annexb), 0, 1, 19, 0, 0)]
 
+
+def test_idmx_encrypted_span_maps_use_descriptor_video_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_h264 = b"\x00\x00\x00\x01\x65dynamic"
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        lambda nal, _key, *, nalu_header_size: nal,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+    h264_packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=b"\x45\x02\x1b\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x65dynamic",
+            sequence=2,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+    hevc_packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x40\x01vps",
+            sequence=2,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x26\x01dynamic",
+            sequence=3,
+            payload_type=97,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    h264_annexb, h264_spans = _idmx_h264_annexb_packet_spans(
+        h264_packets,
+        IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+        stream_is_clear=False,
+    )
+    hevc_annexb, hevc_spans = _idmx_hevc_annexb_packet_spans(
+        hevc_packets,
+        IDMX_MEDIA_KEY,
+    )
+
+    assert h264_annexb == expected_h264
+    assert h264_spans == [(0, len(h264_annexb), 1, 1, 5, 0, 0)]
+    expected_vps = b"\x00\x00\x00\x01\x40\x01vps"
+    assert hevc_annexb == expected_vps + b"\x00\x00\x00\x01\x26\x01dynamic"
+    assert hevc_spans == [
+        (0, len(expected_vps), 1, 1, 32, 0, 0),
+        (len(expected_vps), len(hevc_annexb), 2, 2, 19, 0, 0),
+    ]
+
+
+def test_idmx_hevc_span_map_honors_authoritative_route_before_shape_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    direct_irap = b"\x26\x01hevc-irap"
+    packets = [
+        _rtp_packet(
+            direct_irap,
+            payload_type=97,
+            extension_data=b"\x45\x02\x24\x61",
+            ssrc=b"\x55\x66\x77\x88",
+        )
+    ]
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _key: nal,
+    )
+
+    annexb, spans = _idmx_hevc_annexb_packet_spans(packets, IDMX_MEDIA_KEY)
+
+    assert annexb == b"\x00\x00\x00\x01" + direct_irap
+    assert spans == [(0, len(annexb), 0, 0, 19, 0, 0)]
+
 def test_idmx_hevc_span_map_preserves_pending_fragment_across_standalone_nal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -785,8 +1778,8 @@ def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
         lambda _packets: True,
     )
     monkeypatch.setattr(
-        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb",
-        lambda *_args, **_kwargs: full_annexb,
+        "pyezvizapi.local_stream._decrypt_idmx_local_packets_to_annexb_with_codec",
+        lambda *_args, **_kwargs: (full_annexb, None),
     )
     monkeypatch.setattr(
         "pyezvizapi.local_stream._idmx_local_packets_have_aac",
@@ -1214,6 +2207,48 @@ def test_copy_local_stream_to_decrypted_mpegts_handles_live_padded_extended_hevc
         + vps
         + b"\x00\x00\x00\x01\x26\x01slice-payload\x24\x00X"
     )
+
+
+def test_copy_local_stream_to_decrypted_mpegts_uses_hevc_route_mid_gop(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ffmpeg = tmp_path / "fake-ffmpeg"
+    fake_ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "codec = sys.argv[sys.argv.index('-f') + 1]\n"
+        "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    fake_ffmpeg.chmod(0o755)
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_hevc_nal_prefix",
+        lambda nal, _aes_key: nal,
+    )
+    mid_gop = b"\x02\x01mid-gop"
+    packet = _rtp_packet(
+        mid_gop,
+        payload_type=97,
+        extension_data=b"\x45\x02\x24\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return [SimpleNamespace(body=packet)]
+
+    output = io.BytesIO()
+    copy_local_stream_to_decrypted_mpegts(
+        FakeStream(),
+        output,
+        IDMX_MEDIA_KEY,
+        ffmpeg_path=str(fake_ffmpeg),
+        max_packets=1,
+    )
+
+    assert output.getvalue() == b"hevc:\x00\x00\x00\x01" + mid_gop
 
 def test_copy_local_stream_to_decrypted_mpegts_prefers_direct_hevc_before_h264_encrypted_header_fallback(
     tmp_path,
@@ -2466,6 +3501,94 @@ def test_h264_packet_offsets_ignore_non_h264_payloads() -> None:
 
     assert _h264_annexb_packet_end_offsets(packets) == [0, 8]
 
+
+def test_h264_packet_offsets_use_descriptor_route_inside_aggregate() -> None:
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    first_media = _rtp_packet(
+        b"\x67sps",
+        sequence=2,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    last_media = _rtp_packet(
+        b"\x65dynamic",
+        sequence=3,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    aggregate = (
+        outer_header
+        + b"\x00\x10sidecar"
+        + len(first_media).to_bytes(4, "little")
+        + first_media
+        + len(last_media).to_bytes(4, "little")
+        + last_media
+    )
+    aggregate_packet = len(aggregate).to_bytes(4, "little") + aggregate
+    descriptor = _rtp_packet(
+        b"metadata",
+        sequence=4,
+        payload_type=112,
+        extension_data=b"\x45\x02\x1b\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+
+    assert _h264_annexb_packet_end_offsets([aggregate_packet, descriptor]) == [
+        20,
+        20,
+    ]
+
+
+def test_h264_selected_packets_slice_descriptor_routed_aggregate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream._decrypt_h264_nal_prefix",
+        lambda nal, _key, *, nalu_header_size: nal,
+    )
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+    sps = _rtp_packet(
+        b"\x67sps",
+        sequence=2,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    idr = _rtp_packet(
+        b"\x65dynamic",
+        sequence=3,
+        payload_type=97,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    aggregate = (
+        outer_header
+        + b"\x00\x10sidecar"
+        + len(sps).to_bytes(4, "little")
+        + sps
+        + len(idr).to_bytes(4, "little")
+        + idr
+    )
+    aggregate_packet = len(aggregate).to_bytes(4, "little") + aggregate
+    descriptor = _rtp_packet(
+        b"metadata",
+        sequence=4,
+        payload_type=112,
+        extension_data=b"\x45\x02\x1b\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    full_annexb = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x65dynamic"
+    selected_annexb = b"\x00\x00\x00\x01\x65dynamic"
+
+    selected = _idmx_packets_from_selected_annexb(
+        [aggregate_packet, descriptor],
+        full_annexb=full_annexb,
+        selected_annexb=selected_annexb,
+        media_key=IDMX_MEDIA_KEY,
+        nalu_header_size=0,
+        video_input_format="h264",
+    )
+
+    assert selected == [len(idr).to_bytes(4, "little") + idr]
+
 def test_copy_local_stream_to_mpegts_drops_h264_fu_a_on_sequence_gap(
     tmp_path,
 ) -> None:
@@ -2585,6 +3708,61 @@ def test_copy_local_stream_to_mpegts_flattens_command_port_idmx_aggregates(
         + first_fu[2:]
         + last_fu[2:]
     )
+
+
+def test_local_idmx_routes_dynamic_video_inside_aggregate() -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x40\x01vps\x00\x00\x00\x01\x26\x01slice"
+    outer_header = b"\x80\x60\x5d\x5c\x7d\x52\x2a\x3e\x55\x66\x77\x88"
+
+    def nested(packet: bytes) -> bytes:
+        return len(packet).to_bytes(4, "little") + packet
+
+    aggregate = (
+        outer_header
+        + b"\x00\x10aggregate-sidecar"
+        + nested(
+            _rtp_packet(
+                b"\x40\x01vps",
+                sequence=2,
+                payload_type=97,
+                ssrc=b"\x55\x66\x77\x88",
+            )
+        )
+        + nested(
+            _rtp_packet(
+                b"\x26\x01slice",
+                sequence=3,
+                payload_type=97,
+                ssrc=b"\x55\x66\x77\x88",
+            )
+        )
+    )
+    unrelated = _rtp_packet(
+        b"sidecar",
+        sequence=1,
+        payload_type=112,
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    packet = nested(unrelated) + nested(aggregate)
+    descriptor = _rtp_packet(
+        b"metadata",
+        payload_type=112,
+        extension_data=b"\x45\x02\x24\x61",
+        ssrc=b"\x55\x66\x77\x88",
+    )
+    descriptor_aggregate = (
+        outer_header
+        + b"\x00\x10metadata-sidecar"
+        + nested(descriptor)
+    )
+    descriptor_packet = descriptor_aggregate
+
+    annexb, codec = _idmx_local_packets_to_annexb_with_codec(
+        [descriptor_packet, packet]
+    )
+
+    assert codec == "hevc"
+    assert annexb == expected_annexb
 
 def test_copy_local_stream_to_mpegts_splits_offset_zero_idmx_aggregates(
     tmp_path,

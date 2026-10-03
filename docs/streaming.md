@@ -68,6 +68,11 @@ is not emitted.
 Codec routing follows the metadata-first behavior of the official EZVIZ
 Android app. Native IDMX descriptor `0x45` advertises a stream type and RTP
 payload type; `pyezvizapi` uses that route before inspecting media bytes.
+Descriptors may arrive after the first packets. Streaming exports retain an
+evolving route profile until media dispatch begins; compatible repeats are
+accepted, while a later payload-owner or codec mutation fails explicitly before
+the affected packet reaches a depacketizer. Descriptor-free payload type 96
+keeps its legacy H.264/HEVC probing behavior.
 Descriptor `0x43` supplies audio parameters such as sample rate and channels,
 but does not identify the codec by itself. When `0x45` is absent, the shared
 RTP layer recognizes the official app's static payload families, rejects known
@@ -97,6 +102,12 @@ but its `0x45` stream-type table does not define an Opus entry. Unknown `0x45`
 stream types are therefore preserved as unknown routes: their payload types
 cannot be mistaken for fallback video or audio while remaining safe for future
 codec support.
+
+Sanitized local IDMX summaries include an `rtp_profile` with codec, media kind,
+payload type, observed SSRC, and authoritative sample-rate/channel metadata.
+They never include packet bodies, media keys, credentials, or device identity.
+Descriptor-free static audio is named only where the official RTP/app mapping
+is unambiguous; dynamic and private ownership remains visible as `unknown`.
 
 ## Public clip configuration
 

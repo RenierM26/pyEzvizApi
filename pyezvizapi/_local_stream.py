@@ -65,15 +65,17 @@ from .rtp import (
     DEFAULT_AAC_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
+    RtpRouteProfile,
+    RtpStreamDescriptor,
+    RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
-    idmx_aac_descriptor,
     idmx_rtp_stream_descriptors,
     parse_rtp_packet,
-    rtp_codec_payload_types,
-    rtp_media_kind,
+    rtp_packet_has_valid_idmx_aac_frame,
     rtp_packet_is_idmx_aac,
     rtp_payload,
+    rtp_payload_video_codec,
 )
 from .stream_media import (
     ANNEX_B_LONG_START_CODE,
@@ -2250,14 +2252,18 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         monotonic=monotonic,
     )
     if _local_stream_packets_are_idmx(packets):
-        annexb = _decrypt_idmx_local_packets_to_annexb(
-            packets,
-            media_key,
-            nalu_header_size=nalu_header_size,
-            decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
+        annexb, authoritative_video_codec = (
+            _decrypt_idmx_local_packets_to_annexb_with_codec(
+                packets,
+                media_key,
+                nalu_header_size=nalu_header_size,
+                decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
+            )
         )
         full_annexb = annexb
-        if _annexb_has_h264_vcl(annexb):
+        if authoritative_video_codec == "h264" or (
+            authoritative_video_codec is None and _annexb_has_h264_vcl(annexb)
+        ):
             annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
                 h264_skip_initial_idr_windows,
@@ -2270,7 +2276,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 )
             video_input_format = "h264"
             video_frame_rate = None
-        elif _annexb_looks_like_hevc(annexb):
+        elif authoritative_video_codec == "hevc" or _annexb_looks_like_hevc(annexb):
             annexb = skip_hevc_annexb_initial_irap_windows(
                 annexb,
                 h264_skip_initial_idr_windows,
@@ -2821,6 +2827,7 @@ def summarize_idmx_h264_local_packets(
             payloads,
             max_samples=max_frames,
         ),
+        "rtp_profile": _idmx_route_diagnostics(payloads),
         "h264_nal_units": {
             "sample_limit": max_frames,
             "samples": [],
@@ -2834,16 +2841,22 @@ def summarize_idmx_h264_local_packets(
     }
     samples = summary["samples"]
     assert isinstance(samples, list)
+    h264_payload_types = _idmx_local_video_payload_types(payloads, codec="h264")
     active_h264_fu: dict[str, Any] | None = None
     for frame_index, frame in enumerate(_iter_idmx_local_packet_frames(payloads)):
         summary["frame_count"] = frame_index + 1
-        frame_summary = _summarize_idmx_h264_local_frame(frame, frame_index)
+        frame_summary = _summarize_idmx_h264_local_frame(
+            frame,
+            frame_index,
+            h264_payload_types=h264_payload_types,
+        )
         _merge_idmx_h264_frame_summary(summary, frame_summary)
         active_h264_fu = _record_idmx_h264_nal_unit_summary(
             summary,
             frame,
             frame_summary,
             active_fu=active_h264_fu,
+            h264_payload_types=h264_payload_types,
         )
         if len(samples) < max_frames:
             samples.append(frame_summary)
@@ -2856,6 +2869,25 @@ def summarize_idmx_h264_local_packets(
             end_frame_index=None,
         )
     return summary
+
+
+def _idmx_route_diagnostics(packets: list[bytes]) -> dict[str, object]:
+    """Return sanitized codec/ownership metadata for a local IDMX capture."""
+
+    parsed: list[RtpPacket] = []
+    profile = RtpRouteProfile()
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None:
+            parsed.append(packet)
+            profile.absorb(packet)
+    for packet in parsed:
+        if profile.media_kind(packet) in {"video", "audio"}:
+            profile.mark_media(packet, absorb=False)
+    return profile.diagnostics()
 
 
 def _summarize_idmx_packet_shapes(
@@ -4545,7 +4577,7 @@ def _decrypted_hevc_annexb_packet_index_for_offset(
     return max(len(packets) - 1, 0)
 
 
-def _idmx_h264_annexb_packet_spans(
+def _idmx_h264_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     packets: list[bytes],
     media_key: str | bytes,
     *,
@@ -4561,15 +4593,33 @@ def _idmx_h264_annexb_packet_spans(
     active_start_frame: int | None = None
     aes_key = _local_media_aes_key(media_key)
     header_size = H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
+    routed_payload_types = _idmx_local_video_payload_types(packets, codec="h264")
+    route_epoch_profile = RtpRouteProfile()
     for packet_index, packet in enumerate(packets):
-        for frame_index, frame in enumerate(_iter_idmx_local_packet_frame(packet)):
+        for frame_index, frame in enumerate(
+            _iter_idmx_local_packet_frame(
+                packet,
+                video_payload_types=routed_payload_types,
+            )
+        ):
             frame_header_size = _idmx_local_frame_header_size(frame)
-            if frame_header_size is None or not _idmx_local_frame_is_h264_transport(
-                frame,
-                frame_header_size,
+            if frame_header_size is None:
+                continue
+            rtp_packet = _idmx_local_frame_rtp_packet(frame, frame_header_size)
+            if rtp_packet is not None:
+                route_epoch_profile.absorb(rtp_packet)
+            if (
+                rtp_packet is None
+                or rtp_packet.payload_type not in routed_payload_types
             ):
                 continue
             body = _idmx_local_frame_media_body(frame, frame_header_size)
+            if not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                rtp_packet,
+                "h264",
+            ):
+                continue
             if _looks_like_idmx_h264_fu_a_frame(body):
                 is_start = bool(body[1] & 0x80)
                 nal_type = body[1] & 0x1F
@@ -4671,20 +4721,65 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     active_nal_type: int | None = None
     hevc_evidence_seen = False
     aes_key = _local_media_aes_key(media_key)
+    routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
+    routed_h264_payload_types = _idmx_local_video_payload_types(
+        packets,
+        codec="h264",
+    )
+    authoritative_hevc_route = bool(
+        routed_payload_types and not routed_h264_payload_types
+    )
+    route_epoch_profile = RtpRouteProfile()
     for packet_index, packet in enumerate(packets):
-        for frame_index, frame in enumerate(_iter_idmx_local_packet_frame(packet)):
+        for frame_index, frame in enumerate(
+            _iter_idmx_local_packet_frame(
+                packet,
+                video_payload_types=routed_payload_types,
+            )
+        ):
             frame_header_size = _idmx_local_frame_header_size(frame)
             if frame_header_size is None:
                 continue
             body = _idmx_local_frame_media_body(frame, frame_header_size)
-            h264_transport = _idmx_local_frame_is_h264_transport(
-                frame,
-                frame_header_size,
+            rtp_packet = _idmx_local_frame_rtp_packet(frame, frame_header_size)
+            if rtp_packet is not None:
+                route_epoch_profile.absorb(rtp_packet)
+            active_route_descriptor = next(
+                (
+                    descriptor
+                    for descriptor in route_epoch_profile.descriptors
+                    if rtp_packet is not None
+                    and descriptor.payload_type == rtp_packet.payload_type
+                ),
+                None,
             )
-            wrapped_media = _looks_like_idmx_hevc_media_frame(body)
-            direct_media = h264_transport and (
-                hevc_evidence_seen or _looks_like_idmx_hevc_evidence_frame(body)
-            ) and _looks_like_idmx_hevc_direct_frame(body)
+            routed_transport = bool(
+                rtp_packet is not None
+                and rtp_packet.payload_type in routed_payload_types
+            )
+            hevc_epoch_compatible = bool(
+                active_route_descriptor is None
+                or active_route_descriptor.codec == "hevc"
+            )
+            conflicting_h264_route = bool(
+                rtp_packet is not None
+                and rtp_packet.payload_type
+                in route_epoch_profile.codec_payload_types("h264")
+            )
+            wrapped_media = (
+                routed_transport
+                and hevc_epoch_compatible
+                and _looks_like_idmx_hevc_media_frame(body)
+            )
+            direct_media = routed_transport and hevc_epoch_compatible and (
+                authoritative_hevc_route
+                or hevc_evidence_seen
+                or _looks_like_idmx_hevc_evidence_frame(body)
+            ) and _idmx_hevc_direct_frame_matches_route(
+                body,
+                authoritative_hevc=authoritative_hevc_route,
+                conflicting_h264_route=conflicting_h264_route,
+            )
             if wrapped_media:
                 hevc_evidence_seen = True
                 payload = body[IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET:]
@@ -4828,8 +4923,19 @@ def _annexb_vcl_bounds(
     return (bounds[0][0], bounds[-1][1]) if bounds else None
 
 
-def _idmx_packet_frame_slice(packet: bytes, start: int, stop: int) -> bytes:
-    frames = list(_iter_idmx_local_packet_frame(packet))
+def _idmx_packet_frame_slice(
+    packet: bytes,
+    start: int,
+    stop: int,
+    *,
+    video_payload_types: frozenset[int],
+) -> bytes:
+    frames = list(
+        _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        )
+    )
     if start == 0 and stop == len(frames):
         return packet
     return b"".join(
@@ -4882,22 +4988,40 @@ def _idmx_packets_for_selected_vcl_spans(
     last_span = selected_spans[-1]
     start_packet = first_span[2]
     end_packet = last_span[3]
+    video_payload_types = _idmx_local_video_payload_types(
+        packets,
+        codec=cast(RtpVideoCodec, video_input_format),
+    )
     if start_packet == end_packet:
         return [
             _idmx_packet_frame_slice(
                 packets[start_packet],
                 first_span[5],
                 last_span[6] + 1,
+                video_payload_types=video_payload_types,
             )
         ]
     selected_packets = [
         _idmx_packet_frame_slice(
             packets[start_packet],
             first_span[5],
-            len(list(_iter_idmx_local_packet_frame(packets[start_packet]))),
+            len(
+                list(
+                    _iter_idmx_local_packet_frame(
+                        packets[start_packet],
+                        video_payload_types=video_payload_types,
+                    )
+                )
+            ),
+            video_payload_types=video_payload_types,
         ),
         *packets[start_packet + 1 : end_packet],
-        _idmx_packet_frame_slice(packets[end_packet], 0, last_span[6] + 1),
+        _idmx_packet_frame_slice(
+            packets[end_packet],
+            0,
+            last_span[6] + 1,
+            video_payload_types=video_payload_types,
+        ),
     ]
     return [packet for packet in selected_packets if packet]
 
@@ -5226,6 +5350,8 @@ def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | 
 def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
     frame: bytes,
     frame_index: int,
+    *,
+    h264_payload_types: frozenset[int],
 ) -> dict[str, Any]:
     header_size = _idmx_local_frame_header_size(frame)
     sample: dict[str, Any] = {
@@ -5244,7 +5370,11 @@ def _summarize_idmx_h264_local_frame(  # noqa: PLR0911
     body = _idmx_local_frame_media_body(frame, header_size)
     sample["body_length"] = len(body)
     sample["body_sha256"] = hashlib.sha256(body).hexdigest()
-    is_h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
+    is_h264_transport = _idmx_local_frame_is_h264_transport(
+        frame,
+        header_size,
+        payload_types=h264_payload_types,
+    )
     if is_h264_transport and _looks_like_idmx_h264_fu_a_frame(body):
         fu_header = body[1]
         sample["kind"] = "h264_fu_a"
@@ -5300,9 +5430,14 @@ def _idmx_local_frame_transport_fields(
     }
 
 
-def _idmx_local_frame_is_h264_transport(frame: bytes, header_size: int) -> bool:
+def _idmx_local_frame_is_h264_transport(
+    frame: bytes,
+    header_size: int,
+    *,
+    payload_types: frozenset[int] = frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}),
+) -> bool:
     transport = _idmx_local_frame_transport_fields(frame, header_size)
-    return transport.get("rtp_payload_type") == IDMX_H264_RTP_PAYLOAD_TYPE
+    return transport.get("rtp_payload_type") in payload_types
 
 
 def _idmx_local_frame_sequence_number(frame: bytes, header_size: int) -> int | None:
@@ -5337,15 +5472,15 @@ def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
 def _idmx_audio_descriptor(packets: list[bytes]) -> tuple[int, int] | None:
     """Read sample rate and channels from an IDMX 0x43 audio descriptor."""
 
-    rtp_packets: list[RtpPacket] = []
+    profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
-            rtp_packets.append(packet)
-    return idmx_aac_descriptor(rtp_packets)
+            profile.absorb(packet)
+    return profile.audio_metadata
 
 
 def _idmx_audio_metadata(
@@ -5360,16 +5495,15 @@ def _idmx_audio_metadata(
 def _idmx_audio_payload_types(packets: list[bytes]) -> frozenset[int]:
     """Return the AAC payload route advertised by startup stream metadata."""
 
-    rtp_packets: list[RtpPacket] = []
+    profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
-            rtp_packets.append(packet)
-    return rtp_codec_payload_types(
-        idmx_rtp_stream_descriptors(rtp_packets),
+            profile.absorb(packet)
+    return profile.codec_payload_types(
         "aac",
         fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
@@ -5397,10 +5531,22 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
             rtp_packets.append(packet)
-    descriptors = idmx_rtp_stream_descriptors(rtp_packets)
+    routed_video_payload_types = _idmx_local_video_payload_types(packets)
+    route_epoch_profile = RtpRouteProfile()
     timestamps: list[int] = []
     for packet in rtp_packets:
-        if rtp_media_kind(packet, stream_descriptors=descriptors) == "video" and (
+        route_epoch_profile.absorb(packet)
+        active_route_descriptor = _rtp_packet_route_descriptor(
+            route_epoch_profile,
+            packet,
+        )
+        if (
+            packet.payload_type in routed_video_payload_types
+            and (
+                active_route_descriptor is None
+                or active_route_descriptor.media_kind == "video"
+            )
+        ) and (
             not timestamps or timestamps[-1] != packet.timestamp
         ):
             timestamps.append(packet.timestamp)
@@ -5490,11 +5636,16 @@ def _record_idmx_h264_nal_unit_summary(  # noqa: PLR0911, PLR0912
     frame_summary: dict[str, Any],
     *,
     active_fu: dict[str, Any] | None,
+    h264_payload_types: frozenset[int],
 ) -> dict[str, Any] | None:
     header_size = frame_summary.get("header_size")
     if not isinstance(header_size, int):
         return active_fu
-    if not _idmx_local_frame_is_h264_transport(frame, header_size):
+    if not _idmx_local_frame_is_h264_transport(
+        frame,
+        header_size,
+        payload_types=h264_payload_types,
+    ):
         return active_fu
     body = _idmx_local_frame_media_body(frame, header_size)
     if _looks_like_idmx_h264_clear_nal(body):
@@ -5787,27 +5938,69 @@ def _idmx_local_frame_header_score(
     return None
 
 
-def _iter_idmx_local_frame_or_nested(frame: bytes) -> Iterator[bytes]:
+def _iter_idmx_local_frame_or_nested(
+    frame: bytes,
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> Iterator[bytes]:
     """Yield one IDMX frame, or nested frames from command-port aggregate records."""
     header_size = _idmx_local_frame_header_size(frame)
     if header_size is None:
         yield frame
         return
     body = frame[header_size:]
-    if not body.startswith(b"\x00\x10") or body.count(IDMX_LOCAL_FRAME_SENTINEL) <= 1:
+    if not body.startswith(b"\x00\x10") or not body.count(IDMX_LOCAL_FRAME_SENTINEL):
         yield frame
         return
     nested_frames = tuple(_iter_idmx_local_frames(body))
-    if not any(_idmx_local_frame_contains_media(nested) for nested in nested_frames):
+    contains_media = _idmx_local_frames_contain_routed_media(
+        nested_frames,
+        video_payload_types=video_payload_types,
+    )
+    contains_descriptors = any(
+        idmx_rtp_stream_descriptors((packet,))
+        for nested in nested_frames
+        if (nested_header_size := _idmx_local_frame_header_size(nested)) is not None
+        if (packet := _idmx_local_frame_rtp_packet(nested, nested_header_size))
+        is not None
+    )
+    if not contains_media and not contains_descriptors:
         yield frame
         return
     yield from nested_frames
 
 
-def _iter_idmx_local_packet_frame(packet: bytes) -> Iterator[bytes]:
-    if _is_complete_idmx_rtp_frame(
-        packet
-    ) and not _idmx_local_packet_contains_aggregate_media_frame(packet):
+def _iter_idmx_local_packet_frame(
+    packet: bytes,
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> Iterator[bytes]:
+    if len(packet) >= 4:
+        prefixed_length = int.from_bytes(packet[:4], "little")
+        prefixed_frame = packet[4 : 4 + prefixed_length]
+        prefixed_header_size = _idmx_local_frame_header_size(prefixed_frame)
+        if (
+            prefixed_length == len(packet) - 4
+            and prefixed_header_size is not None
+            and _idmx_local_frame_header_score(
+                prefixed_frame,
+                prefixed_header_size,
+            )
+            is not None
+        ):
+            yield from _iter_idmx_local_frame_or_nested(
+                prefixed_frame,
+                video_payload_types=video_payload_types,
+            )
+            return
+    if (
+        _is_complete_idmx_rtp_frame(packet)
+        and not _idmx_local_packet_contains_aggregate_media_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        )
+        and not _idmx_local_packet_contains_aggregate_descriptors(packet)
+    ):
         yield packet
         return
     header_size = _idmx_local_frame_header_size(packet)
@@ -5815,15 +6008,29 @@ def _iter_idmx_local_packet_frame(packet: bytes) -> Iterator[bytes]:
         header_size is not None
         and _idmx_local_frame_header_score(packet, header_size) is not None
     ):
-        if _idmx_local_packet_contains_aggregate_media_frame(packet):
+        if _idmx_local_packet_contains_aggregate_media_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        ):
             yield from _iter_idmx_local_frames(packet)
             return
-        yield from _iter_idmx_local_frame_or_nested(packet)
+        yield from _iter_idmx_local_frame_or_nested(
+            packet,
+            video_payload_types=video_payload_types,
+        )
         return
-    yield from _iter_idmx_local_frames(packet)
+    for frame in _iter_idmx_local_frames(packet):
+        yield from _iter_idmx_local_frame_or_nested(
+            frame,
+            video_payload_types=video_payload_types,
+        )
 
 
-def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes) -> bool:
+def _idmx_local_packet_contains_aggregate_media_frame(
+    packet: bytes,
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> bool:
     frames = tuple(_iter_idmx_local_frames(packet))
     if len(frames) <= 1:
         return False
@@ -5836,10 +6043,52 @@ def _idmx_local_packet_contains_aggregate_media_frame(packet: bytes) -> bool:
             or sequence != ((previous_sequence + 1) & 0xFFFF)
         ):
             return False
-        if _idmx_local_frame_contains_media(frame):
-            return True
         previous_sequence = sequence
-    return False
+    return _idmx_local_frames_contain_routed_media(
+        frames,
+        video_payload_types=video_payload_types,
+    )
+
+
+def _idmx_local_packet_contains_aggregate_descriptors(packet: bytes) -> bool:
+    frames = tuple(_iter_idmx_local_frames(packet))
+    if len(frames) <= 1:
+        return False
+    return any(
+        idmx_rtp_stream_descriptors((parsed,))
+        for frame in frames[1:]
+        if (header_size := _idmx_local_frame_header_size(frame)) is not None
+        if (parsed := _idmx_local_frame_rtp_packet(frame, header_size)) is not None
+    )
+
+
+def _idmx_local_frames_contain_routed_media(
+    frames: tuple[bytes, ...],
+    *,
+    video_payload_types: frozenset[int] = frozenset(),
+) -> bool:
+    """Return whether nested frames contain video under their final route profile."""
+
+    parsed: list[tuple[RtpPacket, bytes]] = []
+    profile = RtpRouteProfile()
+    for frame in frames:
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is None:
+            continue
+        parsed.append((packet, _idmx_local_frame_media_body(frame, header_size)))
+        profile.absorb(packet)
+    return any(
+        (profile.media_kind(packet) == "video" or packet.payload_type in video_payload_types)
+        and (
+            _looks_like_idmx_hevc_direct_frame(body)
+            or _looks_like_idmx_h264_fu_a_frame(body)
+            or _looks_like_idmx_h264_clear_nal(body)
+        )
+        for packet, body in parsed
+    ) or any(_idmx_local_frame_contains_media(frame) for frame in frames)
 
 
 def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
@@ -5850,8 +6099,24 @@ def _idmx_local_packet_frame_sequence_number(frame: bytes) -> int | None:
 
 
 def _iter_idmx_local_packet_frames(packets: list[bytes]) -> Iterator[bytes]:
+    profile = RtpRouteProfile()
     for packet in packets:
-        yield from _iter_idmx_local_packet_frame(packet)
+        for frame in _iter_idmx_local_packet_frame(packet):
+            header_size = _idmx_local_frame_header_size(frame)
+            if header_size is not None:
+                parsed = _idmx_local_frame_rtp_packet(frame, header_size)
+                if parsed is not None:
+                    profile.absorb(parsed)
+    video_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in profile.descriptors
+        if descriptor.media_kind == "video"
+    )
+    for packet in packets:
+        yield from _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=video_payload_types,
+        )
 
 
 def _idmx_local_frame_contains_media(frame: bytes) -> bool:
@@ -5897,6 +6162,43 @@ def _decrypt_idmx_local_packets_to_annexb(
     nalu_header_size: int | None = None,
     decrypt_hevc_parameter_sets: bool = False,
 ) -> bytes:
+    annexb, _authoritative_codec = _decrypt_idmx_local_packets_to_annexb_with_codec(
+        packets,
+        media_key,
+        nalu_header_size=nalu_header_size,
+        decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets,
+    )
+    return annexb
+
+
+def _decrypt_idmx_local_packets_to_annexb_with_codec(  # noqa: PLR0912, PLR0915
+    packets: list[bytes],
+    media_key: str | bytes,
+    *,
+    nalu_header_size: int | None = None,
+    decrypt_hevc_parameter_sets: bool = False,
+) -> tuple[bytes, RtpVideoCodec | None]:
+    """Decrypt local video and retain an authoritative descriptor codec."""
+
+    routed_h264_payload_types, routed_hevc_payload_types = (
+        _idmx_local_supported_video_payload_types(packets)
+    )
+    if (
+        routed_h264_payload_types
+        and routed_hevc_payload_types
+        and routed_h264_payload_types != routed_hevc_payload_types
+    ):
+        raise PyEzvizError(
+            "Conflicting H.264 and HEVC routes in encrypted EZVIZ local stream"
+        )
+    final_route_is_authoritative_hevc = bool(
+        routed_hevc_payload_types and not routed_h264_payload_types
+    )
+    authoritative_codec: RtpVideoCodec | None = None
+    if final_route_is_authoritative_hevc:
+        authoritative_codec = "hevc"
+    elif routed_h264_payload_types and not routed_hevc_payload_types:
+        authoritative_codec = "h264"
     aes_key = _local_media_aes_key(media_key)
     h264_nalu_header_size = (
         H264_NAL_HEADER_SIZE if nalu_header_size is None else nalu_header_size
@@ -5905,17 +6207,52 @@ def _decrypt_idmx_local_packets_to_annexb(
     active_fu: _RtpFragmentedNal | None = None
     active_h264_fu: _RtpFragmentedNal | None = None
     hevc_evidence_seen = False
+    route_epoch_profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             raise PyEzvizError("Mixed EZVIZ local stream payload formats are unsupported")
         body = _idmx_local_frame_media_body(frame, header_size)
-        h264_transport = _idmx_local_frame_is_h264_transport(frame, header_size)
+        rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if rtp_packet is not None:
+            route_epoch_profile.absorb(rtp_packet)
+        active_route_descriptor = next(
+            (
+                descriptor
+                for descriptor in route_epoch_profile.descriptors
+                if rtp_packet is not None
+                and descriptor.payload_type == rtp_packet.payload_type
+            ),
+            None,
+        )
+        h264_transport = bool(
+            rtp_packet is not None
+            and rtp_packet.payload_type in routed_h264_payload_types
+        )
+        hevc_transport = bool(
+            rtp_packet is not None
+            and rtp_packet.payload_type in routed_hevc_payload_types
+        )
+        hevc_codec_compatible = bool(
+            hevc_transport
+            and (
+                active_route_descriptor is None
+                or active_route_descriptor.codec == "hevc"
+            )
+        )
+        h264_codec_compatible = bool(
+            h264_transport
+            and not final_route_is_authoritative_hevc
+            and (
+                active_route_descriptor is None
+                or active_route_descriptor.codec == "h264"
+            )
+        )
         if _looks_like_idmx_hevc_parameter_frame(body):
             # Live PlayCtrl takes parameter sets from the media-wrapper frames below;
             # the short sidecar-looking 00 01/00 02 records are not fed to FFmpeg.
             continue
-        if _looks_like_idmx_hevc_media_frame(body):
+        if hevc_codec_compatible and _looks_like_idmx_hevc_media_frame(body):
             hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(
                 output,
@@ -5928,7 +6265,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             )
             continue
         if (
-            h264_transport
+            h264_codec_compatible
             and not hevc_evidence_seen
             and _looks_like_idmx_h264_fu_a_frame(body)
         ):
@@ -5943,7 +6280,7 @@ def _decrypt_idmx_local_packets_to_annexb(
             )
             continue
         if (
-            h264_transport
+            h264_codec_compatible
             and not hevc_evidence_seen
             and _looks_like_idmx_h264_clear_nal(body)
         ):
@@ -5956,9 +6293,20 @@ def _decrypt_idmx_local_packets_to_annexb(
             )
             continue
         hevc_direct_evidence = _looks_like_idmx_hevc_evidence_frame(body)
-        if h264_transport and (
-            hevc_evidence_seen or hevc_direct_evidence
-        ) and _looks_like_idmx_hevc_direct_frame(body):
+        conflicting_h264_route = bool(
+            rtp_packet is not None
+            and rtp_packet.payload_type
+            in route_epoch_profile.codec_payload_types("h264")
+        )
+        if hevc_codec_compatible and (
+            final_route_is_authoritative_hevc
+            or hevc_evidence_seen
+            or hevc_direct_evidence
+        ) and _idmx_hevc_direct_frame_matches_route(
+            body,
+            authoritative_hevc=final_route_is_authoritative_hevc,
+            conflicting_h264_route=conflicting_h264_route,
+        ):
             hevc_evidence_seen = True
             active_fu = _append_idmx_hevc_media_payload(
                 output,
@@ -5971,7 +6319,7 @@ def _decrypt_idmx_local_packets_to_annexb(
                 decrypt_parameter_sets=decrypt_hevc_parameter_sets,
             )
             continue
-        if h264_transport and h264_nalu_header_size == 0 and body:
+        if h264_codec_compatible and h264_nalu_header_size == 0 and body:
             active_h264_fu = None
             _append_decrypted_h264_nal(
                 output,
@@ -5984,7 +6332,7 @@ def _decrypt_idmx_local_packets_to_annexb(
         _append_decrypted_hevc_nal(output, bytes(active_fu.data), aes_key)
     if not output:
         raise PyEzvizError("EZVIZ local IDMX stream did not include media frames")
-    return bytes(output)
+    return bytes(output), authoritative_codec
 
 
 def _decrypt_idmx_local_packets_to_adts_aac(
@@ -5997,19 +6345,50 @@ def _decrypt_idmx_local_packets_to_adts_aac(
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
 
+    final_profile = _idmx_local_route_profile(packets)
+    descriptor_aac_payload_types = final_profile.codec_payload_types("aac")
+    selected_audio_payload_types = (
+        audio_payload_types
+        if audio_payload_types is not None
+        else final_profile.codec_payload_types(
+            "aac",
+            fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
+        )
+    )
     rtp_packets: list[RtpPacket] = []
+    route_epoch_profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None or not _is_complete_idmx_rtp_frame(frame):
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is not None:
+        if packet is None:
+            continue
+        route_epoch_profile.absorb(packet)
+        if packet.payload_type not in selected_audio_payload_types:
             rtp_packets.append(packet)
+            continue
+        if (
+            packet.payload_type in descriptor_aac_payload_types
+            and not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                packet,
+                "aac",
+            )
+        ):
+            continue
+        if (
+            packet.payload_type in descriptor_aac_payload_types
+            and _rtp_packet_route_descriptor(route_epoch_profile, packet) is None
+            and not rtp_packet_has_valid_idmx_aac_frame(packet)
+        ):
+            continue
+        rtp_packets.append(packet)
     return decrypt_idmx_aac_packets(
         rtp_packets,
         media_key,
         audio_metadata=audio_metadata,
-        audio_payload_types=audio_payload_types,
+        audio_payload_types=selected_audio_payload_types,
         require_contiguous=require_contiguous,
     )
 
@@ -6017,12 +6396,22 @@ def _decrypt_idmx_local_packets_to_adts_aac(
 def _idmx_local_packets_to_h264_annexb(packets: list[bytes]) -> bytes:
     output = bytearray()
     depacketizer = RtpVideoDepacketizer("h264")
+    routed_payload_types = _idmx_local_video_payload_types(packets, codec="h264")
+    route_epoch_profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is None or packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
+        if packet is not None:
+            route_epoch_profile.absorb(packet)
+        if packet is None or packet.payload_type not in routed_payload_types:
+            continue
+        if not _rtp_packet_matches_codec_epoch(
+            route_epoch_profile,
+            packet,
+            "h264",
+        ):
             continue
         if not (
             _looks_like_idmx_h264_fu_a_frame(packet.payload)
@@ -6040,15 +6429,28 @@ def _h264_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
     output = bytearray()
     depacketizer = RtpVideoDepacketizer("h264")
     end_offsets: list[int] = []
+    routed_payload_types = _idmx_local_video_payload_types(packets, codec="h264")
+    route_epoch_profile = RtpRouteProfile()
     for packet in packets:
-        for frame in _iter_idmx_local_packet_frame(packet):
+        for frame in _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=routed_payload_types,
+        ):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
             rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
+            if rtp_packet is not None:
+                route_epoch_profile.absorb(rtp_packet)
             if (
                 rtp_packet is None
-                or rtp_packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE
+                or rtp_packet.payload_type not in routed_payload_types
+            ):
+                continue
+            if not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                rtp_packet,
+                "h264",
             ):
                 continue
             if not (
@@ -6072,14 +6474,26 @@ def _idmx_local_packets_to_hevc_annexb(
         "hevc",
         allow_ezviz_headerless_hevc_fu=True,
     )
+    routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
+    route_epoch_profile = RtpRouteProfile()
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
-        if packet is None or packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
+        if packet is not None:
+            route_epoch_profile.absorb(packet)
+        if packet is None or packet.payload_type not in routed_payload_types:
             continue
-        if not _looks_like_idmx_hevc_direct_frame(packet.payload):
+        if (
+            not _rtp_packet_matches_codec_epoch(
+                route_epoch_profile,
+                packet,
+                "hevc",
+            )
+            or rtp_payload_video_codec(packet.payload) == "h264"
+            or not _looks_like_idmx_hevc_direct_frame(packet.payload)
+        ):
             continue
         for nal in depacketizer.push(packet):
             _append_hevc_nal(output, nal)
@@ -6098,15 +6512,28 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
         allow_ezviz_headerless_hevc_fu=True,
     )
     end_offsets: list[int] = []
+    routed_payload_types = _idmx_local_video_payload_types(packets, codec="hevc")
+    route_epoch_profile = RtpRouteProfile()
     for packet in packets:
-        for frame in _iter_idmx_local_packet_frame(packet):
+        for frame in _iter_idmx_local_packet_frame(
+            packet,
+            video_payload_types=routed_payload_types,
+        ):
             header_size = _idmx_local_frame_header_size(frame)
             if header_size is None:
                 continue
             rtp_packet = _idmx_local_frame_rtp_packet(frame, header_size)
+            if rtp_packet is not None:
+                route_epoch_profile.absorb(rtp_packet)
             if (
                 rtp_packet is None
-                or rtp_packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE
+                or rtp_packet.payload_type not in routed_payload_types
+                or not _rtp_packet_matches_codec_epoch(
+                    route_epoch_profile,
+                    rtp_packet,
+                    "hevc",
+                )
+                or rtp_payload_video_codec(rtp_packet.payload) == "h264"
                 or not _looks_like_idmx_hevc_direct_frame(rtp_packet.payload)
             ):
                 continue
@@ -6114,6 +6541,105 @@ def _hevc_annexb_packet_end_offsets(packets: list[bytes]) -> list[int]:
                 _append_hevc_nal(output, nal)
         end_offsets.append(len(output))
     return end_offsets
+
+
+def _idmx_local_video_payload_types(
+    packets: list[bytes],
+    *,
+    codec: RtpVideoCodec | None = None,
+) -> frozenset[int]:
+    """Return descriptor-owned local video routes with legacy PT 96 fallback."""
+
+    profile = _idmx_local_route_profile(packets)
+    if codec is not None:
+        if any(descriptor.media_kind == "video" for descriptor in profile.descriptors):
+            return profile.codec_payload_types(codec)
+        return profile.codec_payload_types(
+            codec,
+            fallback_payload_types=frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}),
+        )
+    descriptor_video_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in profile.descriptors
+        if descriptor.media_kind == "video"
+    )
+    if descriptor_video_payload_types:
+        return descriptor_video_payload_types
+    assigned = frozenset(descriptor.payload_type for descriptor in profile.descriptors)
+    return frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}) - assigned
+
+
+def _idmx_local_route_profile(packets: list[bytes]) -> RtpRouteProfile:
+    """Return the final authoritative route snapshot for local IDMX packets."""
+
+    profile = RtpRouteProfile()
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header_size = _idmx_local_frame_header_size(frame)
+        if header_size is None:
+            continue
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        if packet is not None:
+            profile.absorb(packet)
+    return profile
+
+
+def _rtp_packet_route_descriptor(
+    profile: RtpRouteProfile,
+    packet: RtpPacket,
+) -> RtpStreamDescriptor | None:
+    """Return the descriptor active for one packet, or None before discovery."""
+
+    return next(
+        (
+            descriptor
+            for descriptor in profile.descriptors
+            if descriptor.payload_type == packet.payload_type
+        ),
+        None,
+    )
+
+
+def _rtp_packet_matches_codec_epoch(
+    profile: RtpRouteProfile,
+    packet: RtpPacket,
+    codec: str,
+) -> bool:
+    """Accept one codec only in its active or genuinely unclassified epoch."""
+
+    descriptor = _rtp_packet_route_descriptor(profile, packet)
+    return descriptor is None or descriptor.codec == codec
+
+
+def _idmx_local_supported_video_payload_types(
+    packets: list[bytes],
+) -> tuple[frozenset[int], frozenset[int]]:
+    """Return H.264/HEVC routes, rejecting unsupported-only video profiles."""
+
+    profile = _idmx_local_route_profile(packets)
+    video_descriptors = tuple(
+        descriptor
+        for descriptor in profile.descriptors
+        if descriptor.media_kind == "video"
+    )
+    if video_descriptors:
+        h264_payload_types = profile.codec_payload_types("h264")
+        hevc_payload_types = profile.codec_payload_types("hevc")
+    else:
+        fallback_payload_types = frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
+        h264_payload_types = profile.codec_payload_types(
+            "h264",
+            fallback_payload_types=fallback_payload_types,
+        )
+        hevc_payload_types = profile.codec_payload_types(
+            "hevc",
+            fallback_payload_types=fallback_payload_types,
+        )
+    if video_descriptors and not (h264_payload_types or hevc_payload_types):
+        codecs = ", ".join(sorted({descriptor.codec for descriptor in video_descriptors}))
+        raise PyEzvizError(
+            f"Unsupported encrypted EZVIZ local video codec: {codecs}"
+        )
+    return h264_payload_types, hevc_payload_types
 
 
 def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
@@ -6124,6 +6650,11 @@ def _idmx_local_packets_to_annexb(packets: list[bytes]) -> bytes:
 def _idmx_local_packets_to_annexb_with_codec(
     packets: list[bytes],
 ) -> tuple[bytes, str]:
+    route_profile = _idmx_local_route_profile(packets)
+    authoritative_hevc = any(
+        descriptor.media_kind == "video" and descriptor.codec == "hevc"
+        for descriptor in route_profile.descriptors
+    )
     try:
         h264_annexb = _idmx_local_packets_to_h264_annexb(packets)
     except PyEzvizError as h264_error:
@@ -6133,18 +6664,16 @@ def _idmx_local_packets_to_annexb_with_codec(
             raise h264_error from hevc_error
     if _annexb_has_h264_vcl(h264_annexb):
         return h264_annexb, "h264"
-    if _idmx_local_packets_have_direct_hevc_media(packets):
-        try:
-            return _idmx_local_packets_to_hevc_annexb(packets), "hevc"
-        except PyEzvizError:
-            pass
     try:
         hevc_annexb = _idmx_local_packets_to_hevc_annexb(packets)
     except PyEzvizError:
-        pass
-    else:
-        if _annexb_looks_like_hevc(hevc_annexb):
-            return hevc_annexb, "hevc"
+        return h264_annexb, "h264"
+    if (
+        authoritative_hevc
+        or _idmx_local_packets_have_direct_hevc_media(packets)
+        or _annexb_looks_like_hevc(hevc_annexb)
+    ):
+        return hevc_annexb, "hevc"
     return h264_annexb, "h264"
 
 
@@ -6197,6 +6726,19 @@ def _looks_like_idmx_hevc_direct_frame(body: bytes) -> bool:
         return False
     nal_type = _hevc_nal_type(body)
     return 0 <= nal_type <= 40 or nal_type == 49
+
+
+def _idmx_hevc_direct_frame_matches_route(
+    body: bytes,
+    *,
+    authoritative_hevc: bool,
+    conflicting_h264_route: bool = False,
+) -> bool:
+    if not _looks_like_idmx_hevc_direct_frame(body):
+        return False
+    return not authoritative_hevc or (
+        not conflicting_h264_route and rtp_payload_video_codec(body) != "h264"
+    )
 
 
 def _looks_like_idmx_hevc_evidence_frame(body: bytes) -> bool:

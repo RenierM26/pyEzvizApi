@@ -67,6 +67,11 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Route local and cloud RTP/IDMX media by descriptor-owned payload types instead
+  of assuming video payload type 96. Live cloud remuxing now accepts delayed and
+  repeated descriptors, rejects unsafe midstream route mutations, and reports
+  sanitized codec/ownership profiles without exporting additional audio codecs.
+
 - Preserve descriptor-backed AAC-LC audio in decrypted cloud RTP/IDMX MPEG-TS
   exports. Bounded dumps and `save_clip` remux captured AAC beside H.264/HEVC,
   while the HTTP proxy streams audio through a bounded loopback FFmpeg input;

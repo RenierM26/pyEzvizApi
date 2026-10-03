@@ -29,16 +29,19 @@ from .rtp import (
     DEFAULT_AAC_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
+    RtpRouteProfile,
+    RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
-    idmx_aac_descriptor,
     idmx_rtp_stream_descriptors,
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_nal_units,
+    rtp_payload_video_codec,
 )
 from .stream_media import decrypt_hikvision_ps_video, detect_transport
 from .stream_transport import (
@@ -959,6 +962,37 @@ def _write_cloud_mpegts_packets(
     output.flush()
 
 
+def _cloud_rtp_packet_matches_video_route(
+    packet: RtpPacket,
+    *,
+    route_codec: RtpVideoCodec,
+    epoch_route: RtpStreamDescriptor | None,
+) -> bool:
+    """Return whether a buffered packet belongs to one video route epoch."""
+
+    if epoch_route is not None:
+        return (
+            epoch_route.media_kind == "video" and epoch_route.codec == route_codec
+        )
+    detected_codec = rtp_payload_video_codec(packet.payload)
+    if detected_codec is not None:
+        return detected_codec == route_codec
+    if route_codec == "hevc" and len(packet.payload) >= 2:
+        hevc_nal_type = (packet.payload[0] >> 1) & 0x3F
+        if (
+            16 <= hevc_nal_type <= 23
+            or hevc_nal_type in {32, 33, 34, 39, 40, 49}
+        ) and packet.payload[1] & 0x07 != 0:
+            return True
+    if route_codec == "h264":
+        return bool(packet.payload) and packet.payload[0] & 0x1F in {6, 9}
+    return (
+        len(packet.payload) >= 2
+        and (packet.payload[0] >> 1) & 0x3F <= 40
+        and packet.payload[1] & 0x07 != 0
+    )
+
+
 def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     packets: Iterator[Any],
     output: BinaryIO,
@@ -972,17 +1006,89 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
     prefix: list[RtpPacket] = []
-    video_probe: list[RtpPacket] = []
+    prefix_route_epochs: list[RtpStreamDescriptor | None] = []
+    route_profile = RtpRouteProfile()
     codec: RtpVideoCodec | None = None
     audio_metadata: tuple[int, int] | None = None
     audio_decodable = False
+    consumed_packets = 0
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         parsed = _parse_cloud_rtp_packet(packet.body)
         if parsed is None:
             continue
+        consumed_packets += 1
+        previous_descriptors = {
+            descriptor.payload_type: descriptor
+            for descriptor in route_profile.descriptors
+        }
+        route_profile.absorb(parsed)
+        stream_descriptors = route_profile.descriptors
+        parsed_route_epoch = next(
+            (
+                descriptor
+                for descriptor in stream_descriptors
+                if descriptor.payload_type == parsed.payload_type
+            ),
+            None,
+        )
         prefix.append(parsed)
-        stream_descriptors = idmx_rtp_stream_descriptors(prefix)
+        prefix_route_epochs.append(parsed_route_epoch)
+        for descriptor in stream_descriptors:
+            previous = previous_descriptors.get(descriptor.payload_type)
+            route_changed = previous is None or (
+                previous.codec != descriptor.codec
+                or previous.media_kind != descriptor.media_kind
+            )
+            if (
+                descriptor.media_kind == "video"
+                and route_changed
+                and descriptor.codec in {"h264", "hevc"}
+            ):
+                route_codec: RtpVideoCodec = (
+                    "h264" if descriptor.codec == "h264" else "hevc"
+                )
+                selected_prefix: list[RtpPacket] = []
+                selected_epochs: list[RtpStreamDescriptor | None] = []
+                for candidate, epoch_route in zip(
+                    prefix,
+                    prefix_route_epochs,
+                    strict=True,
+                ):
+                    if candidate.payload_type != descriptor.payload_type:
+                        selected_prefix.append(candidate)
+                        selected_epochs.append(epoch_route)
+                        continue
+                    if not _cloud_rtp_packet_matches_video_route(
+                        candidate,
+                        route_codec=route_codec,
+                        epoch_route=epoch_route,
+                    ):
+                        continue
+                    selected_prefix.append(candidate)
+                    selected_epochs.append(descriptor)
+                prefix = selected_prefix
+                prefix_route_epochs = selected_epochs
+            elif descriptor.media_kind == "audio" and route_changed:
+                selected_audio_prefix: list[
+                    tuple[RtpPacket, RtpStreamDescriptor | None]
+                ] = [
+                    (candidate, epoch_route)
+                    for candidate, epoch_route in zip(
+                        prefix,
+                        prefix_route_epochs,
+                        strict=True,
+                    )
+                    if candidate.payload_type != descriptor.payload_type
+                    or (
+                        descriptor.codec == "aac"
+                        and rtp_packet_has_valid_idmx_aac_frame(candidate)
+                    )
+                ]
+                prefix = [candidate for candidate, _epoch in selected_audio_prefix]
+                prefix_route_epochs = [
+                    epoch for _candidate, epoch in selected_audio_prefix
+                ]
         video_route_is_authoritative = any(
             descriptor.media_kind == "video"
             for descriptor in stream_descriptors
@@ -992,31 +1098,45 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             "aac",
             fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
         )
-        kind = rtp_media_kind(
-            parsed,
-            stream_descriptors=stream_descriptors,
-        )
-        if audio_metadata is None:
-            audio_metadata = idmx_aac_descriptor((parsed,))
-        if kind == "video":
-            video_probe.append(parsed)
+        audio_metadata = route_profile.audio_metadata
+        video_probe = [
+            candidate
+            for candidate in prefix
+            if rtp_media_kind(
+                candidate,
+                stream_descriptors=stream_descriptors,
+            )
+            == "video"
+        ]
         try:
-            codec = detect_rtp_video_codec(prefix, allow_fallback=False)
+            codec = detect_rtp_video_codec(
+                prefix,
+                allow_fallback=False,
+                stream_descriptors=stream_descriptors,
+            )
         except UnsupportedRtpVideoCodecError:
             codec = None
             if (
                 video_route_is_authoritative
-                or len(prefix) >= _RTP_CODEC_PROBE_MAX_PACKETS
+                or consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS
             ):
                 raise
         except PyEzvizError:
-            if len(video_probe) >= _RTP_CODEC_PROBE_MAX_PACKETS:
-                codec = detect_rtp_video_codec(prefix)
+            if consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
+                codec = detect_rtp_video_codec(
+                    prefix,
+                    stream_descriptors=stream_descriptors,
+                )
+        if codec is not None and video_route_is_authoritative:
+            selected_video_payload_types = route_profile.codec_payload_types(codec)
+            video_probe = [
+                candidate
+                for candidate in video_probe
+                if candidate.payload_type in selected_video_payload_types
+            ]
         if (
             audio_key is not None
             and audio_metadata is not None
-            and kind in {"audio", "metadata"}
-            and not audio_decodable
         ):
             audio_decodable = any(
                 decrypt_idmx_aac_packets(
@@ -1036,24 +1156,40 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             )
         if codec is None:
             continue
+        if not video_probe:
+            if consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
+                raise PyEzvizError(
+                    "RTP cloud stream did not include media on its video route"
+                )
+            continue
         if (
             not video_route_is_authoritative
-            and len(video_probe) < _RTP_CODEC_PROBE_MAX_PACKETS
+            and consumed_packets < _RTP_CODEC_PROBE_MAX_PACKETS
         ):
             continue
         if audio_key is None or audio_decodable:
             break
-        if len(prefix) >= _RTP_AUDIO_PROBE_MAX_PACKETS:
+        if consumed_packets >= _RTP_AUDIO_PROBE_MAX_PACKETS:
             break
     if codec is None:
         try:
-            codec = detect_rtp_video_codec(prefix)
+            codec = detect_rtp_video_codec(
+                prefix,
+                stream_descriptors=route_profile.descriptors,
+            )
         except UnsupportedRtpVideoCodecError:
             raise
         except PyEzvizError as err:
             raise PyEzvizError(
                 "Could not detect RTP video codec in cloud stream"
             ) from err
+
+    if not any(
+        descriptor.media_kind == "video"
+        for descriptor in route_profile.descriptors
+    ):
+        for payload_type in {packet.payload_type for packet in video_probe}:
+            route_profile.select_video_fallback(payload_type, codec)
 
     def _remaining_rtp_packets() -> Iterator[RtpPacket]:
         for packet in packets:
@@ -1064,12 +1200,15 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             yield parsed
 
     selected_audio_key = audio_key if audio_decodable else None
-    stream_descriptors = idmx_rtp_stream_descriptors(prefix)
+    stream_descriptors = route_profile.descriptors
     aac_payload_types = rtp_codec_payload_types(
         stream_descriptors,
         "aac",
         fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
+    if selected_audio_key is not None:
+        for payload_type in aac_payload_types:
+            route_profile.select_audio_fallback(payload_type, "aac")
     audio_input = _CloudRtpAudioInput() if selected_audio_key is not None else None
     if audio_input is not None:
         audio_input.start()
@@ -1110,23 +1249,44 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 return
             audio_enabled = False
             audio_failed = True
+            route_profile.deactivate_audio()
             try:
                 audio_input.close_input()
             except (BrokenPipeError, PyEzvizError):
                 audio_input.cancel()
 
         try:
-            for packet in chain(prefix, _remaining_rtp_packets()):
-                kind = rtp_media_kind(
-                    packet,
-                    stream_descriptors=stream_descriptors,
+            buffered_packets = ((packet, True) for packet in prefix)
+            live_packets = (
+                (packet, False) for packet in _remaining_rtp_packets()
+            )
+            for packet, buffered in chain(buffered_packets, live_packets):
+                if not buffered:
+                    route_profile.absorb(packet)
+                kind = route_profile.media_kind(packet)
+                video_descriptors_are_authoritative = any(
+                    descriptor.media_kind == "video"
+                    for descriptor in route_profile.descriptors
+                )
+                current_video_payload_types = (
+                    route_profile.codec_payload_types(codec)
+                    if video_descriptors_are_authoritative
+                    else frozenset(
+                        candidate.payload_type for candidate in video_probe
+                    )
+                )
+                current_aac_payload_types = rtp_codec_payload_types(
+                    route_profile.descriptors,
+                    "aac",
+                    fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
                 )
                 if (
                     kind == "audio"
-                    and packet.payload_type in aac_payload_types
+                    and packet.payload_type in current_aac_payload_types
                     and audio_enabled
                     and audio_input is not None
                 ):
+                    route_profile.mark_media(packet, absorb=False)
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:
@@ -1146,7 +1306,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         (packet,),
                         selected_audio_key,
                         audio_metadata=audio_metadata,
-                        audio_payload_types=aac_payload_types,
+                        audio_payload_types=current_aac_payload_types,
                         require_contiguous=False,
                     )
                     if audio is None:
@@ -1162,8 +1322,12 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         packet.timestamp + 1024 * audio.frame_count
                     ) & 0xFFFFFFFF
                     continue
-                if kind != "video":
+                if (
+                    kind != "video"
+                    or packet.payload_type not in current_video_payload_types
+                ):
                     continue
+                route_profile.mark_media(packet, absorb=False)
                 for nal_unit in depacketizer.push(packet):
                     if nal_unit:
                         annexb = ANNEX_B_START_CODE + nal_unit

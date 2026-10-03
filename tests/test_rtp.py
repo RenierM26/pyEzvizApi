@@ -9,6 +9,7 @@ from pyezvizapi.rtp import (
     KNOWN_AUDIO_PAYLOAD_TYPES,
     KNOWN_VIDEO_PAYLOAD_TYPES,
     RtpAacStream,
+    RtpRouteProfile,
     RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
@@ -18,6 +19,7 @@ from pyezvizapi.rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_annexb,
 )
 
@@ -132,6 +134,30 @@ def test_decrypt_idmx_aac_packets_requires_native_descriptor() -> None:
     )
 
     assert decrypt_idmx_aac_packets([packet], b"0123456789abcdef") is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "extension_data"),
+    [
+        (b"\x00\x10\x00\x08malformed", b"\x80\x06\x00\x01\x21\x21\x02\x01"),
+        (b"\x00\x10\x00\x28valid", b"\x00\x06\x00\x01\x21\x21\x02\x01"),
+    ],
+)
+def test_idmx_aac_frame_validation_rejects_malformed_packet(
+    payload: bytes,
+    extension_data: bytes,
+) -> None:
+    packet = parse_rtp_packet(
+        _rtp(
+            payload,
+            sequence=1,
+            payload_type=104,
+            extension_profile=0x4000,
+            extension_data=extension_data,
+        )
+    )
+
+    assert not rtp_packet_has_valid_idmx_aac_frame(packet)
 
 
 def test_decrypt_idmx_aac_packets_uses_descriptor_payload_route() -> None:
@@ -283,6 +309,269 @@ def test_idmx_stream_descriptor_routes_non_default_hevc_payload_type() -> None:
     ) == HEVC_DESCRIPTOR_ROUTED_NAL
 
 
+def test_route_profile_absorbs_delayed_descriptor_before_media_dispatch() -> None:
+    profile = RtpRouteProfile()
+    early = parse_rtp_packet(_rtp(b"\x67early", sequence=1, payload_type=96))
+    descriptor = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x90\x60\x45\x02\x1b\x61",
+        )
+    )
+
+    profile.absorb(early)
+    profile.absorb(descriptor)
+
+    assert profile.media_kind(early) == "audio"
+    assert profile.codec_payload_types(
+        "h264", fallback_payload_types=frozenset({96})
+    ) == frozenset({97})
+
+
+def test_route_profile_rejects_descriptor_mutation_after_media_dispatch() -> None:
+    profile = RtpRouteProfile()
+    descriptor = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    )
+    video = parse_rtp_packet(_rtp(b"\x67video", sequence=2, payload_type=97, ssrc=9))
+    repeated = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    )
+    mutation = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=4,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x61",
+        )
+    )
+    profile.absorb(descriptor)
+    profile.mark_media(video)
+    profile.absorb(repeated)
+
+    with pytest.raises(PyEzvizError, match="RTP route mutation after media began"):
+        profile.absorb(mutation)
+
+
+def test_route_profile_rejects_new_incompatible_video_route_after_dispatch() -> None:
+    profile = RtpRouteProfile()
+    h264_descriptor = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    )
+    video = parse_rtp_packet(_rtp(b"\x67video", sequence=2, payload_type=97))
+    new_hevc_route = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x62",
+        )
+    )
+    profile.absorb(h264_descriptor)
+    profile.mark_media(video)
+
+    with pytest.raises(PyEzvizError, match="RTP route mutation after media began"):
+        profile.absorb(new_hevc_route)
+
+
+def test_route_profile_accepts_codec_alias_repeat_after_media_dispatch() -> None:
+    profile = RtpRouteProfile()
+    descriptor = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    )
+    video = parse_rtp_packet(_rtp(b"\x67video", sequence=2, payload_type=97))
+    alias = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\xb0\x61",
+        )
+    )
+
+    profile.absorb(descriptor)
+    profile.mark_media(video)
+    profile.absorb(alias)
+
+    assert profile.descriptors[0].stream_type == 0xB0
+    assert profile.descriptors[0].codec == "h264"
+
+
+def test_route_profile_rejects_mutation_of_selected_video_fallback() -> None:
+    profile = RtpRouteProfile()
+    video = parse_rtp_packet(_rtp(b"\x67video", sequence=1))
+    mutation = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x60",
+        )
+    )
+    profile.select_video_fallback(96, "h264")
+    profile.mark_media(video)
+
+    with pytest.raises(PyEzvizError, match="RTP route mutation after media began"):
+        profile.absorb(mutation)
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "codec"),
+    ((26, "mjpeg"), (32, "mpeg2video"), (99, "svac")),
+)
+def test_route_profile_reports_static_video_codec(
+    payload_type: int,
+    codec: str,
+) -> None:
+    profile = RtpRouteProfile()
+    video = parse_rtp_packet(
+        _rtp(b"video", sequence=1, payload_type=payload_type, ssrc=7)
+    )
+
+    profile.mark_media(video)
+
+    assert profile.streams() == (
+        {
+            "codec": codec,
+            "media_kind": "video",
+            "payload_type": payload_type,
+            "ssrc": 7,
+            "sample_rate": None,
+            "channels": None,
+            "authoritative": False,
+        },
+    )
+
+
+def test_route_profile_reports_audio_metadata_and_sanitized_diagnostics() -> None:
+    profile = RtpRouteProfile()
+    descriptor = b"\x45\x02\x0f\x69" + bytes(
+        (0x43, 10, 0, 1, 2, 0, 250, 3, 0, 0, 3, 0xFF)
+    )
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata-secret",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=descriptor,
+        )
+    )
+    audio = parse_rtp_packet(
+        _rtp(b"media-secret", sequence=2, payload_type=105, ssrc=0x12345678)
+    )
+    profile.absorb(metadata)
+    profile.mark_media(audio)
+
+    assert profile.streams() == (
+        {
+            "codec": "aac",
+            "media_kind": "audio",
+            "payload_type": 105,
+            "ssrc": 0x12345678,
+            "sample_rate": 16000,
+            "channels": 1,
+            "authoritative": True,
+        },
+    )
+    diagnostic = profile.diagnostics()
+    assert diagnostic == {"media_started": True, "streams": list(profile.streams())}
+    assert "secret" not in repr(diagnostic)
+
+
+def test_route_profile_accepts_audio_metadata_after_consumer_is_disabled() -> None:
+    profile = RtpRouteProfile()
+    metadata_16k = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x0f\x69" + bytes(
+                (0x43, 10, 0, 1, 2, 0, 250, 3, 0, 0, 3, 0xFF)
+            ),
+        )
+    )
+    audio = parse_rtp_packet(_rtp(b"audio", sequence=2, payload_type=105))
+    metadata_8k = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=3,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x90\x69" + bytes(
+                (0x43, 10, 0, 1, 2, 0, 125, 3, 0, 0, 3, 0xFF)
+            ),
+        )
+    )
+    profile.absorb(metadata_16k)
+    profile.mark_media(audio)
+    profile.deactivate_audio()
+
+    profile.absorb(metadata_8k)
+
+    assert profile.audio_metadata == (8_000, 1)
+    assert profile.codec_payload_types("g711-alaw") == frozenset({105})
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "codec", "sample_rate", "channels"),
+    [
+        (0, "g711-mulaw", 8000, 1),
+        (8, "g711-alaw", 8000, 1),
+        (115, "opus", None, None),
+        (104, "unknown", None, None),
+    ],
+)
+def test_route_profile_only_names_unambiguous_descriptor_free_audio(
+    payload_type: int,
+    codec: str,
+    sample_rate: int | None,
+    channels: int | None,
+) -> None:
+    profile = RtpRouteProfile()
+    packet = parse_rtp_packet(
+        _rtp(b"audio", sequence=1, payload_type=payload_type, ssrc=7)
+    )
+    profile.mark_media(packet)
+
+    stream = profile.streams()[0]
+    assert stream["codec"] == codec
+    assert stream["sample_rate"] == sample_rate
+    assert stream["channels"] == channels
+
+
 def test_descriptor_routes_replace_conflicting_default_video_payload_type() -> None:
     descriptors = b"\x45\x02\x90\x60\x45\x02\x1b\x61"
     metadata = parse_rtp_packet(
@@ -311,6 +600,27 @@ def test_descriptor_routes_replace_conflicting_default_video_payload_type() -> N
         (metadata, reassigned_audio, video),
         codec="h264",
     ) == H264_DESCRIPTOR_ROUTED_NAL
+
+
+def test_authoritative_video_descriptor_disables_legacy_pt96_fallback() -> None:
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x1b\x61",
+        )
+    )
+    legacy = parse_rtp_packet(_rtp(b"\x65wrong", sequence=2, payload_type=96))
+    routed = parse_rtp_packet(_rtp(b"\x65right", sequence=3, payload_type=97))
+    routes = idmx_rtp_stream_descriptors((metadata,))
+
+    assert rtp_media_kind(legacy, stream_descriptors=routes) == "unknown"
+    assert (
+        rtp_packets_to_annexb((metadata, legacy, routed), codec="h264")
+        == H264_DESCRIPTOR_ROUTED_NAL
+    )
 
 
 def test_unknown_descriptor_claims_shared_payload_from_video_fallback() -> None:

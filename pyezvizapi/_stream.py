@@ -289,8 +289,7 @@ class VtmStreamClient:
                 else min(connect_timeout, remaining)
             )
         sock = self._socket_factory((host, port), connect_timeout)
-        if self.timeout is not None:
-            sock.settimeout(self.timeout)
+        sock.settimeout(self.timeout)
         self._socket = sock
         return self
 
@@ -523,12 +522,20 @@ class VtmStreamClient:
             if first_packet_deadline is not None and now >= first_packet_deadline:
                 self._read_inactivity_deadline = None
                 break
+            active_stream_deadlines = [
+                deadline
+                for deadline in (capture_deadline, first_packet_deadline)
+                if deadline is not None
+            ]
+            keepalive_deadline = (
+                min(active_stream_deadlines) if active_stream_deadlines else None
+            )
             if next_keepalive is not None and now >= next_keepalive:
                 assert keepalive_interval is not None
                 if self.stream_info is not None and self.stream_info.streamssn:
                     try:
                         self.send_keepalive(
-                            deadline=capture_deadline,
+                            deadline=keepalive_deadline,
                             monotonic=monotonic,
                         )
                     except _VtmReadDeadlineExpired:
@@ -555,7 +562,7 @@ class VtmStreamClient:
                 try:
                     self.send_keepalive(
                         message_code=VtmMessageCode.KEEPALIVE_RSP,
-                        deadline=capture_deadline,
+                        deadline=keepalive_deadline,
                         monotonic=monotonic,
                     )
                 except _VtmReadDeadlineExpired:

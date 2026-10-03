@@ -2899,13 +2899,14 @@ def test_collect_stream_packets_starts_duration_at_first_media() -> None:
     stream = FakeVtmStream()
     monotonic = lambda: 10.0  # noqa: E731
 
-    assert cli_module._collect_stream_packets(  # noqa: SLF001
-        stream,
-        max_packets=5,
-        duration_seconds=1.5,
-        allow_encrypted=False,
-        monotonic=monotonic,
-    ) == []
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cli_module._collect_stream_packets(  # noqa: SLF001
+            stream,
+            max_packets=5,
+            duration_seconds=1.5,
+            allow_encrypted=False,
+            monotonic=monotonic,
+        )
     assert stream.iterator_kwargs == {
         "max_packets": 5,
         "duration_seconds": 1.5,
@@ -3041,6 +3042,21 @@ def test_write_stream_payloads_stops_after_duration() -> None:
     )
 
     assert output.getvalue() == expected_payload
+
+
+def test_write_stream_payloads_rejects_empty_startup() -> None:
+    class EmptyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 1
+            return []
+
+    with pytest.raises(PyEzvizError, match="did not provide media"):
+        cli_module._write_stream_payloads(  # noqa: SLF001
+            EmptyStream(),
+            io.BytesIO(),
+            max_packets=1,
+            allow_encrypted=False,
+        )
 
 
 def test_stream_dump_rejects_encrypted_packets_by_default(monkeypatch, tmp_path, caplog) -> None:

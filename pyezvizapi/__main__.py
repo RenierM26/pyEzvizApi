@@ -3067,6 +3067,7 @@ def _write_stream_payloads(
     deadline = None
 
     iterator_kwargs: dict[str, Any] = {"max_packets": max_packets}
+    bytes_written = 0
     if isinstance(stream, VtmStreamClient):
         iterator_kwargs.update(
             duration_seconds=duration_seconds,
@@ -3090,13 +3091,17 @@ def _write_stream_payloads(
         payload = transform_payload(packet.body) if transform_payload else packet.body
         if payload:
             output.write(payload)
+            bytes_written += len(payload)
         if flush_each:
             output.flush()
     if transform_payload and hasattr(transform_payload, "flush"):
         tail = transform_payload.flush()
         if tail:
             output.write(tail)
+            bytes_written += len(tail)
     output.flush()
+    if bytes_written == 0:
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
 
 
 def _start_cli_cloud_stream(
@@ -3187,6 +3192,8 @@ def _collect_stream_packets(
         if not packets or "VTM socket closed" not in str(err):
             raise
         _LOGGER.warning("%s; using partial captured stream", err)
+    if not packets:
+        raise PyEzvizError("Cloud stream did not provide media before startup expired")
     return packets
 
 

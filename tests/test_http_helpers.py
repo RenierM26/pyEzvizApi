@@ -3718,7 +3718,11 @@ def test_save_decrypted_cloud_mpegps_without_ffmpeg(
     binary_output: bool,
 ) -> None:
     client = _client()
-    video_payload = b"\x00\x00\x01\x65\xb8\x00"
+    video_payload = (
+        b"\x00\x00\x01\x67\x42\x00\x1e\x80"
+        b"\x00\x00\x01\x68\xc0"
+        b"\x00\x00\x01\x65\xb8\x00"
+    )
     pes_payload = b"\x80\x00\x00" + video_payload
     capture = (
         b"\x00\x00\x01\xe0"
@@ -3790,7 +3794,7 @@ def test_save_decrypted_cloud_mpegps_rejects_invalid_slice_body(
 ) -> None:
     client = _client()
     output_path = tmp_path / "clip.ps"
-    video_payload = b"\x00\x00\x01\x65\x00"
+    video_payload = b"\x00\x00\x01\x65\xff"
     pes_payload = b"\x80\x00\x00" + video_payload
     capture = (
         b"\x00\x00\x01\xe0"
@@ -3837,6 +3841,102 @@ def test_save_decrypted_cloud_clip_rejects_fifo_target(monkeypatch, tmp_path) ->
         )
 
     assert stat.S_ISFIFO(output_path.stat().st_mode)
+
+
+def test_save_decrypted_cloud_clip_supports_write_only_existing_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"existing")
+    output_path.chmod(0o200)
+    original_inode = output_path.stat().st_ino
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    output_path.chmod(0o600)
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_save_cloud_clip_supports_long_destination_name(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / ("x" * 240 + ".ts")
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        lambda *_args, **_kwargs: None,
+    )
+
+    client.save_clip(
+        "CAM123",
+        output_path,
+        source="cloud",
+        decrypt_video=True,
+        media_key="MEDIAKEY",
+    )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_cloud_clip_rejects_concurrent_target_replacement(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "clip.ts"
+    output_path.write_bytes(b"original")
+    replacement = tmp_path / "replacement.ts"
+    replacement_payload = b"rotated-by-another-process"
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda _client, _serial, selected_output, **_kwargs: selected_output.write(
+            SAVE_CLIP_PAYLOAD
+        ),
+    )
+
+    def rotate_target(*_args: Any, **_kwargs: Any) -> None:
+        replacement.write_bytes(replacement_payload)
+        os.replace(replacement, output_path)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client._require_decodable_saved_video_frame",
+        rotate_target,
+    )
+
+    with pytest.raises(PyEzvizError, match="target changed during capture"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            decrypt_video=True,
+            media_key="MEDIAKEY",
+        )
+
+    assert output_path.read_bytes() == replacement_payload
 
 
 def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(

@@ -404,7 +404,15 @@ def _require_saved_mpegps_video_payload(path: Path) -> None:
     can request MPEG-TS, whose remux path already requires FFmpeg.
     """
 
-    data = path.read_bytes()
+    nals = _annexb_nals(_mpegps_video_payload(path.read_bytes()))
+    if _has_linked_h264_video(nals) or _has_linked_hevc_video(nals):
+        return
+    raise PyEzvizError("Saved cloud MPEG-PS clip did not include clear video payload")
+
+
+def _mpegps_video_payload(data: bytes) -> bytes:
+    """Return concatenated MPEG-PS video PES payload bytes."""
+
     video_payload = bytearray()
     offset = 0
     while offset + 9 <= len(data):
@@ -425,38 +433,71 @@ def _require_saved_mpegps_video_payload(path: Path) -> None:
         if payload_start < packet_end:
             video_payload.extend(data[payload_start:packet_end])
         offset = max(packet_start + 4, packet_end)
+    return bytes(video_payload)
 
-    payload = bytes(video_payload)
+
+def _annexb_nals(payload: bytes) -> list[tuple[bytes, bytes]]:
+    """Return Annex-B NAL headers and bodies from one elementary stream."""
+
+    nals: list[tuple[bytes, bytes]] = []
     start = 0
     while True:
         start_code = payload.find(b"\x00\x00\x01", start)
         if start_code < 0 or start_code + 3 >= len(payload):
-            break
-        header = payload[start_code + 3]
+            return nals
+        header_start = start_code + 3
+        next_start = payload.find(b"\x00\x00\x01", header_start + 1)
+        nal_end = len(payload) if next_start < 0 else next_start
+        nals.append((payload[header_start : header_start + 2], payload[header_start + 1 : nal_end]))
+        start = header_start
+
+
+def _has_linked_h264_video(nals: list[tuple[bytes, bytes]]) -> bool:
+    """Return whether H.264 parameter sets link to a plausible slice."""
+
+    h264_sps_ids: set[int] = set()
+    h264_pps_to_sps: dict[int, int] = {}
+    h264_slice_pps_ids: set[int] = set()
+    for header_bytes, nal_body in nals:
+        header = header_bytes[0]
         h264_type = header & 0x1F
-        nal_body_start = start_code + 4
-        next_start = payload.find(b"\x00\x00\x01", nal_body_start)
-        nal_body_end = len(payload) if next_start < 0 else next_start
-        nal_body = payload[nal_body_start:nal_body_end]
-        if (
-            (header & 0x80) == 0
-            and 1 <= h264_type <= 5
-            and _has_plausible_h264_slice_header(nal_body)
+        if header & 0x80:
+            continue
+        if h264_type == 7:
+            sps_id = _h264_sps_id(nal_body)
+            if sps_id is not None:
+                h264_sps_ids.add(sps_id)
+        elif h264_type == 8:
+            pps_ids = _h264_pps_ids(nal_body)
+            if pps_ids is not None:
+                h264_pps_to_sps[pps_ids[0]] = pps_ids[1]
+        elif 1 <= h264_type <= 5:
+            pps_id = _h264_slice_pps_id(nal_body)
+            if pps_id is not None:
+                h264_slice_pps_ids.add(pps_id)
+    return any(
+        pps_id in h264_pps_to_sps
+        and h264_pps_to_sps[pps_id] in h264_sps_ids
+        for pps_id in h264_slice_pps_ids
+    )
+
+
+def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
+    """Return whether HEVC parameter sets accompany a plausible slice."""
+
+    nal_types: set[int] = set()
+    has_valid_slice = False
+    for header, body in nals:
+        if len(header) < 2 or header[0] & 0x80 or not (header[1] & 0x07):
+            continue
+        nal_type = (header[0] >> 1) & 0x3F
+        nal_types.add(nal_type)
+        if nal_type <= 31 and _has_plausible_hevc_slice_header(
+            body[1:],
+            nal_type=nal_type,
         ):
-            return
-        if start_code + 4 < len(payload):
-            hevc_type = (header >> 1) & 0x3F
-            temporal_id = payload[start_code + 4] & 0x07
-            hevc_body = payload[start_code + 5 : nal_body_end]
-            if (
-                (header & 0x80) == 0
-                and hevc_type <= 31
-                and temporal_id
-                and _has_plausible_hevc_slice_header(hevc_body, nal_type=hevc_type)
-            ):
-                return
-        start = start_code + 3
-    raise PyEzvizError("Saved cloud MPEG-PS clip did not include clear video payload")
+            has_valid_slice = True
+    return {32, 33, 34}.issubset(nal_types) and has_valid_slice
 
 
 def _rbsp_bits(data: bytes) -> str:
@@ -488,20 +529,48 @@ def _read_unsigned_exp_golomb(bits: str, offset: int) -> tuple[int, int] | None:
     return value, value_end
 
 
-def _has_plausible_h264_slice_header(data: bytes) -> bool:
-    """Return whether decrypted bytes contain a plausible H.264 slice header."""
+def _h264_sps_id(data: bytes) -> int | None:
+    """Return a validated baseline H.264 SPS id."""
 
+    if len(data) < 4 or data[0] not in {44, 66, 77, 83, 86, 88, 100, 110, 118, 122, 128, 134, 135, 138, 139, 244}:
+        return None
+    if data[1] & 0x03 or data[2] == 0:
+        return None
+    decoded = _read_unsigned_exp_golomb(_rbsp_bits(data[3:]), 0)
+    return decoded[0] if decoded is not None and decoded[0] <= 31 else None
+
+
+def _h264_pps_ids(data: bytes) -> tuple[int, int] | None:
+    """Return linked PPS/SPS ids from a plausible H.264 PPS."""
+
+    bits = _rbsp_bits(data)
+    pps = _read_unsigned_exp_golomb(bits, 0)
+    if pps is None or pps[0] > 255:
+        return None
+    sps = _read_unsigned_exp_golomb(bits, pps[1])
+    if sps is None or sps[0] > 31:
+        return None
+    return pps[0], sps[0]
+
+
+def _h264_slice_pps_id(data: bytes) -> int | None:
+    """Return the referenced PPS id from a plausible H.264 slice header."""
+
+    if len(data) < 2:
+        return None
     bits = _rbsp_bits(data)
     offset = 0
     values: list[int] = []
     for _ in range(3):
         decoded = _read_unsigned_exp_golomb(bits, offset)
         if decoded is None:
-            return False
+            return None
         value, offset = decoded
         values.append(value)
     first_mb, slice_type, pic_parameter_set_id = values
-    return first_mb <= 65535 and slice_type <= 9 and pic_parameter_set_id <= 255
+    if first_mb <= 65535 and slice_type <= 9 and pic_parameter_set_id <= 255:
+        return pic_parameter_set_id
+    return None
 
 
 def _has_plausible_hevc_slice_header(data: bytes, *, nal_type: int) -> bool:
@@ -517,22 +586,34 @@ def _has_plausible_hevc_slice_header(data: bytes, *, nal_type: int) -> bool:
     return decoded is not None and decoded[0] <= 63
 
 
-def _publish_validated_cloud_clip(temp_path: Path, target: Path) -> None:
+def _publish_validated_cloud_clip(
+    temp_path: Path,
+    target: Path,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> None:
     """Publish validated bytes while preserving an existing target inode."""
 
-    try:
-        target_stat = target.stat()
-    except FileNotFoundError:
-        os.replace(temp_path, target)
+    if expected_identity is None:
+        try:
+            os.link(temp_path, target)
+        except FileExistsError as err:
+            raise PyEzvizError("Cloud clip output target changed during capture") from err
+        temp_path.unlink()
         return
-    if not stat.S_ISREG(target_stat.st_mode):
-        raise PyEzvizError("Cloud clip output target must be a regular file")
 
     # Replacing an inode atomically necessarily loses its ACLs, xattrs, and
     # hard-link identity.  Validation has already succeeded, so update an
     # existing regular file in place just as the legacy save path did.
-    with temp_path.open("rb") as source, target.open("r+b") as destination:
-        destination.seek(0)
+    try:
+        destination_fd = os.open(target, os.O_WRONLY)
+    except FileNotFoundError as err:
+        raise PyEzvizError("Cloud clip output target changed during capture") from err
+    with temp_path.open("rb") as source, os.fdopen(destination_fd, "wb") as destination:
+        destination_stat = os.fstat(destination.fileno())
+        if (destination_stat.st_dev, destination_stat.st_ino) != expected_identity:
+            raise PyEzvizError("Cloud clip output target changed during capture")
+        destination.truncate(0)
         while chunk := source.read(CLOUD_CLIP_COPY_CHUNK_SIZE):
             destination.write(chunk)
         destination.truncate()
@@ -541,18 +622,20 @@ def _publish_validated_cloud_clip(temp_path: Path, target: Path) -> None:
     temp_path.unlink()
 
 
-def _cloud_clip_staging_parent(target: Path) -> Path | None:
-    """Return a sibling staging parent only when the target is missing."""
+def _cloud_clip_staging(
+    target: Path,
+) -> tuple[Path | None, tuple[int, int] | None]:
+    """Return the staging parent and original target identity."""
 
     try:
         target_stat = target.stat()
     except FileNotFoundError:
-        return target.parent
+        return target.parent, None
     if not stat.S_ISREG(target_stat.st_mode):
         raise PyEzvizError("Cloud clip output target must be a regular file")
     # Existing files publish through their current inode, so a private system
     # temp does not require write access to the target's parent directory.
-    return None
+    return None, (target_stat.st_dev, target_stat.st_ino)
 
 
 def _is_existing_non_regular_path(path: Path) -> bool:
@@ -4039,10 +4122,10 @@ class EzvizClient:
                 with output_path.open("wb") as output_file:
                     copy_cloud(output_file)
             else:
-                staging_parent = _cloud_clip_staging_parent(publication_target)
+                staging_parent, target_identity = _cloud_clip_staging(publication_target)
                 suffix = ".ts" if output_format == "mpegts" else ".ps"
                 with tempfile.TemporaryDirectory(
-                    prefix=f".{publication_target.name}.",
+                    prefix=".pyezvizapi-cloud-clip-",
                     dir=staging_parent,
                 ) as temp_dir:
                     temp_path = Path(temp_dir) / f"capture{suffix}"
@@ -4055,7 +4138,11 @@ class EzvizClient:
                         )
                     elif decrypt_video:
                         _require_saved_mpegps_video_payload(temp_path)
-                    _publish_validated_cloud_clip(temp_path, publication_target)
+                    _publish_validated_cloud_clip(
+                        temp_path,
+                        publication_target,
+                        expected_identity=target_identity,
+                    )
         else:
             start_position = _binary_position(output)
             if decrypt_video:

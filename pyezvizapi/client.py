@@ -488,6 +488,8 @@ class _H264PpsInfo(NamedTuple):
     weighted_bipred_idc: int
     deblocking_filter_control_present: bool
     redundant_pic_cnt_present: bool
+    slice_group_map_type: int = 0
+    slice_group_change_rate: int = 0
 
 
 class _HevcSpsInfo(NamedTuple):
@@ -601,13 +603,15 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
     )
 
 
-def _rbsp_bits(data: bytes) -> str:
-    """Return an RBSP bit string after removing emulation-prevention bytes."""
+def _rbsp_bits(data: bytes) -> str | None:
+    """Return RBSP bits, rejecting malformed emulation-prevention sequences."""
 
     rbsp = bytearray()
     zero_count = 0
-    for value in data:
+    for index, value in enumerate(data):
         if zero_count >= 2 and value == 0x03:
+            if index + 1 >= len(data) or data[index + 1] > 0x03:
+                return None
             zero_count = 0
             continue
         rbsp.append(value)
@@ -772,6 +776,8 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
     if data[1] & 0x03 or data[2] == 0:
         return None
     bits = _rbsp_bits(data[3:])
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 0:
         return None
@@ -911,6 +917,58 @@ def _h264_sps_info(  # noqa: PLR0911, PLR0912, PLR0915
     )
 
 
+def _skip_h264_slice_groups(  # noqa: PLR0911, PLR0912
+    bits: str,
+    offset: int,
+    group_count: int,
+    sps: _H264SpsInfo,
+) -> tuple[int, int, int] | None:
+    """Skip a PPS flexible-macroblock-order map and retain slice controls."""
+
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None or decoded[0] > 6:
+        return None
+    map_type, offset = decoded
+    pic_size = sps.pic_width_in_mbs * sps.pic_height_in_map_units
+    change_rate = 0
+    if map_type == 0:
+        for _ in range(group_count):
+            decoded = _read_unsigned_exp_golomb(bits, offset)
+            if decoded is None or decoded[0] >= pic_size:
+                return None
+            offset = decoded[1]
+    elif map_type == 2:
+        for _ in range(group_count - 1):
+            top_left = _read_unsigned_exp_golomb(bits, offset)
+            if top_left is None or top_left[0] >= pic_size:
+                return None
+            bottom_right = _read_unsigned_exp_golomb(bits, top_left[1])
+            if bottom_right is None or not top_left[0] <= bottom_right[0] < pic_size:
+                return None
+            offset = bottom_right[1]
+    elif map_type in {3, 4, 5}:
+        if group_count != 2 or offset >= len(bits):
+            return None
+        rate = _read_unsigned_exp_golomb(bits, offset + 1)
+        if rate is None or rate[0] >= pic_size:
+            return None
+        change_rate = rate[0] + 1
+        offset = rate[1]
+    elif map_type == 6:
+        declared_size = _read_unsigned_exp_golomb(bits, offset)
+        if declared_size is None or declared_size[0] + 1 != pic_size:
+            return None
+        offset = declared_size[1]
+        group_bits = (group_count - 1).bit_length()
+        if offset + pic_size * group_bits > len(bits):
+            return None
+        for _ in range(pic_size):
+            if int(bits[offset : offset + group_bits], 2) >= group_count:
+                return None
+            offset += group_bits
+    return offset, map_type, change_rate
+
+
 def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
     data: bytes,
     *,
@@ -919,6 +977,8 @@ def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
     """Return fields needed to validate slices after parsing an H.264 PPS."""
 
     bits = _rbsp_bits(data)
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 0:
         return None
@@ -936,9 +996,22 @@ def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
     bottom_field_pic_order_in_frame_present = bits[offset + 1] == "1"
     offset += 2
     decoded = _read_unsigned_exp_golomb(bits, offset)
-    if decoded is None or decoded[0] != 0:
+    if decoded is None or decoded[0] > 7:
         return None
+    slice_group_count = decoded[0] + 1
     offset = decoded[1]
+    slice_group_map_type = 0
+    slice_group_change_rate = 0
+    if slice_group_count > 1:
+        linked_sps = sps_info.get(sps[0])
+        if linked_sps is None:
+            return None
+        group_syntax = _skip_h264_slice_groups(
+            bits, offset, slice_group_count, linked_sps
+        )
+        if group_syntax is None:
+            return None
+        offset, slice_group_map_type, slice_group_change_rate = group_syntax
     default_ref_counts: list[int] = []
     for _ in range(2):
         decoded = _read_unsigned_exp_golomb(bits, offset)
@@ -1007,6 +1080,8 @@ def _h264_pps_info(  # noqa: PLR0911, PLR0912, PLR0915
         weighted_bipred_idc=weighted_bipred_idc,
         deblocking_filter_control_present=deblocking_filter_control_present,
         redundant_pic_cnt_present=redundant_pic_cnt_present,
+        slice_group_map_type=slice_group_map_type,
+        slice_group_change_rate=slice_group_change_rate,
     )
 
 
@@ -1121,6 +1196,8 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     if len(data) < 2:
         return None
     bits = _rbsp_bits(data)
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 0:
         return None
@@ -1277,6 +1354,15 @@ def _h264_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
                 if decoded_signed is None:
                     return None
                 offset = decoded_signed[1]
+    if pps.slice_group_change_rate:
+        pic_size_in_map_units = sps.pic_width_in_mbs * sps.pic_height_in_map_units
+        cycle_bits = (
+            (pic_size_in_map_units + pps.slice_group_change_rate - 1)
+            // pps.slice_group_change_rate
+        ).bit_length()
+        if offset + cycle_bits > len(bits):
+            return None
+        offset += cycle_bits
     if nal_type == 2:
         slice_id = _read_unsigned_exp_golomb(bits, offset)
         if slice_id is None or slice_id[0] > 65535:
@@ -1310,6 +1396,8 @@ def _hevc_vps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915
     """Return a VPS id after parsing its mandatory syntax prefix."""
 
     bits = _rbsp_bits(data)
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 32:
         return None
@@ -1755,6 +1843,8 @@ def _hevc_sps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     """Return linked IDs and POC width after parsing mandatory SPS fields."""
 
     bits = _rbsp_bits(data)
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 0:
         return None
@@ -1944,6 +2034,8 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     """Return linked IDs and slice controls after mandatory PPS fields."""
 
     bits = _rbsp_bits(data)
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 0:
         return None
@@ -2105,6 +2197,8 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
     """Return a PPS id after parsing mandatory linked HEVC slice fields."""
 
     bits = _rbsp_bits(data)
+    if bits is None:
+        return None
     trailing_one = bits.rfind("1")
     if trailing_one < 0:
         return None

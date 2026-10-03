@@ -31,6 +31,7 @@ from pyezvizapi.api_endpoints import (
 from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
+    _h264_pps_info,
     _h264_slice_pps_id,
     _h264_sps_info,
     _H264PpsInfo,
@@ -40,6 +41,7 @@ from pyezvizapi.client import (
     _LocalStreamPacketMetadataRecorder,
     _mpegps_video_payload,
     _publish_unreadable_existing_clip,
+    _rbsp_bits,
     _regular_path_has_identity,
     _reserve_existing_clip_space,
     _skip_hevc_short_term_ref_pic_set,
@@ -4559,6 +4561,69 @@ def test_h264_mbaff_skip_run_uses_macroblock_pair_address() -> None:
 
     assert parsed(2) == 0
     assert parsed(3) is None
+
+
+@pytest.mark.parametrize(
+    ("map_type", "map_bits"),
+    [
+        (0, _unsigned_exp_golomb_bits(0) * 2),
+        (1, ""),
+        (2, _unsigned_exp_golomb_bits(0) + _unsigned_exp_golomb_bits(1)),
+        (3, "0" + _unsigned_exp_golomb_bits(0)),
+        (4, "0" + _unsigned_exp_golomb_bits(0)),
+        (5, "0" + _unsigned_exp_golomb_bits(0)),
+        (6, _unsigned_exp_golomb_bits(3) + "0101"),
+    ],
+)
+def test_h264_slice_group_pps_and_slice_headers(map_type: int, map_bits: str) -> None:
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True, 2, 2)
+    pps_bits = (
+        _unsigned_exp_golomb_bits(0) * 2  # PPS and SPS IDs
+        + "00"  # entropy and bottom-field POC flags
+        + _unsigned_exp_golomb_bits(1)  # two slice groups
+        + _unsigned_exp_golomb_bits(map_type)
+        + map_bits
+        + _unsigned_exp_golomb_bits(0) * 2  # reference counts
+        + "000"  # weighting controls
+        + _signed_exp_golomb_bits(0) * 3  # initial QP/QS and chroma offset
+        + "000"  # deblocking, constrained-intra, redundant-count flags
+    )
+    pps = _h264_pps_info(_rbsp_bytes(pps_bits), sps_info={0: sps})
+    assert pps is not None
+    assert pps.slice_group_map_type == map_type
+    slice_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)  # I slice
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"  # frame_num
+        + _signed_exp_golomb_bits(0)  # slice_qp_delta
+        + ("000" if map_type in {3, 4, 5} else "")
+        + _unsigned_exp_golomb_bits(0)  # first CAVLC macroblock type
+    )
+    assert _h264_slice_pps_id(
+        _rbsp_bytes(slice_bits), nal_header=0x01,
+        sps_info={0: sps}, pps_info={0: pps},
+    ) == 0
+
+
+def test_rbsp_rejects_forbidden_or_trailing_emulation_prevention() -> None:
+    assert _rbsp_bits(b"\x00\x00\x03\x03") == "0" * 16 + "00000011"
+    assert _rbsp_bits(b"\x00\x00\x03\x04") is None
+    assert _rbsp_bits(b"\x00\x00\x03") is None
+    sps = _H264SpsInfo(0, 1, False, 4, 2, 0, False, True)
+    pps = _H264PpsInfo(0, 0, False, False, 0, 0, False, 0, False, False)
+    slice_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(2)
+        + _unsigned_exp_golomb_bits(0)
+        + "0000"
+        + _signed_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(0)
+    )
+    assert _h264_slice_pps_id(
+        _rbsp_bytes(slice_bits) + b"\x00\x00\x03\x04\x80",
+        nal_header=0x01, sps_info={0: sps}, pps_info={0: pps},
+    ) is None
 
 
 def test_h264_separate_colour_plane_omits_chroma_prediction_weights() -> None:

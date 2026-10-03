@@ -685,6 +685,152 @@ def test_vtm_stream_capture_deadline_bounds_keepalive_write() -> None:
     assert fake_socket.closed
     assert not stream.connected
 
+
+def test_vtm_stream_first_packet_deadline_bounds_proactive_keepalive_write() -> None:
+    configured_timeout = 10.0
+    remaining_timeout = 0.25
+
+    class BlockingSendSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__([])
+            self.timeout = configured_timeout
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def sendall(self, data: bytes) -> None:
+            del data
+            raise TimeoutError
+
+    fake_socket = BlockingSendSocket()
+    stream = VtmStreamClient("ysproto://vtm.example.test:8554/live")
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+    ticks = iter((0.0, 5.0, 5.75))
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=30.0,
+            duration_from_start=True,
+            first_packet_deadline=6.0,
+            keepalive_interval=5.0,
+            monotonic=lambda: next(ticks),
+        )
+    )
+
+    assert packets == []
+    assert remaining_timeout in fake_socket.timeout_history
+    assert fake_socket.closed
+    assert not stream.connected
+
+
+def test_vtm_stream_first_packet_deadline_bounds_keepalive_response_write() -> None:
+    configured_timeout = 10.0
+    remaining_timeout = 0.25
+    peer_keepalive = decode_vtm_packet(
+        encode_vtm_packet(
+            KEEPALIVE_REQ,
+            message_code=VtmMessageCode.KEEPALIVE_REQ,
+        )
+    )
+
+    class BlockingSendSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__([])
+            self.timeout = configured_timeout
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def sendall(self, data: bytes) -> None:
+            del data
+            raise TimeoutError
+
+    class PeerKeepaliveStream(VtmStreamClient):
+        def read_packet(self, **_kwargs: Any) -> Any:
+            return peer_keepalive
+
+    fake_socket = BlockingSendSocket()
+    stream = PeerKeepaliveStream("ysproto://vtm.example.test:8554/live")
+    stream._socket = fake_socket  # noqa: SLF001
+    stream.stream_info = SimpleNamespace(streamssn="ssn-123")  # type: ignore[assignment]
+    ticks = iter((0.0, 0.5, 1.75))
+
+    packets = list(
+        stream.iter_packets(
+            duration_seconds=30.0,
+            duration_from_start=True,
+            first_packet_deadline=2.0,
+            keepalive_interval=None,
+            monotonic=lambda: next(ticks),
+        )
+    )
+
+    assert packets == []
+    assert remaining_timeout in fake_socket.timeout_history
+    assert fake_socket.closed
+    assert not stream.connected
+
+
+def test_vtm_stream_deadline_only_connect_restores_blocking_socket_mode() -> None:
+    connect_timeouts: list[float | None] = []
+
+    class DeadlineSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self, connect_timeout: float | None) -> None:
+            super().__init__([])
+            self.timeout = connect_timeout
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+    def socket_factory(
+        _address: tuple[str, int],
+        timeout: float | None,
+    ) -> DeadlineSocket:
+        connect_timeouts.append(timeout)
+        return DeadlineSocket(timeout)
+
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=None,
+        socket_factory=socket_factory,
+    )
+    stream.connect(deadline=10.0, monotonic=lambda: 0.0)
+    fake_socket = stream._socket  # noqa: SLF001
+
+    assert isinstance(fake_socket, DeadlineSocket)
+    assert connect_timeouts == [10.0]
+    assert fake_socket.timeout is None
+    assert fake_socket.timeout_history == [None]
+
+
+def test_vtm_stream_start_uses_one_deadline_across_control_reads() -> None:
+    fake_socket = FakeVtmSocket([])
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=15.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    )
+    ticks = iter((0.0, 0.0, 2.0))
+
+    with pytest.raises(DeviceException, match="timed out waiting for VTM stream info"):
+        stream.start(deadline=1.0, monotonic=lambda: next(ticks))
+
+    assert fake_socket.closed
+    assert not stream.connected
+
 @pytest.mark.parametrize(
     "message_code",
     (VtmMessageCode.KEEPALIVE_REQ, VtmMessageCode.KEEPALIVE_RSP),
@@ -1030,6 +1176,63 @@ def test_vtm_stream_client_stops_quiet_read_at_first_packet_timeout() -> None:
 
     assert packets == []
     assert fake_socket.timeout is None
+
+
+def test_vtm_stream_client_first_packet_deadline_uses_remaining_budget() -> None:
+    stream_info_body = b"\x08\x00\x22\x07ssn-123\x2a\x05key-1"
+
+    class Clock:
+        now = 109.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class QuietSocket(FakeVtmSocket):
+        timeout_history: list[float | None]
+
+        def __init__(self, responses: list[bytes]) -> None:
+            super().__init__(responses)
+            self.timeout_history = []
+
+        def settimeout(self, timeout: float | None) -> None:
+            super().settimeout(timeout)
+            self.timeout_history.append(timeout)
+
+        def recv(self, size: int) -> bytes:
+            if self._buffer:
+                return super().recv(size)
+            clock.now = 110.0
+            raise TimeoutError
+
+    fake_socket = QuietSocket(
+        [
+            encode_vtm_packet(
+                stream_info_body,
+                message_code=VtmMessageCode.STREAMINFO_RSP,
+                sequence=7,
+            )
+        ]
+    )
+
+    with VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=10.0,
+        socket_factory=lambda _address, _timeout: fake_socket,
+    ) as stream:
+        stream.start()
+        stream._read_inactivity_deadline = None  # noqa: SLF001
+        packets = list(
+            stream.iter_packets(
+                first_packet_deadline=110.0,
+                keepalive_interval=None,
+                monotonic=clock,
+            )
+        )
+
+    assert packets == []
+    assert 1.0 in fake_socket.timeout_history
 
 def test_vtm_stream_client_start_follows_redirect_response() -> None:
     redirect_url = "ysproto://redirect.example.test:6000/live?dev=CAM123"

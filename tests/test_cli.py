@@ -2252,6 +2252,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
         ffmpeg_path: str,
         max_packets: int | None,
         duration_seconds: float | None,
+        first_packet_deadline: float | None,
         allow_encrypted: bool,
     ) -> None:
         calls.append(
@@ -2260,6 +2261,7 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
                 "ffmpeg_path": ffmpeg_path,
                 "max_packets": max_packets,
                 "duration_seconds": duration_seconds,
+                "first_packet_deadline": first_packet_deadline,
                 "allow_encrypted": allow_encrypted,
             }
         )
@@ -2297,14 +2299,22 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
     assert calls[0]["ffmpeg_path"] == "ffmpeg-custom"
     assert calls[0]["max_packets"] is None
     assert calls[0]["duration_seconds"] == cli_module._parse_duration_seconds("2min")  # noqa: SLF001
+    assert calls[0]["first_packet_deadline"] is None
     assert calls[0]["allow_encrypted"] is False
     assert output_file.read_bytes() == expected_payload
 
 
 def test_stream_dump_can_decrypt_before_mpegts_remux(monkeypatch, tmp_path) -> None:
     class EncryptKeyClient(_FakeClient):
-        def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+        def get_cam_key(
+            self,
+            serial: str,
+            *,
+            smscode: str | int | None = None,
+            max_retries: int = 0,
+        ) -> str:
             assert serial == "CAM123"
+            assert smscode is None
             assert max_retries == 1
             return "camera-key"
 
@@ -2428,6 +2438,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
         *,
         detected_codec: str,
         decrypt_codec: str,
+        media_key: str | bytes | None = None,
     ) -> bytes:
         decrypt_calls.append(
             {
@@ -2436,6 +2447,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                 "units": units,
                 "detected_codec": detected_codec,
                 "decrypt_codec": decrypt_codec,
+                "media_key": media_key,
             }
         )
         return b"decrypted-hevc"
@@ -2489,6 +2501,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
             "units": (b"\x00\x00\x00\x01\x40\x01vps",),
             "detected_codec": "hevc",
             "decrypt_codec": "hevc",
+            "media_key": "camera-secret",
         }
     ]
     assert remux_calls == [
@@ -2501,7 +2514,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
     monkeypatch,
     tmp_path,
 ) -> None:
-    _install_fake_client(monkeypatch)
+    fake_client = _install_fake_client(monkeypatch)
     body = (
         b"\x80\x60\x00\x01"
         b"\x00\x00\x00\x01"
@@ -2565,6 +2578,8 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
                 "--duration",
                 "0",
                 "--decrypt-video",
+                "--sms-code",
+                "654321",
                 "--output",
                 str(output_file),
             ]
@@ -2581,6 +2596,11 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
             "transport": cli_module.StreamTransport.RTP,
         }
     ]
+    assert fake_client.instances[0].cam_key_request == {
+        "serial": "CAM123",
+        "max_retries": 1,
+        "smscode": "654321",
+    }
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
@@ -2631,12 +2651,14 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
         *,
         detected_codec: str,
         decrypt_codec: str,
+        media_key: str | bytes | None = None,
     ) -> bytes:
         decrypt_calls.append(
             {
                 "units": units,
                 "detected_codec": detected_codec,
                 "decrypt_codec": decrypt_codec,
+                "media_key": media_key,
             }
         )
         return b"decrypted-h264"
@@ -2687,6 +2709,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
             "units": (b"\x00\x00\x00\x01\x41h264",),
             "detected_codec": "h264",
             "decrypt_codec": "h264",
+            "media_key": "camera-secret",
         }
     ]
     assert remux_calls == [
@@ -2742,12 +2765,14 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
         *,
         detected_codec: str,
         decrypt_codec: str,
+        media_key: str | bytes | None = None,
     ) -> bytes:
         decrypt_calls.append(
             {
                 "units": units,
                 "detected_codec": detected_codec,
                 "decrypt_codec": decrypt_codec,
+                "media_key": media_key,
             }
         )
         return b"decrypted-h264"
@@ -2788,6 +2813,8 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                 "--decrypt-video",
                 "--decrypt-codec",
                 "encrypted-header",
+                "--media-key-hex",
+                "000102030405060708090a0b0c0d0e0f",
                 "--output",
                 str(output_file),
             ]
@@ -2800,6 +2827,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
             "units": (b"\x00\x00\x00\x01\x41h264",),
             "detected_codec": "h264",
             "decrypt_codec": "encrypted-header",
+            "media_key": bytes(range(16)),
         }
     ]
     assert remux_calls == [
@@ -3147,6 +3175,7 @@ def test_remux_stream_payloads_routes_clear_transport_when_encrypted_allowed(
             "ffmpeg_path": "ffmpeg-custom",
             "max_packets": 4,
             "duration_seconds": 3.0,
+            "first_packet_deadline": None,
             "allow_encrypted": True,
         }
     ]
@@ -3193,6 +3222,9 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
                 "decrypt_video": args.decrypt_video,
                 "decrypt_codec": args.decrypt_codec,
                 "max_packets": args.max_packets,
+                "sms_code": args.sms_code,
+                "media_key": args.media_key,
+                "media_key_hex": args.media_key_hex,
             }
         )
 
@@ -3218,6 +3250,8 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
                 "--ffmpeg-path",
                 sys.executable,
                 "--decrypt-video",
+                "--media-key-hex",
+                "000102030405060708090a0b0c0d0e0f",
                 "--max-packets",
                 "4",
                 "--no-refresh-vtm",
@@ -3240,6 +3274,9 @@ def test_stream_proxy_dispatches_blocking_proxy(monkeypatch, tmp_path) -> None:
             "decrypt_video": True,
             "decrypt_codec": "auto",
             "max_packets": 4,
+            "sms_code": None,
+            "media_key": None,
+            "media_key_hex": "000102030405060708090a0b0c0d0e0f",
         }
     ]
     assert client.closed is True

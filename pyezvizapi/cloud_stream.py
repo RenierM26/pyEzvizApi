@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from itertools import chain
 import json
@@ -370,6 +370,46 @@ def open_cloud_stream(
     )
 
 
+def _start_bounded_cloud_stream(
+    stream: Any,
+    *,
+    timeout: float | None,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    """Start VTM negotiation with one deadline instead of per-read timeouts."""
+
+    if not isinstance(stream, VtmStreamClient):
+        stream.start()
+        return None
+    startup_seconds = timeout
+    if startup_seconds is None or startup_seconds <= 0:
+        startup_seconds = duration_seconds
+    deadline = (
+        None
+        if startup_seconds is None
+        else monotonic() + startup_seconds
+    )
+    stream.start(deadline=deadline, monotonic=monotonic)
+    return deadline
+
+
+@contextmanager
+def _closing_unconnected_cloud_stream(stream: Any) -> Iterator[Any]:
+    """Manage a newly-created stream without triggering eager ``__enter__``."""
+
+    try:
+        yield stream
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+        else:
+            exit_context = getattr(stream, "__exit__", None)
+            if callable(exit_context):
+                exit_context(None, None, None)
+
+
 def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     client: Any,
     serial: str,
@@ -405,7 +445,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             serial,
             channel=channel,
@@ -413,12 +453,19 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
-        ) as stream:
-            stream.start()
+        )
+        with _closing_unconnected_cloud_stream(stream):
+            startup_deadline = _start_bounded_cloud_stream(
+                stream,
+                timeout=timeout,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
+                first_packet_deadline=startup_deadline,
                 monotonic=monotonic,
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
@@ -442,7 +489,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         output.flush()
         return
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         serial,
         channel=channel,
@@ -450,13 +497,20 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
-    ) as stream:
-        stream.start()
+    )
+    with _closing_unconnected_cloud_stream(stream):
+        startup_deadline = _start_bounded_cloud_stream(
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
         _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
 
@@ -493,7 +547,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             selected_key = media_key if media_key is not None else client.get_cam_key(serial)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
-        with open_cloud_stream(
+        stream = open_cloud_stream(
             client,
             serial,
             channel=channel,
@@ -501,12 +555,19 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
-        ) as stream:
-            stream.start()
+        )
+        with _closing_unconnected_cloud_stream(stream):
+            startup_deadline = _start_bounded_cloud_stream(
+                stream,
+                timeout=timeout,
+                duration_seconds=duration_seconds,
+                monotonic=monotonic,
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
+                first_packet_deadline=startup_deadline,
                 monotonic=monotonic,
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
@@ -521,7 +582,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         )
         return
 
-    with open_cloud_stream(
+    stream = open_cloud_stream(
         client,
         serial,
         channel=channel,
@@ -529,14 +590,21 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
-    ) as stream:
-        stream.start()
+    )
+    with _closing_unconnected_cloud_stream(stream):
+        startup_deadline = _start_bounded_cloud_stream(
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
         copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
             ffmpeg_path=ffmpeg_path,
             max_packets=max_packets,
             duration_seconds=duration_seconds,
+            first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
 
@@ -590,6 +658,7 @@ def _copy_cloud_stream_payloads_to_mpegps(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Copy clear MPEG-PS packets while rejecting known incompatible transports."""
@@ -598,6 +667,7 @@ def _copy_cloud_stream_payloads_to_mpegps(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(packets)
@@ -641,6 +711,7 @@ def _collect_cloud_stream_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> list[Any]:
     """Collect clear VTM packets while retaining RTP packet boundaries."""
@@ -650,6 +721,7 @@ def _collect_cloud_stream_packets(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     ):
         _require_clear_cloud_packet(packet)
@@ -791,16 +863,26 @@ def _iter_bounded_cloud_packets(
     *,
     max_packets: int | None,
     duration_seconds: float | None,
+    first_packet_timeout: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float],
 ) -> Iterator[Any]:
     """Iterate cloud packets with transport-level deadlines when available."""
 
     if isinstance(stream, VtmStreamClient):
-        return stream.iter_packets(
-            max_packets=max_packets,
-            duration_seconds=duration_seconds,
-            monotonic=monotonic,
-        )
+        selected_first_packet_timeout = first_packet_timeout
+        if selected_first_packet_timeout is None and duration_seconds is None:
+            selected_first_packet_timeout = stream.timeout
+        iterator_kwargs: dict[str, Any] = {
+            "max_packets": max_packets,
+            "duration_seconds": duration_seconds,
+            "duration_from_start": True,
+            "first_packet_timeout": selected_first_packet_timeout,
+            "monotonic": monotonic,
+        }
+        if first_packet_deadline is not None:
+            iterator_kwargs["first_packet_deadline"] = first_packet_deadline
+        return stream.iter_packets(**iterator_kwargs)
 
     def _fallback() -> Iterator[Any]:
         deadline = None if duration_seconds is None else monotonic() + duration_seconds
@@ -812,13 +894,15 @@ def _iter_bounded_cloud_packets(
     return _fallback()
 
 
-def copy_cloud_stream_packets_to_mpegts(
+def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
     stream: Any,
     output: BinaryIO,
     *,
     ffmpeg_path: str,
     max_packets: int | None,
     duration_seconds: float | None = None,
+    first_packet_timeout: float | None = None,
+    first_packet_deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     allow_encrypted: bool = False,
     mpegps_transform: Callable[[bytes], bytes] | None = None,
@@ -831,6 +915,8 @@ def copy_cloud_stream_packets_to_mpegts(
         stream,
         max_packets=max_packets,
         duration_seconds=duration_seconds,
+        first_packet_timeout=first_packet_timeout,
+        first_packet_deadline=first_packet_deadline,
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(

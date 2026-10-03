@@ -19,12 +19,15 @@ from pyezvizapi._stream import (
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
     StreamTransport,
     VtmChannel,
+    VtmMessageCode,
     VtmPacket,
+    VtmStreamClient,
     _find_hevc_nal_start_codes,
     decode_vtm_packet,
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
     detect_transport,
+    encode_vtm_packet,
     mpeg_ps_complete_prefix_length,
     mpeg_ps_decryptable_prefix_length,
     rtp_payload,
@@ -2589,6 +2592,228 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 
     assert open_calls == [("ffmpeg-custom", "hevc")]
     assert output.getvalue() == expected_annexb
+
+
+def test_cloud_packet_iterator_bounds_from_request_start() -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return iter(())
+
+    stream = RecordingStream()
+    monotonic = lambda: 10.0  # noqa: E731
+
+    assert list(
+        cloud_stream_module._iter_bounded_cloud_packets(  # noqa: SLF001
+            stream,
+            max_packets=4,
+            duration_seconds=8.0,
+            first_packet_timeout=3.0,
+            monotonic=monotonic,
+        )
+    ) == []
+    assert stream.kwargs == {
+        "max_packets": 4,
+        "duration_seconds": 8.0,
+        "duration_from_start": True,
+        "first_packet_timeout": 3.0,
+        "monotonic": monotonic,
+    }
+
+
+def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return SimpleNamespace()
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+        stream,
+        timeout=15.0,
+        duration_seconds=8.0,
+        monotonic=monotonic,
+    )
+
+    assert stream.kwargs == {"deadline": 115.0, "monotonic": monotonic}
+
+
+@pytest.mark.parametrize(
+    ("timeout", "duration_seconds", "expected_connect_timeout"),
+    ((15.0, 8.0, 15.0), (None, 8.0, 8.0)),
+)
+def test_cloud_stream_start_bounds_initial_connect(
+    timeout: float | None,
+    duration_seconds: float,
+    expected_connect_timeout: float,
+) -> None:
+    response = encode_vtm_packet(
+        b"\x08\x00\x22\x07ssn-123\x2a\x05key-1",
+        message_code=VtmMessageCode.STREAMINFO_RSP,
+    )
+    connect_timeouts: list[float | None] = []
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.buffer = response
+            self.timeout: float | None = None
+            self.closed = False
+
+        def gettimeout(self) -> float | None:
+            return self.timeout
+
+        def settimeout(self, value: float | None) -> None:
+            self.timeout = value
+
+        def sendall(self, _data: bytes) -> None:
+            return None
+
+        def recv(self, size: int) -> bytes:
+            chunk = self.buffer[:size]
+            self.buffer = self.buffer[size:]
+            return chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_socket = FakeSocket()
+
+    def socket_factory(
+        _address: tuple[str, int],
+        selected_timeout: float | None,
+    ) -> FakeSocket:
+        connect_timeouts.append(selected_timeout)
+        return fake_socket
+
+    stream = VtmStreamClient(
+        "ysproto://example.invalid:8554/live",
+        timeout=timeout,
+        socket_factory=socket_factory,
+    )
+    monotonic = lambda: 100.0  # noqa: E731
+
+    with cloud_stream_module._closing_unconnected_cloud_stream(stream):  # noqa: SLF001
+        cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+            stream,
+            timeout=timeout,
+            duration_seconds=duration_seconds,
+            monotonic=monotonic,
+        )
+
+    assert connect_timeouts == [expected_connect_timeout]
+    assert fake_socket.closed
+
+
+def test_cloud_copy_reuses_startup_deadline_for_first_media(
+    monkeypatch,
+) -> None:
+    expected_deadline = 110.0
+
+    class Clock:
+        now = 100.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class SlowNegotiationStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=10.0)
+            self.start_deadline: float | None = None
+            self.iterator_kwargs: dict[str, Any] = {}
+
+        def start(self, **kwargs: Any) -> Any:
+            self.start_deadline = kwargs["deadline"]
+            clock.now = 109.0
+            return SimpleNamespace()
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.iterator_kwargs = kwargs
+            return iter(())
+
+    stream = SlowNegotiationStream()
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "open_cloud_stream",
+        lambda *_args, **_kwargs: stream,
+    )
+
+    copy_cloud_stream_to_mpegps(
+        _client(),
+        "CAM123",
+        io.BytesIO(),
+        timeout=10.0,
+        duration_seconds=30.0,
+        max_packets=1,
+        monotonic=clock,
+    )
+
+    assert stream.start_deadline == expected_deadline
+    assert stream.iterator_kwargs["first_packet_deadline"] == expected_deadline
+    assert stream.iterator_kwargs["first_packet_timeout"] is None
+
+
+def test_unconnected_cloud_stream_context_closes_after_start_failure() -> None:
+    class FailingStream:
+        closed = False
+
+        def start(self) -> None:
+            raise PyEzvizError("startup failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    stream = FailingStream()
+
+    with (
+        pytest.raises(PyEzvizError, match="startup failed"),
+        cloud_stream_module._closing_unconnected_cloud_stream(stream),  # noqa: SLF001
+    ):
+        cloud_stream_module._start_bounded_cloud_stream(  # noqa: SLF001
+            stream,
+            timeout=3.0,
+            duration_seconds=8.0,
+            monotonic=lambda: 100.0,
+        )
+
+    assert stream.closed
+
+
+def test_cloud_packet_iterator_bounds_first_media_for_packet_only_capture() -> None:
+    stream_timeout = 15.0
+
+    class RecordingStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live", timeout=stream_timeout)
+            self.kwargs: dict[str, Any] = {}
+
+        def iter_packets(self, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            return iter(())
+
+    stream = RecordingStream()
+    monotonic = lambda: 100.0  # noqa: E731
+
+    assert list(
+        cloud_stream_module._iter_bounded_cloud_packets(  # noqa: SLF001
+            stream,
+            max_packets=4,
+            duration_seconds=None,
+            monotonic=monotonic,
+        )
+    ) == []
+    assert stream.kwargs["first_packet_timeout"] == stream_timeout
 
 
 def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(

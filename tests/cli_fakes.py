@@ -214,8 +214,16 @@ class FakeClient:
         }
         return {"ticketInfo": {"ticket": "ticket-value"}, "meta": {"code": 200}}
 
-    def get_cam_key(self, serial: str, *, max_retries: int = 0) -> str:
+    def get_cam_key(
+        self,
+        serial: str,
+        *,
+        smscode: str | int | None = None,
+        max_retries: int = 0,
+    ) -> str:
         self.cam_key_request = {"serial": serial, "max_retries": max_retries}
+        if smscode is not None:
+            self.cam_key_request["smscode"] = smscode
         return "camera-secret"
 
     def capture_picture(

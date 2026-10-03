@@ -1090,8 +1090,24 @@ def _rtp_packet_matches_codec_epoch(
 
     if route_epoch is not None:
         return route_epoch.media_kind == "video" and route_epoch.codec == codec
+    if _rtp_payload_matches_video_codec(packet.payload, codec):
+        return True
     detected_codec = rtp_payload_video_codec(packet.payload)
     return detected_codec is None or detected_codec == codec
+
+
+def _rtp_payload_matches_video_codec(
+    payload: bytes,
+    codec: RtpVideoCodec,
+) -> bool:
+    """Return whether a descriptor-free payload is valid for the selected codec."""
+
+    if not payload:
+        return False
+    if codec == "h264":
+        nal_type = payload[0] & 0x1F
+        return 1 <= nal_type <= 24 or (nal_type == 28 and len(payload) >= 2)
+    return len(payload) >= 2 and _is_plausible_hevc_header(payload)
 
 
 def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:

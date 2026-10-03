@@ -21,9 +21,11 @@ from pyezvizapi.rtp import (
     rtp_media_kind,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_annexb,
+    rtp_payload_video_codec,
 )
 
 H264_WRAPPED_NAL = b"\x00\x00\x00\x01\x65hello-world"
+H264_DATA_PARTITION_NAL = b"\x00\x00\x00\x01\x62\x01h264-data-partition"
 H264_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x65right"
 H264_CUSTOM_ROUTED_NAL = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
@@ -393,6 +395,15 @@ def test_rtp_annexb_discards_conflicting_video_before_delayed_descriptor() -> No
 
     assert detect_rtp_video_codec(packets) == "hevc"
     assert rtp_packets_to_annexb(packets, codec="hevc") == expected_annexb
+
+
+def test_rtp_annexb_preserves_descriptor_free_h264_data_partition() -> None:
+    packet = parse_rtp_packet(
+        _rtp(b"\x62\x01h264-data-partition", sequence=1)
+    )
+
+    assert rtp_payload_video_codec(packet.payload) == "hevc"
+    assert rtp_packets_to_annexb((packet,), codec="h264") == H264_DATA_PARTITION_NAL
 
 
 def test_route_profile_absorbs_delayed_descriptor_before_media_dispatch() -> None:

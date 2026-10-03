@@ -8,6 +8,7 @@ import io
 import json
 import socket
 import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any, BinaryIO
 
@@ -2714,7 +2715,10 @@ def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> Non
     assert stream.kwargs == {"deadline": 115.0, "monotonic": monotonic}
 
 
-@pytest.mark.parametrize("duration_seconds", [float("inf"), float("nan"), 10**309])
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [float("inf"), float("nan"), 10**309, 1e12, sys.float_info.max],
+)
 def test_cloud_stream_start_ignores_nonfinite_fallback_duration(
     duration_seconds: float,
 ) -> None:

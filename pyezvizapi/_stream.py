@@ -583,6 +583,8 @@ class VtmStreamClient:
                 continue
 
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+                if not packet.body:
+                    continue
                 if capture_deadline is None and duration_seconds is not None:
                     capture_deadline = monotonic() + duration_seconds
                 first_packet_deadline = None

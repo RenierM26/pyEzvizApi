@@ -3837,36 +3837,120 @@ def test_h264_validation_rejects_truncated_linked_structures() -> None:
     assert not _has_linked_h264_video(truncated)
 
 
-def test_hevc_validation_links_parameter_sets_to_slice() -> None:
-    vps_body = b"\x1c\x01\xff\xff"
-    sps_body = b"\x11" + b"\x00" * 12 + b"\x80"
-    pps_body = b"\xc0"
-    slice_body = b"\xc0"
-    nals = [
-        (b"\x40\x01", b"\x01" + vps_body),
-        (b"\x42\x01", b"\x01" + sps_body),
-        (b"\x44\x01", b"\x01" + pps_body),
-        (b"\x02\x01", b"\x01" + slice_body),
+def _unsigned_exp_golomb_bits(value: int) -> str:
+    encoded = f"{value + 1:b}"
+    return "0" * (len(encoded) - 1) + encoded
+
+
+def _signed_exp_golomb_bits(value: int) -> str:
+    code_num = -2 * value if value <= 0 else 2 * value - 1
+    return _unsigned_exp_golomb_bits(code_num)
+
+
+def _rbsp_bytes(bits: str) -> bytes:
+    padded = (bits + "1").ljust((len(bits) + 8) // 8 * 8, "0")
+    return int(padded, 2).to_bytes(len(padded) // 8, "big")
+
+
+def _hevc_profile_tier_level_bits(
+    sub_layer_flags: tuple[tuple[bool, bool], ...],
+) -> str:
+    bits = "0" * 96
+    bits += "".join(
+        ("1" if profile else "0") + ("1" if level else "0")
+        for profile, level in sub_layer_flags
+    )
+    if sub_layer_flags:
+        bits += "00" * (8 - len(sub_layer_flags))
+    for profile, level in sub_layer_flags:
+        if profile:
+            bits += "0" * 88
+        if level:
+            bits += "0" * 8
+    return bits
+
+
+def _valid_hevc_validation_nals(
+    *,
+    sps_vps_id: int = 0,
+    pps_sps_id: int = 0,
+    slice_pps_id: int = 0,
+    sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
+) -> list[tuple[bytes, bytes]]:
+    max_sub_layers_minus1 = len(sub_layer_flags)
+    vps_bits = (
+        "0000"  # vps_video_parameter_set_id
+        "11"  # base-layer flags
+        "000000"  # vps_max_layers_minus1
+        "000"  # vps_max_sub_layers_minus1
+        "1"
+        + "1" * 16
+        + _hevc_profile_tier_level_bits(())
+        + "0"  # vps_sub_layer_ordering_info_present_flag
+        + _unsigned_exp_golomb_bits(0) * 3
+        + "000000"
+        + _unsigned_exp_golomb_bits(0)
+    )
+    sps_bits = (
+        f"{sps_vps_id:04b}"
+        f"{max_sub_layers_minus1:03b}"
+        "1"
+        + _hevc_profile_tier_level_bits(sub_layer_flags)
+        + _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(1)
+        + _unsigned_exp_golomb_bits(64)
+        + _unsigned_exp_golomb_bits(36)
+        + "0"
+        + _unsigned_exp_golomb_bits(0) * 2
+        + _unsigned_exp_golomb_bits(4)
+    )
+    pps_bits = (
+        _unsigned_exp_golomb_bits(0)
+        + _unsigned_exp_golomb_bits(pps_sps_id)
+        + "0000000"
+        + _unsigned_exp_golomb_bits(0) * 2
+        + _signed_exp_golomb_bits(0)
+        + "000"
+        + _signed_exp_golomb_bits(0) * 2
+        + "000000"
+    )
+    slice_bits = (
+        "1"
+        + _unsigned_exp_golomb_bits(slice_pps_id)
+        + _unsigned_exp_golomb_bits(2)
+    )
+    return [
+        (b"\x40\x01", b"\x01" + _rbsp_bytes(vps_bits)),
+        (b"\x42\x01", b"\x01" + _rbsp_bytes(sps_bits)),
+        (b"\x44\x01", b"\x01" + _rbsp_bytes(pps_bits)),
+        (b"\x02\x01", b"\x01" + _rbsp_bytes(slice_bits)),
     ]
 
+
+def test_hevc_validation_links_parameter_sets_to_slice() -> None:
+    nals = _valid_hevc_validation_nals()
+
     assert _has_linked_hevc_video(nals)
-    assert not _has_linked_hevc_video(
-        [nals[0], (b"\x42\x01", b"\x01\x21" + b"\x00" * 12 + b"\x80"), *nals[2:]]
-    )
-    assert not _has_linked_hevc_video([*nals[:2], (b"\x44\x01", b"\x01\xa0"), nals[3]])
-    assert not _has_linked_hevc_video([*nals[:3], (b"\x02\x01", b"\x01\xa0")])
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(sps_vps_id=1))
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(pps_sps_id=1))
+    assert not _has_linked_hevc_video(_valid_hevc_validation_nals(slice_pps_id=1))
 
 
-def test_hevc_validation_parses_interleaved_sub_layer_flags() -> None:
-    sps_bits = "00010101" + "0" * 96 + "0100" + "0" * 12 + "0" * 8 + "1"
-    padded_sps_bits = sps_bits.ljust((len(sps_bits) + 7) // 8 * 8, "0")
-    sps_body = int(padded_sps_bits, 2).to_bytes(len(padded_sps_bits) // 8, "big")
-    nals = [
-        (b"\x40\x01", b"\x01\x1c\x01\xff\xff"),
-        (b"\x42\x01", b"\x01" + sps_body),
+def test_hevc_validation_rejects_truncated_linked_structures() -> None:
+    truncated = [
+        (b"\x40\x01", b"\x01\x00\x00\xff\xff"),
+        (b"\x42\x01", b"\x01" + b"\x00" * 13),
         (b"\x44\x01", b"\x01\xc0"),
         (b"\x02\x01", b"\x01\xc0"),
     ]
+
+    assert not _has_linked_hevc_video(truncated)
+
+
+def test_hevc_validation_parses_interleaved_sub_layer_flags() -> None:
+    nals = _valid_hevc_validation_nals(
+        sub_layer_flags=((False, True), (True, False))
+    )
 
     assert _has_linked_hevc_video(nals)
 

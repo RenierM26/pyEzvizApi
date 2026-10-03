@@ -2304,7 +2304,10 @@ def test_stream_dump_defaults_to_mpegts_remux(monkeypatch, tmp_path) -> None:
     assert output_file.read_bytes() == expected_payload
 
 
-@pytest.mark.parametrize("duration_seconds", [float("inf"), float("nan"), 10**309])
+@pytest.mark.parametrize(
+    "duration_seconds",
+    [float("inf"), float("nan"), 10**309, 1e12, sys.float_info.max],
+)
 def test_cli_cloud_stream_start_ignores_nonfinite_fallback_duration(
     duration_seconds: float,
 ) -> None:

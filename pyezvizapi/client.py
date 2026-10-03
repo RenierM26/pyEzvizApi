@@ -490,7 +490,8 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
 
     vps_ids: set[int] = set()
     sps_to_vps: dict[int, int] = {}
-    pps_to_sps: dict[int, int] = {}
+    pps_info: dict[int, tuple[int, bool, bool, int]] = {}
+    slices: list[tuple[bytes, int]] = []
     slice_pps_ids: set[int] = set()
     for header, body in nals:
         if len(header) < 2 or header[0] & 0x80 or not (header[1] & 0x07):
@@ -508,15 +509,21 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
         elif nal_type == 34:
             pps_ids = _hevc_pps_ids(nal_body)
             if pps_ids is not None:
-                pps_to_sps[pps_ids[0]] = pps_ids[1]
+                pps_info[pps_ids[0]] = pps_ids[1:]
         elif nal_type <= 31:
-            pps_id = _hevc_slice_pps_id(nal_body, nal_type=nal_type)
-            if pps_id is not None:
-                slice_pps_ids.add(pps_id)
+            slices.append((nal_body, nal_type))
+    for nal_body, nal_type in slices:
+        pps_id = _hevc_slice_pps_id(
+            nal_body,
+            nal_type=nal_type,
+            pps_info=pps_info,
+        )
+        if pps_id is not None:
+            slice_pps_ids.add(pps_id)
     return any(
-        pps_id in pps_to_sps
-        and pps_to_sps[pps_id] in sps_to_vps
-        and sps_to_vps[pps_to_sps[pps_id]] in vps_ids
+        pps_id in pps_info
+        and pps_info[pps_id][0] in sps_to_vps
+        and sps_to_vps[pps_info[pps_id][0]] in vps_ids
         for pps_id in slice_pps_ids
     )
 
@@ -734,29 +741,46 @@ def _h264_slice_pps_id(data: bytes) -> int | None:
     return None
 
 
-def _hevc_vps_id(data: bytes) -> int | None:
-    """Return a VPS id after validating fixed HEVC VPS marker bits."""
+def _hevc_vps_id(data: bytes) -> int | None:  # noqa: PLR0911
+    """Return a VPS id after parsing its mandatory syntax prefix."""
 
     bits = _rbsp_bits(data)
     if len(bits) < 32 or bits[16:32] != "1" * 16:
         return None
     max_sub_layers_minus1 = int(bits[12:15], 2)
-    return int(bits[:4], 2) if max_sub_layers_minus1 <= 6 else None
-
-
-def _hevc_sps_ids(data: bytes) -> tuple[int, int] | None:
-    """Return linked SPS/VPS ids from a plausible HEVC SPS."""
-
-    bits = _rbsp_bits(data)
-    if len(bits) < 104:
+    if max_sub_layers_minus1 > 6:
         return None
-    vps_id = int(bits[:4], 2)
-    max_sub_layers_minus1 = int(bits[4:7], 2)
-    if max_sub_layers_minus1 > 6 or (
-        max_sub_layers_minus1 == 0 and bits[7] != "1"
-    ):
+    offset = _skip_hevc_profile_tier_level(bits, 32, max_sub_layers_minus1)
+    if offset is None or offset >= len(bits):
         return None
-    offset = 104
+    ordering_info_present = bits[offset] == "1"
+    offset += 1
+    start_layer = 0 if ordering_info_present else max_sub_layers_minus1
+    for _ in range(start_layer, max_sub_layers_minus1 + 1):
+        for _ in range(3):
+            decoded = _read_unsigned_exp_golomb(bits, offset)
+            if decoded is None:
+                return None
+            offset = decoded[1]
+    if offset + 6 > len(bits):
+        return None
+    offset += 6  # vps_max_layer_id
+    layer_sets = _read_unsigned_exp_golomb(bits, offset)
+    if layer_sets is None or layer_sets[0] > 1023:
+        return None
+    return int(bits[:4], 2) if bits.rfind("1") >= layer_sets[1] else None
+
+
+def _skip_hevc_profile_tier_level(
+    bits: str,
+    offset: int,
+    max_sub_layers_minus1: int,
+) -> int | None:
+    """Return the bit offset after HEVC profile_tier_level syntax."""
+
+    if offset + 96 > len(bits):
+        return None
+    offset += 96
     sub_layer_flags: list[tuple[str, str]] = []
     for _ in range(max_sub_layers_minus1):
         if offset + 2 > len(bits):
@@ -770,32 +794,147 @@ def _hevc_sps_ids(data: bytes) -> tuple[int, int] | None:
             offset += 88
         if level_present == "1":
             offset += 8
-    decoded = _read_unsigned_exp_golomb(bits, offset)
-    return (decoded[0], vps_id) if decoded is not None and decoded[0] <= 15 else None
+        if offset > len(bits):
+            return None
+    return offset
 
 
-def _hevc_pps_ids(data: bytes) -> tuple[int, int] | None:
-    """Return linked PPS/SPS ids from a plausible HEVC PPS."""
+def _hevc_sps_ids(  # noqa: PLR0911, PLR0912
+    data: bytes,
+) -> tuple[int, int] | None:
+    """Return linked SPS/VPS ids after parsing mandatory SPS fields."""
+
+    bits = _rbsp_bits(data)
+    if len(bits) < 104:
+        return None
+    vps_id = int(bits[:4], 2)
+    max_sub_layers_minus1 = int(bits[4:7], 2)
+    if max_sub_layers_minus1 > 6 or (
+        max_sub_layers_minus1 == 0 and bits[7] != "1"
+    ):
+        return None
+    offset = _skip_hevc_profile_tier_level(bits, 8, max_sub_layers_minus1)
+    if offset is None:
+        return None
+    sps = _read_unsigned_exp_golomb(bits, offset)
+    if sps is None or sps[0] > 15:
+        return None
+    offset = sps[1]
+    chroma_format = _read_unsigned_exp_golomb(bits, offset)
+    if chroma_format is None or chroma_format[0] > 3:
+        return None
+    offset = chroma_format[1]
+    if chroma_format[0] == 3:
+        if offset >= len(bits):
+            return None
+        offset += 1
+    for _ in range(2):
+        dimension = _read_unsigned_exp_golomb(bits, offset)
+        if dimension is None or dimension[0] <= 0:
+            return None
+        offset = dimension[1]
+    if offset >= len(bits):
+        return None
+    if bits[offset] == "1":
+        offset += 1
+        for _ in range(4):
+            window_offset = _read_unsigned_exp_golomb(bits, offset)
+            if window_offset is None:
+                return None
+            offset = window_offset[1]
+    else:
+        offset += 1
+    for maximum in (8, 8, 12):
+        value = _read_unsigned_exp_golomb(bits, offset)
+        if value is None or value[0] > maximum:
+            return None
+        offset = value[1]
+    return (sps[0], vps_id) if bits.rfind("1") >= offset else None
+
+
+def _hevc_pps_ids(  # noqa: PLR0911
+    data: bytes,
+) -> tuple[int, int, bool, bool, int] | None:
+    """Return linked IDs and slice controls after mandatory PPS fields."""
 
     bits = _rbsp_bits(data)
     pps = _read_unsigned_exp_golomb(bits, 0)
     if pps is None or pps[0] > 63:
         return None
     sps = _read_unsigned_exp_golomb(bits, pps[1])
-    return (pps[0], sps[0]) if sps is not None and sps[0] <= 15 else None
+    if sps is None or sps[0] > 15 or sps[1] + 7 > len(bits):
+        return None
+    offset = sps[1]
+    dependent_slices = bits[offset] == "1"
+    output_flag_present = bits[offset + 1] == "1"
+    extra_slice_header_bits = int(bits[offset + 2 : offset + 5], 2)
+    offset += 7  # includes sign_data_hiding and cabac_init_present
+    for _ in range(2):
+        ref_count = _read_unsigned_exp_golomb(bits, offset)
+        if ref_count is None or ref_count[0] > 14:
+            return None
+        offset = ref_count[1]
+    init_qp = _read_signed_exp_golomb(bits, offset)
+    if init_qp is None or not -26 <= init_qp[0] <= 25:
+        return None
+    offset = init_qp[1]
+    if offset + 3 > len(bits):
+        return None
+    cu_qp_delta_enabled = bits[offset + 2] == "1"
+    offset += 3
+    if cu_qp_delta_enabled:
+        depth = _read_unsigned_exp_golomb(bits, offset)
+        if depth is None:
+            return None
+        offset = depth[1]
+    for _ in range(2):
+        chroma_offset = _read_signed_exp_golomb(bits, offset)
+        if chroma_offset is None:
+            return None
+        offset = chroma_offset[1]
+    if offset + 6 > len(bits):
+        return None
+    offset += 6
+    if bits.rfind("1") < offset:
+        return None
+    return (
+        pps[0],
+        sps[0],
+        dependent_slices,
+        output_flag_present,
+        extra_slice_header_bits,
+    )
 
 
-def _hevc_slice_pps_id(data: bytes, *, nal_type: int) -> int | None:
-    """Return the referenced PPS id from a plausible HEVC slice header."""
+def _hevc_slice_pps_id(
+    data: bytes,
+    *,
+    nal_type: int,
+    pps_info: dict[int, tuple[int, bool, bool, int]],
+) -> int | None:
+    """Return a referenced PPS id from a complete first-slice header prefix."""
 
     bits = _rbsp_bits(data)
     if not bits:
         return None
-    offset = 1  # first_slice_segment_in_pic_flag
+    first_slice_segment = bits[0] == "1"
+    if not first_slice_segment:
+        return None
+    offset = 1
     if 16 <= nal_type <= 23:
         offset += 1  # no_output_of_prior_pics_flag
     decoded = _read_unsigned_exp_golomb(bits, offset)
-    return decoded[0] if decoded is not None and decoded[0] <= 63 else None
+    if decoded is None or decoded[0] not in pps_info:
+        return None
+    pps_id, offset = decoded
+    _, _, output_flag_present, extra_slice_header_bits = pps_info[pps_id]
+    offset += extra_slice_header_bits
+    if output_flag_present:
+        offset += 1
+    slice_type = _read_unsigned_exp_golomb(bits, offset)
+    if slice_type is None or slice_type[0] > 2:
+        return None
+    return pps_id if bits.rfind("1") >= slice_type[1] else None
 
 
 def _publish_validated_cloud_clip(

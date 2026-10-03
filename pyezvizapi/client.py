@@ -2249,6 +2249,13 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
         if offset + extension_bits > len(bits):
             return None
         offset += extension_bits
+    if offset >= len(bits) or bits[offset] != "1":
+        return None
+    offset += 1
+    while offset % 8:
+        if offset >= len(bits) or bits[offset] != "0":
+            return None
+        offset += 1
     return pps_id if offset < len(bits) else None
 
 
@@ -2393,23 +2400,11 @@ def _publish_unreadable_existing_clip(
     expected_identity: tuple[int, int],
     destination_fd: int,
 ) -> None:
-    """Publish to an unreadable writable target without requiring ownership."""
+    """Publish through a captured unreadable target descriptor."""
 
     try:
         if not _regular_path_has_identity(target, expected_identity):
             raise PyEzvizError("Cloud clip output target changed during capture")
-        # Prefer atomic publication when directory permissions permit it.
-        staged_mode = stat.S_IMODE(temp_path.stat().st_mode)
-        with suppress(OSError):
-            shutil.copystat(target, temp_path, follow_symlinks=False)
-        try:
-            os.replace(temp_path, target)
-            return
-        except PermissionError:
-            # Parent-directory access may be denied even though the already
-            # opened target descriptor remains writable; use it below.
-            pass
-        os.chmod(temp_path, staged_mode)
         destination_stat = os.fstat(destination_fd)
         if (destination_stat.st_dev, destination_stat.st_ino) != expected_identity:
             raise PyEzvizError("Cloud clip output target changed during capture")
@@ -2427,6 +2422,8 @@ def _publish_unreadable_existing_clip(
             destination.truncate()
             destination.flush()
             os.fsync(destination.fileno())
+        if not _regular_path_has_identity(target, expected_identity):
+            raise PyEzvizError("Cloud clip output target changed during capture")
         temp_path.unlink()
     finally:
         if destination_fd >= 0:

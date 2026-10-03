@@ -27,6 +27,7 @@ from pyezvizapi.api_endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
+import pyezvizapi.client as client_module
 from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
@@ -37,6 +38,7 @@ from pyezvizapi.client import (
     _has_linked_hevc_video,
     _LocalStreamPacketMetadataRecorder,
     _mpegps_video_payload,
+    _publish_unreadable_existing_clip,
     _reserve_existing_clip_space,
     _skip_hevc_short_term_ref_pic_set,
 )
@@ -3935,6 +3937,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     entropy_coding_sync_enabled: bool = False,
     slice_header_extension_present: bool = False,
     include_slice_header_tail: bool = True,
+    include_slice_data: bool = True,
+    slice_alignment_bits: str | None = None,
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
@@ -4021,7 +4025,7 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             else ""
         )
     )
-    slice_bits = (
+    slice_header_bits = (
         "1"
         + _unsigned_exp_golomb_bits(slice_pps_id)
         + _unsigned_exp_golomb_bits(slice_type)
@@ -4071,8 +4075,12 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             if include_slice_header_tail
             else ""
         )
-        + "0"  # at least one slice-data bit before rbsp_stop_one_bit
     )
+    if slice_alignment_bits is None:
+        slice_alignment_bits = "1" + "0" * ((-len(slice_header_bits) - 1) % 8)
+    slice_bits = slice_header_bits + slice_alignment_bits
+    if include_slice_data:
+        slice_bits += "0"
     return [
         (b"\x40\x01", b"\x01" + _rbsp_bytes(vps_bits)),
         (b"\x42\x01", b"\x01" + _rbsp_bytes(sps_bits)),
@@ -4088,6 +4096,15 @@ def test_hevc_validation_links_parameter_sets_to_slice() -> None:
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(sps_vps_id=1))
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(pps_sps_id=1))
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(slice_pps_id=1))
+
+
+def test_hevc_validation_requires_data_after_byte_alignment() -> None:
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(include_slice_data=False)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(slice_alignment_bits="0")
+    )
 
 
 @pytest.mark.parametrize("nal_type", [10, 15, 22, 31])
@@ -4448,7 +4465,7 @@ def test_save_decrypted_cloud_clip_supports_write_only_existing_target(
     assert output_path.stat().st_ino == original_inode
 
 
-def test_save_decrypted_cloud_clip_atomically_replaces_unreadable_acl_target(
+def test_save_decrypted_cloud_clip_updates_captured_unreadable_acl_target(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -4492,7 +4509,52 @@ def test_save_decrypted_cloud_clip_atomically_replaces_unreadable_acl_target(
 
     output_path.chmod(0o600)
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
-    assert output_path.stat().st_ino != original_inode
+    assert output_path.stat().st_ino == original_inode
+
+
+def test_unreadable_clip_publication_preserves_concurrent_replacement(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    target = tmp_path / "clip.ts"
+    target.write_bytes(b"original")
+    expected_identity = (target.stat().st_dev, target.stat().st_ino)
+    destination_fd = os.open(target, os.O_WRONLY)
+    staged = tmp_path / "staged.ts"
+    staged.write_bytes(SAVE_CLIP_PAYLOAD)
+    replacement = tmp_path / "replacement.ts"
+    replacement_payload = b"concurrent replacement"
+    replacement.write_bytes(replacement_payload)
+    identity_checks = 0
+    real_identity_check = client_module._regular_path_has_identity
+
+    def replace_after_identity_check(
+        path: Path,
+        identity: tuple[int, int],
+    ) -> bool:
+        nonlocal identity_checks
+        identity_checks += 1
+        if identity_checks == 1:
+            os.replace(replacement, target)
+            return True
+        return real_identity_check(path, identity)
+
+    monkeypatch.setattr(
+        client_module,
+        "_regular_path_has_identity",
+        replace_after_identity_check,
+    )
+
+    with pytest.raises(PyEzvizError, match="target changed during capture"):
+        _publish_unreadable_existing_clip(
+            staged,
+            target,
+            expected_identity=expected_identity,
+            destination_fd=destination_fd,
+        )
+
+    assert target.read_bytes() == replacement_payload
+    assert staged.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
 def test_save_decrypted_cloud_clip_updates_unreadable_target_without_parent_access(

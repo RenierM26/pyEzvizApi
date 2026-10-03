@@ -509,6 +509,7 @@ class _HevcPpsInfo(NamedTuple):
     output_flag_present: bool
     extra_slice_header_bits: int
     slice_chroma_qp_offsets_present: bool
+    chroma_qp_offset_list_enabled: bool
     deblocking_filter_override_enabled: bool
     pps_deblocking_filter_disabled: bool
     loop_filter_across_slices_enabled: bool
@@ -578,7 +579,7 @@ def _has_linked_hevc_video(nals: list[tuple[bytes, bytes]]) -> bool:
             pps_ids = _hevc_pps_ids(nal_body)
             if pps_ids is not None:
                 pps_info[pps_ids[0]] = pps_ids[1]
-        elif nal_type <= 31:
+        elif nal_type <= 9 or 16 <= nal_type <= 21:
             slices.append((nal_body, nal_type))
     for nal_body, nal_type in slices:
         pps_id = _hevc_slice_pps_id(
@@ -1513,8 +1514,8 @@ def _skip_hevc_pps_range_extension(  # noqa: PLR0911
     offset: int,
     *,
     transform_skip_enabled: bool,
-) -> int | None:
-    """Return the bit offset after HEVC pps_range_extension syntax."""
+) -> tuple[int, bool] | None:
+    """Return the offset and chroma-list flag after PPS range-extension syntax."""
 
     if transform_skip_enabled:
         transform_size = _read_unsigned_exp_golomb(bits, offset)
@@ -1545,7 +1546,7 @@ def _skip_hevc_pps_range_extension(  # noqa: PLR0911
         if sao_scale is None:
             return None
         offset = sao_scale[1]
-    return offset
+    return offset, chroma_qp_offset_list_enabled
 
 
 def _skip_hevc_short_term_ref_pic_set(  # noqa: PLR0911, PLR0912
@@ -2015,6 +2016,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
     offset += 1
     extension_present = bits[offset] == "1"
     offset += 1
+    chroma_qp_offset_list_enabled = False
     if extension_present:
         if offset + 8 > len(bits):
             return None
@@ -2031,7 +2033,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             )
             if range_offset is None:
                 return None
-            offset = range_offset
+            offset, chroma_qp_offset_list_enabled = range_offset
         if "1" in extension_flags[4:]:
             offset = len(bits)
     if offset != len(bits):
@@ -2044,6 +2046,7 @@ def _hevc_pps_ids(  # noqa: PLR0911, PLR0912, PLR0915
             output_flag_present=output_flag_present,
             extra_slice_header_bits=extra_slice_header_bits,
             slice_chroma_qp_offsets_present=slice_chroma_qp_offsets_present,
+            chroma_qp_offset_list_enabled=chroma_qp_offset_list_enabled,
             deblocking_filter_override_enabled=deblocking_filter_override_enabled,
             pps_deblocking_filter_disabled=pps_deblocking_filter_disabled,
             loop_filter_across_slices_enabled=loop_filter_across_slices_enabled,
@@ -2194,6 +2197,10 @@ def _hevc_slice_pps_id(  # noqa: PLR0911, PLR0912, PLR0915
             if chroma_offset is None:
                 return None
             offset = chroma_offset[1]
+    if linked_pps.chroma_qp_offset_list_enabled:
+        if offset >= len(bits):
+            return None
+        offset += 1
     slice_deblocking_filter_disabled = linked_pps.pps_deblocking_filter_disabled
     if linked_pps.deblocking_filter_override_enabled:
         if offset >= len(bits):

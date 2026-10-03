@@ -3924,6 +3924,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     valid_inline_slice_rps: bool = True,
     slice_chroma_qp_offsets_present: bool = False,
     include_slice_chroma_qp_offsets: bool = True,
+    chroma_qp_offset_list_enabled: bool = False,
+    include_cu_chroma_qp_offset_flag: bool = True,
     deblocking_filter_override_enabled: bool = False,
     include_slice_deblocking_fields: bool = True,
     separate_colour_plane: bool = False,
@@ -3936,6 +3938,8 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
     sub_layer_flags: tuple[tuple[bool, bool], ...] = (),
 ) -> list[tuple[bytes, bytes]]:
     max_sub_layers_minus1 = len(sub_layer_flags)
+    if chroma_qp_offset_list_enabled:
+        pps_extension_bits = "10000000" + "01111111"
     vps_bits = (
         "0000"  # vps_video_parameter_set_id
         "11"  # base-layer flags
@@ -4041,6 +4045,11 @@ def _valid_hevc_validation_nals(  # noqa: PLR0913
             else ""
         )
         + (
+            "0"
+            if chroma_qp_offset_list_enabled and include_cu_chroma_qp_offset_flag
+            else ""
+        )
+        + (
             "11"
             if deblocking_filter_override_enabled and include_slice_deblocking_fields
             else ""
@@ -4079,6 +4088,14 @@ def test_hevc_validation_links_parameter_sets_to_slice() -> None:
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(sps_vps_id=1))
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(pps_sps_id=1))
     assert not _has_linked_hevc_video(_valid_hevc_validation_nals(slice_pps_id=1))
+
+
+@pytest.mark.parametrize("nal_type", [10, 15, 22, 31])
+def test_hevc_validation_rejects_reserved_vcl_nal_types(nal_type: int) -> None:
+    nals = _valid_hevc_validation_nals()
+    nals[-1] = (bytes((nal_type << 1, 1)), nals[-1][1])
+
+    assert not _has_linked_hevc_video(nals)
 
 
 def test_hevc_validation_rejects_truncated_linked_structures() -> None:
@@ -4150,6 +4167,18 @@ def test_hevc_validation_requires_declared_slice_chroma_qp_offsets() -> None:
         _valid_hevc_validation_nals(
             slice_chroma_qp_offsets_present=True,
             include_slice_chroma_qp_offsets=False,
+        )
+    )
+
+
+def test_hevc_validation_requires_range_extension_chroma_offset_flag() -> None:
+    assert _has_linked_hevc_video(
+        _valid_hevc_validation_nals(chroma_qp_offset_list_enabled=True)
+    )
+    assert not _has_linked_hevc_video(
+        _valid_hevc_validation_nals(
+            chroma_qp_offset_list_enabled=True,
+            include_cu_chroma_qp_offset_flag=False,
         )
     )
 

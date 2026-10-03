@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import suppress
 import datetime as dt
 import errno
 import io
@@ -27,7 +28,6 @@ from pyezvizapi.api_endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
-import pyezvizapi.client as client_module
 from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
@@ -39,6 +39,7 @@ from pyezvizapi.client import (
     _LocalStreamPacketMetadataRecorder,
     _mpegps_video_payload,
     _publish_unreadable_existing_clip,
+    _regular_path_has_identity,
     _reserve_existing_clip_space,
     _skip_hevc_short_term_ref_pic_set,
 )
@@ -4526,7 +4527,7 @@ def test_unreadable_clip_publication_preserves_concurrent_replacement(
     replacement_payload = b"concurrent replacement"
     replacement.write_bytes(replacement_payload)
     identity_checks = 0
-    real_identity_check = client_module._regular_path_has_identity
+    real_identity_check = _regular_path_has_identity
 
     def replace_after_identity_check(
         path: Path,
@@ -4540,18 +4541,21 @@ def test_unreadable_clip_publication_preserves_concurrent_replacement(
         return real_identity_check(path, identity)
 
     monkeypatch.setattr(
-        client_module,
-        "_regular_path_has_identity",
+        "pyezvizapi.client._regular_path_has_identity",
         replace_after_identity_check,
     )
 
-    with pytest.raises(PyEzvizError, match="target changed during capture"):
-        _publish_unreadable_existing_clip(
-            staged,
-            target,
-            expected_identity=expected_identity,
-            destination_fd=destination_fd,
-        )
+    try:
+        with pytest.raises(PyEzvizError, match="target changed during capture"):
+            _publish_unreadable_existing_clip(
+                staged,
+                target,
+                expected_identity=expected_identity,
+                destination_fd=destination_fd,
+            )
+    finally:
+        with suppress(OSError):
+            os.close(destination_fd)
 
     assert target.read_bytes() == replacement_payload
     assert staged.read_bytes() == SAVE_CLIP_PAYLOAD

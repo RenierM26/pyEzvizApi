@@ -23,7 +23,11 @@ from pyezvizapi.api_endpoints import (
     API_ENDPOINT_IOT_ACTION,
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
-from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
+from pyezvizapi.client import (
+    CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
+    EzvizClient,
+    _LocalStreamPacketMetadataRecorder,
+)
 from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
 from pyezvizapi.constants import (
     FEATURE_CODE,
@@ -3551,11 +3555,11 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
         fake_copy_cloud_stream_to_mpegts,
     )
-    validation_calls: list[tuple[Path, str, float | None]] = []
+    validation_calls: list[tuple[Path, str]] = []
     monkeypatch.setattr(
         "pyezvizapi.client._require_decodable_saved_video_frame",
-        lambda path, *, ffmpeg_path, timeout: validation_calls.append(
-            (path, ffmpeg_path, timeout)
+        lambda path, *, ffmpeg_path: validation_calls.append(
+            (path, ffmpeg_path)
         ),
     )
 
@@ -3596,7 +3600,7 @@ def test_save_clip_uses_cloud_source(monkeypatch, tmp_path) -> None:
         }
     ]
     assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
-    assert validation_calls == [(output_path, "/usr/bin/ffmpeg", 5.0)]
+    assert validation_calls == [(output_path, "/usr/bin/ffmpeg")]
     assert result == {
         "ok": True,
         "kind": "clip",
@@ -3695,13 +3699,19 @@ def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
         output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", fake_copy)
-    monkeypatch.setattr(
-        "pyezvizapi.client.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(
+    run_calls: list[dict[str, Any]] = []
+
+    def fake_run(*_args: Any, **kwargs: Any) -> SimpleNamespace:
+        run_calls.append(kwargs)
+        return SimpleNamespace(
             returncode=0,
             stdout=b"\x00",
             stderr=b"decoder warning",
-        ),
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.subprocess.run",
+        fake_run,
     )
 
     result = client.save_clip(
@@ -3710,9 +3720,11 @@ def test_save_cloud_clip_accepts_decoded_frame_despite_warnings(
         source="cloud",
         decrypt_video=True,
         media_key="MEDIAKEY",
+        timeout=0.01,
     )
 
     assert result["ok"] is True
+    assert run_calls[0]["timeout"] == CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS
 
 
 def test_save_cloud_clip_does_not_decode_validate_encrypted_path(

@@ -207,6 +207,7 @@ class _SourceDefaultNaluHeaderSize(int):
 
 
 _SOURCE_DEFAULT_NALU_HEADER_SIZE: int = _SourceDefaultNaluHeaderSize(0)
+CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS = 5.0
 
 UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
@@ -356,13 +357,9 @@ def _require_decodable_saved_video_frame(
     path: Path,
     *,
     ffmpeg_path: str,
-    timeout: float | None,
 ) -> None:
     """Require one decoded frame before reporting a saved clip as successful."""
 
-    probe_timeout = 5.0
-    if timeout is not None and timeout > 0:
-        probe_timeout = min(timeout, probe_timeout)
     try:
         completed = subprocess.run(
             [
@@ -385,7 +382,7 @@ def _require_decodable_saved_video_frame(
             ],
             capture_output=True,
             check=False,
-            timeout=probe_timeout,
+            timeout=CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
         )
     except OSError as err:
         raise PyEzvizError(f"Could not launch FFmpeg at {ffmpeg_path!r}: {err}") from err
@@ -3867,7 +3864,6 @@ class EzvizClient:
                 _require_decodable_saved_video_frame(
                     output_path,
                     ffmpeg_path=ffmpeg_path,
-                    timeout=timeout,
                 )
         else:
             start_position = _binary_position(output)

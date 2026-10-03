@@ -580,6 +580,20 @@ def test_copy_local_stream_to_mpegts_rejects_unbounded_clear_idmx_payload() -> N
     with pytest.raises(PyEzvizError, match="IDMX stream remux requires"):
         copy_local_stream_to_mpegts(FakeStream(), io.BytesIO())
 
+
+def test_copy_local_stream_to_mpegts_rejects_empty_capture() -> None:
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[Any]:
+            assert max_packets == 1
+            return []
+
+    with pytest.raises(PyEzvizError, match="did not include media payloads"):
+        copy_local_stream_to_mpegts(
+            FakeStream(),
+            io.BytesIO(),
+            max_packets=1,
+        )
+
 def test_copy_local_stream_to_mpegts_pipes_payloads(tmp_path) -> None:
     fake_ffmpeg = tmp_path / "fake-ffmpeg"
     fake_ffmpeg.write_text(

@@ -292,6 +292,11 @@ class RtpRouteProfile:
             fallback_payload_types=fallback_payload_types,
         )
 
+    def descriptor_for(self, packet: RtpPacket) -> RtpStreamDescriptor | None:
+        """Return the active descriptor for one packet's payload route."""
+
+        return self._descriptors.get(packet.payload_type)
+
     def mark_media(self, packet: RtpPacket, *, absorb: bool = True) -> None:
         """Record a packet immediately before it is dispatched as media.
 
@@ -650,7 +655,8 @@ def decrypt_idmx_aac_packets(
     """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
 
     packet_list = list(packets)
-    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    route_profile, route_epochs = _rtp_route_epochs(packet_list)
+    descriptors = route_profile.descriptors
     selected_audio_payload_types = audio_payload_types
     if selected_audio_payload_types is None:
         selected_audio_payload_types = rtp_codec_payload_types(
@@ -660,10 +666,14 @@ def decrypt_idmx_aac_packets(
         )
     encrypted_access_units: list[bytes] = []
     timestamps: list[int] = []
-    for packet in packet_list:
+    for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
         if packet.payload_type not in selected_audio_payload_types:
             continue
+        if route_epoch is not None and route_epoch.codec != "aac":
+            continue
         if not rtp_packet_has_valid_idmx_aac_frame(packet):
+            if route_epoch is None:
+                continue
             return None
         access_unit = _idmx_aac_access_unit(packet.payload)
         assert access_unit is not None
@@ -676,7 +686,7 @@ def decrypt_idmx_aac_packets(
         for previous, current in pairwise(timestamps)
     ):
         return None
-    descriptor = idmx_aac_descriptor(packet_list) or audio_metadata
+    descriptor = route_profile.audio_metadata or audio_metadata
     if descriptor is None:
         return None
     sample_rate, channels = descriptor
@@ -765,10 +775,8 @@ def detect_rtp_video_codec(
     """Detect H.264 or HEVC from routed RTP video packets."""
 
     packet_list = list(packets)
-    descriptors = (
-        tuple(stream_descriptors)
-        if stream_descriptors is not None
-        else idmx_rtp_stream_descriptors(packet_list)
+    descriptors = tuple(stream_descriptors) if stream_descriptors is not None else (
+        _rtp_route_epochs(packet_list)[0].descriptors
     )
     advertised_codec = _advertised_rtp_video_codec(descriptors)
     if advertised_codec is not None:
@@ -1037,7 +1045,8 @@ def rtp_packets_to_nal_units(
     """Route RTP video packets and return complete continuity-checked NAL units."""
 
     packet_list = list(packets)
-    descriptors = idmx_rtp_stream_descriptors(packet_list)
+    route_profile, route_epochs = _rtp_route_epochs(packet_list)
+    descriptors = route_profile.descriptors
     routed_video_payload_types = rtp_codec_payload_types(
         descriptors,
         codec,
@@ -1048,13 +1057,57 @@ def rtp_packets_to_nal_units(
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
-    for packet in packet_list:
+    for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
         if packet.payload_type not in routed_video_payload_types:
+            continue
+        if not _rtp_packet_matches_codec_epoch(packet, route_epoch, codec):
             continue
         for nal in depacketizer.push(packet):
             if nal:
                 output.append(nal)
     return tuple(output)
+
+
+def _rtp_route_epochs(
+    packets: Iterable[RtpPacket],
+) -> tuple[RtpRouteProfile, tuple[RtpStreamDescriptor | None, ...]]:
+    """Return final routing plus the active descriptor for every packet."""
+
+    profile = RtpRouteProfile()
+    epochs: list[RtpStreamDescriptor | None] = []
+    for packet in packets:
+        profile.absorb(packet)
+        epochs.append(profile.descriptor_for(packet))
+    return profile, tuple(epochs)
+
+
+def _rtp_packet_matches_codec_epoch(
+    packet: RtpPacket,
+    route_epoch: RtpStreamDescriptor | None,
+    codec: RtpVideoCodec,
+) -> bool:
+    """Return whether a packet belongs to the selected video codec epoch."""
+
+    if route_epoch is not None:
+        return route_epoch.media_kind == "video" and route_epoch.codec == codec
+    if _rtp_payload_matches_video_codec(packet.payload, codec):
+        return True
+    detected_codec = rtp_payload_video_codec(packet.payload)
+    return detected_codec is None or detected_codec == codec
+
+
+def _rtp_payload_matches_video_codec(
+    payload: bytes,
+    codec: RtpVideoCodec,
+) -> bool:
+    """Return whether a descriptor-free payload is valid for the selected codec."""
+
+    if not payload:
+        return False
+    if codec == "h264":
+        nal_type = payload[0] & 0x1F
+        return 1 <= nal_type <= 24 or (nal_type == 28 and len(payload) >= 2)
+    return len(payload) >= 2 and _is_plausible_hevc_header(payload)
 
 
 def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:

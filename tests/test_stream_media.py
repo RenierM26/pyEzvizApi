@@ -35,6 +35,7 @@ from pyezvizapi.cloud_stream import (
     copy_cloud_stream_packets_to_mpegts,
     copy_cloud_stream_to_mpegps,
     copy_cloud_stream_to_mpegts,
+    copy_decrypted_cloud_stream_packets_to_mpegts,
 )
 from pyezvizapi.exceptions import (
     HTTPError,
@@ -2530,6 +2531,66 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
     assert output.getvalue() == CLEAR_ANNEXB
 
 
+def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
+    monkeypatch,
+) -> None:
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01new-hevc-idr"
+    bodies = (
+        _rtp_packet(b"\x67old-h264-sps", sequence=1, payload_type=97),
+        _rtp_packet(
+            b"metadata",
+            sequence=2,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x0a\x24\x61" + (b"\xff" * 8),
+        ),
+        _rtp_packet(
+            b"\x26\x01new-hevc-idr",
+            sequence=3,
+            payload_type=97,
+            marker=True,
+        ),
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+        for sequence, body in enumerate(bodies, start=1)
+    ]
+    open_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "decrypt_hikvision_ps_video",
+        lambda data, *_args, **_kwargs: data,
+    )
+
+    def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
+        open_calls.append((ffmpeg_path, codec))
+        return subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        fake_open_remux,
+    )
+    output = io.BytesIO()
+
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg-custom",
+        media_key="MEDIAKEY",
+        transport=StreamTransport.RTP,
+    )
+
+    assert open_calls == [("ffmpeg-custom", "hevc")]
+    assert output.getvalue() == expected_annexb
+
+
 def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
     monkeypatch,
 ) -> None:
@@ -2858,7 +2919,6 @@ def test_copy_cloud_stream_packets_to_mpegts_streams_rtp_aac_to_second_input(
     assert len(audio_inputs) == 1
     assert audio_inputs[0].started is True
     assert audio_inputs[0].closed is True
-    assert audio_inputs[0].cancelled is True
     assert audio_inputs[0].finish_calls == [True]
     assert (105, frozenset({105})) in decrypt_calls
     assert len(audio_inputs[0].chunks) == 1

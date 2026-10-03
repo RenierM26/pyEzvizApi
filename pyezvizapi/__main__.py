@@ -3100,7 +3100,7 @@ def _write_stream_payloads(
             output.write(tail)
             bytes_written += len(tail)
     output.flush()
-    if bytes_written == 0:
+    if bytes_written == 0 and not (max_packets is not None and max_packets <= 0):
         raise PyEzvizError("Cloud stream did not provide media before startup expired")
 
 

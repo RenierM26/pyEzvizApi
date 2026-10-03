@@ -3085,6 +3085,23 @@ def test_write_stream_payloads_rejects_empty_startup() -> None:
         )
 
 
+def test_write_stream_payloads_preserves_explicit_zero_packet_dump() -> None:
+    class EmptyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 0
+            return []
+
+    output = io.BytesIO()
+    cli_module._write_stream_payloads(  # noqa: SLF001
+        EmptyStream(),
+        output,
+        max_packets=0,
+        allow_encrypted=False,
+    )
+
+    assert not output.getvalue()
+
+
 def test_stream_dump_rejects_encrypted_packets_by_default(monkeypatch, tmp_path, caplog) -> None:
     _install_fake_client(monkeypatch)
 

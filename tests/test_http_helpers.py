@@ -30,6 +30,7 @@ from pyezvizapi.api_endpoints import (
 from pyezvizapi.client import (
     CLOUD_CLIP_VALIDATION_TIMEOUT_SECONDS,
     EzvizClient,
+    _has_linked_h264_video,
     _has_linked_hevc_video,
     _LocalStreamPacketMetadataRecorder,
 )
@@ -3722,9 +3723,10 @@ def test_save_decrypted_cloud_mpegps_without_ffmpeg(
 ) -> None:
     client = _client()
     video_payload = (
-        b"\x00\x00\x01\x67\x42\x00\x1e\x80"
-        b"\x00\x00\x01\x68\xc0"
-        b"\x00\x00\x01\x65\xb8\x00"
+        b"\x00\x00\x01\x67\x42\xc0\x0a\xda\x7b\x01\x10"
+        b"\x00\x00\x03\x00\x10\x00\x00\x03\x00\x28\xf1\x22\x6a"
+        b"\x00\x00\x01\x68\xce\x0f\xc8"
+        b"\x00\x00\x01\x65\x88\x84\x3a\x26\x28\x00\x09\x02\xe0"
     )
     pes_payload = b"\x80\x00\x00" + video_payload
     capture = (
@@ -3823,6 +3825,16 @@ def test_save_decrypted_cloud_mpegps_rejects_invalid_slice_body(
         )
 
     assert not output_path.exists()
+
+
+def test_h264_validation_rejects_truncated_linked_structures() -> None:
+    truncated = [
+        (b"\x67\x64", b"\x64\x00\x01\x80"),
+        (b"\x68\xc0", b"\xc0"),
+        (b"\x65\xe0", b"\xe0\x00"),
+    ]
+
+    assert not _has_linked_h264_video(truncated)
 
 
 def test_hevc_validation_links_parameter_sets_to_slice() -> None:

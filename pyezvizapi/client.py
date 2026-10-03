@@ -549,15 +549,133 @@ def _read_unsigned_exp_golomb(bits: str, offset: int) -> tuple[int, int] | None:
     return value, value_end
 
 
-def _h264_sps_id(data: bytes) -> int | None:
-    """Return a validated baseline H.264 SPS id."""
+def _read_signed_exp_golomb(bits: str, offset: int) -> tuple[int, int] | None:
+    """Read one signed Exp-Golomb value from ``bits``."""
+
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None:
+        return None
+    code_num, next_offset = decoded
+    value = (code_num + 1) // 2
+    return (-value if code_num % 2 == 0 else value), next_offset
+
+
+def _skip_h264_scaling_list(bits: str, offset: int, size: int) -> int | None:
+    """Return the bit offset after one H.264 scaling list."""
+
+    last_scale = 8
+    next_scale = 8
+    for _ in range(size):
+        if next_scale != 0:
+            decoded = _read_signed_exp_golomb(bits, offset)
+            if decoded is None:
+                return None
+            delta_scale, offset = decoded
+            next_scale = (last_scale + delta_scale + 256) % 256
+        last_scale = next_scale or last_scale
+    return offset
+
+
+def _h264_sps_id(data: bytes) -> int | None:  # noqa: PLR0911, PLR0912, PLR0915
+    """Return an SPS id after parsing mandatory H.264 sequence syntax."""
 
     if len(data) < 4 or data[0] not in {44, 66, 77, 83, 86, 88, 100, 110, 118, 122, 128, 134, 135, 138, 139, 244}:
         return None
     if data[1] & 0x03 or data[2] == 0:
         return None
-    decoded = _read_unsigned_exp_golomb(_rbsp_bits(data[3:]), 0)
-    return decoded[0] if decoded is not None and decoded[0] <= 31 else None
+    bits = _rbsp_bits(data[3:])
+    decoded = _read_unsigned_exp_golomb(bits, 0)
+    if decoded is None or decoded[0] > 31:
+        return None
+    sps_id, offset = decoded
+    if data[0] in {44, 83, 86, 100, 110, 118, 122, 128, 134, 135, 138, 139, 244}:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 3:
+            return None
+        chroma_format_idc, offset = decoded
+        if chroma_format_idc == 3:
+            offset += 1
+        for _ in range(2):
+            decoded = _read_unsigned_exp_golomb(bits, offset)
+            if decoded is None or decoded[0] > 6:
+                return None
+            offset = decoded[1]
+        offset += 1
+        if offset >= len(bits):
+            return None
+        scaling_matrix_present = bits[offset] == "1"
+        offset += 1
+        if scaling_matrix_present:
+            for index in range(12 if chroma_format_idc == 3 else 8):
+                if offset >= len(bits):
+                    return None
+                scaling_list_present = bits[offset] == "1"
+                offset += 1
+                if scaling_list_present:
+                    skipped = _skip_h264_scaling_list(
+                        bits,
+                        offset,
+                        16 if index < 6 else 64,
+                    )
+                    if skipped is None:
+                        return None
+                    offset = skipped
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None or decoded[0] > 12:
+        return None
+    offset = decoded[1]
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None or decoded[0] > 2:
+        return None
+    pic_order_cnt_type, offset = decoded
+    if pic_order_cnt_type == 0:
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 12:
+            return None
+        offset = decoded[1]
+    elif pic_order_cnt_type == 1:
+        offset += 1
+        for _ in range(2):
+            decoded_signed = _read_signed_exp_golomb(bits, offset)
+            if decoded_signed is None:
+                return None
+            offset = decoded_signed[1]
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None or decoded[0] > 255:
+            return None
+        cycle_count, offset = decoded
+        for _ in range(cycle_count):
+            decoded_signed = _read_signed_exp_golomb(bits, offset)
+            if decoded_signed is None:
+                return None
+            offset = decoded_signed[1]
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None:
+        return None
+    offset = decoded[1] + 1
+    for _ in range(2):
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None:
+            return None
+        offset = decoded[1]
+    if offset >= len(bits):
+        return None
+    frame_mbs_only = bits[offset] == "1"
+    offset += 1
+    if not frame_mbs_only:
+        offset += 1
+    offset += 1
+    if offset >= len(bits):
+        return None
+    frame_cropping = bits[offset] == "1"
+    offset += 1
+    if frame_cropping:
+        for _ in range(4):
+            decoded = _read_unsigned_exp_golomb(bits, offset)
+            if decoded is None:
+                return None
+            offset = decoded[1]
+    return sps_id if offset < len(bits) else None
 
 
 def _h264_pps_ids(data: bytes) -> tuple[int, int] | None:
@@ -570,7 +688,23 @@ def _h264_pps_ids(data: bytes) -> tuple[int, int] | None:
     sps = _read_unsigned_exp_golomb(bits, pps[1])
     if sps is None or sps[0] > 31:
         return None
-    return pps[0], sps[0]
+    offset = sps[1] + 2
+    decoded = _read_unsigned_exp_golomb(bits, offset)
+    if decoded is None or decoded[0] != 0:
+        return None
+    offset = decoded[1]
+    for _ in range(2):
+        decoded = _read_unsigned_exp_golomb(bits, offset)
+        if decoded is None:
+            return None
+        offset = decoded[1]
+    offset += 3
+    for _ in range(3):
+        decoded_signed = _read_signed_exp_golomb(bits, offset)
+        if decoded_signed is None:
+            return None
+        offset = decoded_signed[1]
+    return (pps[0], sps[0]) if offset + 3 <= len(bits) else None
 
 
 def _h264_slice_pps_id(data: bytes) -> int | None:
@@ -588,7 +722,13 @@ def _h264_slice_pps_id(data: bytes) -> int | None:
         value, offset = decoded
         values.append(value)
     first_mb, slice_type, pic_parameter_set_id = values
-    if first_mb <= 65535 and slice_type <= 9 and pic_parameter_set_id <= 255:
+    trailing_one = bits.rfind("1")
+    if (
+        first_mb <= 65535
+        and slice_type <= 9
+        and pic_parameter_set_id <= 255
+        and trailing_one - offset >= 5
+    ):
         return pic_parameter_set_id
     return None
 

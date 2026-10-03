@@ -816,6 +816,28 @@ def test_vtm_stream_deadline_only_connect_restores_blocking_socket_mode() -> Non
     assert fake_socket.timeout_history == [None]
 
 
+def test_vtm_stream_start_translates_deadline_limited_connect_timeout() -> None:
+    expected_timeout = 8.0
+
+    def socket_factory(
+        _address: tuple[str, int],
+        timeout: float | None,
+    ) -> Any:
+        assert timeout == expected_timeout
+        raise TimeoutError("connect timed out")
+
+    stream = VtmStreamClient(
+        "ysproto://vtm.example.test:8554/live",
+        timeout=None,
+        socket_factory=socket_factory,
+    )
+
+    with pytest.raises(DeviceException, match="timed out waiting for VTM stream info"):
+        stream.start(deadline=108.0, monotonic=lambda: 100.0)
+
+    assert not stream.connected
+
+
 def test_vtm_stream_start_uses_one_deadline_across_control_reads() -> None:
     fake_socket = FakeVtmSocket([])
     stream = VtmStreamClient(

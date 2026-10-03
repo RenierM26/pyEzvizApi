@@ -279,16 +279,23 @@ class VtmStreamClient:
             return self
         host, port, _path, _params = parse_vtm_url(self.stream_url)
         connect_timeout = self.timeout
+        deadline_limits_connect = False
         if deadline is not None:
             remaining = deadline - monotonic()
             if remaining <= 0:
                 raise _VtmReadDeadlineExpired
+            deadline_limits_connect = self.timeout is None or remaining <= self.timeout
             connect_timeout = (
                 remaining
                 if connect_timeout is None
                 else min(connect_timeout, remaining)
             )
-        sock = self._socket_factory((host, port), connect_timeout)
+        try:
+            sock = self._socket_factory((host, port), connect_timeout)
+        except TimeoutError as err:
+            if deadline_limits_connect:
+                raise _VtmReadDeadlineExpired from err
+            raise
         sock.settimeout(self.timeout)
         self._socket = sock
         return self

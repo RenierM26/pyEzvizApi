@@ -5420,6 +5420,50 @@ def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> 
     ]
 
 
+def test_buffered_stream_decryptor_keeps_initial_pes_until_header_mode_known(
+    monkeypatch,
+) -> None:
+    initial = b"pack"
+    continuation = b"video"
+    combined = initial + continuation
+    empty = b""
+    expected = b"clear-" + combined
+    detect_calls: list[bytes] = []
+    decrypt_calls: list[tuple[bytes, int | None]] = []
+
+    def fake_detect(data: bytes, _key: str, *, default: int | None) -> int | None:
+        assert default is None
+        detect_calls.append(data)
+        return 0 if data == combined else None
+
+    def fake_decrypt(data: bytes, _key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append((data, nalu_header_size))
+        return b"clear-" + data
+
+    monkeypatch.setattr(cli_module, "mpeg_ps_decryptable_prefix_length", len)
+    monkeypatch.setattr(
+        cli_module,
+        "detect_hikvision_ps_video_nalu_header_size",
+        fake_detect,
+    )
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+    decryptor = cli_module._BufferedStreamPayloadDecryptor(  # noqa: SLF001
+        "camera-key", codec="auto"
+    )
+
+    assert decryptor(initial) == empty
+    assert decryptor(continuation) == expected
+    assert detect_calls == [initial, combined]
+    assert decrypt_calls == [(combined, 0)]
+
+    limited = cli_module._BufferedStreamPayloadDecryptor(  # noqa: SLF001
+        "camera-key", codec="auto"
+    )
+    limited._MAX_AUTO_PROBE_BYTES = len(initial) - 1  # noqa: SLF001
+    with pytest.raises(PyEzvizError, match="Could not detect MPEG-PS"):
+        limited(initial)
+
+
 def test_stream_rtp_decryptor_uses_detected_codec_and_shared_key(monkeypatch) -> None:
     class FakeClient:
         key_calls = 0

@@ -325,6 +325,33 @@ def test_decrypt_hikvision_ps_video_keeps_short_encrypted_h264_nals() -> None:
         + clear_payload
     )
 
+
+def test_decrypt_hikvision_ps_video_preserves_short_clear_pps_between_encrypted_nals() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_sps = b"\x67" + b"s" * 28
+    clear_pps = b"\x28\xee\x3c\x80"
+    clear_idr = b"\x65" + b"i" * 31
+
+    def video_pes(nal: bytes) -> bytes:
+        payload = b"\x00\x00\x00\x01" + nal
+        return (
+            b"\x00\x00\x01\xe0"
+            + (len(payload) + 3).to_bytes(2, "big")
+            + b"\x80\x00\x00"
+            + payload
+        )
+
+    encrypted = (
+        video_pes(_encrypt_hikvision_fixture_blocks(aes_key, clear_sps[:16]) + clear_sps[16:])
+        + video_pes(clear_pps)
+        + video_pes(_encrypt_hikvision_fixture_blocks(aes_key, clear_idr))
+    )
+    expected = video_pes(clear_sps) + video_pes(clear_pps) + video_pes(clear_idr)
+
+    assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=0) == expected
+
+
 def test_decrypt_hikvision_ps_video_keeps_unaligned_h264_nal_boundaries() -> None:
     key = "camera-key"
     clear_nal = b"\x65fedcba987654321"

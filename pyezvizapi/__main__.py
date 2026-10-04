@@ -3346,6 +3346,8 @@ def _codec_nalu_header_size(codec: str) -> int | None:
 class _BufferedStreamPayloadDecryptor:
     """Decrypt MPEG-PS payloads after buffering across VTM packet splits."""
 
+    _MAX_AUTO_PROBE_BYTES = 8 * 1024 * 1024
+
     def __init__(self, key: str | bytes, *, codec: str) -> None:
         self._key = key
         self._nalu_header_size = _codec_nalu_header_size(codec)
@@ -3375,7 +3377,23 @@ class _BufferedStreamPayloadDecryptor:
         self._buffer.extend(data)
         complete_end = mpeg_ps_decryptable_prefix_length(self._buffer)
         if complete_end <= 0:
+            if (
+                self._nalu_header_size is None
+                and len(self._buffer) > self._MAX_AUTO_PROBE_BYTES
+            ):
+                raise PyEzvizError("Could not detect MPEG-PS video encryption mode")
             return b""
+        if self._nalu_header_size is None:
+            detected = detect_hikvision_ps_video_nalu_header_size(
+                bytes(self._buffer[:complete_end]),
+                self._key,
+                default=None,
+            )
+            if detected is None:
+                if len(self._buffer) > self._MAX_AUTO_PROBE_BYTES:
+                    raise PyEzvizError("Could not detect MPEG-PS video encryption mode")
+                return b""
+            self._nalu_header_size = detected
         chunk = bytes(self._buffer[:complete_end])
         del self._buffer[:complete_end]
         return self._decrypt_chunk(chunk)

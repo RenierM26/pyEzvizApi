@@ -3832,13 +3832,17 @@ class EzvizClient:
             start_position = _binary_position(output)
             copy_cloud(output)
 
+        bytes_written = _bytes_written_to_output(output, start_position=start_position)
+        if bytes_written == 0:
+            raise PyEzvizError("Cloud stream capture did not contain media")
+
         return {
             "ok": True,
             "kind": "clip",
             "serial": serial,
             "channel": channel,
             "output": _output_name(output),
-            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "bytes": bytes_written,
             "source": "cloud",
             "format": output_format,
             "duration_seconds": duration_seconds,

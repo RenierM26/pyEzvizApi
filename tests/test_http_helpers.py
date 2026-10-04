@@ -3640,6 +3640,7 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
         **kwargs: Any,
     ) -> None:
         calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
@@ -3693,6 +3694,7 @@ def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
         **kwargs: Any,
     ) -> None:
         calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
@@ -3709,6 +3711,28 @@ def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
     )
 
     assert calls[0]["nalu_header_size"] == 0
+
+
+def test_save_clip_cloud_rejects_empty_capture(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "empty.ts"
+
+    def fake_copy_cloud_stream_to_mpegts(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        del source_client, serial, output, kwargs
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    with pytest.raises(PyEzvizError, match="did not contain media"):
+        client.save_clip("CAM123", output_path, source="cloud")
+    assert output_path.stat().st_size == 0
 
 
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:

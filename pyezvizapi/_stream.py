@@ -1570,14 +1570,33 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
 
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
+    def is_short_clear_h264_pps(
+        payload: bytes,
+        start_code_pos: int,
+        start_code_len: int,
+        nal_end: int,
+    ) -> bool:
+        header_pos = start_code_pos + start_code_len
+        return (
+            2 <= nal_end - header_pos < AES.block_size
+            and _h264_nal_type(payload, start_code_pos, start_code_len) == 8
+        )
+
     def find_encrypted_nal_start_codes(
         data: bytes,
         start: int,
         end: int,
     ) -> list[tuple[int, int]]:
         starts: list[tuple[int, int]] = []
-        for start_code_pos, start_code_len in _find_nal_start_codes(data, start, end):
+        candidates = _find_nal_start_codes(data, start, end)
+        for index, (start_code_pos, start_code_len) in enumerate(candidates):
             encrypted_header = start_code_pos + start_code_len
+            nal_end = candidates[index + 1][0] if index + 1 < len(candidates) else end
+            if is_short_clear_h264_pps(
+                data, start_code_pos, start_code_len, nal_end
+            ):
+                starts.append((start_code_pos, start_code_len))
+                continue
             if encrypted_header + AES.block_size > end:
                 continue
             cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
@@ -1789,13 +1808,16 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 if idx + 1 < len(nal_starts)
                 else len(payload)
             )
+            clear_short_pps = nalu_header_size == 0 and is_short_clear_h264_pps(
+                payload, start_code_pos, start_code_len, decrypt_end
+            )
             if active_nal:
                 candidate_decrypted = active_nal_decrypted + max(
                     0,
                     start_code_pos - segment_start,
                 )
                 if candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
-                    if nalu_header_size == 0 and (
+                    if nalu_header_size == 0 and not clear_short_pps and (
                         candidate_decrypted == 0
                         or not starts_plausible_encrypted_nal(
                             start_code_pos + start_code_len,
@@ -1813,6 +1835,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 and (
                     (
                         nalu_header_size == 0
+                        and not clear_short_pps
                         and not starts_plausible_encrypted_nal(
                             start_code_pos + start_code_len,
                             decrypt_end,

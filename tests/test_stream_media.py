@@ -30,6 +30,7 @@ from pyezvizapi._stream import (
     encode_vtm_packet,
     mpeg_ps_complete_prefix_length,
     mpeg_ps_decryptable_prefix_length,
+    mpeg_ps_video_pts_span_seconds,
     rtp_payload,
 )
 from pyezvizapi.client import EzvizClient
@@ -41,6 +42,7 @@ from pyezvizapi.cloud_stream import (
     copy_decrypted_cloud_stream_packets_to_mpegts,
 )
 from pyezvizapi.exceptions import (
+    EzvizIncompleteMediaError,
     EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
@@ -54,6 +56,7 @@ H264_SPS_ANNEXB = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_FU_ANNEXB = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 HEVC_DESCRIPTOR_ANNEXB = b"\x00\x00\x00\x01\x26\x01hevc"
 AV_MPEGTS_PAYLOAD = b"av-mpegts"
+MPEGPS_PAYLOAD = b"mpegps"
 AAC_FRAME = b"aac-frame"
 
 cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
@@ -188,6 +191,107 @@ def test_detect_transport_and_rtp_payload() -> None:
     assert detect_transport(b"\x47...") == StreamTransport.MPEG_TS
     assert detect_transport(rtp) == StreamTransport.RTP
     assert rtp_payload(rtp) == BODY
+
+
+def _timed_video_pes(pts: int) -> bytes:
+    encoded = bytes(
+        (
+            0x20 | (((pts >> 30) & 7) << 1) | 1,
+            (pts >> 22) & 0xFF,
+            (((pts >> 15) & 0x7F) << 1) | 1,
+            (pts >> 7) & 0xFF,
+            ((pts & 0x7F) << 1) | 1,
+        )
+    )
+    payload = b"\x00\x00\x00\x01\x26\x01frame"
+    return (
+        b"\x00\x00\x01\xe0"
+        + (8 + len(payload)).to_bytes(2, "big")
+        + b"\x80\x80\x05"
+        + encoded
+        + payload
+    )
+
+
+def test_mpeg_ps_video_pts_span_reads_clear_pes_headers() -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    payload = pack + _timed_video_pes(90_000) + pack + _timed_video_pes(1_710_000)
+
+    assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(18)
+
+
+@pytest.mark.parametrize(
+    ("max_packets", "last_pts", "incomplete"),
+    [(None, 180_000, True), (2, 180_000, False), (None, 1_710_000, False)],
+)
+@pytest.mark.parametrize("output_format", ["mpegps", "mpegts"])
+def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
+    monkeypatch: pytest.MonkeyPatch,
+    max_packets: int | None,
+    last_pts: int,
+    incomplete: bool,
+    output_format: str,
+) -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    bodies = (pack + _timed_video_pes(90_000), pack + _timed_video_pes(last_pts))
+
+    class FakeCloudStream:
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            for index, body in enumerate(bodies):
+                yield VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+
+    client = _client()
+    monkeypatch.setattr(client, "get_cam_key", lambda _serial: "camera-key")
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts",
+        lambda _packets, output, **_kwargs: output.write(AV_MPEGTS_PAYLOAD),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
+    )
+    copy = (
+        copy_cloud_stream_to_mpegps
+        if output_format == "mpegps"
+        else copy_cloud_stream_to_mpegts
+    )
+    output = io.BytesIO()
+    if incomplete:
+        with pytest.raises(EzvizIncompleteMediaError) as error:
+            copy(
+                client,
+                "CAM123",
+                output,
+                duration_seconds=20,
+                decrypt_video=True,
+            )
+        assert error.value.reason == "incomplete_media"
+        assert error.value.source == "cloud"
+        assert error.value.observed_duration_seconds == pytest.approx(1)
+        assert output.getvalue() == EMPTY_BYTES
+    else:
+        copy(
+            client,
+            "CAM123",
+            output,
+            duration_seconds=20,
+            max_packets=max_packets,
+            decrypt_video=True,
+        )
+        assert output.getvalue() == (
+            MPEGPS_PAYLOAD if output_format == "mpegps" else AV_MPEGTS_PAYLOAD
+        )
+
 
 def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:
     key = "camera-key"

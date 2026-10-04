@@ -28,6 +28,27 @@ class EzvizNoMediaError(PyEzvizError):
     reason = "no_media"
 
 
+class EzvizIncompleteMediaError(PyEzvizError):
+    """A timed capture contained substantially less video than requested."""
+
+    reason = "incomplete_media"
+
+    def __init__(
+        self,
+        *,
+        source: str,
+        requested_duration_seconds: float,
+        observed_duration_seconds: float,
+    ) -> None:
+        self.source = source
+        self.requested_duration_seconds = requested_duration_seconds
+        self.observed_duration_seconds = observed_duration_seconds
+        super().__init__(
+            f"{source} video is incomplete: {observed_duration_seconds:.2f}s "
+            f"of {requested_duration_seconds:.2f}s requested"
+        )
+
+
 class InvalidURL(PyEzvizError):
     """Raised when a request fails due to an invalid URL or proxy settings."""
 

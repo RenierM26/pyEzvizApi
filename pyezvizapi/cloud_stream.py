@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import (
+    EzvizIncompleteMediaError,
     EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
@@ -49,7 +50,11 @@ from .rtp import (
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
-from .stream_media import decrypt_hikvision_ps_video, detect_transport
+from .stream_media import (
+    decrypt_hikvision_ps_video,
+    detect_transport,
+    mpeg_ps_video_pts_span_seconds,
+)
 from .stream_transport import (
     SocketFactory,
     StreamTransport,
@@ -485,6 +490,13 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
             )
         payload = b"".join(packet.body for packet in packets)
+        if not payload:
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        _require_cloud_mpegps_video_duration(
+            payload,
+            duration_seconds=duration_seconds,
+            max_packets=max_packets,
+        )
         output.write(
             decrypt_hikvision_ps_video(
                 payload,
@@ -578,6 +590,14 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
         packets = list(media_packets)
+        if not packets or not any(packet.body for packet in packets):
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        if transport in (StreamTransport.MPEG_PS, StreamTransport.UNKNOWN):
+            _require_cloud_mpegps_video_duration(
+                b"".join(packet.body for packet in packets),
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+            )
         copy_decrypted_cloud_stream_packets_to_mpegts(
             packets,
             output,
@@ -612,6 +632,25 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             duration_seconds=duration_seconds,
             first_packet_deadline=startup_deadline,
             monotonic=monotonic,
+        )
+
+
+def _require_cloud_mpegps_video_duration(
+    payload: bytes,
+    *,
+    duration_seconds: float | None,
+    max_packets: int | None,
+) -> None:
+    """Reject markedly short video when a timed capture was not packet-capped."""
+
+    if duration_seconds is None or duration_seconds < 8 or max_packets is not None:
+        return
+    observed = mpeg_ps_video_pts_span_seconds(payload)
+    if observed is not None and observed < duration_seconds / 2:
+        raise EzvizIncompleteMediaError(
+            source="cloud",
+            requested_duration_seconds=duration_seconds,
+            observed_duration_seconds=observed,
         )
 
 

@@ -41,6 +41,7 @@ from pyezvizapi.constants import (
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizAuthVerificationCode,
+    EzvizIncompleteMediaError,
     EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
@@ -3899,7 +3900,40 @@ def test_save_clip_cloud_rejects_empty_capture(monkeypatch, tmp_path) -> None:
     with pytest.raises(EzvizNoMediaError, match="did not contain media") as error:
         client.save_clip("CAM123", output_path, source="cloud")
     assert error.value.reason == "no_media"
-    assert output_path.stat().st_size == 0
+    assert not output_path.exists()
+    assert not list(tmp_path.glob(".empty.ts.*.tmp"))
+
+
+def test_save_clip_cloud_preserves_existing_file_on_incomplete_capture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client()
+    output_path = tmp_path / "gate.ts"
+    previous_clip = b"previous-clip"
+    output_path.write_bytes(previous_clip)
+
+    def fake_copy_cloud_stream_to_mpegts(
+        _source_client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(b"short-clip")
+        raise EzvizIncompleteMediaError(
+            source="cloud",
+            requested_duration_seconds=20,
+            observed_duration_seconds=1,
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    with pytest.raises(EzvizIncompleteMediaError):
+        client.save_clip("CAM123", output_path, source="cloud", duration_seconds=20)
+    assert output_path.read_bytes() == previous_clip
+    assert not list(tmp_path.glob(".gate.ts.*.tmp"))
 
 
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:

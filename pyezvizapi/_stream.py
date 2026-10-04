@@ -1266,6 +1266,45 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
     return ranges
 
 
+def mpeg_ps_video_pts_span_seconds(data: bytes) -> float | None:
+    """Measure video presentation span from clear MPEG-PS PES headers.
+
+    Video bodies may be encrypted, but their PES timestamps remain clear. Return
+    ``None`` when no valid video PTS is available rather than guessing from bytes.
+    """
+
+    first_pts: int | None = None
+    last_pts: int | None = None
+    for packet in _mpeg_ps_video_decrypt_ranges(data):
+        start = packet.start
+        if not _is_video_pes_stream_id(packet.stream_id) or start + 14 > len(data):
+            continue
+        if (data[start + 6] & 0xC0) != 0x80 or data[start + 8] < 5:
+            continue
+        pts_dts_flags = data[start + 7] & 0xC0
+        if pts_dts_flags not in (0x80, 0xC0):
+            continue
+        encoded = data[start + 9 : start + 14]
+        expected_prefix = 0x20 if pts_dts_flags == 0x80 else 0x30
+        if (encoded[0] & 0xF0) != expected_prefix or not all(
+            encoded[index] & 1 for index in (0, 2, 4)
+        ):
+            continue
+        pts = (
+            ((encoded[0] >> 1) & 0x07) << 30
+            | encoded[1] << 22
+            | (encoded[2] >> 1) << 15
+            | encoded[3] << 7
+            | encoded[4] >> 1
+        )
+        if first_pts is None:
+            first_pts = pts
+        last_pts = pts
+    if first_pts is None or last_pts is None:
+        return None
+    return ((last_pts - first_pts) & ((1 << 33) - 1)) / 90_000
+
+
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
     """Return the end offset for a complete MPEG-PS packet at ``start``."""
 

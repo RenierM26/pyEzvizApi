@@ -3861,8 +3861,20 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("wb") as output_file:
-                copy_cloud(output_file)
+            temporary_path = output_path.with_name(
+                f".{output_path.name}.{uuid4().hex}.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+                with os.fdopen(descriptor, "wb") as output_file:
+                    copy_cloud(output_file)
+                if temporary_path.stat().st_size == 0:
+                    raise EzvizNoMediaError("Cloud stream capture did not contain media")
+                os.replace(temporary_path, output_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
         else:
             start_position = _binary_position(output)
             copy_cloud(output)

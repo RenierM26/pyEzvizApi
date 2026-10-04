@@ -1251,14 +1251,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
                 if is_vcl:
+                    starts_picture = _rtp_nal_starts_picture(
+                        classified_nal, codec=codec
+                    )
                     if not pending_vcl.get(packet.ssrc):
-                        needs_start_evidence = first_vcl_au_pending.get(
-                            packet.ssrc, True
-                        ) or pending_gap.get(packet.ssrc, False)
-                        starts_picture = needs_start_evidence and _rtp_nal_starts_picture(
-                            classified_nal,
-                            codec=codec,
-                        )
                         first_slice_seen[packet.ssrc] = starts_picture
                         if (
                             new_timestamp_au.get(packet.ssrc)
@@ -1267,6 +1263,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                             # A confirmed new picture cannot contain the slice
                             # lost before its timestamp boundary.
                             pending_gap[packet.ssrc] = False
+                    elif starts_picture:
+                        # ASO/FMO may transmit macroblock zero after another
+                        # slice of the same access unit.
+                        first_slice_seen[packet.ssrc] = True
                     pending_vcl[packet.ssrc] = True
         if packet.marker:
             finish_access_unit(

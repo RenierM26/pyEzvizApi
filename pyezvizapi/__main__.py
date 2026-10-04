@@ -3248,6 +3248,7 @@ def _detect_rtp_video_codec(
             if media_key is not None and _codec_nalu_header_size(decrypt_codec) == 0
             else None
         ),
+        allow_ezviz_headerless_hevc_fu=True,
     )
 
 

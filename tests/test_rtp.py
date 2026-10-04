@@ -249,6 +249,11 @@ def test_encrypted_header_hevc_ezviz_fu_reassembles_before_transform(
         packet_nal_transform=decrypt,
     ) == (clear_nal,)
     assert seen == [encrypted_nal]
+    assert detect_rtp_video_codec(
+        (start, end),
+        video_payload_transform=decrypt,
+        allow_ezviz_headerless_hevc_fu=True,
+    ) == "hevc"
 
 
 @pytest.mark.parametrize("codec", ["h264", "hevc"])
@@ -313,7 +318,11 @@ def test_encrypted_header_aggregation_decrypts_only_extracted_nals(
 
     def decrypt(nal: bytes) -> bytes:
         seen.append(nal)
-        return clear_nals[encrypted_nals.index(nal)] if nal in encrypted_nals else b"invalid"
+        return (
+            clear_nals[encrypted_nals.index(nal)]
+            if nal in encrypted_nals
+            else b"\x09metadata" if codec == "h264" else b"\x40\x01metadata"
+        )
 
     assert rtp_packets_to_nal_units(
         (packet,),
@@ -321,7 +330,41 @@ def test_encrypted_header_aggregation_decrypts_only_extracted_nals(
         completed_access_units_only=True,
         packet_nal_transform=decrypt,
     ) == clear_nals
-    assert seen == list(encrypted_nals)
+    assert seen[0] == payload
+    assert seen[-len(encrypted_nals) :] == list(encrypted_nals)
+
+
+def test_encrypted_single_nal_that_looks_like_aggregation_stays_single() -> None:
+    ciphertext = b"\x78\x00\x10" + b"x" * 16
+    clear_nal = b"\x61\xe0clear"
+    packet = parse_rtp_packet(_rtp(ciphertext, sequence=1, marker=True))
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == ciphertext else b"\x09metadata"
+
+    assert rtp_packets_to_nal_units(
+        (packet,),
+        codec="h264",
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen[0] == ciphertext
+
+
+def test_encrypted_aggregation_ambiguity_is_explicit() -> None:
+    ciphertext = b"\x78\x00\x10" + b"x" * 16
+    packet = parse_rtp_packet(_rtp(ciphertext, sequence=1, marker=True))
+
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        rtp_packets_to_nal_units(
+            (packet,),
+            codec="h264",
+            completed_access_units_only=True,
+            packet_nal_transform=lambda _nal: b"\x61\xe0slice",
+        )
+    assert error.value.reason == "ambiguous_encrypted_aggregation"
 
 
 @pytest.mark.parametrize(

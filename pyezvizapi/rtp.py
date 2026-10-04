@@ -784,6 +784,7 @@ def detect_rtp_video_codec(  # noqa: PLR0912
     allow_fallback: bool = True,
     stream_descriptors: Iterable[RtpStreamDescriptor] | None = None,
     video_payload_transform: Callable[[bytes], bytes] | None = None,
+    allow_ezviz_headerless_hevc_fu: bool = False,
 ) -> RtpVideoCodec:
     """Detect H.264 or HEVC from routed RTP video packets."""
 
@@ -807,6 +808,7 @@ def detect_rtp_video_codec(  # noqa: PLR0912
                     video_payload_types=video_payload_types,
                     completed_access_units_only=True,
                     packet_nal_transform=video_payload_transform,
+                    allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
                 )
             except EzvizUnsupportedMediaError:
                 # A competing codec probe can misread HEVC as H.264 data
@@ -1232,6 +1234,39 @@ def _is_complete_aggregation_packet(payload: bytes, codec: RtpVideoCodec) -> boo
     )
 
 
+def _encrypted_aggregation_packet(
+    payload: bytes,
+    codec: RtpVideoCodec,
+    transform: Callable[[bytes], bytes],
+) -> bool:
+    """Resolve a clear AP wrapper versus ciphertext that only resembles one."""
+
+    if not _is_complete_aggregation_packet(payload, codec):
+        return False
+    header_size = 1 if codec == "h264" else 2
+    clear_single = transform(payload)
+    clear_units = tuple(
+        transform(unit)
+        for unit in _aggregation_units(payload, header_size=header_size)
+    )
+    single_valid = _valid_rtp_nal_header(clear_single, codec=codec)
+    aggregate_valid = all(
+        _valid_rtp_nal_header(unit, codec=codec) for unit in clear_units
+    )
+    if single_valid and aggregate_valid:
+        single_vcl = rtp_nal_units_have_vcl((clear_single,), codec=codec)
+        aggregate_vcl = rtp_nal_units_have_vcl(clear_units, codec=codec)
+        if single_vcl == aggregate_vcl:
+            raise EzvizUnsupportedMediaError(
+                "Encrypted RTP payload is ambiguous between one NAL and "
+                "an aggregation packet; use another stream source",
+                source="rtp",
+                reason="ambiguous_encrypted_aggregation",
+            )
+        return aggregate_vcl
+    return aggregate_valid or not single_valid
+
+
 def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     packets: Iterable[RtpPacket],
     *,
@@ -1289,7 +1324,9 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             )
             if packet.payload_type in routed_video_payload_types
             and (route_epoch is None or route_epoch.media_kind == "video")
-            and _is_complete_aggregation_packet(packet.payload, codec)
+            and _encrypted_aggregation_packet(
+                packet.payload, codec, packet_nal_transform
+            )
         )
         if packet_nal_transform is not None
         else frozenset()

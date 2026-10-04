@@ -1058,6 +1058,7 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             video_payload_transform=(
                 decrypt_encrypted_header if nalu_header_size == 0 else None
             ),
+            allow_ezviz_headerless_hevc_fu=True,
         )
         header_size = nalu_header_size
         if header_size is None:

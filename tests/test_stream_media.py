@@ -35,6 +35,7 @@ from pyezvizapi._stream import (
 )
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    _probe_cloud_video_duration,
     cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_cloud_stream_to_mpegps,
@@ -378,6 +379,46 @@ def test_decrypted_cloud_save_probes_ambiguous_single_pts_before_publication(
         assert output.getvalue() == (
             MPEGPS_PAYLOAD if output_format == "mpegps" else AV_MPEGTS_PAYLOAD
         )
+
+
+def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+        calls.append(command)
+        if "-show_frames" in command:
+            payload: dict[str, Any] = {
+                "frames": [
+                    {"best_effort_timestamp_time": "100.0"},
+                    {"best_effort_timestamp_time": "102.0"},
+                ]
+            }
+        else:
+            payload = {"streams": [{}], "format": {"duration": "20.0"}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+
+    observed = _probe_cloud_video_duration(
+        tmp_path / "short.ps", ffprobe_path="ffprobe"
+    )
+
+    assert observed == pytest.approx(2)
+    assert len(calls) == 2
+
+
+def test_cloud_video_probe_reports_missing_ffprobe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    def missing_ffprobe(*_args: Any, **_kwargs: Any) -> Any:
+        raise FileNotFoundError("ffprobe")
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", missing_ffprobe)
+
+    with pytest.raises(PyEzvizError, match="ffprobe is required"):
+        _probe_cloud_video_duration(tmp_path / "short.ts", ffprobe_path="ffprobe")
 
 
 def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:

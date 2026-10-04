@@ -748,12 +748,56 @@ def _probe_cloud_video_duration(path: Path, *, ffprobe_path: str) -> float:
         if not streams:
             return 0.0
         value = streams[0].get("duration")
-        duration = float(value)
-    except (TypeError, ValueError, AttributeError, json.JSONDecodeError) as err:
+    except (TypeError, AttributeError, json.JSONDecodeError) as err:
         raise PyEzvizError("Could not determine staged cloud video duration") from err
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return _probe_cloud_video_frame_span(path, ffprobe_path=ffprobe_path)
     if not math.isfinite(duration) or duration < 0:
         raise PyEzvizError("Staged cloud video duration is invalid")
     return duration
+
+
+def _probe_cloud_video_frame_span(path: Path, *, ffprobe_path: str) -> float:
+    """Measure decoded video frames when MPEG-PS lacks stream duration."""
+
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_frames",
+                "-show_entries",
+                "frame=best_effort_timestamp_time",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise PyEzvizError("Could not probe staged cloud video frames") from err
+    if result.returncode != 0:
+        raise PyEzvizError("Could not probe staged cloud video frames")
+    try:
+        frames = json.loads(result.stdout).get("frames") or []
+        timestamps = [
+            float(frame["best_effort_timestamp_time"])
+            for frame in frames
+            if frame.get("best_effort_timestamp_time") not in (None, "N/A")
+        ]
+    except (TypeError, ValueError, AttributeError, json.JSONDecodeError) as err:
+        raise PyEzvizError("Could not determine staged cloud video frame span") from err
+    if len(timestamps) < 2 or not all(math.isfinite(value) for value in timestamps):
+        return 0.0
+    return max(timestamps) - min(timestamps)
 
 
 def _require_bounded_cloud_decrypt_capture(

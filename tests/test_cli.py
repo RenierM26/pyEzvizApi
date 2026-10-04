@@ -5275,7 +5275,9 @@ def test_stream_proxy_rejects_empty_success_response(monkeypatch) -> None:
     )
 
     handler = FakeHandler()
-    cli_module._handle_stream_proxy_get(handler, config, object())  # noqa: SLF001
+    cli_module._handle_stream_proxy_get(  # noqa: SLF001
+        cast(Any, handler), config, cast(Any, object())
+    )
 
     assert handler.responses == []
     assert handler.errors == [

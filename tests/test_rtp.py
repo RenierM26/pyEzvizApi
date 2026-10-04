@@ -119,6 +119,35 @@ def test_bounded_rtp_discards_damaged_picture_before_later_healthy_one() -> None
     ) == (b"\x67sps", b"\x61healthy")
 
 
+def test_bounded_rtp_keeps_fragment_continuity_across_same_ssrc_metadata() -> None:
+    start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, payload_type=112)
+    )
+    end = parse_rtp_packet(_rtp(b"\x7c\x41end", sequence=4, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (start, metadata, end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61startend",)
+
+
+def test_bounded_rtp_detects_real_gap_before_same_ssrc_metadata() -> None:
+    start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    # Video packet 3 was lost; the next observed RTP packet is metadata 4.
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=4, payload_type=112)
+    )
+    end = parse_rtp_packet(_rtp(b"\x7c\x41end", sequence=5, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (start, metadata, end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
 def _rtp(
     payload: bytes,
     *,

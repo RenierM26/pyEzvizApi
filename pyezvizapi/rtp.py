@@ -890,6 +890,13 @@ class RtpVideoDepacketizer:
             return self._push_hevc(packet)
         raise PyEzvizError(f"Unsupported RTP video codec: {self.codec}")
 
+    def observe_nonvideo_packet(self, packet: RtpPacket) -> None:
+        """Advance a shared SSRC sequence without interpreting its payload."""
+
+        continuity = self._continuity(packet)
+        if continuity in {"gap", "conflict"}:
+            self._discard_fragment(packet.ssrc)
+
     def _continuity(self, packet: RtpPacket) -> str:
         previous = self._last_sequence_by_ssrc.get(packet.ssrc)
         identity = (packet.sequence, packet.timestamp, packet.marker, packet.payload)
@@ -1062,7 +1069,7 @@ def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) 
     )
 
 
-def rtp_packets_to_nal_units(  # noqa: PLR0912
+def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     packets: Iterable[RtpPacket],
     *,
     codec: RtpVideoCodec,
@@ -1118,10 +1125,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912
                 accepted[index] = True
 
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
-        if packet.payload_type not in routed_video_payload_types:
-            continue
-        if not _rtp_packet_matches_codec_epoch(packet, route_epoch, codec):
-            continue
+        is_video = (
+            packet.payload_type in routed_video_payload_types
+            and _rtp_packet_matches_codec_epoch(packet, route_epoch, codec)
+        )
         previous_sequence = active_sequences.get(packet.ssrc)
         sequence_delta = (
             (packet.sequence - previous_sequence) & 0xFFFF
@@ -1129,10 +1136,18 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912
             else 1
         )
         if sequence_delta == 0 or sequence_delta >= 0x8000:
-            depacketizer.push(packet)
+            if is_video:
+                depacketizer.push(packet)
+            else:
+                depacketizer.observe_nonvideo_packet(packet)
             continue
         active_sequences[packet.ssrc] = packet.sequence
         contiguous = sequence_delta == 1
+        if not is_video:
+            depacketizer.observe_nonvideo_packet(packet)
+            if not contiguous:
+                pending_gap[packet.ssrc] = True
+            continue
         previous_timestamp = active_timestamps.get(packet.ssrc)
         if previous_timestamp is not None and packet.timestamp != previous_timestamp:
             finish_access_unit(

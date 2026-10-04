@@ -572,6 +572,28 @@ def test_bounded_h264_keeps_new_timestamp_metadata_gap_despite_mb_zero() -> None
     ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
 
 
+def test_bounded_h264_keeps_new_timestamp_metadata_conflict() -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    # Reusing sequence 1 with changed timestamp/payload is a conflict, not a
+    # duplicate. Its damage belongs to the picture at timestamp 12000.
+    conflict = parse_rtp_packet(
+        _rtp(b"metadata", sequence=1, timestamp=12000, payload_type=112)
+    )
+    uncertain = parse_rtp_packet(
+        _rtp(b"\x61\xe0mb0", sequence=2, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=3, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, conflict, uncertain, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
 @pytest.mark.parametrize(
     ("video_nal", "expected"),
     [

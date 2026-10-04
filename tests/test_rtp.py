@@ -231,7 +231,7 @@ def test_encrypted_header_fu_reassembles_before_transform(
         completed_access_units_only=True,
         packet_nal_transform=decrypt,
     ) == (clear_nal,)
-    assert seen == [encrypted_nal]
+    assert seen[-1] == encrypted_nal
 
 
 @pytest.mark.parametrize("continuation", ["pseudo-header", "headerless"])
@@ -261,12 +261,76 @@ def test_encrypted_header_hevc_ezviz_fu_reassembles_before_transform(
         completed_access_units_only=True,
         packet_nal_transform=decrypt,
     ) == (clear_nal,)
-    assert seen == [encrypted_nal]
+    assert seen[-1] == encrypted_nal
     assert detect_rtp_video_codec(
         (start, end),
         video_payload_transform=decrypt,
         allow_ezviz_headerless_hevc_fu=True,
     ) == "hevc"
+
+
+@pytest.mark.parametrize(
+    ("codec", "fu_start"),
+    [("h264", b"\x7c\x81"), ("hevc", b"\x62\x01\x93")],
+)
+def test_encrypted_header_incomplete_fu_identifies_codec_from_clear_framing(
+    codec: RtpVideoCodec, fu_start: bytes
+) -> None:
+    packet = parse_rtp_packet(_rtp(fu_start + b"x" * 32, sequence=1))
+    assert detect_rtp_video_codec(
+        (packet,),
+        video_payload_transform=lambda _payload: b"\x80invalid",
+        allow_ezviz_headerless_hevc_fu=True,
+    ) == codec
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_encrypted_single_nals_that_look_like_fu_chain_stay_single(
+    codec: RtpVideoCodec,
+) -> None:
+    if codec == "h264":
+        start_payload = b"\x7c\x81" + b"a" * 16
+        end_payload = b"\x7c\x41" + b"b" * 16
+        clear_nals = (b"\x61\xe0first", b"\x61\x70second")
+    else:
+        start_payload = b"\x62\x01\x93" + b"a" * 16
+        end_payload = b"\x62\x01\x53" + b"b" * 16
+        clear_nals = (b"\x26\x01\xa0first", b"\x02\x01\x70second")
+    packets = (
+        parse_rtp_packet(_rtp(start_payload, sequence=1)),
+        parse_rtp_packet(_rtp(end_payload, sequence=2, marker=True)),
+    )
+
+    def decrypt(payload: bytes) -> bytes:
+        if payload == start_payload:
+            return clear_nals[0]
+        if payload == end_payload:
+            return clear_nals[1]
+        return b"\x80invalid"
+
+    assert rtp_packets_to_nal_units(
+        packets,
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == clear_nals
+
+
+def test_encrypted_fu_and_single_nal_ambiguity_is_explicit() -> None:
+    packets = (
+        parse_rtp_packet(_rtp(b"\x7c\x81" + b"a" * 16, sequence=1)),
+        parse_rtp_packet(
+            _rtp(b"\x7c\x41" + b"b" * 16, sequence=2, marker=True)
+        ),
+    )
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        rtp_packets_to_nal_units(
+            packets,
+            codec="h264",
+            completed_access_units_only=True,
+            packet_nal_transform=lambda _payload: b"\x61\xe0slice",
+        )
+    assert error.value.reason == "ambiguous_encrypted_fu"
 
 
 @pytest.mark.parametrize("codec", ["h264", "hevc"])
@@ -308,7 +372,7 @@ def test_encrypted_header_fu_keeps_same_ssrc_nonvideo_continuity(
         completed_access_units_only=True,
         packet_nal_transform=decrypt,
     ) == (clear_nal,)
-    assert seen == [encrypted_nal]
+    assert seen[-1] == encrypted_nal
 
 
 @pytest.mark.parametrize("codec", ["h264", "hevc"])

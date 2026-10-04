@@ -828,6 +828,21 @@ def detect_rtp_video_codec(  # noqa: PLR0912
         for descriptor in descriptors
         if descriptor.media_kind == "video"
     )
+    if video_payload_transform is not None:
+        # An unfinished FU has no complete NAL to probe. Its RTP indicator is
+        # clear framing, not ciphertext, and still identifies the video codec.
+        fu_codecs: set[RtpVideoCodec] = {
+            codec
+            for packet in packet_list
+            if packet.payload_type in routed_video_payload_types
+            and not packet.marker
+            for codec in supported_codecs
+            if (signature := _fu_signature(packet.payload, codec)) is not None
+            and signature[2]
+            and not signature[3]
+        }
+        if len(fu_codecs) == 1:
+            return next(iter(fu_codecs))
     non_video_descriptor_payload_types = frozenset(
         descriptor.payload_type
         for descriptor in descriptors
@@ -1140,12 +1155,62 @@ def _fu_signature(
     ), bool(fu_header & 0x40)
 
 
+def _encrypted_fu_chain_is_fragmented_nal(
+    packets: list[RtpPacket],
+    chain: list[int],
+    codec: RtpVideoCodec,
+    transform: Callable[[bytes], bytes],
+    allow_ezviz_headerless_hevc_fu: bool,
+) -> bool:
+    """Disambiguate real FU framing from coincidental ciphertext prefixes."""
+
+    depacketizer = RtpVideoDepacketizer(
+        codec,
+        allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+    )
+    chain_indexes = set(chain)
+    ssrc = packets[chain[0]].ssrc
+    assembled: list[bytes] = []
+    for index in range(chain[0], chain[-1] + 1):
+        packet = packets[index]
+        if packet.ssrc != ssrc:
+            continue
+        if index in chain_indexes:
+            assembled.extend(depacketizer.push(packet))
+        else:
+            depacketizer.observe_nonvideo_packet(packet)
+    clear_assembled = transform(assembled[0]) if len(assembled) == 1 else b""
+    unique_packets = {
+        packets[index].sequence: packets[index] for index in chain
+    }
+    clear_singles = tuple(
+        transform(packet.payload) for packet in unique_packets.values()
+    )
+    assembled_valid = _valid_rtp_nal_header(clear_assembled, codec=codec)
+    singles_valid = all(
+        _valid_rtp_nal_header(nal, codec=codec) for nal in clear_singles
+    )
+    assembled_vcl = rtp_nal_units_have_vcl((clear_assembled,), codec=codec)
+    singles_vcl = rtp_nal_units_have_vcl(clear_singles, codec=codec)
+    if assembled_vcl != singles_vcl:
+        return assembled_vcl
+    if assembled_valid and singles_valid:
+        raise EzvizUnsupportedMediaError(
+            "Encrypted RTP payload is ambiguous between fragmented and "
+            "single NAL units; use another stream source",
+            source="rtp",
+            reason="ambiguous_encrypted_fu",
+        )
+    return assembled_valid or not singles_valid
+
+
 def _complete_fu_chain_indexes(  # noqa: PLR0912
     packets: list[RtpPacket],
     codec: RtpVideoCodec,
     route_epochs: tuple[RtpStreamDescriptor | None, ...],
     video_payload_types: frozenset[int],
     allow_ezviz_headerless_hevc_fu: bool,
+    transform: Callable[[bytes], bytes],
 ) -> frozenset[int]:
     """Avoid mistaking an isolated ciphertext FU lookalike for real framing."""
 
@@ -1210,7 +1275,14 @@ def _complete_fu_chain_indexes(  # noqa: PLR0912
                     is_end = current.marker
             chain.append(index)
             if is_end:
-                indexes.update(chain)
+                if _encrypted_fu_chain_is_fragmented_nal(
+                    packets,
+                    chain,
+                    codec,
+                    transform,
+                    allow_ezviz_headerless_hevc_fu,
+                ):
+                    indexes.update(chain)
                 break
             if current.marker:
                 break
@@ -1312,6 +1384,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             route_epochs,
             routed_video_payload_types,
             allow_ezviz_headerless_hevc_fu,
+            packet_nal_transform,
         )
         if packet_nal_transform is not None
         else frozenset()

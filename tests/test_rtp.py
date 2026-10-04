@@ -156,6 +156,21 @@ def test_bounded_rtp_rejects_incomplete_first_mb_code(truncated: bytes) -> None:
     ) == (b"\x61\x80first",)
 
 
+@pytest.mark.parametrize("truncated", [b"\x61\x80", b"\x61\xc0"])
+def test_bounded_rtp_rejects_incomplete_h264_slice_fields(truncated: bytes) -> None:
+    healthy = b"\x61\xe0healthy"
+    packets = (
+        parse_rtp_packet(_rtp(healthy, sequence=1, marker=True)),
+        parse_rtp_packet(
+            _rtp(truncated, sequence=2, timestamp=12000, marker=True)
+        ),
+    )
+    assert not rtp_nal_units_have_vcl((truncated,), codec="h264")
+    assert rtp_packets_to_nal_units(
+        packets, codec="h264", completed_access_units_only=True
+    ) == (healthy,)
+
+
 @pytest.mark.parametrize("truncated", [b"\x02\x01\x80", b"\x02\x01\x80\x00"])
 def test_bounded_rtp_rejects_incomplete_hevc_pps_code(truncated: bytes) -> None:
     healthy = b"\x02\x01\xc0healthy"

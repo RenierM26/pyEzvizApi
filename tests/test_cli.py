@@ -3095,7 +3095,7 @@ def test_cli_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
 @pytest.mark.parametrize(
     ("ciphertext", "expect_media"),
     [
-        ("206e9ba3e9476a2e4dee7b57ea93fc93", True),
+        ("4f398594072be830a32772a2eefdd2d3", True),
         ("b35d3653711a4dfb243b107dec3e53d5", False),
     ],
 )

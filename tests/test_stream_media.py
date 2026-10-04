@@ -2985,7 +2985,7 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 @pytest.mark.parametrize(
     ("first_bit", "fill", "ciphertext", "expect_media"),
     [
-        (0x80, 0, "206e9ba3e9476a2e4dee7b57ea93fc93", True),
+        (0xF0, 1, "4f398594072be830a32772a2eefdd2d3", True),
         (0, 2, "b35d3653711a4dfb243b107dec3e53d5", False),
     ],
 )

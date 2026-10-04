@@ -1116,6 +1116,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
+    output_is_vcl: list[bool] = []
     accepted: list[bool] = []
     pending_indexes: dict[int, list[int]] = {}
     active_timestamps: dict[int, int] = {}
@@ -1124,6 +1125,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     pending_gap: dict[int, bool] = {}
     first_vcl_au_pending: dict[int, bool] = {}
     first_slice_seen: dict[int, bool] = {}
+    new_timestamp_au: dict[int, bool] = {}
 
     def finish_access_unit(ssrc: int, *, complete: bool) -> None:
         if pending_vcl.get(ssrc) and first_vcl_au_pending.get(ssrc, True):
@@ -1132,7 +1134,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         # Keep non-VCL metadata from a damaged or unfinished picture, but
         # never carry its VCL slices into a later healthy access unit.
         for index in pending_indexes.pop(ssrc, []):
-            if complete or not rtp_nal_units_have_vcl((output[index],), codec=codec):
+            if complete or not output_is_vcl[index]:
                 accepted[index] = True
 
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
@@ -1177,6 +1179,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             pending_gap[packet.ssrc] = not contiguous or pending_gap.get(
                 packet.ssrc, False
             )
+            new_timestamp_au[packet.ssrc] = True
         elif not contiguous:
             pending_gap[packet.ssrc] = True
         active_timestamps[packet.ssrc] = packet.timestamp
@@ -1190,10 +1193,16 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             pending_gap[packet.ssrc] = True
         for nal in packet_nals:
             if nal:
+                classified_nal = (
+                    first_slice_transform(nal)
+                    if first_slice_transform is not None
+                    else nal
+                )
                 if (
                     completed_access_units_only
                     and codec == "h264"
-                    and (nal[0] & 0x1F) in {2, 3, 4}
+                    and classified_nal
+                    and (classified_nal[0] & 0x1F) in {2, 3, 4}
                 ):
                     raise EzvizUnsupportedMediaError(
                         "H.264 RTP data partitions cannot be verified as complete "
@@ -1203,20 +1212,20 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                     )
                 pending_indexes.setdefault(packet.ssrc, []).append(len(output))
                 output.append(nal)
+                is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
+                output_is_vcl.append(is_vcl)
                 accepted.append(False)
-                if rtp_nal_units_have_vcl((nal,), codec=codec):
+                if is_vcl:
                     if not pending_vcl.get(packet.ssrc):
                         needs_start_evidence = first_vcl_au_pending.get(
                             packet.ssrc, True
                         ) or pending_gap.get(packet.ssrc, False)
                         starts_picture = needs_start_evidence and _rtp_nal_starts_picture(
-                            first_slice_transform(nal)
-                            if first_slice_transform is not None
-                            else nal,
+                            classified_nal,
                             codec=codec,
                         )
                         first_slice_seen[packet.ssrc] = starts_picture
-                        if previous_timestamp != packet.timestamp and starts_picture:
+                        if new_timestamp_au.get(packet.ssrc) and starts_picture:
                             # A confirmed new picture cannot contain the slice
                             # lost before its timestamp boundary.
                             pending_gap[packet.ssrc] = False
@@ -1233,6 +1242,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             )
             pending_vcl[packet.ssrc] = False
             pending_gap[packet.ssrc] = False
+            new_timestamp_au[packet.ssrc] = False
     if completed_access_units_only:
         for ssrc in tuple(pending_indexes):
             finish_access_unit(ssrc, complete=False)

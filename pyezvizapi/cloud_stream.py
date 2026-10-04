@@ -1065,18 +1065,14 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             completed_access_units_only=True,
             first_slice_transform=decrypted_nal,
         )
-        if not rtp_nal_units_have_vcl(nal_units, codec=codec):
+        decrypted_units = tuple(decrypted_nal(nal_unit) for nal_unit in nal_units)
+        if not rtp_nal_units_have_vcl(decrypted_units, codec=codec):
             raise EzvizNoMediaError(
                 "Cloud RTP capture contained no complete video frame; "
                 "increase the capture duration"
             )
         decrypted_annexb = b"".join(
-            _decrypt_cloud_rtp_nal_unit(
-                nal_unit,
-                media_key,
-                nalu_header_size=header_size,
-            )
-            for nal_unit in nal_units
+            ANNEX_B_START_CODE + nal_unit for nal_unit in decrypted_units
         )
         audio = decrypt_idmx_aac_packets(parsed, media_key)
         if audio is not None:

@@ -257,6 +257,21 @@ def test_bounded_rtp_carries_metadata_gap_across_video_timestamp() -> None:
     ) == (b"\x61\x80first", b"\x61\x80healthy")
 
 
+def test_bounded_rtp_recovers_first_slice_reassembled_after_timestamp_gap() -> None:
+    damaged = parse_rtp_packet(_rtp(b"\x61\x80old", sequence=1, timestamp=9000))
+    # The missing sequence 2 was the prior picture's final slice.
+    start = parse_rtp_packet(
+        _rtp(b"\x7c\x81\x80new", sequence=3, timestamp=12000)
+    )
+    end = parse_rtp_packet(
+        _rtp(b"\x7c\x41-end", sequence=4, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (damaged, start, end), codec="h264", completed_access_units_only=True
+    ) == (b"\x61\x80new-end",)
+
+
 def test_bounded_rtp_rejects_malformed_marked_fu_after_complete_slice() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
     fu_start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))

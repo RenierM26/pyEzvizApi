@@ -3126,6 +3126,24 @@ def test_cli_cloud_rtp_checks_first_slice_after_decryption(
     ) == (b"\x00\x00\x00\x01" + encrypted_nal,)
 
 
+def test_cli_cloud_rtp_classifies_vcl_after_encrypted_header_decryption() -> None:
+    encrypted_nal = bytes.fromhex("6756a9964cbfe8a9b98a095499213e39")
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets,
+        codec="h264",
+        first_slice_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == (b"\x00\x00\x00\x01" + encrypted_nal,)
+
+
 def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:
     class FakeVtmStream(VtmStreamClient):
         def __init__(self) -> None:

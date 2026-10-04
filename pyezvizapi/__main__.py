@@ -3283,7 +3283,12 @@ def _rtp_packets_to_annexb_units(
             decrypted_first_slice if first_slice_key is not None else None
         ),
     )
-    if not rtp_nal_units_have_vcl(nal_units, codec=cast(Any, codec)):
+    classified_units = (
+        tuple(decrypted_first_slice(nal_unit) for nal_unit in nal_units)
+        if first_slice_key is not None
+        else nal_units
+    )
+    if not rtp_nal_units_have_vcl(classified_units, codec=cast(Any, codec)):
         raise EzvizNoMediaError(
             "Cloud RTP capture contained no complete video frame; "
             "increase the capture duration"

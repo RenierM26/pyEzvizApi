@@ -69,6 +69,7 @@ _RTP_CODEC_PROBE_MAX_PACKETS = 32
 _RTP_AUDIO_PROBE_MAX_PACKETS = 256
 _RTP_AUDIO_QUEUE_MAX_FRAMES = 128
 _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
+_MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS = 5.0
 
 
 class _CloudRtpAudioInput:
@@ -674,7 +675,9 @@ def _require_cloud_mpegps_video_duration(
 
     if duration_seconds is None or duration_seconds < 8 or max_packets is not None:
         return False
-    observed = mpeg_ps_video_pts_span_seconds(payload)
+    observed = mpeg_ps_video_pts_span_seconds(
+        payload, max_gap_seconds=_MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
+    )
     if observed is None:
         return True
     if observed < duration_seconds / 2:
@@ -804,7 +807,10 @@ def _probe_cloud_video_frame_span(path: Path, *, ffprobe_path: str) -> float:
     span = 0.0
     segment_start = previous = timestamps[0]
     for timestamp in timestamps[1:]:
-        if timestamp < previous:
+        if (
+            timestamp < previous
+            or timestamp - previous > _MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
+        ):
             span += previous - segment_start
             segment_start = timestamp
         previous = timestamp

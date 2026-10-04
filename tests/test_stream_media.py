@@ -225,6 +225,17 @@ def test_mpeg_ps_video_pts_span_is_unknown_with_one_timestamp() -> None:
     assert mpeg_ps_video_pts_span_seconds(_timed_video_pes(90_000)) is None
 
 
+def test_mpeg_ps_video_pts_span_is_ambiguous_after_forward_gap() -> None:
+    payload = b"".join(
+        _timed_video_pes(pts)
+        for pts in (0, 45_000, 9_000_000, 9_045_000)
+    )
+
+    assert (
+        mpeg_ps_video_pts_span_seconds(payload, max_gap_seconds=5.0) is None
+    )
+
+
 @pytest.mark.parametrize(
     ("first_pts", "last_pts", "expected_span"),
     [(90_000, 0, None), ((1 << 33) - 90_000, 90_000, 2)],
@@ -264,7 +275,12 @@ def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
     output_format: str,
 ) -> None:
     pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
-    bodies = (pack + _timed_video_pes(90_000), pack + _timed_video_pes(last_pts))
+    pts_values = (
+        (90_000, last_pts)
+        if incomplete or max_packets is not None
+        else (*range(90_000, last_pts, 4 * 90_000), last_pts)
+    )
+    bodies = tuple(pack + _timed_video_pes(pts) for pts in pts_values)
 
     class FakeCloudStream:
         def start(self) -> None:
@@ -326,13 +342,17 @@ def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
 
 @pytest.mark.parametrize("output_format", ["mpegps", "mpegts"])
 @pytest.mark.parametrize("video_duration", [2.0, 18.0])
-def test_decrypted_cloud_save_probes_ambiguous_single_pts_before_publication(
+@pytest.mark.parametrize(
+    "pts_values", [(90_000,), (0, 45_000, 9_000_000, 9_045_000)]
+)
+def test_decrypted_cloud_save_probes_ambiguous_pts_before_publication(
     monkeypatch: pytest.MonkeyPatch,
     output_format: str,
     video_duration: float,
+    pts_values: tuple[int, ...],
 ) -> None:
     pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
-    body = pack + _timed_video_pes(90_000)
+    body = b"".join(pack + _timed_video_pes(pts) for pts in pts_values)
 
     class FakeCloudStream:
         def start(self) -> None:
@@ -409,15 +429,24 @@ def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
     assert len(calls) == 2
 
 
-def test_cloud_video_probe_does_not_count_frame_timestamp_reset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        ("100.0", "100.5", "0.0", "0.5"),
+        ("0.0", "0.5", "100.0", "100.5"),
+    ],
+)
+def test_cloud_video_probe_does_not_count_frame_timestamp_discontinuity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    timestamps: tuple[str, ...],
 ) -> None:
     def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
         if "-show_frames" in command:
             payload: dict[str, Any] = {
                 "frames": [
                     {"best_effort_timestamp_time": value}
-                    for value in ("100.0", "100.5", "0.0", "0.5")
+                    for value in timestamps
                 ]
             }
         else:

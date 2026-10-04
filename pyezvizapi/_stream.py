@@ -1267,11 +1267,14 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
     return ranges
 
 
-def mpeg_ps_video_pts_span_seconds(data: bytes) -> float | None:
+def mpeg_ps_video_pts_span_seconds(
+    data: bytes, *, max_gap_seconds: float | None = None
+) -> float | None:
     """Measure video presentation span from clear MPEG-PS PES headers.
 
     Video bodies may be encrypted, but their PES timestamps remain clear. Return
     ``None`` when no valid video PTS is available rather than guessing from bytes.
+    ``max_gap_seconds`` treats sparse or jumped adjacent timestamps as ambiguous.
     """
 
     timestamps: list[int] = []
@@ -1305,6 +1308,12 @@ def mpeg_ps_video_pts_span_seconds(data: bytes) -> float | None:
     wraps = 0
     for previous, current in pairwise(timestamps):
         if current >= previous:
+            if (
+                max_gap_seconds is not None
+                and current - previous > max_gap_seconds * 90_000
+            ):
+                # Sparse or discontinuous PES timing cannot prove coverage.
+                return None
             continue
         if (
             previous >= wrap - transition_window

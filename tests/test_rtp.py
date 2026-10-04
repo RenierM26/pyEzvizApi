@@ -94,6 +94,52 @@ def test_bounded_rtp_does_not_close_picture_across_sequence_gap() -> None:
     ) == ()
 
 
+def test_bounded_rtp_rejects_sequence_conflict_before_timestamp_boundary() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    conflict = parse_rtp_packet(_rtp(b"\x61altered", sequence=1, timestamp=9000))
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x61next", sequence=2, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, conflict, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61next",)
+
+
+def test_bounded_rtp_keeps_picture_after_identical_duplicate() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x61next", sequence=2, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, first, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61first", b"\x61next")
+
+
+@pytest.mark.parametrize(
+    ("codec", "aggregation", "slice_nal"),
+    [
+        ("h264", b"\x78", b"\x61slice"),
+        ("hevc", b"\x60\x01", b"\x02\x01slice"),
+    ],
+)
+def test_bounded_rtp_rejects_partial_marked_aggregation(
+    codec: RtpVideoCodec, aggregation: bytes, slice_nal: bytes
+) -> None:
+    partial = aggregation + len(slice_nal).to_bytes(2, "big") + slice_nal + b"\x00\x08bad"
+    packet = parse_rtp_packet(_rtp(partial, sequence=1, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+    assert RtpVideoDepacketizer(codec).push(packet) == ()
+
+
 def test_bounded_rtp_does_not_close_marked_picture_after_sequence_gap() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
     final_slice = parse_rtp_packet(_rtp(b"\x61last", sequence=3, marker=True))

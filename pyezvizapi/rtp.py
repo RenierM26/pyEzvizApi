@@ -1141,10 +1141,13 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             else 1
         )
         if sequence_delta == 0 or sequence_delta >= 0x8000:
+            conflicts_before = depacketizer.stats.sequence_conflicts
             if is_video:
                 depacketizer.push(packet)
             else:
                 depacketizer.observe_nonvideo_packet(packet)
+            if depacketizer.stats.sequence_conflicts > conflicts_before:
+                pending_gap[packet.ssrc] = True
             continue
         active_sequences[packet.ssrc] = packet.sequence
         contiguous = sequence_delta == 1
@@ -1248,11 +1251,13 @@ def _rtp_payload_matches_video_codec(
 def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:
     units: list[bytes] = []
     offset = header_size
-    while offset + 2 <= len(payload):
+    while offset < len(payload):
+        if offset + 2 > len(payload):
+            return ()
         unit_size = int.from_bytes(payload[offset : offset + 2], "big")
         offset += 2
         if unit_size <= 0 or offset + unit_size > len(payload):
-            break
+            return ()
         units.append(payload[offset : offset + unit_size])
         offset += unit_size
     return tuple(units)

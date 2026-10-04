@@ -2919,6 +2919,48 @@ def test_clip_options_use_ecdh_compatible_default_mux() -> None:
     assert options.resolved_mux().output_format == "mpegps"
 
 
+@pytest.mark.parametrize(
+    ("override", "decrypt_video", "duration_seconds", "expected"),
+    [
+        (None, False, 8.0, True),
+        (False, False, 8.0, False),
+        (True, False, 8.0, True),
+        (None, True, 8.0, False),
+        (None, False, None, False),
+    ],
+)
+def test_native_hcnetsdk_clip_auto_waits_for_clear_video_window(
+    monkeypatch: pytest.MonkeyPatch,
+    override: bool | None,
+    decrypt_video: bool,
+    duration_seconds: float | None,
+    expected: bool,
+) -> None:
+    client = _client()
+    captured: list[ClipOptions] = []
+
+    def capture_options(
+        _serial: str, _output: object, options: ClipOptions
+    ) -> dict[str, bool]:
+        captured.append(options)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "save_clip_with_options", capture_options)
+    client.save_clip(
+        "CAM123",
+        io.BytesIO(),
+        source="hcnetsdk-command-port",
+        duration_seconds=duration_seconds,
+        decrypt_video=decrypt_video,
+        media_key="KEY" if decrypt_video else None,
+        hcnetsdk_command_generated_plan=cast(Any, object()),
+        hcnetsdk_video_wait_for_clean_window=override,
+    )
+
+    assert captured[0].mux is not None
+    assert captured[0].mux.h264_wait_for_clean_idr_window is expected
+
+
 def test_save_clip_with_options_rejects_unsupported_byte_limit() -> None:
     client = _client()
     options = ClipOptions(capture=CaptureLimits(max_bytes=1024))

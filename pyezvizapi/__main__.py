@@ -926,11 +926,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hcnetsdk-video-wait-for-clean-window",
         dest="hcnetsdk_h264_wait_for_clean_idr_window",
         action="store_true",
+        default=None,
         help=(
             "For clear IDMX command-port streams, discard startup media until "
             "a decodable H.264 IDR or HEVC IRAP window is found, then start the requested "
-            "duration window."
+            "duration window. This is automatic for bounded generated LAN plans."
         ),
+    )
+    parser_save_clip.add_argument(
+        "--hcnetsdk-video-no-wait-for-clean-window",
+        dest="hcnetsdk_h264_wait_for_clean_idr_window",
+        action="store_false",
+        default=None,
+        help="Disable automatic clean-window waiting for HCNetSDK generated LAN plans.",
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-clean-idr-wait-seconds",

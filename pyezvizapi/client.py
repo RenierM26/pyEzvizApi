@@ -3056,7 +3056,7 @@ class EzvizClient:
         hcnetsdk_h264_trim_to_clean_idr_window: bool = False,
         hcnetsdk_h264_clean_idr_preroll_seconds: float = 0.0,
         hcnetsdk_h264_clean_idr_max_windows: int = 32,
-        hcnetsdk_h264_wait_for_clean_idr_window: bool = False,
+        hcnetsdk_h264_wait_for_clean_idr_window: bool | None = None,
         hcnetsdk_h264_clean_idr_wait_seconds: float = 60.0,
         hcnetsdk_video_trim_to_clean_window: bool | None = None,
         hcnetsdk_video_clean_window_preroll_seconds: float | None = None,
@@ -3144,11 +3144,22 @@ class EzvizClient:
                 if hcnetsdk_video_clean_window_max_windows is None
                 else hcnetsdk_video_clean_window_max_windows
             )
-            wait_for_clean_window = (
-                hcnetsdk_h264_wait_for_clean_idr_window
-                if hcnetsdk_video_wait_for_clean_window is None
-                else hcnetsdk_video_wait_for_clean_window
-            )
+            if hcnetsdk_video_wait_for_clean_window is not None:
+                wait_for_clean_window = hcnetsdk_video_wait_for_clean_window
+            elif hcnetsdk_h264_wait_for_clean_idr_window is not None:
+                wait_for_clean_window = hcnetsdk_h264_wait_for_clean_idr_window
+            else:
+                # Native LAN plans may start between IDR/IRAP windows. Collect
+                # until the first decodable window only for bounded clear clips;
+                # callers using other plans or trim options keep their choices.
+                wait_for_clean_window = bool(
+                    hcnetsdk_command_generated_plan is not None
+                    and not decrypt_video
+                    and is_positive_finite_duration_bound(duration_seconds)
+                    and not hcnetsdk_h264_skip_initial_idr_windows
+                    and not trim_to_clean_window
+                    and not clean_window_preroll_seconds
+                )
             clean_window_wait_seconds = (
                 hcnetsdk_h264_clean_idr_wait_seconds
                 if hcnetsdk_video_clean_window_wait_seconds is None

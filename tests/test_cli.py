@@ -1048,7 +1048,7 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
         "hcnetsdk_h264_trim_to_clean_idr_window": False,
         "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
         "hcnetsdk_h264_clean_idr_max_windows": 32,
-        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_wait_for_clean_idr_window": None,
         "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
     }
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
@@ -1683,7 +1683,7 @@ def test_save_clip_can_use_hcnetsdk_command_port_generated_plan_file(
         request["hcnetsdk_h264_clean_idr_max_windows"]
         == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
     )
-    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is False
+    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is None
     assert (
         request["hcnetsdk_h264_clean_idr_wait_seconds"]
         == HCNETSDK_CLEAN_IDR_DEFAULT_WAIT_SECONDS
@@ -1772,8 +1772,37 @@ def test_save_clip_can_use_hcnetsdk_command_port_native_plan(
     assert generated_plan.steps[8].read_response_after_each is False
     assert generated_plan.steps[8].control_templates[0].command_id == 0x30000
     assert generated_plan.steps[9].control_templates[0].command_id == 0x90100
+    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is None
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
     assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-native-plan",
+                "app-lan-live-view",
+                "--hcnetsdk-command-password",
+                "123456",
+                "--hcnetsdk-video-no-wait-for-clean-window",
+            ]
+        )
+        == 0
+    )
+    assert fake_client.instances[-1].save_clip_request[
+        "hcnetsdk_h264_wait_for_clean_idr_window"
+    ] is False
 
 
 def test_save_clip_native_plan_rejects_non_primary_channel(
@@ -1990,7 +2019,7 @@ def test_save_clip_can_use_cloud_source(
         "hcnetsdk_h264_trim_to_clean_idr_window": False,
         "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
         "hcnetsdk_h264_clean_idr_max_windows": 32,
-        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_wait_for_clean_idr_window": None,
         "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
         "cloud_client_type": 7,
         "cloud_token_index": 1,

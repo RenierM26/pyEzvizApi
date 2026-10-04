@@ -6560,12 +6560,8 @@ def _idmx_local_video_payload_types(
 
     profile = _idmx_local_route_profile(packets)
     if codec is not None:
-        if any(descriptor.media_kind == "video" for descriptor in profile.descriptors):
-            return profile.codec_payload_types(codec)
-        return profile.codec_payload_types(
-            codec,
-            fallback_payload_types=frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}),
-        )
+        h264_types, hevc_types = _idmx_local_supported_video_payload_types(packets)
+        return h264_types if codec == "h264" else hevc_types
     descriptor_video_payload_types = frozenset(
         descriptor.payload_type
         for descriptor in profile.descriptors

@@ -25,6 +25,7 @@ from pyezvizapi._local_stream import (
     _idmx_local_packets_to_hevc_annexb,
     _idmx_local_supported_video_payload_types,
     _idmx_local_video_frame_rate,
+    _idmx_local_video_payload_types,
     _idmx_packets_from_selected_annexb,
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
@@ -792,12 +793,23 @@ def test_local_idmx_stale_hevc_descriptor_uses_observed_legacy_route() -> None:
             payload_type=96,
             ssrc=b"\x55\x66\x77\x88",
         ),
+        _rtp_packet(
+            b"\x26\x01irap",
+            sequence=4,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
     ]
 
     assert _idmx_local_supported_video_payload_types(packets) == (
         frozenset(),
         frozenset({15, 96}),
     )
+    assert _idmx_local_video_payload_types(packets, codec="hevc") == frozenset(
+        {15, 96}
+    )
+    irap_nal = b"\x00\x00\x00\x01\x26\x01irap"
+    assert irap_nal in _idmx_local_packets_to_hevc_annexb(packets)
 
 
 def test_local_idmx_active_descriptor_prevents_legacy_route_fallback() -> None:

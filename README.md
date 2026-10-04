@@ -251,9 +251,15 @@ pyezvizapi --json save clip \
   --duration 20 \
   --hcnetsdk-command-native-plan app-lan-live-view \
   --hcnetsdk-command-password "$EZVIZ_LAN_PASSWORD" \
-  --hcnetsdk-local-ip 192.0.2.20 \
-  --hcnetsdk-h264-skip-initial-idr-windows 1
+  --hcnetsdk-local-ip 192.0.2.20
 ```
+
+The command-port password is the device login password; on some cameras it
+differs from the cloud video-encryption key. For finite-duration clear captures
+using a generated LAN plan, the library automatically waits (up to 60 seconds
+by default) for the first decodable H.264 IDR or HEVC IRAP window before
+starting the requested clip duration. Use
+`--hcnetsdk-video-no-wait-for-clean-window` to disable this behavior.
 
 The built-in `app-lan-live-view` plan currently supports `--channel 1` only
 because the app-observed command tails include channel-1 fields. It keeps the
@@ -357,9 +363,9 @@ command-port sessions time to stabilize while preserving more of the requested
 clean clip. Use `--hcnetsdk-video-clean-window-max-windows N` when long
 unstable starts need more than the default 32 video windows checked.
 If you need to preserve the requested clip duration instead of trimming after
-capture, use `--hcnetsdk-video-wait-for-clean-window`; this discards startup
-media until a decodable H.264 IDR or HEVC IRAP window is found, then starts the
-requested duration window. Bound that pre-capture wait with
+capture on other plans, use `--hcnetsdk-video-wait-for-clean-window`; this
+discards startup media until a decodable H.264 IDR or HEVC IRAP window is found,
+then starts the requested duration window. Bound that pre-capture wait with
 `--hcnetsdk-video-clean-window-wait-seconds N`. The older
 `--hcnetsdk-h264-*clean-idr*` names remain accepted as compatibility aliases.
 Some cameras expose very sparse or persistently corrupt refresh windows on

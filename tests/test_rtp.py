@@ -625,6 +625,36 @@ def test_bounded_rtp_carries_metadata_gap_across_video_timestamp() -> None:
     ) == (b"\x61\x80first", b"\x61\x80healthy")
 
 
+@pytest.mark.parametrize("nonvideo_payload_type", [104, 112])
+def test_bounded_rtp_keeps_multiplexed_gap_across_different_timestamp_clocks(
+    nonvideo_payload_type: int,
+) -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    # Sequence 2 could be the next video's first slice. Audio/metadata use
+    # another timestamp clock, so their timestamp cannot assign the loss.
+    other_media = parse_rtp_packet(
+        _rtp(
+            b"other media",
+            sequence=3,
+            timestamp=777_777,
+            payload_type=nonvideo_payload_type,
+        )
+    )
+    trailing = parse_rtp_packet(
+        _rtp(b"\x61\x00tail", sequence=4, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=5, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, other_media, trailing, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
 def test_bounded_h264_keeps_new_timestamp_metadata_gap_despite_mb_zero() -> None:
     previous = parse_rtp_packet(
         _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)

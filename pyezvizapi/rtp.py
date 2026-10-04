@@ -1345,6 +1345,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     pending_vcl: dict[int, bool] = {}
     pending_gap: dict[int, bool] = {}
     gap_timestamp: dict[int, int] = {}
+    unassigned_gap: dict[int, bool] = {}
     pending_corrupt: dict[int, bool] = {}
     first_vcl_au_pending: dict[int, bool] = {}
     first_slice_seen: dict[int, bool] = {}
@@ -1390,7 +1391,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 depacketizer.observe_nonvideo_packet(packet)
             if depacketizer.stats.sequence_conflicts > conflicts_before:
                 pending_gap[packet.ssrc] = True
-                gap_timestamp[packet.ssrc] = packet.timestamp
+                if is_video:
+                    gap_timestamp[packet.ssrc] = packet.timestamp
+                else:
+                    unassigned_gap[packet.ssrc] = True
                 pending_corrupt[packet.ssrc] = True
             continue
         active_sequences[packet.ssrc] = packet.sequence
@@ -1399,7 +1403,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             depacketizer.observe_nonvideo_packet(packet)
             if not contiguous:
                 pending_gap[packet.ssrc] = True
-                gap_timestamp[packet.ssrc] = packet.timestamp
+                unassigned_gap[packet.ssrc] = True
             continue
         previous_timestamp = active_timestamps.get(packet.ssrc)
         if previous_timestamp is not None and packet.timestamp != previous_timestamp:
@@ -1416,12 +1420,16 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             pending_corrupt[packet.ssrc] = False
             pending_gap[packet.ssrc] = not contiguous or (
                 pending_gap.get(packet.ssrc, False)
-                and gap_timestamp.get(packet.ssrc) == packet.timestamp
+                and (
+                    unassigned_gap.get(packet.ssrc, False)
+                    or gap_timestamp.get(packet.ssrc) == packet.timestamp
+                )
             )
             if pending_gap[packet.ssrc]:
                 gap_timestamp[packet.ssrc] = packet.timestamp
             else:
                 gap_timestamp.pop(packet.ssrc, None)
+                unassigned_gap.pop(packet.ssrc, None)
             new_timestamp_au[packet.ssrc] = True
         elif not contiguous:
             pending_gap[packet.ssrc] = True
@@ -1497,6 +1505,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                             # H.264 macroblock zero can arrive later under ASO/FMO.
                             pending_gap[packet.ssrc] = False
                             gap_timestamp.pop(packet.ssrc, None)
+                            unassigned_gap.pop(packet.ssrc, None)
                     elif codec == "h264" and starts_picture:
                         # ASO/FMO may transmit macroblock zero after another
                         # slice of the same access unit.
@@ -1515,6 +1524,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             pending_vcl[packet.ssrc] = False
             pending_gap[packet.ssrc] = False
             gap_timestamp.pop(packet.ssrc, None)
+            unassigned_gap.pop(packet.ssrc, None)
             pending_corrupt[packet.ssrc] = False
             new_timestamp_au[packet.ssrc] = False
     if completed_access_units_only:

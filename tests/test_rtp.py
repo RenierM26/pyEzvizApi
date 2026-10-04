@@ -371,6 +371,24 @@ def test_bounded_rtp_does_not_close_picture_across_sequence_gap() -> None:
     ) == ()
 
 
+def test_bounded_h264_does_not_clear_new_picture_gap_with_macroblock_zero() -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    # Missing sequence 2 could be an earlier ASO/FMO slice of this picture.
+    uncertain = parse_rtp_packet(
+        _rtp(b"\x61\xe0mb0", sequence=3, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=4, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, uncertain, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
 def test_bounded_rtp_rejects_sequence_conflict_before_timestamp_boundary() -> None:
     first = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
     conflict = parse_rtp_packet(_rtp(b"\x61altered", sequence=1, timestamp=9000))
@@ -534,14 +552,34 @@ def test_bounded_rtp_carries_metadata_gap_across_video_timestamp() -> None:
     ) == (b"\x61\x80first", b"\x61\x80healthy")
 
 
+def test_bounded_h264_keeps_new_timestamp_metadata_gap_despite_mb_zero() -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, timestamp=12000, payload_type=112)
+    )
+    uncertain = parse_rtp_packet(
+        _rtp(b"\x61\xe0mb0", sequence=4, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=5, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, metadata, uncertain, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
 @pytest.mark.parametrize(
     ("video_nal", "expected"),
     [
-        (b"\x61\x80first", (b"\x61\x80first",)),
+        (b"\x61\x80first", ()),
         (b"\x61\x00tail", ()),
     ],
 )
-def test_bounded_rtp_resolves_pre_video_metadata_gap_with_first_slice(
+def test_bounded_h264_preserves_pre_video_metadata_gap_with_macroblock_zero(
     video_nal: bytes, expected: tuple[bytes, ...]
 ) -> None:
     first_metadata = parse_rtp_packet(
@@ -562,11 +600,11 @@ def test_bounded_rtp_resolves_pre_video_metadata_gap_with_first_slice(
 @pytest.mark.parametrize(
     ("first_slice_bit", "expected"),
     [
-        (b"\x80", (b"\x61\x80startend",)),
+        (b"\x80", ()),
         (b"\x00", ()),
     ],
 )
-def test_bounded_rtp_resolves_pre_video_gap_after_fu_reassembly(
+def test_bounded_h264_preserves_pre_video_gap_after_fu_reassembly(
     first_slice_bit: bytes, expected: tuple[bytes, ...]
 ) -> None:
     first_metadata = parse_rtp_packet(
@@ -586,7 +624,7 @@ def test_bounded_rtp_resolves_pre_video_gap_after_fu_reassembly(
     ) == expected
 
 
-def test_bounded_rtp_recovers_first_slice_reassembled_after_timestamp_gap() -> None:
+def test_bounded_h264_rejects_macroblock_zero_after_timestamp_gap() -> None:
     damaged = parse_rtp_packet(_rtp(b"\x61\x80old", sequence=1, timestamp=9000))
     # The missing sequence 2 was the prior picture's final slice.
     start = parse_rtp_packet(
@@ -598,7 +636,7 @@ def test_bounded_rtp_recovers_first_slice_reassembled_after_timestamp_gap() -> N
 
     assert rtp_packets_to_nal_units(
         (damaged, start, end), codec="h264", completed_access_units_only=True
-    ) == (b"\x61\x80new-end",)
+    ) == ()
 
 
 def test_bounded_rtp_rejects_malformed_marked_fu_after_complete_slice() -> None:

@@ -1288,6 +1288,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     active_sequences: dict[int, int] = {}
     pending_vcl: dict[int, bool] = {}
     pending_gap: dict[int, bool] = {}
+    metadata_gap_timestamp: dict[int, int] = {}
     pending_corrupt: dict[int, bool] = {}
     first_vcl_au_pending: dict[int, bool] = {}
     first_slice_seen: dict[int, bool] = {}
@@ -1341,6 +1342,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             depacketizer.observe_nonvideo_packet(packet)
             if not contiguous:
                 pending_gap[packet.ssrc] = True
+                metadata_gap_timestamp[packet.ssrc] = packet.timestamp
             continue
         previous_timestamp = active_timestamps.get(packet.ssrc)
         if previous_timestamp is not None and packet.timestamp != previous_timestamp:
@@ -1355,9 +1357,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             )
             pending_vcl[packet.ssrc] = False
             pending_corrupt[packet.ssrc] = False
-            pending_gap[packet.ssrc] = not contiguous or pending_gap.get(
-                packet.ssrc, False
+            pending_gap[packet.ssrc] = not contiguous or (
+                pending_gap.get(packet.ssrc, False)
+                and metadata_gap_timestamp.get(packet.ssrc) == packet.timestamp
             )
+            metadata_gap_timestamp.pop(packet.ssrc, None)
             new_timestamp_au[packet.ssrc] = True
         elif not contiguous:
             pending_gap[packet.ssrc] = True
@@ -1422,11 +1426,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                         if (
                             new_timestamp_au.get(packet.ssrc)
                             or first_vcl_au_pending.get(packet.ssrc, True)
-                        ) and starts_picture and not pending_corrupt.get(
+                        ) and starts_picture and codec == "hevc" and not pending_corrupt.get(
                             packet.ssrc, False
                         ):
-                            # A confirmed new picture cannot contain the slice
-                            # lost before its timestamp boundary.
+                            # HEVC's first-slice flag establishes a new picture.
+                            # H.264 macroblock zero can arrive later under ASO/FMO.
                             pending_gap[packet.ssrc] = False
                     elif codec == "h264" and starts_picture:
                         # ASO/FMO may transmit macroblock zero after another
@@ -1445,6 +1449,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             )
             pending_vcl[packet.ssrc] = False
             pending_gap[packet.ssrc] = False
+            metadata_gap_timestamp.pop(packet.ssrc, None)
             pending_corrupt[packet.ssrc] = False
             new_timestamp_au[packet.ssrc] = False
     if completed_access_units_only:

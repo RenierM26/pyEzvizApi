@@ -797,7 +797,16 @@ def _probe_cloud_video_frame_span(path: Path, *, ffprobe_path: str) -> float:
         raise PyEzvizError("Could not determine staged cloud video frame span") from err
     if len(timestamps) < 2 or not all(math.isfinite(value) for value in timestamps):
         return 0.0
-    return max(timestamps) - min(timestamps)
+    # ffprobe frame timestamps can restart when the upstream timeline resets.
+    # A global max-minus-min would count that clock jump as received video.
+    span = 0.0
+    segment_start = previous = timestamps[0]
+    for timestamp in timestamps[1:]:
+        if timestamp < previous:
+            span += previous - segment_start
+            segment_start = timestamp
+        previous = timestamp
+    return span + previous - segment_start
 
 
 def _require_bounded_cloud_decrypt_capture(

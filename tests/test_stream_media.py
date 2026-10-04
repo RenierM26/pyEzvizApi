@@ -409,6 +409,30 @@ def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
     assert len(calls) == 2
 
 
+def test_cloud_video_probe_does_not_count_frame_timestamp_reset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+        if "-show_frames" in command:
+            payload: dict[str, Any] = {
+                "frames": [
+                    {"best_effort_timestamp_time": value}
+                    for value in ("100.0", "100.5", "0.0", "0.5")
+                ]
+            }
+        else:
+            payload = {"streams": [{}], "format": {"duration": "101.0"}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+
+    observed = _probe_cloud_video_duration(
+        tmp_path / "reset.ps", ffprobe_path="ffprobe"
+    )
+
+    assert observed == pytest.approx(1)
+
+
 def test_cloud_video_probe_reports_missing_ffprobe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:

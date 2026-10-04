@@ -102,6 +102,12 @@ pyezvizapi --token-file ezviz_token.json --json save clip \
   --serial ABC123 --duration 10s --decrypt-video \
   --output /config/www/ezviz/front.ts
 
+# Decrypted direct-local clips auto-detect whether the codec header is clear.
+# Use --decrypt-codec encrypted-header only for a device known to encrypt it.
+
+# Cloud save auto-selects the first VTM resource unless --channel is given.
+# This matters on multi-lens cameras whose first resource is channel 0.
+
 # Save from the full local HCNetSDK command-port media path on port 8000.
 pyezvizapi --token-file ezviz_token.json --json save clip \
   --source hcnetsdk-command-port --serial ABC123 --host 192.0.2.10 \

@@ -91,7 +91,7 @@ class ClipOptions:
         default_factory=lambda: MediaDecodeOptions(nalu_header_size=0)
     )
     mux: MediaMuxOptions | None = None
-    channel: int = 1
+    channel: int | None = None
 
     def resolved_mux(self) -> MediaMuxOptions:
         """Return explicit mux settings or the source-compatible default."""

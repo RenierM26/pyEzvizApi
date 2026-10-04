@@ -219,7 +219,7 @@ class SaveMediaResult(TypedDict, total=False):
     ok: bool
     kind: str
     serial: str
-    channel: int
+    channel: int | None
     output: str | None
     bytes: int | None
     source: str
@@ -3032,7 +3032,7 @@ class EzvizClient:
         output_format: ClipOutputFormat | None = None,
         duration_seconds: float | None = 10.0,
         max_packets: int | None = None,
-        channel: int = 1,
+        channel: int | None = None,
         ffmpeg_path: str = "ffmpeg",
         decrypt_video: bool = False,
         media_key: str | bytes | None = None,
@@ -3083,13 +3083,18 @@ class EzvizClient:
         This long-form signature is retained for compatibility. New code can
         group the same settings with :meth:`save_clip_with_options`.
 
-        When ``nalu_header_size`` is omitted, cloud decryption auto-detects the
-        clear codec header while local sources retain the legacy ``0`` default.
+        When ``nalu_header_size`` is omitted, cloud and direct-local decryption
+        auto-detect the clear codec header. Other sources retain the legacy
+        ``0`` default.
         Passing ``0`` or ``None`` explicitly preserves that exact choice.
         """
 
         if nalu_header_size is _SOURCE_DEFAULT_NALU_HEADER_SIZE:
-            nalu_header_size = None if source == "cloud" else 0
+            nalu_header_size = (
+                None
+                if decrypt_video and source in {"cloud", "local-sdk", "local-sdk-ecdh"}
+                else 0
+            )
 
         if output_format is None:
             output_format = "mpegps" if source == "local-sdk-ecdh" else "mpegts"
@@ -3259,7 +3264,7 @@ class EzvizClient:
                 output_format=mux.output_format,
                 duration_seconds=options.duration_seconds,
                 max_packets=options.max_packets,
-                channel=options.channel,
+                channel=1 if options.channel is None else options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,
                 media_key=decode.media_key,
@@ -3278,7 +3283,7 @@ class EzvizClient:
                 duration_seconds=options.duration_seconds,
                 max_packets=options.max_packets,
                 max_frames=source.max_frames,
-                channel=options.channel,
+                channel=1 if options.channel is None else options.channel,
                 cas_serial=source.cas_serial,
                 register_p2p_session=source.register_p2p_session,
                 p2p_register_max_retries=source.p2p_register_max_retries,
@@ -3299,7 +3304,7 @@ class EzvizClient:
                 output_format=mux.output_format,
                 duration_seconds=options.duration_seconds,
                 max_packets=options.max_packets,
-                channel=options.channel,
+                channel=1 if options.channel is None else options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,
                 media_key=decode.media_key,
@@ -3419,13 +3424,17 @@ class EzvizClient:
                 smscode=smscode,
             )
 
+        bytes_written = _bytes_written_to_output(output, start_position=start_position)
+        if bytes_written == 0:
+            raise PyEzvizError("Local SDK ECDH capture did not contain media")
+
         return {
             "ok": True,
             "kind": "clip",
             "serial": serial,
             "channel": channel,
             "output": _output_name(output),
-            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "bytes": bytes_written,
             "source": "local-sdk-ecdh",
             "format": output_format,
             "duration_seconds": duration_seconds,
@@ -3762,7 +3771,7 @@ class EzvizClient:
         output_format: ClipOutputFormat,
         duration_seconds: float | None,
         max_packets: int | None,
-        channel: int,
+        channel: int | None,
         ffmpeg_path: str,
         decrypt_video: bool,
         media_key: str | bytes | None,

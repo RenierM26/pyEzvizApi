@@ -1066,6 +1066,65 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
     }
 
 
+def test_save_clip_cloud_defaults_to_resource_auto_selection(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                "cloud",
+                "--serial",
+                "CAM123",
+                "--output",
+                str(tmp_path / "front.ts"),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["channel"] is None
+
+
+@pytest.mark.parametrize("source", ["local-sdk", "local-sdk-ecdh"])
+def test_save_clip_decrypted_local_defaults_to_auto_header_detection(
+    monkeypatch,
+    tmp_path,
+    source,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                source,
+                "--serial",
+                "CAM123",
+                "--duration",
+                "5s",
+                "--decrypt-video",
+                "--output",
+                str(tmp_path / "front.ts"),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["nalu_header_size"] is None
+
+
 def test_save_clip_can_use_local_sdk_ecdh_source(
     monkeypatch,
     tmp_path,

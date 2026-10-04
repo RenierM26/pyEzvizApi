@@ -2997,6 +2997,26 @@ def test_save_clip_accepts_arbitrary_size_integer_packet_limit(monkeypatch) -> N
     assert calls[0]["max_packets"] == huge_limit
 
 
+def test_save_clip_rejects_empty_local_sdk_ecdh_capture(monkeypatch) -> None:
+    client = _client()
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        assert source_client is client
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    with pytest.raises(PyEzvizError, match="did not contain media"):
+        client.save_clip("CAM123", io.BytesIO(), source="local-sdk-ecdh")
+
+
 def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ps"
@@ -3119,6 +3139,7 @@ def test_save_clip_local_sdk_ecdh_bounds_input_frames_by_max_packets(
         **kwargs: Any,
     ) -> None:
         calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
@@ -3634,6 +3655,29 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
     )
 
     assert calls[0]["nalu_header_size"] is None
+    assert calls[0]["channel"] is None
+
+
+@pytest.mark.parametrize("source", ["local-sdk", "local-sdk-ecdh"])
+def test_save_clip_local_decrypt_uses_automatic_nalu_header_default(
+    monkeypatch,
+    source,
+) -> None:
+    client = _client()
+    captured: list[ClipOptions] = []
+
+    def fake_save_clip_with_options(
+        serial: str,
+        output: str | Path | BinaryIO,
+        options: ClipOptions,
+    ) -> dict[str, Any]:
+        captured.append(options)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "save_clip_with_options", fake_save_clip_with_options)
+    client.save_clip("CAM123", io.BytesIO(), source=source, decrypt_video=True)
+
+    assert captured[0].decode.nalu_header_size is None
 
 
 def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(

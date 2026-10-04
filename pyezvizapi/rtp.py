@@ -897,6 +897,11 @@ class RtpVideoDepacketizer:
         if continuity in {"gap", "conflict"}:
             self._discard_fragment(packet.ssrc)
 
+    def has_incomplete_nal(self, ssrc: int) -> bool:
+        """Report an unfinished fragmented NAL for one video SSRC."""
+
+        return ssrc in self._fragment_by_ssrc
+
     def _continuity(self, packet: RtpPacket) -> str:
         previous = self._last_sequence_by_ssrc.get(packet.ssrc)
         identity = (packet.sequence, packet.timestamp, packet.marker, packet.payload)
@@ -1156,6 +1161,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                     pending_vcl.get(packet.ssrc)
                     and contiguous
                     and not pending_gap.get(packet.ssrc)
+                    and not depacketizer.has_incomplete_nal(packet.ssrc)
                 ),
             )
             pending_vcl[packet.ssrc] = False
@@ -1163,7 +1169,15 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         elif not contiguous:
             pending_gap[packet.ssrc] = True
         active_timestamps[packet.ssrc] = packet.timestamp
-        for nal in depacketizer.push(packet):
+        prior_fragment_open = depacketizer.has_incomplete_nal(packet.ssrc)
+        discarded_before = depacketizer.stats.discarded_fragments
+        packet_nals = depacketizer.push(packet)
+        if (
+            depacketizer.stats.discarded_fragments > discarded_before
+            and not (previous_timestamp != packet.timestamp and prior_fragment_open)
+        ):
+            pending_gap[packet.ssrc] = True
+        for nal in packet_nals:
             if nal:
                 pending_indexes.setdefault(packet.ssrc, []).append(len(output))
                 output.append(nal)
@@ -1174,7 +1188,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             finish_access_unit(
                 packet.ssrc,
                 complete=bool(
-                    pending_vcl.get(packet.ssrc) and not pending_gap.get(packet.ssrc)
+                    packet_nals
+                    and pending_vcl.get(packet.ssrc)
+                    and not pending_gap.get(packet.ssrc)
+                    and not depacketizer.has_incomplete_nal(packet.ssrc)
                 ),
             )
             pending_vcl[packet.ssrc] = False

@@ -3041,6 +3041,12 @@ def test_hcnetsdk_command_port_preserves_length_prefixed_idmx_before_rtp() -> No
 
     assert _hcnetsdk_command_port_media_payload(payload) == payload
 
+
+def test_hcnetsdk_command_port_preserves_raw_mpegps_after_invalid_rtp_version() -> None:
+    payload = b"\x00\x00\x01\xba" + bytes(32)
+
+    assert _hcnetsdk_command_port_media_payload(payload) == payload
+
 def test_hcnetsdk_command_port_preserves_length_prefixed_idmx_before_header_strip() -> None:
     idmx_frame = (
         b"\x80\x60"

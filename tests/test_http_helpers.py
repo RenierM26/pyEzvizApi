@@ -2925,6 +2925,34 @@ def test_clip_options_use_ecdh_compatible_default_mux() -> None:
 
 
 @pytest.mark.parametrize(
+    ("explicit_mux", "expected_format"),
+    [(None, "mpegts"), (MediaMuxOptions(output_format="mpegps"), "mpegps")],
+)
+def test_typed_ecdh_save_uses_decrypted_default_unless_mux_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_mux: MediaMuxOptions | None,
+    expected_format: str,
+) -> None:
+    client = _client()
+    formats: list[str] = []
+
+    def capture_clip(*_args: Any, **kwargs: Any) -> dict[str, bool]:
+        formats.append(kwargs["output_format"])
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_local_sdk_ecdh_clip", capture_clip)
+    options = ClipOptions(
+        source=LocalSdkEcdhClipSource(),
+        decode=MediaDecodeOptions(decrypt_video=True),
+        mux=explicit_mux,
+    )
+
+    client.save_clip_with_options("CAM123", io.BytesIO(), options)
+
+    assert formats == [expected_format]
+
+
+@pytest.mark.parametrize(
     ("override", "decrypt_video", "duration_seconds", "expected"),
     [
         (None, False, 8.0, True),

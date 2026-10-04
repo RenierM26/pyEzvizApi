@@ -25,7 +25,12 @@ from .constants import (
     IDMX_VIDEO_RTP_CLOCK_RATE,
     MAX_RETRIES,
 )
-from .exceptions import EzvizLocalSdkDeadlineExpired, EzvizNoMediaError, PyEzvizError
+from .exceptions import (
+    EzvizLocalSdkDeadlineExpired,
+    EzvizNoMediaError,
+    EzvizUnsupportedMediaError,
+    PyEzvizError,
+)
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -89,7 +94,6 @@ from .stream_media import (
 HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = "app-lan-live-view"
 
 _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS = {
-    "Unsupported RTP version",
     "RTP packet is too short",
     "RTP CSRC header exceeds packet length",
     "RTP extension header exceeds packet length",
@@ -2656,7 +2660,11 @@ def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:
     try:
         unwrapped = rtp_payload(payload)
     except PyEzvizError as err:
-        if str(err) not in _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS:
+        invalid_rtp_version = (
+            isinstance(err, EzvizUnsupportedMediaError)
+            and err.reason == "invalid_rtp_version"
+        )
+        if not invalid_rtp_version and str(err) not in _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS:
             raise
         return payload
     hrudp_payload = _hcnetsdk_hrudp_video_payload(unwrapped)

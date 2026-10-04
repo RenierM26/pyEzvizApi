@@ -99,7 +99,9 @@ class ClipOptions:
         if self.mux is not None:
             return self.mux
         if isinstance(self.source, LocalSdkEcdhClipSource):
-            return MediaMuxOptions(output_format="mpegps")
+            return MediaMuxOptions(
+                output_format="mpegts" if self.decode.decrypt_video else "mpegps"
+            )
         return MediaMuxOptions()
 
     @property

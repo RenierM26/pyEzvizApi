@@ -38,14 +38,22 @@ class EzvizIncompleteMediaError(PyEzvizError):
         *,
         source: str,
         requested_duration_seconds: float,
-        observed_pts_span_seconds: float,
+        observed_pts_span_seconds: float | None = None,
+        observed_video_duration_seconds: float | None = None,
     ) -> None:
         self.source = source
         self.requested_duration_seconds = requested_duration_seconds
         self.observed_pts_span_seconds = observed_pts_span_seconds
+        self.observed_video_duration_seconds = observed_video_duration_seconds
+        if observed_video_duration_seconds is not None:
+            observed_text = f"video duration {observed_video_duration_seconds:.2f}s"
+        elif observed_pts_span_seconds is not None:
+            observed_text = f"PES timestamp span {observed_pts_span_seconds:.2f}s"
+        else:
+            raise ValueError("An observed media duration or PTS span is required")
         super().__init__(
-            f"{source} video is incomplete: PES timestamp span "
-            f"{observed_pts_span_seconds:.2f}s of {requested_duration_seconds:.2f}s requested"
+            f"{source} video is incomplete: {observed_text} "
+            f"of {requested_duration_seconds:.2f}s requested"
         )
 
 

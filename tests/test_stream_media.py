@@ -220,16 +220,34 @@ def test_mpeg_ps_video_pts_span_reads_clear_pes_headers() -> None:
     assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(18)
 
 
+def test_mpeg_ps_video_pts_span_is_unknown_with_one_timestamp() -> None:
+    assert mpeg_ps_video_pts_span_seconds(_timed_video_pes(90_000)) is None
+
+
 @pytest.mark.parametrize(
     ("first_pts", "last_pts", "expected_span"),
-    [(90_000, 0, 0), ((1 << 33) - 90_000, 90_000, 2)],
+    [(90_000, 0, None), ((1 << 33) - 90_000, 90_000, 2)],
 )
 def test_mpeg_ps_video_pts_span_distinguishes_reset_from_wrap(
-    first_pts: int, last_pts: int, expected_span: float
+    first_pts: int, last_pts: int, expected_span: float | None
 ) -> None:
     payload = _timed_video_pes(first_pts) + _timed_video_pes(last_pts)
 
-    assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(expected_span)
+    observed = mpeg_ps_video_pts_span_seconds(payload)
+    if expected_span is None:
+        assert observed is None
+    else:
+        assert observed == pytest.approx(expected_span)
+
+
+def test_mpeg_ps_video_pts_span_handles_long_capture_across_wrap() -> None:
+    wrap = 1 << 33
+    payload = b"".join(
+        _timed_video_pes(pts)
+        for pts in (wrap - 90 * 90_000, wrap - 90_000, 90_000, 90 * 90_000)
+    )
+
+    assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(180)
 
 
 @pytest.mark.parametrize(
@@ -300,6 +318,63 @@ def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
             max_packets=max_packets,
             decrypt_video=True,
         )
+        assert output.getvalue() == (
+            MPEGPS_PAYLOAD if output_format == "mpegps" else AV_MPEGTS_PAYLOAD
+        )
+
+
+@pytest.mark.parametrize("output_format", ["mpegps", "mpegts"])
+@pytest.mark.parametrize("video_duration", [2.0, 18.0])
+def test_decrypted_cloud_save_probes_ambiguous_single_pts_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    output_format: str,
+    video_duration: float,
+) -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    body = pack + _timed_video_pes(90_000)
+
+    class FakeCloudStream:
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            yield VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+
+    client = _client()
+    monkeypatch.setattr(client, "get_cam_key", lambda _serial: "camera-key")
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts",
+        lambda _packets, output, **_kwargs: output.write(AV_MPEGTS_PAYLOAD),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._probe_cloud_video_duration",
+        lambda _path, **_kwargs: video_duration,
+    )
+    copy = (
+        copy_cloud_stream_to_mpegps
+        if output_format == "mpegps"
+        else copy_cloud_stream_to_mpegts
+    )
+    output = io.BytesIO()
+    if video_duration < 10:
+        with pytest.raises(EzvizIncompleteMediaError) as error:
+            copy(client, "CAM123", output, duration_seconds=20, decrypt_video=True)
+        assert error.value.observed_pts_span_seconds is None
+        assert error.value.observed_video_duration_seconds == pytest.approx(2)
+        assert output.getvalue() == EMPTY_BYTES
+    else:
+        copy(client, "CAM123", output, duration_seconds=20, decrypt_video=True)
         assert output.getvalue() == (
             MPEGPS_PAYLOAD if output_format == "mpegps" else AV_MPEGTS_PAYLOAD
         )

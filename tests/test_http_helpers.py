@@ -5,9 +5,11 @@ import datetime as dt
 import io
 import json
 import math
+import os
 from pathlib import Path
-from stat import S_IMODE
+from stat import S_IMODE, S_ISFIFO
 import sys
+from threading import Thread
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
 
@@ -4002,6 +4004,42 @@ def test_save_clip_cloud_replaces_file_behind_symlink(
 
     assert output_path.is_symlink()
     assert destination.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO is unavailable")
+def test_save_clip_cloud_preserves_fifo_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client()
+    output_path = tmp_path / "stream.pipe"
+    os.mkfifo(output_path)
+    received: list[bytes] = []
+
+    def read_fifo() -> None:
+        with output_path.open("rb") as reader:
+            received.append(reader.read())
+
+    def fake_copy_cloud_stream_to_mpegts(
+        _source_client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+    reader = Thread(target=read_fifo, daemon=True)
+    reader.start()
+
+    client.save_clip("CAM123", output_path, source="cloud")
+    reader.join(timeout=3)
+
+    assert not reader.is_alive()
+    assert received == [SAVE_CLIP_PAYLOAD]
+    assert S_ISFIFO(output_path.stat().st_mode)
 
 
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:

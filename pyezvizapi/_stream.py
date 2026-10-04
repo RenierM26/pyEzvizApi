@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from enum import IntEnum
 import hashlib
 from ipaddress import IPv6Address, ip_address
+from itertools import pairwise
 import re
 import socket
 import ssl
@@ -1273,8 +1274,7 @@ def mpeg_ps_video_pts_span_seconds(data: bytes) -> float | None:
     ``None`` when no valid video PTS is available rather than guessing from bytes.
     """
 
-    first_pts: int | None = None
-    last_pts: int | None = None
+    timestamps: list[int] = []
     for packet in _mpeg_ps_video_decrypt_ranges(data):
         start = packet.start
         if not _is_video_pes_stream_id(packet.stream_id) or start + 14 > len(data):
@@ -1297,18 +1297,26 @@ def mpeg_ps_video_pts_span_seconds(data: bytes) -> float | None:
             | encoded[3] << 7
             | encoded[4] >> 1
         )
-        if first_pts is None:
-            first_pts = pts
-        last_pts = pts
-    if first_pts is None or last_pts is None:
+        timestamps.append(pts)
+    if len(timestamps) < 2:
         return None
-    if last_pts < first_pts:
-        wrap = 1 << 33
-        wrap_window = 60 * 90_000
-        if first_pts >= wrap - wrap_window and last_pts <= wrap_window:
-            return (wrap - first_pts + last_pts) / 90_000
-        return 0.0
-    return (last_pts - first_pts) / 90_000
+    wrap = 1 << 33
+    transition_window = 5 * 90_000
+    wraps = 0
+    for previous, current in pairwise(timestamps):
+        if current >= previous:
+            continue
+        if (
+            previous >= wrap - transition_window
+            and current <= transition_window
+            and wrap - previous + current <= transition_window
+        ):
+            wraps += 1
+            continue
+        # A reset, reordered PTS, or sparse boundary crossing is ambiguous;
+        # the caller must probe the staged media instead of guessing a span.
+        return None
+    return (timestamps[-1] + wraps * wrap - timestamps[0]) / 90_000
 
 
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:

@@ -3822,6 +3822,7 @@ class EzvizClient:
         """Save a clip through the EZVIZ VTM cloud live stream path."""
 
         start_position = None
+        staged_size: int | None = None
 
         def copy_cloud(output_file: BinaryIO) -> None:
             if output_format == "mpegts":
@@ -3865,7 +3866,8 @@ class EzvizClient:
             with SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b") as staging:
                 copy_cloud(cast(BinaryIO, staging))
                 staging.seek(0, os.SEEK_END)
-                if staging.tell() == 0:
+                staged_size = staging.tell()
+                if staged_size == 0:
                     raise EzvizNoMediaError("Cloud stream capture did not contain media")
                 staging.seek(0)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3875,7 +3877,11 @@ class EzvizClient:
             start_position = _binary_position(output)
             copy_cloud(output)
 
-        bytes_written = _bytes_written_to_output(output, start_position=start_position)
+        bytes_written = (
+            staged_size
+            if staged_size is not None
+            else _bytes_written_to_output(output, start_position=start_position)
+        )
         if bytes_written == 0:
             raise EzvizNoMediaError("Cloud stream capture did not contain media")
 

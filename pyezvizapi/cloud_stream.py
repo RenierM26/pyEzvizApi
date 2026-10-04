@@ -9,8 +9,10 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from itertools import chain
 import json
+import math
 from pathlib import Path
 from queue import Empty, Full, Queue
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -492,18 +494,27 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         payload = b"".join(packet.body for packet in packets)
         if not payload:
             raise EzvizNoMediaError("Cloud stream capture did not contain media")
-        _require_cloud_mpegps_video_duration(
+        needs_video_probe = _require_cloud_mpegps_video_duration(
             payload,
             duration_seconds=duration_seconds,
             max_packets=max_packets,
         )
-        output.write(
-            decrypt_hikvision_ps_video(
-                payload,
-                selected_key,
-                nalu_header_size=nalu_header_size,
-            )
+        decrypted = decrypt_hikvision_ps_video(
+            payload,
+            selected_key,
+            nalu_header_size=nalu_header_size,
         )
+        if needs_video_probe:
+            assert duration_seconds is not None
+            _copy_probed_cloud_capture(
+                lambda staged: staged.write(decrypted),
+                output,
+                requested_duration_seconds=duration_seconds,
+                suffix=".ps",
+                ffprobe_path="ffprobe",
+            )
+        else:
+            output.write(decrypted)
         output.flush()
         return
 
@@ -592,12 +603,30 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         packets = list(media_packets)
         if not packets or not any(packet.body for packet in packets):
             raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        needs_video_probe = False
         if transport in (StreamTransport.MPEG_PS, StreamTransport.UNKNOWN):
-            _require_cloud_mpegps_video_duration(
+            needs_video_probe = _require_cloud_mpegps_video_duration(
                 b"".join(packet.body for packet in packets),
                 duration_seconds=duration_seconds,
                 max_packets=max_packets,
             )
+        if needs_video_probe:
+            assert duration_seconds is not None
+            _copy_probed_cloud_capture(
+                lambda staged: copy_decrypted_cloud_stream_packets_to_mpegts(
+                    packets,
+                    staged,
+                    ffmpeg_path=ffmpeg_path,
+                    media_key=selected_key,
+                    nalu_header_size=nalu_header_size,
+                    transport=transport,
+                ),
+                output,
+                requested_duration_seconds=duration_seconds,
+                suffix=".ts",
+                ffprobe_path=str(Path(ffmpeg_path).with_name("ffprobe")),
+            )
+            return
         copy_decrypted_cloud_stream_packets_to_mpegts(
             packets,
             output,
@@ -640,18 +669,91 @@ def _require_cloud_mpegps_video_duration(
     *,
     duration_seconds: float | None,
     max_packets: int | None,
-) -> None:
-    """Reject markedly short video when a timed capture was not packet-capped."""
+) -> bool:
+    """Reject short PTS spans; signal when an unknown span needs media probing."""
 
     if duration_seconds is None or duration_seconds < 8 or max_packets is not None:
-        return
+        return False
     observed = mpeg_ps_video_pts_span_seconds(payload)
-    if observed is not None and observed < duration_seconds / 2:
+    if observed is None:
+        return True
+    if observed < duration_seconds / 2:
         raise EzvizIncompleteMediaError(
             source="cloud",
             requested_duration_seconds=duration_seconds,
             observed_pts_span_seconds=observed,
         )
+    return False
+
+
+def _copy_probed_cloud_capture(
+    write_capture: Callable[[BinaryIO], Any],
+    output: BinaryIO,
+    *,
+    requested_duration_seconds: float,
+    suffix: str,
+    ffprobe_path: str,
+) -> None:
+    """Probe ambiguous PES timing before publishing a decrypted capture."""
+
+    with tempfile.TemporaryDirectory(prefix="pyezviz-cloud-") as directory:
+        staged_path = Path(directory) / f"capture{suffix}"
+        with staged_path.open("wb") as staged:
+            write_capture(staged)
+        if staged_path.stat().st_size == 0:
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        observed = _probe_cloud_video_duration(staged_path, ffprobe_path=ffprobe_path)
+        if observed < requested_duration_seconds / 2:
+            raise EzvizIncompleteMediaError(
+                source="cloud",
+                requested_duration_seconds=requested_duration_seconds,
+                observed_video_duration_seconds=observed,
+            )
+        with staged_path.open("rb") as staged:
+            shutil.copyfileobj(staged, output)
+        output.flush()
+
+
+def _probe_cloud_video_duration(path: Path, *, ffprobe_path: str) -> float:
+    """Read the staged clip's video duration when PES timestamps are ambiguous."""
+
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=duration:format=duration",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise PyEzvizError(
+            "ffprobe is required to verify cloud video with ambiguous PES timestamps"
+        ) from err
+    if result.returncode != 0:
+        raise PyEzvizError("Could not probe staged cloud video duration")
+    try:
+        probe = json.loads(result.stdout)
+        streams = probe.get("streams") or []
+        if not streams:
+            return 0.0
+        value = streams[0].get("duration")
+        duration = float(value)
+    except (TypeError, ValueError, AttributeError, json.JSONDecodeError) as err:
+        raise PyEzvizError("Could not determine staged cloud video duration") from err
+    if not math.isfinite(duration) or duration < 0:
+        raise PyEzvizError("Staged cloud video duration is invalid")
+    return duration
 
 
 def _require_bounded_cloud_decrypt_capture(

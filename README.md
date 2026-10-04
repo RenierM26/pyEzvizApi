@@ -133,10 +133,12 @@ either `observed_pts_span_seconds` or `observed_video_duration_seconds` for a
 caller to retry or choose another source. When PES timestamps cannot establish
 a span (for example, only one PTS), `ffprobe` checks a private staged clip
 before publication; that binary is required for these ambiguous captures.
-Cloud file saves stage the capture privately before opening the destination, so
-capture/remux failures preserve an existing file. Successful publication writes
-through the destination path, retaining its ownership, ACLs, and usual umask
-behavior; a final filesystem write failure is not an atomic rollback.
+Bounded cloud file saves stage the capture privately before opening the
+destination, so capture/remux failures preserve an existing file. Successful
+publication writes through the destination path, retaining its ownership,
+ACLs, and usual umask behavior; a final filesystem write failure is not an
+atomic rollback. An explicitly unbounded cloud save writes directly to its
+destination as media arrives; interruption can leave a partial clip.
 
 `save clip` uses the direct-local `9010/9020` SDK path and fetches the LAN
 endpoint/CAS tuple from the authenticated client by default. Use

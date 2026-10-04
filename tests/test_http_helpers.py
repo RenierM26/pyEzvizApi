@@ -3939,6 +3939,57 @@ def test_save_clip_cloud_preserves_existing_file_on_incomplete_capture(
     assert not list(tmp_path.glob(".gate.ts.*.tmp"))
 
 
+def test_save_clip_cloud_unbounded_path_streams_before_capture_returns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client()
+    output_path = tmp_path / "live.ts"
+
+    def fake_copy_cloud_stream_to_mpegts(
+        _source_client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+        output.flush()
+        assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+        raise RuntimeError("capture interrupted")
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    with pytest.raises(RuntimeError, match="capture interrupted"):
+        client.save_clip(
+            "CAM123", output_path, source="cloud", duration_seconds=None
+        )
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+
+
+def test_save_clip_cloud_unbounded_decrypt_preserves_existing_path(
+    tmp_path: Path,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "existing.ts"
+    previous_clip = b"previous"
+    output_path.write_bytes(previous_clip)
+
+    with pytest.raises(PyEzvizError, match="requires a positive finite"):
+        client.save_clip(
+            "CAM123",
+            output_path,
+            source="cloud",
+            duration_seconds=None,
+            decrypt_video=True,
+            media_key="KEY",
+        )
+
+    assert output_path.read_bytes() == previous_clip
+
+
 @pytest.mark.parametrize("existing_mode", [None, 0o640])
 def test_save_clip_cloud_preserves_destination_permissions(
     monkeypatch: pytest.MonkeyPatch,
@@ -4006,9 +4057,10 @@ def test_save_clip_cloud_replaces_file_behind_symlink(
     assert destination.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
+@pytest.mark.parametrize("duration_seconds", [10, None])
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO is unavailable")
 def test_save_clip_cloud_preserves_fifo_output(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, duration_seconds: int | None
 ) -> None:
     client = _client()
     output_path = tmp_path / "stream.pipe"
@@ -4034,7 +4086,9 @@ def test_save_clip_cloud_preserves_fifo_output(
     reader = Thread(target=read_fifo, daemon=True)
     reader.start()
 
-    client.save_clip("CAM123", output_path, source="cloud")
+    client.save_clip(
+        "CAM123", output_path, source="cloud", duration_seconds=duration_seconds
+    )
     reader.join(timeout=3)
 
     assert not reader.is_alive()

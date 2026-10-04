@@ -421,7 +421,10 @@ def test_cloud_video_probe_does_not_count_frame_timestamp_reset(
                 ]
             }
         else:
-            payload = {"streams": [{}], "format": {"duration": "101.0"}}
+            payload = {
+                "streams": [{"duration": "101.0"}],
+                "format": {"duration": "101.0"},
+            }
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
 
     monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)

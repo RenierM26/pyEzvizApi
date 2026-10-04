@@ -756,7 +756,9 @@ def _probe_cloud_video_duration(path: Path, *, ffprobe_path: str) -> float:
         return _probe_cloud_video_frame_span(path, ffprobe_path=ffprobe_path)
     if not math.isfinite(duration) or duration < 0:
         raise PyEzvizError("Staged cloud video duration is invalid")
-    return duration
+    # Container/stream duration may be inflated by the same PTS reset that made
+    # the clear PES timeline ambiguous. Require actual decoded frame coverage.
+    return min(duration, _probe_cloud_video_frame_span(path, ffprobe_path=ffprobe_path))
 
 
 def _probe_cloud_video_frame_span(path: Path, *, ffprobe_path: str) -> float:

@@ -2635,6 +2635,19 @@ def test_decrypted_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> 
     assert output.getvalue() == EMPTY_BYTES
 
 
+def test_decrypted_cloud_rtp_rejects_unmarked_slice_from_unfinished_picture() -> None:
+    body = _rtp_packet(b"\x61complete-slice", marker=False)
+    packet = VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+    output = io.BytesIO()
+
+    with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+        copy_decrypted_cloud_stream_packets_to_mpegts(
+            (packet,), output, ffmpeg_path="ffmpeg", media_key="test-key"
+        )
+
+    assert output.getvalue() == EMPTY_BYTES
+
+
 def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()

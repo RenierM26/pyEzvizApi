@@ -1068,8 +1068,14 @@ def rtp_packets_to_nal_units(
     codec: RtpVideoCodec,
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
     allow_ezviz_headerless_hevc_fu: bool = False,
+    completed_access_units_only: bool = False,
 ) -> tuple[bytes, ...]:
-    """Route RTP video packets and return complete continuity-checked NAL units."""
+    """Route RTP video and optionally discard an unfinished trailing picture.
+
+    A marker or the next video RTP timestamp closes an access unit. A bounded
+    capture ending after one slice but before the picture boundary is not a
+    playable frame, even when that slice is a complete NAL unit.
+    """
 
     packet_list = list(packets)
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
@@ -1097,14 +1103,31 @@ def rtp_packets_to_nal_units(
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
+    last_complete_access_unit_end = 0
+    active_timestamps: dict[int, int] = {}
+    pending_vcl: dict[int, bool] = {}
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
         if packet.payload_type not in routed_video_payload_types:
             continue
         if not _rtp_packet_matches_codec_epoch(packet, route_epoch, codec):
             continue
+        previous_timestamp = active_timestamps.get(packet.ssrc)
+        if previous_timestamp is not None and packet.timestamp != previous_timestamp:
+            if pending_vcl.get(packet.ssrc):
+                last_complete_access_unit_end = len(output)
+            pending_vcl[packet.ssrc] = False
+        active_timestamps[packet.ssrc] = packet.timestamp
         for nal in depacketizer.push(packet):
             if nal:
                 output.append(nal)
+                if rtp_nal_units_have_vcl((nal,), codec=codec):
+                    pending_vcl[packet.ssrc] = True
+        if packet.marker:
+            if pending_vcl.get(packet.ssrc):
+                last_complete_access_unit_end = len(output)
+            pending_vcl[packet.ssrc] = False
+    if completed_access_units_only:
+        return tuple(output[:last_complete_access_unit_end])
     return tuple(output)
 
 

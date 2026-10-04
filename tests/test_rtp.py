@@ -22,6 +22,7 @@ from pyezvizapi.rtp import (
     rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_annexb,
+    rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
 
@@ -48,6 +49,36 @@ def test_h264_vcl_detection_accepts_all_slice_types(nal_type: int) -> None:
 def test_rtp_vcl_detection_rejects_only_parameter_sets() -> None:
     assert not rtp_nal_units_have_vcl((b"\x67sps", b"\x68pps"), codec="h264")
     assert not rtp_nal_units_have_vcl((b"\x40\x01vps",), codec="hevc")
+
+
+def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
+    second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    second_slice_end = parse_rtp_packet(
+        _rtp(b"\x7c\x41end", sequence=3, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, second_slice_start),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+    assert rtp_packets_to_nal_units(
+        (first_slice, second_slice_start, second_slice_end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61first", b"\x61startend")
+
+
+def test_bounded_rtp_accepts_previous_picture_at_timestamp_transition() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    next_picture = parse_rtp_packet(_rtp(b"\x61next", sequence=2, timestamp=12000))
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61first",)
 
 
 def _rtp(

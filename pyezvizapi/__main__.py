@@ -3260,6 +3260,7 @@ def _rtp_packets_to_annexb_units(
         parsed,
         codec=cast(Any, codec),
         allow_ezviz_headerless_hevc_fu=True,
+        completed_access_units_only=True,
     )
     if not rtp_nal_units_have_vcl(nal_units, codec=cast(Any, codec)):
         raise EzvizNoMediaError(

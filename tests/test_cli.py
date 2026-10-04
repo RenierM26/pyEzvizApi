@@ -2544,7 +2544,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                     sequence=2,
                     message_code=0,
                     body=(
-                        b"\x80\x60\x00\x02"
+                        b"\x80\xe0\x00\x02"
                         b"\x00\x00\x00\x02"
                         b"\x00\x00\x00\x02"
                         b"\x26\x01slice"
@@ -2655,7 +2655,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
     )
     packet = VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
     slice_body = (
-        b"\x80\x60\x00\x02"
+        b"\x80\xe0\x00\x02"
         b"\x00\x00\x00\x02"
         b"\x00\x00\x00\x02"
         b"\x26\x01slice"
@@ -2813,7 +2813,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
                     sequence=1,
                     message_code=0,
                     body=(
-                        b"\x80\x60\x00\x01"
+                        b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
                         b"\x41h264"
@@ -2927,7 +2927,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                     sequence=1,
                     message_code=0,
                     body=(
-                        b"\x80\x60\x00\x01"
+                        b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
                         b"\x41h264"

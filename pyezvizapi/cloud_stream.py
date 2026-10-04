@@ -1053,6 +1053,7 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             parsed,
             codec=codec,
             allow_ezviz_headerless_hevc_fu=True,
+            completed_access_units_only=True,
         )
         if not rtp_nal_units_have_vcl(nal_units, codec=codec):
             raise EzvizNoMediaError(

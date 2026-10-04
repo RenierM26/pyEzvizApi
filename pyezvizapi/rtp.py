@@ -1279,7 +1279,7 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
         # first_slice_segment_in_pic_flag follows the two-byte NAL header.
         return len(nal) > 2 and bool(nal[2] & 0x80)
     nal_type = nal[0] & 0x1F if nal else 0
-    # first_mb_in_slice is ue(v): zero is encoded by a leading 1 bit.
+    # first_mb_in_slice uses Exp-Golomb coding: zero has a leading 1 bit.
     # H.264 extension slices (20/21) have a three-byte extension header.
     header_size = 4 if nal_type in {20, 21} else 1
     return len(nal) > header_size and bool(nal[header_size] & 0x80)

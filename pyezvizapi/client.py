@@ -11,7 +11,8 @@ import json
 import logging
 import os
 from pathlib import Path
-from stat import S_IMODE
+import shutil
+from tempfile import SpooledTemporaryFile
 from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, TypedDict, cast
@@ -3861,32 +3862,15 @@ class EzvizClient:
 
         if isinstance(output, str | Path):
             output_path = Path(output)
-            destination_path = (
-                output_path.resolve() if output_path.is_symlink() else output_path
-            )
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                existing_mode = S_IMODE(destination_path.stat().st_mode)
-            except FileNotFoundError:
-                existing_mode = None
-            temporary_path = destination_path.with_name(
-                f".{destination_path.name}.{uuid4().hex}.tmp"
-            )
-            try:
-                descriptor = os.open(
-                    temporary_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    existing_mode if existing_mode is not None else 0o664,
-                )
-                with os.fdopen(descriptor, "wb") as output_file:
-                    copy_cloud(output_file)
-                if existing_mode is not None:
-                    os.chmod(temporary_path, existing_mode)
-                if temporary_path.stat().st_size == 0:
+            with SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b") as staging:
+                copy_cloud(cast(BinaryIO, staging))
+                staging.seek(0, os.SEEK_END)
+                if staging.tell() == 0:
                     raise EzvizNoMediaError("Cloud stream capture did not contain media")
-                os.replace(temporary_path, destination_path)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+                staging.seek(0)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with output_path.open("wb") as output_file:
+                    shutil.copyfileobj(staging, output_file)
         else:
             start_position = _binary_position(output)
             copy_cloud(output)

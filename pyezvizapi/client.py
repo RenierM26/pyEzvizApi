@@ -3880,8 +3880,8 @@ class EzvizClient:
                 )
                 with os.fdopen(descriptor, "wb") as output_file:
                     copy_cloud(output_file)
-                    if existing_mode is not None:
-                        os.fchmod(output_file.fileno(), existing_mode)
+                if existing_mode is not None:
+                    os.chmod(temporary_path, existing_mode)
                 if temporary_path.stat().st_size == 0:
                     raise EzvizNoMediaError("Cloud stream capture did not contain media")
                 os.replace(temporary_path, destination_path)

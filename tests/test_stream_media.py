@@ -221,6 +221,18 @@ def test_mpeg_ps_video_pts_span_reads_clear_pes_headers() -> None:
 
 
 @pytest.mark.parametrize(
+    ("first_pts", "last_pts", "expected_span"),
+    [(90_000, 0, 0), ((1 << 33) - 90_000, 90_000, 2)],
+)
+def test_mpeg_ps_video_pts_span_distinguishes_reset_from_wrap(
+    first_pts: int, last_pts: int, expected_span: float
+) -> None:
+    payload = _timed_video_pes(first_pts) + _timed_video_pes(last_pts)
+
+    assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(expected_span)
+
+
+@pytest.mark.parametrize(
     ("max_packets", "last_pts", "incomplete"),
     [(None, 180_000, True), (2, 180_000, False), (None, 1_710_000, False)],
 )

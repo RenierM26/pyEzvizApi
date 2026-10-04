@@ -3876,7 +3876,7 @@ class EzvizClient:
                 descriptor = os.open(
                     temporary_path,
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    existing_mode if existing_mode is not None else 0o666,
+                    existing_mode if existing_mode is not None else 0o664,
                 )
                 with os.fdopen(descriptor, "wb") as output_file:
                     copy_cloud(output_file)

@@ -3951,7 +3951,9 @@ def test_save_clip_cloud_preserves_destination_permissions(
         output_path.write_bytes(b"previous")
         output_path.chmod(existing_mode)
     expected_mode = (
-        existing_mode if existing_mode is not None else S_IMODE(reference.stat().st_mode)
+        existing_mode
+        if existing_mode is not None
+        else S_IMODE(reference.stat().st_mode) & 0o664
     )
 
     def fake_copy_cloud_stream_to_mpegts(

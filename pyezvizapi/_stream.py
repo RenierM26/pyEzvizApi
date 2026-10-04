@@ -1302,7 +1302,13 @@ def mpeg_ps_video_pts_span_seconds(data: bytes) -> float | None:
         last_pts = pts
     if first_pts is None or last_pts is None:
         return None
-    return ((last_pts - first_pts) & ((1 << 33) - 1)) / 90_000
+    if last_pts < first_pts:
+        wrap = 1 << 33
+        wrap_window = 60 * 90_000
+        if first_pts >= wrap - wrap_window and last_pts <= wrap_window:
+            return (wrap - first_pts + last_pts) / 90_000
+        return 0.0
+    return (last_pts - first_pts) / 90_000
 
 
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:

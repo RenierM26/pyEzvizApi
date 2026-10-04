@@ -130,7 +130,8 @@ Timed decrypted MPEG-PS cloud captures of at least eight seconds raise
 timestamp span is less than half the requested duration. Packet-capped captures
 are exempt. The exception exposes `source`, `requested_duration_seconds`, and
 `observed_pts_span_seconds` for a caller to retry or choose another source.
-Cloud file saves preserve an existing destination on failure.
+Cloud file saves preserve an existing destination on failure. New files honor
+the process umask up to mode `0664` (no default world-write access).
 
 `save clip` uses the direct-local `9010/9020` SDK path and fetches the LAN
 endpoint/CAS tuple from the authenticated client by default. Use

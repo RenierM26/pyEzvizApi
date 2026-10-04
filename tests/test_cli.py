@@ -14,7 +14,6 @@ from cli_fakes import (
     install_fake_client as _install_fake_client,
     token_file as _token_file,
 )
-from Crypto.Cipher import AES
 import pytest
 
 import pyezvizapi.__main__ as cli_module
@@ -3096,15 +3095,17 @@ def test_cli_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
 
 
 @pytest.mark.parametrize(
-    ("first_bit", "fill", "expect_media"),
-    [(0x80, 0, True), (0, 2, False)],
+    ("ciphertext", "expect_media"),
+    [
+        ("206e9ba3e9476a2e4dee7b57ea93fc93", True),
+        ("b35d3653711a4dfb243b107dec3e53d5", False),
+    ],
 )
 def test_cli_cloud_rtp_checks_first_slice_after_decryption(
-    first_bit: int, fill: int, expect_media: bool
+    ciphertext: str, expect_media: bool
 ) -> None:
     key = b"0123456789abcdef"
-    clear_body = bytes((first_bit,)) + bytes((fill,)) * 15
-    encrypted_body = AES.new(key, AES.MODE_ECB).encrypt(clear_body)
+    encrypted_body = bytes.fromhex(ciphertext)
     encrypted_nal = b"\x61" + encrypted_body
     rtp_body = (
         b"\x80\xe0\x00\x01"

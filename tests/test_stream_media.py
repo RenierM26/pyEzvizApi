@@ -2983,15 +2983,18 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 
 
 @pytest.mark.parametrize(
-    ("first_bit", "fill", "expect_media"),
-    [(0x80, 0, True), (0, 2, False)],
+    ("first_bit", "fill", "ciphertext", "expect_media"),
+    [
+        (0x80, 0, "206e9ba3e9476a2e4dee7b57ea93fc93", True),
+        (0, 2, "b35d3653711a4dfb243b107dec3e53d5", False),
+    ],
 )
 def test_bounded_cloud_checks_first_slice_after_decryption(
-    monkeypatch, first_bit: int, fill: int, expect_media: bool
+    monkeypatch, first_bit: int, fill: int, ciphertext: str, expect_media: bool
 ) -> None:
     key = b"0123456789abcdef"
     clear_body = bytes((first_bit,)) + bytes((fill,)) * 15
-    encrypted_body = AES.new(key, AES.MODE_ECB).encrypt(clear_body)
+    encrypted_body = bytes.fromhex(ciphertext)
     assert bool(encrypted_body[0] & 0x80) is not bool(first_bit & 0x80)
     encrypted_nal = b"\x61" + encrypted_body
     body = _rtp_packet(encrypted_nal, marker=True)

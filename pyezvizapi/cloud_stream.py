@@ -784,60 +784,65 @@ def _probe_cloud_video_duration(
 def _probe_cloud_video_frame_span(
     path: Path, *, ffprobe_path: str, timeout_seconds: float = 30.0
 ) -> float:
-    """Measure decoded video frames when MPEG-PS lacks stream duration."""
+    """Measure decoded video coverage without retaining every frame in memory."""
 
-    try:
-        result = subprocess.run(
-            [
-                ffprobe_path,
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_frames",
-                "-show_entries",
-                "frame=best_effort_timestamp_time",
-                "-of",
-                "json",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as err:
-        raise PyEzvizError(
-            f"ffprobe timed out probing cloud video frames after {timeout_seconds:g} seconds"
-        ) from err
-    except OSError as err:
-        raise PyEzvizError("Could not probe staged cloud video frames") from err
-    if result.returncode != 0:
-        raise PyEzvizError("Could not probe staged cloud video frames")
-    try:
-        frames = json.loads(result.stdout).get("frames") or []
-        timestamps = [
-            float(frame["best_effort_timestamp_time"])
-            for frame in frames
-            if frame.get("best_effort_timestamp_time") not in (None, "N/A")
-        ]
-    except (TypeError, ValueError, AttributeError, json.JSONDecodeError) as err:
-        raise PyEzvizError("Could not determine staged cloud video frame span") from err
-    if len(timestamps) < 2 or not all(math.isfinite(value) for value in timestamps):
-        return 0.0
-    # ffprobe frame timestamps can restart when the upstream timeline resets.
-    # A global max-minus-min would count that clock jump as received video.
-    span = 0.0
-    segment_start = previous = timestamps[0]
-    for timestamp in timestamps[1:]:
-        if (
-            timestamp < previous
-            or timestamp - previous > _MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
-        ):
-            span += previous - segment_start
-            segment_start = timestamp
-        previous = timestamp
-    return span + previous - segment_start
+    with tempfile.TemporaryFile(mode="w+t") as frame_timestamps:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_frames",
+                    "-show_entries",
+                    "frame=best_effort_timestamp_time",
+                    "-of",
+                    "csv=p=0",
+                    str(path),
+                ],
+                stdout=frame_timestamps,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as err:
+            raise PyEzvizError(
+                f"ffprobe timed out probing cloud video frames after {timeout_seconds:g} seconds"
+            ) from err
+        except OSError as err:
+            raise PyEzvizError("Could not probe staged cloud video frames") from err
+        if result.returncode != 0:
+            raise PyEzvizError("Could not probe staged cloud video frames")
+        frame_timestamps.seek(0)
+        span = 0.0
+        segment_start: float | None = None
+        previous: float | None = None
+        for line in frame_timestamps:
+            value = line.strip()
+            if not value or value == "N/A":
+                continue
+            try:
+                timestamp = float(value)
+            except ValueError as err:
+                raise PyEzvizError(
+                    "Could not determine staged cloud video frame span"
+                ) from err
+            if not math.isfinite(timestamp):
+                raise PyEzvizError("Staged cloud video frame timestamp is invalid")
+            if previous is None:
+                segment_start = timestamp
+            elif segment_start is not None and (
+                timestamp < previous
+                or timestamp - previous > _MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
+            ):
+                span += previous - segment_start
+                segment_start = timestamp
+            previous = timestamp
+        if segment_start is None or previous is None:
+            return 0.0
+        return span + previous - segment_start
 
 
 def _require_bounded_cloud_decrypt_capture(

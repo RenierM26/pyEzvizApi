@@ -413,12 +413,10 @@ def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
     def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
         calls.append((command, kwargs["timeout"]))
         if "-show_frames" in command:
-            payload: dict[str, Any] = {
-                "frames": [
-                    {"best_effort_timestamp_time": "100.0"},
-                    {"best_effort_timestamp_time": "102.0"},
-                ]
-            }
+            assert "capture_output" not in kwargs
+            assert "csv=p=0" in command
+            kwargs["stdout"].write("100.0\n102.0\n")
+            return SimpleNamespace(returncode=0)
         else:
             payload = {"streams": [{}], "format": {"duration": "20.0"}}
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
@@ -446,14 +444,10 @@ def test_cloud_video_probe_does_not_count_frame_timestamp_discontinuity(
     tmp_path: Any,
     timestamps: tuple[str, ...],
 ) -> None:
-    def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
         if "-show_frames" in command:
-            payload: dict[str, Any] = {
-                "frames": [
-                    {"best_effort_timestamp_time": value}
-                    for value in timestamps
-                ]
-            }
+            kwargs["stdout"].write("\n".join(timestamps) + "\n")
+            return SimpleNamespace(returncode=0)
         else:
             payload = {
                 "streams": [{"duration": "101.0"}],

@@ -1496,7 +1496,7 @@ def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
         if nal_type >= 32:
             return True
         # first_slice_segment_in_pic_flag and (for IRAP) the no-output flag
-        # precede the mandatory slice_pic_parameter_set_id ue(v) code.
+        # precede the mandatory Exp-Golomb slice-PPS identifier.
         return len(nal) > 2 and _exp_golomb_code_complete(
             nal, 17 + int(16 <= nal_type <= 23)
         )

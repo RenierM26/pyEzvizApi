@@ -49,6 +49,7 @@ from .rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
@@ -1047,22 +1048,47 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
         packet_list = list(media_packets)
     if selected_transport == StreamTransport.RTP:
         parsed = _cloud_rtp_packets(packet_list)
-        codec = detect_rtp_video_codec(parsed)
-        nal_units = rtp_packets_to_nal_units(
+        def decrypt_encrypted_header(nal_unit: bytes) -> bytes:
+            return _decrypt_cloud_rtp_nal_unit(
+                nal_unit, media_key, nalu_header_size=0
+            )[len(ANNEX_B_START_CODE) :]
+
+        codec = detect_rtp_video_codec(
             parsed,
-            codec=codec,
+            video_payload_transform=(
+                decrypt_encrypted_header if nalu_header_size == 0 else None
+            ),
             allow_ezviz_headerless_hevc_fu=True,
         )
         header_size = nalu_header_size
         if header_size is None:
             header_size = 2 if codec == "hevc" else 1
-        decrypted_annexb = b"".join(
-            _decrypt_cloud_rtp_nal_unit(
-                nal_unit,
-                media_key,
-                nalu_header_size=header_size,
+
+        def decrypted_nal(nal_unit: bytes) -> bytes:
+            return _decrypt_cloud_rtp_nal_unit(
+                nal_unit, media_key, nalu_header_size=header_size
+            )[len(ANNEX_B_START_CODE) :]
+
+        nal_units = rtp_packets_to_nal_units(
+            parsed,
+            codec=codec,
+            allow_ezviz_headerless_hevc_fu=True,
+            completed_access_units_only=True,
+            first_slice_transform=decrypted_nal if header_size != 0 else None,
+            packet_nal_transform=decrypted_nal if header_size == 0 else None,
+        )
+        decrypted_units = (
+            tuple(decrypted_nal(nal_unit) for nal_unit in nal_units)
+            if header_size != 0
+            else nal_units
+        )
+        if not rtp_nal_units_have_vcl(decrypted_units, codec=codec):
+            raise EzvizNoMediaError(
+                "Cloud RTP capture contained no complete video frame; "
+                "increase the capture duration"
             )
-            for nal_unit in nal_units
+        decrypted_annexb = b"".join(
+            ANNEX_B_START_CODE + nal_unit for nal_unit in decrypted_units
         )
         audio = decrypt_idmx_aac_packets(parsed, media_key)
         if audio is not None:

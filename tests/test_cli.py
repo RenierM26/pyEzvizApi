@@ -18,7 +18,7 @@ import pytest
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.constants import MAX_RETRIES
-from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
+from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizNoMediaError, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     HcNetSdkCommandPortExchange,
     build_hcnetsdk_tcp_frame,
@@ -2524,7 +2524,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
             return None
 
         def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
-            assert max_packets == 1
+            assert max_packets == 2
             return [
                 VtmPacket(
                     channel=VtmChannel.STREAM,
@@ -2537,7 +2537,19 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                         b"\x00\x00\x00\x02"
                         b"\x40\x01vps"
                     ),
-                )
+                ),
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=19,
+                    sequence=2,
+                    message_code=0,
+                    body=(
+                        b"\x80\xe0\x00\x02"
+                        b"\x00\x00\x00\x02"
+                        b"\x00\x00\x00\x02"
+                        b"\x26\x01\x80slice"
+                    ),
+                ),
             ]
 
     monkeypatch.setattr(
@@ -2599,7 +2611,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                 "--serial",
                 "CAM123",
                 "--max-packets",
-                "1",
+                "2",
                 "--duration",
                 "0",
                 "--decrypt-video",
@@ -2615,7 +2627,10 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
         {
             "client": client,
             "serial": "CAM123",
-            "units": (b"\x00\x00\x00\x01\x40\x01vps",),
+            "units": (
+                b"\x00\x00\x00\x01\x40\x01vps",
+                b"\x00\x00\x00\x01\x26\x01\x80slice",
+            ),
             "detected_codec": "hevc",
             "decrypt_codec": "hevc",
             "media_key": "camera-secret",
@@ -2639,6 +2654,13 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
         b"\x40\x01vps"
     )
     packet = VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+    slice_body = (
+        b"\x80\xe0\x00\x02"
+        b"\x00\x00\x00\x02"
+        b"\x00\x00\x00\x02"
+        b"\x26\x01\x80slice"
+    )
+    slice_packet = VtmPacket(VtmChannel.STREAM, len(slice_body), 2, 0, slice_body)
 
     class FakeStream:
         def __enter__(self) -> FakeStream:
@@ -2651,8 +2673,8 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
             return None
 
         def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
-            assert max_packets == 1
-            return [packet]
+            assert max_packets == 2
+            return [packet, slice_packet]
 
     remux_calls: list[dict[str, Any]] = []
 
@@ -2691,7 +2713,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
                 "--serial",
                 "CAM123",
                 "--max-packets",
-                "1",
+                "2",
                 "--duration",
                 "0",
                 "--decrypt-video",
@@ -2706,7 +2728,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
 
     assert remux_calls == [
         {
-            "packets": [packet],
+            "packets": [packet, slice_packet],
             "ffmpeg_path": "ffmpeg",
             "media_key": "camera-secret",
             "nalu_header_size": None,
@@ -2719,6 +2741,51 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
         "smscode": "654321",
     }
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
+
+
+def test_stream_dump_audio_route_preserves_destination_without_video(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """An audio-routed short cloud capture must fail before truncating output."""
+
+    _install_fake_client(monkeypatch)
+
+    def packet(payload: bytes, sequence: int) -> VtmPacket:
+        body = (
+            b"\x80\x60" + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x01" + b"\x55\x66\x77\x88" + payload
+        )
+        return VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 2
+            return [
+                packet(b"\x40\x01vps", 1),
+                packet(b"\x62\x01\x93partial", 2),
+            ]
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_a, **_k: FakeStream())
+    monkeypatch.setattr(cli_module, "cloud_rtp_packets_have_audio", lambda _p: True)
+    output_file = tmp_path / "existing.ts"
+    existing_media = b"existing-media"
+    output_file.write_bytes(existing_media)
+
+    assert cli_module.main([
+        "--token-file", _token_file(tmp_path), "stream", "dump", "--serial",
+        "CAM123", "--max-packets", "2", "--duration", "0", "--decrypt-video",
+        "--output", str(output_file),
+    ]) == 1
+    assert output_file.read_bytes() == existing_media
 
 
 def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
@@ -2746,10 +2813,10 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
                     sequence=1,
                     message_code=0,
                     body=(
-                        b"\x80\x60\x00\x01"
+                        b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
-                        b"\x41h264"
+                        b"\x41\x80h264"
                     ),
                 )
             ]
@@ -2823,7 +2890,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
 
     assert decrypt_calls == [
         {
-            "units": (b"\x00\x00\x00\x01\x41h264",),
+            "units": (b"\x00\x00\x00\x01\x41\x80h264",),
             "detected_codec": "h264",
             "decrypt_codec": "h264",
             "media_key": "camera-secret",
@@ -2835,7 +2902,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
-def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
+def test_stream_dump_decrypts_encrypted_rtp_header_before_remux(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -2860,10 +2927,11 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                     sequence=1,
                     message_code=0,
                     body=(
-                        b"\x80\x60\x00\x01"
+                        b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
-                        b"\x41h264"
+                        b"\x5c\xb0\x9d\x36\x57\x77\xa9\xf5"
+                        b"\x05\xd2\x61\xbb\x4b\xb1\xca\xde"
                     ),
                 )
             ]
@@ -2931,7 +2999,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                 "--decrypt-codec",
                 "encrypted-header",
                 "--media-key-hex",
-                "000102030405060708090a0b0c0d0e0f",
+                "30313233343536373839616263646566",
                 "--output",
                 str(output_file),
             ]
@@ -2939,16 +3007,13 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
         == 0
     )
 
-    assert decrypt_calls == [
-        {
-            "units": (b"\x00\x00\x00\x01\x41h264",),
-            "detected_codec": "h264",
-            "decrypt_codec": "encrypted-header",
-            "media_key": bytes(range(16)),
-        }
-    ]
+    assert not decrypt_calls
     assert remux_calls == [
-        {"data": b"decrypted-h264", "ffmpeg_path": "ffmpeg", "codec": "h264"}
+        {
+            "data": b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,
+            "ffmpeg_path": "ffmpeg",
+            "codec": "h264",
+        }
     ]
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
@@ -2978,7 +3043,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         )
 
     bodies = [
-        rtp(b"\x7c\x85hello", payload_type=96, sequence=65535, ssrc=1),
+        rtp(b"\x7c\x85\x80hello", payload_type=96, sequence=65535, ssrc=1),
         rtp(b"aac", payload_type=104, sequence=7, ssrc=2),
         rtp(b"metadata", payload_type=112, sequence=9, ssrc=3),
         rtp(
@@ -2994,13 +3059,142 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         for index, body in enumerate(bodies)
     ]
     packets.append(VtmPacket(VtmChannel.STREAM, 8, 5, 0, b"\x80control"))
-    expected_annexb = b"\x00\x00\x00\x01\x65hello-world"
+    expected_annexb = b"\x00\x00\x00\x01\x65\x80hello-world"
 
     assert cli_module._detect_rtp_video_codec(packets) == "h264"  # noqa: SLF001
     assert (
         cli_module._rtp_packets_to_annexb(packets, codec="h264")  # noqa: SLF001
         == expected_annexb
     )
+
+
+def test_cli_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
+    def rtp(payload: bytes, sequence: int) -> bytes:
+        return (
+            b"\x80\x60" + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x01" + b"\x55\x66\x77\x88" + payload
+        )
+
+    bodies = (
+        rtp(b"\x40\x01vps", 1),
+        rtp(b"\x42\x01sps", 2),
+        rtp(b"\x44\x01pps", 3),
+        rtp(b"\x62\x01\x93partial", 4),
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+
+    with pytest.raises(EzvizNoMediaError, match="increase the capture duration") as error:
+        cli_module._rtp_packets_to_annexb_units(packets, codec="hevc")  # noqa: SLF001
+
+    assert error.value.reason == "no_media"
+
+
+@pytest.mark.parametrize(
+    ("ciphertext", "expect_media"),
+    [
+        ("4f398594072be830a32772a2eefdd2d3", True),
+        ("b35d3653711a4dfb243b107dec3e53d5", False),
+    ],
+)
+def test_cli_cloud_rtp_checks_first_slice_after_decryption(
+    ciphertext: str, expect_media: bool
+) -> None:
+    key = b"0123456789abcdef"
+    encrypted_body = bytes.fromhex(ciphertext)
+    encrypted_nal = b"\x61" + encrypted_body
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+    if not expect_media:
+        with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+            cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+                packets, codec="h264", first_slice_key=key
+            )
+        return
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets, codec="h264", first_slice_key=key
+    ) == (b"\x00\x00\x00\x01" + encrypted_nal,)
+
+
+def test_cli_cloud_rtp_classifies_vcl_after_encrypted_header_decryption() -> None:
+    encrypted_nal = bytes.fromhex("6756a9964cbfe8a9b98a095499213e39")
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets,
+        codec="h264",
+        first_slice_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == (b"\x00\x00\x00\x01\x61\x80" + b"#" * 14,)
+
+
+def test_cli_cloud_rtp_depacketizes_after_encrypted_header_decryption() -> None:
+    # Ciphertext low bits resemble FU-A; clear bytes form a single first slice.
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets,
+        codec="h264",
+        first_slice_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == (b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,)
+
+
+def test_cli_cloud_rtp_decrypts_encrypted_header_aggregation() -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    payload = b"\x78" + len(encrypted_nal).to_bytes(2, "big") + encrypted_nal
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + payload
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets,
+        codec="h264",
+        first_slice_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == (b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,)
+
+
+def test_cli_cloud_rtp_detects_codec_after_encrypted_header_decryption() -> None:
+    encrypted_nal = bytes.fromhex("4f1b29388cceb8f99e7f61305787a4f5")
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._detect_rtp_video_codec(  # noqa: SLF001
+        packets,
+        media_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == "h264"
 
 
 def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:

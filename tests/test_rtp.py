@@ -19,8 +19,10 @@ from pyezvizapi.rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_annexb,
+    rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
 
@@ -37,6 +39,880 @@ def test_parse_rtp_reports_version_failure_with_stable_reason() -> None:
         parse_rtp_packet(b"\x40" + b"\x00" * 11)
     assert error.value.source == "rtp"
     assert error.value.reason == "invalid_rtp_version"
+
+
+@pytest.mark.parametrize("nal_type", [1, 2, 3, 4, 5, 19, 20, 21])
+def test_h264_vcl_detection_accepts_all_slice_types(nal_type: int) -> None:
+    assert rtp_nal_units_have_vcl((bytes((nal_type,)) + b"slice",), codec="h264")
+
+
+def test_rtp_vcl_detection_rejects_only_parameter_sets() -> None:
+    assert not rtp_nal_units_have_vcl((b"\x67sps", b"\x68pps"), codec="h264")
+    assert not rtp_nal_units_have_vcl((b"\x40\x01vps",), codec="hevc")
+
+
+@pytest.mark.parametrize(
+    ("codec", "malformed"),
+    [("h264", b"\x81\x80bad"), ("hevc", b"\x82\x01\x80bad")],
+)
+def test_bounded_rtp_rejects_forbidden_bit_as_media(
+    codec: RtpVideoCodec, malformed: bytes
+) -> None:
+    packet = parse_rtp_packet(_rtp(malformed, sequence=1, marker=True))
+    assert not rtp_nal_units_have_vcl((malformed,), codec=codec)
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+
+
+@pytest.mark.parametrize(
+    "nal",
+    [
+        b"\x75\x80\x00\x80slice",  # 3D-AVC: two-byte extension.
+        b"\x75\x00\x00\x00\x80slice",  # MVC/SVC: three-byte extension.
+    ],
+)
+def test_bounded_rtp_accepts_type_21_first_slice(nal: bytes) -> None:
+    packet = parse_rtp_packet(_rtp(nal, sequence=1, marker=True))
+    assert rtp_packets_to_nal_units(
+        (packet,), codec="h264", completed_access_units_only=True
+    ) == (nal,)
+
+
+def test_bounded_rtp_accepts_nonzero_hevc_layer_id() -> None:
+    nal = b"\x02\x09\x80slice"  # VCL type 1, layer 1, temporal ID 1.
+    packet = parse_rtp_packet(_rtp(nal, sequence=1, marker=True))
+    assert rtp_nal_units_have_vcl((nal,), codec="hevc")
+    assert rtp_packets_to_nal_units(
+        (packet,), codec="hevc", completed_access_units_only=True
+    ) == (nal,)
+
+
+def test_bounded_rtp_damages_picture_after_forbidden_bit_nal() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
+    malformed = parse_rtp_packet(_rtp(b"\x81\x80bad", sequence=2, marker=True))
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=3, timestamp=12000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (first, malformed, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80healthy",)
+
+
+def test_bounded_rtp_damages_picture_after_codec_mismatched_video_packet() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\xe0first", sequence=1))
+    mismatched = parse_rtp_packet(_rtp(b"\x40\x01vps", sequence=2))
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=3, timestamp=12000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (first, mismatched, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0healthy",)
+
+
+@pytest.mark.parametrize(
+    ("codec", "header_only", "healthy_nal"),
+    [
+        ("h264", b"\x61", b"\x61\x80healthy"),
+        ("hevc", b"\x02\x01", b"\x02\x01\x80healthy"),
+        ("h264", b"\x75\x80\x00", b"\x75\x80\x00\x80healthy"),
+    ],
+)
+def test_bounded_rtp_rejects_header_only_vcl(
+    codec: RtpVideoCodec, header_only: bytes, healthy_nal: bytes
+) -> None:
+    first = parse_rtp_packet(_rtp(healthy_nal, sequence=1, marker=True))
+    truncated = parse_rtp_packet(
+        _rtp(header_only, sequence=2, timestamp=12000, marker=True)
+    )
+    assert not rtp_nal_units_have_vcl((header_only,), codec=codec)
+    assert rtp_packets_to_nal_units(
+        (first, truncated), codec=codec, completed_access_units_only=True
+    ) == (healthy_nal,)
+
+
+@pytest.mark.parametrize(
+    ("codec", "header_only", "healthy_nal"),
+    [
+        ("h264", b"\x61", b"\x61\x80healthy"),
+        ("hevc", b"\x02\x01", b"\x02\x01\x80healthy"),
+    ],
+)
+def test_bounded_rtp_header_only_vcl_damages_prior_slice(
+    codec: RtpVideoCodec, header_only: bytes, healthy_nal: bytes
+) -> None:
+    first = parse_rtp_packet(_rtp(healthy_nal, sequence=1))
+    truncated = parse_rtp_packet(_rtp(header_only, sequence=2, marker=True))
+    next_picture = parse_rtp_packet(
+        _rtp(healthy_nal, sequence=3, timestamp=12000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (first, truncated, next_picture),
+        codec=codec,
+        completed_access_units_only=True,
+    ) == (healthy_nal,)
+
+
+@pytest.mark.parametrize("truncated", [b"\x61\x00", b"\x61\x00\x80"])
+def test_bounded_rtp_rejects_incomplete_first_mb_code(truncated: bytes) -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, marker=True))
+    malformed = parse_rtp_packet(
+        _rtp(truncated, sequence=2, timestamp=12000, marker=True)
+    )
+    assert not rtp_nal_units_have_vcl((truncated,), codec="h264")
+    assert rtp_packets_to_nal_units(
+        (first, malformed), codec="h264", completed_access_units_only=True
+    ) == (b"\x61\x80first",)
+
+
+@pytest.mark.parametrize("truncated", [b"\x61\x80", b"\x61\xc0"])
+def test_bounded_rtp_rejects_incomplete_h264_slice_fields(truncated: bytes) -> None:
+    healthy = b"\x61\xe0healthy"
+    packets = (
+        parse_rtp_packet(_rtp(healthy, sequence=1, marker=True)),
+        parse_rtp_packet(
+            _rtp(truncated, sequence=2, timestamp=12000, marker=True)
+        ),
+    )
+    assert not rtp_nal_units_have_vcl((truncated,), codec="h264")
+    assert rtp_packets_to_nal_units(
+        packets, codec="h264", completed_access_units_only=True
+    ) == (healthy,)
+
+
+@pytest.mark.parametrize("truncated", [b"\x02\x01\x80", b"\x02\x01\x80\x00"])
+def test_bounded_rtp_rejects_incomplete_hevc_pps_code(truncated: bytes) -> None:
+    healthy = b"\x02\x01\xc0healthy"
+    packets = (
+        parse_rtp_packet(_rtp(healthy, sequence=1, marker=True)),
+        parse_rtp_packet(
+            _rtp(truncated, sequence=2, timestamp=12000, marker=True)
+        ),
+    )
+    assert not rtp_nal_units_have_vcl((truncated,), codec="hevc")
+    assert rtp_packets_to_nal_units(
+        packets, codec="hevc", completed_access_units_only=True
+    ) == (healthy,)
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_encrypted_header_fu_reassembles_before_transform(
+    codec: RtpVideoCodec,
+) -> None:
+    if codec == "h264":
+        encrypted_nal = b"\x61" + bytes(range(1, 32))
+        clear_nal = b"\x61\x80" + b"x" * 30
+        fu_prefix = b"\x7c"
+        fu_type = b"\x01"
+        body = encrypted_nal[1:]
+    else:
+        encrypted_nal = b"\x02\x01" + bytes(range(2, 32))
+        clear_nal = b"\x02\x01\xc0" + b"x" * 29
+        fu_prefix = b"\x62\x01"
+        fu_type = b"\x01"
+        body = encrypted_nal[2:]
+    packets = (
+        parse_rtp_packet(_rtp(fu_prefix + bytes((0x80 | fu_type[0],)) + body[:7], sequence=1)),
+        parse_rtp_packet(_rtp(fu_prefix + bytes((0x40 | fu_type[0],)) + body[7:], sequence=2, marker=True)),
+    )
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == encrypted_nal else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        packets,
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen[-1] == encrypted_nal
+
+
+@pytest.mark.parametrize("continuation", ["pseudo-header", "headerless"])
+def test_encrypted_header_hevc_ezviz_fu_reassembles_before_transform(
+    continuation: str,
+) -> None:
+    encrypted_nal = b"\x26\x01" + bytes(range(2, 32))
+    clear_nal = b"\x26\x01\xa0" + b"x" * 29
+    body = encrypted_nal[2:]
+    start = parse_rtp_packet(_rtp(b"\x62\x01\x93" + body[:7], sequence=1))
+    end_payload = (
+        b"\x62\x01\x66" + body[7:]
+        if continuation == "pseudo-header"
+        else b"\x62\x01" + body[7:]
+    )
+    end = parse_rtp_packet(_rtp(end_payload, sequence=2, marker=True))
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == encrypted_nal else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        (start, end),
+        codec="hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen[-1] == encrypted_nal
+    assert detect_rtp_video_codec(
+        (start, end),
+        video_payload_transform=decrypt,
+        allow_ezviz_headerless_hevc_fu=True,
+    ) == "hevc"
+
+
+@pytest.mark.parametrize(
+    ("codec", "fu_start"),
+    [("h264", b"\x7c\x81"), ("hevc", b"\x62\x01\x93")],
+)
+def test_encrypted_header_incomplete_fu_identifies_codec_from_clear_framing(
+    codec: RtpVideoCodec, fu_start: bytes
+) -> None:
+    packet = parse_rtp_packet(_rtp(fu_start + b"x" * 32, sequence=1))
+    assert detect_rtp_video_codec(
+        (packet,),
+        video_payload_transform=lambda _payload: b"\x80invalid",
+        allow_ezviz_headerless_hevc_fu=True,
+    ) == codec
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_encrypted_single_nals_that_look_like_fu_chain_stay_single(
+    codec: RtpVideoCodec,
+) -> None:
+    if codec == "h264":
+        start_payload = b"\x7c\x81" + b"a" * 16
+        end_payload = b"\x7c\x41" + b"b" * 16
+        clear_nals = (b"\x61\xe0first", b"\x61\x70second")
+    else:
+        start_payload = b"\x62\x01\x93" + b"a" * 16
+        end_payload = b"\x62\x01\x53" + b"b" * 16
+        clear_nals = (b"\x26\x01\xa0first", b"\x02\x01\x70second")
+    packets = (
+        parse_rtp_packet(_rtp(start_payload, sequence=1)),
+        parse_rtp_packet(_rtp(end_payload, sequence=2, marker=True)),
+    )
+
+    def decrypt(payload: bytes) -> bytes:
+        if payload == start_payload:
+            return clear_nals[0]
+        if payload == end_payload:
+            return clear_nals[1]
+        return b"\x80invalid"
+
+    assert rtp_packets_to_nal_units(
+        packets,
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == clear_nals
+
+
+def test_encrypted_fu_and_single_nal_ambiguity_is_explicit() -> None:
+    packets = (
+        parse_rtp_packet(_rtp(b"\x7c\x81" + b"a" * 16, sequence=1)),
+        parse_rtp_packet(
+            _rtp(b"\x7c\x41" + b"b" * 16, sequence=2, marker=True)
+        ),
+    )
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        rtp_packets_to_nal_units(
+            packets,
+            codec="h264",
+            completed_access_units_only=True,
+            packet_nal_transform=lambda _payload: b"\x61\xe0slice",
+        )
+    assert error.value.reason == "ambiguous_encrypted_fu"
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+@pytest.mark.parametrize("duplicate_start", [False, True])
+@pytest.mark.parametrize("nonvideo_payload_type", [112, 104])
+def test_encrypted_header_fu_keeps_same_ssrc_nonvideo_continuity(
+    codec: RtpVideoCodec,
+    duplicate_start: bool,
+    nonvideo_payload_type: int,
+) -> None:
+    if codec == "h264":
+        encrypted_nal = b"\x61" + bytes(range(1, 32))
+        clear_nal = b"\x61\x80" + b"x" * 30
+        fu_prefix = b"\x7c"
+        body = encrypted_nal[1:]
+    else:
+        encrypted_nal = b"\x02\x01" + bytes(range(2, 32))
+        clear_nal = b"\x02\x01\xc0" + b"x" * 29
+        fu_prefix = b"\x62\x01"
+        body = encrypted_nal[2:]
+    start = parse_rtp_packet(_rtp(fu_prefix + b"\x81" + body[:7], sequence=1))
+    packets = (start,) + ((start,) if duplicate_start else ()) + (
+        parse_rtp_packet(
+            _rtp(b"other media", sequence=2, payload_type=nonvideo_payload_type)
+        ),
+        parse_rtp_packet(
+            _rtp(fu_prefix + b"\x41" + body[7:], sequence=3, marker=True)
+        ),
+    )
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == encrypted_nal else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        packets,
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen[-1] == encrypted_nal
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_encrypted_header_aggregation_decrypts_only_extracted_nals(
+    codec: RtpVideoCodec,
+) -> None:
+    if codec == "h264":
+        encrypted_nals = (b"\x67" + b"a" * 15, b"\x61" + b"b" * 15)
+        clear_nals = (b"\x67" + b"s" * 15, b"\x61\x80" + b"v" * 14)
+        wrapper = b"\x78"
+    else:
+        encrypted_nals = (b"\x40\x01" + b"a" * 14, b"\x02\x01" + b"b" * 13)
+        clear_nals = (b"\x40\x01" + b"s" * 14, b"\x02\x01\xc0" + b"v" * 13)
+        wrapper = b"\x60\x01"
+    payload = wrapper + b"".join(
+        len(nal).to_bytes(2, "big") + nal for nal in encrypted_nals
+    )
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, marker=True))
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return (
+            clear_nals[encrypted_nals.index(nal)]
+            if nal in encrypted_nals
+            else b"\x09metadata" if codec == "h264" else b"\x40\x01metadata"
+        )
+
+    assert rtp_packets_to_nal_units(
+        (packet,),
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == clear_nals
+    assert seen[0] == payload
+    assert seen[-len(encrypted_nals) :] == list(encrypted_nals)
+
+
+def test_encrypted_single_nal_that_looks_like_aggregation_stays_single() -> None:
+    ciphertext = b"\x78\x00\x10" + b"x" * 16
+    clear_nal = b"\x61\xe0clear"
+    packet = parse_rtp_packet(_rtp(ciphertext, sequence=1, marker=True))
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == ciphertext else b"\x09metadata"
+
+    assert rtp_packets_to_nal_units(
+        (packet,),
+        codec="h264",
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen[0] == ciphertext
+
+
+def test_encrypted_aggregation_ambiguity_is_explicit() -> None:
+    ciphertext = b"\x78\x00\x10" + b"x" * 16
+    packet = parse_rtp_packet(_rtp(ciphertext, sequence=1, marker=True))
+
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        rtp_packets_to_nal_units(
+            (packet,),
+            codec="h264",
+            completed_access_units_only=True,
+            packet_nal_transform=lambda _nal: b"\x61\xe0slice",
+        )
+    assert error.value.reason == "ambiguous_encrypted_aggregation"
+
+
+@pytest.mark.parametrize(
+    ("codec", "bad", "good", "wrapper"),
+    [
+        ("h264", b"\x81\x80bad", b"\x61\x80good", b"\x78"),
+        ("hevc", b"\x82\x01\xc0bad", b"\x02\x01\xc0good", b"\x60\x01"),
+    ],
+)
+def test_bounded_aggregation_does_not_hide_bad_nal_before_first_slice(
+    codec: RtpVideoCodec, bad: bytes, good: bytes, wrapper: bytes
+) -> None:
+    payload = wrapper + b"".join(
+        len(nal).to_bytes(2, "big") + nal for nal in (bad, good)
+    )
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, marker=True))
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+
+
+def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
+    second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))
+    second_slice_end = parse_rtp_packet(
+        _rtp(b"\x7c\x41end", sequence=3, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, second_slice_start),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+    assert rtp_packets_to_nal_units(
+        (first_slice, second_slice_start, second_slice_end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80first", b"\x61\x00startend")
+
+
+def test_bounded_rtp_accepts_previous_picture_at_timestamp_transition() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, timestamp=9000))
+    next_picture = parse_rtp_packet(_rtp(b"\x61next", sequence=2, timestamp=12000))
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80first",)
+
+
+def test_bounded_rtp_accepts_later_macroblock_zero_in_initial_picture() -> None:
+    nonzero_first = parse_rtp_packet(_rtp(b"\x61\x40mb1", sequence=1))
+    macroblock_zero = parse_rtp_packet(
+        _rtp(b"\x61\x80mb0", sequence=2, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (nonzero_first,), codec="h264", completed_access_units_only=True
+    ) == ()
+    assert rtp_packets_to_nal_units(
+        (nonzero_first, macroblock_zero),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x40mb1", b"\x61\x80mb0")
+
+
+def test_bounded_rtp_does_not_close_picture_across_sequence_gap() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    # Sequence 2 was the missing final slice of the first picture.
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x7c\x81start", sequence=3, timestamp=12000)
+    )
+    assert rtp_packets_to_nal_units(
+        (first_slice, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
+def test_bounded_h264_does_not_clear_new_picture_gap_with_macroblock_zero() -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    # Missing sequence 2 could be an earlier ASO/FMO slice of this picture.
+    uncertain = parse_rtp_packet(
+        _rtp(b"\x61\xe0mb0", sequence=3, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=4, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, uncertain, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
+def test_bounded_rtp_rejects_sequence_conflict_before_timestamp_boundary() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    conflict = parse_rtp_packet(_rtp(b"\x61altered", sequence=1, timestamp=9000))
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x61\x80next", sequence=2, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, conflict, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80next",)
+
+
+def test_bounded_rtp_keeps_picture_after_identical_duplicate() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, timestamp=9000))
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x61next", sequence=2, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, first, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80first", b"\x61next")
+
+
+@pytest.mark.parametrize(
+    ("codec", "trailing_slice", "complete_slice"),
+    [
+        ("h264", b"\x61\x00tail", b"\x61\x80whole"),
+        ("hevc", b"\x02\x01\x00tail", b"\x02\x01\x80whole"),
+    ],
+)
+def test_bounded_rtp_rejects_initial_trailing_slice(
+    codec: RtpVideoCodec, trailing_slice: bytes, complete_slice: bytes
+) -> None:
+    first = parse_rtp_packet(_rtp(trailing_slice, sequence=1, marker=True))
+    next_picture = parse_rtp_packet(
+        _rtp(complete_slice, sequence=2, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first,), codec=codec, completed_access_units_only=True
+    ) == ()
+    assert rtp_packets_to_nal_units(
+        (first, next_picture), codec=codec, completed_access_units_only=True
+    ) == (complete_slice,)
+
+
+@pytest.mark.parametrize("nal_type", [2, 3, 4])
+def test_bounded_rtp_rejects_unverifiable_h264_data_partitions(
+    nal_type: int,
+) -> None:
+    # Partition B/C can start with a zero slice_id; its first bit is not
+    # first_mb_in_slice and cannot prove that partition A was captured.
+    payload = bytes((0x60 | nal_type, 0x80)) + b"partition"
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, marker=True))
+
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        rtp_packets_to_nal_units(
+            (packet,), codec="h264", completed_access_units_only=True
+        )
+    assert error.value.source == "rtp"
+    assert error.value.reason == "unsupported_h264_data_partition"
+    assert rtp_packets_to_nal_units((packet,), codec="h264") == (payload,)
+
+
+@pytest.mark.parametrize(
+    ("codec", "aggregation", "slice_nal"),
+    [
+        ("h264", b"\x78", b"\x61slice"),
+        ("hevc", b"\x60\x01", b"\x02\x01slice"),
+    ],
+)
+def test_bounded_rtp_rejects_partial_marked_aggregation(
+    codec: RtpVideoCodec, aggregation: bytes, slice_nal: bytes
+) -> None:
+    partial = aggregation + len(slice_nal).to_bytes(2, "big") + slice_nal + b"\x00\x08bad"
+    packet = parse_rtp_packet(_rtp(partial, sequence=1, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+    assert RtpVideoDepacketizer(codec).push(packet) == ()
+
+
+def test_bounded_rtp_does_not_close_marked_picture_after_sequence_gap() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
+    final_slice = parse_rtp_packet(_rtp(b"\x61last", sequence=3, marker=True))
+    assert rtp_packets_to_nal_units(
+        (first_slice, final_slice),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
+def test_bounded_rtp_discards_damaged_picture_before_later_healthy_one() -> None:
+    config = parse_rtp_packet(_rtp(b"\x67sps", sequence=1, timestamp=9000))
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=2, timestamp=9000))
+    damaged_slice = parse_rtp_packet(_rtp(b"\x61damaged", sequence=4, timestamp=9000))
+    healthy_picture = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=5, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (config, first_slice, damaged_slice, healthy_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x67sps", b"\x61\x80healthy")
+
+
+def test_bounded_rtp_keeps_fragment_continuity_across_same_ssrc_metadata() -> None:
+    start = parse_rtp_packet(_rtp(b"\x7c\x81\x80start", sequence=2))
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, payload_type=112)
+    )
+    end = parse_rtp_packet(_rtp(b"\x7c\x41end", sequence=4, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (start, metadata, end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80startend",)
+
+
+def test_bounded_rtp_detects_real_gap_before_same_ssrc_metadata() -> None:
+    start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    # Video packet 3 was lost; the next observed RTP packet is metadata 4.
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=4, payload_type=112)
+    )
+    end = parse_rtp_packet(_rtp(b"\x7c\x41end", sequence=5, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (start, metadata, end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
+def test_bounded_rtp_carries_metadata_gap_across_video_timestamp() -> None:
+    first = parse_rtp_packet(
+        _rtp(b"\x61\x80first", sequence=1, timestamp=9000, marker=True)
+    )
+    # Sequence 2 is the missing first slice at timestamp 12000.
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, timestamp=12000, payload_type=112)
+    )
+    trailing = parse_rtp_packet(
+        _rtp(b"\x61\x00tail", sequence=4, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=5, timestamp=15000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, metadata, trailing, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80first", b"\x61\x80healthy")
+
+
+@pytest.mark.parametrize("nonvideo_payload_type", [104, 112])
+def test_bounded_rtp_keeps_multiplexed_gap_across_different_timestamp_clocks(
+    nonvideo_payload_type: int,
+) -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    # Sequence 2 could be the next video's first slice. Audio/metadata use
+    # another timestamp clock, so their timestamp cannot assign the loss.
+    other_media = parse_rtp_packet(
+        _rtp(
+            b"other media",
+            sequence=3,
+            timestamp=777_777,
+            payload_type=nonvideo_payload_type,
+        )
+    )
+    trailing = parse_rtp_packet(
+        _rtp(b"\x61\x00tail", sequence=4, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=5, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, other_media, trailing, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
+def test_bounded_h264_keeps_new_timestamp_metadata_gap_despite_mb_zero() -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, timestamp=12000, payload_type=112)
+    )
+    uncertain = parse_rtp_packet(
+        _rtp(b"\x61\xe0mb0", sequence=4, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=5, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, metadata, uncertain, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
+def test_bounded_h264_keeps_new_timestamp_metadata_conflict() -> None:
+    previous = parse_rtp_packet(
+        _rtp(b"\x61\xe0previous", sequence=1, timestamp=9000, marker=True)
+    )
+    # Reusing sequence 1 with changed timestamp/payload is a conflict, not a
+    # duplicate. Its damage belongs to the picture at timestamp 12000.
+    conflict = parse_rtp_packet(
+        _rtp(b"metadata", sequence=1, timestamp=12000, payload_type=112)
+    )
+    uncertain = parse_rtp_packet(
+        _rtp(b"\x61\xe0mb0", sequence=2, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=3, timestamp=15000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (previous, conflict, uncertain, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0previous", b"\x61\xe0healthy")
+
+
+@pytest.mark.parametrize(
+    ("video_nal", "expected"),
+    [
+        (b"\x61\x80first", ()),
+        (b"\x61\x00tail", ()),
+    ],
+)
+def test_bounded_h264_preserves_pre_video_metadata_gap_with_macroblock_zero(
+    video_nal: bytes, expected: tuple[bytes, ...]
+) -> None:
+    first_metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=1, payload_type=112)
+    )
+    # Missing sequence 2 was before any observed video timestamp.
+    second_metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, payload_type=112)
+    )
+    video = parse_rtp_packet(_rtp(video_nal, sequence=4, marker=True))
+    assert rtp_packets_to_nal_units(
+        (first_metadata, second_metadata, video),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("first_slice_bit", "expected"),
+    [
+        (b"\x80", ()),
+        (b"\x00", ()),
+    ],
+)
+def test_bounded_h264_preserves_pre_video_gap_after_fu_reassembly(
+    first_slice_bit: bytes, expected: tuple[bytes, ...]
+) -> None:
+    first_metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=1, payload_type=112)
+    )
+    second_metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, payload_type=112)
+    )
+    start = parse_rtp_packet(
+        _rtp(b"\x7c\x81" + first_slice_bit + b"start", sequence=4)
+    )
+    end = parse_rtp_packet(_rtp(b"\x7c\x41end", sequence=5, marker=True))
+    assert rtp_packets_to_nal_units(
+        (first_metadata, second_metadata, start, end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == expected
+
+
+def test_bounded_h264_rejects_macroblock_zero_after_timestamp_gap() -> None:
+    damaged = parse_rtp_packet(_rtp(b"\x61\x80old", sequence=1, timestamp=9000))
+    # The missing sequence 2 was the prior picture's final slice.
+    start = parse_rtp_packet(
+        _rtp(b"\x7c\x81\x80new", sequence=3, timestamp=12000)
+    )
+    end = parse_rtp_packet(
+        _rtp(b"\x7c\x41-end", sequence=4, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (damaged, start, end), codec="h264", completed_access_units_only=True
+    ) == ()
+
+
+def test_bounded_rtp_rejects_malformed_marked_fu_after_complete_slice() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
+    fu_start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    # This FU ends a different NAL type; the depacketizer discards it.
+    malformed_end = parse_rtp_packet(
+        _rtp(b"\x7c\x45end", sequence=3, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, fu_start, malformed_end),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
+def test_bounded_rtp_rejects_unmarked_malformed_fu_before_timestamp_change() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, timestamp=9000))
+    malformed_fu = parse_rtp_packet(_rtp(b"\x7c", sequence=2, timestamp=9000))
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=3, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, malformed_fu, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80healthy",)
+
+
+@pytest.mark.parametrize(
+    ("codec", "malformed_fu"),
+    [
+        ("h264", b"\x7c\xc1\x80slice"),
+        ("hevc", b"\x62\x01\xc1\x80slice"),
+    ],
+)
+def test_bounded_rtp_rejects_fu_with_start_and_end_flags(
+    codec: RtpVideoCodec, malformed_fu: bytes
+) -> None:
+    packet = parse_rtp_packet(_rtp(malformed_fu, sequence=1, marker=True))
+    assert RtpVideoDepacketizer(codec).push(packet) == ()
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+
+
+def test_bounded_rtp_rejects_picture_with_open_fragment_at_timestamp_change() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    fu_start = parse_rtp_packet(
+        _rtp(b"\x7c\x81start", sequence=2, timestamp=9000)
+    )
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x61healthy", sequence=3, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, fu_start, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61healthy",)
+
+
+def test_bounded_rtp_rejects_marked_nal_that_discards_prior_fragment() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
+    fu_start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    marked_sei = parse_rtp_packet(_rtp(b"\x66sei", sequence=3, marker=True))
+
+    assert rtp_packets_to_nal_units(
+        (first_slice, fu_start, marked_sei),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x66sei",)
 
 
 def _rtp(

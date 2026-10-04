@@ -2611,6 +2611,43 @@ def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
     assert output.getvalue() == EMPTY_BYTES
 
 
+def test_decrypted_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
+    """A short C8W-style capture must not publish an empty successful clip."""
+
+    bodies = (
+        _rtp_packet(b"\x40\x01vps", sequence=1),
+        _rtp_packet(b"\x42\x01sps", sequence=2),
+        _rtp_packet(b"\x44\x01pps", sequence=3),
+        _rtp_packet(b"\x62\x01\x93partial", sequence=4),
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+    output = io.BytesIO()
+
+    with pytest.raises(EzvizNoMediaError, match="no complete video frame") as error:
+        copy_decrypted_cloud_stream_packets_to_mpegts(
+            packets, output, ffmpeg_path="ffmpeg", media_key="test-key"
+        )
+
+    assert error.value.reason == "no_media"
+    assert output.getvalue() == EMPTY_BYTES
+
+
+def test_decrypted_cloud_rtp_rejects_unmarked_slice_from_unfinished_picture() -> None:
+    body = _rtp_packet(b"\x61complete-slice", marker=False)
+    packet = VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+    output = io.BytesIO()
+
+    with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+        copy_decrypted_cloud_stream_packets_to_mpegts(
+            (packet,), output, ffmpeg_path="ffmpeg", media_key="test-key"
+        )
+
+    assert output.getvalue() == EMPTY_BYTES
+
+
 def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
@@ -2794,7 +2831,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
 ) -> None:
     client = _client()
     output = io.BytesIO()
-    rtp_body = _rtp_packet(b"\x67encrypted-h264", marker=True)
+    rtp_body = _rtp_packet(b"\x61\x80encrypted-h264", marker=True)
     decrypt_calls: list[tuple[bytes, str | bytes, int | None]] = []
     open_calls: list[tuple[str, str]] = []
 
@@ -2839,7 +2876,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         nalu_header_size: int | None,
     ) -> bytes:
         decrypt_calls.append((data, key, nalu_header_size))
-        return data[:9] + CLEAR_ANNEXB
+        return data
 
     def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
         open_calls.append((ffmpeg_path, codec))
@@ -2873,22 +2910,22 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         media_key="MEDIAKEY",
     )
 
-    expected_annexb = b"\x00\x00\x00\x01\x67encrypted-h264"
+    expected_annexb = b"\x00\x00\x00\x01\x61\x80encrypted-h264"
     assert decrypt_calls == [
         (
             b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + expected_annexb,
             "MEDIAKEY",
             1,
         )
-    ]
+    ] * 2
     assert open_calls == [("ffmpeg-custom", "h264")]
-    assert output.getvalue() == CLEAR_ANNEXB
+    assert output.getvalue() == expected_annexb
 
 
 def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
     monkeypatch,
 ) -> None:
-    expected_annexb = b"\x00\x00\x00\x01\x26\x01new-hevc-idr"
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01\x80new-hevc-idr"
     bodies = (
         _rtp_packet(b"\x67old-h264-sps", sequence=1, payload_type=97),
         _rtp_packet(
@@ -2899,7 +2936,7 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
             extension_data=b"\x45\x0a\x24\x61" + (b"\xff" * 8),
         ),
         _rtp_packet(
-            b"\x26\x01new-hevc-idr",
+            b"\x26\x01\x80new-hevc-idr",
             sequence=3,
             payload_type=97,
             marker=True,
@@ -2943,6 +2980,235 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 
     assert open_calls == [("ffmpeg-custom", "hevc")]
     assert output.getvalue() == expected_annexb
+
+
+@pytest.mark.parametrize(
+    ("first_bit", "fill", "ciphertext", "expect_media"),
+    [
+        (0xF0, 1, "4f398594072be830a32772a2eefdd2d3", True),
+        (0, 2, "b35d3653711a4dfb243b107dec3e53d5", False),
+    ],
+)
+def test_bounded_cloud_checks_first_slice_after_decryption(
+    monkeypatch, first_bit: int, fill: int, ciphertext: str, expect_media: bool
+) -> None:
+    key = b"0123456789abcdef"
+    clear_body = bytes((first_bit,)) + bytes((fill,)) * 15
+    encrypted_body = bytes.fromhex(ciphertext)
+    assert bool(encrypted_body[0] & 0x80) is not bool(first_bit & 0x80)
+    encrypted_nal = b"\x61" + encrypted_body
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    if not expect_media:
+        with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+            copy_decrypted_cloud_stream_packets_to_mpegts(
+                packets,
+                output,
+                ffmpeg_path="ffmpeg",
+                media_key=key,
+                transport=StreamTransport.RTP,
+            )
+        assert not output.getvalue()
+        return
+
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=key,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01\x61" + clear_body
+
+
+def test_bounded_cloud_classifies_vcl_after_encrypted_header_decryption(
+    monkeypatch,
+) -> None:
+    # The ciphertext looks like H.264 SPS, while the clear NAL is a first slice.
+    encrypted_nal = bytes.fromhex("6756a9964cbfe8a9b98a095499213e39")
+    clear_nal = b"\x61\x80" + b"#" * 14
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
+def test_bounded_cloud_depacketizes_after_encrypted_header_decryption(
+    monkeypatch,
+) -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    clear_nal = b"\x61\x80" + bytes((13,)) * 14
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
+def test_bounded_cloud_decrypts_reassembled_encrypted_header_fu(monkeypatch) -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    clear_nal = b"\x61\x80" + bytes((13,)) * 14
+    indicator = bytes(((encrypted_nal[0] & 0xE0) | 28,))
+    nal_type = encrypted_nal[0] & 0x1F
+    first = _rtp_packet(
+        indicator + bytes((0x80 | nal_type,)) + encrypted_nal[1:7],
+        sequence=1,
+    )
+    last = _rtp_packet(
+        indicator + bytes((0x40 | nal_type,)) + encrypted_nal[7:],
+        sequence=2,
+        marker=True,
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate((first, last), 1)
+    ]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
+def test_bounded_cloud_incomplete_encrypted_fu_reports_no_media() -> None:
+    body = _rtp_packet(b"\x7c\x81" + b"x" * 32)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+    with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+        copy_decrypted_cloud_stream_packets_to_mpegts(
+            packets,
+            output,
+            ffmpeg_path="ffmpeg",
+            media_key=b"0123456789abcdef",
+            nalu_header_size=0,
+            transport=StreamTransport.RTP,
+        )
+    assert not output.getvalue()
+
+
+def test_bounded_cloud_decrypts_encrypted_header_aggregation(monkeypatch) -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    clear_nal = b"\x61\x80" + bytes((13,)) * 14
+    payload = b"\x78" + len(encrypted_nal).to_bytes(2, "big") + encrypted_nal
+    body = _rtp_packet(payload, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
+def test_bounded_cloud_detects_codec_after_encrypted_header_decryption(
+    monkeypatch,
+) -> None:
+    # Raw ciphertext resembles HEVC; the clear NAL is H.264.
+    encrypted_nal = bytes.fromhex("4f1b29388cceb8f99e7f61305787a4f5")
+    clear_nal = b"\x61\x80" + bytes((5,)) * 14
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
 
 
 def test_cloud_packet_iterator_bounds_from_request_start() -> None:
@@ -3245,7 +3511,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
             extension_profile=1,
             extension_data=descriptor,
         ),
-        _rtp_packet(b"\x67encrypted-h264", sequence=2, marker=True),
+        _rtp_packet(b"\x61\x80encrypted-h264", sequence=2, marker=True),
         rtp_with_extension(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")
@@ -3281,7 +3547,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
         nalu_header_size: int | None,
     ) -> bytes:
         assert nalu_header_size == 1
-        return data[:9] + CLEAR_ANNEXB
+        return data
 
     def fake_av_remux(
         video: bytes,
@@ -3327,7 +3593,8 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
 
     assert output.getvalue() == AV_MPEGTS_PAYLOAD
     assert len(remux_calls) == 1
-    assert remux_calls[0]["video"] == CLEAR_ANNEXB
+    expected_video = b"\x00\x00\x00\x01\x61\x80encrypted-h264"
+    assert remux_calls[0]["video"] == expected_video
     assert remux_calls[0]["audio"].sample_rate == sample_rate
     assert remux_calls[0]["audio"].channels == 1
     assert remux_calls[0]["audio"].frame_count == 1

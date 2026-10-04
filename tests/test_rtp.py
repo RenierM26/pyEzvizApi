@@ -144,6 +144,18 @@ def test_bounded_rtp_header_only_vcl_damages_prior_slice(
     ) == (healthy_nal,)
 
 
+@pytest.mark.parametrize("truncated", [b"\x61\x00", b"\x61\x00\x80"])
+def test_bounded_rtp_rejects_incomplete_first_mb_code(truncated: bytes) -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, marker=True))
+    malformed = parse_rtp_packet(
+        _rtp(truncated, sequence=2, timestamp=12000, marker=True)
+    )
+    assert not rtp_nal_units_have_vcl((truncated,), codec="h264")
+    assert rtp_packets_to_nal_units(
+        (first, malformed), codec="h264", completed_access_units_only=True
+    ) == (b"\x61\x80first",)
+
+
 def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
     second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))

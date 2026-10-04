@@ -1371,6 +1371,17 @@ def _h264_slice_header_offset(nal: bytes) -> int:
     return header_size
 
 
+def _h264_first_mb_code_complete(nal: bytes) -> bool:
+    """Require the first Exp-Golomb field's stop bit and suffix bits."""
+
+    offset = _h264_slice_header_offset(nal)
+    for leading_zeros, bit_index in enumerate(range(offset * 8, len(nal) * 8)):
+        bit = nal[bit_index // 8] & (0x80 >> (bit_index % 8))
+        if bit:
+            return len(nal) * 8 - bit_index - 1 >= leading_zeros
+    return False
+
+
 def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if codec == "hevc":
         return (
@@ -1383,8 +1394,8 @@ def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if not nal or nal[0] & 0x80 or not 1 <= (nal[0] & 0x1F) <= 23:
         return False
     nal_type = nal[0] & 0x1F
-    return nal_type not in {1, 2, 3, 4, 5, 19, 20, 21} or len(nal) > (
-        _h264_slice_header_offset(nal)
+    return nal_type not in {1, 2, 3, 4, 5, 19, 20, 21} or (
+        _h264_first_mb_code_complete(nal)
     )
 
 

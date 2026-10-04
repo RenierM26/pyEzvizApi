@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal
@@ -1081,6 +1081,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
     allow_ezviz_headerless_hevc_fu: bool = False,
     completed_access_units_only: bool = False,
+    first_slice_transform: Callable[[bytes], bytes] | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
 
@@ -1173,7 +1174,9 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 ),
             )
             pending_vcl[packet.ssrc] = False
-            pending_gap[packet.ssrc] = not contiguous
+            pending_gap[packet.ssrc] = not contiguous or pending_gap.get(
+                packet.ssrc, False
+            )
         elif not contiguous:
             pending_gap[packet.ssrc] = True
         active_timestamps[packet.ssrc] = packet.timestamp
@@ -1192,9 +1195,20 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 accepted.append(False)
                 if rtp_nal_units_have_vcl((nal,), codec=codec):
                     if not pending_vcl.get(packet.ssrc):
-                        first_slice_seen[packet.ssrc] = _rtp_nal_starts_picture(
-                            nal, codec=codec
+                        needs_start_evidence = first_vcl_au_pending.get(
+                            packet.ssrc, True
+                        ) or pending_gap.get(packet.ssrc, False)
+                        starts_picture = needs_start_evidence and _rtp_nal_starts_picture(
+                            first_slice_transform(nal)
+                            if first_slice_transform is not None
+                            else nal,
+                            codec=codec,
                         )
+                        first_slice_seen[packet.ssrc] = starts_picture
+                        if previous_timestamp != packet.timestamp and starts_picture:
+                            # A confirmed new picture cannot contain the slice
+                            # lost before its timestamp boundary.
+                            pending_gap[packet.ssrc] = False
                     pending_vcl[packet.ssrc] = True
         if packet.marker:
             finish_access_unit(

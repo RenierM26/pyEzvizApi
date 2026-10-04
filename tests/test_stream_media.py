@@ -2876,7 +2876,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         nalu_header_size: int | None,
     ) -> bytes:
         decrypt_calls.append((data, key, nalu_header_size))
-        return data[:9] + CLEAR_ANNEXB
+        return data
 
     def fake_open_remux(ffmpeg_path: str, codec: str) -> subprocess.Popen[bytes]:
         open_calls.append((ffmpeg_path, codec))
@@ -2917,9 +2917,9 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
             "MEDIAKEY",
             1,
         )
-    ]
+    ] * 2
     assert open_calls == [("ffmpeg-custom", "h264")]
-    assert output.getvalue() == CLEAR_ANNEXB
+    assert output.getvalue() == expected_annexb
 
 
 def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
@@ -2980,6 +2980,54 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
 
     assert open_calls == [("ffmpeg-custom", "hevc")]
     assert output.getvalue() == expected_annexb
+
+
+@pytest.mark.parametrize(
+    ("first_bit", "fill", "expect_media"),
+    [(0x80, 0, True), (0, 2, False)],
+)
+def test_bounded_cloud_checks_first_slice_after_decryption(
+    monkeypatch, first_bit: int, fill: int, expect_media: bool
+) -> None:
+    key = b"0123456789abcdef"
+    clear_body = bytes((first_bit,)) + bytes((fill,)) * 15
+    encrypted_body = AES.new(key, AES.MODE_ECB).encrypt(clear_body)
+    assert bool(encrypted_body[0] & 0x80) is not bool(first_bit & 0x80)
+    encrypted_nal = b"\x61" + encrypted_body
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    if not expect_media:
+        with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+            copy_decrypted_cloud_stream_packets_to_mpegts(
+                packets,
+                output,
+                ffmpeg_path="ffmpeg",
+                media_key=key,
+                transport=StreamTransport.RTP,
+            )
+        assert not output.getvalue()
+        return
+
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=key,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01\x61" + clear_body
 
 
 def test_cloud_packet_iterator_bounds_from_request_start() -> None:
@@ -3318,7 +3366,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
         nalu_header_size: int | None,
     ) -> bytes:
         assert nalu_header_size == 1
-        return data[:9] + CLEAR_ANNEXB
+        return data
 
     def fake_av_remux(
         video: bytes,
@@ -3364,7 +3412,8 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
 
     assert output.getvalue() == AV_MPEGTS_PAYLOAD
     assert len(remux_calls) == 1
-    assert remux_calls[0]["video"] == CLEAR_ANNEXB
+    expected_video = b"\x00\x00\x00\x01\x61\x80encrypted-h264"
+    assert remux_calls[0]["video"] == expected_video
     assert remux_calls[0]["audio"].sample_rate == sample_rate
     assert remux_calls[0]["audio"].channels == 1
     assert remux_calls[0]["audio"].frame_count == 1

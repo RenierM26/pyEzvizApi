@@ -14,6 +14,7 @@ from cli_fakes import (
     install_fake_client as _install_fake_client,
     token_file as _token_file,
 )
+from Crypto.Cipher import AES
 import pytest
 
 import pyezvizapi.__main__ as cli_module
@@ -3092,6 +3093,36 @@ def test_cli_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
         cli_module._rtp_packets_to_annexb_units(packets, codec="hevc")  # noqa: SLF001
 
     assert error.value.reason == "no_media"
+
+
+@pytest.mark.parametrize(
+    ("first_bit", "fill", "expect_media"),
+    [(0x80, 0, True), (0, 2, False)],
+)
+def test_cli_cloud_rtp_checks_first_slice_after_decryption(
+    first_bit: int, fill: int, expect_media: bool
+) -> None:
+    key = b"0123456789abcdef"
+    clear_body = bytes((first_bit,)) + bytes((fill,)) * 15
+    encrypted_body = AES.new(key, AES.MODE_ECB).encrypt(clear_body)
+    encrypted_nal = b"\x61" + encrypted_body
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+    if not expect_media:
+        with pytest.raises(EzvizNoMediaError, match="no complete video frame"):
+            cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+                packets, codec="h264", first_slice_key=key
+            )
+        return
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets, codec="h264", first_slice_key=key
+    ) == (b"\x00\x00\x00\x01" + encrypted_nal,)
 
 
 def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:

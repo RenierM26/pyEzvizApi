@@ -98,14 +98,14 @@ def test_bounded_rtp_rejects_sequence_conflict_before_timestamp_boundary() -> No
     first = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
     conflict = parse_rtp_packet(_rtp(b"\x61altered", sequence=1, timestamp=9000))
     next_picture = parse_rtp_packet(
-        _rtp(b"\x61next", sequence=2, timestamp=12000, marker=True)
+        _rtp(b"\x61\x80next", sequence=2, timestamp=12000, marker=True)
     )
 
     assert rtp_packets_to_nal_units(
         (first, conflict, next_picture),
         codec="h264",
         completed_access_units_only=True,
-    ) == (b"\x61next",)
+    ) == (b"\x61\x80next",)
 
 
 def test_bounded_rtp_keeps_picture_after_identical_duplicate() -> None:
@@ -178,14 +178,14 @@ def test_bounded_rtp_discards_damaged_picture_before_later_healthy_one() -> None
     first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=2, timestamp=9000))
     damaged_slice = parse_rtp_packet(_rtp(b"\x61damaged", sequence=4, timestamp=9000))
     healthy_picture = parse_rtp_packet(
-        _rtp(b"\x61healthy", sequence=5, timestamp=12000, marker=True)
+        _rtp(b"\x61\x80healthy", sequence=5, timestamp=12000, marker=True)
     )
 
     assert rtp_packets_to_nal_units(
         (config, first_slice, damaged_slice, healthy_picture),
         codec="h264",
         completed_access_units_only=True,
-    ) == (b"\x67sps", b"\x61healthy")
+    ) == (b"\x67sps", b"\x61\x80healthy")
 
 
 def test_bounded_rtp_keeps_fragment_continuity_across_same_ssrc_metadata() -> None:
@@ -215,6 +215,28 @@ def test_bounded_rtp_detects_real_gap_before_same_ssrc_metadata() -> None:
         codec="h264",
         completed_access_units_only=True,
     ) == ()
+
+
+def test_bounded_rtp_carries_metadata_gap_across_video_timestamp() -> None:
+    first = parse_rtp_packet(
+        _rtp(b"\x61\x80first", sequence=1, timestamp=9000, marker=True)
+    )
+    # Sequence 2 is the missing first slice at timestamp 12000.
+    metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, timestamp=12000, payload_type=112)
+    )
+    trailing = parse_rtp_packet(
+        _rtp(b"\x61\x00tail", sequence=4, timestamp=12000, marker=True)
+    )
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=5, timestamp=15000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, metadata, trailing, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80first", b"\x61\x80healthy")
 
 
 def test_bounded_rtp_rejects_malformed_marked_fu_after_complete_slice() -> None:

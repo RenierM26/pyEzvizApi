@@ -3250,17 +3250,38 @@ def _rtp_packets_to_annexb_units(
     packets: list[Any],
     *,
     codec: str,
+    first_slice_key: str | bytes | None = None,
+    decrypt_codec: str = "auto",
 ) -> tuple[bytes, ...]:
     """Return complete Annex-B units from the shared RTP continuity state machine."""
 
     if codec not in {"h264", "hevc"}:
         raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
+
+    def decrypted_first_slice(nal_unit: bytes) -> bytes:
+        assert first_slice_key is not None
+        selected_codec = codec if decrypt_codec == "auto" else decrypt_codec
+        header_size = _codec_nalu_header_size(selected_codec)
+        if header_size is None:
+            header_size = 2 if codec == "hevc" else 1
+        video_pes = (
+            b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
+            + b"\x00\x00\x00\x01"
+            + nal_unit
+        )
+        return decrypt_hikvision_ps_video(
+            video_pes, first_slice_key, nalu_header_size=header_size
+        )[13:]
+
     parsed = _parse_rtp_packets(packets)
     nal_units = rtp_packets_to_nal_units(
         parsed,
         codec=cast(Any, codec),
         allow_ezviz_headerless_hevc_fu=True,
         completed_access_units_only=True,
+        first_slice_transform=(
+            decrypted_first_slice if first_slice_key is not None else None
+        ),
     )
     if not rtp_nal_units_have_vcl(nal_units, codec=cast(Any, codec)):
         raise EzvizNoMediaError(
@@ -5237,7 +5258,10 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         # the remux helper will parse the same bounded capture.
                         rtp_codec = _detect_rtp_video_codec(collected_packets)
                         _rtp_packets_to_annexb_units(
-                            collected_packets, codec=rtp_codec
+                            collected_packets,
+                            codec=rtp_codec,
+                            first_slice_key=media_key,
+                            decrypt_codec=args.decrypt_codec,
                         )
                         assert media_key is not None
 
@@ -5269,6 +5293,8 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                         _rtp_packets_to_annexb_units(
                             collected_packets,
                             codec=rtp_codec,
+                            first_slice_key=media_key,
+                            decrypt_codec=decrypt_codec,
                         ),
                         detected_codec=rtp_codec,
                         decrypt_codec=decrypt_codec,

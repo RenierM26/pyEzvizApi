@@ -1103,11 +1103,20 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
-    last_complete_access_unit_end = 0
+    accepted: list[bool] = []
+    pending_indexes: dict[int, list[int]] = {}
     active_timestamps: dict[int, int] = {}
     active_sequences: dict[int, int] = {}
     pending_vcl: dict[int, bool] = {}
     pending_gap: dict[int, bool] = {}
+
+    def finish_access_unit(ssrc: int, *, complete: bool) -> None:
+        # Keep non-VCL metadata from a damaged or unfinished picture, but
+        # never carry its VCL slices into a later healthy access unit.
+        for index in pending_indexes.pop(ssrc, []):
+            if complete or not rtp_nal_units_have_vcl((output[index],), codec=codec):
+                accepted[index] = True
+
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
         if packet.payload_type not in routed_video_payload_types:
             continue
@@ -1126,10 +1135,14 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912
         contiguous = sequence_delta == 1
         previous_timestamp = active_timestamps.get(packet.ssrc)
         if previous_timestamp is not None and packet.timestamp != previous_timestamp:
-            if pending_vcl.get(packet.ssrc) and contiguous and not pending_gap.get(
-                packet.ssrc
-            ):
-                last_complete_access_unit_end = len(output)
+            finish_access_unit(
+                packet.ssrc,
+                complete=bool(
+                    pending_vcl.get(packet.ssrc)
+                    and contiguous
+                    and not pending_gap.get(packet.ssrc)
+                ),
+            )
             pending_vcl[packet.ssrc] = False
             pending_gap[packet.ssrc] = not contiguous
         elif not contiguous:
@@ -1137,16 +1150,24 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912
         active_timestamps[packet.ssrc] = packet.timestamp
         for nal in depacketizer.push(packet):
             if nal:
+                pending_indexes.setdefault(packet.ssrc, []).append(len(output))
                 output.append(nal)
+                accepted.append(False)
                 if rtp_nal_units_have_vcl((nal,), codec=codec):
                     pending_vcl[packet.ssrc] = True
         if packet.marker:
-            if pending_vcl.get(packet.ssrc) and not pending_gap.get(packet.ssrc):
-                last_complete_access_unit_end = len(output)
+            finish_access_unit(
+                packet.ssrc,
+                complete=bool(
+                    pending_vcl.get(packet.ssrc) and not pending_gap.get(packet.ssrc)
+                ),
+            )
             pending_vcl[packet.ssrc] = False
             pending_gap[packet.ssrc] = False
     if completed_access_units_only:
-        return tuple(output[:last_complete_access_unit_end])
+        for ssrc in tuple(pending_indexes):
+            finish_access_unit(ssrc, complete=False)
+        return tuple(nal for nal, keep in zip(output, accepted, strict=True) if keep)
     return tuple(output)
 
 

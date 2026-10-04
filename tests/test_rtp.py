@@ -104,6 +104,21 @@ def test_bounded_rtp_does_not_close_marked_picture_after_sequence_gap() -> None:
     ) == ()
 
 
+def test_bounded_rtp_discards_damaged_picture_before_later_healthy_one() -> None:
+    config = parse_rtp_packet(_rtp(b"\x67sps", sequence=1, timestamp=9000))
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=2, timestamp=9000))
+    damaged_slice = parse_rtp_packet(_rtp(b"\x61damaged", sequence=4, timestamp=9000))
+    healthy_picture = parse_rtp_packet(
+        _rtp(b"\x61healthy", sequence=5, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (config, first_slice, damaged_slice, healthy_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x67sps", b"\x61healthy")
+
+
 def _rtp(
     payload: bytes,
     *,

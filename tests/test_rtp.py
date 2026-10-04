@@ -19,6 +19,7 @@ from pyezvizapi.rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_annexb,
     rtp_payload_video_codec,
@@ -37,6 +38,16 @@ def test_parse_rtp_reports_version_failure_with_stable_reason() -> None:
         parse_rtp_packet(b"\x40" + b"\x00" * 11)
     assert error.value.source == "rtp"
     assert error.value.reason == "invalid_rtp_version"
+
+
+@pytest.mark.parametrize("nal_type", [1, 2, 3, 4, 5, 19, 20, 21])
+def test_h264_vcl_detection_accepts_all_slice_types(nal_type: int) -> None:
+    assert rtp_nal_units_have_vcl((bytes((nal_type,)) + b"slice",), codec="h264")
+
+
+def test_rtp_vcl_detection_rejects_only_parameter_sets() -> None:
+    assert not rtp_nal_units_have_vcl((b"\x67sps", b"\x68pps"), codec="h264")
+    assert not rtp_nal_units_have_vcl((b"\x40\x01vps",), codec="hevc")
 
 
 def _rtp(

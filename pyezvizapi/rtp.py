@@ -1056,7 +1056,10 @@ def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) 
 
     if codec == "hevc":
         return any(len(nal) >= 2 and ((nal[0] >> 1) & 0x3F) < 32 for nal in nal_units)
-    return any(nal and 1 <= (nal[0] & 0x1F) <= 5 for nal in nal_units)
+    return any(
+        nal and (nal[0] & 0x1F) in {1, 2, 3, 4, 5, 19, 20, 21}
+        for nal in nal_units
+    )
 
 
 def rtp_packets_to_nal_units(

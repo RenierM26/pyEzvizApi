@@ -2654,6 +2654,13 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
         b"\x40\x01vps"
     )
     packet = VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+    slice_body = (
+        b"\x80\x60\x00\x02"
+        b"\x00\x00\x00\x02"
+        b"\x00\x00\x00\x02"
+        b"\x26\x01slice"
+    )
+    slice_packet = VtmPacket(VtmChannel.STREAM, len(slice_body), 2, 0, slice_body)
 
     class FakeStream:
         def __enter__(self) -> FakeStream:
@@ -2666,8 +2673,8 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
             return None
 
         def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
-            assert max_packets == 1
-            return [packet]
+            assert max_packets == 2
+            return [packet, slice_packet]
 
     remux_calls: list[dict[str, Any]] = []
 
@@ -2706,7 +2713,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
                 "--serial",
                 "CAM123",
                 "--max-packets",
-                "1",
+                "2",
                 "--duration",
                 "0",
                 "--decrypt-video",
@@ -2721,7 +2728,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
 
     assert remux_calls == [
         {
-            "packets": [packet],
+            "packets": [packet, slice_packet],
             "ffmpeg_path": "ffmpeg",
             "media_key": "camera-secret",
             "nalu_header_size": None,
@@ -2734,6 +2741,51 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
         "smscode": "654321",
     }
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
+
+
+def test_stream_dump_audio_route_preserves_destination_without_video(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """An audio-routed short cloud capture must fail before truncating output."""
+
+    _install_fake_client(monkeypatch)
+
+    def packet(payload: bytes, sequence: int) -> VtmPacket:
+        body = (
+            b"\x80\x60" + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x01" + b"\x55\x66\x77\x88" + payload
+        )
+        return VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def start(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
+            assert max_packets == 2
+            return [
+                packet(b"\x40\x01vps", 1),
+                packet(b"\x62\x01\x93partial", 2),
+            ]
+
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_a, **_k: FakeStream())
+    monkeypatch.setattr(cli_module, "cloud_rtp_packets_have_audio", lambda _p: True)
+    output_file = tmp_path / "existing.ts"
+    existing_media = b"existing-media"
+    output_file.write_bytes(existing_media)
+
+    assert cli_module.main([
+        "--token-file", _token_file(tmp_path), "stream", "dump", "--serial",
+        "CAM123", "--max-packets", "2", "--duration", "0", "--decrypt-video",
+        "--output", str(output_file),
+    ]) == 1
+    assert output_file.read_bytes() == existing_media
 
 
 def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(

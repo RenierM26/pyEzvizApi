@@ -5232,6 +5232,12 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                     if args.format == "mpegts" and cloud_rtp_packets_have_audio(
                         collected_packets
                     ):
+                        # Validate before opening/truncating a named destination;
+                        # the remux helper will parse the same bounded capture.
+                        rtp_codec = _detect_rtp_video_codec(collected_packets)
+                        _rtp_packets_to_annexb_units(
+                            collected_packets, codec=rtp_codec
+                        )
                         assert media_key is not None
 
                         def _write_rtp_mpegts(selected_output: BinaryIO) -> None:

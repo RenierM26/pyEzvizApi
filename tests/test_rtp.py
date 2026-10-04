@@ -81,6 +81,29 @@ def test_bounded_rtp_accepts_previous_picture_at_timestamp_transition() -> None:
     ) == (b"\x61first",)
 
 
+def test_bounded_rtp_does_not_close_picture_across_sequence_gap() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    # Sequence 2 was the missing final slice of the first picture.
+    next_picture = parse_rtp_packet(
+        _rtp(b"\x7c\x81start", sequence=3, timestamp=12000)
+    )
+    assert rtp_packets_to_nal_units(
+        (first_slice, next_picture),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
+def test_bounded_rtp_does_not_close_marked_picture_after_sequence_gap() -> None:
+    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
+    final_slice = parse_rtp_packet(_rtp(b"\x61last", sequence=3, marker=True))
+    assert rtp_packets_to_nal_units(
+        (first_slice, final_slice),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == ()
+
+
 def _rtp(
     payload: bytes,
     *,

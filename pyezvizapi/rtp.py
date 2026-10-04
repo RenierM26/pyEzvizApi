@@ -1062,7 +1062,7 @@ def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) 
     )
 
 
-def rtp_packets_to_nal_units(
+def rtp_packets_to_nal_units(  # noqa: PLR0912
     packets: Iterable[RtpPacket],
     *,
     codec: RtpVideoCodec,
@@ -1105,17 +1105,35 @@ def rtp_packets_to_nal_units(
     output: list[bytes] = []
     last_complete_access_unit_end = 0
     active_timestamps: dict[int, int] = {}
+    active_sequences: dict[int, int] = {}
     pending_vcl: dict[int, bool] = {}
+    pending_gap: dict[int, bool] = {}
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
         if packet.payload_type not in routed_video_payload_types:
             continue
         if not _rtp_packet_matches_codec_epoch(packet, route_epoch, codec):
             continue
+        previous_sequence = active_sequences.get(packet.ssrc)
+        sequence_delta = (
+            (packet.sequence - previous_sequence) & 0xFFFF
+            if previous_sequence is not None
+            else 1
+        )
+        if sequence_delta == 0 or sequence_delta >= 0x8000:
+            depacketizer.push(packet)
+            continue
+        active_sequences[packet.ssrc] = packet.sequence
+        contiguous = sequence_delta == 1
         previous_timestamp = active_timestamps.get(packet.ssrc)
         if previous_timestamp is not None and packet.timestamp != previous_timestamp:
-            if pending_vcl.get(packet.ssrc):
+            if pending_vcl.get(packet.ssrc) and contiguous and not pending_gap.get(
+                packet.ssrc
+            ):
                 last_complete_access_unit_end = len(output)
             pending_vcl[packet.ssrc] = False
+            pending_gap[packet.ssrc] = not contiguous
+        elif not contiguous:
+            pending_gap[packet.ssrc] = True
         active_timestamps[packet.ssrc] = packet.timestamp
         for nal in depacketizer.push(packet):
             if nal:
@@ -1123,9 +1141,10 @@ def rtp_packets_to_nal_units(
                 if rtp_nal_units_have_vcl((nal,), codec=codec):
                     pending_vcl[packet.ssrc] = True
         if packet.marker:
-            if pending_vcl.get(packet.ssrc):
+            if pending_vcl.get(packet.ssrc) and not pending_gap.get(packet.ssrc):
                 last_complete_access_unit_end = len(output)
             pending_vcl[packet.ssrc] = False
+            pending_gap[packet.ssrc] = False
     if completed_access_units_only:
         return tuple(output[:last_complete_access_unit_end])
     return tuple(output)

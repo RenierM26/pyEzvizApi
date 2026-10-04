@@ -101,6 +101,49 @@ def test_bounded_rtp_damages_picture_after_forbidden_bit_nal() -> None:
     ) == (b"\x61\x80healthy",)
 
 
+@pytest.mark.parametrize(
+    ("codec", "header_only", "healthy_nal"),
+    [
+        ("h264", b"\x61", b"\x61\x80healthy"),
+        ("hevc", b"\x02\x01", b"\x02\x01\x80healthy"),
+        ("h264", b"\x75\x80\x00", b"\x75\x80\x00\x80healthy"),
+    ],
+)
+def test_bounded_rtp_rejects_header_only_vcl(
+    codec: RtpVideoCodec, header_only: bytes, healthy_nal: bytes
+) -> None:
+    first = parse_rtp_packet(_rtp(healthy_nal, sequence=1, marker=True))
+    truncated = parse_rtp_packet(
+        _rtp(header_only, sequence=2, timestamp=12000, marker=True)
+    )
+    assert not rtp_nal_units_have_vcl((header_only,), codec=codec)
+    assert rtp_packets_to_nal_units(
+        (first, truncated), codec=codec, completed_access_units_only=True
+    ) == (healthy_nal,)
+
+
+@pytest.mark.parametrize(
+    ("codec", "header_only", "healthy_nal"),
+    [
+        ("h264", b"\x61", b"\x61\x80healthy"),
+        ("hevc", b"\x02\x01", b"\x02\x01\x80healthy"),
+    ],
+)
+def test_bounded_rtp_header_only_vcl_damages_prior_slice(
+    codec: RtpVideoCodec, header_only: bytes, healthy_nal: bytes
+) -> None:
+    first = parse_rtp_packet(_rtp(healthy_nal, sequence=1))
+    truncated = parse_rtp_packet(_rtp(header_only, sequence=2, marker=True))
+    next_picture = parse_rtp_packet(
+        _rtp(healthy_nal, sequence=3, timestamp=12000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (first, truncated, next_picture),
+        codec=codec,
+        completed_access_units_only=True,
+    ) == (healthy_nal,)
+
+
 def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
     second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))

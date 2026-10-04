@@ -1324,7 +1324,12 @@ def _rtp_payload_matches_video_codec(
     if codec == "h264":
         nal_type = payload[0] & 0x1F
         return 1 <= nal_type <= 24 or (nal_type == 28 and len(payload) >= 2)
-    return _valid_rtp_nal_header(payload, codec="hevc")
+    return (
+        len(payload) >= 2
+        and not (payload[0] & 0x80)
+        and bool(payload[1] & 0x07)
+        and ((payload[0] >> 1) & 0x3F) <= 49
+    )
 
 
 def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:
@@ -1348,6 +1353,11 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if codec == "hevc":
         # first_slice_segment_in_pic_flag follows the two-byte NAL header.
         return len(nal) > 2 and bool(nal[2] & 0x80)
+    header_size = _h264_slice_header_offset(nal)
+    return len(nal) > header_size and bool(nal[header_size] & 0x80)
+
+
+def _h264_slice_header_offset(nal: bytes) -> int:
     nal_type = nal[0] & 0x1F if nal else 0
     # first_mb_in_slice uses Exp-Golomb coding: zero has a leading 1 bit.
     # Type 20 uses a three-byte extension. Type 21 uses only two bytes when
@@ -1355,7 +1365,7 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     header_size = 4 if nal_type in {20, 21} else 1
     if nal_type == 21 and len(nal) > 1 and nal[1] & 0x80:
         header_size = 3
-    return len(nal) > header_size and bool(nal[header_size] & 0x80)
+    return header_size
 
 
 def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
@@ -1365,8 +1375,14 @@ def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
             and not (nal[0] & 0x80)
             and bool(nal[1] & 0x07)
             and ((nal[0] >> 1) & 0x3F) <= 49
+            and (len(nal) > 2 or ((nal[0] >> 1) & 0x3F) >= 32)
         )
-    return bool(nal) and not (nal[0] & 0x80) and 1 <= (nal[0] & 0x1F) <= 23
+    if not nal or nal[0] & 0x80 or not 1 <= (nal[0] & 0x1F) <= 23:
+        return False
+    nal_type = nal[0] & 0x1F
+    return nal_type not in {1, 2, 3, 4, 5, 19, 20, 21} or len(nal) > (
+        _h264_slice_header_offset(nal)
+    )
 
 
 def _is_plausible_hevc_header(payload: bytes) -> bool:

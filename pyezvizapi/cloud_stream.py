@@ -705,7 +705,11 @@ def _copy_probed_cloud_capture(
             write_capture(staged)
         if staged_path.stat().st_size == 0:
             raise EzvizNoMediaError("Cloud stream capture did not contain media")
-        observed = _probe_cloud_video_duration(staged_path, ffprobe_path=ffprobe_path)
+        observed = _probe_cloud_video_duration(
+            staged_path,
+            ffprobe_path=ffprobe_path,
+            timeout_seconds=max(30.0, requested_duration_seconds * 2),
+        )
         if observed < requested_duration_seconds / 2:
             raise EzvizIncompleteMediaError(
                 source="cloud",
@@ -717,7 +721,9 @@ def _copy_probed_cloud_capture(
         output.flush()
 
 
-def _probe_cloud_video_duration(path: Path, *, ffprobe_path: str) -> float:
+def _probe_cloud_video_duration(
+    path: Path, *, ffprobe_path: str, timeout_seconds: float = 30.0
+) -> float:
     """Read the staged clip's video duration when PES timestamps are ambiguous."""
 
     try:
@@ -736,10 +742,14 @@ def _probe_cloud_video_duration(path: Path, *, ffprobe_path: str) -> float:
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout_seconds,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as err:
+    except subprocess.TimeoutExpired as err:
+        raise PyEzvizError(
+            f"ffprobe timed out verifying cloud video after {timeout_seconds:g} seconds"
+        ) from err
+    except OSError as err:
         raise PyEzvizError(
             "ffprobe is required to verify cloud video with ambiguous PES timestamps"
         ) from err
@@ -756,15 +766,24 @@ def _probe_cloud_video_duration(path: Path, *, ffprobe_path: str) -> float:
     try:
         duration = float(value)
     except (TypeError, ValueError):
-        return _probe_cloud_video_frame_span(path, ffprobe_path=ffprobe_path)
+        return _probe_cloud_video_frame_span(
+            path, ffprobe_path=ffprobe_path, timeout_seconds=timeout_seconds
+        )
     if not math.isfinite(duration) or duration < 0:
         raise PyEzvizError("Staged cloud video duration is invalid")
     # Container/stream duration may be inflated by the same PTS reset that made
     # the clear PES timeline ambiguous. Require actual decoded frame coverage.
-    return min(duration, _probe_cloud_video_frame_span(path, ffprobe_path=ffprobe_path))
+    return min(
+        duration,
+        _probe_cloud_video_frame_span(
+            path, ffprobe_path=ffprobe_path, timeout_seconds=timeout_seconds
+        ),
+    )
 
 
-def _probe_cloud_video_frame_span(path: Path, *, ffprobe_path: str) -> float:
+def _probe_cloud_video_frame_span(
+    path: Path, *, ffprobe_path: str, timeout_seconds: float = 30.0
+) -> float:
     """Measure decoded video frames when MPEG-PS lacks stream duration."""
 
     try:
@@ -784,10 +803,14 @@ def _probe_cloud_video_frame_span(path: Path, *, ffprobe_path: str) -> float:
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout_seconds,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as err:
+    except subprocess.TimeoutExpired as err:
+        raise PyEzvizError(
+            f"ffprobe timed out probing cloud video frames after {timeout_seconds:g} seconds"
+        ) from err
+    except OSError as err:
         raise PyEzvizError("Could not probe staged cloud video frames") from err
     if result.returncode != 0:
         raise PyEzvizError("Could not probe staged cloud video frames")

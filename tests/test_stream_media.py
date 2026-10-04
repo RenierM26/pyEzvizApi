@@ -6,6 +6,7 @@ import base64
 import importlib
 import io
 import json
+from pathlib import Path
 import socket
 import subprocess
 from types import SimpleNamespace
@@ -378,9 +379,12 @@ def test_decrypted_cloud_save_probes_ambiguous_pts_before_publication(
         "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
         lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
     )
+    def fake_probe(_path: Path, **kwargs: Any) -> float:
+        assert kwargs["timeout_seconds"] == pytest.approx(40)
+        return video_duration
+
     monkeypatch.setattr(
-        "pyezvizapi.cloud_stream._probe_cloud_video_duration",
-        lambda _path, **_kwargs: video_duration,
+        "pyezvizapi.cloud_stream._probe_cloud_video_duration", fake_probe
     )
     copy = (
         copy_cloud_stream_to_mpegps
@@ -404,10 +408,10 @@ def test_decrypted_cloud_save_probes_ambiguous_pts_before_publication(
 def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], float]] = []
 
-    def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
-        calls.append(command)
+    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        calls.append((command, kwargs["timeout"]))
         if "-show_frames" in command:
             payload: dict[str, Any] = {
                 "frames": [
@@ -422,11 +426,12 @@ def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
     monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
 
     observed = _probe_cloud_video_duration(
-        tmp_path / "short.ps", ffprobe_path="ffprobe"
+        tmp_path / "short.ps", ffprobe_path="ffprobe", timeout_seconds=120
     )
 
     assert observed == pytest.approx(2)
     assert len(calls) == 2
+    assert [timeout for _command, timeout in calls] == [120, 120]
 
 
 @pytest.mark.parametrize(
@@ -475,6 +480,25 @@ def test_cloud_video_probe_reports_missing_ffprobe(
 
     with pytest.raises(PyEzvizError, match="ffprobe is required"):
         _probe_cloud_video_duration(tmp_path / "short.ts", ffprobe_path="ffprobe")
+
+
+def test_cloud_video_probe_reports_frame_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+        if "-show_frames" in command:
+            raise subprocess.TimeoutExpired("ffprobe", 120)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"streams": [{"duration": "120.0"}]}),
+        )
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+
+    with pytest.raises(PyEzvizError, match="timed out probing cloud video frames"):
+        _probe_cloud_video_duration(
+            tmp_path / "long.ts", ffprobe_path="ffprobe", timeout_seconds=120
+        )
 
 
 def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:

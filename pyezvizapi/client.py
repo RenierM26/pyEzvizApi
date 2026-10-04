@@ -339,6 +339,22 @@ def _binary_position(output: BinaryIO) -> int | None:
         return None
 
 
+class _CountingBinaryWriter:
+    """Count bytes sent to an output that may not support ``tell()``."""
+
+    def __init__(self, output: BinaryIO) -> None:
+        self.output = output
+        self.bytes_written = 0
+
+    def write(self, payload: bytes) -> int:
+        written = self.output.write(payload)
+        self.bytes_written += written
+        return written
+
+    def flush(self) -> None:
+        self.output.flush()
+
+
 def _bytes_written_to_output(
     output: str | Path | BinaryIO,
     *,
@@ -3873,11 +3889,9 @@ class EzvizClient:
                 # instead of growing a spool without limit or starving a FIFO.
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 with output_path.open("wb") as output_file:
-                    start_position = _binary_position(output_file)
-                    copy_cloud(output_file)
-                    staged_size = _bytes_written_to_output(
-                        output_file, start_position=start_position
-                    )
+                    counted_output = _CountingBinaryWriter(output_file)
+                    copy_cloud(cast(BinaryIO, counted_output))
+                    staged_size = counted_output.bytes_written
             else:
                 with SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b") as staging:
                     copy_cloud(cast(BinaryIO, staging))

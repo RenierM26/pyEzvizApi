@@ -4086,13 +4086,45 @@ def test_save_clip_cloud_preserves_fifo_output(
     reader = Thread(target=read_fifo, daemon=True)
     reader.start()
 
-    client.save_clip(
+    result = client.save_clip(
         "CAM123", output_path, source="cloud", duration_seconds=duration_seconds
     )
     reader.join(timeout=3)
 
     assert not reader.is_alive()
     assert received == [SAVE_CLIP_PAYLOAD]
+    assert S_ISFIFO(output_path.stat().st_mode)
+    assert result["bytes"] == len(SAVE_CLIP_PAYLOAD)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO is unavailable")
+def test_save_clip_cloud_unbounded_empty_fifo_is_no_media(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client()
+    output_path = tmp_path / "empty.pipe"
+    os.mkfifo(output_path)
+    received: list[bytes] = []
+
+    def read_fifo() -> None:
+        with output_path.open("rb") as reader:
+            received.append(reader.read())
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        lambda *_args, **_kwargs: None,
+    )
+    reader = Thread(target=read_fifo, daemon=True)
+    reader.start()
+
+    with pytest.raises(EzvizNoMediaError):
+        client.save_clip(
+            "CAM123", output_path, source="cloud", duration_seconds=None
+        )
+    reader.join(timeout=3)
+
+    assert not reader.is_alive()
+    assert received == [b""]
     assert S_ISFIFO(output_path.stat().st_mode)
 
 

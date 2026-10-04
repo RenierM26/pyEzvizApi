@@ -162,6 +162,7 @@ from .exceptions import (
     DeviceException,
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
+    EzvizNoMediaError,
     HTTPError,
     InvalidURL,
     PyEzvizError,
@@ -3410,7 +3411,7 @@ class EzvizClient:
                         smscode=smscode,
                     )
                 if temporary_path.stat().st_size == 0:
-                    raise PyEzvizError("Local SDK ECDH capture did not contain media")
+                    raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
                 os.replace(temporary_path, output_path)
             finally:
                 temporary_path.unlink(missing_ok=True)
@@ -3441,7 +3442,7 @@ class EzvizClient:
 
         bytes_written = _bytes_written_to_output(output, start_position=start_position)
         if bytes_written == 0:
-            raise PyEzvizError("Local SDK ECDH capture did not contain media")
+            raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
 
         return {
             "ok": True,
@@ -3849,7 +3850,7 @@ class EzvizClient:
 
         bytes_written = _bytes_written_to_output(output, start_position=start_position)
         if bytes_written == 0:
-            raise PyEzvizError("Cloud stream capture did not contain media")
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
 
         return {
             "ok": True,

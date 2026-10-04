@@ -41,7 +41,12 @@ from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Util.asn1 import DerSequence
 
-from .exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .exceptions import (
+    DeviceException,
+    EzvizLocalSdkDeadlineExpired,
+    EzvizLocalSdkStreamClosed,
+    PyEzvizError,
+)
 from .media import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
@@ -12336,7 +12341,9 @@ def _recv_exact(sock: Any, length: int) -> bytes:
                 "Device offline or unreachable: timed out waiting for EZVIZ local SDK data"
             ) from err
         if not chunk:
-            raise PyEzvizError("Socket closed before expected EZVIZ frame bytes")
+            raise EzvizLocalSdkStreamClosed(
+                "Socket closed before expected EZVIZ frame bytes"
+            )
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)

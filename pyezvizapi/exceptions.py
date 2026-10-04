@@ -22,6 +22,12 @@ class EzvizUnsupportedMediaError(PyEzvizError):
         self.reason = reason
 
 
+class EzvizNoMediaError(PyEzvizError):
+    """A bounded preview completed without any media packets."""
+
+    reason = "no_media"
+
+
 class InvalidURL(PyEzvizError):
     """Raised when a request fails due to an invalid URL or proxy settings."""
 
@@ -52,6 +58,10 @@ class DeviceException(PyEzvizError):
 
 class EzvizLocalSdkDeadlineExpired(DeviceException):
     """Raised when a bounded local SDK frame read reaches its total deadline."""
+
+
+class EzvizLocalSdkStreamClosed(DeviceException):
+    """Raised when a local SDK socket closes mid-frame."""
 
 
 class EzvizPushFatalError(PyEzvizError):

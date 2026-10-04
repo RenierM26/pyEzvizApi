@@ -5232,6 +5232,57 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
     assert handler.errors == [(502, "Could not launch FFmpeg")]
 
 
+def test_stream_proxy_rejects_empty_success_response(monkeypatch) -> None:
+    class FakeStream:
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        wfile = io.BytesIO()
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.responses: list[int] = []
+            self.errors: list[tuple[int, str]] = []
+
+        def send_response(self, code: int) -> None:
+            self.responses.append(code)
+
+        def send_error(self, code: int, message: str) -> None:
+            self.errors.append((code, message))
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=8,
+        path="/CAM123.ts",
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=True,
+        decrypt_video=False,
+        decrypt_codec="auto",
+        max_packets=5,
+    )
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
+    monkeypatch.setattr(
+        cli_module, "copy_cloud_stream_packets_to_mpegts", lambda *_args, **_kwargs: None
+    )
+
+    handler = FakeHandler()
+    cli_module._handle_stream_proxy_get(handler, config, object())  # noqa: SLF001
+
+    assert handler.responses == []
+    assert handler.errors == [
+        (502, "Cloud stream proxy supplied no media within the capture bound")
+    ]
+
+
 def test_stream_proxy_routes_clear_transport_when_encrypted_allowed(monkeypatch) -> None:
     expected_payload = b"mpegts"
 
@@ -5366,7 +5417,7 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
 
     copy_calls: list[bytes] = []
 
-    def fake_copy_cloud_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
+    def fake_copy_cloud_stream_payloads_to_mpegts(*args: Any, **kwargs: Any) -> None:
         transform_payload = kwargs["mpegps_transform"]
         assert kwargs["rtp_transform"] is not None
         assert kwargs["rtp_audio_key"] == "camera-key"
@@ -5378,6 +5429,7 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
         third = transform_payload(audio_pes)
         tail = transform_payload.flush()
         copy_calls.extend([first, second, third, tail])
+        args[1].write(b"muxed")
 
     monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
     monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)

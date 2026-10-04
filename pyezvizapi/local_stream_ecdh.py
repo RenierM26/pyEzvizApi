@@ -63,6 +63,7 @@ from .constants import (
 )
 from .exceptions import (
     EzvizLocalSdkDeadlineExpired,
+    EzvizLocalSdkStreamClosed,
     EzvizUnsupportedMediaError,
     PyEzvizError,
 )
@@ -929,49 +930,68 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         max_frames=max_frames,
         duration_seconds=duration_seconds,
     )
-    with open_local_sdk_ecdh_stream_from_client(
-        client,
-        serial,
-        cas_serial=cas_serial,
-        channel=channel,
-        receiver_port=receiver_port,
-        identifier=identifier,
-        uuid=uuid,
-        timestamp=timestamp,
-        send_init=send_init,
-        pre_start_body=pre_start_body,
-        pre_start_sequence=pre_start_sequence,
-        preview_sequence=preview_sequence,
-        stream_setup_sequence=stream_setup_sequence,
-        stream_rate=stream_rate,
-        stream_mode=stream_mode,
-        register_p2p_session=register_p2p_session,
-        p2p_register_max_retries=p2p_register_max_retries,
-        timeout=timeout,
-        socket_factory=socket_factory,
-        max_prefix_bytes=max_prefix_bytes,
-        fetch_media_key=decrypt_video and media_key is None,
-        smscode=smscode,
-    ) as stream:
-        selected_media_key = media_key
-        if decrypt_video and selected_media_key is None:
-            selected_media_key = stream.media_key
-            if selected_media_key is None:
-                raise PyEzvizError(
-                    "decrypt_video requires a media_key or fetchable camera media key"
+    try:
+        initial_output_position: int | None = output.tell()
+    except (AttributeError, OSError, ValueError):
+        initial_output_position = None
+    # C8W closes an otherwise valid ECDH preview at rate 1 but streams at
+    # rate 0. Retry only a premature socket close, before any output was
+    # published; never hide a media/decryption/authentication failure.
+    stream_rates = (stream_rate, 0) if stream_rate == 1 else (stream_rate,)
+    for index, candidate_rate in enumerate(stream_rates):
+        try:
+            with open_local_sdk_ecdh_stream_from_client(
+                client,
+                serial,
+                cas_serial=cas_serial,
+                channel=channel,
+                receiver_port=receiver_port,
+                identifier=identifier,
+                uuid=uuid,
+                timestamp=timestamp,
+                send_init=send_init,
+                pre_start_body=pre_start_body,
+                pre_start_sequence=pre_start_sequence,
+                preview_sequence=preview_sequence,
+                stream_setup_sequence=stream_setup_sequence,
+                stream_rate=candidate_rate,
+                stream_mode=stream_mode,
+                register_p2p_session=register_p2p_session,
+                p2p_register_max_retries=p2p_register_max_retries,
+                timeout=timeout,
+                socket_factory=socket_factory,
+                max_prefix_bytes=max_prefix_bytes,
+                fetch_media_key=decrypt_video and media_key is None,
+                smscode=smscode,
+            ) as stream:
+                selected_media_key = media_key
+                if decrypt_video and selected_media_key is None:
+                    selected_media_key = stream.media_key
+                    if selected_media_key is None:
+                        raise PyEzvizError(
+                            "decrypt_video requires a media_key or fetchable camera media key"
+                        )
+                copy_local_sdk_ecdh_stream_to_media(
+                    stream,
+                    output,
+                    output_format=output_format,
+                    decrypt_video=decrypt_video,
+                    media_key=selected_media_key,
+                    ffmpeg_path=ffmpeg_path,
+                    nalu_header_size=nalu_header_size,
+                    max_packets=max_packets,
+                    max_frames=max_frames,
+                    duration_seconds=duration_seconds,
                 )
-        copy_local_sdk_ecdh_stream_to_media(
-            stream,
-            output,
-            output_format=output_format,
-            decrypt_video=decrypt_video,
-            media_key=selected_media_key,
-            ffmpeg_path=ffmpeg_path,
-            nalu_header_size=nalu_header_size,
-            max_packets=max_packets,
-            max_frames=max_frames,
-            duration_seconds=duration_seconds,
-        )
+            return
+        except EzvizLocalSdkStreamClosed:
+            if index + 1 == len(stream_rates) or initial_output_position is None:
+                raise
+            try:
+                if output.tell() != initial_output_position:
+                    raise
+            except (AttributeError, OSError, ValueError):
+                raise
 
 
 def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913

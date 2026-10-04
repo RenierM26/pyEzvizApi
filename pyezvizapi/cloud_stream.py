@@ -21,8 +21,13 @@ from urllib.parse import urlparse
 
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
-from .exceptions import HTTPError, PyEzvizError, UnsupportedRtpVideoCodecError
-from .media import has_positive_finite_capture_bound
+from .exceptions import (
+    EzvizNoMediaError,
+    HTTPError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
+from .media import has_positive_finite_capture_bound, is_positive_finite_duration_bound
 from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     ANNEX_B_START_CODE,
@@ -866,6 +871,7 @@ def _iter_bounded_cloud_packets(
     duration_seconds: float | None,
     first_packet_timeout: float | None = None,
     first_packet_deadline: float | None = None,
+    stream_packet_timeout_seconds: float | None = None,
     monotonic: Callable[[], float],
 ) -> Iterator[Any]:
     """Iterate cloud packets with transport-level deadlines when available."""
@@ -883,6 +889,10 @@ def _iter_bounded_cloud_packets(
         }
         if first_packet_deadline is not None:
             iterator_kwargs["first_packet_deadline"] = first_packet_deadline
+        if stream_packet_timeout_seconds is not None:
+            iterator_kwargs["stream_packet_timeout_seconds"] = (
+                stream_packet_timeout_seconds
+            )
         return stream.iter_packets(**iterator_kwargs)
 
     def _fallback() -> Iterator[Any]:
@@ -909,8 +919,19 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
     mpegps_transform: Callable[[bytes], bytes] | None = None,
     rtp_transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
     rtp_audio_key: str | bytes | None = None,
+    startup_timeout_seconds: float | None = None,
 ) -> None:
     """Route VTM payloads by transport and write MPEG-TS."""
+
+    if startup_timeout_seconds is not None and not is_positive_finite_duration_bound(
+        startup_timeout_seconds
+    ):
+        raise PyEzvizError("Cloud video startup timeout must be positive and finite")
+    startup_deadline = (
+        monotonic() + startup_timeout_seconds
+        if startup_timeout_seconds is not None
+        else None
+    )
 
     packets = _iter_bounded_cloud_packets(
         stream,
@@ -918,11 +939,18 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
         duration_seconds=duration_seconds,
         first_packet_timeout=first_packet_timeout,
         first_packet_deadline=first_packet_deadline,
+        stream_packet_timeout_seconds=(
+            min(startup_timeout_seconds, 20.0)
+            if startup_timeout_seconds is not None
+            else None
+        ),
         monotonic=monotonic,
     )
     transport, packets = _peek_cloud_transport(
         packets,
         allow_encrypted=allow_encrypted,
+        startup_deadline=startup_deadline,
+        monotonic=monotonic,
     )
     if transport == StreamTransport.MPEG_TS:
         if mpegps_transform is not None or rtp_transform is not None:
@@ -942,6 +970,8 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
             transform=rtp_transform,
             audio_key=rtp_audio_key,
             allow_encrypted=allow_encrypted,
+            startup_deadline=startup_deadline,
+            monotonic=monotonic,
         )
         return
 
@@ -968,11 +998,15 @@ def _peek_cloud_transport(
     packets: Iterator[Any],
     *,
     allow_encrypted: bool = False,
+    startup_deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[StreamTransport, Iterator[Any]]:
     """Discard nonmedia prelude packets until a known transport is found."""
 
     prefix: list[Any] = []
     for packet in packets:
+        if startup_deadline is not None and monotonic() >= startup_deadline:
+            raise EzvizNoMediaError("Cloud stream supplied no media before startup deadline")
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         prefix.append(packet)
         if not packet.body:
@@ -1089,6 +1123,8 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     transform: Callable[[bytes, RtpVideoCodec], bytes] | None = None,
     audio_key: str | bytes | None = None,
     allow_encrypted: bool = False,
+    startup_deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     """Depacketize RTP video and optional descriptor-backed AAC to MPEG-TS."""
 
@@ -1101,6 +1137,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     consumed_packets = 0
     stale_video_route = False
     for packet in packets:
+        if startup_deadline is not None and monotonic() >= startup_deadline:
+            raise EzvizNoMediaError(
+                "RTP cloud stream supplied no routed video before startup deadline"
+            )
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         parsed = _parse_cloud_rtp_packet(packet.body)
         if parsed is None:

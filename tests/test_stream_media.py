@@ -41,6 +41,7 @@ from pyezvizapi.cloud_stream import (
     copy_decrypted_cloud_stream_packets_to_mpegts,
 )
 from pyezvizapi.exceptions import (
+    EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
     UnsupportedRtpVideoCodecError,
@@ -2667,6 +2668,30 @@ def test_cloud_packet_iterator_bounds_from_request_start() -> None:
     }
 
 
+def test_vtm_stream_packet_inactivity_ignores_control_keepalives() -> None:
+    clock = [0.0]
+
+    class ControlOnlyStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.read_count = 0
+
+        def read_packet(self, **_kwargs: Any) -> VtmPacket:
+            clock[0] += 1.0
+            self.read_count += 1
+            return VtmPacket(VtmChannel.MESSAGE, 0, self.read_count, 0, b"")
+
+    stream = ControlOnlyStream()
+    assert list(
+        stream.iter_packets(
+            stream_packet_timeout_seconds=2.0,
+            keepalive_interval=None,
+            monotonic=lambda: clock[0],
+        )
+    ) == []
+    assert stream.read_count == 2
+
+
 def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:
     class RecordingStream(VtmStreamClient):
         def __init__(self) -> None:
@@ -3509,6 +3534,32 @@ def test_copy_cloud_stream_packets_accepts_predispatch_video_codec_correction(
 
     assert open_calls == ["hevc"]
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
+
+
+def test_cloud_rtp_startup_deadline_reports_no_routed_video() -> None:
+    body = _rtp_packet(b"metadata", sequence=1, payload_type=112)
+
+    class MetadataOnlyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets is None
+            for sequence in range(1, 10):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    ticks = iter((0.0, 1.0, 2.0))
+    with pytest.raises(EzvizNoMediaError, match="no routed video") as error:
+        copy_cloud_stream_packets_to_mpegts(
+            MetadataOnlyStream(),
+            io.BytesIO(),
+            ffmpeg_path="ffmpeg",
+            max_packets=None,
+            startup_timeout_seconds=1.5,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert error.value.reason == "no_media"
 
 
 def test_copy_cloud_stream_packets_probes_until_first_routed_video(

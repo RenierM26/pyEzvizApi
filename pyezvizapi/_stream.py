@@ -23,6 +23,7 @@ from .media import (
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
+    is_positive_finite_duration_bound,
 )
 from .rtp import rtp_payload as _rtp_payload
 
@@ -476,6 +477,7 @@ class VtmStreamClient:
         duration_from_start: bool = False,
         first_packet_timeout: float | None = None,
         first_packet_deadline: float | None = None,
+        stream_packet_timeout_seconds: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
         monotonic: Callable[[], float] = time.monotonic,
@@ -490,6 +492,10 @@ class VtmStreamClient:
             return
         if first_packet_timeout is not None and first_packet_timeout <= 0:
             return
+        if stream_packet_timeout_seconds is not None and not is_positive_finite_duration_bound(
+            stream_packet_timeout_seconds
+        ):
+            raise PyEzvizError("VTM stream packet timeout must be positive and finite")
         if keepalive_interval is not None and keepalive_interval <= 0:
             raise PyEzvizError("keepalive_interval must be positive or None")
 
@@ -514,6 +520,11 @@ class VtmStreamClient:
         next_keepalive = (
             None if keepalive_interval is None else started_at + keepalive_interval
         )
+        next_stream_packet_deadline = (
+            None
+            if stream_packet_timeout_seconds is None
+            else started_at + stream_packet_timeout_seconds
+        )
         while max_packets is None or seen < max_packets:
             now = monotonic()
             if capture_deadline is not None and now >= capture_deadline:
@@ -522,9 +533,19 @@ class VtmStreamClient:
             if first_packet_deadline is not None and now >= first_packet_deadline:
                 self._read_inactivity_deadline = None
                 break
+            if (
+                next_stream_packet_deadline is not None
+                and now >= next_stream_packet_deadline
+            ):
+                self._read_inactivity_deadline = None
+                break
             active_stream_deadlines = [
                 deadline
-                for deadline in (capture_deadline, first_packet_deadline)
+                for deadline in (
+                    capture_deadline,
+                    first_packet_deadline,
+                    next_stream_packet_deadline,
+                )
                 if deadline is not None
             ]
             keepalive_deadline = (
@@ -548,6 +569,7 @@ class VtmStreamClient:
                 for deadline in (
                     capture_deadline,
                     first_packet_deadline,
+                    next_stream_packet_deadline,
                     next_keepalive,
                 )
                 if deadline is not None
@@ -576,6 +598,8 @@ class VtmStreamClient:
                 continue
 
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+                if stream_packet_timeout_seconds is not None:
+                    next_stream_packet_deadline = monotonic() + stream_packet_timeout_seconds
                 if capture_deadline is None and duration_seconds is not None:
                     capture_deadline = monotonic() + duration_seconds
                 first_packet_deadline = None

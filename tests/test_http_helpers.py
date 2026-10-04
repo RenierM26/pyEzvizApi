@@ -36,6 +36,7 @@ from pyezvizapi.constants import (
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizAuthVerificationCode,
+    EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
 )
@@ -3013,8 +3014,9 @@ def test_save_clip_rejects_empty_local_sdk_ecdh_capture(monkeypatch) -> None:
         fake_copy_local_sdk_ecdh_stream_from_client,
     )
 
-    with pytest.raises(PyEzvizError, match="did not contain media"):
+    with pytest.raises(EzvizNoMediaError, match="did not contain media") as error:
         client.save_clip("CAM123", io.BytesIO(), source="local-sdk-ecdh")
+    assert error.value.reason == "no_media"
 
 
 def test_save_clip_ecdh_failure_preserves_existing_path(monkeypatch, tmp_path) -> None:
@@ -3786,8 +3788,9 @@ def test_save_clip_cloud_rejects_empty_capture(monkeypatch, tmp_path) -> None:
         fake_copy_cloud_stream_to_mpegts,
     )
 
-    with pytest.raises(PyEzvizError, match="did not contain media"):
+    with pytest.raises(EzvizNoMediaError, match="did not contain media") as error:
         client.save_clip("CAM123", output_path, source="cloud")
+    assert error.value.reason == "no_media"
     assert output_path.stat().st_size == 0
 
 

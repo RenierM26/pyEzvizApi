@@ -32,7 +32,7 @@ from pyezvizapi._local_stream import (
     summarize_h264_annexb_units,
     summarize_idmx_h264_local_packets,
 )
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizNoMediaError, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     EzvizInterleavedRtpFrame,
     EzvizInterleavedRtpFrameHeader,
@@ -41,6 +41,19 @@ from pyezvizapi.hcnetsdk import (
 )
 
 FIRST_PREFIX = b"preface"
+
+
+def test_decrypted_local_stream_reports_no_media_before_ffmpeg() -> None:
+    class EmptyStream:
+        def iter_packets(self, **_kwargs: object) -> list[object]:
+            return []
+
+    with pytest.raises(EzvizNoMediaError, match="no media packets") as error:
+        copy_local_stream_to_decrypted_mpegts(
+            EmptyStream(), io.BytesIO(), "media-key", max_packets=1
+        )
+
+    assert error.value.reason == "no_media"
 
 STREAM_TIMEOUT = 3.0
 

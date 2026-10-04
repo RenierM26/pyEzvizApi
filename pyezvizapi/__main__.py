@@ -41,7 +41,7 @@ from .constants import (
     DefenseModeType,
     DeviceSwitchType,
 )
-from .exceptions import EzvizAuthVerificationCode, PyEzvizError
+from .exceptions import EzvizAuthVerificationCode, EzvizNoMediaError, PyEzvizError
 from .hcnetsdk import (
     HCNETSDK_COMMAND_PORT_CONTROL_FAMILY,
     EzvizCasDeviceInfo,
@@ -3700,8 +3700,12 @@ def _handle_stream_proxy_get(
                 mpegps_transform=mpegps_transform,
                 rtp_transform=rtp_transform,
                 rtp_audio_key=rtp_audio_key,
+                startup_timeout_seconds=60.0,
             )
-            _start_response()
+            if not response_started:
+                raise EzvizNoMediaError(
+                    "Cloud stream proxy supplied no media within the capture bound"
+                )
     except (BrokenPipeError, ConnectionResetError):
         _LOGGER.debug("Stream proxy client disconnected")
     except PyEzvizError as err:

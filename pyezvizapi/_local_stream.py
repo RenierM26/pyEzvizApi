@@ -25,7 +25,7 @@ from .constants import (
     IDMX_VIDEO_RTP_CLOCK_RATE,
     MAX_RETRIES,
 )
-from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .exceptions import EzvizLocalSdkDeadlineExpired, EzvizNoMediaError, PyEzvizError
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -2251,6 +2251,10 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         duration_seconds=capture_duration_seconds,
         monotonic=monotonic,
     )
+    if not packets:
+        raise EzvizNoMediaError(
+            "EZVIZ local stream supplied no media packets within the capture bound"
+        )
     if _local_stream_packets_are_idmx(packets):
         annexb, authoritative_video_codec = (
             _decrypt_idmx_local_packets_to_annexb_with_codec(

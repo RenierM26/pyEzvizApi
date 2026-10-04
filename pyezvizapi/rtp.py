@@ -1318,7 +1318,7 @@ def _rtp_payload_matches_video_codec(
     if codec == "h264":
         nal_type = payload[0] & 0x1F
         return 1 <= nal_type <= 24 or (nal_type == 28 and len(payload) >= 2)
-    return len(payload) >= 2 and _is_plausible_hevc_header(payload)
+    return _valid_rtp_nal_header(payload, codec="hevc")
 
 
 def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:
@@ -1344,14 +1344,22 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
         return len(nal) > 2 and bool(nal[2] & 0x80)
     nal_type = nal[0] & 0x1F if nal else 0
     # first_mb_in_slice uses Exp-Golomb coding: zero has a leading 1 bit.
-    # H.264 extension slices (20/21) have a three-byte extension header.
+    # Type 20 uses a three-byte extension. Type 21 uses only two bytes when
+    # avc_3d_extension_flag (the first extension bit) is set.
     header_size = 4 if nal_type in {20, 21} else 1
+    if nal_type == 21 and len(nal) > 1 and nal[1] & 0x80:
+        header_size = 3
     return len(nal) > header_size and bool(nal[header_size] & 0x80)
 
 
 def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if codec == "hevc":
-        return len(nal) >= 2 and _is_plausible_hevc_header(nal)
+        return (
+            len(nal) >= 2
+            and not (nal[0] & 0x80)
+            and bool(nal[1] & 0x07)
+            and ((nal[0] >> 1) & 0x3F) <= 49
+        )
     return bool(nal) and not (nal[0] & 0x80) and 1 <= (nal[0] & 0x1F) <= 23
 
 

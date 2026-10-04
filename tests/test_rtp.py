@@ -65,6 +65,29 @@ def test_bounded_rtp_rejects_forbidden_bit_as_media(
     ) == ()
 
 
+@pytest.mark.parametrize(
+    "nal",
+    [
+        b"\x75\x80\x00\x80slice",  # 3D-AVC: two-byte extension.
+        b"\x75\x00\x00\x00\x80slice",  # MVC/SVC: three-byte extension.
+    ],
+)
+def test_bounded_rtp_accepts_type_21_first_slice(nal: bytes) -> None:
+    packet = parse_rtp_packet(_rtp(nal, sequence=1, marker=True))
+    assert rtp_packets_to_nal_units(
+        (packet,), codec="h264", completed_access_units_only=True
+    ) == (nal,)
+
+
+def test_bounded_rtp_accepts_nonzero_hevc_layer_id() -> None:
+    nal = b"\x02\x09\x80slice"  # VCL type 1, layer 1, temporal ID 1.
+    packet = parse_rtp_packet(_rtp(nal, sequence=1, marker=True))
+    assert rtp_nal_units_have_vcl((nal,), codec="hevc")
+    assert rtp_packets_to_nal_units(
+        (packet,), codec="hevc", completed_access_units_only=True
+    ) == (nal,)
+
+
 def test_bounded_rtp_damages_picture_after_forbidden_bit_nal() -> None:
     first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
     malformed = parse_rtp_packet(_rtp(b"\x81\x80bad", sequence=2, marker=True))

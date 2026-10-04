@@ -221,6 +221,36 @@ def test_encrypted_header_fu_reassembles_before_transform(
     assert seen == [encrypted_nal]
 
 
+@pytest.mark.parametrize("continuation", ["pseudo-header", "headerless"])
+def test_encrypted_header_hevc_ezviz_fu_reassembles_before_transform(
+    continuation: str,
+) -> None:
+    encrypted_nal = b"\x26\x01" + bytes(range(2, 32))
+    clear_nal = b"\x26\x01\xa0" + b"x" * 29
+    body = encrypted_nal[2:]
+    start = parse_rtp_packet(_rtp(b"\x62\x01\x93" + body[:7], sequence=1))
+    end_payload = (
+        b"\x62\x01\x66" + body[7:]
+        if continuation == "pseudo-header"
+        else b"\x62\x01" + body[7:]
+    )
+    end = parse_rtp_packet(_rtp(end_payload, sequence=2, marker=True))
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == encrypted_nal else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        (start, end),
+        codec="hevc",
+        allow_ezviz_headerless_hevc_fu=True,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen == [encrypted_nal]
+
+
 @pytest.mark.parametrize("codec", ["h264", "hevc"])
 @pytest.mark.parametrize("duplicate_start", [False, True])
 @pytest.mark.parametrize("nonvideo_payload_type", [112, 104])

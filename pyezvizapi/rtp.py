@@ -1126,7 +1126,7 @@ def _fu_signature(
             fu_header & 0x80
         ), bool(fu_header & 0x40)
     if (
-        len(payload) < 4
+        len(payload) < 3
         or (payload[0] >> 1) & 0x3F != 49
         or payload[0] & 0x80
         or not payload[1] & 0x07
@@ -1143,6 +1143,7 @@ def _complete_fu_chain_indexes(  # noqa: PLR0912
     codec: RtpVideoCodec,
     route_epochs: tuple[RtpStreamDescriptor | None, ...],
     video_payload_types: frozenset[int],
+    allow_ezviz_headerless_hevc_fu: bool,
 ) -> frozenset[int]:
     """Avoid mistaking an isolated ciphertext FU lookalike for real framing."""
 
@@ -1189,10 +1190,24 @@ def _complete_fu_chain_indexes(  # noqa: PLR0912
             ):
                 break
             fragment = _fu_signature(current.payload, codec)
-            if fragment is None or fragment[:2] != start[:2] or fragment[2]:
+            if fragment is None or fragment[0] != start[0] or fragment[2]:
                 break
+            is_end = fragment[3]
+            if fragment[1] != start[1]:
+                if codec != "hevc" or not allow_ezviz_headerless_hevc_fu:
+                    break
+                reconstructed_header = (
+                    packet.payload[0] & 0x81
+                ) | (start[1] << 1)
+                pseudo_header = current.payload[2] in {
+                    reconstructed_header,
+                    reconstructed_header | 0x40,
+                }
+                if not pseudo_header:
+                    # Ezviz may omit the FU header on continuation packets.
+                    is_end = current.marker
             chain.append(index)
-            if fragment[3]:
+            if is_end:
                 indexes.update(chain)
                 break
             if current.marker:
@@ -1257,7 +1272,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         )
     encrypted_fu_indexes = (
         _complete_fu_chain_indexes(
-            packet_list, codec, route_epochs, routed_video_payload_types
+            packet_list,
+            codec,
+            route_epochs,
+            routed_video_payload_types,
+            allow_ezviz_headerless_hevc_fu,
         )
         if packet_nal_transform is not None
         else frozenset()

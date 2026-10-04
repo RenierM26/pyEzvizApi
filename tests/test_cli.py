@@ -2902,7 +2902,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
 
-def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
+def test_stream_dump_decrypts_encrypted_rtp_header_before_remux(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -2930,7 +2930,8 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                         b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
-                        b"\x41\x80h264"
+                        b"\x5c\xb0\x9d\x36\x57\x77\xa9\xf5"
+                        b"\x05\xd2\x61\xbb\x4b\xb1\xca\xde"
                     ),
                 )
             ]
@@ -2998,7 +2999,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                 "--decrypt-codec",
                 "encrypted-header",
                 "--media-key-hex",
-                "000102030405060708090a0b0c0d0e0f",
+                "30313233343536373839616263646566",
                 "--output",
                 str(output_file),
             ]
@@ -3006,16 +3007,13 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
         == 0
     )
 
-    assert decrypt_calls == [
-        {
-            "units": (b"\x00\x00\x00\x01\x41\x80h264",),
-            "detected_codec": "h264",
-            "decrypt_codec": "encrypted-header",
-            "media_key": bytes(range(16)),
-        }
-    ]
+    assert not decrypt_calls
     assert remux_calls == [
-        {"data": b"decrypted-h264", "ffmpeg_path": "ffmpeg", "codec": "h264"}
+        {
+            "data": b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,
+            "ffmpeg_path": "ffmpeg",
+            "codec": "h264",
+        }
     ]
     assert output_file.read_bytes() == MPEGTS_PAYLOAD
 
@@ -3141,7 +3139,43 @@ def test_cli_cloud_rtp_classifies_vcl_after_encrypted_header_decryption() -> Non
         codec="h264",
         first_slice_key=b"0123456789abcdef",
         decrypt_codec="encrypted-header",
-    ) == (b"\x00\x00\x00\x01" + encrypted_nal,)
+    ) == (b"\x00\x00\x00\x01\x61\x80" + b"#" * 14,)
+
+
+def test_cli_cloud_rtp_depacketizes_after_encrypted_header_decryption() -> None:
+    # Ciphertext low bits resemble FU-A; clear bytes form a single first slice.
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets,
+        codec="h264",
+        first_slice_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == (b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,)
+
+
+def test_cli_cloud_rtp_detects_codec_after_encrypted_header_decryption() -> None:
+    encrypted_nal = bytes.fromhex("4f1b29388cceb8f99e7f61305787a4f5")
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + encrypted_nal
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._detect_rtp_video_codec(  # noqa: SLF001
+        packets,
+        media_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == "h264"
 
 
 def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:

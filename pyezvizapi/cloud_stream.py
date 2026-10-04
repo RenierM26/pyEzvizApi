@@ -1048,7 +1048,17 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
         packet_list = list(media_packets)
     if selected_transport == StreamTransport.RTP:
         parsed = _cloud_rtp_packets(packet_list)
-        codec = detect_rtp_video_codec(parsed)
+        def decrypt_encrypted_header(nal_unit: bytes) -> bytes:
+            return _decrypt_cloud_rtp_nal_unit(
+                nal_unit, media_key, nalu_header_size=0
+            )[len(ANNEX_B_START_CODE) :]
+
+        codec = detect_rtp_video_codec(
+            parsed,
+            video_payload_transform=(
+                decrypt_encrypted_header if nalu_header_size == 0 else None
+            ),
+        )
         header_size = nalu_header_size
         if header_size is None:
             header_size = 2 if codec == "hevc" else 1
@@ -1063,9 +1073,14 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             codec=codec,
             allow_ezviz_headerless_hevc_fu=True,
             completed_access_units_only=True,
-            first_slice_transform=decrypted_nal,
+            first_slice_transform=decrypted_nal if header_size != 0 else None,
+            packet_nal_transform=decrypted_nal if header_size == 0 else None,
         )
-        decrypted_units = tuple(decrypted_nal(nal_unit) for nal_unit in nal_units)
+        decrypted_units = (
+            tuple(decrypted_nal(nal_unit) for nal_unit in nal_units)
+            if header_size != 0
+            else nal_units
+        )
         if not rtp_nal_units_have_vcl(decrypted_units, codec=codec):
             raise EzvizNoMediaError(
                 "Cloud RTP capture contained no complete video frame; "

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from typing import Literal
 
@@ -783,6 +783,7 @@ def detect_rtp_video_codec(
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
     allow_fallback: bool = True,
     stream_descriptors: Iterable[RtpStreamDescriptor] | None = None,
+    video_payload_transform: Callable[[bytes], bytes] | None = None,
 ) -> RtpVideoCodec:
     """Detect H.264 or HEVC from routed RTP video packets."""
 
@@ -824,19 +825,24 @@ def detect_rtp_video_codec(
     for packet in packet_list:
         if packet.payload_type not in routed_video_payload_types:
             continue
-        unsupported_codec = _rtp_payload_unsupported_video_codec(packet.payload)
+        payload = (
+            video_payload_transform(packet.payload)
+            if video_payload_transform is not None
+            else packet.payload
+        )
+        unsupported_codec = _rtp_payload_unsupported_video_codec(payload)
         if unsupported_codec is not None:
             raise UnsupportedRtpVideoCodecError(
                 f"Unsupported RTP video codec: {unsupported_codec}"
             )
-        codec = rtp_payload_video_codec(packet.payload)
+        codec = rtp_payload_video_codec(payload)
         if codec is not None:
             return codec
-        if _is_ambiguous_h264_hevc_payload(packet.payload):
+        if _is_ambiguous_h264_hevc_payload(payload):
             continue
-        if len(packet.payload) >= 2 and fallback is None:
-            hevc_type = (packet.payload[0] >> 1) & 0x3F
-            h264_type = packet.payload[0] & 0x1F
+        if len(payload) >= 2 and fallback is None:
+            hevc_type = (payload[0] >> 1) & 0x3F
+            h264_type = payload[0] & 0x1F
             if 0 <= hevc_type <= 50:
                 fallback = "hevc"
             elif 1 <= h264_type <= 23:
@@ -1082,6 +1088,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     allow_ezviz_headerless_hevc_fu: bool = False,
     completed_access_units_only: bool = False,
     first_slice_transform: Callable[[bytes], bytes] | None = None,
+    packet_nal_transform: Callable[[bytes], bytes] | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
 
@@ -1138,9 +1145,17 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 accepted[index] = True
 
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
+        candidate_video = packet.payload_type in routed_video_payload_types
+        routed_packet = (
+            replace(packet, payload=packet_nal_transform(packet.payload))
+            if candidate_video
+            and packet_nal_transform is not None
+            and (route_epoch is None or route_epoch.media_kind == "video")
+            else packet
+        )
         is_video = (
-            packet.payload_type in routed_video_payload_types
-            and _rtp_packet_matches_codec_epoch(packet, route_epoch, codec)
+            candidate_video
+            and _rtp_packet_matches_codec_epoch(routed_packet, route_epoch, codec)
         )
         previous_sequence = active_sequences.get(packet.ssrc)
         sequence_delta = (
@@ -1151,7 +1166,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         if sequence_delta == 0 or sequence_delta >= 0x8000:
             conflicts_before = depacketizer.stats.sequence_conflicts
             if is_video:
-                depacketizer.push(packet)
+                depacketizer.push(routed_packet)
             else:
                 depacketizer.observe_nonvideo_packet(packet)
             if depacketizer.stats.sequence_conflicts > conflicts_before:
@@ -1185,7 +1200,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         active_timestamps[packet.ssrc] = packet.timestamp
         prior_fragment_open = depacketizer.has_incomplete_nal(packet.ssrc)
         discarded_before = depacketizer.stats.discarded_fragments
-        packet_nals = depacketizer.push(packet)
+        packet_nals = depacketizer.push(routed_packet)
         if not packet_nals and not depacketizer.has_incomplete_nal(packet.ssrc):
             # A rejected video payload may represent a missing slice even when
             # no active fragmented NAL existed to increment discard stats.

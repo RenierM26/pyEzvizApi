@@ -3064,6 +3064,67 @@ def test_bounded_cloud_classifies_vcl_after_encrypted_header_decryption(
     assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
 
 
+def test_bounded_cloud_depacketizes_after_encrypted_header_decryption(
+    monkeypatch,
+) -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    clear_nal = b"\x61\x80" + bytes((13,)) * 14
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
+def test_bounded_cloud_detects_codec_after_encrypted_header_decryption(
+    monkeypatch,
+) -> None:
+    # Raw ciphertext resembles HEVC; the clear NAL is H.264.
+    encrypted_nal = bytes.fromhex("4f1b29388cceb8f99e7f61305787a4f5")
+    clear_nal = b"\x61\x80" + bytes((5,)) * 14
+    body = _rtp_packet(encrypted_nal, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
 def test_cloud_packet_iterator_bounds_from_request_start() -> None:
     class RecordingStream(VtmStreamClient):
         def __init__(self) -> None:

@@ -3222,10 +3222,33 @@ def _rtp_payload_video_codec(payload: bytes) -> str | None:
     return rtp_payload_video_codec(payload)
 
 
-def _detect_rtp_video_codec(packets: list[Any]) -> str:
+def _detect_rtp_video_codec(
+    packets: list[Any],
+    *,
+    media_key: str | bytes | None = None,
+    decrypt_codec: str = "auto",
+) -> str:
     """Detect RTP video codec through the shared parser and router."""
 
-    return detect_rtp_video_codec(_parse_rtp_packets(packets))
+    def decrypted_header(nal_unit: bytes) -> bytes:
+        assert media_key is not None
+        video_pes = (
+            b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
+            + b"\x00\x00\x00\x01"
+            + nal_unit
+        )
+        return decrypt_hikvision_ps_video(
+            video_pes, media_key, nalu_header_size=0
+        )[13:]
+
+    return detect_rtp_video_codec(
+        _parse_rtp_packets(packets),
+        video_payload_transform=(
+            decrypted_header
+            if media_key is not None and _codec_nalu_header_size(decrypt_codec) == 0
+            else None
+        ),
+    )
 
 
 def _parse_rtp_packets(packets: list[Any]) -> list[Any]:
@@ -3257,13 +3280,13 @@ def _rtp_packets_to_annexb_units(
 
     if codec not in {"h264", "hevc"}:
         raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
+    selected_codec = codec if decrypt_codec == "auto" else decrypt_codec
+    header_size = _codec_nalu_header_size(selected_codec)
+    if header_size is None:
+        header_size = 2 if codec == "hevc" else 1
 
     def decrypted_first_slice(nal_unit: bytes) -> bytes:
         assert first_slice_key is not None
-        selected_codec = codec if decrypt_codec == "auto" else decrypt_codec
-        header_size = _codec_nalu_header_size(selected_codec)
-        if header_size is None:
-            header_size = 2 if codec == "hevc" else 1
         video_pes = (
             b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00"
             + b"\x00\x00\x00\x01"
@@ -3280,12 +3303,19 @@ def _rtp_packets_to_annexb_units(
         allow_ezviz_headerless_hevc_fu=True,
         completed_access_units_only=True,
         first_slice_transform=(
-            decrypted_first_slice if first_slice_key is not None else None
+            decrypted_first_slice
+            if first_slice_key is not None and header_size != 0
+            else None
+        ),
+        packet_nal_transform=(
+            decrypted_first_slice
+            if first_slice_key is not None and header_size == 0
+            else None
         ),
     )
     classified_units = (
         tuple(decrypted_first_slice(nal_unit) for nal_unit in nal_units)
-        if first_slice_key is not None
+        if first_slice_key is not None and header_size != 0
         else nal_units
     )
     if not rtp_nal_units_have_vcl(classified_units, codec=cast(Any, codec)):
@@ -5261,7 +5291,11 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                     ):
                         # Validate before opening/truncating a named destination;
                         # the remux helper will parse the same bounded capture.
-                        rtp_codec = _detect_rtp_video_codec(collected_packets)
+                        rtp_codec = _detect_rtp_video_codec(
+                            collected_packets,
+                            media_key=media_key,
+                            decrypt_codec=args.decrypt_codec,
+                        )
                         _rtp_packets_to_annexb_units(
                             collected_packets,
                             codec=rtp_codec,
@@ -5288,22 +5322,31 @@ def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
                             with Path(args.output).open("wb") as output:
                                 _write_rtp_mpegts(output)
                         return 0
-                    rtp_codec = _detect_rtp_video_codec(collected_packets)
+                    rtp_codec = _detect_rtp_video_codec(
+                        collected_packets,
+                        media_key=media_key,
+                        decrypt_codec=args.decrypt_codec,
+                    )
                     decrypt_codec = (
                         rtp_codec if args.decrypt_codec == "auto" else args.decrypt_codec
                     )
-                    payload = _decrypt_rtp_annexb_units(
-                        client,
-                        args.serial,
-                        _rtp_packets_to_annexb_units(
-                            collected_packets,
-                            codec=rtp_codec,
-                            first_slice_key=media_key,
-                            decrypt_codec=decrypt_codec,
-                        ),
-                        detected_codec=rtp_codec,
+                    rtp_units = _rtp_packets_to_annexb_units(
+                        collected_packets,
+                        codec=rtp_codec,
+                        first_slice_key=media_key,
                         decrypt_codec=decrypt_codec,
-                        media_key=media_key,
+                    )
+                    payload = (
+                        b"".join(rtp_units)
+                        if _codec_nalu_header_size(decrypt_codec) == 0
+                        else _decrypt_rtp_annexb_units(
+                            client,
+                            args.serial,
+                            rtp_units,
+                            detected_codec=rtp_codec,
+                            decrypt_codec=decrypt_codec,
+                            media_key=media_key,
+                        )
                     )
                     if args.output == "-":
                         if args.format == "raw":

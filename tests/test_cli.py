@@ -3161,6 +3161,25 @@ def test_cli_cloud_rtp_depacketizes_after_encrypted_header_decryption() -> None:
     ) == (b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,)
 
 
+def test_cli_cloud_rtp_decrypts_encrypted_header_aggregation() -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    payload = b"\x78" + len(encrypted_nal).to_bytes(2, "big") + encrypted_nal
+    rtp_body = (
+        b"\x80\xe0\x00\x01"
+        + b"\x00\x00\x00\x01"
+        + b"\x55\x66\x77\x88"
+        + payload
+    )
+    packets = [VtmPacket(VtmChannel.STREAM, len(rtp_body), 1, 0, rtp_body)]
+
+    assert cli_module._rtp_packets_to_annexb_units(  # noqa: SLF001
+        packets,
+        codec="h264",
+        first_slice_key=b"0123456789abcdef",
+        decrypt_codec="encrypted-header",
+    ) == (b"\x00\x00\x00\x01\x61\x80" + bytes((13,)) * 14,)
+
+
 def test_cli_cloud_rtp_detects_codec_after_encrypted_header_decryption() -> None:
     encrypted_nal = bytes.fromhex("4f1b29388cceb8f99e7f61305787a4f5")
     rtp_body = (

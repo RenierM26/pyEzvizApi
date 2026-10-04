@@ -206,6 +206,98 @@ def test_encrypted_header_fu_reassembles_before_transform(
     assert seen == [encrypted_nal]
 
 
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+@pytest.mark.parametrize("duplicate_start", [False, True])
+@pytest.mark.parametrize("nonvideo_payload_type", [112, 104])
+def test_encrypted_header_fu_keeps_same_ssrc_nonvideo_continuity(
+    codec: RtpVideoCodec,
+    duplicate_start: bool,
+    nonvideo_payload_type: int,
+) -> None:
+    if codec == "h264":
+        encrypted_nal = b"\x61" + bytes(range(1, 32))
+        clear_nal = b"\x61\x80" + b"x" * 30
+        fu_prefix = b"\x7c"
+        body = encrypted_nal[1:]
+    else:
+        encrypted_nal = b"\x02\x01" + bytes(range(2, 32))
+        clear_nal = b"\x02\x01\xc0" + b"x" * 29
+        fu_prefix = b"\x62\x01"
+        body = encrypted_nal[2:]
+    start = parse_rtp_packet(_rtp(fu_prefix + b"\x81" + body[:7], sequence=1))
+    packets = (start,) + ((start,) if duplicate_start else ()) + (
+        parse_rtp_packet(
+            _rtp(b"other media", sequence=2, payload_type=nonvideo_payload_type)
+        ),
+        parse_rtp_packet(
+            _rtp(fu_prefix + b"\x41" + body[7:], sequence=3, marker=True)
+        ),
+    )
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == encrypted_nal else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        packets,
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen == [encrypted_nal]
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_encrypted_header_aggregation_decrypts_only_extracted_nals(
+    codec: RtpVideoCodec,
+) -> None:
+    if codec == "h264":
+        encrypted_nals = (b"\x67" + b"a" * 15, b"\x61" + b"b" * 15)
+        clear_nals = (b"\x67" + b"s" * 15, b"\x61\x80" + b"v" * 14)
+        wrapper = b"\x78"
+    else:
+        encrypted_nals = (b"\x40\x01" + b"a" * 14, b"\x02\x01" + b"b" * 13)
+        clear_nals = (b"\x40\x01" + b"s" * 14, b"\x02\x01\xc0" + b"v" * 13)
+        wrapper = b"\x60\x01"
+    payload = wrapper + b"".join(
+        len(nal).to_bytes(2, "big") + nal for nal in encrypted_nals
+    )
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, marker=True))
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nals[encrypted_nals.index(nal)] if nal in encrypted_nals else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        (packet,),
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == clear_nals
+    assert seen == list(encrypted_nals)
+
+
+@pytest.mark.parametrize(
+    ("codec", "bad", "good", "wrapper"),
+    [
+        ("h264", b"\x81\x80bad", b"\x61\x80good", b"\x78"),
+        ("hevc", b"\x82\x01\xc0bad", b"\x02\x01\xc0good", b"\x60\x01"),
+    ],
+)
+def test_bounded_aggregation_does_not_hide_bad_nal_before_first_slice(
+    codec: RtpVideoCodec, bad: bytes, good: bytes, wrapper: bytes
+) -> None:
+    payload = wrapper + b"".join(
+        len(nal).to_bytes(2, "big") + nal for nal in (bad, good)
+    )
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, marker=True))
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+
+
 def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
     second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))

@@ -3135,6 +3135,35 @@ def test_bounded_cloud_decrypts_reassembled_encrypted_header_fu(monkeypatch) -> 
     assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
 
 
+def test_bounded_cloud_decrypts_encrypted_header_aggregation(monkeypatch) -> None:
+    encrypted_nal = bytes.fromhex("5cb09d365777a9f505d261bb4bb1cade")
+    clear_nal = b"\x61\x80" + bytes((13,)) * 14
+    payload = b"\x78" + len(encrypted_nal).to_bytes(2, "big") + encrypted_nal
+    body = _rtp_packet(payload, marker=True)
+    packets = [VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)]
+    output = io.BytesIO()
+
+    def fake_remux(
+        video: bytes, selected_output: BinaryIO, **_kwargs: Any
+    ) -> None:
+        selected_output.write(video)
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_remux_cloud_elementary_bytes_to_mpegts",
+        fake_remux,
+    )
+    copy_decrypted_cloud_stream_packets_to_mpegts(
+        packets,
+        output,
+        ffmpeg_path="ffmpeg",
+        media_key=b"0123456789abcdef",
+        nalu_header_size=0,
+        transport=StreamTransport.RTP,
+    )
+    assert output.getvalue() == b"\x00\x00\x00\x01" + clear_nal
+
+
 def test_bounded_cloud_detects_codec_after_encrypted_header_decryption(
     monkeypatch,
 ) -> None:

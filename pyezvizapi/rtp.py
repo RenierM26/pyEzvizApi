@@ -1119,7 +1119,7 @@ def _fu_signature(
     """Identify clear FU framing without interpreting its encrypted NAL body."""
 
     if codec == "h264":
-        if len(payload) < 3 or payload[0] & 0x1F != 28:
+        if len(payload) < 3 or payload[0] & 0x80 or payload[0] & 0x1F != 28:
             return None
         header, fu_header = payload[:2]
         return bytes((header & 0xE0,)), fu_header & 0x1F, bool(
@@ -1138,39 +1138,83 @@ def _fu_signature(
     ), bool(fu_header & 0x40)
 
 
-def _complete_fu_chain_indexes(
-    packets: list[RtpPacket], codec: RtpVideoCodec
+def _complete_fu_chain_indexes(  # noqa: PLR0912
+    packets: list[RtpPacket],
+    codec: RtpVideoCodec,
+    route_epochs: tuple[RtpStreamDescriptor | None, ...],
+    video_payload_types: frozenset[int],
 ) -> frozenset[int]:
     """Avoid mistaking an isolated ciphertext FU lookalike for real framing."""
 
     indexes: set[int] = set()
     for start_index, packet in enumerate(packets):
+        route_epoch = route_epochs[start_index]
+        if packet.payload_type not in video_payload_types or (
+            route_epoch is not None and route_epoch.media_kind != "video"
+        ):
+            continue
         start = _fu_signature(packet.payload, codec)
         if start is None or not start[2] or start[3] or packet.marker:
             continue
         chain = [start_index]
         previous = packet
+        previous_index = start_index
         for index in range(start_index + 1, len(packets)):
             current = packets[index]
             if current.ssrc != packet.ssrc:
                 continue
             if (
+                current.sequence == previous.sequence
+                and current.timestamp == previous.timestamp
+                and current.payload_type == previous.payload_type
+                and current.marker == previous.marker
+                and current.payload == previous.payload
+            ):
+                if previous_index in chain:
+                    chain.append(index)
+                continue
+            if current.sequence != (previous.sequence + 1) & 0xFFFF:
+                break
+            previous = current
+            previous_index = index
+            route_epoch = route_epochs[index]
+            if current.payload_type not in video_payload_types or (
+                route_epoch is not None and route_epoch.media_kind != "video"
+            ):
+                # Other media can share the video SSRC and sequence counter.
+                continue
+            if (
                 current.timestamp != packet.timestamp
                 or current.payload_type != packet.payload_type
-                or current.sequence != (previous.sequence + 1) & 0xFFFF
             ):
                 break
             fragment = _fu_signature(current.payload, codec)
             if fragment is None or fragment[:2] != start[:2] or fragment[2]:
                 break
             chain.append(index)
-            previous = current
             if fragment[3]:
                 indexes.update(chain)
                 break
             if current.marker:
                 break
     return frozenset(indexes)
+
+
+def _is_complete_aggregation_packet(payload: bytes, codec: RtpVideoCodec) -> bool:
+    """Recognize clear aggregation framing without decrypting its length fields."""
+
+    if codec == "h264":
+        return bool(
+            payload and not payload[0] & 0x80 and payload[0] & 0x1F == 24
+            and _aggregation_units(payload, header_size=1)
+        )
+    return bool(
+        len(payload) >= 2
+        and not payload[0] & 0x80
+        and payload[1] & 0x07
+        and (payload[0] >> 1) & 0x3F == 48
+        and _aggregation_units(payload, header_size=2)
+    )
 
 
 def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
@@ -1191,11 +1235,6 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     """
 
     packet_list = list(packets)
-    encrypted_fu_indexes = (
-        _complete_fu_chain_indexes(packet_list, codec)
-        if packet_nal_transform is not None
-        else frozenset()
-    )
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
     descriptors = route_profile.descriptors
     routed_video_payload_types = rtp_codec_payload_types(
@@ -1216,6 +1255,27 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             for payload_type in video_payload_types
             if payload_type not in assigned_payload_types
         )
+    encrypted_fu_indexes = (
+        _complete_fu_chain_indexes(
+            packet_list, codec, route_epochs, routed_video_payload_types
+        )
+        if packet_nal_transform is not None
+        else frozenset()
+    )
+    encrypted_aggregation_indexes = (
+        frozenset(
+            index
+            for index, (packet, route_epoch) in enumerate(
+                zip(packet_list, route_epochs, strict=True)
+            )
+            if packet.payload_type in routed_video_payload_types
+            and (route_epoch is None or route_epoch.media_kind == "video")
+            and _is_complete_aggregation_packet(packet.payload, codec)
+        )
+        if packet_nal_transform is not None
+        else frozenset()
+    )
+    encrypted_framing_indexes = encrypted_fu_indexes | encrypted_aggregation_indexes
     depacketizer = RtpVideoDepacketizer(
         codec,
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
@@ -1228,6 +1288,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     active_sequences: dict[int, int] = {}
     pending_vcl: dict[int, bool] = {}
     pending_gap: dict[int, bool] = {}
+    pending_corrupt: dict[int, bool] = {}
     first_vcl_au_pending: dict[int, bool] = {}
     first_slice_seen: dict[int, bool] = {}
     new_timestamp_au: dict[int, bool] = {}
@@ -1250,7 +1311,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             replace(packet, payload=packet_nal_transform(packet.payload))
             if candidate_video
             and packet_nal_transform is not None
-            and packet_index not in encrypted_fu_indexes
+            and packet_index not in encrypted_framing_indexes
             and (route_epoch is None or route_epoch.media_kind == "video")
             else packet
         )
@@ -1272,6 +1333,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 depacketizer.observe_nonvideo_packet(packet)
             if depacketizer.stats.sequence_conflicts > conflicts_before:
                 pending_gap[packet.ssrc] = True
+                pending_corrupt[packet.ssrc] = True
             continue
         active_sequences[packet.ssrc] = packet.sequence
         contiguous = sequence_delta == 1
@@ -1292,6 +1354,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 ),
             )
             pending_vcl[packet.ssrc] = False
+            pending_corrupt[packet.ssrc] = False
             pending_gap[packet.ssrc] = not contiguous or pending_gap.get(
                 packet.ssrc, False
             )
@@ -1306,17 +1369,19 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             # A rejected video payload may represent a missing slice even when
             # no active fragmented NAL existed to increment discard stats.
             pending_gap[packet.ssrc] = True
+            pending_corrupt[packet.ssrc] = True
         if (
             depacketizer.stats.discarded_fragments > discarded_before
             and not (previous_timestamp != packet.timestamp and prior_fragment_open)
         ):
             pending_gap[packet.ssrc] = True
+            pending_corrupt[packet.ssrc] = True
         for nal in packet_nals:
             if nal:
-                # FU framing is clear, but the reassembled NAL is encrypted.
+                # FU/AP framing is clear, but each resulting NAL is encrypted.
                 output_nal = (
                     packet_nal_transform(nal)
-                    if packet_index in encrypted_fu_indexes
+                    if packet_index in encrypted_framing_indexes
                     and packet_nal_transform is not None
                     else nal
                 )
@@ -1329,6 +1394,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                     classified_nal, codec=codec
                 ):
                     pending_gap[packet.ssrc] = True
+                    pending_corrupt[packet.ssrc] = True
                     continue
                 if (
                     completed_access_units_only
@@ -1356,7 +1422,9 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                         if (
                             new_timestamp_au.get(packet.ssrc)
                             or first_vcl_au_pending.get(packet.ssrc, True)
-                        ) and starts_picture:
+                        ) and starts_picture and not pending_corrupt.get(
+                            packet.ssrc, False
+                        ):
                             # A confirmed new picture cannot contain the slice
                             # lost before its timestamp boundary.
                             pending_gap[packet.ssrc] = False
@@ -1377,6 +1445,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             )
             pending_vcl[packet.ssrc] = False
             pending_gap[packet.ssrc] = False
+            pending_corrupt[packet.ssrc] = False
             new_timestamp_au[packet.ssrc] = False
     if completed_access_units_only:
         for ssrc in tuple(pending_indexes):

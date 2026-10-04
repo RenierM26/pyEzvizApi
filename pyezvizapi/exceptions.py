@@ -29,7 +29,7 @@ class EzvizNoMediaError(PyEzvizError):
 
 
 class EzvizIncompleteMediaError(PyEzvizError):
-    """A timed capture contained substantially less video than requested."""
+    """A timed capture had too little video timestamp coverage."""
 
     reason = "incomplete_media"
 
@@ -38,14 +38,14 @@ class EzvizIncompleteMediaError(PyEzvizError):
         *,
         source: str,
         requested_duration_seconds: float,
-        observed_duration_seconds: float,
+        observed_pts_span_seconds: float,
     ) -> None:
         self.source = source
         self.requested_duration_seconds = requested_duration_seconds
-        self.observed_duration_seconds = observed_duration_seconds
+        self.observed_pts_span_seconds = observed_pts_span_seconds
         super().__init__(
-            f"{source} video is incomplete: {observed_duration_seconds:.2f}s "
-            f"of {requested_duration_seconds:.2f}s requested"
+            f"{source} video is incomplete: PES timestamp span "
+            f"{observed_pts_span_seconds:.2f}s of {requested_duration_seconds:.2f}s requested"
         )
 
 

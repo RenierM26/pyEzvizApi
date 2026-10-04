@@ -650,7 +650,7 @@ def _require_cloud_mpegps_video_duration(
         raise EzvizIncompleteMediaError(
             source="cloud",
             requested_duration_seconds=duration_seconds,
-            observed_duration_seconds=observed,
+            observed_pts_span_seconds=observed,
         )
 
 

@@ -277,7 +277,7 @@ def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
             )
         assert error.value.reason == "incomplete_media"
         assert error.value.source == "cloud"
-        assert error.value.observed_duration_seconds == pytest.approx(1)
+        assert error.value.observed_pts_span_seconds == pytest.approx(1)
         assert output.getvalue() == EMPTY_BYTES
     else:
         copy(

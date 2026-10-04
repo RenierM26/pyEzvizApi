@@ -3922,7 +3922,7 @@ def test_save_clip_cloud_preserves_existing_file_on_incomplete_capture(
         raise EzvizIncompleteMediaError(
             source="cloud",
             requested_duration_seconds=20,
-            observed_duration_seconds=1,
+            observed_pts_span_seconds=1,
         )
 
     monkeypatch.setattr(

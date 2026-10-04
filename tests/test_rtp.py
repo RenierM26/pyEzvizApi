@@ -156,6 +156,56 @@ def test_bounded_rtp_rejects_incomplete_first_mb_code(truncated: bytes) -> None:
     ) == (b"\x61\x80first",)
 
 
+@pytest.mark.parametrize("truncated", [b"\x02\x01\x80", b"\x02\x01\x80\x00"])
+def test_bounded_rtp_rejects_incomplete_hevc_pps_code(truncated: bytes) -> None:
+    healthy = b"\x02\x01\xc0healthy"
+    packets = (
+        parse_rtp_packet(_rtp(healthy, sequence=1, marker=True)),
+        parse_rtp_packet(
+            _rtp(truncated, sequence=2, timestamp=12000, marker=True)
+        ),
+    )
+    assert not rtp_nal_units_have_vcl((truncated,), codec="hevc")
+    assert rtp_packets_to_nal_units(
+        packets, codec="hevc", completed_access_units_only=True
+    ) == (healthy,)
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_encrypted_header_fu_reassembles_before_transform(
+    codec: RtpVideoCodec,
+) -> None:
+    if codec == "h264":
+        encrypted_nal = b"\x61" + bytes(range(1, 32))
+        clear_nal = b"\x61\x80" + b"x" * 30
+        fu_prefix = b"\x7c"
+        fu_type = b"\x01"
+        body = encrypted_nal[1:]
+    else:
+        encrypted_nal = b"\x02\x01" + bytes(range(2, 32))
+        clear_nal = b"\x02\x01\xc0" + b"x" * 29
+        fu_prefix = b"\x62\x01"
+        fu_type = b"\x01"
+        body = encrypted_nal[2:]
+    packets = (
+        parse_rtp_packet(_rtp(fu_prefix + bytes((0x80 | fu_type[0],)) + body[:7], sequence=1)),
+        parse_rtp_packet(_rtp(fu_prefix + bytes((0x40 | fu_type[0],)) + body[7:], sequence=2, marker=True)),
+    )
+    seen: list[bytes] = []
+
+    def decrypt(nal: bytes) -> bytes:
+        seen.append(nal)
+        return clear_nal if nal == encrypted_nal else b"invalid"
+
+    assert rtp_packets_to_nal_units(
+        packets,
+        codec=codec,
+        completed_access_units_only=True,
+        packet_nal_transform=decrypt,
+    ) == (clear_nal,)
+    assert seen == [encrypted_nal]
+
+
 def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
     second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))

@@ -777,7 +777,7 @@ def _advertised_rtp_video_codec(
     )
 
 
-def detect_rtp_video_codec(
+def detect_rtp_video_codec(  # noqa: PLR0912
     packets: Iterable[RtpPacket],
     *,
     video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
@@ -794,6 +794,28 @@ def detect_rtp_video_codec(
     advertised_codec = _advertised_rtp_video_codec(descriptors)
     if advertised_codec is not None:
         return advertised_codec
+    if video_payload_transform is not None:
+        # A valid FU carries clear framing around ciphertext. Probe assembled
+        # NALs before interpreting individual encrypted fragments as codecs.
+        supported_codecs: tuple[RtpVideoCodec, RtpVideoCodec] = ("h264", "hevc")
+        decrypted_codecs: list[RtpVideoCodec] = []
+        for probe_codec in supported_codecs:
+            try:
+                nal_units = rtp_packets_to_nal_units(
+                    packet_list,
+                    codec=probe_codec,
+                    video_payload_types=video_payload_types,
+                    completed_access_units_only=True,
+                    packet_nal_transform=video_payload_transform,
+                )
+            except EzvizUnsupportedMediaError:
+                # A competing codec probe can misread HEVC as H.264 data
+                # partitions; the selected codec still reports this error.
+                continue
+            if rtp_nal_units_have_vcl(nal_units, codec=probe_codec):
+                decrypted_codecs.append(probe_codec)
+        if len(decrypted_codecs) == 1:
+            return decrypted_codecs[0]
     assigned_payload_types = frozenset(
         descriptor.payload_type for descriptor in descriptors
     )
@@ -1091,6 +1113,66 @@ def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) 
     )
 
 
+def _fu_signature(
+    payload: bytes, codec: RtpVideoCodec
+) -> tuple[bytes, int, bool, bool] | None:
+    """Identify clear FU framing without interpreting its encrypted NAL body."""
+
+    if codec == "h264":
+        if len(payload) < 3 or payload[0] & 0x1F != 28:
+            return None
+        header, fu_header = payload[:2]
+        return bytes((header & 0xE0,)), fu_header & 0x1F, bool(
+            fu_header & 0x80
+        ), bool(fu_header & 0x40)
+    if (
+        len(payload) < 4
+        or (payload[0] >> 1) & 0x3F != 49
+        or payload[0] & 0x80
+        or not payload[1] & 0x07
+    ):
+        return None
+    fu_header = payload[2]
+    return bytes((payload[0] & 0x81, payload[1])), fu_header & 0x3F, bool(
+        fu_header & 0x80
+    ), bool(fu_header & 0x40)
+
+
+def _complete_fu_chain_indexes(
+    packets: list[RtpPacket], codec: RtpVideoCodec
+) -> frozenset[int]:
+    """Avoid mistaking an isolated ciphertext FU lookalike for real framing."""
+
+    indexes: set[int] = set()
+    for start_index, packet in enumerate(packets):
+        start = _fu_signature(packet.payload, codec)
+        if start is None or not start[2] or start[3] or packet.marker:
+            continue
+        chain = [start_index]
+        previous = packet
+        for index in range(start_index + 1, len(packets)):
+            current = packets[index]
+            if current.ssrc != packet.ssrc:
+                continue
+            if (
+                current.timestamp != packet.timestamp
+                or current.payload_type != packet.payload_type
+                or current.sequence != (previous.sequence + 1) & 0xFFFF
+            ):
+                break
+            fragment = _fu_signature(current.payload, codec)
+            if fragment is None or fragment[:2] != start[:2] or fragment[2]:
+                break
+            chain.append(index)
+            previous = current
+            if fragment[3]:
+                indexes.update(chain)
+                break
+            if current.marker:
+                break
+    return frozenset(indexes)
+
+
 def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     packets: Iterable[RtpPacket],
     *,
@@ -1109,6 +1191,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     """
 
     packet_list = list(packets)
+    encrypted_fu_indexes = (
+        _complete_fu_chain_indexes(packet_list, codec)
+        if packet_nal_transform is not None
+        else frozenset()
+    )
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
     descriptors = route_profile.descriptors
     routed_video_payload_types = rtp_codec_payload_types(
@@ -1155,12 +1242,15 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             if complete or not output_is_vcl[index]:
                 accepted[index] = True
 
-    for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
+    for packet_index, (packet, route_epoch) in enumerate(
+        zip(packet_list, route_epochs, strict=True)
+    ):
         candidate_video = packet.payload_type in routed_video_payload_types
         routed_packet = (
             replace(packet, payload=packet_nal_transform(packet.payload))
             if candidate_video
             and packet_nal_transform is not None
+            and packet_index not in encrypted_fu_indexes
             and (route_epoch is None or route_epoch.media_kind == "video")
             else packet
         )
@@ -1223,10 +1313,17 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             pending_gap[packet.ssrc] = True
         for nal in packet_nals:
             if nal:
-                classified_nal = (
-                    first_slice_transform(nal)
-                    if first_slice_transform is not None
+                # FU framing is clear, but the reassembled NAL is encrypted.
+                output_nal = (
+                    packet_nal_transform(nal)
+                    if packet_index in encrypted_fu_indexes
+                    and packet_nal_transform is not None
                     else nal
+                )
+                classified_nal = (
+                    first_slice_transform(output_nal)
+                    if first_slice_transform is not None
+                    else output_nal
                 )
                 if completed_access_units_only and not _valid_rtp_nal_header(
                     classified_nal, codec=codec
@@ -1246,7 +1343,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                         reason="unsupported_h264_data_partition",
                     )
                 pending_indexes.setdefault(packet.ssrc, []).append(len(output))
-                output.append(nal)
+                output.append(output_nal)
                 is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
@@ -1374,8 +1471,11 @@ def _h264_slice_header_offset(nal: bytes) -> int:
 def _h264_first_mb_code_complete(nal: bytes) -> bool:
     """Require the first Exp-Golomb field's stop bit and suffix bits."""
 
-    offset = _h264_slice_header_offset(nal)
-    for leading_zeros, bit_index in enumerate(range(offset * 8, len(nal) * 8)):
+    return _exp_golomb_code_complete(nal, _h264_slice_header_offset(nal) * 8)
+
+
+def _exp_golomb_code_complete(nal: bytes, offset_bits: int) -> bool:
+    for leading_zeros, bit_index in enumerate(range(offset_bits, len(nal) * 8)):
         bit = nal[bit_index // 8] & (0x80 >> (bit_index % 8))
         if bit:
             return len(nal) * 8 - bit_index - 1 >= leading_zeros
@@ -1384,12 +1484,21 @@ def _h264_first_mb_code_complete(nal: bytes) -> bool:
 
 def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if codec == "hevc":
-        return (
+        valid_header = (
             len(nal) >= 2
             and not (nal[0] & 0x80)
             and bool(nal[1] & 0x07)
             and ((nal[0] >> 1) & 0x3F) <= 49
-            and (len(nal) > 2 or ((nal[0] >> 1) & 0x3F) >= 32)
+        )
+        if not valid_header:
+            return False
+        nal_type = (nal[0] >> 1) & 0x3F
+        if nal_type >= 32:
+            return True
+        # first_slice_segment_in_pic_flag and (for IRAP) the no-output flag
+        # precede the mandatory slice_pic_parameter_set_id ue(v) code.
+        return len(nal) > 2 and _exp_golomb_code_complete(
+            nal, 17 + int(16 <= nal_type <= 23)
         )
     if not nal or nal[0] & 0x80 or not 1 <= (nal[0] & 0x1F) <= 23:
         return False

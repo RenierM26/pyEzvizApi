@@ -6,6 +6,7 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
+import csv
 from dataclasses import dataclass
 from itertools import chain
 import json
@@ -819,8 +820,8 @@ def _probe_cloud_video_frame_span(
         span = 0.0
         segment_start: float | None = None
         previous: float | None = None
-        for line in frame_timestamps:
-            value = line.strip()
+        for row in csv.reader(frame_timestamps):
+            value = row[0].strip() if row else ""
             if not value or value == "N/A":
                 continue
             try:

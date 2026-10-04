@@ -415,7 +415,9 @@ def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
         if "-show_frames" in command:
             assert "capture_output" not in kwargs
             assert "csv=p=0" in command
-            kwargs["stdout"].write("100.0\n102.0\n")
+            kwargs["stdout"].write(
+                "100.0,H.264 User Data Unregistered SEI message\n102.0\n"
+            )
             return SimpleNamespace(returncode=0)
         else:
             payload = {"streams": [{}], "format": {"duration": "20.0"}}

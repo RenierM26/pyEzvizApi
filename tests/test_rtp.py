@@ -101,6 +101,19 @@ def test_bounded_rtp_damages_picture_after_forbidden_bit_nal() -> None:
     ) == (b"\x61\x80healthy",)
 
 
+def test_bounded_rtp_damages_picture_after_codec_mismatched_video_packet() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\xe0first", sequence=1))
+    mismatched = parse_rtp_packet(_rtp(b"\x40\x01vps", sequence=2))
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\xe0healthy", sequence=3, timestamp=12000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (first, mismatched, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\xe0healthy",)
+
+
 @pytest.mark.parametrize(
     ("codec", "header_only", "healthy_nal"),
     [

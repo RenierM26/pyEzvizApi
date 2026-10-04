@@ -1347,6 +1347,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     gap_timestamp: dict[int, int] = {}
     unassigned_gap: dict[int, bool] = {}
     pending_corrupt: dict[int, bool] = {}
+    predescriptor_codec_mismatch: dict[int, bool] = {}
     first_vcl_au_pending: dict[int, bool] = {}
     first_slice_seen: dict[int, bool] = {}
     new_timestamp_au: dict[int, bool] = {}
@@ -1377,6 +1378,19 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             candidate_video
             and _rtp_packet_matches_codec_epoch(routed_packet, route_epoch, codec)
         )
+        if (
+            is_video
+            and route_epoch is not None
+            and predescriptor_codec_mismatch.pop(packet.ssrc, False)
+        ):
+            # A newly advertised video route supersedes a conflicting packet
+            # observed before its descriptor; do not poison the new epoch.
+            finish_access_unit(packet.ssrc, complete=False)
+            pending_vcl[packet.ssrc] = False
+            pending_gap[packet.ssrc] = False
+            gap_timestamp.pop(packet.ssrc, None)
+            unassigned_gap.pop(packet.ssrc, None)
+            pending_corrupt[packet.ssrc] = False
         previous_sequence = active_sequences.get(packet.ssrc)
         sequence_delta = (
             (packet.sequence - previous_sequence) & 0xFFFF
@@ -1401,7 +1415,18 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         contiguous = sequence_delta == 1
         if not is_video:
             depacketizer.observe_nonvideo_packet(packet)
-            if not contiguous:
+            codec_mismatch = candidate_video and (
+                route_epoch is None or route_epoch.media_kind == "video"
+            )
+            if codec_mismatch:
+                # A packet on the selected video route cannot silently turn
+                # into other media when its codec header is damaged.
+                pending_gap[packet.ssrc] = True
+                gap_timestamp[packet.ssrc] = packet.timestamp
+                pending_corrupt[packet.ssrc] = True
+                if route_epoch is None:
+                    predescriptor_codec_mismatch[packet.ssrc] = True
+            elif not contiguous:
                 pending_gap[packet.ssrc] = True
                 unassigned_gap[packet.ssrc] = True
             continue

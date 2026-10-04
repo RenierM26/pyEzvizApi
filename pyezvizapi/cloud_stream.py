@@ -27,6 +27,7 @@ from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     ANNEX_B_START_CODE,
     DEFAULT_AAC_PAYLOAD_TYPES,
+    DEFAULT_VIDEO_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
     RtpRouteProfile,
@@ -1098,6 +1099,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     audio_metadata: tuple[int, int] | None = None
     audio_decodable = False
     consumed_packets = 0
+    stale_video_route = False
     for packet in packets:
         _require_clear_cloud_packet(packet, allow_encrypted=allow_encrypted)
         parsed = _parse_cloud_rtp_packet(packet.body)
@@ -1220,6 +1222,31 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 for candidate in video_probe
                 if candidate.payload_type in selected_video_payload_types
             ]
+            if (
+                consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS
+                and not video_probe
+                and not any(
+                    candidate.payload_type in selected_video_payload_types
+                    for candidate in prefix
+                )
+            ):
+                assigned_payload_types = {
+                    descriptor.payload_type for descriptor in stream_descriptors
+                }
+                video_probe = [
+                    candidate
+                    for candidate, epoch_route in zip(
+                        prefix, prefix_route_epochs, strict=True
+                    )
+                    if candidate.payload_type in DEFAULT_VIDEO_PAYLOAD_TYPES
+                    and candidate.payload_type not in assigned_payload_types
+                    and _cloud_rtp_packet_matches_video_route(
+                        candidate,
+                        route_codec=codec,
+                        epoch_route=epoch_route,
+                    )
+                ]
+                stale_video_route = bool(video_probe)
         if (
             audio_key is not None
             and audio_metadata is not None
@@ -1270,7 +1297,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 "Could not detect RTP video codec in cloud stream"
             ) from err
 
-    if not any(
+    if stale_video_route or not any(
         descriptor.media_kind == "video"
         for descriptor in route_profile.descriptors
     ):
@@ -1355,7 +1382,9 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     for descriptor in route_profile.descriptors
                 )
                 current_video_payload_types = (
-                    route_profile.codec_payload_types(codec)
+                    frozenset(candidate.payload_type for candidate in video_probe)
+                    if stale_video_route
+                    else route_profile.codec_payload_types(codec)
                     if video_descriptors_are_authoritative
                     else frozenset(
                         candidate.payload_type for candidate in video_probe

@@ -276,6 +276,10 @@ class RtpRouteProfile:
     def media_kind(self, packet: RtpPacket) -> RtpMediaKind:
         """Classify a packet using current authoritative ownership."""
 
+        if packet.payload_type not in self._descriptors:
+            fallback = self._selected_fallbacks.get(packet.payload_type)
+            if fallback is not None:
+                return fallback[1]
         return rtp_media_kind(packet, stream_descriptors=self.descriptors)
 
     def codec_payload_types(
@@ -1052,6 +1056,19 @@ def rtp_packets_to_nal_units(
         codec,
         fallback_payload_types=video_payload_types,
     )
+    if not any(
+        packet.payload_type in routed_video_payload_types for packet in packet_list
+    ):
+        # Some cameras advertise a video payload type in IDMX metadata that
+        # never appears on the wire (observed: HEVC PT 15, packets on PT 96).
+        # Fall back only when the advertised route is entirely absent; an
+        # active descriptor must continue to take precedence over legacy PTs.
+        assigned_payload_types = {item.payload_type for item in descriptors}
+        routed_video_payload_types = frozenset(
+            payload_type
+            for payload_type in video_payload_types
+            if payload_type not in assigned_payload_types
+        )
     depacketizer = RtpVideoDepacketizer(
         codec,
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,

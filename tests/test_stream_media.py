@@ -3534,6 +3534,60 @@ def test_copy_cloud_stream_packets_probes_until_first_routed_video(
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
 
 
+def test_copy_cloud_stream_packets_falls_back_when_descriptor_route_absent(
+    monkeypatch,
+) -> None:
+    bodies = [
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x0f",
+        )
+    ]
+    bodies.extend(
+        _rtp_packet(
+            b"\x40\x01vps",
+            sequence=sequence,
+            payload_type=96,
+            marker=True,
+        )
+        for sequence in range(2, 35)
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+    )
+
+    expected_nal = b"\x00\x00\x00\x01\x40\x01vps"
+    assert output.getvalue() == expected_nal * 33
+
+
 def test_copy_cloud_stream_packets_bounds_missing_routed_video() -> None:
     probe_packet_limit = 64
     bodies = [

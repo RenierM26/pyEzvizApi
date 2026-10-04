@@ -720,6 +720,24 @@ def test_authoritative_video_descriptor_disables_legacy_pt96_fallback() -> None:
     )
 
 
+def test_absent_video_descriptor_route_falls_back_to_observed_pt96() -> None:
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x0f",
+        )
+    )
+    video = parse_rtp_packet(
+        _rtp(b"\x40\x01vps", sequence=2, payload_type=96)
+    )
+
+    expected = b"\x00\x00\x00\x01\x40\x01vps"
+    assert rtp_packets_to_annexb((metadata, video), codec="hevc") == expected
+
+
 def test_unknown_descriptor_claims_shared_payload_from_video_fallback() -> None:
     descriptor = b"\x45\x02\xaf\x60"
     metadata = parse_rtp_packet(

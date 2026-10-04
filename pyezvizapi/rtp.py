@@ -958,6 +958,9 @@ class RtpVideoDepacketizer:
         fu_header = payload[1]
         is_start = bool(fu_header & 0x80)
         is_end = bool(fu_header & 0x40)
+        if is_start and is_end:
+            self._discard_fragment(packet.ssrc)
+            return ()
         if is_start:
             self._discard_fragment(packet.ssrc)
             self._fragment_by_ssrc[packet.ssrc] = _FragmentedNal(
@@ -1003,6 +1006,9 @@ class RtpVideoDepacketizer:
         fu_header = payload[2]
         is_start = bool(fu_header & 0x80)
         is_end = bool(fu_header & 0x40)
+        if is_start and is_end:
+            self._discard_fragment(packet.ssrc)
+            return ()
         if is_start:
             self._discard_fragment(packet.ssrc)
             original_type = fu_header & 0x3F

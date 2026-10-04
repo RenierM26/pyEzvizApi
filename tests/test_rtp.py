@@ -351,6 +351,23 @@ def test_bounded_rtp_rejects_unmarked_malformed_fu_before_timestamp_change() -> 
     ) == (b"\x61\x80healthy",)
 
 
+@pytest.mark.parametrize(
+    ("codec", "malformed_fu"),
+    [
+        ("h264", b"\x7c\xc1\x80slice"),
+        ("hevc", b"\x62\x01\xc1\x80slice"),
+    ],
+)
+def test_bounded_rtp_rejects_fu_with_start_and_end_flags(
+    codec: RtpVideoCodec, malformed_fu: bytes
+) -> None:
+    packet = parse_rtp_packet(_rtp(malformed_fu, sequence=1, marker=True))
+    assert RtpVideoDepacketizer(codec).push(packet) == ()
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+
+
 def test_bounded_rtp_rejects_picture_with_open_fragment_at_timestamp_change() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
     fu_start = parse_rtp_packet(

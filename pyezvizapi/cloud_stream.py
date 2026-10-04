@@ -49,6 +49,7 @@ from .rtp import (
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
+    rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
@@ -1053,6 +1054,11 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             codec=codec,
             allow_ezviz_headerless_hevc_fu=True,
         )
+        if not rtp_nal_units_have_vcl(nal_units, codec=codec):
+            raise EzvizNoMediaError(
+                "Cloud RTP capture contained no complete video frame; "
+                "increase the capture duration"
+            )
         header_size = nalu_header_size
         if header_size is None:
             header_size = 2 if codec == "hevc" else 1

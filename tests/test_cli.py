@@ -18,7 +18,7 @@ import pytest
 
 import pyezvizapi.__main__ as cli_module
 from pyezvizapi.constants import MAX_RETRIES
-from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
+from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizNoMediaError, PyEzvizError
 from pyezvizapi.hcnetsdk import (
     HcNetSdkCommandPortExchange,
     build_hcnetsdk_tcp_frame,
@@ -2524,7 +2524,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
             return None
 
         def iter_packets(self, *, max_packets: int | None = None) -> list[VtmPacket]:
-            assert max_packets == 1
+            assert max_packets == 2
             return [
                 VtmPacket(
                     channel=VtmChannel.STREAM,
@@ -2537,7 +2537,19 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                         b"\x00\x00\x00\x02"
                         b"\x40\x01vps"
                     ),
-                )
+                ),
+                VtmPacket(
+                    channel=VtmChannel.STREAM,
+                    length=19,
+                    sequence=2,
+                    message_code=0,
+                    body=(
+                        b"\x80\x60\x00\x02"
+                        b"\x00\x00\x00\x02"
+                        b"\x00\x00\x00\x02"
+                        b"\x26\x01slice"
+                    ),
+                ),
             ]
 
     monkeypatch.setattr(
@@ -2599,7 +2611,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                 "--serial",
                 "CAM123",
                 "--max-packets",
-                "1",
+                "2",
                 "--duration",
                 "0",
                 "--decrypt-video",
@@ -2615,7 +2627,10 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
         {
             "client": client,
             "serial": "CAM123",
-            "units": (b"\x00\x00\x00\x01\x40\x01vps",),
+            "units": (
+                b"\x00\x00\x00\x01\x40\x01vps",
+                b"\x00\x00\x00\x01\x26\x01slice",
+            ),
             "detected_codec": "hevc",
             "decrypt_codec": "hevc",
             "media_key": "camera-secret",
@@ -3001,6 +3016,30 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         cli_module._rtp_packets_to_annexb(packets, codec="h264")  # noqa: SLF001
         == expected_annexb
     )
+
+
+def test_cli_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
+    def rtp(payload: bytes, sequence: int) -> bytes:
+        return (
+            b"\x80\x60" + sequence.to_bytes(2, "big")
+            + b"\x00\x00\x00\x01" + b"\x55\x66\x77\x88" + payload
+        )
+
+    bodies = (
+        rtp(b"\x40\x01vps", 1),
+        rtp(b"\x42\x01sps", 2),
+        rtp(b"\x44\x01pps", 3),
+        rtp(b"\x62\x01\x93partial", 4),
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+
+    with pytest.raises(EzvizNoMediaError, match="increase the capture duration") as error:
+        cli_module._rtp_packets_to_annexb_units(packets, codec="hevc")  # noqa: SLF001
+
+    assert error.value.reason == "no_media"
 
 
 def test_collect_stream_packets_forwards_vtm_capture_deadline() -> None:

@@ -1047,6 +1047,18 @@ def rtp_packets_to_annexb(
     )
 
 
+def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) -> bool:
+    """Return whether complete RTP NALs contain a decodable video slice.
+
+    Parameter sets alone are not video: they can arrive before a large first
+    fragmented frame that does not finish within a short capture bound.
+    """
+
+    if codec == "hevc":
+        return any(len(nal) >= 2 and ((nal[0] >> 1) & 0x3F) < 32 for nal in nal_units)
+    return any(nal and 1 <= (nal[0] & 0x1F) <= 5 for nal in nal_units)
+
+
 def rtp_packets_to_nal_units(
     packets: Iterable[RtpPacket],
     *,

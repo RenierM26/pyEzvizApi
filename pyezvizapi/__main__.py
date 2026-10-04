@@ -89,6 +89,7 @@ from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
 from .rtp import (
     detect_rtp_video_codec,
     parse_rtp_packet,
+    rtp_nal_units_have_vcl,
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
@@ -3255,13 +3256,19 @@ def _rtp_packets_to_annexb_units(
     if codec not in {"h264", "hevc"}:
         raise PyEzvizError(f"Unsupported RTP video codec: {codec}")
     parsed = _parse_rtp_packets(packets)
+    nal_units = rtp_packets_to_nal_units(
+        parsed,
+        codec=cast(Any, codec),
+        allow_ezviz_headerless_hevc_fu=True,
+    )
+    if not rtp_nal_units_have_vcl(nal_units, codec=cast(Any, codec)):
+        raise EzvizNoMediaError(
+            "Cloud RTP capture contained no complete video frame; "
+            "increase the capture duration"
+        )
     return tuple(
         b"\x00\x00\x00\x01" + nal_unit
-        for nal_unit in rtp_packets_to_nal_units(
-            parsed,
-            codec=cast(Any, codec),
-            allow_ezviz_headerless_hevc_fu=True,
-        )
+        for nal_unit in nal_units
     )
 
 

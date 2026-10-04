@@ -23,7 +23,7 @@ class EzvizUnsupportedMediaError(PyEzvizError):
 
 
 class EzvizNoMediaError(PyEzvizError):
-    """A bounded preview completed without any media packets."""
+    """A bounded preview completed without usable media."""
 
     reason = "no_media"
 

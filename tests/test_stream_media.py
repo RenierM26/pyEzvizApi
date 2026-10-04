@@ -2611,6 +2611,30 @@ def test_copy_cloud_stream_to_mpegts_rejects_incomplete_rtp_video(
     assert output.getvalue() == EMPTY_BYTES
 
 
+def test_decrypted_cloud_rtp_rejects_parameter_sets_without_complete_frame() -> None:
+    """A short C8W-style capture must not publish an empty successful clip."""
+
+    bodies = (
+        _rtp_packet(b"\x40\x01vps", sequence=1),
+        _rtp_packet(b"\x42\x01sps", sequence=2),
+        _rtp_packet(b"\x44\x01pps", sequence=3),
+        _rtp_packet(b"\x62\x01\x93partial", sequence=4),
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+    output = io.BytesIO()
+
+    with pytest.raises(EzvizNoMediaError, match="no complete video frame") as error:
+        copy_decrypted_cloud_stream_packets_to_mpegts(
+            packets, output, ffmpeg_path="ffmpeg", media_key="test-key"
+        )
+
+    assert error.value.reason == "no_media"
+    assert output.getvalue() == EMPTY_BYTES
+
+
 def test_copy_cloud_stream_to_mpegts_passes_through_mpegts(monkeypatch) -> None:
     client = _client()
     output = io.BytesIO()
@@ -2794,7 +2818,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
 ) -> None:
     client = _client()
     output = io.BytesIO()
-    rtp_body = _rtp_packet(b"\x67encrypted-h264", marker=True)
+    rtp_body = _rtp_packet(b"\x61encrypted-h264", marker=True)
     decrypt_calls: list[tuple[bytes, str | bytes, int | None]] = []
     open_calls: list[tuple[str, str]] = []
 
@@ -2873,7 +2897,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         media_key="MEDIAKEY",
     )
 
-    expected_annexb = b"\x00\x00\x00\x01\x67encrypted-h264"
+    expected_annexb = b"\x00\x00\x00\x01\x61encrypted-h264"
     assert decrypt_calls == [
         (
             b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + expected_annexb,
@@ -3245,7 +3269,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
             extension_profile=1,
             extension_data=descriptor,
         ),
-        _rtp_packet(b"\x67encrypted-h264", sequence=2, marker=True),
+        _rtp_packet(b"\x61encrypted-h264", sequence=2, marker=True),
         rtp_with_extension(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")

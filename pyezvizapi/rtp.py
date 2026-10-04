@@ -1262,7 +1262,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                         first_slice_seen[packet.ssrc] = starts_picture
                         if (
                             new_timestamp_au.get(packet.ssrc)
-                            or previous_timestamp is None
+                            or first_vcl_au_pending.get(packet.ssrc, True)
                         ) and starts_picture:
                             # A confirmed new picture cannot contain the slice
                             # lost before its timestamp boundary.

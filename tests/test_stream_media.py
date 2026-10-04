@@ -41,6 +41,7 @@ from pyezvizapi.cloud_stream import (
     copy_decrypted_cloud_stream_packets_to_mpegts,
 )
 from pyezvizapi.exceptions import (
+    EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
     UnsupportedRtpVideoCodecError,
@@ -203,7 +204,6 @@ def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> 
         + b"\x80\x00\x00"
         + encrypted_payload
     )
-
     assert (
         decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
         == b"\x00\x00\x01\xe0"
@@ -211,6 +211,22 @@ def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> 
         + b"\x80\x00\x00"
         + clear_payload
     )
+
+
+def test_decrypt_hikvision_ps_video_recovers_overlong_pes_at_valid_pack() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = _encrypt_hikvision_fixture_blocks(aes_key, clear_body)
+    # The declared PES length ends after the first AES block, but the camera
+    # continues this video payload until the next valid MPEG-2 pack header.
+    short_length = 3 + 4 + 2 + AES.block_size
+    pes_header = b"\x00\x00\x01\xe0" + short_length.to_bytes(2, "big") + b"\x80\x00\x00"
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    encrypted = pes_header + b"\x00\x00\x00\x01\x42\x01" + encrypted_body + pack
+    expected = pes_header + b"\x00\x00\x00\x01\x42\x01" + clear_body + pack
+
+    assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=2) == expected
 
 def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
     key = "camera-key"
@@ -324,6 +340,33 @@ def test_decrypt_hikvision_ps_video_keeps_short_encrypted_h264_nals() -> None:
         + b"\x80\x00\x00"
         + clear_payload
     )
+
+
+def test_decrypt_hikvision_ps_video_preserves_short_clear_pps_between_encrypted_nals() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_sps = b"\x67" + b"s" * 28
+    clear_pps = b"\x28\xee\x3c\x80"
+    clear_idr = b"\x65" + b"i" * 31
+
+    def video_pes(nal: bytes) -> bytes:
+        payload = b"\x00\x00\x00\x01" + nal
+        return (
+            b"\x00\x00\x01\xe0"
+            + (len(payload) + 3).to_bytes(2, "big")
+            + b"\x80\x00\x00"
+            + payload
+        )
+
+    encrypted = (
+        video_pes(_encrypt_hikvision_fixture_blocks(aes_key, clear_sps[:16]) + clear_sps[16:])
+        + video_pes(clear_pps)
+        + video_pes(_encrypt_hikvision_fixture_blocks(aes_key, clear_idr))
+    )
+    expected = video_pes(clear_sps) + video_pes(clear_pps) + video_pes(clear_idr)
+
+    assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=0) == expected
+
 
 def test_decrypt_hikvision_ps_video_keeps_unaligned_h264_nal_boundaries() -> None:
     key = "camera-key"
@@ -2625,6 +2668,30 @@ def test_cloud_packet_iterator_bounds_from_request_start() -> None:
     }
 
 
+def test_vtm_stream_packet_inactivity_ignores_control_keepalives() -> None:
+    clock = [0.0]
+
+    class ControlOnlyStream(VtmStreamClient):
+        def __init__(self) -> None:
+            super().__init__("ysproto://example.invalid/live")
+            self.read_count = 0
+
+        def read_packet(self, **_kwargs: Any) -> VtmPacket:
+            clock[0] += 1.0
+            self.read_count += 1
+            return VtmPacket(VtmChannel.MESSAGE, 0, self.read_count, 0, b"")
+
+    stream = ControlOnlyStream()
+    assert list(
+        stream.iter_packets(
+            stream_packet_timeout_seconds=2.0,
+            keepalive_interval=None,
+            monotonic=lambda: clock[0],
+        )
+    ) == []
+    assert stream.read_count == 2
+
+
 def test_cloud_stream_start_uses_configured_timeout_as_overall_deadline() -> None:
     class RecordingStream(VtmStreamClient):
         def __init__(self) -> None:
@@ -3469,6 +3536,32 @@ def test_copy_cloud_stream_packets_accepts_predispatch_video_codec_correction(
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
 
 
+def test_cloud_rtp_startup_deadline_reports_no_routed_video() -> None:
+    body = _rtp_packet(b"metadata", sequence=1, payload_type=112)
+
+    class MetadataOnlyStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets is None
+            for sequence in range(1, 10):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    ticks = iter((0.0, 1.0, 2.0))
+    with pytest.raises(EzvizNoMediaError, match="no routed video") as error:
+        copy_cloud_stream_packets_to_mpegts(
+            MetadataOnlyStream(),
+            io.BytesIO(),
+            ffmpeg_path="ffmpeg",
+            max_packets=None,
+            startup_timeout_seconds=1.5,
+            monotonic=lambda: next(ticks),
+        )
+
+    assert error.value.reason == "no_media"
+
+
 def test_copy_cloud_stream_packets_probes_until_first_routed_video(
     monkeypatch,
 ) -> None:
@@ -3532,6 +3625,60 @@ def test_copy_cloud_stream_packets_probes_until_first_routed_video(
 
     assert open_calls == ["hevc"]
     assert output.getvalue() == HEVC_DESCRIPTOR_ANNEXB
+
+
+def test_copy_cloud_stream_packets_falls_back_when_descriptor_route_absent(
+    monkeypatch,
+) -> None:
+    bodies = [
+        _rtp_packet(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x0f",
+        )
+    ]
+    bodies.extend(
+        _rtp_packet(
+            b"\x40\x01vps",
+            sequence=sequence,
+            payload_type=96,
+            marker=True,
+        )
+        for sequence in range(2, 35)
+    )
+
+    class FakeStream:
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            assert max_packets == len(bodies)
+            for sequence, body in enumerate(bodies, start=1):
+                yield VtmPacket(VtmChannel.STREAM, len(body), sequence, 0, body)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cloud_stream_module,
+        "_open_cloud_elementary_mpegts_remux_process",
+        lambda *_args, **_kwargs: subprocess.Popen(
+            ["cat"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ),
+    )
+    output = io.BytesIO()
+
+    copy_cloud_stream_packets_to_mpegts(
+        FakeStream(),
+        output,
+        ffmpeg_path="ffmpeg",
+        max_packets=len(bodies),
+    )
+
+    expected_nal = b"\x00\x00\x00\x01\x40\x01vps"
+    assert output.getvalue() == expected_nal * 33
 
 
 def test_copy_cloud_stream_packets_bounds_missing_routed_video() -> None:

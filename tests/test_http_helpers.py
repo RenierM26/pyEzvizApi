@@ -24,7 +24,12 @@ from pyezvizapi.api_endpoints import (
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
 from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
-from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
+from pyezvizapi.clip import (
+    ClipOptions,
+    CloudClipSource,
+    HcNetSdkCommandPortClipSource,
+    LocalSdkEcdhClipSource,
+)
 from pyezvizapi.constants import (
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
@@ -36,6 +41,7 @@ from pyezvizapi.constants import (
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizAuthVerificationCode,
+    EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
 )
@@ -2918,6 +2924,109 @@ def test_clip_options_use_ecdh_compatible_default_mux() -> None:
     assert options.resolved_mux().output_format == "mpegps"
 
 
+@pytest.mark.parametrize(
+    ("explicit_mux", "expected_format"),
+    [(None, "mpegts"), (MediaMuxOptions(output_format="mpegps"), "mpegps")],
+)
+def test_typed_ecdh_save_uses_decrypted_default_unless_mux_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_mux: MediaMuxOptions | None,
+    expected_format: str,
+) -> None:
+    client = _client()
+    formats: list[str] = []
+
+    def capture_clip(*_args: Any, **kwargs: Any) -> dict[str, bool]:
+        formats.append(kwargs["output_format"])
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_local_sdk_ecdh_clip", capture_clip)
+    options = ClipOptions(
+        source=LocalSdkEcdhClipSource(),
+        decode=MediaDecodeOptions(decrypt_video=True),
+        mux=explicit_mux,
+    )
+
+    client.save_clip_with_options("CAM123", io.BytesIO(), options)
+
+    assert formats == [expected_format]
+
+
+@pytest.mark.parametrize(
+    ("override", "decrypt_video", "duration_seconds", "expected"),
+    [
+        (None, False, 8.0, True),
+        (False, False, 8.0, False),
+        (True, False, 8.0, True),
+        (None, True, 8.0, False),
+        (None, False, None, False),
+    ],
+)
+def test_native_hcnetsdk_clip_auto_waits_for_clear_video_window(
+    monkeypatch: pytest.MonkeyPatch,
+    override: bool | None,
+    decrypt_video: bool,
+    duration_seconds: float | None,
+    expected: bool,
+) -> None:
+    client = _client()
+    captured: list[ClipOptions] = []
+
+    def capture_options(
+        _serial: str, _output: object, options: ClipOptions
+    ) -> dict[str, bool]:
+        captured.append(options)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "save_clip_with_options", capture_options)
+    client.save_clip(
+        "CAM123",
+        io.BytesIO(),
+        source="hcnetsdk-command-port",
+        duration_seconds=duration_seconds,
+        decrypt_video=decrypt_video,
+        media_key="KEY" if decrypt_video else None,
+        hcnetsdk_command_generated_plan=cast(Any, object()),
+        hcnetsdk_video_wait_for_clean_window=override,
+    )
+
+    assert captured[0].mux is not None
+    assert captured[0].mux.h264_wait_for_clean_idr_window is expected
+
+
+@pytest.mark.parametrize(
+    ("explicit_mux", "decrypt_video", "expected"),
+    [(False, False, True), (True, False, False), (False, True, False)],
+)
+def test_typed_clip_options_auto_wait_for_generated_clear_lan_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_mux: bool,
+    decrypt_video: bool,
+    expected: bool,
+) -> None:
+    client = _client()
+    captured: list[bool] = []
+
+    def capture_clip(*_args: Any, **kwargs: Any) -> dict[str, bool]:
+        captured.append(kwargs["h264_wait_for_clean_idr_window"])
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_hcnetsdk_command_port_clip", capture_clip)
+    options = ClipOptions(
+        source=HcNetSdkCommandPortClipSource(generated_plan=cast(Any, object())),
+        capture=CaptureLimits(duration_seconds=8.0),
+        decode=MediaDecodeOptions(
+            decrypt_video=decrypt_video,
+            media_key="KEY" if decrypt_video else None,
+        ),
+        mux=MediaMuxOptions() if explicit_mux else None,
+    )
+
+    client.save_clip_with_options("CAM123", io.BytesIO(), options)
+
+    assert captured == [expected]
+
+
 def test_save_clip_with_options_rejects_unsupported_byte_limit() -> None:
     client = _client()
     options = ClipOptions(capture=CaptureLimits(max_bytes=1024))
@@ -2995,6 +3104,53 @@ def test_save_clip_accepts_arbitrary_size_integer_packet_limit(monkeypatch) -> N
 
     assert result == {"ok": True}
     assert calls[0]["max_packets"] == huge_limit
+
+
+def test_save_clip_rejects_empty_local_sdk_ecdh_capture(monkeypatch) -> None:
+    client = _client()
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        assert source_client is client
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    with pytest.raises(EzvizNoMediaError, match="did not contain media") as error:
+        client.save_clip("CAM123", io.BytesIO(), source="local-sdk-ecdh")
+    assert error.value.reason == "no_media"
+
+
+def test_save_clip_ecdh_failure_preserves_existing_path(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ps"
+    existing_clip = b"existing clip"
+    output_path.write_bytes(existing_clip)
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(b"partial media")
+        raise PyEzvizError("unsupported ECDH payload")
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client", fake_copy
+    )
+
+    with pytest.raises(PyEzvizError, match="unsupported ECDH payload"):
+        client.save_clip("CAM123", output_path, source="local-sdk-ecdh")
+
+    assert output_path.read_bytes() == existing_clip
+    assert list(tmp_path.iterdir()) == [output_path]
 
 
 def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
@@ -3105,6 +3261,36 @@ def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> N
     assert result["content_type"] == "video/mpeg"
 
 
+def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
+    monkeypatch, tmp_path
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ts"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append(kwargs)
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    result = client.save_clip(
+        "CAM123", output_path, source="local-sdk-ecdh", decrypt_video=True
+    )
+
+    assert calls[0]["output_format"] == "mpegts"
+    assert result["format"] == "mpegts"
+    assert result["content_type"] == "video/mp2t"
+
+
 def test_save_clip_local_sdk_ecdh_bounds_input_frames_by_max_packets(
     monkeypatch,
     tmp_path,
@@ -3119,6 +3305,7 @@ def test_save_clip_local_sdk_ecdh_bounds_input_frames_by_max_packets(
         **kwargs: Any,
     ) -> None:
         calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
@@ -3619,6 +3806,7 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
         **kwargs: Any,
     ) -> None:
         calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
@@ -3634,6 +3822,29 @@ def test_save_clip_cloud_decrypt_uses_automatic_nalu_header_default(
     )
 
     assert calls[0]["nalu_header_size"] is None
+    assert calls[0]["channel"] is None
+
+
+@pytest.mark.parametrize("source", ["local-sdk", "local-sdk-ecdh"])
+def test_save_clip_local_decrypt_uses_automatic_nalu_header_default(
+    monkeypatch,
+    source,
+) -> None:
+    client = _client()
+    captured: list[ClipOptions] = []
+
+    def fake_save_clip_with_options(
+        serial: str,
+        output: str | Path | BinaryIO,
+        options: ClipOptions,
+    ) -> dict[str, Any]:
+        captured.append(options)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "save_clip_with_options", fake_save_clip_with_options)
+    client.save_clip("CAM123", io.BytesIO(), source=source, decrypt_video=True)
+
+    assert captured[0].decode.nalu_header_size is None
 
 
 def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
@@ -3649,6 +3860,7 @@ def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
         **kwargs: Any,
     ) -> None:
         calls.append({"client": source_client, "serial": serial, **kwargs})
+        output.write(SAVE_CLIP_PAYLOAD)
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",
@@ -3665,6 +3877,29 @@ def test_save_clip_cloud_decrypt_preserves_explicit_zero_nalu_header(
     )
 
     assert calls[0]["nalu_header_size"] == 0
+
+
+def test_save_clip_cloud_rejects_empty_capture(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "empty.ts"
+
+    def fake_copy_cloud_stream_to_mpegts(
+        _source_client: EzvizClient,
+        _serial: str,
+        _output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    with pytest.raises(EzvizNoMediaError, match="did not contain media") as error:
+        client.save_clip("CAM123", output_path, source="cloud")
+    assert error.value.reason == "no_media"
+    assert output_path.stat().st_size == 0
 
 
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:

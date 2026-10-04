@@ -23,6 +23,7 @@ from .media import (
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
+    is_positive_finite_duration_bound,
 )
 from .rtp import rtp_payload as _rtp_payload
 
@@ -476,6 +477,7 @@ class VtmStreamClient:
         duration_from_start: bool = False,
         first_packet_timeout: float | None = None,
         first_packet_deadline: float | None = None,
+        stream_packet_timeout_seconds: float | None = None,
         include_control: bool = False,
         keepalive_interval: float | None = 5.0,
         monotonic: Callable[[], float] = time.monotonic,
@@ -490,6 +492,10 @@ class VtmStreamClient:
             return
         if first_packet_timeout is not None and first_packet_timeout <= 0:
             return
+        if stream_packet_timeout_seconds is not None and not is_positive_finite_duration_bound(
+            stream_packet_timeout_seconds
+        ):
+            raise PyEzvizError("VTM stream packet timeout must be positive and finite")
         if keepalive_interval is not None and keepalive_interval <= 0:
             raise PyEzvizError("keepalive_interval must be positive or None")
 
@@ -514,6 +520,11 @@ class VtmStreamClient:
         next_keepalive = (
             None if keepalive_interval is None else started_at + keepalive_interval
         )
+        next_stream_packet_deadline = (
+            None
+            if stream_packet_timeout_seconds is None
+            else started_at + stream_packet_timeout_seconds
+        )
         while max_packets is None or seen < max_packets:
             now = monotonic()
             if capture_deadline is not None and now >= capture_deadline:
@@ -522,9 +533,19 @@ class VtmStreamClient:
             if first_packet_deadline is not None and now >= first_packet_deadline:
                 self._read_inactivity_deadline = None
                 break
+            if (
+                next_stream_packet_deadline is not None
+                and now >= next_stream_packet_deadline
+            ):
+                self._read_inactivity_deadline = None
+                break
             active_stream_deadlines = [
                 deadline
-                for deadline in (capture_deadline, first_packet_deadline)
+                for deadline in (
+                    capture_deadline,
+                    first_packet_deadline,
+                    next_stream_packet_deadline,
+                )
                 if deadline is not None
             ]
             keepalive_deadline = (
@@ -548,6 +569,7 @@ class VtmStreamClient:
                 for deadline in (
                     capture_deadline,
                     first_packet_deadline,
+                    next_stream_packet_deadline,
                     next_keepalive,
                 )
                 if deadline is not None
@@ -576,6 +598,8 @@ class VtmStreamClient:
                 continue
 
             if packet.channel in (VtmChannel.STREAM, VtmChannel.ENCRYPTED_STREAM):
+                if stream_packet_timeout_seconds is not None:
+                    next_stream_packet_deadline = monotonic() + stream_packet_timeout_seconds
                 if capture_deadline is None and duration_seconds is not None:
                     capture_deadline = monotonic() + duration_seconds
                 first_packet_deadline = None
@@ -1202,6 +1226,46 @@ def _mpeg_ps_complete_packet_ranges(
     return ranges
 
 
+def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
+    """Recover overlong EZVIZ video PES runs for the bounded decrypt pass.
+
+    Some cloud cameras advertise a capped PES length while continuing the
+    encrypted video payload until the next pack. The strict parser must retain
+    its prefix semantics for streaming; only the complete-capture decrypt pass
+    may bridge such a gap, anchored by a valid MPEG-2 pack header.
+    """
+
+    ranges: list[_MpegPsPacketRange] = []
+    offset = 0
+    while offset < len(data):
+        parsed = _mpeg_ps_complete_packet_ranges(
+            data[offset:], include_trailing_unbounded_video=True
+        )
+        if not parsed:
+            break
+        ranges.extend(
+            _MpegPsPacketRange(offset + item.start, offset + item.end, item.stream_id)
+            for item in parsed
+        )
+        parsed_end = ranges[-1].end
+        if parsed_end >= len(data):
+            break
+        next_pack = data.find(b"\x00\x00\x01\xba", parsed_end)
+        while next_pack >= 0 and not (
+            next_pack + 14 <= len(data) and _is_mpeg2_pack_header(data, next_pack)
+        ):
+            next_pack = data.find(b"\x00\x00\x01\xba", next_pack + 4)
+        if next_pack < 0:
+            break
+        if _is_video_pes_stream_id(ranges[-1].stream_id):
+            previous = ranges[-1]
+            ranges[-1] = _MpegPsPacketRange(
+                previous.start, next_pack, previous.stream_id
+            )
+        offset = next_pack
+    return ranges
+
+
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
     """Return the end offset for a complete MPEG-PS packet at ``start``."""
 
@@ -1570,14 +1634,33 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
 
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
+    def is_short_clear_h264_pps(
+        payload: bytes,
+        start_code_pos: int,
+        start_code_len: int,
+        nal_end: int,
+    ) -> bool:
+        header_pos = start_code_pos + start_code_len
+        return (
+            2 <= nal_end - header_pos < AES.block_size
+            and _h264_nal_type(payload, start_code_pos, start_code_len) == 8
+        )
+
     def find_encrypted_nal_start_codes(
         data: bytes,
         start: int,
         end: int,
     ) -> list[tuple[int, int]]:
         starts: list[tuple[int, int]] = []
-        for start_code_pos, start_code_len in _find_nal_start_codes(data, start, end):
+        candidates = _find_nal_start_codes(data, start, end)
+        for index, (start_code_pos, start_code_len) in enumerate(candidates):
             encrypted_header = start_code_pos + start_code_len
+            nal_end = candidates[index + 1][0] if index + 1 < len(candidates) else end
+            if is_short_clear_h264_pps(
+                data, start_code_pos, start_code_len, nal_end
+            ):
+                starts.append((start_code_pos, start_code_len))
+                continue
             if encrypted_header + AES.block_size > end:
                 continue
             cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
@@ -1655,10 +1738,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
             nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
             return nal_type is None or nal_type >= 32
 
-        for packet_range in _mpeg_ps_complete_packet_ranges(
-            data,
-            include_trailing_unbounded_video=True,
-        ):
+        for packet_range in _mpeg_ps_video_decrypt_ranges(data):
             if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
                 continue
             if not _is_video_pes_stream_id(packet_range.stream_id):
@@ -1789,13 +1869,16 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 if idx + 1 < len(nal_starts)
                 else len(payload)
             )
+            clear_short_pps = nalu_header_size == 0 and is_short_clear_h264_pps(
+                payload, start_code_pos, start_code_len, decrypt_end
+            )
             if active_nal:
                 candidate_decrypted = active_nal_decrypted + max(
                     0,
                     start_code_pos - segment_start,
                 )
                 if candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
-                    if nalu_header_size == 0 and (
+                    if nalu_header_size == 0 and not clear_short_pps and (
                         candidate_decrypted == 0
                         or not starts_plausible_encrypted_nal(
                             start_code_pos + start_code_len,
@@ -1813,6 +1896,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                 and (
                     (
                         nalu_header_size == 0
+                        and not clear_short_pps
                         and not starts_plausible_encrypted_nal(
                             start_code_pos + start_code_len,
                             decrypt_end,

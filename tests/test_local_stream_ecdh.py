@@ -18,6 +18,8 @@ from pyezvizapi import (
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizLocalSdkDeadlineExpired,
+    EzvizLocalSdkStreamClosed,
+    EzvizUnsupportedMediaError,
     PyEzvizError,
 )
 from pyezvizapi.hcnetsdk import (
@@ -488,6 +490,21 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_preserves_authenticated_rtp_packet(
     )
 
 
+def test_ecdh_decoder_rejects_version_only_pseudo_rtp() -> None:
+    decoder = EzvizLocalSdkEcdhStreamDecoder(
+        generate_ezviz_local_sdk_ecdh_keypair().private_key
+    )
+    # A random authenticated plaintext can have RTP version bits by chance.
+    # Without an IDMX sentinel, it must not be published as a video packet.
+    pseudo_rtp = b"\x80\x60\x00\x01\x00\x00\x00\x01\x11\x22\x33\x44noise"
+    for _ in range(31):
+        assert decoder._absorb_plain(pseudo_rtp) == EMPTY_BYTES  # noqa: SLF001
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        decoder._absorb_plain(pseudo_rtp)  # noqa: SLF001
+    assert error.value.source == "local-sdk-ecdh"
+    assert error.value.reason == "unsupported_payload"
+
+
 def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering() -> None:
     client_key_pair = generate_ezviz_local_sdk_ecdh_keypair()
     camera_private_key = ec.generate_private_key(ec.SECP256R1())
@@ -873,6 +890,81 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
     assert calls[2]["max_packets"] == 7
     assert calls[2]["max_frames"] == 7
     assert calls[2]["duration_seconds"] == duration_seconds
+
+
+def test_copy_local_sdk_ecdh_retries_rate_zero_after_premedia_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rates: list[int] = []
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open(*_args: object, stream_rate: int, **_kwargs: object) -> FakeStream:
+        rates.append(stream_rate)
+        return FakeStream()
+
+    def fake_copy(_stream: object, output: BytesIO, **_kwargs: object) -> None:
+        if rates[-1] == 1:
+            raise EzvizLocalSdkStreamClosed(
+                "Socket closed before expected EZVIZ frame bytes"
+            )
+        output.write(LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        fake_open,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media",
+        fake_copy,
+    )
+    output = BytesIO()
+
+    copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", output)
+
+    assert rates == [1, 0]
+    assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD
+
+
+def test_copy_local_sdk_ecdh_does_not_retry_after_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rates: list[int] = []
+
+    class FakeStream:
+        def __enter__(self) -> FakeStream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_open(*_args: object, stream_rate: int, **_kwargs: object) -> FakeStream:
+        rates.append(stream_rate)
+        return FakeStream()
+
+    def fake_copy(_stream: object, output: BytesIO, **_kwargs: object) -> None:
+        output.write(b"partial")
+        raise EzvizLocalSdkStreamClosed(
+            "Socket closed before expected EZVIZ frame bytes"
+        )
+
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client",
+        fake_open,
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media",
+        fake_copy,
+    )
+    with pytest.raises(EzvizLocalSdkStreamClosed):
+        copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", BytesIO())
+
+    assert rates == [1]
 
 
 @pytest.mark.parametrize(

@@ -25,7 +25,12 @@ from .constants import (
     IDMX_VIDEO_RTP_CLOCK_RATE,
     MAX_RETRIES,
 )
-from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .exceptions import (
+    EzvizLocalSdkDeadlineExpired,
+    EzvizNoMediaError,
+    EzvizUnsupportedMediaError,
+    PyEzvizError,
+)
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -89,7 +94,6 @@ from .stream_media import (
 HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = "app-lan-live-view"
 
 _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS = {
-    "Unsupported RTP version",
     "RTP packet is too short",
     "RTP CSRC header exceeds packet length",
     "RTP extension header exceeds packet length",
@@ -2251,6 +2255,10 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         duration_seconds=capture_duration_seconds,
         monotonic=monotonic,
     )
+    if not packets:
+        raise EzvizNoMediaError(
+            "EZVIZ local stream supplied no media packets within the capture bound"
+        )
     if _local_stream_packets_are_idmx(packets):
         annexb, authoritative_video_codec = (
             _decrypt_idmx_local_packets_to_annexb_with_codec(
@@ -2296,13 +2304,17 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
         audio = None
         if _idmx_local_packets_have_aac(packets):
-            selected_packets = _idmx_packets_from_selected_annexb(
-                packets,
-                full_annexb=full_annexb,
-                selected_annexb=annexb,
-                media_key=media_key,
-                nalu_header_size=nalu_header_size,
-                video_input_format=video_input_format,
+            selected_packets = (
+                packets
+                if annexb == full_annexb
+                else _idmx_packets_from_selected_annexb(
+                    packets,
+                    full_annexb=full_annexb,
+                    selected_annexb=annexb,
+                    media_key=media_key,
+                    nalu_header_size=nalu_header_size,
+                    video_input_format=video_input_format,
+                )
             )
             audio = _decrypt_idmx_local_packets_to_adts_aac(
                 selected_packets,
@@ -2648,7 +2660,11 @@ def _hcnetsdk_command_port_media_payload(payload: bytes) -> bytes:
     try:
         unwrapped = rtp_payload(payload)
     except PyEzvizError as err:
-        if str(err) not in _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS:
+        invalid_rtp_version = (
+            isinstance(err, EzvizUnsupportedMediaError)
+            and err.reason == "invalid_rtp_version"
+        )
+        if not invalid_rtp_version and str(err) not in _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS:
             raise
         return payload
     hrudp_payload = _hcnetsdk_hrudp_video_payload(unwrapped)
@@ -6550,14 +6566,10 @@ def _idmx_local_video_payload_types(
 ) -> frozenset[int]:
     """Return descriptor-owned local video routes with legacy PT 96 fallback."""
 
-    profile = _idmx_local_route_profile(packets)
     if codec is not None:
-        if any(descriptor.media_kind == "video" for descriptor in profile.descriptors):
-            return profile.codec_payload_types(codec)
-        return profile.codec_payload_types(
-            codec,
-            fallback_payload_types=frozenset({IDMX_H264_RTP_PAYLOAD_TYPE}),
-        )
+        h264_types, hevc_types = _idmx_local_supported_video_payload_types(packets)
+        return h264_types if codec == "h264" else hevc_types
+    profile = _idmx_local_route_profile(packets)
     descriptor_video_payload_types = frozenset(
         descriptor.payload_type
         for descriptor in profile.descriptors
@@ -6624,6 +6636,44 @@ def _idmx_local_supported_video_payload_types(
     if video_descriptors:
         h264_payload_types = profile.codec_payload_types("h264")
         hevc_payload_types = profile.codec_payload_types("hevc")
+        # Some ECDH IDMX cameras advertise a stale HEVC PT (observed: 15)
+        # but send all video on the legacy PT 96. As on the cloud path, an
+        # active descriptor wins; only an entirely unused advertised route
+        # may fall back, and the unassigned route needs codec evidence.
+        assigned = frozenset(
+            descriptor.payload_type for descriptor in profile.descriptors
+        )
+        advertised_video = h264_payload_types | hevc_payload_types
+        if IDMX_H264_RTP_PAYLOAD_TYPE not in assigned:
+            observed_advertised = False
+            hevc_evidence = 0
+            h264_evidence = 0
+            for frame in _iter_idmx_local_packet_frames(packets):
+                header_size = _idmx_local_frame_header_size(frame)
+                if header_size is None:
+                    continue
+                packet = _idmx_local_frame_rtp_packet(frame, header_size)
+                if packet is None:
+                    continue
+                if packet.payload_type in advertised_video:
+                    observed_advertised = True
+                    break
+                if packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
+                    continue
+                body = _idmx_local_frame_media_body(frame, header_size)
+                hevc_evidence += bool(
+                    _looks_like_idmx_hevc_media_frame(body)
+                    or _looks_like_idmx_hevc_evidence_frame(body)
+                )
+                h264_evidence += bool(
+                    _looks_like_idmx_h264_fu_a_frame(body)
+                    or _looks_like_idmx_h264_clear_nal(body)
+                )
+            if not observed_advertised:
+                if hevc_payload_types and not h264_payload_types and hevc_evidence >= 2:
+                    hevc_payload_types |= frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
+                elif h264_payload_types and not hevc_payload_types and h264_evidence >= 2:
+                    h264_payload_types |= frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
     else:
         fallback_payload_types = frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
         h264_payload_types = profile.codec_payload_types(

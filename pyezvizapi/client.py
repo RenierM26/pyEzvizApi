@@ -162,6 +162,7 @@ from .exceptions import (
     DeviceException,
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
+    EzvizNoMediaError,
     HTTPError,
     InvalidURL,
     PyEzvizError,
@@ -219,7 +220,7 @@ class SaveMediaResult(TypedDict, total=False):
     ok: bool
     kind: str
     serial: str
-    channel: int
+    channel: int | None
     output: str | None
     bytes: int | None
     source: str
@@ -3032,7 +3033,7 @@ class EzvizClient:
         output_format: ClipOutputFormat | None = None,
         duration_seconds: float | None = 10.0,
         max_packets: int | None = None,
-        channel: int = 1,
+        channel: int | None = None,
         ffmpeg_path: str = "ffmpeg",
         decrypt_video: bool = False,
         media_key: str | bytes | None = None,
@@ -3055,7 +3056,7 @@ class EzvizClient:
         hcnetsdk_h264_trim_to_clean_idr_window: bool = False,
         hcnetsdk_h264_clean_idr_preroll_seconds: float = 0.0,
         hcnetsdk_h264_clean_idr_max_windows: int = 32,
-        hcnetsdk_h264_wait_for_clean_idr_window: bool = False,
+        hcnetsdk_h264_wait_for_clean_idr_window: bool | None = None,
         hcnetsdk_h264_clean_idr_wait_seconds: float = 60.0,
         hcnetsdk_video_trim_to_clean_window: bool | None = None,
         hcnetsdk_video_clean_window_preroll_seconds: float | None = None,
@@ -3077,22 +3078,30 @@ class EzvizClient:
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
         port-8000 HCNetSDK bootstrap command frames, then remuxes the command
         port media stream to MPEG-TS.
-        When omitted, ``output_format`` defaults to MPEG-PS for
-        ``source="local-sdk-ecdh"`` and MPEG-TS for other sources.
+        When omitted, ``output_format`` defaults to MPEG-PS for clear
+        ``source="local-sdk-ecdh"`` captures and MPEG-TS for decrypted ECDH
+        or other sources. MPEG-TS accommodates both ECDH MPEG-PS and IDMX/RTP.
 
         This long-form signature is retained for compatibility. New code can
         group the same settings with :meth:`save_clip_with_options`.
 
-        When ``nalu_header_size`` is omitted, cloud decryption auto-detects the
-        clear codec header while local sources retain the legacy ``0`` default.
+        When ``nalu_header_size`` is omitted, cloud and direct-local decryption
+        auto-detect the clear codec header. Other sources retain the legacy
+        ``0`` default.
         Passing ``0`` or ``None`` explicitly preserves that exact choice.
         """
 
         if nalu_header_size is _SOURCE_DEFAULT_NALU_HEADER_SIZE:
-            nalu_header_size = None if source == "cloud" else 0
+            nalu_header_size = (
+                None
+                if decrypt_video and source in {"cloud", "local-sdk", "local-sdk-ecdh"}
+                else 0
+            )
 
         if output_format is None:
-            output_format = "mpegps" if source == "local-sdk-ecdh" else "mpegts"
+            output_format = (
+                "mpegps" if source == "local-sdk-ecdh" and not decrypt_video else "mpegts"
+            )
         mux_options = MediaMuxOptions(
             output_format=output_format,
             ffmpeg_path=ffmpeg_path,
@@ -3135,11 +3144,22 @@ class EzvizClient:
                 if hcnetsdk_video_clean_window_max_windows is None
                 else hcnetsdk_video_clean_window_max_windows
             )
-            wait_for_clean_window = (
-                hcnetsdk_h264_wait_for_clean_idr_window
-                if hcnetsdk_video_wait_for_clean_window is None
-                else hcnetsdk_video_wait_for_clean_window
-            )
+            if hcnetsdk_video_wait_for_clean_window is not None:
+                wait_for_clean_window = hcnetsdk_video_wait_for_clean_window
+            elif hcnetsdk_h264_wait_for_clean_idr_window is not None:
+                wait_for_clean_window = hcnetsdk_h264_wait_for_clean_idr_window
+            else:
+                # Native LAN plans may start between IDR/IRAP windows. Collect
+                # until the first decodable window only for bounded clear clips;
+                # callers using other plans or trim options keep their choices.
+                wait_for_clean_window = bool(
+                    hcnetsdk_command_generated_plan is not None
+                    and not decrypt_video
+                    and is_positive_finite_duration_bound(duration_seconds)
+                    and not hcnetsdk_h264_skip_initial_idr_windows
+                    and not trim_to_clean_window
+                    and not clean_window_preroll_seconds
+                )
             clean_window_wait_seconds = (
                 hcnetsdk_h264_clean_idr_wait_seconds
                 if hcnetsdk_video_clean_window_wait_seconds is None
@@ -3259,7 +3279,7 @@ class EzvizClient:
                 output_format=mux.output_format,
                 duration_seconds=options.duration_seconds,
                 max_packets=options.max_packets,
-                channel=options.channel,
+                channel=1 if options.channel is None else options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,
                 media_key=decode.media_key,
@@ -3278,7 +3298,7 @@ class EzvizClient:
                 duration_seconds=options.duration_seconds,
                 max_packets=options.max_packets,
                 max_frames=source.max_frames,
-                channel=options.channel,
+                channel=1 if options.channel is None else options.channel,
                 cas_serial=source.cas_serial,
                 register_p2p_session=source.register_p2p_session,
                 p2p_register_max_retries=source.p2p_register_max_retries,
@@ -3299,7 +3319,7 @@ class EzvizClient:
                 output_format=mux.output_format,
                 duration_seconds=options.duration_seconds,
                 max_packets=options.max_packets,
-                channel=options.channel,
+                channel=1 if options.channel is None else options.channel,
                 ffmpeg_path=mux.ffmpeg_path,
                 decrypt_video=decode.decrypt_video,
                 media_key=decode.media_key,
@@ -3318,7 +3338,15 @@ class EzvizClient:
                 h264_trim_to_clean_idr_window=mux.h264_trim_to_clean_idr_window,
                 h264_clean_idr_preroll_seconds=(mux.h264_clean_idr_preroll_seconds),
                 h264_clean_idr_max_windows=mux.h264_clean_idr_max_windows,
-                h264_wait_for_clean_idr_window=mux.h264_wait_for_clean_idr_window,
+                h264_wait_for_clean_idr_window=(
+                    mux.h264_wait_for_clean_idr_window
+                    or (
+                        options.mux is None
+                        and source.generated_plan is not None
+                        and not decode.decrypt_video
+                        and is_positive_finite_duration_bound(options.duration_seconds)
+                    )
+                ),
                 h264_clean_idr_wait_seconds=mux.h264_clean_idr_wait_seconds,
             )
         if isinstance(source, CloudClipSource):
@@ -3371,29 +3399,41 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("wb") as output_file:
-                copy_local_sdk_ecdh_stream_from_client(
-                    self,
-                    serial,
-                    output_file,
-                    cas_serial=cas_serial,
-                    channel=channel,
-                    receiver_port=receiver_port,
-                    send_init=send_init,
-                    register_p2p_session=register_p2p_session,
-                    p2p_register_max_retries=p2p_register_max_retries,
-                    timeout=timeout,
-                    max_prefix_bytes=max_prefix_bytes,
-                    max_packets=max_packets,
-                    max_frames=resolved_max_frames,
-                    duration_seconds=duration_seconds,
-                    output_format=output_format,
-                    decrypt_video=decrypt_video,
-                    media_key=media_key,
-                    ffmpeg_path=ffmpeg_path,
-                    nalu_header_size=nalu_header_size,
-                    smscode=smscode,
+            temporary_path = output_path.with_name(
+                f".{output_path.name}.{uuid4().hex}.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
                 )
+                with os.fdopen(descriptor, "wb") as output_file:
+                    copy_local_sdk_ecdh_stream_from_client(
+                        self,
+                        serial,
+                        output_file,
+                        cas_serial=cas_serial,
+                        channel=channel,
+                        receiver_port=receiver_port,
+                        send_init=send_init,
+                        register_p2p_session=register_p2p_session,
+                        p2p_register_max_retries=p2p_register_max_retries,
+                        timeout=timeout,
+                        max_prefix_bytes=max_prefix_bytes,
+                        max_packets=max_packets,
+                        max_frames=resolved_max_frames,
+                        duration_seconds=duration_seconds,
+                        output_format=output_format,
+                        decrypt_video=decrypt_video,
+                        media_key=media_key,
+                        ffmpeg_path=ffmpeg_path,
+                        nalu_header_size=nalu_header_size,
+                        smscode=smscode,
+                    )
+                if temporary_path.stat().st_size == 0:
+                    raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
+                os.replace(temporary_path, output_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
         else:
             start_position = _binary_position(output)
             copy_local_sdk_ecdh_stream_from_client(
@@ -3419,13 +3459,17 @@ class EzvizClient:
                 smscode=smscode,
             )
 
+        bytes_written = _bytes_written_to_output(output, start_position=start_position)
+        if bytes_written == 0:
+            raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
+
         return {
             "ok": True,
             "kind": "clip",
             "serial": serial,
             "channel": channel,
             "output": _output_name(output),
-            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "bytes": bytes_written,
             "source": "local-sdk-ecdh",
             "format": output_format,
             "duration_seconds": duration_seconds,
@@ -3762,7 +3806,7 @@ class EzvizClient:
         output_format: ClipOutputFormat,
         duration_seconds: float | None,
         max_packets: int | None,
-        channel: int,
+        channel: int | None,
         ffmpeg_path: str,
         decrypt_video: bool,
         media_key: str | bytes | None,
@@ -3823,13 +3867,17 @@ class EzvizClient:
             start_position = _binary_position(output)
             copy_cloud(output)
 
+        bytes_written = _bytes_written_to_output(output, start_position=start_position)
+        if bytes_written == 0:
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+
         return {
             "ok": True,
             "kind": "clip",
             "serial": serial,
             "channel": channel,
             "output": _output_name(output),
-            "bytes": _bytes_written_to_output(output, start_position=start_position),
+            "bytes": bytes_written,
             "source": "cloud",
             "format": output_format,
             "duration_seconds": duration_seconds,

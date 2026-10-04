@@ -91,7 +91,7 @@ class ClipOptions:
         default_factory=lambda: MediaDecodeOptions(nalu_header_size=0)
     )
     mux: MediaMuxOptions | None = None
-    channel: int = 1
+    channel: int | None = None
 
     def resolved_mux(self) -> MediaMuxOptions:
         """Return explicit mux settings or the source-compatible default."""
@@ -99,7 +99,9 @@ class ClipOptions:
         if self.mux is not None:
             return self.mux
         if isinstance(self.source, LocalSdkEcdhClipSource):
-            return MediaMuxOptions(output_format="mpegps")
+            return MediaMuxOptions(
+                output_format="mpegts" if self.decode.decrypt_video else "mpegps"
+            )
         return MediaMuxOptions()
 
     @property

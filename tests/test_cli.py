@@ -1048,7 +1048,7 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
         "hcnetsdk_h264_trim_to_clean_idr_window": False,
         "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
         "hcnetsdk_h264_clean_idr_max_windows": 32,
-        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_wait_for_clean_idr_window": None,
         "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
     }
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
@@ -1064,6 +1064,65 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
         "duration_seconds": 5.0,
         "content_type": "video/mp2t",
     }
+
+
+def test_save_clip_cloud_defaults_to_resource_auto_selection(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                "cloud",
+                "--serial",
+                "CAM123",
+                "--output",
+                str(tmp_path / "front.ts"),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["channel"] is None
+
+
+@pytest.mark.parametrize("source", ["local-sdk", "local-sdk-ecdh"])
+def test_save_clip_decrypted_local_defaults_to_auto_header_detection(
+    monkeypatch,
+    tmp_path,
+    source,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                source,
+                "--serial",
+                "CAM123",
+                "--duration",
+                "5s",
+                "--decrypt-video",
+                "--output",
+                str(tmp_path / "front.ts"),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["nalu_header_size"] is None
 
 
 def test_save_clip_can_use_local_sdk_ecdh_source(
@@ -1153,6 +1212,35 @@ def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(
     request = fake_client.instances[0].save_clip_request
     assert request["source"] == "local-sdk-ecdh"
     assert request["output_format"] == "mpegps"
+
+
+def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--serial",
+                "CAM123",
+                "--source",
+                "local-sdk-ecdh",
+                "--decrypt-video",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["output_format"] == "mpegts"
 
 
 def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
@@ -1595,7 +1683,7 @@ def test_save_clip_can_use_hcnetsdk_command_port_generated_plan_file(
         request["hcnetsdk_h264_clean_idr_max_windows"]
         == HCNETSDK_CLEAN_IDR_MAX_WINDOWS
     )
-    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is False
+    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is None
     assert (
         request["hcnetsdk_h264_clean_idr_wait_seconds"]
         == HCNETSDK_CLEAN_IDR_DEFAULT_WAIT_SECONDS
@@ -1684,8 +1772,37 @@ def test_save_clip_can_use_hcnetsdk_command_port_native_plan(
     assert generated_plan.steps[8].read_response_after_each is False
     assert generated_plan.steps[8].control_templates[0].command_id == 0x30000
     assert generated_plan.steps[9].control_templates[0].command_id == 0x90100
+    assert request["hcnetsdk_h264_wait_for_clean_idr_window"] is None
     assert output_path.read_bytes() == MPEGTS_PAYLOAD
     assert json.loads(capsys.readouterr().out)["source"] == "hcnetsdk-command-port"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--source",
+                "hcnetsdk-command-port",
+                "--serial",
+                "CAM123",
+                "--host",
+                "192.0.2.10",
+                "--output",
+                str(output_path),
+                "--hcnetsdk-command-native-plan",
+                "app-lan-live-view",
+                "--hcnetsdk-command-password",
+                "123456",
+                "--hcnetsdk-video-no-wait-for-clean-window",
+            ]
+        )
+        == 0
+    )
+    assert fake_client.instances[-1].save_clip_request[
+        "hcnetsdk_h264_wait_for_clean_idr_window"
+    ] is False
 
 
 def test_save_clip_native_plan_rejects_non_primary_channel(
@@ -1902,7 +2019,7 @@ def test_save_clip_can_use_cloud_source(
         "hcnetsdk_h264_trim_to_clean_idr_window": False,
         "hcnetsdk_h264_clean_idr_preroll_seconds": 0.0,
         "hcnetsdk_h264_clean_idr_max_windows": 32,
-        "hcnetsdk_h264_wait_for_clean_idr_window": False,
+        "hcnetsdk_h264_wait_for_clean_idr_window": None,
         "hcnetsdk_h264_clean_idr_wait_seconds": 60.0,
         "cloud_client_type": 7,
         "cloud_token_index": 1,
@@ -3650,7 +3767,7 @@ def test_local_sdk_dump_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 
-def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
+def test_local_sdk_dump_ecdh_decryption_defaults_to_mpegts(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "local_sdk_ecdh.ts"
     calls: list[dict[str, Any]] = []
 
@@ -3688,8 +3805,6 @@ def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
                 "0123456",
                 "--cas-key",
                 "1234567890abcdef",
-                "--format",
-                "mpegts",
                 "--decrypt-video",
                 "--media-key",
                 "media-secret",
@@ -5146,6 +5261,59 @@ def test_stream_proxy_sends_error_when_ffmpeg_fails_before_headers(monkeypatch) 
     assert handler.errors == [(502, "Could not launch FFmpeg")]
 
 
+def test_stream_proxy_rejects_empty_success_response(monkeypatch) -> None:
+    class FakeStream:
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeHandler:
+        path = "/CAM123.ts"
+        wfile = io.BytesIO()
+        close_connection = False
+
+        def __init__(self) -> None:
+            self.responses: list[int] = []
+            self.errors: list[tuple[int, str]] = []
+
+        def send_response(self, code: int) -> None:
+            self.responses.append(code)
+
+        def send_error(self, code: int, message: str) -> None:
+            self.errors.append((code, message))
+
+    config = cli_module.StreamProxyConfig(
+        serial="CAM123",
+        channel=1,
+        client_type=1,
+        token_index=0,
+        refresh_vtm=True,
+        timeout=8,
+        path="/CAM123.ts",
+        ffmpeg_path="ffmpeg",
+        allow_encrypted=True,
+        decrypt_video=False,
+        decrypt_codec="auto",
+        max_packets=5,
+    )
+    monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
+    monkeypatch.setattr(
+        cli_module, "copy_cloud_stream_packets_to_mpegts", lambda *_args, **_kwargs: None
+    )
+
+    handler = FakeHandler()
+    cli_module._handle_stream_proxy_get(  # noqa: SLF001
+        cast(Any, handler), config, cast(Any, object())
+    )
+
+    assert handler.responses == []
+    assert handler.errors == [
+        (502, "Cloud stream proxy supplied no media within the capture bound")
+    ]
+
+
 def test_stream_proxy_routes_clear_transport_when_encrypted_allowed(monkeypatch) -> None:
     expected_payload = b"mpegts"
 
@@ -5280,7 +5448,7 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
 
     copy_calls: list[bytes] = []
 
-    def fake_copy_cloud_stream_payloads_to_mpegts(*_args: Any, **kwargs: Any) -> None:
+    def fake_copy_cloud_stream_payloads_to_mpegts(*args: Any, **kwargs: Any) -> None:
         transform_payload = kwargs["mpegps_transform"]
         assert kwargs["rtp_transform"] is not None
         assert kwargs["rtp_audio_key"] == "camera-key"
@@ -5292,6 +5460,7 @@ def test_stream_proxy_can_decrypt_payloads_before_remux(monkeypatch) -> None:
         third = transform_payload(audio_pes)
         tail = transform_payload.flush()
         copy_calls.extend([first, second, third, tail])
+        args[1].write(b"muxed")
 
     monkeypatch.setattr(cli_module, "open_cloud_stream", lambda *_args, **_kwargs: FakeStream())
     monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
@@ -5359,6 +5528,50 @@ def test_buffered_stream_decryptor_defers_auto_until_video_nals(monkeypatch) -> 
         {"data": video_chunk, "key": "camera-key", "nalu_header_size": 0},
         {"data": next_chunk, "key": "camera-key", "nalu_header_size": 0},
     ]
+
+
+def test_buffered_stream_decryptor_keeps_initial_pes_until_header_mode_known(
+    monkeypatch,
+) -> None:
+    initial = b"pack"
+    continuation = b"video"
+    combined = initial + continuation
+    empty = b""
+    expected = b"clear-" + combined
+    detect_calls: list[bytes] = []
+    decrypt_calls: list[tuple[bytes, int | None]] = []
+
+    def fake_detect(data: bytes, _key: str, *, default: int | None) -> int | None:
+        assert default is None
+        detect_calls.append(data)
+        return 0 if data == combined else None
+
+    def fake_decrypt(data: bytes, _key: str, *, nalu_header_size: int | None) -> bytes:
+        decrypt_calls.append((data, nalu_header_size))
+        return b"clear-" + data
+
+    monkeypatch.setattr(cli_module, "mpeg_ps_decryptable_prefix_length", len)
+    monkeypatch.setattr(
+        cli_module,
+        "detect_hikvision_ps_video_nalu_header_size",
+        fake_detect,
+    )
+    monkeypatch.setattr(cli_module, "decrypt_hikvision_ps_video", fake_decrypt)
+    decryptor = cli_module._BufferedStreamPayloadDecryptor(  # noqa: SLF001
+        "camera-key", codec="auto"
+    )
+
+    assert decryptor(initial) == empty
+    assert decryptor(continuation) == expected
+    assert detect_calls == [initial, combined]
+    assert decrypt_calls == [(combined, 0)]
+
+    limited = cli_module._BufferedStreamPayloadDecryptor(  # noqa: SLF001
+        "camera-key", codec="auto"
+    )
+    limited._MAX_AUTO_PROBE_BYTES = len(initial) - 1  # noqa: SLF001
+    with pytest.raises(PyEzvizError, match="Could not detect MPEG-PS"):
+        limited(initial)
 
 
 def test_stream_rtp_decryptor_uses_detected_codec_and_shared_key(monkeypatch) -> None:

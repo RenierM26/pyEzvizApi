@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.rtp import (
     KNOWN_AUDIO_PAYLOAD_TYPES,
     KNOWN_VIDEO_PAYLOAD_TYPES,
@@ -30,6 +30,13 @@ H264_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x65right"
 H264_CUSTOM_ROUTED_NAL = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 HEVC_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x26\x01hevc"
+
+
+def test_parse_rtp_reports_version_failure_with_stable_reason() -> None:
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        parse_rtp_packet(b"\x40" + b"\x00" * 11)
+    assert error.value.source == "rtp"
+    assert error.value.reason == "invalid_rtp_version"
 
 
 def _rtp(
@@ -718,6 +725,24 @@ def test_authoritative_video_descriptor_disables_legacy_pt96_fallback() -> None:
         rtp_packets_to_annexb((metadata, legacy, routed), codec="h264")
         == H264_DESCRIPTOR_ROUTED_NAL
     )
+
+
+def test_absent_video_descriptor_route_falls_back_to_observed_pt96() -> None:
+    metadata = parse_rtp_packet(
+        _rtp(
+            b"metadata",
+            sequence=1,
+            payload_type=112,
+            extension_profile=1,
+            extension_data=b"\x45\x02\x24\x0f",
+        )
+    )
+    video = parse_rtp_packet(
+        _rtp(b"\x40\x01vps", sequence=2, payload_type=96)
+    )
+
+    expected = b"\x00\x00\x00\x01\x40\x01vps"
+    assert rtp_packets_to_annexb((metadata, video), codec="hevc") == expected
 
 
 def test_unknown_descriptor_claims_shared_payload_from_video_fallback() -> None:

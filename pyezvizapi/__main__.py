@@ -41,7 +41,7 @@ from .constants import (
     DefenseModeType,
     DeviceSwitchType,
 )
-from .exceptions import EzvizAuthVerificationCode, PyEzvizError
+from .exceptions import EzvizAuthVerificationCode, EzvizNoMediaError, PyEzvizError
 from .hcnetsdk import (
     HCNETSDK_COMMAND_PORT_CONTROL_FAMILY,
     EzvizCasDeviceInfo,
@@ -676,8 +676,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument(
         "--channel",
         type=int,
-        default=1,
-        help="Camera channel number (default: 1)",
+        default=None,
+        help="Camera channel number (default: auto for cloud, 1 for local)",
     )
     parser_save_clip.add_argument(
         "--output",
@@ -702,7 +702,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Output container: MPEG-TS is easiest for FFmpeg/Home Assistant; "
-            "defaults to mpegps for local-sdk-ecdh and mpegts otherwise"
+            "defaults to mpegps for clear local-sdk-ecdh, mpegts otherwise"
         ),
     )
     parser_save_clip.add_argument(
@@ -732,7 +732,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Video codec transform for --decrypt-video; defaults to auto for "
-            "cloud streams and encrypted-header for local streams"
+            "cloud and direct-local SDK streams, encrypted-header for HCNetSDK"
         ),
     )
     parser_save_clip.add_argument(
@@ -926,11 +926,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hcnetsdk-video-wait-for-clean-window",
         dest="hcnetsdk_h264_wait_for_clean_idr_window",
         action="store_true",
+        default=None,
         help=(
             "For clear IDMX command-port streams, discard startup media until "
             "a decodable H.264 IDR or HEVC IRAP window is found, then start the requested "
-            "duration window."
+            "duration window. This is automatic for bounded generated LAN plans."
         ),
+    )
+    parser_save_clip.add_argument(
+        "--hcnetsdk-video-no-wait-for-clean-window",
+        dest="hcnetsdk_h264_wait_for_clean_idr_window",
+        action="store_false",
+        default=None,
+        help="Disable automatic clean-window waiting for HCNetSDK generated LAN plans.",
     )
     parser_save_clip.add_argument(
         "--hcnetsdk-h264-clean-idr-wait-seconds",
@@ -1413,7 +1421,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Output container: raw MPEG-PS payloads or remuxed MPEG-TS "
-            "(default: mpegps for --local-sdk-ecdh, mpegts otherwise)"
+            "(default: mpegps for clear --local-sdk-ecdh, mpegts otherwise)"
         ),
     )
     parser_stream_local_dump.add_argument(
@@ -2318,9 +2326,12 @@ def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> N
 def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     """Save a short direct-local camera clip to disk."""
 
+    if args.channel is None and args.source != "cloud":
+        args.channel = 1
+
     decrypt_codec = args.decrypt_codec or (
         "auto"
-        if args.source == "cloud" and args.decrypt_video
+        if args.decrypt_video and args.source in {"cloud", "local-sdk", "local-sdk-ecdh"}
         else "encrypted-header"
     )
 
@@ -2365,7 +2376,11 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     )
     output_format = args.format
     if output_format is None:
-        output_format = "mpegps" if args.source == "local-sdk-ecdh" else "mpegts"
+        output_format = (
+            "mpegps"
+            if args.source == "local-sdk-ecdh" and not args.decrypt_video
+            else "mpegts"
+        )
 
     save_kwargs: dict[str, Any] = {
         "source": args.source,
@@ -3343,6 +3358,8 @@ def _codec_nalu_header_size(codec: str) -> int | None:
 class _BufferedStreamPayloadDecryptor:
     """Decrypt MPEG-PS payloads after buffering across VTM packet splits."""
 
+    _MAX_AUTO_PROBE_BYTES = 8 * 1024 * 1024
+
     def __init__(self, key: str | bytes, *, codec: str) -> None:
         self._key = key
         self._nalu_header_size = _codec_nalu_header_size(codec)
@@ -3372,7 +3389,23 @@ class _BufferedStreamPayloadDecryptor:
         self._buffer.extend(data)
         complete_end = mpeg_ps_decryptable_prefix_length(self._buffer)
         if complete_end <= 0:
+            if (
+                self._nalu_header_size is None
+                and len(self._buffer) > self._MAX_AUTO_PROBE_BYTES
+            ):
+                raise PyEzvizError("Could not detect MPEG-PS video encryption mode")
             return b""
+        if self._nalu_header_size is None:
+            detected = detect_hikvision_ps_video_nalu_header_size(
+                bytes(self._buffer[:complete_end]),
+                self._key,
+                default=None,
+            )
+            if detected is None:
+                if len(self._buffer) > self._MAX_AUTO_PROBE_BYTES:
+                    raise PyEzvizError("Could not detect MPEG-PS video encryption mode")
+                return b""
+            self._nalu_header_size = detected
         chunk = bytes(self._buffer[:complete_end])
         del self._buffer[:complete_end]
         return self._decrypt_chunk(chunk)
@@ -3675,8 +3708,12 @@ def _handle_stream_proxy_get(
                 mpegps_transform=mpegps_transform,
                 rtp_transform=rtp_transform,
                 rtp_audio_key=rtp_audio_key,
+                startup_timeout_seconds=60.0,
             )
-            _start_response()
+            if not response_started:
+                raise EzvizNoMediaError(
+                    "Cloud stream proxy supplied no media within the capture bound"
+                )
     except (BrokenPipeError, ConnectionResetError):
         _LOGGER.debug("Stream proxy client disconnected")
     except PyEzvizError as err:
@@ -4130,7 +4167,9 @@ def _handle_local_sdk_stream_dump(
         )
 
     if args.format is None:
-        args.format = "mpegps" if args.local_sdk_ecdh else "mpegts"
+        args.format = (
+            "mpegps" if args.local_sdk_ecdh and not args.decrypt_video else "mpegts"
+        )
 
     if args.local_sdk_ecdh:
         with _build_local_sdk_ecdh_cli_stream(args, client) as stream:

@@ -61,7 +61,12 @@ from .constants import (
     RTP_FIXED_HEADER_LENGTH,
     RTP_VERSION,
 )
-from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .exceptions import (
+    EzvizLocalSdkDeadlineExpired,
+    EzvizLocalSdkStreamClosed,
+    EzvizUnsupportedMediaError,
+    PyEzvizError,
+)
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -88,6 +93,9 @@ from .media import (
     has_positive_finite_capture_bound,
 )
 from .rtp import rtp_payload
+
+_MAX_UNRECOGNIZED_ECDH_MEDIA_RECORDS = 32
+_IDMX_RTP_SSRC = b"\x55\x66\x77\x88"
 
 
 @dataclass(frozen=True)
@@ -404,6 +412,7 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._pending = bytearray()
         self._highest_sequence: int | None = None
         self._seen_sequences: set[int] = set()
+        self._unrecognized_media_records = 0
 
     @property
     def keys_derived(self) -> bool:
@@ -504,6 +513,16 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._pending.extend(plain)
         buffered = bytes(self._pending)
         first_pack_offset = buffered.find(LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER)
+        if first_pack_offset < 0:
+            self._unrecognized_media_records += 1
+            if self._unrecognized_media_records >= _MAX_UNRECOGNIZED_ECDH_MEDIA_RECORDS:
+                self._pending.clear()
+                raise EzvizUnsupportedMediaError(
+                    "EZVIZ local SDK ECDH records authenticated but contain neither "
+                    "MPEG-PS nor IDMX/RTP media; try the cloud stream source",
+                    source="local-sdk-ecdh",
+                    reason="unsupported_payload",
+                )
         if first_pack_offset >= 0:
             keyframe_offset = self._find_keyframe(
                 buffered,
@@ -525,7 +544,18 @@ class EzvizLocalSdkEcdhStreamDecoder:
 
 
 def _is_complete_ecdh_rtp_packet(payload: bytes) -> bool:
-    """Return whether an authenticated ECDH record is one complete RTP packet."""
+    """Recognize the IDMX RTP framing observed in authenticated ECDH records.
+
+    Version bits alone match one quarter of random bytes and caused invalid
+    decrypted records to be published as RTP video.
+    """
+    if payload[8:12] != _IDMX_RTP_SSRC:
+        return False
+    return _is_parseable_rtp_packet(payload)
+
+
+def _is_parseable_rtp_packet(payload: bytes) -> bool:
+    """Check RTP syntax without treating it as proof of an ECDH media route."""
     if len(payload) < RTP_FIXED_HEADER_LENGTH or payload[0] >> 6 != RTP_VERSION:
         return False
     try:
@@ -900,49 +930,68 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         max_frames=max_frames,
         duration_seconds=duration_seconds,
     )
-    with open_local_sdk_ecdh_stream_from_client(
-        client,
-        serial,
-        cas_serial=cas_serial,
-        channel=channel,
-        receiver_port=receiver_port,
-        identifier=identifier,
-        uuid=uuid,
-        timestamp=timestamp,
-        send_init=send_init,
-        pre_start_body=pre_start_body,
-        pre_start_sequence=pre_start_sequence,
-        preview_sequence=preview_sequence,
-        stream_setup_sequence=stream_setup_sequence,
-        stream_rate=stream_rate,
-        stream_mode=stream_mode,
-        register_p2p_session=register_p2p_session,
-        p2p_register_max_retries=p2p_register_max_retries,
-        timeout=timeout,
-        socket_factory=socket_factory,
-        max_prefix_bytes=max_prefix_bytes,
-        fetch_media_key=decrypt_video and media_key is None,
-        smscode=smscode,
-    ) as stream:
-        selected_media_key = media_key
-        if decrypt_video and selected_media_key is None:
-            selected_media_key = stream.media_key
-            if selected_media_key is None:
-                raise PyEzvizError(
-                    "decrypt_video requires a media_key or fetchable camera media key"
+    try:
+        initial_output_position: int | None = output.tell()
+    except (AttributeError, OSError, ValueError):
+        initial_output_position = None
+    # C8W closes an otherwise valid ECDH preview at rate 1 but streams at
+    # rate 0. Retry only a premature socket close, before any output was
+    # published; never hide a media/decryption/authentication failure.
+    stream_rates = (stream_rate, 0) if stream_rate == 1 else (stream_rate,)
+    for index, candidate_rate in enumerate(stream_rates):
+        try:
+            with open_local_sdk_ecdh_stream_from_client(
+                client,
+                serial,
+                cas_serial=cas_serial,
+                channel=channel,
+                receiver_port=receiver_port,
+                identifier=identifier,
+                uuid=uuid,
+                timestamp=timestamp,
+                send_init=send_init,
+                pre_start_body=pre_start_body,
+                pre_start_sequence=pre_start_sequence,
+                preview_sequence=preview_sequence,
+                stream_setup_sequence=stream_setup_sequence,
+                stream_rate=candidate_rate,
+                stream_mode=stream_mode,
+                register_p2p_session=register_p2p_session,
+                p2p_register_max_retries=p2p_register_max_retries,
+                timeout=timeout,
+                socket_factory=socket_factory,
+                max_prefix_bytes=max_prefix_bytes,
+                fetch_media_key=decrypt_video and media_key is None,
+                smscode=smscode,
+            ) as stream:
+                selected_media_key = media_key
+                if decrypt_video and selected_media_key is None:
+                    selected_media_key = stream.media_key
+                    if selected_media_key is None:
+                        raise PyEzvizError(
+                            "decrypt_video requires a media_key or fetchable camera media key"
+                        )
+                copy_local_sdk_ecdh_stream_to_media(
+                    stream,
+                    output,
+                    output_format=output_format,
+                    decrypt_video=decrypt_video,
+                    media_key=selected_media_key,
+                    ffmpeg_path=ffmpeg_path,
+                    nalu_header_size=nalu_header_size,
+                    max_packets=max_packets,
+                    max_frames=max_frames,
+                    duration_seconds=duration_seconds,
                 )
-        copy_local_sdk_ecdh_stream_to_media(
-            stream,
-            output,
-            output_format=output_format,
-            decrypt_video=decrypt_video,
-            media_key=selected_media_key,
-            ffmpeg_path=ffmpeg_path,
-            nalu_header_size=nalu_header_size,
-            max_packets=max_packets,
-            max_frames=max_frames,
-            duration_seconds=duration_seconds,
-        )
+            return
+        except EzvizLocalSdkStreamClosed:
+            if index + 1 == len(stream_rates) or initial_output_position is None:
+                raise
+            try:
+                if output.tell() != initial_output_position:
+                    raise
+            except (AttributeError, OSError, ValueError):
+                raise
 
 
 def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
@@ -1064,7 +1113,7 @@ def copy_local_sdk_ecdh_stream_to_mpegps(
     except StopIteration:
         output.flush()
         return
-    if _is_complete_ecdh_rtp_packet(first_packet.body):
+    if _is_parseable_rtp_packet(first_packet.body):
         raise PyEzvizError(
             "EZVIZ local SDK ECDH stream contains RTP/IDMX, not MPEG-PS; "
             "use output_format='mpegts' with decrypt_video=True"

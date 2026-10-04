@@ -3338,7 +3338,15 @@ class EzvizClient:
                 h264_trim_to_clean_idr_window=mux.h264_trim_to_clean_idr_window,
                 h264_clean_idr_preroll_seconds=(mux.h264_clean_idr_preroll_seconds),
                 h264_clean_idr_max_windows=mux.h264_clean_idr_max_windows,
-                h264_wait_for_clean_idr_window=mux.h264_wait_for_clean_idr_window,
+                h264_wait_for_clean_idr_window=(
+                    mux.h264_wait_for_clean_idr_window
+                    or (
+                        options.mux is None
+                        and source.generated_plan is not None
+                        and not decode.decrypt_video
+                        and is_positive_finite_duration_bound(options.duration_seconds)
+                    )
+                ),
                 h264_clean_idr_wait_seconds=mux.h264_clean_idr_wait_seconds,
             )
         if isinstance(source, CloudClipSource):

@@ -6558,10 +6558,10 @@ def _idmx_local_video_payload_types(
 ) -> frozenset[int]:
     """Return descriptor-owned local video routes with legacy PT 96 fallback."""
 
-    profile = _idmx_local_route_profile(packets)
     if codec is not None:
         h264_types, hevc_types = _idmx_local_supported_video_payload_types(packets)
         return h264_types if codec == "h264" else hevc_types
+    profile = _idmx_local_route_profile(packets)
     descriptor_video_payload_types = frozenset(
         descriptor.payload_type
         for descriptor in profile.descriptors

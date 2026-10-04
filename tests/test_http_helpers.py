@@ -24,7 +24,12 @@ from pyezvizapi.api_endpoints import (
     API_ENDPOINT_P2PBUSINESS_CONFIGURATIONS_P2P,
 )
 from pyezvizapi.client import EzvizClient, _LocalStreamPacketMetadataRecorder
-from pyezvizapi.clip import ClipOptions, CloudClipSource, LocalSdkEcdhClipSource
+from pyezvizapi.clip import (
+    ClipOptions,
+    CloudClipSource,
+    HcNetSdkCommandPortClipSource,
+    LocalSdkEcdhClipSource,
+)
 from pyezvizapi.constants import (
     FEATURE_CODE,
     HIK_ENCRYPTION_HEADER,
@@ -2961,6 +2966,39 @@ def test_native_hcnetsdk_clip_auto_waits_for_clear_video_window(
     assert captured[0].mux.h264_wait_for_clean_idr_window is expected
 
 
+@pytest.mark.parametrize(
+    ("explicit_mux", "decrypt_video", "expected"),
+    [(False, False, True), (True, False, False), (False, True, False)],
+)
+def test_typed_clip_options_auto_wait_for_generated_clear_lan_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_mux: bool,
+    decrypt_video: bool,
+    expected: bool,
+) -> None:
+    client = _client()
+    captured: list[bool] = []
+
+    def capture_clip(*_args: Any, **kwargs: Any) -> dict[str, bool]:
+        captured.append(kwargs["h264_wait_for_clean_idr_window"])
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_save_hcnetsdk_command_port_clip", capture_clip)
+    options = ClipOptions(
+        source=HcNetSdkCommandPortClipSource(generated_plan=cast(Any, object())),
+        capture=CaptureLimits(duration_seconds=8.0),
+        decode=MediaDecodeOptions(
+            decrypt_video=decrypt_video,
+            media_key="KEY" if decrypt_video else None,
+        ),
+        mux=MediaMuxOptions() if explicit_mux else None,
+    )
+
+    client.save_clip_with_options("CAM123", io.BytesIO(), options)
+
+    assert captured == [expected]
+
+
 def test_save_clip_with_options_rejects_unsupported_byte_limit() -> None:
     client = _client()
     options = ClipOptions(capture=CaptureLimits(max_bytes=1024))
@@ -3818,12 +3856,12 @@ def test_save_clip_cloud_rejects_empty_capture(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "empty.ts"
 
     def fake_copy_cloud_stream_to_mpegts(
-        source_client: EzvizClient,
-        serial: str,
-        output: BinaryIO,
-        **kwargs: Any,
+        _source_client: EzvizClient,
+        _serial: str,
+        _output: BinaryIO,
+        **_kwargs: Any,
     ) -> None:
-        del source_client, serial, output, kwargs
+        return None
 
     monkeypatch.setattr(
         "pyezvizapi.client.copy_cloud_stream_to_mpegts",

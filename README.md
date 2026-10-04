@@ -125,6 +125,21 @@ pyezvizapi --token-file ezviz_token.json --json save image \
   --output /config/www/ezviz/alarm.jpg
 ```
 
+Timed decrypted MPEG-PS cloud captures of at least eight seconds raise
+`EzvizIncompleteMediaError` (`reason="incomplete_media"`) when their video
+timestamp span is less than half the requested duration. Packet-capped captures
+are exempt. The exception exposes `source`, `requested_duration_seconds`, and
+either `observed_pts_span_seconds` or `observed_video_duration_seconds` for a
+caller to retry or choose another source. When PES timestamps cannot establish
+a span (for example, only one PTS), `ffprobe` checks a private staged clip
+before publication; that binary is required for these ambiguous captures.
+Bounded cloud file saves stage the capture privately before opening the
+destination, so capture/remux failures preserve an existing file. Successful
+publication writes through the destination path, retaining its ownership,
+ACLs, and usual umask behavior; a final filesystem write failure is not an
+atomic rollback. An explicitly unbounded cloud save writes directly to its
+destination as media arrives; interruption can leave a partial clip.
+
 `save clip` uses the direct-local `9010/9020` SDK path and fetches the LAN
 endpoint/CAS tuple from the authenticated client by default. Use
 `--source hcnetsdk-command-port` for the full local port-8000 media path when

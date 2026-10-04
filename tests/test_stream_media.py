@@ -6,6 +6,7 @@ import base64
 import importlib
 import io
 import json
+from pathlib import Path
 import socket
 import subprocess
 from types import SimpleNamespace
@@ -30,10 +31,12 @@ from pyezvizapi._stream import (
     encode_vtm_packet,
     mpeg_ps_complete_prefix_length,
     mpeg_ps_decryptable_prefix_length,
+    mpeg_ps_video_pts_span_seconds,
     rtp_payload,
 )
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.cloud_stream import (
+    _probe_cloud_video_duration,
     cloud_rtp_packets_have_audio,
     copy_cloud_stream_packets_to_mpegts,
     copy_cloud_stream_to_mpegps,
@@ -41,6 +44,7 @@ from pyezvizapi.cloud_stream import (
     copy_decrypted_cloud_stream_packets_to_mpegts,
 )
 from pyezvizapi.exceptions import (
+    EzvizIncompleteMediaError,
     EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
@@ -54,6 +58,7 @@ H264_SPS_ANNEXB = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_FU_ANNEXB = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 HEVC_DESCRIPTOR_ANNEXB = b"\x00\x00\x00\x01\x26\x01hevc"
 AV_MPEGTS_PAYLOAD = b"av-mpegts"
+MPEGPS_PAYLOAD = b"mpegps"
 AAC_FRAME = b"aac-frame"
 
 cloud_stream_module = importlib.import_module("pyezvizapi.cloud_stream")
@@ -188,6 +193,309 @@ def test_detect_transport_and_rtp_payload() -> None:
     assert detect_transport(b"\x47...") == StreamTransport.MPEG_TS
     assert detect_transport(rtp) == StreamTransport.RTP
     assert rtp_payload(rtp) == BODY
+
+
+def _timed_video_pes(pts: int) -> bytes:
+    encoded = bytes(
+        (
+            0x20 | (((pts >> 30) & 7) << 1) | 1,
+            (pts >> 22) & 0xFF,
+            (((pts >> 15) & 0x7F) << 1) | 1,
+            (pts >> 7) & 0xFF,
+            ((pts & 0x7F) << 1) | 1,
+        )
+    )
+    payload = b"\x00\x00\x00\x01\x26\x01frame"
+    return (
+        b"\x00\x00\x01\xe0"
+        + (8 + len(payload)).to_bytes(2, "big")
+        + b"\x80\x80\x05"
+        + encoded
+        + payload
+    )
+
+
+def test_mpeg_ps_video_pts_span_reads_clear_pes_headers() -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    payload = pack + _timed_video_pes(90_000) + pack + _timed_video_pes(1_710_000)
+
+    assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(18)
+
+
+def test_mpeg_ps_video_pts_span_is_unknown_with_one_timestamp() -> None:
+    assert mpeg_ps_video_pts_span_seconds(_timed_video_pes(90_000)) is None
+
+
+def test_mpeg_ps_video_pts_span_is_ambiguous_after_forward_gap() -> None:
+    payload = b"".join(
+        _timed_video_pes(pts)
+        for pts in (0, 45_000, 9_000_000, 9_045_000)
+    )
+
+    assert (
+        mpeg_ps_video_pts_span_seconds(payload, max_gap_seconds=5.0) is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("first_pts", "last_pts", "expected_span"),
+    [(90_000, 0, None), ((1 << 33) - 90_000, 90_000, 2)],
+)
+def test_mpeg_ps_video_pts_span_distinguishes_reset_from_wrap(
+    first_pts: int, last_pts: int, expected_span: float | None
+) -> None:
+    payload = _timed_video_pes(first_pts) + _timed_video_pes(last_pts)
+
+    observed = mpeg_ps_video_pts_span_seconds(payload)
+    if expected_span is None:
+        assert observed is None
+    else:
+        assert observed == pytest.approx(expected_span)
+
+
+def test_mpeg_ps_video_pts_span_handles_long_capture_across_wrap() -> None:
+    wrap = 1 << 33
+    payload = b"".join(
+        _timed_video_pes(pts)
+        for pts in (wrap - 90 * 90_000, wrap - 90_000, 90_000, 90 * 90_000)
+    )
+
+    assert mpeg_ps_video_pts_span_seconds(payload) == pytest.approx(180)
+
+
+@pytest.mark.parametrize(
+    ("max_packets", "last_pts", "incomplete"),
+    [(None, 180_000, True), (2, 180_000, False), (None, 1_710_000, False)],
+)
+@pytest.mark.parametrize("output_format", ["mpegps", "mpegts"])
+def test_decrypted_cloud_save_rejects_short_timestamp_span_unless_packet_capped(
+    monkeypatch: pytest.MonkeyPatch,
+    max_packets: int | None,
+    last_pts: int,
+    incomplete: bool,
+    output_format: str,
+) -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    pts_values = (
+        (90_000, last_pts)
+        if incomplete or max_packets is not None
+        else (*range(90_000, last_pts, 4 * 90_000), last_pts)
+    )
+    bodies = tuple(pack + _timed_video_pes(pts) for pts in pts_values)
+
+    class FakeCloudStream:
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            for index, body in enumerate(bodies):
+                yield VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+
+    client = _client()
+    monkeypatch.setattr(client, "get_cam_key", lambda _serial: "camera-key")
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts",
+        lambda _packets, output, **_kwargs: output.write(AV_MPEGTS_PAYLOAD),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
+    )
+    copy = (
+        copy_cloud_stream_to_mpegps
+        if output_format == "mpegps"
+        else copy_cloud_stream_to_mpegts
+    )
+    output = io.BytesIO()
+    if incomplete:
+        with pytest.raises(EzvizIncompleteMediaError) as error:
+            copy(
+                client,
+                "CAM123",
+                output,
+                duration_seconds=20,
+                decrypt_video=True,
+            )
+        assert error.value.reason == "incomplete_media"
+        assert error.value.source == "cloud"
+        assert error.value.observed_pts_span_seconds == pytest.approx(1)
+        assert output.getvalue() == EMPTY_BYTES
+    else:
+        copy(
+            client,
+            "CAM123",
+            output,
+            duration_seconds=20,
+            max_packets=max_packets,
+            decrypt_video=True,
+        )
+        assert output.getvalue() == (
+            MPEGPS_PAYLOAD if output_format == "mpegps" else AV_MPEGTS_PAYLOAD
+        )
+
+
+@pytest.mark.parametrize("output_format", ["mpegps", "mpegts"])
+@pytest.mark.parametrize("video_duration", [2.0, 18.0])
+@pytest.mark.parametrize(
+    "pts_values", [(90_000,), (0, 45_000, 9_000_000, 9_045_000)]
+)
+def test_decrypted_cloud_save_probes_ambiguous_pts_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    output_format: str,
+    video_duration: float,
+    pts_values: tuple[int, ...],
+) -> None:
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    body = b"".join(pack + _timed_video_pes(pts) for pts in pts_values)
+
+    class FakeCloudStream:
+        def start(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def iter_packets(self, *, max_packets: int | None = None) -> Any:
+            yield VtmPacket(VtmChannel.STREAM, len(body), 1, 0, body)
+
+    client = _client()
+    monkeypatch.setattr(client, "get_cam_key", lambda _serial: "camera-key")
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.open_cloud_stream",
+        lambda *_args, **_kwargs: FakeCloudStream(),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts",
+        lambda _packets, output, **_kwargs: output.write(AV_MPEGTS_PAYLOAD),
+    )
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream.decrypt_hikvision_ps_video",
+        lambda *_args, **_kwargs: MPEGPS_PAYLOAD,
+    )
+    def fake_probe(_path: Path, **kwargs: Any) -> float:
+        assert kwargs["timeout_seconds"] == pytest.approx(40)
+        return video_duration
+
+    monkeypatch.setattr(
+        "pyezvizapi.cloud_stream._probe_cloud_video_duration", fake_probe
+    )
+    copy = (
+        copy_cloud_stream_to_mpegps
+        if output_format == "mpegps"
+        else copy_cloud_stream_to_mpegts
+    )
+    output = io.BytesIO()
+    if video_duration < 10:
+        with pytest.raises(EzvizIncompleteMediaError) as error:
+            copy(client, "CAM123", output, duration_seconds=20, decrypt_video=True)
+        assert error.value.observed_pts_span_seconds is None
+        assert error.value.observed_video_duration_seconds == pytest.approx(2)
+        assert output.getvalue() == EMPTY_BYTES
+    else:
+        copy(client, "CAM123", output, duration_seconds=20, decrypt_video=True)
+        assert output.getvalue() == (
+            MPEGPS_PAYLOAD if output_format == "mpegps" else AV_MPEGTS_PAYLOAD
+        )
+
+
+def test_cloud_video_probe_uses_video_frames_when_ps_stream_duration_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    calls: list[tuple[list[str], float]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        calls.append((command, kwargs["timeout"]))
+        if "-show_frames" in command:
+            assert "capture_output" not in kwargs
+            assert "csv=p=0" in command
+            kwargs["stdout"].write(
+                "100.0,H.264 User Data Unregistered SEI message\n102.0\n"
+            )
+            return SimpleNamespace(returncode=0)
+        else:
+            payload = {"streams": [{}], "format": {"duration": "20.0"}}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+
+    observed = _probe_cloud_video_duration(
+        tmp_path / "short.ps", ffprobe_path="ffprobe", timeout_seconds=120
+    )
+
+    assert observed == pytest.approx(2)
+    assert len(calls) == 2
+    assert [timeout for _command, timeout in calls] == [120, 120]
+
+
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        ("100.0", "100.5", "0.0", "0.5"),
+        ("0.0", "0.5", "100.0", "100.5"),
+    ],
+)
+def test_cloud_video_probe_does_not_count_frame_timestamp_discontinuity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    timestamps: tuple[str, ...],
+) -> None:
+    def fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        if "-show_frames" in command:
+            kwargs["stdout"].write("\n".join(timestamps) + "\n")
+            return SimpleNamespace(returncode=0)
+        else:
+            payload = {
+                "streams": [{"duration": "101.0"}],
+                "format": {"duration": "101.0"},
+            }
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+
+    observed = _probe_cloud_video_duration(
+        tmp_path / "reset.ps", ffprobe_path="ffprobe"
+    )
+
+    assert observed == pytest.approx(1)
+
+
+def test_cloud_video_probe_reports_missing_ffprobe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    def missing_ffprobe(*_args: Any, **_kwargs: Any) -> Any:
+        raise FileNotFoundError("ffprobe")
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", missing_ffprobe)
+
+    with pytest.raises(PyEzvizError, match="ffprobe is required"):
+        _probe_cloud_video_duration(tmp_path / "short.ts", ffprobe_path="ffprobe")
+
+
+def test_cloud_video_probe_reports_frame_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_run(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+        if "-show_frames" in command:
+            raise subprocess.TimeoutExpired("ffprobe", 120)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"streams": [{"duration": "120.0"}]}),
+        )
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.subprocess.run", fake_run)
+
+    with pytest.raises(PyEzvizError, match="timed out probing cloud video frames"):
+        _probe_cloud_video_duration(
+            tmp_path / "long.ts", ffprobe_path="ffprobe", timeout_seconds=120
+        )
+
 
 def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> None:
     key = "camera-key"

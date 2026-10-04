@@ -13,6 +13,7 @@ from ._stream import (  # noqa: F401
     detect_transport,
     mpeg_ps_complete_prefix_length,
     mpeg_ps_decryptable_prefix_length,
+    mpeg_ps_video_pts_span_seconds,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

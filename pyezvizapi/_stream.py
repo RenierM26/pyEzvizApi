@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from enum import IntEnum
 import hashlib
 from ipaddress import IPv6Address, ip_address
+from itertools import pairwise
 import re
 import socket
 import ssl
@@ -1264,6 +1265,67 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
             )
         offset = next_pack
     return ranges
+
+
+def mpeg_ps_video_pts_span_seconds(
+    data: bytes, *, max_gap_seconds: float | None = None
+) -> float | None:
+    """Measure video presentation span from clear MPEG-PS PES headers.
+
+    Video bodies may be encrypted, but their PES timestamps remain clear. Return
+    ``None`` when no valid video PTS is available rather than guessing from bytes.
+    ``max_gap_seconds`` treats sparse or jumped adjacent timestamps as ambiguous.
+    """
+
+    timestamps: list[int] = []
+    for packet in _mpeg_ps_video_decrypt_ranges(data):
+        start = packet.start
+        if not _is_video_pes_stream_id(packet.stream_id) or start + 14 > len(data):
+            continue
+        if (data[start + 6] & 0xC0) != 0x80 or data[start + 8] < 5:
+            continue
+        pts_dts_flags = data[start + 7] & 0xC0
+        if pts_dts_flags not in (0x80, 0xC0):
+            continue
+        encoded = data[start + 9 : start + 14]
+        expected_prefix = 0x20 if pts_dts_flags == 0x80 else 0x30
+        if (encoded[0] & 0xF0) != expected_prefix or not all(
+            encoded[index] & 1 for index in (0, 2, 4)
+        ):
+            continue
+        pts = (
+            ((encoded[0] >> 1) & 0x07) << 30
+            | encoded[1] << 22
+            | (encoded[2] >> 1) << 15
+            | encoded[3] << 7
+            | encoded[4] >> 1
+        )
+        timestamps.append(pts)
+    if len(timestamps) < 2:
+        return None
+    wrap = 1 << 33
+    transition_window = 5 * 90_000
+    wraps = 0
+    for previous, current in pairwise(timestamps):
+        if current >= previous:
+            if (
+                max_gap_seconds is not None
+                and current - previous > max_gap_seconds * 90_000
+            ):
+                # Sparse or discontinuous PES timing cannot prove coverage.
+                return None
+            continue
+        if (
+            previous >= wrap - transition_window
+            and current <= transition_window
+            and wrap - previous + current <= transition_window
+        ):
+            wraps += 1
+            continue
+        # A reset, reordered PTS, or sparse boundary crossing is ambiguous;
+        # the caller must probe the staged media instead of guessing a span.
+        return None
+    return (timestamps[-1] + wraps * wrap - timestamps[0]) / 90_000
 
 
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:

@@ -6,11 +6,14 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
+import csv
 from dataclasses import dataclass
 from itertools import chain
 import json
+import math
 from pathlib import Path
 from queue import Empty, Full, Queue
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -22,6 +25,7 @@ from urllib.parse import urlparse
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import (
+    EzvizIncompleteMediaError,
     EzvizNoMediaError,
     HTTPError,
     PyEzvizError,
@@ -49,7 +53,11 @@ from .rtp import (
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
-from .stream_media import decrypt_hikvision_ps_video, detect_transport
+from .stream_media import (
+    decrypt_hikvision_ps_video,
+    detect_transport,
+    mpeg_ps_video_pts_span_seconds,
+)
 from .stream_transport import (
     SocketFactory,
     StreamTransport,
@@ -62,6 +70,7 @@ _RTP_CODEC_PROBE_MAX_PACKETS = 32
 _RTP_AUDIO_PROBE_MAX_PACKETS = 256
 _RTP_AUDIO_QUEUE_MAX_FRAMES = 128
 _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
+_MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS = 5.0
 
 
 class _CloudRtpAudioInput:
@@ -485,13 +494,29 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
             )
         payload = b"".join(packet.body for packet in packets)
-        output.write(
-            decrypt_hikvision_ps_video(
-                payload,
-                selected_key,
-                nalu_header_size=nalu_header_size,
-            )
+        if not payload:
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        needs_video_probe = _require_cloud_mpegps_video_duration(
+            payload,
+            duration_seconds=duration_seconds,
+            max_packets=max_packets,
         )
+        decrypted = decrypt_hikvision_ps_video(
+            payload,
+            selected_key,
+            nalu_header_size=nalu_header_size,
+        )
+        if needs_video_probe:
+            assert duration_seconds is not None
+            _copy_probed_cloud_capture(
+                lambda staged: staged.write(decrypted),
+                output,
+                requested_duration_seconds=duration_seconds,
+                suffix=".ps",
+                ffprobe_path="ffprobe",
+            )
+        else:
+            output.write(decrypted)
         output.flush()
         return
 
@@ -578,6 +603,32 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             )
         transport, media_packets = _peek_cloud_transport(iter(packets))
         packets = list(media_packets)
+        if not packets or not any(packet.body for packet in packets):
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        needs_video_probe = False
+        if transport in (StreamTransport.MPEG_PS, StreamTransport.UNKNOWN):
+            needs_video_probe = _require_cloud_mpegps_video_duration(
+                b"".join(packet.body for packet in packets),
+                duration_seconds=duration_seconds,
+                max_packets=max_packets,
+            )
+        if needs_video_probe:
+            assert duration_seconds is not None
+            _copy_probed_cloud_capture(
+                lambda staged: copy_decrypted_cloud_stream_packets_to_mpegts(
+                    packets,
+                    staged,
+                    ffmpeg_path=ffmpeg_path,
+                    media_key=selected_key,
+                    nalu_header_size=nalu_header_size,
+                    transport=transport,
+                ),
+                output,
+                requested_duration_seconds=duration_seconds,
+                suffix=".ts",
+                ffprobe_path=str(Path(ffmpeg_path).with_name("ffprobe")),
+            )
+            return
         copy_decrypted_cloud_stream_packets_to_mpegts(
             packets,
             output,
@@ -613,6 +664,186 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
+
+
+def _require_cloud_mpegps_video_duration(
+    payload: bytes,
+    *,
+    duration_seconds: float | None,
+    max_packets: int | None,
+) -> bool:
+    """Reject short PTS spans; signal when an unknown span needs media probing."""
+
+    if duration_seconds is None or duration_seconds < 8 or max_packets is not None:
+        return False
+    observed = mpeg_ps_video_pts_span_seconds(
+        payload, max_gap_seconds=_MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
+    )
+    if observed is None:
+        return True
+    if observed < duration_seconds / 2:
+        raise EzvizIncompleteMediaError(
+            source="cloud",
+            requested_duration_seconds=duration_seconds,
+            observed_pts_span_seconds=observed,
+        )
+    return False
+
+
+def _copy_probed_cloud_capture(
+    write_capture: Callable[[BinaryIO], Any],
+    output: BinaryIO,
+    *,
+    requested_duration_seconds: float,
+    suffix: str,
+    ffprobe_path: str,
+) -> None:
+    """Probe ambiguous PES timing before publishing a decrypted capture."""
+
+    with tempfile.TemporaryDirectory(prefix="pyezviz-cloud-") as directory:
+        staged_path = Path(directory) / f"capture{suffix}"
+        with staged_path.open("wb") as staged:
+            write_capture(staged)
+        if staged_path.stat().st_size == 0:
+            raise EzvizNoMediaError("Cloud stream capture did not contain media")
+        observed = _probe_cloud_video_duration(
+            staged_path,
+            ffprobe_path=ffprobe_path,
+            timeout_seconds=max(30.0, requested_duration_seconds * 2),
+        )
+        if observed < requested_duration_seconds / 2:
+            raise EzvizIncompleteMediaError(
+                source="cloud",
+                requested_duration_seconds=requested_duration_seconds,
+                observed_video_duration_seconds=observed,
+            )
+        with staged_path.open("rb") as staged:
+            shutil.copyfileobj(staged, output)
+        output.flush()
+
+
+def _probe_cloud_video_duration(
+    path: Path, *, ffprobe_path: str, timeout_seconds: float = 30.0
+) -> float:
+    """Read the staged clip's video duration when PES timestamps are ambiguous."""
+
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=duration:format=duration",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as err:
+        raise PyEzvizError(
+            f"ffprobe timed out verifying cloud video after {timeout_seconds:g} seconds"
+        ) from err
+    except OSError as err:
+        raise PyEzvizError(
+            "ffprobe is required to verify cloud video with ambiguous PES timestamps"
+        ) from err
+    if result.returncode != 0:
+        raise PyEzvizError("Could not probe staged cloud video duration")
+    try:
+        probe = json.loads(result.stdout)
+        streams = probe.get("streams") or []
+        if not streams:
+            return 0.0
+        value = streams[0].get("duration")
+    except (TypeError, AttributeError, json.JSONDecodeError) as err:
+        raise PyEzvizError("Could not determine staged cloud video duration") from err
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return _probe_cloud_video_frame_span(
+            path, ffprobe_path=ffprobe_path, timeout_seconds=timeout_seconds
+        )
+    if not math.isfinite(duration) or duration < 0:
+        raise PyEzvizError("Staged cloud video duration is invalid")
+    # Container/stream duration may be inflated by the same PTS reset that made
+    # the clear PES timeline ambiguous. Require actual decoded frame coverage.
+    return min(
+        duration,
+        _probe_cloud_video_frame_span(
+            path, ffprobe_path=ffprobe_path, timeout_seconds=timeout_seconds
+        ),
+    )
+
+
+def _probe_cloud_video_frame_span(
+    path: Path, *, ffprobe_path: str, timeout_seconds: float = 30.0
+) -> float:
+    """Measure decoded video coverage without retaining every frame in memory."""
+
+    with tempfile.TemporaryFile(mode="w+t") as frame_timestamps:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe_path,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_frames",
+                    "-show_entries",
+                    "frame=best_effort_timestamp_time",
+                    "-of",
+                    "csv=p=0",
+                    str(path),
+                ],
+                stdout=frame_timestamps,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as err:
+            raise PyEzvizError(
+                f"ffprobe timed out probing cloud video frames after {timeout_seconds:g} seconds"
+            ) from err
+        except OSError as err:
+            raise PyEzvizError("Could not probe staged cloud video frames") from err
+        if result.returncode != 0:
+            raise PyEzvizError("Could not probe staged cloud video frames")
+        frame_timestamps.seek(0)
+        span = 0.0
+        segment_start: float | None = None
+        previous: float | None = None
+        for row in csv.reader(frame_timestamps):
+            value = row[0].strip() if row else ""
+            if not value or value == "N/A":
+                continue
+            try:
+                timestamp = float(value)
+            except ValueError as err:
+                raise PyEzvizError(
+                    "Could not determine staged cloud video frame span"
+                ) from err
+            if not math.isfinite(timestamp):
+                raise PyEzvizError("Staged cloud video frame timestamp is invalid")
+            if previous is None:
+                segment_start = timestamp
+            elif segment_start is not None and (
+                timestamp < previous
+                or timestamp - previous > _MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
+            ):
+                span += previous - segment_start
+                segment_start = timestamp
+            previous = timestamp
+        if segment_start is None or previous is None:
+            return 0.0
+        return span + previous - segment_start
 
 
 def _require_bounded_cloud_decrypt_capture(

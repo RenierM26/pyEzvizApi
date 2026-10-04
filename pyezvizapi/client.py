@@ -11,6 +11,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
+from tempfile import SpooledTemporaryFile
 from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, TypedDict, cast
@@ -335,6 +337,22 @@ def _binary_position(output: BinaryIO) -> int | None:
         return int(output.tell())
     except (AttributeError, OSError, TypeError, ValueError):
         return None
+
+
+class _CountingBinaryWriter:
+    """Count bytes sent to an output that may not support ``tell()``."""
+
+    def __init__(self, output: BinaryIO) -> None:
+        self.output = output
+        self.bytes_written = 0
+
+    def write(self, payload: bytes) -> int:
+        written = self.output.write(payload)
+        self.bytes_written += written
+        return written
+
+    def flush(self) -> None:
+        self.output.flush()
 
 
 def _bytes_written_to_output(
@@ -3820,6 +3838,7 @@ class EzvizClient:
         """Save a clip through the EZVIZ VTM cloud live stream path."""
 
         start_position = None
+        staged_size: int | None = None
 
         def copy_cloud(output_file: BinaryIO) -> None:
             if output_format == "mpegts":
@@ -3858,16 +3877,41 @@ class EzvizClient:
                 smscode=smscode,
             )
 
+        if decrypt_video and duration_seconds is None and max_packets is None:
+            raise PyEzvizError(
+                "Encrypted cloud stream decrypt requires a positive finite "
+                "duration_seconds or max_packets"
+            )
         if isinstance(output, str | Path):
             output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("wb") as output_file:
-                copy_cloud(output_file)
+            if duration_seconds is None and max_packets is None:
+                # An unbounded stream may never return. Publish it as it arrives
+                # instead of growing a spool without limit or starving a FIFO.
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with output_path.open("wb") as output_file:
+                    counted_output = _CountingBinaryWriter(output_file)
+                    copy_cloud(cast(BinaryIO, counted_output))
+                    staged_size = counted_output.bytes_written
+            else:
+                with SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b") as staging:
+                    copy_cloud(cast(BinaryIO, staging))
+                    staging.seek(0, os.SEEK_END)
+                    staged_size = staging.tell()
+                    if staged_size == 0:
+                        raise EzvizNoMediaError("Cloud stream capture did not contain media")
+                    staging.seek(0)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with output_path.open("wb") as output_file:
+                        shutil.copyfileobj(staging, output_file)
         else:
             start_position = _binary_position(output)
             copy_cloud(output)
 
-        bytes_written = _bytes_written_to_output(output, start_position=start_position)
+        bytes_written = (
+            staged_size
+            if isinstance(output, str | Path)
+            else _bytes_written_to_output(output, start_position=start_position)
+        )
         if bytes_written == 0:
             raise EzvizNoMediaError("Cloud stream capture did not contain media")
 

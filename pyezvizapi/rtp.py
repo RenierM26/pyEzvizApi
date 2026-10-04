@@ -1263,7 +1263,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                             # A confirmed new picture cannot contain the slice
                             # lost before its timestamp boundary.
                             pending_gap[packet.ssrc] = False
-                    elif starts_picture:
+                    elif codec == "h264" and starts_picture:
                         # ASO/FMO may transmit macroblock zero after another
                         # slice of the same access unit.
                         first_slice_seen[packet.ssrc] = True

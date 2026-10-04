@@ -51,6 +51,33 @@ def test_rtp_vcl_detection_rejects_only_parameter_sets() -> None:
     assert not rtp_nal_units_have_vcl((b"\x40\x01vps",), codec="hevc")
 
 
+@pytest.mark.parametrize(
+    ("codec", "malformed"),
+    [("h264", b"\x81\x80bad"), ("hevc", b"\x82\x01\x80bad")],
+)
+def test_bounded_rtp_rejects_forbidden_bit_as_media(
+    codec: RtpVideoCodec, malformed: bytes
+) -> None:
+    packet = parse_rtp_packet(_rtp(malformed, sequence=1, marker=True))
+    assert not rtp_nal_units_have_vcl((malformed,), codec=codec)
+    assert rtp_packets_to_nal_units(
+        (packet,), codec=codec, completed_access_units_only=True
+    ) == ()
+
+
+def test_bounded_rtp_damages_picture_after_forbidden_bit_nal() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
+    malformed = parse_rtp_packet(_rtp(b"\x81\x80bad", sequence=2, marker=True))
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=3, timestamp=12000, marker=True)
+    )
+    assert rtp_packets_to_nal_units(
+        (first, malformed, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80healthy",)
+
+
 def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
     second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))

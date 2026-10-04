@@ -1073,9 +1073,14 @@ def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) 
     """
 
     if codec == "hevc":
-        return any(len(nal) >= 2 and ((nal[0] >> 1) & 0x3F) < 32 for nal in nal_units)
+        return any(
+            _valid_rtp_nal_header(nal, codec=codec)
+            and ((nal[0] >> 1) & 0x3F) < 32
+            for nal in nal_units
+        )
     return any(
-        nal and (nal[0] & 0x1F) in {1, 2, 3, 4, 5, 19, 20, 21}
+        _valid_rtp_nal_header(nal, codec=codec)
+        and (nal[0] & 0x1F) in {1, 2, 3, 4, 5, 19, 20, 21}
         for nal in nal_units
     )
 
@@ -1217,6 +1222,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                     if first_slice_transform is not None
                     else nal
                 )
+                if completed_access_units_only and not _valid_rtp_nal_header(
+                    classified_nal, codec=codec
+                ):
+                    pending_gap[packet.ssrc] = True
+                    continue
                 if (
                     completed_access_units_only
                     and codec == "h264"
@@ -1337,6 +1347,12 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     # H.264 extension slices (20/21) have a three-byte extension header.
     header_size = 4 if nal_type in {20, 21} else 1
     return len(nal) > header_size and bool(nal[header_size] & 0x80)
+
+
+def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
+    if codec == "hevc":
+        return len(nal) >= 2 and _is_plausible_hevc_header(nal)
+    return bool(nal) and not (nal[0] & 0x80) and 1 <= (nal[0] & 0x1F) <= 23
 
 
 def _is_plausible_hevc_header(payload: bytes) -> bool:

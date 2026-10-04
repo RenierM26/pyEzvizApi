@@ -52,8 +52,8 @@ def test_rtp_vcl_detection_rejects_only_parameter_sets() -> None:
 
 
 def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
-    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1))
-    second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1))
+    second_slice_start = parse_rtp_packet(_rtp(b"\x7c\x81\x00start", sequence=2))
     second_slice_end = parse_rtp_packet(
         _rtp(b"\x7c\x41end", sequence=3, marker=True)
     )
@@ -67,18 +67,18 @@ def test_bounded_rtp_omits_complete_slice_from_unfinished_picture() -> None:
         (first_slice, second_slice_start, second_slice_end),
         codec="h264",
         completed_access_units_only=True,
-    ) == (b"\x61first", b"\x61startend")
+    ) == (b"\x61\x80first", b"\x61\x00startend")
 
 
 def test_bounded_rtp_accepts_previous_picture_at_timestamp_transition() -> None:
-    first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    first_slice = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, timestamp=9000))
     next_picture = parse_rtp_packet(_rtp(b"\x61next", sequence=2, timestamp=12000))
 
     assert rtp_packets_to_nal_units(
         (first_slice, next_picture),
         codec="h264",
         completed_access_units_only=True,
-    ) == (b"\x61first",)
+    ) == (b"\x61\x80first",)
 
 
 def test_bounded_rtp_does_not_close_picture_across_sequence_gap() -> None:
@@ -109,7 +109,7 @@ def test_bounded_rtp_rejects_sequence_conflict_before_timestamp_boundary() -> No
 
 
 def test_bounded_rtp_keeps_picture_after_identical_duplicate() -> None:
-    first = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, timestamp=9000))
     next_picture = parse_rtp_packet(
         _rtp(b"\x61next", sequence=2, timestamp=12000, marker=True)
     )
@@ -118,7 +118,30 @@ def test_bounded_rtp_keeps_picture_after_identical_duplicate() -> None:
         (first, first, next_picture),
         codec="h264",
         completed_access_units_only=True,
-    ) == (b"\x61first", b"\x61next")
+    ) == (b"\x61\x80first", b"\x61next")
+
+
+@pytest.mark.parametrize(
+    ("codec", "trailing_slice", "complete_slice"),
+    [
+        ("h264", b"\x61\x00tail", b"\x61\x80whole"),
+        ("hevc", b"\x02\x01\x00tail", b"\x02\x01\x80whole"),
+    ],
+)
+def test_bounded_rtp_rejects_initial_trailing_slice(
+    codec: RtpVideoCodec, trailing_slice: bytes, complete_slice: bytes
+) -> None:
+    first = parse_rtp_packet(_rtp(trailing_slice, sequence=1, marker=True))
+    next_picture = parse_rtp_packet(
+        _rtp(complete_slice, sequence=2, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first,), codec=codec, completed_access_units_only=True
+    ) == ()
+    assert rtp_packets_to_nal_units(
+        (first, next_picture), codec=codec, completed_access_units_only=True
+    ) == (complete_slice,)
 
 
 @pytest.mark.parametrize(
@@ -166,7 +189,7 @@ def test_bounded_rtp_discards_damaged_picture_before_later_healthy_one() -> None
 
 
 def test_bounded_rtp_keeps_fragment_continuity_across_same_ssrc_metadata() -> None:
-    start = parse_rtp_packet(_rtp(b"\x7c\x81start", sequence=2))
+    start = parse_rtp_packet(_rtp(b"\x7c\x81\x80start", sequence=2))
     metadata = parse_rtp_packet(
         _rtp(b"metadata", sequence=3, payload_type=112)
     )
@@ -176,7 +199,7 @@ def test_bounded_rtp_keeps_fragment_continuity_across_same_ssrc_metadata() -> No
         (start, metadata, end),
         codec="h264",
         completed_access_units_only=True,
-    ) == (b"\x61startend",)
+    ) == (b"\x61\x80startend",)
 
 
 def test_bounded_rtp_detects_real_gap_before_same_ssrc_metadata() -> None:

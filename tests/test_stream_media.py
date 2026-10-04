@@ -2831,7 +2831,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
 ) -> None:
     client = _client()
     output = io.BytesIO()
-    rtp_body = _rtp_packet(b"\x61encrypted-h264", marker=True)
+    rtp_body = _rtp_packet(b"\x61\x80encrypted-h264", marker=True)
     decrypt_calls: list[tuple[bytes, str | bytes, int | None]] = []
     open_calls: list[tuple[str, str]] = []
 
@@ -2910,7 +2910,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
         media_key="MEDIAKEY",
     )
 
-    expected_annexb = b"\x00\x00\x00\x01\x61encrypted-h264"
+    expected_annexb = b"\x00\x00\x00\x01\x61\x80encrypted-h264"
     assert decrypt_calls == [
         (
             b"\x00\x00\x01\xe0\x00\x00\x80\x00\x00" + expected_annexb,
@@ -2925,7 +2925,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_video_before_remux(
 def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
     monkeypatch,
 ) -> None:
-    expected_annexb = b"\x00\x00\x00\x01\x26\x01new-hevc-idr"
+    expected_annexb = b"\x00\x00\x00\x01\x26\x01\x80new-hevc-idr"
     bodies = (
         _rtp_packet(b"\x67old-h264-sps", sequence=1, payload_type=97),
         _rtp_packet(
@@ -2936,7 +2936,7 @@ def test_bounded_cloud_decrypt_discards_conflicting_predescriptor_video(
             extension_data=b"\x45\x0a\x24\x61" + (b"\xff" * 8),
         ),
         _rtp_packet(
-            b"\x26\x01new-hevc-idr",
+            b"\x26\x01\x80new-hevc-idr",
             sequence=3,
             payload_type=97,
             marker=True,
@@ -3282,7 +3282,7 @@ def test_copy_cloud_stream_to_mpegts_decrypts_rtp_aac_before_av_remux(
             extension_profile=1,
             extension_data=descriptor,
         ),
-        _rtp_packet(b"\x61encrypted-h264", sequence=2, marker=True),
+        _rtp_packet(b"\x61\x80encrypted-h264", sequence=2, marker=True),
         rtp_with_extension(
             b"\x00\x10"
             + (len(encrypted_audio) << 3).to_bytes(2, "big")

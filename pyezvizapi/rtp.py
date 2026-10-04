@@ -1121,8 +1121,13 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     active_sequences: dict[int, int] = {}
     pending_vcl: dict[int, bool] = {}
     pending_gap: dict[int, bool] = {}
+    first_vcl_au_pending: dict[int, bool] = {}
+    first_slice_seen: dict[int, bool] = {}
 
     def finish_access_unit(ssrc: int, *, complete: bool) -> None:
+        if pending_vcl.get(ssrc) and first_vcl_au_pending.get(ssrc, True):
+            complete = complete and first_slice_seen.get(ssrc, False)
+            first_vcl_au_pending[ssrc] = False
         # Keep non-VCL metadata from a damaged or unfinished picture, but
         # never carry its VCL slices into a later healthy access unit.
         for index in pending_indexes.pop(ssrc, []):
@@ -1186,6 +1191,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 output.append(nal)
                 accepted.append(False)
                 if rtp_nal_units_have_vcl((nal,), codec=codec):
+                    if not pending_vcl.get(packet.ssrc):
+                        first_slice_seen[packet.ssrc] = _rtp_nal_starts_picture(
+                            nal, codec=codec
+                        )
                     pending_vcl[packet.ssrc] = True
         if packet.marker:
             finish_access_unit(
@@ -1261,6 +1270,19 @@ def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]
         units.append(payload[offset : offset + unit_size])
         offset += unit_size
     return tuple(units)
+
+
+def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
+    """Read the first-slice flag needed to trust a capture's initial picture."""
+
+    if codec == "hevc":
+        # first_slice_segment_in_pic_flag follows the two-byte NAL header.
+        return len(nal) > 2 and bool(nal[2] & 0x80)
+    nal_type = nal[0] & 0x1F if nal else 0
+    # first_mb_in_slice is ue(v): zero is encoded by a leading 1 bit.
+    # H.264 extension slices (20/21) have a three-byte extension header.
+    header_size = 4 if nal_type in {20, 21} else 1
+    return len(nal) > header_size and bool(nal[header_size] & 0x80)
 
 
 def _is_plausible_hevc_header(payload: bytes) -> bool:

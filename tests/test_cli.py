@@ -2547,7 +2547,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
                         b"\x80\xe0\x00\x02"
                         b"\x00\x00\x00\x02"
                         b"\x00\x00\x00\x02"
-                        b"\x26\x01slice"
+                        b"\x26\x01\x80slice"
                     ),
                 ),
             ]
@@ -2629,7 +2629,7 @@ def test_stream_dump_can_depacketize_rtp_hevc_before_decrypt_remux(
             "serial": "CAM123",
             "units": (
                 b"\x00\x00\x00\x01\x40\x01vps",
-                b"\x00\x00\x00\x01\x26\x01slice",
+                b"\x00\x00\x00\x01\x26\x01\x80slice",
             ),
             "detected_codec": "hevc",
             "decrypt_codec": "hevc",
@@ -2658,7 +2658,7 @@ def test_stream_dump_routes_rtp_audio_to_shared_decrypted_av_remux(
         b"\x80\xe0\x00\x02"
         b"\x00\x00\x00\x02"
         b"\x00\x00\x00\x02"
-        b"\x26\x01slice"
+        b"\x26\x01\x80slice"
     )
     slice_packet = VtmPacket(VtmChannel.STREAM, len(slice_body), 2, 0, slice_body)
 
@@ -2816,7 +2816,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
                         b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
-                        b"\x41h264"
+                        b"\x41\x80h264"
                     ),
                 )
             ]
@@ -2890,7 +2890,7 @@ def test_stream_dump_detects_h264_non_idr_before_hevc_header_overlap(
 
     assert decrypt_calls == [
         {
-            "units": (b"\x00\x00\x00\x01\x41h264",),
+            "units": (b"\x00\x00\x00\x01\x41\x80h264",),
             "detected_codec": "h264",
             "decrypt_codec": "h264",
             "media_key": "camera-secret",
@@ -2930,7 +2930,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
                         b"\x80\xe0\x00\x01"
                         b"\x00\x00\x00\x01"
                         b"\x00\x00\x00\x02"
-                        b"\x41h264"
+                        b"\x41\x80h264"
                     ),
                 )
             ]
@@ -3008,7 +3008,7 @@ def test_stream_dump_uses_requested_decrypt_codec_for_rtp_payload(
 
     assert decrypt_calls == [
         {
-            "units": (b"\x00\x00\x00\x01\x41h264",),
+            "units": (b"\x00\x00\x00\x01\x41\x80h264",),
             "detected_codec": "h264",
             "decrypt_codec": "encrypted-header",
             "media_key": bytes(range(16)),
@@ -3045,7 +3045,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         )
 
     bodies = [
-        rtp(b"\x7c\x85hello", payload_type=96, sequence=65535, ssrc=1),
+        rtp(b"\x7c\x85\x80hello", payload_type=96, sequence=65535, ssrc=1),
         rtp(b"aac", payload_type=104, sequence=7, ssrc=2),
         rtp(b"metadata", payload_type=112, sequence=9, ssrc=3),
         rtp(
@@ -3061,7 +3061,7 @@ def test_cloud_rtp_pipeline_routes_mixed_media_and_accepts_sequence_wrap() -> No
         for index, body in enumerate(bodies)
     ]
     packets.append(VtmPacket(VtmChannel.STREAM, 8, 5, 0, b"\x80control"))
-    expected_annexb = b"\x00\x00\x00\x01\x65hello-world"
+    expected_annexb = b"\x00\x00\x00\x01\x65\x80hello-world"
 
     assert cli_module._detect_rtp_video_codec(packets) == "h264"  # noqa: SLF001
     assert (

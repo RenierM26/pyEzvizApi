@@ -144,6 +144,24 @@ def test_bounded_rtp_rejects_initial_trailing_slice(
     ) == (complete_slice,)
 
 
+@pytest.mark.parametrize("nal_type", [2, 3, 4])
+def test_bounded_rtp_rejects_unverifiable_h264_data_partitions(
+    nal_type: int,
+) -> None:
+    # Partition B/C can start with a zero slice_id; its first bit is not
+    # first_mb_in_slice and cannot prove that partition A was captured.
+    payload = bytes((0x60 | nal_type, 0x80)) + b"partition"
+    packet = parse_rtp_packet(_rtp(payload, sequence=1, marker=True))
+
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        rtp_packets_to_nal_units(
+            (packet,), codec="h264", completed_access_units_only=True
+        )
+    assert error.value.source == "rtp"
+    assert error.value.reason == "unsupported_h264_data_partition"
+    assert rtp_packets_to_nal_units((packet,), codec="h264") == (payload,)
+
+
 @pytest.mark.parametrize(
     ("codec", "aggregation", "slice_nal"),
     [

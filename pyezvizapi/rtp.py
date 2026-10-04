@@ -1190,6 +1190,17 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             pending_gap[packet.ssrc] = True
         for nal in packet_nals:
             if nal:
+                if (
+                    completed_access_units_only
+                    and codec == "h264"
+                    and (nal[0] & 0x1F) in {2, 3, 4}
+                ):
+                    raise EzvizUnsupportedMediaError(
+                        "H.264 RTP data partitions cannot be verified as complete "
+                        "in a bounded capture; use another stream source",
+                        source="rtp",
+                        reason="unsupported_h264_data_partition",
+                    )
                 pending_indexes.setdefault(packet.ssrc, []).append(len(output))
                 output.append(nal)
                 accepted.append(False)

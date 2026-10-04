@@ -350,6 +350,31 @@ def test_bounded_rtp_carries_metadata_gap_across_video_timestamp() -> None:
     ) == (b"\x61\x80first", b"\x61\x80healthy")
 
 
+@pytest.mark.parametrize(
+    ("video_nal", "expected"),
+    [
+        (b"\x61\x80first", (b"\x61\x80first",)),
+        (b"\x61\x00tail", ()),
+    ],
+)
+def test_bounded_rtp_resolves_pre_video_metadata_gap_with_first_slice(
+    video_nal: bytes, expected: tuple[bytes, ...]
+) -> None:
+    first_metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=1, payload_type=112)
+    )
+    # Missing sequence 2 was before any observed video timestamp.
+    second_metadata = parse_rtp_packet(
+        _rtp(b"metadata", sequence=3, payload_type=112)
+    )
+    video = parse_rtp_packet(_rtp(video_nal, sequence=4, marker=True))
+    assert rtp_packets_to_nal_units(
+        (first_metadata, second_metadata, video),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == expected
+
+
 def test_bounded_rtp_recovers_first_slice_reassembled_after_timestamp_gap() -> None:
     damaged = parse_rtp_packet(_rtp(b"\x61\x80old", sequence=1, timestamp=9000))
     # The missing sequence 2 was the prior picture's final slice.

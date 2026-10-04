@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from stat import S_IMODE
 from threading import RLock
 import time
 from typing import Any, BinaryIO, ClassVar, TypedDict, cast
@@ -3860,19 +3861,30 @@ class EzvizClient:
 
         if isinstance(output, str | Path):
             output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = output_path.with_name(
-                f".{output_path.name}.{uuid4().hex}.tmp"
+            destination_path = (
+                output_path.resolve() if output_path.is_symlink() else output_path
+            )
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                existing_mode = S_IMODE(destination_path.stat().st_mode)
+            except FileNotFoundError:
+                existing_mode = None
+            temporary_path = destination_path.with_name(
+                f".{destination_path.name}.{uuid4().hex}.tmp"
             )
             try:
                 descriptor = os.open(
-                    temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                    temporary_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    existing_mode if existing_mode is not None else 0o666,
                 )
                 with os.fdopen(descriptor, "wb") as output_file:
                     copy_cloud(output_file)
+                    if existing_mode is not None:
+                        os.fchmod(output_file.fileno(), existing_mode)
                 if temporary_path.stat().st_size == 0:
                     raise EzvizNoMediaError("Cloud stream capture did not contain media")
-                os.replace(temporary_path, output_path)
+                os.replace(temporary_path, destination_path)
             finally:
                 temporary_path.unlink(missing_ok=True)
         else:

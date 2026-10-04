@@ -6,6 +6,7 @@ import io
 import json
 import math
 from pathlib import Path
+from stat import S_IMODE
 import sys
 from types import SimpleNamespace
 from typing import Any, BinaryIO, cast
@@ -3934,6 +3935,70 @@ def test_save_clip_cloud_preserves_existing_file_on_incomplete_capture(
         client.save_clip("CAM123", output_path, source="cloud", duration_seconds=20)
     assert output_path.read_bytes() == previous_clip
     assert not list(tmp_path.glob(".gate.ts.*.tmp"))
+
+
+@pytest.mark.parametrize("existing_mode", [None, 0o640])
+def test_save_clip_cloud_preserves_destination_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    existing_mode: int | None,
+) -> None:
+    client = _client()
+    output_path = tmp_path / "published.ts"
+    reference = tmp_path / "reference.ts"
+    reference.write_bytes(b"reference")
+    if existing_mode is not None:
+        output_path.write_bytes(b"previous")
+        output_path.chmod(existing_mode)
+    expected_mode = (
+        existing_mode if existing_mode is not None else S_IMODE(reference.stat().st_mode)
+    )
+
+    def fake_copy_cloud_stream_to_mpegts(
+        _source_client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    client.save_clip("CAM123", output_path, source="cloud")
+
+    assert output_path.read_bytes() == SAVE_CLIP_PAYLOAD
+    assert S_IMODE(output_path.stat().st_mode) == expected_mode
+
+
+def test_save_clip_cloud_replaces_file_behind_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _client()
+    destination = tmp_path / "actual.ts"
+    destination.write_bytes(b"previous")
+    output_path = tmp_path / "current.ts"
+    output_path.symlink_to(destination)
+
+    def fake_copy_cloud_stream_to_mpegts(
+        _source_client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(SAVE_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_cloud_stream_to_mpegts",
+        fake_copy_cloud_stream_to_mpegts,
+    )
+
+    client.save_clip("CAM123", output_path, source="cloud")
+
+    assert output_path.is_symlink()
+    assert destination.read_bytes() == SAVE_CLIP_PAYLOAD
 
 
 def test_save_image_triggers_capture_and_downloads(monkeypatch, tmp_path) -> None:

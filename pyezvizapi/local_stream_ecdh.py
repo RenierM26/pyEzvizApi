@@ -61,7 +61,11 @@ from .constants import (
     RTP_FIXED_HEADER_LENGTH,
     RTP_VERSION,
 )
-from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
+from .exceptions import (
+    EzvizLocalSdkDeadlineExpired,
+    EzvizUnsupportedMediaError,
+    PyEzvizError,
+)
 from .hcnetsdk import (
     EzvizCasDeviceInfo,
     EzvizInterleavedRtpFrameWithPrefix,
@@ -88,6 +92,9 @@ from .media import (
     has_positive_finite_capture_bound,
 )
 from .rtp import rtp_payload
+
+_MAX_UNRECOGNIZED_ECDH_MEDIA_RECORDS = 32
+_IDMX_RTP_SSRC = b"\x55\x66\x77\x88"
 
 
 @dataclass(frozen=True)
@@ -404,6 +411,7 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._pending = bytearray()
         self._highest_sequence: int | None = None
         self._seen_sequences: set[int] = set()
+        self._unrecognized_media_records = 0
 
     @property
     def keys_derived(self) -> bool:
@@ -504,6 +512,16 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._pending.extend(plain)
         buffered = bytes(self._pending)
         first_pack_offset = buffered.find(LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER)
+        if first_pack_offset < 0:
+            self._unrecognized_media_records += 1
+            if self._unrecognized_media_records >= _MAX_UNRECOGNIZED_ECDH_MEDIA_RECORDS:
+                self._pending.clear()
+                raise EzvizUnsupportedMediaError(
+                    "EZVIZ local SDK ECDH records authenticated but contain neither "
+                    "MPEG-PS nor IDMX/RTP media; try the cloud stream source",
+                    source="local-sdk-ecdh",
+                    reason="unsupported_payload",
+                )
         if first_pack_offset >= 0:
             keyframe_offset = self._find_keyframe(
                 buffered,
@@ -525,7 +543,18 @@ class EzvizLocalSdkEcdhStreamDecoder:
 
 
 def _is_complete_ecdh_rtp_packet(payload: bytes) -> bool:
-    """Return whether an authenticated ECDH record is one complete RTP packet."""
+    """Recognize the IDMX RTP framing observed in authenticated ECDH records.
+
+    Version bits alone match one quarter of random bytes and caused invalid
+    decrypted records to be published as RTP video.
+    """
+    if payload[8:12] != _IDMX_RTP_SSRC:
+        return False
+    return _is_parseable_rtp_packet(payload)
+
+
+def _is_parseable_rtp_packet(payload: bytes) -> bool:
+    """Check RTP syntax without treating it as proof of an ECDH media route."""
     if len(payload) < RTP_FIXED_HEADER_LENGTH or payload[0] >> 6 != RTP_VERSION:
         return False
     try:
@@ -1064,7 +1093,7 @@ def copy_local_sdk_ecdh_stream_to_mpegps(
     except StopIteration:
         output.flush()
         return
-    if _is_complete_ecdh_rtp_packet(first_packet.body):
+    if _is_parseable_rtp_packet(first_packet.body):
         raise PyEzvizError(
             "EZVIZ local SDK ECDH stream contains RTP/IDMX, not MPEG-PS; "
             "use output_format='mpegts' with decrypt_video=True"

@@ -1202,6 +1202,46 @@ def _mpeg_ps_complete_packet_ranges(
     return ranges
 
 
+def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
+    """Recover overlong EZVIZ video PES runs for the bounded decrypt pass.
+
+    Some cloud cameras advertise a capped PES length while continuing the
+    encrypted video payload until the next pack. The strict parser must retain
+    its prefix semantics for streaming; only the complete-capture decrypt pass
+    may bridge such a gap, anchored by a valid MPEG-2 pack header.
+    """
+
+    ranges: list[_MpegPsPacketRange] = []
+    offset = 0
+    while offset < len(data):
+        parsed = _mpeg_ps_complete_packet_ranges(
+            data[offset:], include_trailing_unbounded_video=True
+        )
+        if not parsed:
+            break
+        ranges.extend(
+            _MpegPsPacketRange(offset + item.start, offset + item.end, item.stream_id)
+            for item in parsed
+        )
+        parsed_end = ranges[-1].end
+        if parsed_end >= len(data):
+            break
+        next_pack = data.find(b"\x00\x00\x01\xba", parsed_end)
+        while next_pack >= 0 and not (
+            next_pack + 14 <= len(data) and _is_mpeg2_pack_header(data, next_pack)
+        ):
+            next_pack = data.find(b"\x00\x00\x01\xba", next_pack + 4)
+        if next_pack < 0:
+            break
+        if _is_video_pes_stream_id(ranges[-1].stream_id):
+            previous = ranges[-1]
+            ranges[-1] = _MpegPsPacketRange(
+                previous.start, next_pack, previous.stream_id
+            )
+        offset = next_pack
+    return ranges
+
+
 def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
     """Return the end offset for a complete MPEG-PS packet at ``start``."""
 
@@ -1674,10 +1714,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
             nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
             return nal_type is None or nal_type >= 32
 
-        for packet_range in _mpeg_ps_complete_packet_ranges(
-            data,
-            include_trailing_unbounded_video=True,
-        ):
+        for packet_range in _mpeg_ps_video_decrypt_ranges(data):
             if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
                 continue
             if not _is_video_pes_stream_id(packet_range.stream_id):

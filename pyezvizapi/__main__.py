@@ -702,7 +702,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Output container: MPEG-TS is easiest for FFmpeg/Home Assistant; "
-            "defaults to mpegps for local-sdk-ecdh and mpegts otherwise"
+            "defaults to mpegps for clear local-sdk-ecdh, mpegts otherwise"
         ),
     )
     parser_save_clip.add_argument(
@@ -1413,7 +1413,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Output container: raw MPEG-PS payloads or remuxed MPEG-TS "
-            "(default: mpegps for --local-sdk-ecdh, mpegts otherwise)"
+            "(default: mpegps for clear --local-sdk-ecdh, mpegts otherwise)"
         ),
     )
     parser_stream_local_dump.add_argument(
@@ -2368,7 +2368,11 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     )
     output_format = args.format
     if output_format is None:
-        output_format = "mpegps" if args.source == "local-sdk-ecdh" else "mpegts"
+        output_format = (
+            "mpegps"
+            if args.source == "local-sdk-ecdh" and not args.decrypt_video
+            else "mpegts"
+        )
 
     save_kwargs: dict[str, Any] = {
         "source": args.source,
@@ -4151,7 +4155,9 @@ def _handle_local_sdk_stream_dump(
         )
 
     if args.format is None:
-        args.format = "mpegps" if args.local_sdk_ecdh else "mpegts"
+        args.format = (
+            "mpegps" if args.local_sdk_ecdh and not args.decrypt_video else "mpegts"
+        )
 
     if args.local_sdk_ecdh:
         with _build_local_sdk_ecdh_cli_stream(args, client) as stream:

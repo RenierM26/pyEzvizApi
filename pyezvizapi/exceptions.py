@@ -9,6 +9,19 @@ class UnsupportedRtpVideoCodecError(PyEzvizError):
     """Raised when IDMX metadata identifies an unsupported RTP video codec."""
 
 
+class EzvizUnsupportedMediaError(PyEzvizError):
+    """Authenticated stream data is not a media format this source can decode.
+
+    ``reason`` is stable for callers deciding whether to try another stream
+    source; the message remains suitable for CLI diagnostics.
+    """
+
+    def __init__(self, message: str, *, source: str, reason: str) -> None:
+        super().__init__(message)
+        self.source = source
+        self.reason = reason
+
+
 class InvalidURL(PyEzvizError):
     """Raised when a request fails due to an invalid URL or proxy settings."""
 

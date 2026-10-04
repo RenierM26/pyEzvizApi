@@ -2296,13 +2296,17 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             raise PyEzvizError("EZVIZ local IDMX stream did not include video frames")
         audio = None
         if _idmx_local_packets_have_aac(packets):
-            selected_packets = _idmx_packets_from_selected_annexb(
-                packets,
-                full_annexb=full_annexb,
-                selected_annexb=annexb,
-                media_key=media_key,
-                nalu_header_size=nalu_header_size,
-                video_input_format=video_input_format,
+            selected_packets = (
+                packets
+                if annexb == full_annexb
+                else _idmx_packets_from_selected_annexb(
+                    packets,
+                    full_annexb=full_annexb,
+                    selected_annexb=annexb,
+                    media_key=media_key,
+                    nalu_header_size=nalu_header_size,
+                    video_input_format=video_input_format,
+                )
             )
             audio = _decrypt_idmx_local_packets_to_adts_aac(
                 selected_packets,
@@ -6624,6 +6628,44 @@ def _idmx_local_supported_video_payload_types(
     if video_descriptors:
         h264_payload_types = profile.codec_payload_types("h264")
         hevc_payload_types = profile.codec_payload_types("hevc")
+        # Some ECDH IDMX cameras advertise a stale HEVC PT (observed: 15)
+        # but send all video on the legacy PT 96. As on the cloud path, an
+        # active descriptor wins; only an entirely unused advertised route
+        # may fall back, and the unassigned route needs codec evidence.
+        assigned = frozenset(
+            descriptor.payload_type for descriptor in profile.descriptors
+        )
+        advertised_video = h264_payload_types | hevc_payload_types
+        if IDMX_H264_RTP_PAYLOAD_TYPE not in assigned:
+            observed_advertised = False
+            hevc_evidence = 0
+            h264_evidence = 0
+            for frame in _iter_idmx_local_packet_frames(packets):
+                header_size = _idmx_local_frame_header_size(frame)
+                if header_size is None:
+                    continue
+                packet = _idmx_local_frame_rtp_packet(frame, header_size)
+                if packet is None:
+                    continue
+                if packet.payload_type in advertised_video:
+                    observed_advertised = True
+                    break
+                if packet.payload_type != IDMX_H264_RTP_PAYLOAD_TYPE:
+                    continue
+                body = _idmx_local_frame_media_body(frame, header_size)
+                hevc_evidence += bool(
+                    _looks_like_idmx_hevc_media_frame(body)
+                    or _looks_like_idmx_hevc_evidence_frame(body)
+                )
+                h264_evidence += bool(
+                    _looks_like_idmx_h264_fu_a_frame(body)
+                    or _looks_like_idmx_h264_clear_nal(body)
+                )
+            if not observed_advertised:
+                if hevc_payload_types and not h264_payload_types and hevc_evidence >= 2:
+                    hevc_payload_types |= frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
+                elif h264_payload_types and not hevc_payload_types and h264_evidence >= 2:
+                    h264_payload_types |= frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
     else:
         fallback_payload_types = frozenset({IDMX_H264_RTP_PAYLOAD_TYPE})
         h264_payload_types = profile.codec_payload_types(

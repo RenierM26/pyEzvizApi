@@ -18,6 +18,7 @@ from pyezvizapi import (
 from pyezvizapi.exceptions import (
     DeviceException,
     EzvizLocalSdkDeadlineExpired,
+    EzvizUnsupportedMediaError,
     PyEzvizError,
 )
 from pyezvizapi.hcnetsdk import (
@@ -486,6 +487,21 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_preserves_authenticated_rtp_packet(
         )
         == rtp_packet
     )
+
+
+def test_ecdh_decoder_rejects_version_only_pseudo_rtp() -> None:
+    decoder = EzvizLocalSdkEcdhStreamDecoder(
+        generate_ezviz_local_sdk_ecdh_keypair().private_key
+    )
+    # A random authenticated plaintext can have RTP version bits by chance.
+    # Without an IDMX sentinel, it must not be published as a video packet.
+    pseudo_rtp = b"\x80\x60\x00\x01\x00\x00\x00\x01\x11\x22\x33\x44noise"
+    for _ in range(31):
+        assert decoder._absorb_plain(pseudo_rtp) == EMPTY_BYTES  # noqa: SLF001
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        decoder._absorb_plain(pseudo_rtp)  # noqa: SLF001
+    assert error.value.source == "local-sdk-ecdh"
+    assert error.value.reason == "unsupported_payload"
 
 
 def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering() -> None:

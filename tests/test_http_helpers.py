@@ -3017,6 +3017,32 @@ def test_save_clip_rejects_empty_local_sdk_ecdh_capture(monkeypatch) -> None:
         client.save_clip("CAM123", io.BytesIO(), source="local-sdk-ecdh")
 
 
+def test_save_clip_ecdh_failure_preserves_existing_path(monkeypatch, tmp_path) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ps"
+    existing_clip = b"existing clip"
+    output_path.write_bytes(existing_clip)
+
+    def fake_copy(
+        _client: EzvizClient,
+        _serial: str,
+        output: BinaryIO,
+        **_kwargs: Any,
+    ) -> None:
+        output.write(b"partial media")
+        raise PyEzvizError("unsupported ECDH payload")
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client", fake_copy
+    )
+
+    with pytest.raises(PyEzvizError, match="unsupported ECDH payload"):
+        client.save_clip("CAM123", output_path, source="local-sdk-ecdh")
+
+    assert output_path.read_bytes() == existing_clip
+    assert list(tmp_path.iterdir()) == [output_path]
+
+
 def test_save_clip_uses_local_sdk_ecdh_source(monkeypatch, tmp_path) -> None:
     client = _client()
     output_path = tmp_path / "www" / "front.ps"
@@ -3123,6 +3149,36 @@ def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> N
     assert result["source"] == "local-sdk-ecdh"
     assert result["format"] == "mpegps"
     assert result["content_type"] == "video/mpeg"
+
+
+def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
+    monkeypatch, tmp_path
+) -> None:
+    client = _client()
+    output_path = tmp_path / "front.ts"
+    calls: list[dict[str, Any]] = []
+
+    def fake_copy_local_sdk_ecdh_stream_from_client(
+        source_client: EzvizClient,
+        serial: str,
+        output: BinaryIO,
+        **kwargs: Any,
+    ) -> None:
+        calls.append(kwargs)
+        output.write(SAVE_LOCAL_SDK_ECDH_CLIP_PAYLOAD)
+
+    monkeypatch.setattr(
+        "pyezvizapi.client.copy_local_sdk_ecdh_stream_from_client",
+        fake_copy_local_sdk_ecdh_stream_from_client,
+    )
+
+    result = client.save_clip(
+        "CAM123", output_path, source="local-sdk-ecdh", decrypt_video=True
+    )
+
+    assert calls[0]["output_format"] == "mpegts"
+    assert result["format"] == "mpegts"
+    assert result["content_type"] == "video/mp2t"
 
 
 def test_save_clip_local_sdk_ecdh_bounds_input_frames_by_max_packets(

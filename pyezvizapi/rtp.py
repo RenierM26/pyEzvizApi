@@ -9,7 +9,11 @@ from typing import Literal
 
 from Crypto.Cipher import AES
 
-from .exceptions import PyEzvizError, UnsupportedRtpVideoCodecError
+from .exceptions import (
+    EzvizUnsupportedMediaError,
+    PyEzvizError,
+    UnsupportedRtpVideoCodecError,
+)
 
 ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 MPEG_VIDEO_START_CODE_PREFIX = b"\x00\x00\x01"
@@ -410,7 +414,11 @@ def parse_rtp_packet(data: bytes) -> RtpPacket:
     if len(data) < 12:
         raise PyEzvizError("RTP packet is too short")
     if data[0] >> 6 != 2:
-        raise PyEzvizError("Unsupported RTP version")
+        raise EzvizUnsupportedMediaError(
+            "Unsupported RTP version: source did not provide RTP v2 media",
+            source="rtp",
+            reason="invalid_rtp_version",
+        )
 
     has_padding = bool(data[0] & 0x20)
     has_extension = bool(data[0] & 0x10)

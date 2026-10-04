@@ -1214,6 +1214,35 @@ def test_save_clip_local_sdk_ecdh_defaults_to_mpegps(
     assert request["output_format"] == "mpegps"
 
 
+def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    output_path = tmp_path / "www" / "front.ts"
+
+    assert (
+        cli_module.main(
+            [
+                "--token-file",
+                _token_file(tmp_path),
+                "save",
+                "clip",
+                "--serial",
+                "CAM123",
+                "--source",
+                "local-sdk-ecdh",
+                "--decrypt-video",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+
+    assert fake_client.instances[0].save_clip_request["output_format"] == "mpegts"
+
+
 def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
     monkeypatch,
     tmp_path,
@@ -3709,7 +3738,7 @@ def test_local_sdk_dump_ecdh_defaults_to_mpegps(monkeypatch, tmp_path) -> None:
     assert output_path.read_bytes() == LOCAL_SDK_TEST_PAYLOAD
 
 
-def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
+def test_local_sdk_dump_ecdh_decryption_defaults_to_mpegts(monkeypatch, tmp_path) -> None:
     output_path = tmp_path / "local_sdk_ecdh.ts"
     calls: list[dict[str, Any]] = []
 
@@ -3747,8 +3776,6 @@ def test_local_sdk_dump_ecdh_decrypts_to_mpegts(monkeypatch, tmp_path) -> None:
                 "0123456",
                 "--cas-key",
                 "1234567890abcdef",
-                "--format",
-                "mpegts",
                 "--decrypt-video",
                 "--media-key",
                 "media-secret",

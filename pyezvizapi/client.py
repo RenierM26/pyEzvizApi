@@ -3077,8 +3077,9 @@ class EzvizClient:
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
         port-8000 HCNetSDK bootstrap command frames, then remuxes the command
         port media stream to MPEG-TS.
-        When omitted, ``output_format`` defaults to MPEG-PS for
-        ``source="local-sdk-ecdh"`` and MPEG-TS for other sources.
+        When omitted, ``output_format`` defaults to MPEG-PS for clear
+        ``source="local-sdk-ecdh"`` captures and MPEG-TS for decrypted ECDH
+        or other sources. MPEG-TS accommodates both ECDH MPEG-PS and IDMX/RTP.
 
         This long-form signature is retained for compatibility. New code can
         group the same settings with :meth:`save_clip_with_options`.
@@ -3097,7 +3098,9 @@ class EzvizClient:
             )
 
         if output_format is None:
-            output_format = "mpegps" if source == "local-sdk-ecdh" else "mpegts"
+            output_format = (
+                "mpegps" if source == "local-sdk-ecdh" and not decrypt_video else "mpegts"
+            )
         mux_options = MediaMuxOptions(
             output_format=output_format,
             ffmpeg_path=ffmpeg_path,
@@ -3376,29 +3379,41 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("wb") as output_file:
-                copy_local_sdk_ecdh_stream_from_client(
-                    self,
-                    serial,
-                    output_file,
-                    cas_serial=cas_serial,
-                    channel=channel,
-                    receiver_port=receiver_port,
-                    send_init=send_init,
-                    register_p2p_session=register_p2p_session,
-                    p2p_register_max_retries=p2p_register_max_retries,
-                    timeout=timeout,
-                    max_prefix_bytes=max_prefix_bytes,
-                    max_packets=max_packets,
-                    max_frames=resolved_max_frames,
-                    duration_seconds=duration_seconds,
-                    output_format=output_format,
-                    decrypt_video=decrypt_video,
-                    media_key=media_key,
-                    ffmpeg_path=ffmpeg_path,
-                    nalu_header_size=nalu_header_size,
-                    smscode=smscode,
+            temporary_path = output_path.with_name(
+                f".{output_path.name}.{uuid4().hex}.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
                 )
+                with os.fdopen(descriptor, "wb") as output_file:
+                    copy_local_sdk_ecdh_stream_from_client(
+                        self,
+                        serial,
+                        output_file,
+                        cas_serial=cas_serial,
+                        channel=channel,
+                        receiver_port=receiver_port,
+                        send_init=send_init,
+                        register_p2p_session=register_p2p_session,
+                        p2p_register_max_retries=p2p_register_max_retries,
+                        timeout=timeout,
+                        max_prefix_bytes=max_prefix_bytes,
+                        max_packets=max_packets,
+                        max_frames=resolved_max_frames,
+                        duration_seconds=duration_seconds,
+                        output_format=output_format,
+                        decrypt_video=decrypt_video,
+                        media_key=media_key,
+                        ffmpeg_path=ffmpeg_path,
+                        nalu_header_size=nalu_header_size,
+                        smscode=smscode,
+                    )
+                if temporary_path.stat().st_size == 0:
+                    raise PyEzvizError("Local SDK ECDH capture did not contain media")
+                os.replace(temporary_path, output_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
         else:
             start_position = _binary_position(output)
             copy_local_sdk_ecdh_stream_from_client(

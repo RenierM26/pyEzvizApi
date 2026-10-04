@@ -23,6 +23,7 @@ from pyezvizapi._local_stream import (
     _idmx_local_packets_to_annexb_with_codec,
     _idmx_local_packets_to_h264_annexb,
     _idmx_local_packets_to_hevc_annexb,
+    _idmx_local_supported_video_payload_types,
     _idmx_local_video_frame_rate,
     _idmx_packets_from_selected_annexb,
     copy_local_stream_to_decrypted_mpegts,
@@ -756,6 +757,68 @@ def test_encrypted_local_idmx_rejects_unsupported_authoritative_video_route(
             IDMX_MEDIA_KEY,
             nalu_header_size=0,
         )
+
+
+def test_local_idmx_stale_hevc_descriptor_uses_observed_legacy_route() -> None:
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x0f",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x40\x01vps",
+            sequence=2,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x42\x01sps",
+            sequence=3,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_supported_video_payload_types(packets) == (
+        frozenset(),
+        frozenset({15, 96}),
+    )
+
+
+def test_local_idmx_active_descriptor_prevents_legacy_route_fallback() -> None:
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x0f",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x40\x01vps",
+            sequence=2,
+            payload_type=15,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x40\x01vps",
+            sequence=3,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        _rtp_packet(
+            b"\x42\x01sps",
+            sequence=4,
+            payload_type=96,
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+    ]
+
+    assert _idmx_local_supported_video_payload_types(packets) == (
+        frozenset(),
+        frozenset({15}),
+    )
 
 
 def test_encrypted_local_idmx_rejects_mixed_authoritative_video_codecs(
@@ -1752,7 +1815,7 @@ def test_idmx_h264_selected_packets_track_vcl_inside_aggregate_packet() -> None:
         stream_is_clear=True,
     ) == [start_fu, middle_audio, end_fu]
 
-def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
+def test_copy_decrypted_mpegts_keeps_all_packets_when_video_is_untrimmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     packets = [b"audio-before", b"first-vcl", b"audio", b"last-vcl", b"audio-after"]
@@ -1839,8 +1902,8 @@ def test_copy_decrypted_mpegts_bounds_untrimmed_aac_to_video_vcl(
         max_packets=len(packets),
     )
 
-    assert selected_calls == [(full_annexb, full_annexb)]
-    assert audio_calls == [(selected_packets, (16_000, 1), frozenset({105}))]
+    assert selected_calls == []
+    assert audio_calls == [(packets, (16_000, 1), frozenset({105}))]
     assert mux_calls == [(full_annexb, audio)]
 
 def test_copy_local_stream_to_decrypted_mpegts_wait_path_keeps_aac(

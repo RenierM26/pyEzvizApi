@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.rtp import (
     KNOWN_AUDIO_PAYLOAD_TYPES,
     KNOWN_VIDEO_PAYLOAD_TYPES,
@@ -30,6 +30,13 @@ H264_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x65right"
 H264_CUSTOM_ROUTED_NAL = b"\x00\x00\x00\x01\x67h264-sps"
 HEVC_EZVIZ_WRAPPED_NAL = b"\x00\x00\x00\x01\x26\x01startmiddleend"
 HEVC_DESCRIPTOR_ROUTED_NAL = b"\x00\x00\x00\x01\x26\x01hevc"
+
+
+def test_parse_rtp_reports_version_failure_with_stable_reason() -> None:
+    with pytest.raises(EzvizUnsupportedMediaError) as error:
+        parse_rtp_packet(b"\x40" + b"\x00" * 11)
+    assert error.value.source == "rtp"
+    assert error.value.reason == "invalid_rtp_version"
 
 
 def _rtp(

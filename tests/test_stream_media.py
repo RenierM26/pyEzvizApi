@@ -203,7 +203,6 @@ def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> 
         + b"\x80\x00\x00"
         + encrypted_payload
     )
-
     assert (
         decrypt_hikvision_ps_video(pes, key, nalu_header_size=2)
         == b"\x00\x00\x01\xe0"
@@ -211,6 +210,22 @@ def test_decrypt_hikvision_ps_video_preserves_nal_header_and_decrypts_body() -> 
         + b"\x80\x00\x00"
         + clear_payload
     )
+
+
+def test_decrypt_hikvision_ps_video_recovers_overlong_pes_at_valid_pack() -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_body = b"0123456789abcdef" * 2
+    encrypted_body = _encrypt_hikvision_fixture_blocks(aes_key, clear_body)
+    # The declared PES length ends after the first AES block, but the camera
+    # continues this video payload until the next valid MPEG-2 pack header.
+    short_length = 3 + 4 + 2 + AES.block_size
+    pes_header = b"\x00\x00\x01\xe0" + short_length.to_bytes(2, "big") + b"\x80\x00\x00"
+    pack = b"\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x01\xff\xf8"
+    encrypted = pes_header + b"\x00\x00\x00\x01\x42\x01" + encrypted_body + pack
+    expected = pes_header + b"\x00\x00\x00\x01\x42\x01" + clear_body + pack
+
+    assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=2) == expected
 
 def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
     key = "camera-key"

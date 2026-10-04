@@ -1186,6 +1186,10 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         prior_fragment_open = depacketizer.has_incomplete_nal(packet.ssrc)
         discarded_before = depacketizer.stats.discarded_fragments
         packet_nals = depacketizer.push(packet)
+        if not packet_nals and not depacketizer.has_incomplete_nal(packet.ssrc):
+            # A rejected video payload may represent a missing slice even when
+            # no active fragmented NAL existed to increment discard stats.
+            pending_gap[packet.ssrc] = True
         if (
             depacketizer.stats.discarded_fragments > discarded_before
             and not (previous_timestamp != packet.timestamp and prior_fragment_open)

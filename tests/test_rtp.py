@@ -287,6 +287,20 @@ def test_bounded_rtp_rejects_malformed_marked_fu_after_complete_slice() -> None:
     ) == ()
 
 
+def test_bounded_rtp_rejects_unmarked_malformed_fu_before_timestamp_change() -> None:
+    first = parse_rtp_packet(_rtp(b"\x61\x80first", sequence=1, timestamp=9000))
+    malformed_fu = parse_rtp_packet(_rtp(b"\x7c", sequence=2, timestamp=9000))
+    healthy = parse_rtp_packet(
+        _rtp(b"\x61\x80healthy", sequence=3, timestamp=12000, marker=True)
+    )
+
+    assert rtp_packets_to_nal_units(
+        (first, malformed_fu, healthy),
+        codec="h264",
+        completed_access_units_only=True,
+    ) == (b"\x61\x80healthy",)
+
+
 def test_bounded_rtp_rejects_picture_with_open_fragment_at_timestamp_change() -> None:
     first_slice = parse_rtp_packet(_rtp(b"\x61first", sequence=1, timestamp=9000))
     fu_start = parse_rtp_packet(

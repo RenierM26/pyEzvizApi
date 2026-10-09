@@ -1,8 +1,10 @@
 include LICENSE.md
+include CHANGELOG.md
 graft examples
 global-exclude __pycache__/*
 global-exclude *.py[cod]
 include docs/channel99.md
 include docs/streaming.md
+include docs/release-2.0.0.md
 include tests/fixtures/longlink_native.json
 recursive-include tests/fixtures/stream *.hex

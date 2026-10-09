@@ -16,8 +16,8 @@ You can also use it directly from the command line for quick checks and scriptin
 
 Version 2.0 replaces the legacy push transport. Existing push integrations must
 migrate and provide durable token storage; ordinary polling remains independent
-of push. Read the [release notes](docs/release-2.0.0.md) and
-[channel-99 migration guide](docs/channel99.md) before upgrading.
+of push. Read the [release notes](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/release-2.0.0.md) and
+[channel-99 migration guide](https://github.com/RenierM26/pyEzvizApi/blob/main/docs/channel99.md) before upgrading.
 Python 3.12 or newer is required. Streaming/remuxing also needs FFmpeg, with
 ffprobe required for ambiguous timed cloud MPEG-PS validation.
 

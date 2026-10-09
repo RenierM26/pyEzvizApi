@@ -157,8 +157,9 @@ bound before network work. New code should use valid positive, finite
   input. Raw output remains available for packet-exact diagnostics. An RTP or
   MPEG-TS cloud stream cannot be requested as MPEG-PS because doing so would
   mislabel its bytes.
-- IDMX records using the fixed `0x55667788` source marker have per-payload-type
-  sequence counters. Ordinary RTP sources retain SSRC-wide counters. Local
+- Packets explicitly marked by the native IDMX transport parser and using the fixed `0x55667788` source marker have per-payload-type
+  sequence counters. Ordinary RTP sources retain SSRC-wide counters, even if
+  their SSRC happens to have that same value. Local
   one-byte-prefixed RTP records are normalized with their extensions and padding
   before media reassembly; padding is never part of the encrypted NAL. Native
   HEVC media wrappers use encoded SPS/VUI timing rather than a forced RTP-clock

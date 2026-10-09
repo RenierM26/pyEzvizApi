@@ -1087,7 +1087,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     slice_plain = b"slice-plain-1234"
     slice_cipher = bytes.fromhex("7a51a826f29068d1a992b0d6c59a5be9")
     ignored_parameter_frame = (
-        b"\x0d\x90\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
+        b"\xfa\x90\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
         b"\x00\x01\x00\x0cignored"
     )
     vps_frame = (
@@ -4412,3 +4412,46 @@ def test_local_idmx_frame_rate_follows_verified_unused_descriptor_fallback() -> 
         ),
     ]
     assert _idmx_local_video_frame_rate(packets) == "15"
+
+
+@pytest.mark.parametrize("payload_type", [96, 104, 112])
+@pytest.mark.parametrize("padding", [b"\x00", b"\xff"])
+def test_shimmed_rtp_rejects_invalid_padding_on_every_media_route(
+    payload_type: int, padding: bytes
+) -> None:
+    frame = (
+        b"\x0d\xa0"
+        + bytes((payload_type,))
+        + b"\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        + b"\x7c\x85payload"
+        + padding
+    )
+    with pytest.raises(PyEzvizError, match="Invalid RTP padding"):
+        _idmx_local_frame_rtp_packet(frame, 13)
+    with pytest.raises(PyEzvizError, match="Invalid RTP padding"):
+        _idmx_local_frame_media_body(frame, 13)
+
+
+@pytest.mark.parametrize("payload_type", [96, 104, 112])
+def test_shimmed_rtp_rejects_invalid_extension_on_every_media_route(
+    payload_type: int,
+) -> None:
+    frame = (
+        b"\x0d\x90"
+        + bytes((payload_type,))
+        + b"\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        + b"\x00\x01\xff\xffpayload"
+    )
+    with pytest.raises(PyEzvizError, match="extension payload exceeds"):
+        _idmx_local_frame_rtp_packet(frame, 13)
+
+
+def test_explicit_legacy_command_record_does_not_claim_rtp_provenance() -> None:
+    frame = (
+        b"\xfa\x90\x60\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        b"\x00\x01\x00\x0csidecar"
+    )
+    packet = _idmx_local_frame_rtp_packet(frame, 13)
+    assert packet is not None
+    assert not packet.idmx
+    assert packet.payload == frame[13:]

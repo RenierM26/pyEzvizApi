@@ -540,7 +540,7 @@ def test_copy_local_stream_to_decrypted_mpegts_rejects_unknown_idmx_before_ffmpe
             assert max_packets == 1
             return [
                 SimpleNamespace(
-                    body=b"\x0d\x90\x00\x00\x00\x00\x00\x00\x00\x55\x66\x77\x88"
+                    body=b"\xfa\x90\x00\x00\x00\x00\x00\x00\x00\x55\x66\x77\x88"
                 )
             ]
 

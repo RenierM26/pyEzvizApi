@@ -2015,13 +2015,13 @@ def test_idmx_independent_counters_preserve_video_fu(
     start_payload = b"\x7c\x85\x80start" if codec == "h264" else b"\x62\x01\x93\x80start"
     end_payload = b"\x7c\x45end" if codec == "h264" else b"\x62\x01\x53end"
     start = parse_rtp_packet(
-        _rtp(start_payload, sequence=video_sequence, ssrc=ssrc)
+        _rtp(start_payload, sequence=video_sequence, ssrc=ssrc), idmx=True
     )
     audio = parse_rtp_packet(
-        _rtp(b"audio", sequence=audio_sequence, payload_type=104, ssrc=ssrc)
+        _rtp(b"audio", sequence=audio_sequence, payload_type=104, ssrc=ssrc), idmx=True
     )
     metadata = parse_rtp_packet(
-        _rtp(b"metadata", sequence=300, payload_type=112, ssrc=ssrc)
+        _rtp(b"metadata", sequence=300, payload_type=112, ssrc=ssrc), idmx=True
     )
     end = parse_rtp_packet(
         _rtp(
@@ -2029,7 +2029,8 @@ def test_idmx_independent_counters_preserve_video_fu(
             sequence=(video_sequence + 1) & 0xFFFF,
             marker=True,
             ssrc=ssrc,
-        )
+        ),
+        idmx=True,
     )
     expected = b"\x65\x80startend" if codec == "h264" else b"\x26\x01\x80startend"
     depacketizer = RtpVideoDepacketizer(codec)
@@ -2057,12 +2058,12 @@ def test_idmx_independent_counters_preserve_video_fu(
 
 def test_idmx_independent_counters_do_not_hide_video_loss() -> None:
     ssrc = 0x55667788
-    start = parse_rtp_packet(_rtp(b"\x7c\x85\x80start", sequence=100, ssrc=ssrc))
+    start = parse_rtp_packet(_rtp(b"\x7c\x85\x80start", sequence=100, ssrc=ssrc), idmx=True)
     audio = parse_rtp_packet(
-        _rtp(b"audio", sequence=101, payload_type=104, ssrc=ssrc)
+        _rtp(b"audio", sequence=101, payload_type=104, ssrc=ssrc), idmx=True
     )
     end = parse_rtp_packet(
-        _rtp(b"\x7c\x45end", sequence=102, marker=True, ssrc=ssrc)
+        _rtp(b"\x7c\x45end", sequence=102, marker=True, ssrc=ssrc), idmx=True
     )
     assert rtp_packets_to_nal_units(
         (start, audio, end), codec="h264", completed_access_units_only=True
@@ -2072,3 +2073,24 @@ def test_idmx_independent_counters_do_not_hide_video_loss() -> None:
     depacketizer.observe_nonvideo_packet(audio)
     assert depacketizer.push(end) == ()
     assert depacketizer.stats.sequence_gaps == 1
+
+
+def test_ordinary_rtp_may_share_idmx_marker_without_independent_counters() -> None:
+    ssrc = 0x55667788
+    start = parse_rtp_packet(_rtp(b"\x7c\x85\x80start", sequence=100, ssrc=ssrc))
+    audio = parse_rtp_packet(
+        _rtp(b"audio", sequence=101, payload_type=104, ssrc=ssrc)
+    )
+    end = parse_rtp_packet(
+        _rtp(b"\x7c\x45end", sequence=102, marker=True, ssrc=ssrc)
+    )
+    assert not start.idmx
+    expected = b"\x65\x80startend"
+    depacketizer = RtpVideoDepacketizer("h264")
+    depacketizer.push(start)
+    depacketizer.observe_nonvideo_packet(audio)
+    assert depacketizer.has_incomplete_nal(ssrc, payload_type=96)
+    assert depacketizer.push(end) == (expected,)
+    assert rtp_packets_to_nal_units(
+        (start, audio, end), codec="h264", completed_access_units_only=True
+    ) == (expected,)

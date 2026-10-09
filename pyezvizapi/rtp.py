@@ -133,6 +133,7 @@ class RtpPacket:
     marker: bool
     extension_profile: int | None = None
     extension_data: bytes = b""
+    idmx: bool = False
 
 
 @dataclass
@@ -414,8 +415,8 @@ class _FragmentedNal:
     timestamp: int
 
 
-def parse_rtp_packet(data: bytes) -> RtpPacket:
-    """Parse an RTP v2 packet, including CSRC, extension, and padding fields."""
+def parse_rtp_packet(data: bytes, *, idmx: bool = False) -> RtpPacket:
+    """Parse RTP v2; only native transport callers may assert IDMX provenance."""
 
     if len(data) < 12:
         raise PyEzvizError("RTP packet is too short")
@@ -463,6 +464,7 @@ def parse_rtp_packet(data: bytes) -> RtpPacket:
         marker=bool(data[1] & 0x80),
         extension_profile=extension_profile,
         extension_data=extension_data,
+        idmx=idmx,
     )
 
 
@@ -902,7 +904,7 @@ def _rtp_sequence_key(packet: RtpPacket) -> RtpSequenceKey:
 
     return (
         packet.ssrc,
-        packet.payload_type if packet.ssrc == IDMX_RTP_SOURCE_MARKER else None,
+        packet.payload_type if packet.idmx and packet.ssrc == IDMX_RTP_SOURCE_MARKER else None,
     )
 
 
@@ -962,10 +964,9 @@ class RtpVideoDepacketizer:
     def has_incomplete_nal(self, ssrc: int, *, payload_type: int | None = None) -> bool:
         """Report an unfinished NAL, optionally scoped to an IDMX route."""
 
-        if ssrc == IDMX_RTP_SOURCE_MARKER and payload_type is None:
+        if payload_type is None:
             return any(key[0] == ssrc for key in self._fragment_by_ssrc)
-        key = (ssrc, payload_type if ssrc == IDMX_RTP_SOURCE_MARKER else None)
-        return key in self._fragment_by_ssrc
+        return (ssrc, None) in self._fragment_by_ssrc or (ssrc, payload_type) in self._fragment_by_ssrc
 
     def _continuity(self, packet: RtpPacket) -> str:
         sequence_key = _rtp_sequence_key(packet)

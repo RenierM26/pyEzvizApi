@@ -5336,9 +5336,9 @@ def _idmx_local_rtp_frame(frame: bytes) -> bytes | None:
             try:
                 parse_rtp_packet(rtp_frame)
             except PyEzvizError:
-                if offset == 1 and _looks_like_idmx_hevc_media_frame(frame[13:]):
-                    # This explicit native RTP wrapper cannot be downgraded to
-                    # a legacy record when its padding or extension is invalid.
+                if offset == 1:
+                    # 0x0d identifies shimmed RTP independently of media codec.
+                    # Legacy 0xfa command records are handled outside this path.
                     raise
                 continue
             return rtp_frame
@@ -5381,7 +5381,7 @@ def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | 
 
     rtp_frame = _idmx_local_rtp_frame(frame)
     if rtp_frame is not None:
-        packet = parse_rtp_packet(rtp_frame)
+        packet = parse_rtp_packet(rtp_frame, idmx=True)
         if header_size == 13 and packet.extension_profile is None:
             packet = replace(packet, payload=_strip_idmx_command_h264_record_trailer(packet.payload))
         return packet

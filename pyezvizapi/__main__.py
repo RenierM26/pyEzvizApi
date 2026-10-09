@@ -3258,7 +3258,7 @@ def _parse_rtp_packets(packets: list[Any]) -> list[Any]:
     parsed = []
     for packet in packets:
         try:
-            parsed.append(parse_rtp_packet(packet.body))
+            parsed.append(parse_rtp_packet(packet.body, idmx=True))
         except PyEzvizError:
             continue
     return parsed

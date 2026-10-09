@@ -6392,3 +6392,35 @@ def test_pyezviz_error_returns_cli_error(monkeypatch, tmp_path, caplog) -> None:
 
     assert "cloud exploded" in caplog.text
     assert ErrorClient.instances[0].closed is True
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_cli_cloud_rtp_marks_native_independent_sequence_counters(codec: str) -> None:
+    start = b"\x7c\x85\x80start" if codec == "h264" else b"\x62\x01\x93\x80start"
+    end = b"\x7c\x45end" if codec == "h264" else b"\x62\x01\x53end"
+    nal = b"\x65\x80startend" if codec == "h264" else b"\x26\x01\x80startend"
+
+    def rtp(payload: bytes, pt: int, sequence: int, *, marker: bool = False) -> bytes:
+        return (
+            b"\x80"
+            + bytes((pt | (0x80 if marker else 0),))
+            + sequence.to_bytes(2, "big")
+            + (9000).to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + payload
+        )
+
+    bodies = (
+        rtp(start, 96, 100),
+        rtp(b"audio", 104, 200),
+        rtp(b"metadata", 112, 300),
+        rtp(end, 96, 101, marker=True),
+    )
+    packets = [
+        VtmPacket(VtmChannel.STREAM, len(body), index, 0, body)
+        for index, body in enumerate(bodies)
+    ]
+    parsed = cli_module._parse_rtp_packets(packets)  # noqa: SLF001
+    assert all(packet.idmx for packet in parsed)
+    expected = (b"\x00\x00\x00\x01" + nal,)
+    assert cli_module._rtp_packets_to_annexb_units(packets, codec=codec) == expected  # noqa: SLF001

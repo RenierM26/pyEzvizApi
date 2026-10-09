@@ -8,7 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## v2.0.0 - 2026-10-09
 
-Release preparation; publication is pending. See [upgrade and release notes](docs/release-2.0.0.md).
+See [upgrade requirements, known limitations, and release notes](docs/release-2.0.0.md).
 
 ### Breaking changes
 

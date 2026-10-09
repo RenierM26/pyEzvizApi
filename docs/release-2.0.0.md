@@ -1,7 +1,9 @@
-# pyEzvizApi 2.0.0 release preparation
+# pyEzvizApi 2.0.0 release notes
 
-Status: prepared for review, not tagged or published. The changelog date is the
-preparation date; update it if publication happens on a later date.
+These notes describe the changes selected for 2.0.0. Check the
+[GitHub releases](https://github.com/RenierM26/pyEzvizApi/releases) and
+[PyPI](https://pypi.org/project/pyezvizapi/) for publication status. The changelog
+date records preparation; update it before publishing on a later date.
 
 ## Why a major version
 

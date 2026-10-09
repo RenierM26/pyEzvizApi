@@ -52,6 +52,12 @@ See [CHANGELOG.md](../CHANGELOG.md) for the detailed change list and
 
 ## Known limitations, not release claims
 
+- Fresh X80 wheel smoke is mixed: a 30-second cached-key cloud capture decoded
+  only one 3840×2160 HEVC frame beside 466 AAC frames, while the direct-local
+  capture decoded video with reference diagnostics. Initial inventory-key
+  attempts failed; fresh account media-key retrieval required MFA. These are
+  not a clean sustained-video sign-off. Repeat with freshly verified media keys
+  and investigate the sparse cloud video/local diagnostics before publication.
 - Intermittent C8W cloud upstream delivery remains unresolved. Increasing a bound
   does not guarantee media; unavailable captures return `no_media` (proxy 502).
 - Residual Gate HEVC reference/PPS warnings need full-clip follow-up. A short clean

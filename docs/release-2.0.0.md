@@ -54,7 +54,7 @@ See [CHANGELOG.md](../CHANGELOG.md) for the detailed change list and
 
 - Fresh X80 wheel smoke is mixed: a 30-second cached-key cloud capture decoded
   only one 3840×2160 HEVC frame beside 466 AAC frames, while the direct-local
-  capture decoded video with reference diagnostics. Initial inventory-key
+  capture decoded 451 video frames with 33 HEVC decoder diagnostics. Initial inventory-key
   attempts failed; fresh account media-key retrieval required MFA. These are
   not a clean sustained-video sign-off. Repeat with freshly verified media keys
   and investigate the sparse cloud video/local diagnostics before publication.

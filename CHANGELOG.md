@@ -6,6 +6,15 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+## v2.0.0 - 2026-10-09
+
+Release preparation; publication is pending. See [upgrade and release notes](docs/release-2.0.0.md).
+
+### Breaking changes
+
+- Removed the obsolete push registration transport. Existing push integrations must migrate to channel-99, persist complete rotated tokens durably through `on_token_updated`, and monitor `raise_if_failed()`. Polling/API operations remain available independently of push.
+- Channel-99 credentials are tied to the host MAC-derived feature code; moving saved push tokens to a different host identity requires reauthentication.
+
 ### Changed
 
 - Recover expired push-only HTTPS sessions before registration retry; expose fatal persistence/recovery failures through `MQTTClient.raise_if_failed()` and stop automatic retries.
@@ -66,6 +75,13 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 - Exposed local SDK ECDH stream helpers through the generic `local_stream` namespace while keeping the focused ECDH implementation module available.
 
 ### Fixed
+
+- Bound stream reads, startup, keepalives, and shutdown to capture deadlines; make rapid local receiver-port reopen safe without reusable Windows bindings.
+- Share RTP/IDMX processing and FFmpeg cleanup across stream paths, preserve legacy stream imports, and expose grouped typed clip options.
+- Auto-select cloud resources for multi-lens cameras, refresh stale local/ECDH routes, and use automatic local NAL-header detection and clean-window recovery.
+- Preserve MFA codes across region redirects.
+- Reject empty, incomplete, discontinuous, or ambiguous bounded cloud RTP video with typed errors instead of publishing partial output. Retain explicit `no_media`/proxy HTTP 502 when upstream delivery is unavailable.
+- Reject materially truncated timed decrypted cloud MPEG-PS clips with `EzvizIncompleteMediaError`; privately stage bounded cloud saves to preserve existing destinations on capture/remux failure.
 
 - Route local and cloud RTP/IDMX media by descriptor-owned payload types instead
   of assuming video payload type 96. Live cloud remuxing now accepts delayed and

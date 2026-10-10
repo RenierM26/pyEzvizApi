@@ -2158,3 +2158,14 @@ def test_bounded_aac_does_not_convert_reorder_or_invalid_clock_to_gap(delta: int
             timestamp=timestamp, payload_type=104, extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01"), idmx=True))
     assert decrypt_idmx_aac_packets(packets, b"key", require_contiguous=False) is None
+
+
+def test_bounded_nal_timestamps_follow_only_accepted_picture_units() -> None:
+    packets = (
+        parse_rtp_packet(_rtp(b"\x65\x80complete", sequence=1, timestamp=1000, marker=True)),
+        parse_rtp_packet(_rtp(b"\x41\x80unfinished", sequence=2, timestamp=10000)),
+    )
+    timestamps: list[int] = []
+    assert rtp_packets_to_nal_units(packets, codec="h264", completed_access_units_only=True,
+        nal_timestamps=timestamps) == (b"\x65\x80complete",)
+    assert timestamps == [1000]

@@ -724,6 +724,9 @@ class EzvizLocalSdkEcdhMediaStream:
 class _BoundedEcdhMediaStream:
     """Adapt ECDH input-frame/deadline bounds to generic media helpers."""
 
+    supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
+
     stream: EzvizLocalSdkEcdhMediaStream
     max_frames: int | None
     duration_seconds: float | None
@@ -733,11 +736,19 @@ class _BoundedEcdhMediaStream:
         self,
         *,
         max_packets: int | None = None,
+        duration_seconds: float | None = None,
+        duration_from_start: bool = False,
+        monotonic: Callable[[], float] | None = None,
     ) -> Iterator[EzvizLocalSdkEcdhStreamPacket]:
+        del duration_from_start, monotonic
+        selected_duration = self.duration_seconds
+        if duration_seconds is not None:
+            selected_duration = (duration_seconds if selected_duration is None
+                                 else min(selected_duration, duration_seconds))
         return self.stream.iter_packets(
             max_packets=max_packets,
             max_frames=self.max_frames,
-            duration_seconds=self.duration_seconds,
+            duration_seconds=selected_duration,
             monotonic=self.monotonic,
         )
 

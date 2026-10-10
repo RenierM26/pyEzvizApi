@@ -397,3 +397,6 @@ Existing explicit ECDH source frame-limit behavior is unchanged.
 Automatic legacy LAN clips likewise count nonempty media packets, skipping empty
 leading records within a finite `max_packets + 1024` input allowance. The local
 capture duration includes startup. Existing explicit-source defaults are unchanged.
+
+Automatic live legacy streams use the same nonempty-packet accounting and bounded
+input allowance. Empty-only input fails as no media, not a successful live packet.

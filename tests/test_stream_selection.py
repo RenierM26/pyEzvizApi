@@ -705,3 +705,76 @@ def test_local_nonempty_packet_budget_preserves_explicit_defaults(monkeypatch, s
         assert calls[0]["duration_from_start"] is True
     assert len(reads) == (2 + packet_limit if skip else packet_limit)
     assert closed == [True]
+
+
+@pytest.mark.parametrize("empty_only", [False, True])
+@pytest.mark.parametrize("packet_limit", [1, 2])
+def test_auto_live_legacy_counts_nonempty_packets_and_bounds_empty_input(
+    monkeypatch, empty_only: bool, packet_limit: int,
+) -> None:
+    reads: list[bytes] = []
+    closed: list[bool] = []
+
+    class Stream:
+        supports_deadline_iter_packets = True
+        supports_startup_deadline_iter_packets = True
+        def start(self, **_kwargs):
+            pass
+        def close(self):
+            closed.append(True)
+        def iter_packets(self, **kwargs):
+            assert kwargs["max_packets"] == packet_limit + 1024
+            assert kwargs["duration_from_start"] is True
+            bodies = ([b""] * (packet_limit + 1024) if empty_only
+                      else [b"", b"", b""] + [PAYLOAD] * (packet_limit + 1))
+            for body in bodies[:kwargs["max_packets"]]:
+                reads.append(body)
+                yield _local_stream.EzvizLocalStreamPacket(channel=0, length=len(body), body=body)
+
+    monkeypatch.setattr(stream_selection, "select_stream_source", lambda *_a, **_kw: LocalSdkClipSource(credentials=credentials()))
+    monkeypatch.setattr(stream_selection, "open_local_sdk_stream_from_client", lambda *_a, **_kw: Stream())
+    monkeypatch.setattr(stream_selection, "open_cloud_stream", fail)
+    with EzvizClient().open_stream(CAMERA) as stream:
+        if empty_only:
+            with pytest.raises(EzvizNoMediaError):
+                list(stream.iter_media_packets(limits=CaptureLimits(max_packets=packet_limit)))
+            assert len(reads) == packet_limit + 1024
+        else:
+            packets = list(stream.iter_media_packets(limits=CaptureLimits(max_packets=packet_limit)))
+            assert [p.body for p in packets] == [PAYLOAD] * packet_limit
+            assert len(reads) == 3 + packet_limit
+    assert closed
+
+
+@pytest.mark.parametrize("empty_only", [False, True])
+def test_auto_live_ecdh_packet_bound_limits_negotiation_input(monkeypatch, empty_only) -> None:
+    frames: list[int] = []
+    closed: list[bool] = []
+
+    class Stream:
+        def start(self, **_kwargs):
+            pass
+        def close(self):
+            closed.append(True)
+        def iter_packets(self, *, max_packets, max_frames, **_kwargs):
+            assert max_packets == 1
+            assert max_frames == 1025
+            for i in range(max_frames):
+                frames.append(i)
+                if not empty_only and i >= 2:
+                    yield local_stream_ecdh.EzvizLocalSdkEcdhStreamPacket(channel=1, body=PAYLOAD)
+                    return
+
+    monkeypatch.setattr(stream_selection, "select_stream_source", lambda *_a, **_kw: LocalSdkEcdhClipSource(credentials=credentials()))
+    monkeypatch.setattr(stream_selection, "open_local_sdk_ecdh_stream_from_client", lambda *_a, **_kw: Stream())
+    monkeypatch.setattr(stream_selection, "open_cloud_stream", fail)
+    with EzvizClient().open_stream(CAMERA) as stream:
+        if empty_only:
+            with pytest.raises(EzvizNoMediaError):
+                list(stream.iter_media_packets(limits=CaptureLimits(max_packets=1)))
+            assert len(frames) == 1025
+        else:
+            packets = list(stream.iter_media_packets(limits=CaptureLimits(max_packets=1)))
+            assert [p.body for p in packets] == [PAYLOAD]
+            assert frames == [0, 1, 2]
+    assert closed

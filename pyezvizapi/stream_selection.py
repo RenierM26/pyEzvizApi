@@ -9,6 +9,7 @@ import json
 import time
 from typing import Any
 
+from ._local_stream import _NonemptyLocalMediaStream
 from .clip import AutoClipSource, CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
 from .cloud_stream import open_cloud_stream
 from .exceptions import (
@@ -20,6 +21,7 @@ from .exceptions import (
 )
 from .hcnetsdk import HcNetSdkLanEndpoint
 from .local_stream_ecdh import (
+    _BoundedEcdhMediaStream,
     local_ecdh_media_packet_source,
     open_local_sdk_ecdh_stream_from_client,
 )
@@ -233,7 +235,11 @@ class AutoMediaStream:
                             stream_rate=ecdh_rate,
                             timeout=source.timeout,
                         )
-                        adapter = local_ecdh_media_packet_source(self._stream)
+                        adapter = local_ecdh_media_packet_source(_BoundedEcdhMediaStream(
+                            self._stream,
+                            None if selected_limits.max_packets is None else selected_limits.max_packets + 1024,
+                            None, monotonic,
+                        ))
                     elif isinstance(source, LocalSdkClipSource):
                         self._stream = open_local_sdk_stream_from_client(
                             self._client,
@@ -244,7 +250,10 @@ class AutoMediaStream:
                             receiver_ex_port=source.receiver_port,
                             timeout=source.timeout,
                         )
-                        adapter = local_media_packet_source(self._stream)
+                        adapter = local_media_packet_source(_NonemptyLocalMediaStream(
+                            self._stream,
+                            None if selected_limits.max_packets is None else selected_limits.max_packets + 1024,
+                        ))
                     else:
                         self._stream = open_cloud_stream(
                             self._client,
@@ -275,6 +284,8 @@ class AutoMediaStream:
                     ):
                         if self._closed or (deadline is not None and monotonic() >= deadline):
                             return
+                        if not packet.body:
+                            continue
                         emitted = True
                         yield packet
                     if not emitted and selected_limits.max_bytes is None:

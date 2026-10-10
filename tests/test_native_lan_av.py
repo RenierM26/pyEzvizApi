@@ -10,7 +10,6 @@ import subprocess
 from types import SimpleNamespace
 from typing import Any
 
-from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi import EzvizClient, _local_stream
@@ -101,7 +100,7 @@ def test_decrypted_native_source_clock_preserves_missing_picture_gap() -> None:
 
 def test_decrypted_native_hevc_timeline_honors_parameter_set_policy() -> None:
     media_key = "test-media-key"
-    cipher = AES.new(_local_stream._local_media_aes_key(media_key), AES.MODE_ECB)  # noqa: SLF001
+    cipher = _local_stream._hikvision_aes_ecb_cipher(_local_stream._local_media_aes_key(media_key))  # noqa: SLF001
     units = (b"\x40\x01" + b"V" * 16, b"\x26\x01" + b"\x80" + b"I" * 15)
     packets = [b"\x90\xe0" + index.to_bytes(2, "big") + (1000 + index * 6000).to_bytes(4, "big")
         + b"\x55\x66\x77\x88\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"

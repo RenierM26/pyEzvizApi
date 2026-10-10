@@ -1066,9 +1066,11 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
     }
 
 
+@pytest.mark.parametrize("source", ["cloud", "auto"])
+@pytest.mark.parametrize("channel", [None, 2])
 def test_save_clip_cloud_defaults_to_resource_auto_selection(
     monkeypatch,
-    tmp_path,
+    tmp_path, source: str, channel: int | None,
 ) -> None:
     fake_client = _install_fake_client(monkeypatch)
 
@@ -1080,20 +1082,21 @@ def test_save_clip_cloud_defaults_to_resource_auto_selection(
                 "save",
                 "clip",
                 "--source",
-                "cloud",
+                source,
                 "--serial",
                 "CAM123",
                 "--output",
                 str(tmp_path / "front.ts"),
+                *([] if channel is None else ["--channel", str(channel)]),
             ]
         )
         == 0
     )
 
-    assert fake_client.instances[0].save_clip_request["channel"] is None
+    assert fake_client.instances[0].save_clip_request["channel"] == channel
 
 
-@pytest.mark.parametrize("source", ["local-sdk", "local-sdk-ecdh"])
+@pytest.mark.parametrize("source", ["auto", "local-sdk", "local-sdk-ecdh"])
 def test_save_clip_decrypted_local_defaults_to_auto_header_detection(
     monkeypatch,
     tmp_path,
@@ -1243,9 +1246,11 @@ def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
     assert fake_client.instances[0].save_clip_request["output_format"] == "mpegts"
 
 
+@pytest.mark.parametrize("source", ["auto", "local-sdk-ecdh"])
 def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
     monkeypatch,
     tmp_path,
+    source,
 ) -> None:
     class ClipClient(_FakeClient):
         service_urls_calls: int
@@ -1295,7 +1300,7 @@ def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
                 "--serial",
                 "CAM123",
                 "--source",
-                "local-sdk-ecdh",
+                source,
                 "--output",
                 str(output_path),
             ]
@@ -1309,8 +1314,8 @@ def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
     assert client.exported_token["service_urls"] == {
         "sysConf": [None] * 15 + ["cas.example.test", 443]
     }
-    assert client.save_clip_request["source"] == "local-sdk-ecdh"
-    assert client.save_clip_request["output_format"] == "mpegps"
+    assert client.save_clip_request["source"] == source
+    assert client.save_clip_request["output_format"] == ("mpegps" if source == "local-sdk-ecdh" else "mpegts")
 
 
 def test_save_clip_can_use_hcnetsdk_command_port_source(
@@ -6424,3 +6429,14 @@ def test_cli_cloud_rtp_marks_native_independent_sequence_counters(codec: str) ->
     assert all(packet.idmx for packet in parsed)
     expected = (b"\x00\x00\x00\x01" + nal,)
     assert cli_module._rtp_packets_to_annexb_units(packets, codec=codec) == expected  # noqa: SLF001
+
+
+@pytest.mark.parametrize("port", [None, 10101])
+def test_save_clip_auto_preserves_explicit_receiver_port(monkeypatch, tmp_path, port) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    args = ["--token-file", _token_file(tmp_path), "save", "clip", "--source", "auto",
+            "--serial", "CAM123", "--output", str(tmp_path / "preview.ts")]
+    if port is not None:
+        args.extend(["--local-sdk-ecdh-receiver-port", str(port)])
+    assert cli_module.main(args) == 0
+    assert fake_client.instances[0].save_clip_request["local_sdk_ecdh_receiver_port"] == port

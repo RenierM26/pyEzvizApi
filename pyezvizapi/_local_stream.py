@@ -1758,6 +1758,7 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     serial: str,
     *,
     channel: int = 1,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     register_p2p_session: bool = True,
     p2p_register_max_retries: int = MAX_RETRIES,
@@ -1790,6 +1791,7 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     credentials = get_local_sdk_stream_credentials_from_client(
         client,
         serial,
+        credentials=credentials,
         cas_serial=cas_serial,
         fetch_media_key=False,
         register_p2p_session=register_p2p_session,
@@ -1825,6 +1827,34 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     )
 
 
+@dataclass
+class _NonemptyLocalMediaStream:
+    """Count nonempty media independently from a bounded input allowance."""
+    stream: Any
+    max_frames: int | None
+    supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
+
+    def iter_packets(
+        self, *, max_packets: int | None = None, duration_seconds: float | None = None,
+        duration_from_start: bool = True, monotonic: Callable[[], float] = time.monotonic,
+    ) -> Iterator[EzvizLocalStreamPacket]:
+        del duration_from_start
+        emitted = 0
+        for packet in self.stream.iter_packets(
+            max_packets=self.max_frames, duration_seconds=duration_seconds,
+            duration_from_start=True, monotonic=monotonic,
+        ):
+            if not packet.body:
+                continue
+            if max_packets is not None and emitted >= max_packets:
+                return
+            emitted += 1
+            yield packet
+            if max_packets is not None and emitted >= max_packets:
+                return
+
+
 def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     client: Any,
     serial: str,
@@ -1835,6 +1865,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     media_key: str | bytes | None = None,
     nalu_header_size: int | None = 0,
     channel: int = 1,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     register_p2p_session: bool = True,
     p2p_register_max_retries: int = MAX_RETRIES,
@@ -1862,6 +1893,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     monotonic: Callable[[], float] = time.monotonic,
     smscode: str | int | None = None,
     cam_key_max_retries: int = 1,
+    skip_empty_packets: bool = False,
 ) -> EzvizLocalSdkCredentials:
     """Open a direct-local SDK stream from an authenticated client and copy bytes.
 
@@ -1880,6 +1912,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     credentials = get_local_sdk_stream_credentials_from_client(
         client,
         serial,
+        credentials=credentials,
         cas_serial=cas_serial,
         fetch_media_key=decrypt_video and media_key is None,
         register_p2p_session=register_p2p_session,
@@ -1919,10 +1952,14 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
         max_prefix_bytes=max_prefix_bytes,
         command_source_port=receiver_port,
     ) as stream:
+        media_stream: Any = (
+            _NonemptyLocalMediaStream(stream, None if max_packets is None else max_packets + 1024)
+            if skip_empty_packets else stream
+        )
         if output_format == "mpegps":
             if decrypt_video:
                 copy_local_stream_to_decrypted_mpegps(
-                    stream,
+                    media_stream,
                     output,
                     cast(str | bytes, selected_media_key),
                     nalu_header_size=nalu_header_size,
@@ -1932,7 +1969,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
                 )
             else:
                 copy_local_stream_to_mpegps(
-                    stream,
+                    media_stream,
                     output,
                     max_packets=max_packets,
                     duration_seconds=duration_seconds,
@@ -1940,7 +1977,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
                 )
         elif decrypt_video:
             copy_local_stream_to_decrypted_mpegts(
-                stream,
+                media_stream,
                 output,
                 cast(str | bytes, selected_media_key),
                 ffmpeg_path=ffmpeg_path,
@@ -1951,7 +1988,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
             )
         else:
             copy_local_stream_to_mpegts(
-                stream,
+                media_stream,
                 output,
                 ffmpeg_path=ffmpeg_path,
                 max_packets=max_packets,
@@ -1965,6 +2002,8 @@ def get_local_sdk_stream_credentials_from_client(
     client: Any,
     serial: str,
     *,
+    credentials: EzvizLocalSdkCredentials | None = None,
+    endpoint: HcNetSdkLanEndpoint | None = None,
     cas_serial: str | None = None,
     fetch_media_key: bool = True,
     register_p2p_session: bool = True,
@@ -1973,7 +2012,13 @@ def get_local_sdk_stream_credentials_from_client(
     cam_key_max_retries: int = 1,
 ) -> EzvizLocalSdkCredentials:
     """Fetch LAN endpoint, CAS tuple and optional media key from EZVIZ services."""
-    endpoint = _local_sdk_endpoint_from_client(client, serial)
+    if credentials is not None:
+        if credentials.device_info.serial != serial:
+            raise PyEzvizError("Local credentials do not match the requested camera")
+        if fetch_media_key and credentials.media_key is None:
+            raise PyEzvizError("Supplied local credentials require a media_key; no cloud refresh is performed")
+        return credentials
+    endpoint = endpoint or _local_sdk_endpoint_from_client(client, serial)
     if register_p2p_session:
         _register_p2p_session_for_client(
             client,

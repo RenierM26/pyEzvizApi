@@ -30,6 +30,7 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from ._local_stream_protocol import LocalSdkProtocolDetector
 from .constants import (
     LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET,
     LOCAL_SDK_ECDH_DATA_MARKER,
@@ -84,7 +85,11 @@ from .local_stream_media import (
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
 )
-from .local_stream_transport import get_local_sdk_stream_credentials_from_client
+from .local_stream_transport import (
+    EzvizLocalSdkCredentials,
+    fresh_local_sdk_receiver_port,
+    get_local_sdk_stream_credentials_from_client,
+)
 from .media import (
     LegacyPacketSource,
     MediaPacket,
@@ -413,6 +418,7 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._highest_sequence: int | None = None
         self._seen_sequences: set[int] = set()
         self._unrecognized_media_records = 0
+        self._protocol_detector = LocalSdkProtocolDetector()
 
     @property
     def keys_derived(self) -> bool:
@@ -431,6 +437,16 @@ class EzvizLocalSdkEcdhStreamDecoder:
         if self._chacha20_key is None:
             handshake = parse_ezviz_local_sdk_ecdh_handshake_packet(payload)
             if handshake is None:
+                self._protocol_detector.observe(channel, payload)
+                if self._protocol_detector.legacy_rtp_ps:
+                    raise EzvizUnsupportedMediaError(
+                        "Local preview returned legacy RTP/MPEG-PS instead of an "
+                        "ECDH handshake; use source='local-sdk' with the current "
+                        "media key, or probe_local_sdk_stream_from_client to "
+                        "inspect the negotiated protocol",
+                        source="local-sdk-ecdh",
+                        reason="protocol_mismatch",
+                    )
                 return b""
             shared_secret = derive_ezviz_local_sdk_ecdh_shared_secret(
                 self.private_key,
@@ -708,6 +724,9 @@ class EzvizLocalSdkEcdhMediaStream:
 class _BoundedEcdhMediaStream:
     """Adapt ECDH input-frame/deadline bounds to generic media helpers."""
 
+    supports_deadline_iter_packets = True
+    supports_startup_deadline_iter_packets = True
+
     stream: EzvizLocalSdkEcdhMediaStream
     max_frames: int | None
     duration_seconds: float | None
@@ -717,11 +736,19 @@ class _BoundedEcdhMediaStream:
         self,
         *,
         max_packets: int | None = None,
+        duration_seconds: float | None = None,
+        duration_from_start: bool = False,
+        monotonic: Callable[[], float] | None = None,
     ) -> Iterator[EzvizLocalSdkEcdhStreamPacket]:
+        del duration_from_start, monotonic
+        selected_duration = self.duration_seconds
+        if duration_seconds is not None:
+            selected_duration = (duration_seconds if selected_duration is None
+                                 else min(selected_duration, duration_seconds))
         return self.stream.iter_packets(
             max_packets=max_packets,
             max_frames=self.max_frames,
-            duration_seconds=self.duration_seconds,
+            duration_seconds=selected_duration,
             monotonic=self.monotonic,
         )
 
@@ -829,6 +856,7 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     client: Any,
     serial: str,
     *,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     key_pair: EzvizLocalSdkEcdhKeyPair | None = None,
     channel: int = 1,
@@ -858,6 +886,8 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         "register_p2p_session": register_p2p_session,
         "p2p_register_max_retries": p2p_register_max_retries,
     }
+    if credentials is not None:
+        credential_options["credentials"] = credentials
     if smscode is not None:
         credential_options["smscode"] = smscode
     credentials = get_local_sdk_stream_credentials_from_client(
@@ -889,11 +919,12 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     return stream
 
 
-def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
+def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0912, PLR0913
     client: Any,
     serial: str,
     output: BinaryIO,
     *,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
@@ -921,6 +952,8 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     ffmpeg_path: str = "ffmpeg",
     nalu_header_size: int | None = None,
     smscode: str | int | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    fresh_retry_port: bool = False,
 ) -> None:
     """Write authenticated local SDK ECDH media using an ``EzvizClient``."""
     _validate_ecdh_copy_options(
@@ -937,12 +970,24 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     # C8W closes an otherwise valid ECDH preview at rate 1 but streams at
     # rate 0. Retry only a premature socket close, before any output was
     # published; never hide a media/decryption/authentication failure.
+    credentials = get_local_sdk_stream_credentials_from_client(
+        client, serial, credentials=credentials, cas_serial=cas_serial,
+        register_p2p_session=register_p2p_session,
+        p2p_register_max_retries=p2p_register_max_retries,
+        fetch_media_key=decrypt_video and media_key is None, smscode=smscode,
+    )
     stream_rates = (stream_rate, 0) if stream_rate == 1 else (stream_rate,)
+    capture_deadline: float | None = None
     for index, candidate_rate in enumerate(stream_rates):
+        if capture_deadline is not None and monotonic() >= capture_deadline:
+            raise EzvizLocalSdkDeadlineExpired("Local ECDH retry exhausted capture deadline")
+        if index and fresh_retry_port:
+            receiver_port = fresh_local_sdk_receiver_port()
         try:
             with open_local_sdk_ecdh_stream_from_client(
                 client,
                 serial,
+                credentials=credentials,
                 cas_serial=cas_serial,
                 channel=channel,
                 receiver_port=receiver_port,
@@ -964,6 +1009,16 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
                 fetch_media_key=decrypt_video and media_key is None,
                 smscode=smscode,
             ) as stream:
+                remaining_duration = duration_seconds
+                if duration_seconds is not None:
+                    if capture_deadline is None:
+                        # Credential discovery precedes the initial capture
+                        # budget. All subsequent rate attempts share it.
+                        capture_deadline = monotonic() + duration_seconds
+                    else:
+                        remaining_duration = capture_deadline - monotonic()
+                        if remaining_duration <= 0:
+                            raise EzvizLocalSdkDeadlineExpired("Local ECDH retry exhausted capture deadline")
                 selected_media_key = media_key
                 if decrypt_video and selected_media_key is None:
                     selected_media_key = stream.media_key
@@ -981,7 +1036,8 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
                     nalu_header_size=nalu_header_size,
                     max_packets=max_packets,
                     max_frames=max_frames,
-                    duration_seconds=duration_seconds,
+                    duration_seconds=remaining_duration,
+                    monotonic=monotonic,
                 )
             return
         except EzvizLocalSdkStreamClosed:

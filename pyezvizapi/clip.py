@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+import math
 from typing import Any, Literal
 
 from .constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, MAX_RETRIES
+from .exceptions import PyEzvizError
 from .local_stream_transport import (
+    EzvizLocalSdkCredentials,
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortMultiSocketPlan,
 )
 from .media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
 
-ClipSource = Literal["local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
+ClipSource = Literal["auto", "local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
 
 
@@ -22,9 +25,12 @@ class LocalSdkClipSource:
     """Connection options for the direct local SDK stream."""
 
     kind: Literal["local-sdk"] = field(default="local-sdk", init=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
+    skip_empty_packets: bool = field(default=False, kw_only=True)
     cas_serial: str | None = None
     register_p2p_session: bool = True
     p2p_register_max_retries: int = MAX_RETRIES
+    receiver_port: int = field(default=10101, kw_only=True)
     timeout: float | None = 10.0
     smscode: str | int | None = field(default=None, repr=False)
 
@@ -34,12 +40,14 @@ class LocalSdkEcdhClipSource:
     """Connection options for the local SDK ECDH stream."""
 
     kind: Literal["local-sdk-ecdh"] = field(default="local-sdk-ecdh", init=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
     cas_serial: str | None = None
     register_p2p_session: bool = True
     p2p_register_max_retries: int = MAX_RETRIES
     timeout: float | None = 10.0
     smscode: str | int | None = field(default=None, repr=False)
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+    fresh_retry_port: bool = field(default=False, kw_only=True)
     send_init: bool = False
     max_prefix_bytes: int = 4096
     max_frames: int | None = None
@@ -76,8 +84,40 @@ class CloudClipSource:
     smscode: str | int | None = field(default=None, repr=False)
 
 
+@dataclass(frozen=True)
+class AutoClipSource:
+    """Metadata-first playback; offline mode never calls EZVIZ services.
+
+    ``device`` is a cached per-device ``get_device_infos`` result. Offline
+    callers must supply credentials; missing metadata is verified in-stream.
+    """
+
+    kind: Literal["auto"] = field(default="auto", init=False)
+    mode: Literal["auto", "offline"] = "auto"
+    device: dict[str, Any] | None = field(default=None, repr=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
+    allow_cloud_fallback: bool = True
+    timeout: float = 10.0
+    receiver_port: int | None = None
+    smscode: str | int | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("auto", "offline"):
+            raise PyEzvizError("Automatic stream mode must be auto or offline")
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise PyEzvizError("Automatic stream timeout must be positive and finite")
+        if self.receiver_port is not None and not 1 <= self.receiver_port <= 65535:
+            raise PyEzvizError("Automatic stream receiver_port must be a valid TCP port")
+        if self.mode == "offline" and self.credentials is None:
+            raise PyEzvizError("Offline playback requires caller-supplied local credentials")
+
+
 type ClipSourceOptions = (
-    LocalSdkClipSource | LocalSdkEcdhClipSource | HcNetSdkCommandPortClipSource | CloudClipSource
+    AutoClipSource
+    | LocalSdkClipSource
+    | LocalSdkEcdhClipSource
+    | HcNetSdkCommandPortClipSource
+    | CloudClipSource
 )
 
 

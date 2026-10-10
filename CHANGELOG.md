@@ -6,7 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Added
+
+- Metadata-first automatic streaming (`source="auto"`, `AutoClipSource`, and context-managed `open_stream`), with capability-guided local protocol selection and pre-output connection fallback to cloud.
+- A strict offline playback policy using caller-supplied local credentials; no account discovery, registration, key renewal, or cloud fallback. Explicit legacy/ECDH sources also accept supplied credentials.
+
 ### Fixed
+
+- Detect repeated legacy RTP/PS on ECDH-requested sessions and report an actionable protocol mismatch instead of generic no-media; add a bounded, sanitized `probe_local_stream` API with explicit source recommendations.
 
 - Remove the native one-byte prefix from unfragmented local MPEG-PS records, restoring Gate video continuity and AAC without trimming received media.
 - Keep IDMX video, audio, and metadata sequence counters independent when native transport provenance and the fixed RTP source marker are present; preserve shared-counter continuity checks for ordinary RTP.

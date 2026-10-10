@@ -1,5 +1,7 @@
 """Local SDK and HCNetSDK transport/session helpers."""
 
+import socket as _socket
+
 from ._local_stream import (  # noqa: F401
     HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
     EzvizLocalSdkCredentials,
@@ -25,5 +27,19 @@ from ._local_stream import (  # noqa: F401
     open_local_sdk_stream,
     open_local_sdk_stream_from_client,
 )
+
+
+def fresh_local_sdk_receiver_port() -> int:
+    """Reserve a kernel-selected IPv4 port on the SDK bind scope for a new local SDK session.
+
+    Does not connect or listen. The subsequent SDK bind remains authoritative
+    if another local process wins the brief allocation race.
+    """
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as reservation:
+        # The SDK subsequently binds IPv4 INADDR_ANY. This transient socket
+        # must match that scope, but never listens or accepts remote traffic.
+        reservation.bind(("", 0))  # codeql[py/bind-socket-all-network-interfaces] lgtm[py/bind-socket-all-network-interfaces]
+        return int(reservation.getsockname()[1])
+
 
 __all__ = [name for name in globals() if not name.startswith("_")]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
+from dataclasses import replace
 import datetime as dt
 import hashlib
 import json
@@ -15,7 +16,7 @@ import shutil
 from tempfile import SpooledTemporaryFile
 from threading import RLock
 import time
-from typing import Any, BinaryIO, ClassVar, TypedDict, cast
+from typing import Any, BinaryIO, ClassVar, Literal, TypedDict, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 import zlib
@@ -31,6 +32,7 @@ from ._longlink_profile import (
     session_header_for_token,
     synchronize_http_headers,
 )
+from ._request_deadline import bounded_request_timeout, request_budget_lock
 from ._token import (
     ClientToken as ClientToken,  # noqa: PLC0414 - public type export
     validate_feature_code,
@@ -137,6 +139,7 @@ from .api_endpoints import (
 )
 from .cas import EzvizCAS
 from .clip import (
+    AutoClipSource,
     ClipOptions,
     ClipOutputFormat,
     ClipSource,
@@ -182,6 +185,7 @@ from .local_stream_media import (
     summarize_idmx_h264_local_packets,
 )
 from .local_stream_transport import (
+    EzvizLocalSdkCredentials,
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortMultiSocketPlan,
     copy_local_sdk_stream_from_client,
@@ -199,6 +203,7 @@ from .media import (
 )
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
+from .stream_selection import AutoMediaStream, fallback_stream_source, select_stream_source
 from .utils import convert_to_dict, decrypt_image, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
@@ -214,6 +219,28 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
+
+
+def _credential_options(credentials: EzvizLocalSdkCredentials | None) -> dict[str, Any]:
+    """Pass the additive offline option only when supplied by the caller."""
+    return {"credentials": credentials} if credentials is not None else {}
+
+
+def _receiver_options(receiver_port: int, *, receiver_ex: bool = False) -> dict[str, Any]:
+    """Preserve default legacy calls while allowing automatic port selection."""
+    if receiver_port == 10101:
+        return {}
+    return ({"receiver_port": receiver_port, "receiver_ex_port": receiver_port}
+            if receiver_ex else {"receiver_port": receiver_port})
+
+
+def _retry_port_options(enabled: bool) -> dict[str, Any]:
+    """Preserve explicit-source calls while isolating automatic rate retries."""
+    return {"fresh_retry_port": True} if enabled else {}
+
+
+def _nonempty_packet_options(enabled: bool) -> dict[str, Any]:
+    return {"skip_empty_packets": True} if enabled else {}
 
 
 class SaveMediaResult(TypedDict, total=False):
@@ -654,7 +681,7 @@ class EzvizClient:
                 url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
                 allow_redirects=False,
                 data=payload,
-                timeout=self._timeout,
+                timeout=bounded_request_timeout(self._timeout),
             )
 
             req.raise_for_status()
@@ -758,14 +785,14 @@ class EzvizClient:
                 self._body_debug_summary(json_body),
             )
         try:
-            with self._token_lock:
+            with request_budget_lock(self._token_lock):
                 req = self._session.request(
                     method=method,
                     url=url,
                     params=params,
                     data=data,
                     json=json_body,
-                    timeout=self._timeout,
+                    timeout=bounded_request_timeout(self._timeout),
                 )
             req.raise_for_status()
         except requests.HTTPError as err:
@@ -773,7 +800,7 @@ class EzvizClient:
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 # Re-login can also move the account to another regional API.
-                with self._token_lock:
+                with request_budget_lock(self._token_lock):
                     self.login()
                     retry_url = urlunsplit(urlsplit(url)._replace(netloc=self._token["api_url"]))
                 return self._http_request(
@@ -948,7 +975,7 @@ class EzvizClient:
         Useful for endpoints requiring special URL encoding or manual preparation.
         """
         try:
-            with self._token_lock:
+            with request_budget_lock(self._token_lock):
                 # The request may have been prepared before a profile/region
                 # migration. Refresh only authentication/routing, not its encoded
                 # body, query or endpoint-specific headers.
@@ -963,7 +990,7 @@ class EzvizClient:
                     prepared.url = urlunsplit(parts._replace(netloc=self._token["api_url"]))
                     if "Host" in prepared.headers:
                         prepared.headers["Host"] = self._token["api_url"]
-                req = self._session.send(request=prepared, timeout=self._timeout)
+                req = self._session.send(request=prepared, timeout=bounded_request_timeout(self._timeout))
             req.raise_for_status()
         except requests.HTTPError as err:
             if retry_401 and err.response is not None and err.response.status_code == 401:
@@ -994,7 +1021,7 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> JsonDict:
         """Perform request and parse JSON in one step."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             resp = self._http_request(
                 method,
                 self._url(path),
@@ -3042,12 +3069,60 @@ class EzvizClient:
             key = self.get_cam_key(serial, smscode=smscode, max_retries=max_retries)
         return decrypt_image(image_data, key)
 
+    def probe_local_stream(
+        self,
+        serial: str,
+        *,
+        duration_seconds: float = 10.0,
+        max_frames: int = 1024,
+        max_bytes: int = 1024 * 1024,
+        receiver_port: int = 10101,
+    ) -> dict[str, Any]:
+        """Return sanitized protocol evidence and an explicit source recommendation.
+
+        This probes local negotiation, not media-key validity or full playback.
+        Authentication errors propagate; no stream source is silently changed.
+        """
+        from dataclasses import asdict  # noqa: PLC0415
+
+        from .local_stream_probe import probe_local_sdk_stream_from_client  # noqa: PLC0415
+
+        return asdict(
+            probe_local_sdk_stream_from_client(
+                self,
+                serial,
+                duration_seconds=duration_seconds,
+                max_frames=max_frames,
+                max_bytes=max_bytes,
+                receiver_port=receiver_port,
+            )
+        )
+
+    def open_stream(
+        self,
+        serial: str,
+        *,
+        source: AutoClipSource | None = None,
+        channel: int | None = None,
+    ) -> AutoMediaStream:
+        """Return a lazy automatic packet stream; use as a context manager.
+
+        Defaults to metadata-first auto. ``AutoClipSource(mode="offline", ... )``
+        prohibits all cloud/account discovery. Packets still require video
+        decryption/remuxing before serving them to a media player.
+        """
+        return AutoMediaStream(self, serial, source or AutoClipSource(), channel=channel)
+
     def save_clip(  # noqa: PLR0913
         self,
         serial: str,
         output: str | Path | BinaryIO,
         *,
         source: ClipSource = "local-sdk",
+        auto_mode: Literal["auto", "offline"] = "auto",
+        auto_device: dict[str, Any] | None = None,
+        allow_cloud_fallback: bool = True,
+        local_credentials: EzvizLocalSdkCredentials | None = None,
         output_format: ClipOutputFormat | None = None,
         duration_seconds: float | None = 10.0,
         max_packets: int | None = None,
@@ -3084,13 +3159,16 @@ class EzvizClient:
         cloud_client_type: int = 9,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
-        local_sdk_ecdh_receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        local_sdk_ecdh_receiver_port: int | None = None,
         local_sdk_ecdh_send_init: bool = False,
         local_sdk_ecdh_max_prefix_bytes: int = 4096,
         local_sdk_ecdh_max_frames: int | None = None,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
+        ``source="auto"`` selects from pagelist and verifies the stream.
+        ``auto_mode="offline"`` requires ``local_credentials`` and forbids
+        account discovery/key refresh/cloud fallback.
         ``source="local-sdk"`` uses the direct-local 9010/9020 SDK path.
         ``source="cloud"`` uses the EZVIZ VTM cloud live stream path.
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
@@ -3112,7 +3190,7 @@ class EzvizClient:
         if nalu_header_size is _SOURCE_DEFAULT_NALU_HEADER_SIZE:
             nalu_header_size = (
                 None
-                if decrypt_video and source in {"cloud", "local-sdk", "local-sdk-ecdh"}
+                if decrypt_video and source in {"auto", "cloud", "local-sdk", "local-sdk-ecdh"}
                 else 0
             )
 
@@ -3126,8 +3204,19 @@ class EzvizClient:
         )
 
         source_options: ClipSourceOptions
-        if source == "local-sdk":
+        if source == "auto":
+            source_options = AutoClipSource(
+                mode=auto_mode,
+                device=auto_device,
+                credentials=local_credentials,
+                allow_cloud_fallback=allow_cloud_fallback,
+                timeout=10.0 if timeout is None else timeout,
+                receiver_port=local_sdk_ecdh_receiver_port,
+                smscode=smscode,
+            )
+        elif source == "local-sdk":
             source_options = LocalSdkClipSource(
+                credentials=local_credentials,
                 cas_serial=cas_serial,
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
@@ -3136,12 +3225,15 @@ class EzvizClient:
             )
         elif source == "local-sdk-ecdh":
             source_options = LocalSdkEcdhClipSource(
+                credentials=local_credentials,
                 cas_serial=cas_serial,
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
                 smscode=smscode,
-                receiver_port=local_sdk_ecdh_receiver_port,
+                receiver_port=(LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+                               if local_sdk_ecdh_receiver_port is None
+                               else local_sdk_ecdh_receiver_port),
                 send_init=local_sdk_ecdh_send_init,
                 max_prefix_bytes=local_sdk_ecdh_max_prefix_bytes,
                 max_frames=local_sdk_ecdh_max_frames,
@@ -3186,9 +3278,7 @@ class EzvizClient:
             mux_options = MediaMuxOptions(
                 output_format=output_format,
                 ffmpeg_path=ffmpeg_path,
-                h264_skip_initial_idr_windows=(
-                    hcnetsdk_h264_skip_initial_idr_windows
-                ),
+                h264_skip_initial_idr_windows=(hcnetsdk_h264_skip_initial_idr_windows),
                 h264_trim_to_clean_idr_window=trim_to_clean_window,
                 h264_clean_idr_preroll_seconds=clean_window_preroll_seconds,
                 h264_clean_idr_max_windows=clean_window_max_windows,
@@ -3223,8 +3313,7 @@ class EzvizClient:
             capture=CaptureLimits(
                 max_packets=(
                     max_packets
-                    if max_packets is None
-                    or is_positive_capture_count_bound(max_packets)
+                    if max_packets is None or is_positive_capture_count_bound(max_packets)
                     else None
                 ),
                 duration_seconds=(
@@ -3242,12 +3331,8 @@ class EzvizClient:
             mux=mux_options,
             channel=channel,
         )
-        if (
-            max_packets is not None
-            and not is_positive_capture_count_bound(max_packets)
-        ) or (
-            duration_seconds is not None
-            and not is_positive_finite_duration_bound(duration_seconds)
+        if (max_packets is not None and not is_positive_capture_count_bound(max_packets)) or (
+            duration_seconds is not None and not is_positive_finite_duration_bound(duration_seconds)
         ):
             clip_options = _LegacyClipOptions.from_options(
                 clip_options,
@@ -3280,16 +3365,15 @@ class EzvizClient:
             mux.h264_skip_initial_idr_windows
             or mux.h264_trim_to_clean_idr_window
             or mux.h264_clean_idr_preroll_seconds
-            or mux.h264_clean_idr_max_windows
-            != default_mux.h264_clean_idr_max_windows
+            or mux.h264_clean_idr_max_windows != default_mux.h264_clean_idr_max_windows
             or mux.h264_wait_for_clean_idr_window
-            or mux.h264_clean_idr_wait_seconds
-            != default_mux.h264_clean_idr_wait_seconds
+            or mux.h264_clean_idr_wait_seconds != default_mux.h264_clean_idr_wait_seconds
         ):
             raise PyEzvizError(
-                "H.264 clean-window mux options require "
-                "HcNetSdkCommandPortClipSource"
+                "H.264 clean-window mux options require HcNetSdkCommandPortClipSource"
             )
+        if isinstance(source, AutoClipSource):
+            return self._save_auto_clip(serial, output, options)
         if isinstance(source, LocalSdkClipSource):
             return self._save_local_sdk_clip(
                 serial,
@@ -3307,6 +3391,9 @@ class EzvizClient:
                 p2p_register_max_retries=source.p2p_register_max_retries,
                 timeout=source.timeout,
                 smscode=source.smscode,
+                **_credential_options(source.credentials),
+                **_nonempty_packet_options(source.skip_empty_packets),
+                **_receiver_options(source.receiver_port),
             )
         if isinstance(source, LocalSdkEcdhClipSource):
             return self._save_local_sdk_ecdh_clip(
@@ -3329,6 +3416,8 @@ class EzvizClient:
                 media_key=decode.media_key,
                 nalu_header_size=decode.nalu_header_size,
                 smscode=source.smscode,
+                **_credential_options(source.credentials),
+                **_retry_port_options(source.fresh_retry_port),
             )
         if isinstance(source, HcNetSdkCommandPortClipSource):
             return self._save_hcnetsdk_command_port_clip(
@@ -3387,6 +3476,107 @@ class EzvizClient:
             )
         raise PyEzvizError(f"Unsupported clip source options: {type(source).__name__}")
 
+    def _save_auto_clip(  # noqa: PLR0912
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        options: ClipOptions,
+    ) -> SaveMediaResult:
+        """Stage bounded attempts; only commit a successful selected source."""
+        source_options = cast(AutoClipSource, options.source)
+        options.capture.require_bounded("Automatic clip capture")
+        source = select_stream_source(
+            self,
+            serial,
+            source_options,
+            fetch_media_key=options.decode.decrypt_video and options.decode.media_key is None,
+        )
+        if (
+            options.decode.decrypt_video and options.decode.media_key is None
+            and isinstance(source, LocalSdkClipSource | LocalSdkEcdhClipSource)
+            and source.credentials is not None
+        ):
+            # Account discovery already fetched this key. Preserve it across
+            # local protocol/rate retries and any eligible cloud fallback.
+            options = replace(options, decode=replace(options.decode, media_key=source.credentials.media_key))
+        if isinstance(source, LocalSdkEcdhClipSource) and options.max_packets is not None:
+            # Emitted media packets exclude handshake/descriptor/detection
+            # frames. Retain a separate, finite negotiation allowance.
+            source = replace(source, max_frames=options.max_packets + 1024)
+        deadline = (
+            time.monotonic() + options.duration_seconds
+            if options.duration_seconds is not None
+            else None
+        )
+        while True:
+            if isinstance(source, LocalSdkClipSource):
+                source = replace(source, skip_empty_packets=True)
+            duration = None if deadline is None else deadline - time.monotonic()
+            if duration is not None and duration <= 0:
+                raise EzvizNoMediaError("Automatic playback exhausted its capture deadline")
+            selected_options = replace(
+                options,
+                source=source,
+                capture=replace(options.capture, duration_seconds=duration),
+            )
+            with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staged:
+                try:
+                    if isinstance(source, CloudClipSource):
+                        result = self._save_auto_cloud_clip(serial, cast(BinaryIO, staged), selected_options, deadline)
+                    else:
+                        result = self.save_clip_with_options(serial, cast(BinaryIO, staged), selected_options)
+                    size = staged.tell()
+                    if not size:
+                        raise EzvizNoMediaError("Automatic playback did not contain media")
+                except Exception as error:
+                    fallback = (
+                        fallback_stream_source(source, source_options, error)
+                        if staged.tell() == 0
+                        else None
+                    )
+                    if fallback is None:
+                        raise
+                    source = fallback
+                    continue
+                staged.seek(0)
+                if isinstance(output, str | Path):
+                    path = Path(output)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+                    try:
+                        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(descriptor, "wb") as target:
+                            shutil.copyfileobj(staged, target)
+                        os.replace(temporary, path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                else:
+                    shutil.copyfileobj(staged, output)
+                result["output"] = _output_name(output)
+                result["bytes"] = size
+                result["duration_seconds"] = options.duration_seconds
+                result["content_type"] = _content_type_for_output(
+                    output, default="video/mp2t" if result.get("format") == "mpegts" else "video/mpeg",
+                )
+                return result
+
+    def _save_auto_cloud_clip(
+        self, serial: str, output: BinaryIO, options: ClipOptions, deadline: float | None,
+    ) -> SaveMediaResult:
+        source = cast(CloudClipSource, options.source)
+        mux = options.resolved_mux()
+        decode = options.decode
+        return self._save_cloud_clip(
+            serial, output, output_format=mux.output_format,
+            duration_seconds=options.duration_seconds, max_packets=options.max_packets,
+            channel=options.channel, ffmpeg_path=mux.ffmpeg_path,
+            decrypt_video=decode.decrypt_video, media_key=decode.media_key,
+            nalu_header_size=decode.nalu_header_size, timeout=source.timeout,
+            client_type=source.client_type, token_index=source.token_index,
+            refresh_vtm=source.refresh_vtm, smscode=source.smscode,
+            capture_deadline=deadline,
+        )
+
     def _save_local_sdk_ecdh_clip(  # noqa: PLR0913
         self,
         serial: str,
@@ -3409,6 +3599,8 @@ class EzvizClient:
         media_key: str | bytes | None,
         nalu_header_size: int | None,
         smscode: str | int | None,
+        credentials: EzvizLocalSdkCredentials | None = None,
+        fresh_retry_port: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through the local SDK ECDH stream path."""
 
@@ -3417,13 +3609,9 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = output_path.with_name(
-                f".{output_path.name}.{uuid4().hex}.tmp"
-            )
+            temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
             try:
-                descriptor = os.open(
-                    temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-                )
+                descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(descriptor, "wb") as output_file:
                     copy_local_sdk_ecdh_stream_from_client(
                         self,
@@ -3446,6 +3634,8 @@ class EzvizClient:
                         ffmpeg_path=ffmpeg_path,
                         nalu_header_size=nalu_header_size,
                         smscode=smscode,
+                        **_credential_options(credentials),
+                        **_retry_port_options(fresh_retry_port),
                     )
                 if temporary_path.stat().st_size == 0:
                     raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
@@ -3475,6 +3665,8 @@ class EzvizClient:
                 ffmpeg_path=ffmpeg_path,
                 nalu_header_size=nalu_header_size,
                 smscode=smscode,
+                **_credential_options(credentials),
+                **_retry_port_options(fresh_retry_port),
             )
 
         bytes_written = _bytes_written_to_output(output, start_position=start_position)
@@ -3515,6 +3707,9 @@ class EzvizClient:
         p2p_register_max_retries: int,
         timeout: float | None,
         smscode: str | int | None,
+        credentials: EzvizLocalSdkCredentials | None = None,
+        receiver_port: int = 10101,
+        skip_empty_packets: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through the direct-local SDK path."""
 
@@ -3540,6 +3735,9 @@ class EzvizClient:
                     duration_seconds=duration_seconds,
                     ffmpeg_path=ffmpeg_path,
                     smscode=smscode,
+                    **_credential_options(credentials),
+                    **_nonempty_packet_options(skip_empty_packets),
+                    **_receiver_options(receiver_port, receiver_ex=True),
                 )
         else:
             start_position = _binary_position(output)
@@ -3560,6 +3758,9 @@ class EzvizClient:
                 duration_seconds=duration_seconds,
                 ffmpeg_path=ffmpeg_path,
                 smscode=smscode,
+                **_credential_options(credentials),
+                **_nonempty_packet_options(skip_empty_packets),
+                **_receiver_options(receiver_port, receiver_ex=True),
             )
 
         return {
@@ -3834,11 +4035,15 @@ class EzvizClient:
         token_index: int,
         refresh_vtm: bool,
         smscode: str | int | None,
+        capture_deadline: float | None = None,
     ) -> SaveMediaResult:
         """Save a clip through the EZVIZ VTM cloud live stream path."""
 
         start_position = None
         staged_size: int | None = None
+        deadline_options: dict[str, Any] = (
+            {"capture_deadline": capture_deadline} if capture_deadline is not None else {}
+        )
 
         def copy_cloud(output_file: BinaryIO) -> None:
             if output_format == "mpegts":
@@ -3858,6 +4063,7 @@ class EzvizClient:
                     media_key=media_key,
                     nalu_header_size=nalu_header_size,
                     smscode=smscode,
+                    **deadline_options,
                 )
                 return
             copy_cloud_stream_to_mpegps(
@@ -3875,6 +4081,7 @@ class EzvizClient:
                 media_key=media_key,
                 nalu_header_size=nalu_header_size,
                 smscode=smscode,
+                **deadline_options,
             )
 
         if decrypt_video and duration_seconds is None and max_packets is None:
@@ -4473,7 +4680,7 @@ class EzvizClient:
         required). Merely changing headers does not migrate an existing session.
         Persist the returned token before starting push reception.
         """
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self.mqtt_client is not None:
                 raise PyEzvizError("Stop and discard the MQTT client before migrating login")
             if self._token.get("push_profile") == PUSH_PROFILE:
@@ -4499,7 +4706,7 @@ class EzvizClient:
 
     def login(self, sms_code: int | None = None) -> JsonDict:
         """Get or refresh credentials, serializing mutation and persistence with push."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             return self._login_or_refresh(sms_code)
 
     def _login_or_refresh(self, sms_code: int | None = None) -> JsonDict:
@@ -4512,7 +4719,7 @@ class EzvizClient:
                 refresh_credentials(
                     self._session,
                     cast(dict[str, Any], self._token),
-                    self._timeout,
+                    bounded_request_timeout(self._timeout),
                     self._notify_token_updated,
                     self.get_service_urls,
                 )
@@ -4537,11 +4744,11 @@ class EzvizClient:
 
     def logout(self) -> bool:
         """Close Ezviz session and remove login session from ezviz servers."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             try:
                 req = self._session.delete(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGOUT}",
-                    timeout=self._timeout,
+                    timeout=bounded_request_timeout(self._timeout),
                 )
                 req.raise_for_status()
 
@@ -5026,7 +5233,7 @@ class EzvizClient:
         if sensibility not in [0, 1, 2, 3, 4, 5, 6] and type_value == 0:
             raise PyEzvizError("Unproper sensibility for type 0 (should be within 1 to 6).")
         try:
-            with self._token_lock:
+            with request_budget_lock(self._token_lock):
                 req = self._session.post(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY}",
                     data={
@@ -5035,7 +5242,7 @@ class EzvizClient:
                         "channelNo": 1,
                         "value": sensibility,
                     },
-                    timeout=self._timeout,
+                    timeout=bounded_request_timeout(self._timeout),
                 )
 
             req.raise_for_status()
@@ -6549,7 +6756,7 @@ class EzvizClient:
         self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
     ) -> MQTTClient:
         """Return a push client sharing this client's session and token-save callback."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self.mqtt_client is None:
                 self.mqtt_client = MQTTClient(
                     token=cast(dict[Any, Any], self._token),
@@ -6581,7 +6788,7 @@ class EzvizClient:
     def export_token(self) -> dict[str, Any]:
         """Return an independent snapshot of the current authentication token."""
 
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             return deepcopy(cast(dict[str, Any], self._token))
 
     def get_device(self) -> Any:
@@ -6622,7 +6829,7 @@ class EzvizClient:
 
     def close_session(self) -> None:
         """Clear current session."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self._session:
                 self._session.close()
 

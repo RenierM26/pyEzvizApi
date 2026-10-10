@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .cas import EzvizCAS
     from .client import EzvizClient
     from .clip import (
+        AutoClipSource,
         ClipOptions,
         ClipOutputFormat,
         ClipSource,
@@ -714,6 +715,7 @@ if TYPE_CHECKING:
         mpeg_ps_complete_prefix_length,
         mpeg_ps_decryptable_prefix_length,
     )
+    from .stream_selection import AutoMediaStream
     from .stream_transport import (
         StopStreamResponse,
         StreamInfoResponse,
@@ -756,6 +758,8 @@ _EXPORTS = {
     "CaptureLimits": "media",
     "ClipOptions": "clip",
     "ClipOutputFormat": "clip",
+    "AutoClipSource": "clip",
+    "AutoMediaStream": "stream_selection",
     "ClipSource": "clip",
     "ClipSourceOptions": "clip",
     "CloudClipSource": "clip",

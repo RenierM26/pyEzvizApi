@@ -22,6 +22,7 @@ import time
 from typing import Any, BinaryIO, TypedDict, cast
 from urllib.parse import urlparse
 
+from ._request_deadline import request_deadline
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import (
@@ -362,6 +363,8 @@ def open_cloud_stream(
     refresh_vtm: bool = True,
     timeout: float | None = 10.0,
     socket_factory: SocketFactory | None = None,
+    capture_deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> VtmStreamClient:
     """Return a VTM TCP client bootstrapped from EZVIZ cloud metadata.
 
@@ -369,14 +372,15 @@ def open_cloud_stream(
     ``start()`` before reading packets.
     """
 
-    info = get_cloud_stream_info(
-        client,
-        serial,
-        channel=channel,
-        client_type=client_type,
-        token_index=token_index,
-        refresh_vtm=refresh_vtm,
-    )
+    with request_deadline(capture_deadline, monotonic):
+        info = get_cloud_stream_info(
+            client,
+            serial,
+            channel=channel,
+            client_type=client_type,
+            token_index=token_index,
+            refresh_vtm=refresh_vtm,
+        )
     if socket_factory is None:
         return VtmStreamClient(info["stream_url"], timeout=timeout)
     return VtmStreamClient(
@@ -392,9 +396,12 @@ def _start_bounded_cloud_stream(
     timeout: float | None,
     duration_seconds: float | None,
     monotonic: Callable[[], float],
+    capture_deadline: float | None = None,
 ) -> float | None:
     """Start VTM negotiation with one deadline instead of per-read timeouts."""
 
+    if capture_deadline is not None and monotonic() >= capture_deadline:
+        raise EzvizNoMediaError("Cloud bootstrap exhausted capture deadline")
     if not isinstance(stream, VtmStreamClient):
         stream.start()
         return None
@@ -406,6 +413,8 @@ def _start_bounded_cloud_stream(
         if startup_seconds is None
         else monotonic() + startup_seconds
     )
+    if capture_deadline is not None:
+        deadline = capture_deadline if deadline is None else min(deadline, capture_deadline)
     stream.start(deadline=deadline, monotonic=monotonic)
     return deadline
 
@@ -443,6 +452,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     nalu_header_size: int | None = None,
     smscode: str | int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    capture_deadline: float | None = None,
 ) -> None:
     """Copy a cloud VTM live stream to MPEG-PS bytes.
 
@@ -456,9 +466,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             duration_seconds=duration_seconds,
         )
         if media_key is None and smscode is not None:
-            selected_key = client.get_cam_key(serial, smscode=smscode)
+            selected_key = _bounded_cloud_media_key(client, serial, smscode, capture_deadline, monotonic)
         else:
-            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+            selected_key = media_key if media_key is not None else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         stream = open_cloud_stream(
@@ -469,6 +479,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
+            **_cloud_request_budget_options(capture_deadline, monotonic),
         )
         with _closing_unconnected_cloud_stream(stream):
             startup_deadline = _start_bounded_cloud_stream(
@@ -476,7 +487,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 timeout=timeout,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                capture_deadline=capture_deadline,
             )
+            duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -529,6 +542,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
+        **_cloud_request_budget_options(capture_deadline, monotonic),
     )
     with _closing_unconnected_cloud_stream(stream):
         startup_deadline = _start_bounded_cloud_stream(
@@ -536,7 +550,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             timeout=timeout,
             duration_seconds=duration_seconds,
             monotonic=monotonic,
+            capture_deadline=capture_deadline,
         )
+        duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
         _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
@@ -565,6 +581,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
     nalu_header_size: int | None = None,
     smscode: str | int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    capture_deadline: float | None = None,
 ) -> None:
     """Copy a cloud VTM live stream to MPEG-TS bytes."""
 
@@ -574,9 +591,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             duration_seconds=duration_seconds,
         )
         if media_key is None and smscode is not None:
-            selected_key = client.get_cam_key(serial, smscode=smscode)
+            selected_key = _bounded_cloud_media_key(client, serial, smscode, capture_deadline, monotonic)
         else:
-            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+            selected_key = media_key if media_key is not None else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         stream = open_cloud_stream(
@@ -587,6 +604,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
+            **_cloud_request_budget_options(capture_deadline, monotonic),
         )
         with _closing_unconnected_cloud_stream(stream):
             startup_deadline = _start_bounded_cloud_stream(
@@ -594,7 +612,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
                 timeout=timeout,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                capture_deadline=capture_deadline,
             )
+            duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -648,6 +668,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
+        **_cloud_request_budget_options(capture_deadline, monotonic),
     )
     with _closing_unconnected_cloud_stream(stream):
         startup_deadline = _start_bounded_cloud_stream(
@@ -655,7 +676,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             timeout=timeout,
             duration_seconds=duration_seconds,
             monotonic=monotonic,
+            capture_deadline=capture_deadline,
         )
+        duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
         copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
@@ -665,6 +688,20 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
+
+
+def _remaining_cloud_capture_duration(
+    duration_seconds: float | None,
+    capture_deadline: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    """Account for metadata and startup without changing explicit captures."""
+    if capture_deadline is None:
+        return duration_seconds
+    remaining = capture_deadline - monotonic()
+    if remaining <= 0:
+        raise EzvizNoMediaError("Cloud bootstrap exhausted capture deadline")
+    return remaining if duration_seconds is None else min(duration_seconds, remaining)
 
 
 def _require_cloud_mpegps_video_duration(
@@ -1970,3 +2007,12 @@ def _derive_auth_addr(token: Any) -> str:
         if region:
             return f"https://{region}auth.ezvizlife.com"
     raise PyEzvizError("Missing authAddr in service URLs")
+
+
+def _cloud_request_budget_options(deadline: float | None, monotonic: Callable[[], float]) -> dict[str, Any]:
+    return {} if deadline is None else {"capture_deadline": deadline, "monotonic": monotonic}
+
+
+def _bounded_cloud_media_key(client: Any, serial: str, smscode: str | int | None, deadline: float | None, monotonic: Callable[[], float]) -> Any:
+    with request_deadline(deadline, monotonic):
+        return client.get_cam_key(serial) if smscode is None else client.get_cam_key(serial, smscode=smscode)

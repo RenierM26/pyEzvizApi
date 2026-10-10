@@ -2169,3 +2169,30 @@ def test_bounded_nal_timestamps_follow_only_accepted_picture_units() -> None:
     assert rtp_packets_to_nal_units(packets, codec="h264", completed_access_units_only=True,
         nal_timestamps=timestamps) == (b"\x65\x80complete",)
     assert timestamps == [1000]
+
+
+def _native_aac_jitter_packets(offsets: list[int]) -> list[RtpPacket]:
+    packets = [parse_rtp_packet(_rtp(b"metadata", sequence=0, payload_type=112,
+        extension_profile=2, extension_data=bytes.fromhex("430a0090fe00fa0301f403ff")), idmx=True)]
+    encrypted = bytes.fromhex("72727e881edcfd0100a718687909b565")
+    for sequence, timestamp in enumerate(offsets, start=1):
+        packets.append(parse_rtp_packet(_rtp(b"\x00\x10\x00\x80" + encrypted, sequence=sequence,
+            timestamp=timestamp, payload_type=104, extension_profile=0x4000,
+            extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01"), idmx=True))
+    return packets
+
+
+def test_native_aac_preserves_one_millisecond_jitter_only_when_enabled() -> None:
+    packets = _native_aac_jitter_packets([0, 1024, 2064, 3072])
+    assert decrypt_idmx_aac_packets(packets, b"0123456789abcdef", require_contiguous=False) is None
+    audio = decrypt_idmx_aac_packets(packets, b"0123456789abcdef", require_contiguous=False, allow_timestamp_jitter=True)
+    assert audio is not None
+    assert audio.frame_count == 4
+    assert [offset for offset, _data in audio.timed_segments] == [0, 2064, 3072]
+    assert all(data.endswith(b"0123456789abcdef") for _offset, data in audio.timed_segments)
+
+
+@pytest.mark.parametrize("delta", [0, 1, 1056, 0x80000000, 0xFFFFFFFF])
+def test_native_aac_jitter_policy_rejects_unproven_or_reordered_clock(delta: int) -> None:
+    packets = _native_aac_jitter_packets([0, delta])
+    assert decrypt_idmx_aac_packets(packets, b"0123456789abcdef", require_contiguous=False, allow_timestamp_jitter=True) is None

@@ -704,6 +704,7 @@ def decrypt_idmx_aac_packets(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    allow_timestamp_jitter: bool = False,
 ) -> RtpAacStream | None:
     """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
 
@@ -738,14 +739,14 @@ def decrypt_idmx_aac_packets(
         (current - previous) & 0xFFFFFFFF
         for previous, current in pairwise(timestamps)
     ]
-    if any(delta == 0 or delta >= 0x80000000 or delta % IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
-        return None
-    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
-        return None
     descriptor = route_profile.audio_metadata or audio_metadata
     if descriptor is None:
         return None
     sample_rate, channels = descriptor
+    if any(not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter) for delta in deltas):
+        return None
+    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
+        return None
     aes_key = _rtp_media_aes_key(media_key)
     access_units = [
         _decrypt_idmx_aac_access_unit(access_unit, aes_key)
@@ -763,6 +764,15 @@ def decrypt_idmx_aac_packets(
         timed_segments=_aac_timed_segments(adts_frames, deltas),
     )
 
+
+
+def _aac_timestamp_delta_is_supported(delta: int, sample_rate: int, allow_jitter: bool) -> bool:
+    """Accept whole AUs or explicitly enabled native one-millisecond clock jitter."""
+
+    jitter = sample_rate // 1000 if allow_jitter else 0
+    remainder = delta % IDMX_AAC_SAMPLES_PER_FRAME
+    return (IDMX_AAC_SAMPLES_PER_FRAME - jitter <= delta < 0x80000000
+            and min(remainder, IDMX_AAC_SAMPLES_PER_FRAME - remainder) <= jitter)
 
 def _aac_timed_segments(adts_frames: list[bytes], deltas: list[int]) -> tuple[tuple[int, bytes], ...]:
     """Split received ADTS only at missing-AU boundaries."""

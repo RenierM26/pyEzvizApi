@@ -100,11 +100,13 @@ def test_decrypted_native_source_clock_preserves_missing_picture_gap() -> None:
 
 def test_decrypted_native_hevc_timeline_honors_parameter_set_policy() -> None:
     media_key = "test-media-key"
-    cipher = _local_stream._hikvision_aes_ecb_cipher(_local_stream._local_media_aes_key(media_key))  # noqa: SLF001
     units = (b"\x40\x01" + b"V" * 16, b"\x26\x01" + b"\x80" + b"I" * 15)
+    # Fixed native-protocol known-answer vectors keep fixture construction
+    # independent of the decrypt implementation being tested.
+    ciphertexts = (bytes.fromhex("4f6978232cd789e6912542612655feb5"), bytes.fromhex("2a6f97bb5cbf3482e855259a2d1ea297"))
     packets = [b"\x90\xe0" + index.to_bytes(2, "big") + (1000 + index * 6000).to_bytes(4, "big")
         + b"\x55\x66\x77\x88\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
-        + unit[:2] + cipher.encrypt(unit[2:]) for index, unit in enumerate(units)]
+        + unit[:2] + ciphertext for index, (unit, ciphertext) in enumerate(zip(units, ciphertexts, strict=True))]
     annexb = b"".join(b"\x00\x00\x00\x01" + unit for unit in units)
     assert _local_stream._native_decrypted_rtp_timeline(packets, annexb, "hevc", media_key, None, True) == (units, [1000, 7000])  # noqa: SLF001
     with pytest.raises(PyEzvizError, match="cannot be matched"):

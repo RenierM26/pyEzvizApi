@@ -129,17 +129,20 @@ def test_incremental_audio_rejects_non_au_clock_steps(invalid: int) -> None:
         list(muxer.audio(invalid, audio))
 
 
-def test_native_proxy_accepts_descriptor_backed_aac_after_startup_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("delayed_timing", [False, True])
+def test_native_proxy_accepts_descriptor_backed_aac_after_startup_probe(monkeypatch: pytest.MonkeyPatch, delayed_timing: bool) -> None:
     video_descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
     audio_descriptor = b"\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
     metadata = RtpPacket(b"metadata", 112, 0, 0, 1, False, 2,
-        video_descriptor + audio_descriptor + b"\x45\x02\x1b\x60\x45\x02\x0f\x68", True)
+        (b"" if delayed_timing else video_descriptor) + audio_descriptor + b"\x45\x02\x1b\x60\x45\x02\x0f\x68", True)
     video = [RtpPacket(b"\x67parameters", 96, index, 0, 1, True, 0x4000,
         b"\x80\x06\0\x01\x10\0\0\0", True) for index in range(1, 258)]
     audio_packet = RtpPacket(b"audio", 104, 1, 0, 2, True)
     frame_payload = b"\x65\x80frame"
     frame = RtpPacket(frame_payload, 96, 258, 9000, 1, True)
     parsed = [metadata, *video, audio_packet, frame]
+    if delayed_timing:
+        parsed.insert(20, RtpPacket(b"late timing", 112, 1, 0, 3, False, 2, video_descriptor, True))
     raw = [SimpleNamespace(body=bytes(index.to_bytes(2, "big"))) for index in range(len(parsed))]
     monkeypatch.setattr(cloud_stream, "_parse_cloud_rtp_packet", lambda body: parsed[int.from_bytes(body, "big")])
     monkeypatch.setattr(cloud_stream, "_require_clear_cloud_packet", lambda *_a, **_kw: None)
@@ -159,10 +162,11 @@ def test_native_proxy_accepts_descriptor_backed_aac_after_startup_probe(monkeypa
 
     monkeypatch.setattr(cloud_stream, "open_mpegts_remux_process", remux)
     output = io.BytesIO()
-    cloud_stream._copy_cloud_rtp_packets_to_mpegts(iter(raw), output, ffmpeg_path="synthetic", cancel_input=None, audio_key="synthetic")  # noqa: SLF001
+    cloud_stream._copy_cloud_rtp_packets_to_mpegts(iter(raw), output, ffmpeg_path="synthetic", cancel_input=None, audio_key=None if delayed_timing else "synthetic")  # noqa: SLF001
     audio_pes_start = b"\x00\x00\x01\xc0"
-    assert audio_pes_start in output.getvalue()
-    assert adts in output.getvalue()
+    if not delayed_timing:
+        assert audio_pes_start in output.getvalue()
+        assert adts in output.getvalue()
     assert frame_payload in output.getvalue()
 
 

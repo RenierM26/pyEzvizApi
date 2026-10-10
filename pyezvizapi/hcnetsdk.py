@@ -9201,13 +9201,10 @@ class EzvizLocalSdkClient:
             self._command_sock = None
         if self._stream_sock is sock:
             self._stream_sock = None
-            if self._owned_preview is not None:
+            if self._owned_preview is not None and self._retired_stream_sock is None:
                 # A partial frame cannot be parsed again, but closing unread
                 # media before the owned stop ACK can strand the camera session.
                 # Keep it only for bounded raw teardown, never further parsing.
-                if self._retired_stream_sock is not None:
-                    with suppress(OSError):
-                        self._retired_stream_sock.close()
                 self._retired_stream_sock = sock
                 return
         with suppress(Exception):
@@ -9308,6 +9305,8 @@ class EzvizLocalSdkClient:
         method supports it as an optional supplied frame without trying to
         synthesize unknown fields.
         """
+        if self._owned_preview is not None or self._retired_stream_sock is not None:
+            raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
             pre_start = self.send_encrypted_command(
@@ -9373,6 +9372,8 @@ class EzvizLocalSdkClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap preview and build 0x3105 from the 0x2012 Session."""
+        if self._owned_preview is not None or self._retired_stream_sock is not None:
+            raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
             pre_start = self.send_encrypted_command(
@@ -9558,6 +9559,10 @@ class EzvizLocalSdkClient:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Any:
+        if self._retired_stream_sock is not None:
+            raise PyEzvizError(
+                "EZVIZ media socket was invalidated; close this client before reopening"
+            )
         if self._stream_sock is None:
             connect_timeout = self.timeout
             if timeout is not None:

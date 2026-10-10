@@ -203,7 +203,8 @@ def test_stop_response_and_drain_share_one_deadline(peers):
     assert all(p.closed for p in peers[2:5])
 
 
-def test_invalidated_owned_media_is_retained_only_for_stop_drain(peers):
+@pytest.mark.parametrize("retry", [False, True])
+def test_invalidated_owned_media_is_retained_only_for_stop_drain(peers, retry):
     client = start(peers)
     media = peers[3]
     clock = [10.0]
@@ -212,6 +213,13 @@ def test_invalidated_owned_media_is_retained_only_for_stop_drain(peers):
     with pytest.raises(EzvizLocalSdkDeadlineExpired):
         client.read_stream_frame_after_prefix(deadline=10.1, monotonic=lambda: clock[0])
     assert not media.closed
+    if retry:
+        with pytest.raises(PyEzvizError, match="invalidated"):
+            client.read_stream_frame_after_prefix()
+        with pytest.raises(PyEzvizError, match="Close this client"):
+            start(peers)
+        assert len(peers[5]) == 2
+        assert not media.closed
     client.close()
     assert media.shutdown_modes == [socket.SHUT_WR]
     assert media.eof_reads == 1 and media.closed
@@ -250,3 +258,16 @@ def test_stop_drain_os_timeout_is_sdk_deadline_error(peers):
     assert isinstance(caught.value.__cause__, TimeoutError)
     client.close()
     assert all(peer.closed for peer in peers[2:5])
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_bootstrap_cannot_overwrite_accepted_session_before_close(peers, structured):
+    client = start(peers)
+    with pytest.raises(PyEzvizError, match="Close this client"):
+        if structured:
+            start(peers)
+        else:
+            client.bootstrap_preview(preview_body="<Request/>", stream_setup_body="<Request/>")
+    assert len(peers[5]) == 2
+    client.close()
+    assert len(peers[5]) == 3

@@ -536,4 +536,5 @@ stop errors to low-level callers. Raw caller-supplied setup bodies do not grant
 stop authority. The stop envelope shares command 0x2013 with ECDH pre-start, but
 uses the owned session rather than a wildcard initialization body. A media socket
 with an interrupted partial frame is removed from parsing and retained only for
-this bounded teardown; callers must still close their low-level client.
+this bounded teardown. Further reads on that client are rejected rather than
+opening an unrelated socket; callers must close it before reopening.

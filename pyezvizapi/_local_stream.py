@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import hashlib
 import ipaddress
-from itertools import chain, pairwise
+from itertools import chain, groupby, pairwise
 from pathlib import Path
 import subprocess
 import tempfile
@@ -80,6 +80,7 @@ from .rtp import (
     idmx_rtp_stream_descriptors,
     idmx_video_frame_rate,
     parse_rtp_packet,
+    rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packet_is_idmx_aac,
     rtp_packets_to_nal_units,
@@ -2607,7 +2608,8 @@ def _copy_clear_native_idmx_timed_av(
             packet = _idmx_local_frame_rtp_packet(frame, header)
             if packet is not None:
                 rtp_packets.append(packet)
-    if idmx_video_frame_rate(rtp_packets) is None:
+    advertised_rate = idmx_video_frame_rate(rtp_packets)
+    if advertised_rate is None:
         return False
     codec = detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
@@ -2615,6 +2617,11 @@ def _copy_clear_native_idmx_timed_av(
         rtp_packets, codec=codec, completed_access_units_only=True,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
     )
+    if any(packet.extension_profile == 0x4000 and len(packet.extension_data) >= 5
+           and packet.extension_data.startswith(b"\x80\x06")
+           and packet.extension_data[4] & 0xF0 == 0x10 for packet in rtp_packets):
+        # Local native video wrapper ticks are not a proven 90 kHz clock.
+        timestamps = _native_wrapper_video_timestamps(units, timestamps, codec, advertised_rate)
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
     )
@@ -2625,6 +2632,22 @@ def _copy_clear_native_idmx_timed_av(
 
     copy_remuxed_output(process, output, write_input=write_input)
     return True
+
+
+def _native_wrapper_video_timestamps(
+    units: tuple[bytes, ...], timestamps: list[int], codec: RtpVideoCodec, advertised_rate: str,
+) -> list[int]:
+    """Use the native advertised period once per completed picture, not per NAL."""
+
+    period = Fraction(IDMX_VIDEO_RTP_CLOCK_RATE) / Fraction(advertised_rate)
+    frame_index = 0
+    result: list[int] = []
+    for _timestamp, entries in groupby(zip(timestamps, units, strict=True), key=lambda item: item[0]):
+        group_units = [unit for _time, unit in entries]
+        result.extend([round(frame_index * period)] * len(group_units))
+        if rtp_nal_units_have_vcl(group_units, codec=codec):
+            frame_index += 1
+    return result
 
 def h264_clean_idr_capture_budgets(
     *,

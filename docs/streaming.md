@@ -244,3 +244,34 @@ inspect and sanitize any sidecar before sharing it. Never commit live captures,
 inventory files, serials, passwords, tokens, or media keys. If live hardware is
 unavailable, record the live check as skipped; offline golden-fixture
 conformance remains required.
+
+## Bounded local protocol probing
+
+```python
+profile = client.probe_local_stream(serial, duration_seconds=10)
+# protocol: ecdh / legacy_rtp_ps / unknown / no_data
+# recommended_source: local-sdk-ecdh / local-sdk / None
+```
+
+The probe observes an ECDH-requested local session. `ecdh` requires verified
+native handshake authentication, not just a matching magic byte. Repeated,
+parseable RTP packets with recognized PS starts on one route identify
+`legacy_rtp_ps`; duplicates, SSRC alone, RTP version bits, and Annex-B lookalikes
+do not establish that result. The source recommendation is explicit: neither
+this probe nor an explicitly selected ECDH source silently downgrades transport.
+Authentication/network errors propagate. An ECDH capture receiving established
+legacy framing raises `EzvizUnsupportedMediaError` with `source="local-sdk-ecdh"`
+and `reason="protocol_mismatch"`, recommending direct-local with the current key.
+Genuine silence still yields the existing no-media outcome.
+
+Credential discovery precedes the probe's finite stream deadline. Local
+bootstrap and reads share that deadline; frame and byte-processing limits also
+apply. A received frame crossing the byte budget is counted but not decoded;
+at most one complete interleaved frame may cross the receive-byte budget.
+Sockets close on every exit. The returned dictionary contains only protocol,
+source recommendation, authenticated-ECDH flag, and received frame/byte counts;
+no payloads, peer identifiers, session keys, or camera credentials are included.
+This is protocol detection, **not** codec/media-key/playback certification or a
+permanent model-capability cache. Validate actual video and audio with the
+selected source and current media key. The official app's ability to play a
+camera does not prove it used ECDH rather than a different supported transport.

@@ -84,6 +84,7 @@ from .local_stream_media import (
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
 )
+from .local_stream_probe import LocalSdkProtocolDetector
 from .local_stream_transport import get_local_sdk_stream_credentials_from_client
 from .media import (
     LegacyPacketSource,
@@ -413,6 +414,7 @@ class EzvizLocalSdkEcdhStreamDecoder:
         self._highest_sequence: int | None = None
         self._seen_sequences: set[int] = set()
         self._unrecognized_media_records = 0
+        self._protocol_detector = LocalSdkProtocolDetector()
 
     @property
     def keys_derived(self) -> bool:
@@ -431,6 +433,16 @@ class EzvizLocalSdkEcdhStreamDecoder:
         if self._chacha20_key is None:
             handshake = parse_ezviz_local_sdk_ecdh_handshake_packet(payload)
             if handshake is None:
+                self._protocol_detector.observe(channel, payload)
+                if self._protocol_detector.legacy_rtp_ps:
+                    raise EzvizUnsupportedMediaError(
+                        "Local preview returned legacy RTP/MPEG-PS instead of an "
+                        "ECDH handshake; use source='local-sdk' with the current "
+                        "media key, or probe_local_sdk_stream_from_client to "
+                        "inspect the negotiated protocol",
+                        source="local-sdk-ecdh",
+                        reason="protocol_mismatch",
+                    )
                 return b""
             shared_secret = derive_ezviz_local_sdk_ecdh_shared_secret(
                 self.private_key,

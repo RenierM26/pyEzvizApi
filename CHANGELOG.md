@@ -8,6 +8,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Detect repeated legacy RTP/PS on ECDH-requested sessions and report an actionable protocol mismatch instead of generic no-media; add a bounded, sanitized `probe_local_stream` API with explicit source recommendations.
+
 - Remove the native one-byte prefix from unfragmented local MPEG-PS records, restoring Gate video continuity and AAC without trimming received media.
 - Keep IDMX video, audio, and metadata sequence counters independent when native transport provenance and the fixed RTP source marker are present; preserve shared-counter continuity checks for ordinary RTP.
 - Use encoded HEVC timing for native media-wrapper records instead of assuming a 90 kHz clock or forcing 25 fps.

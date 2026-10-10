@@ -3042,6 +3042,35 @@ class EzvizClient:
             key = self.get_cam_key(serial, smscode=smscode, max_retries=max_retries)
         return decrypt_image(image_data, key)
 
+    def probe_local_stream(
+        self,
+        serial: str,
+        *,
+        duration_seconds: float = 10.0,
+        max_frames: int = 1024,
+        max_bytes: int = 1024 * 1024,
+        receiver_port: int = 10101,
+    ) -> dict[str, Any]:
+        """Return sanitized protocol evidence and an explicit source recommendation.
+
+        This probes local negotiation, not media-key validity or full playback.
+        Authentication errors propagate; no stream source is silently changed.
+        """
+        from dataclasses import asdict  # noqa: PLC0415
+
+        from .local_stream_probe import probe_local_sdk_stream_from_client  # noqa: PLC0415
+
+        return asdict(
+            probe_local_sdk_stream_from_client(
+                self,
+                serial,
+                duration_seconds=duration_seconds,
+                max_frames=max_frames,
+                max_bytes=max_bytes,
+                receiver_port=receiver_port,
+            )
+        )
+
     def save_clip(  # noqa: PLR0913
         self,
         serial: str,

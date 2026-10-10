@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import asdict, dataclass, field
 import math
 import socket
 import time
@@ -16,14 +15,11 @@ from typing import Any
 from .exceptions import EzvizLocalSdkDeadlineExpired, PyEzvizError
 from .hcnetsdk import (
     HCNETSDK_EZVIZ_DEFAULT_USERNAME,
-    EzvizLanAudioVideoCompressInfo,
-    EzvizLanCompressionConfig,
-    EzvizLanCompressionInfoV30,
-    EzvizLanVideoResolution,
     HcNetSdkCommandPortClient,
     HcNetSdkCommandPortControlTemplate,
     HcNetSdkCommandPortLoginSession,
     HcNetSdkLanEndpoint,
+    HcNetSdkStreamDetails,
     HcNetSdkTcpFrame,
     SocketFactory,
     ezviz_lan_audio_video_compress_info,
@@ -35,54 +31,6 @@ from .hcnetsdk import (
     hcnetsdk_device_ability_command_port_template,
     hcnetsdk_dvr_config_command_port_template,
 )
-
-
-@dataclass(frozen=True)
-class HcNetSdkStreamDetails:
-    """One fresh camera snapshot: current configuration is not observed media."""
-
-    channel: int
-    configuration: EzvizLanCompressionConfig = field(repr=False)
-    capabilities: EzvizLanAudioVideoCompressInfo
-    reported_login_serial: str = field(default="", repr=False)
-
-    def configured_resolution(self, *, sub_stream: bool = False) -> EzvizLanVideoResolution | None:
-        """Resolve a configured SDK index using this camera's own resolution list."""
-        block = self.configuration.network if sub_stream else self.configuration.normal_record
-        if block is None:
-            return None
-        channels = [c for c in self.capabilities.video_channels if c.channel_number == self.channel]
-        if len(channels) != 1:
-            return None
-        channel = channels[0]
-        if sub_stream:
-            profiles = [p for p in channel.sub_streams if p.index == 1]
-            profile = profiles[0] if len(profiles) == 1 else None
-        else:
-            profile = channel.main_stream
-        if profile is None:
-            return None
-        matches = [r for r in profile.resolutions if r.index == block.resolution]
-        return matches[0] if len(matches) == 1 else None
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return configuration and capability fields without raw replies/auth data."""
-        def configured(block: EzvizLanCompressionInfoV30 | None) -> dict[str, Any] | None:
-            if block is None:
-                return None
-            return {key: value for key, value in asdict(block).items() if key != "raw"}
-        return {
-            "channel": self.channel,
-            "reported_login_serial": self.reported_login_serial,
-            "source": "hcnetsdk_command_port",
-            "observed_media": False,
-            "transport_protocol": None,
-            "main": configured(self.configuration.normal_record),
-            "sub": configured(self.configuration.network),
-            "main_resolution": asdict(r) if (r := self.configured_resolution()) is not None else None,
-            "sub_resolution": asdict(r) if (r := self.configured_resolution(sub_stream=True)) is not None else None,
-            "capabilities": asdict(self.capabilities),
-        }
 
 
 def discover_hcnetsdk_stream_details(

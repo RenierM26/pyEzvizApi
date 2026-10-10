@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 
 from Crypto.Cipher import PKCS1_v1_5
-from Crypto.PublicKey import RSA
 import pytest
 import requests
 
@@ -17,6 +16,7 @@ from pyezvizapi.hcnetsdk import (
     build_hcnetsdk_tcp_frame,
     ezviz_lan_audio_video_compress_info,
     ezviz_lan_compression_config,
+    hcnetsdk_command_port_rsa_key,
     parse_hcnetsdk_tcp_frame,
 )
 
@@ -73,7 +73,9 @@ class WireSocket:
 
 @pytest.fixture
 def wire():
-    key = RSA.generate(1024)
+    # The traced legacy handshake has a fixed 128-byte encrypted challenge.
+    # Use the protocol's existing key factory, not a separate test key policy.
+    key = hcnetsdk_command_port_rsa_key()
     clock = [10.0]
     first = build_hcnetsdk_tcp_frame(PKCS1_v1_5.new(key.publickey()).encrypt(b"a" * 32) + b"s" * 64)
     second = build_hcnetsdk_tcp_frame(b"\x12\x34\x56\x78CAM123\0", field_4=0x10A24BF1)

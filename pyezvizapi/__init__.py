@@ -352,6 +352,7 @@ if TYPE_CHECKING:
         HcNetSdkStdXmlConfigResponse,
         HcNetSdkStopGetFileRequest,
         HcNetSdkStopPlayBackRequest,
+        HcNetSdkStreamDetails,
         HcNetSdkTcpFrame,
         HcNetSdkTcpFrameHeader,
         HcNetSdkTcpFrameShape,
@@ -612,7 +613,7 @@ if TYPE_CHECKING:
         summarize_hcnetsdk_command_trace,
     )
     from .light_bulb import EzvizLightBulb
-    from .local_stream_details import HcNetSdkStreamDetails, discover_hcnetsdk_stream_details
+    from .local_stream_details import discover_hcnetsdk_stream_details
     from .local_stream_ecdh import (
         EzvizLocalSdkEcdhDataPacket,
         EzvizLocalSdkEcdhHandshakePacket,
@@ -753,7 +754,7 @@ if TYPE_CHECKING:
     from .test_cam_rtsp import TestRTSPAuth
 
 _EXPORTS = {
-    "HcNetSdkStreamDetails": "local_stream_details",
+    "HcNetSdkStreamDetails": "hcnetsdk",
     "discover_hcnetsdk_stream_details": "local_stream_details",
     "EzvizLanVideoResolution": "hcnetsdk",
     "AlarmDetectHumanCar": "constants",

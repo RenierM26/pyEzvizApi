@@ -166,8 +166,15 @@ bound before network work. New code should use valid positive, finite
   frame-rate estimate.
 - Direct local SDK streaming requires LAN endpoint and CAS data and may require
   P2P registration before CAS lookup.
-- ECDH local streaming requires the native `0x43` metadata descriptor for AAC.
-  Without it, capture intentionally remains video-only.
+- ECDH IDMX/RTP streaming requires the native `0x43` metadata descriptor for
+  AAC. Without it, capture intentionally remains video-only. MPEG-PS audio
+  instead carries its own PES/ADTS framing.
+- Authenticated ECDH MPEG-PS may still contain media-key-encrypted video,
+  including SPS/VPS bytes. Bounded captures with `decrypt_video=True` and a
+  media key retain PS from its first pack boundary for the inner AES transform,
+  rather than waiting for a keyframe visible before that transform. Unknown
+  media, failed transport authentication and missing capture bounds still fail;
+  clear captures retain their existing keyframe gate.
 - The built-in HCNetSDK `app-lan-live-view` plan currently supports channel 1.
   Other channels require verified command templates.
 - Command-port IDMX can carry H.264, HEVC, fragmented RTP, aggregate records,

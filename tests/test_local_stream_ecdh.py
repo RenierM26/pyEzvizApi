@@ -52,6 +52,7 @@ from pyezvizapi.local_stream_ecdh import (
     EzvizLocalSdkEcdhStreamPacket,
     build_ezviz_local_sdk_ecdh_init_request_body,
     copy_local_sdk_ecdh_stream_from_client,
+    copy_local_sdk_ecdh_stream_to_media,
     copy_local_sdk_ecdh_stream_to_mpegps,
     decrypt_ezviz_local_sdk_ecdh_data_packet,
     derive_ezviz_local_sdk_ecdh_chacha20_key,
@@ -509,7 +510,10 @@ def test_ecdh_decoder_rejects_version_only_pseudo_rtp() -> None:
     assert error.value.reason == "unsupported_payload"
 
 
-def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering() -> None:
+@pytest.mark.parametrize("allow_encrypted_mpegps", [False, True])
+def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering(
+    allow_encrypted_mpegps: bool,
+) -> None:
     client_key_pair = generate_ezviz_local_sdk_ecdh_keypair()
     camera_private_key = ec.generate_private_key(ec.SECP256R1())
     camera_public_key_der = _public_key_der(camera_private_key)
@@ -527,7 +531,9 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_handshake_tampering() -> No
     payload[-1] ^= 1
 
     with pytest.raises(PyEzvizError, match="authentication failed"):
-        EzvizLocalSdkEcdhStreamDecoder(client_key_pair.private_key).feed_payload(0, bytes(payload))
+        EzvizLocalSdkEcdhStreamDecoder(
+            client_key_pair.private_key, allow_encrypted_mpegps=allow_encrypted_mpegps,
+        ).feed_payload(0, bytes(payload))
 
 
 def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_replay_and_stale_sequence() -> None:
@@ -641,6 +647,41 @@ def test_ezviz_local_sdk_ecdh_stream_decoder_rejects_missing_mpegps_boundary() -
         decoder._absorb_plain(  # noqa: SLF001
             LOCAL_SDK_ECDH_H264_SPS_4B + b"frame"
         )
+
+
+def test_ecdh_encrypted_ps_defers_keyframe_gate_until_media_decryption() -> None:
+    decoder = EzvizLocalSdkEcdhStreamDecoder(None, allow_encrypted_mpegps=True)
+    pack = LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER + b"encrypted-video-without-visible-sps"
+    following = b"next-record"
+    assert decoder._absorb_plain(b"prefix" + pack[:2]) == EMPTY_BYTES  # noqa: SLF001
+    assert decoder._absorb_plain(pack[2:]) == pack  # noqa: SLF001
+    assert decoder._absorb_plain(following) == following  # noqa: SLF001
+
+
+def test_ecdh_encrypted_ps_still_rejects_unrecognized_authenticated_records() -> None:
+    decoder = EzvizLocalSdkEcdhStreamDecoder(None, allow_encrypted_mpegps=True)
+    with pytest.raises(EzvizUnsupportedMediaError, match="neither MPEG-PS nor IDMX"):
+        for _ in range(32):
+            decoder._absorb_plain(b"not-a-media-format")  # noqa: SLF001
+
+
+def test_ecdh_copy_enables_encrypted_ps_only_after_key_and_bound_validation(monkeypatch: Any) -> None:
+    stream = open_local_sdk_ecdh_stream(
+        HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10", stream_port=9020),
+        EzvizCasDeviceInfo(serial="CAM123", operation_code="op", key="key"),
+    )
+    calls: list[bool] = []
+    def transformed(*_args: Any, **_kwargs: Any) -> None:
+        calls.append(stream.decoder.allow_encrypted_mpegps)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_stream_to_decrypted_mpegts", transformed)
+    with pytest.raises(PyEzvizError, match="media_key"):
+        copy_local_sdk_ecdh_stream_to_media(stream, BytesIO(), output_format="mpegts", decrypt_video=True, duration_seconds=5)
+    assert stream.decoder.allow_encrypted_mpegps is False
+    with pytest.raises(PyEzvizError, match="positive finite"):
+        copy_local_sdk_ecdh_stream_to_media(stream, BytesIO(), output_format="mpegts", decrypt_video=True, media_key="key")
+    assert stream.decoder.allow_encrypted_mpegps is False
+    copy_local_sdk_ecdh_stream_to_media(stream, BytesIO(), output_format="mpegts", decrypt_video=True, media_key="key", duration_seconds=5)
+    assert calls == [True]
 
 
 def test_build_ezviz_local_sdk_ecdh_init_request_body_uses_operation_code_and_session() -> None:

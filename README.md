@@ -763,6 +763,13 @@ On success, the script prints a confirmation. On failure it raises one of:
 - `InvalidHost`: Hostname/IP or port issue
 - `AuthTestResultFailed`: Invalid credentials
 
+Authentication success does not establish audio/video capture integrity. In
+tested EZVIZ RTSP AAC sessions, FFmpeg stream-copy capture can discard all audio
+at startup; `-copyinkf:a` retains those audio packets
+without changing timestamps or weakening the video keyframe gate. Verify full
+audio decoding as well as video; an AAC stream listed with zero sample rate or
+channels is not evidence of usable audio.
+
 ## Development
 
 Install the project with development dependencies:

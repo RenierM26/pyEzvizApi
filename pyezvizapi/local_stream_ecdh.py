@@ -30,6 +30,7 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from ._local_stream_protocol import LocalSdkProtocolDetector
 from .constants import (
     LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET,
     LOCAL_SDK_ECDH_DATA_MARKER,
@@ -84,7 +85,6 @@ from .local_stream_media import (
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
 )
-from .local_stream_probe import LocalSdkProtocolDetector
 from .local_stream_transport import get_local_sdk_stream_credentials_from_client
 from .media import (
     LegacyPacketSource,

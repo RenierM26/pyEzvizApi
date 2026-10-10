@@ -959,6 +959,12 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0912, PLR0913
     # C8W closes an otherwise valid ECDH preview at rate 1 but streams at
     # rate 0. Retry only a premature socket close, before any output was
     # published; never hide a media/decryption/authentication failure.
+    credentials = get_local_sdk_stream_credentials_from_client(
+        client, serial, credentials=credentials, cas_serial=cas_serial,
+        register_p2p_session=register_p2p_session,
+        p2p_register_max_retries=p2p_register_max_retries,
+        fetch_media_key=decrypt_video and media_key is None, smscode=smscode,
+    )
     stream_rates = (stream_rate, 0) if stream_rate == 1 else (stream_rate,)
     capture_deadline: float | None = None
     for index, candidate_rate in enumerate(stream_rates):

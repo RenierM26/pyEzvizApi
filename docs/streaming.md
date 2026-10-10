@@ -132,7 +132,7 @@ options = ClipOptions(
 result = client.save_clip_with_options("ABC123", "front.ts", options)
 ```
 
-Available source configurations are `LocalSdkClipSource`,
+Available source configurations are `AutoClipSource`, `LocalSdkClipSource`,
 `LocalSdkEcdhClipSource`, `HcNetSdkCommandPortClipSource`, and
 `CloudClipSource`. Capture, decode, and mux settings are deliberately separate
 so unsupported combinations can fail before opening a connection.

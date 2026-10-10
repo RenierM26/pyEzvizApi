@@ -392,9 +392,12 @@ def _start_bounded_cloud_stream(
     timeout: float | None,
     duration_seconds: float | None,
     monotonic: Callable[[], float],
+    capture_deadline: float | None = None,
 ) -> float | None:
     """Start VTM negotiation with one deadline instead of per-read timeouts."""
 
+    if capture_deadline is not None and monotonic() >= capture_deadline:
+        raise EzvizNoMediaError("Cloud bootstrap exhausted capture deadline")
     if not isinstance(stream, VtmStreamClient):
         stream.start()
         return None
@@ -406,6 +409,8 @@ def _start_bounded_cloud_stream(
         if startup_seconds is None
         else monotonic() + startup_seconds
     )
+    if capture_deadline is not None:
+        deadline = capture_deadline if deadline is None else min(deadline, capture_deadline)
     stream.start(deadline=deadline, monotonic=monotonic)
     return deadline
 
@@ -443,6 +448,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
     nalu_header_size: int | None = None,
     smscode: str | int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    capture_deadline: float | None = None,
 ) -> None:
     """Copy a cloud VTM live stream to MPEG-PS bytes.
 
@@ -476,7 +482,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 timeout=timeout,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                capture_deadline=capture_deadline,
             )
+            duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -536,7 +544,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             timeout=timeout,
             duration_seconds=duration_seconds,
             monotonic=monotonic,
+            capture_deadline=capture_deadline,
         )
+        duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
         _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
@@ -565,6 +575,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
     nalu_header_size: int | None = None,
     smscode: str | int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    capture_deadline: float | None = None,
 ) -> None:
     """Copy a cloud VTM live stream to MPEG-TS bytes."""
 
@@ -594,7 +605,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
                 timeout=timeout,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                capture_deadline=capture_deadline,
             )
+            duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -655,7 +668,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             timeout=timeout,
             duration_seconds=duration_seconds,
             monotonic=monotonic,
+            capture_deadline=capture_deadline,
         )
+        duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
         copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
@@ -665,6 +680,20 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             first_packet_deadline=startup_deadline,
             monotonic=monotonic,
         )
+
+
+def _remaining_cloud_capture_duration(
+    duration_seconds: float | None,
+    capture_deadline: float | None,
+    monotonic: Callable[[], float],
+) -> float | None:
+    """Account for metadata and startup without changing explicit captures."""
+    if capture_deadline is None:
+        return duration_seconds
+    remaining = capture_deadline - monotonic()
+    if remaining <= 0:
+        raise EzvizNoMediaError("Cloud bootstrap exhausted capture deadline")
+    return remaining if duration_seconds is None else min(duration_seconds, remaining)
 
 
 def _require_cloud_mpegps_video_duration(

@@ -3355,10 +3355,11 @@ def test_cloud_stream_start_bounds_initial_connect(
     assert fake_socket.closed
 
 
+@pytest.mark.parametrize("capture_deadline", [None, 105.0])
 def test_cloud_copy_reuses_startup_deadline_for_first_media(
-    monkeypatch,
+    monkeypatch, capture_deadline: float | None,
 ) -> None:
-    expected_deadline = 110.0
+    expected_deadline = 110.0 if capture_deadline is None else capture_deadline
 
     class Clock:
         now = 100.0
@@ -3376,7 +3377,7 @@ def test_cloud_copy_reuses_startup_deadline_for_first_media(
 
         def start(self, **kwargs: Any) -> Any:
             self.start_deadline = kwargs["deadline"]
-            clock.now = 109.0
+            clock.now = expected_deadline - 1
             return SimpleNamespace()
 
         def iter_packets(self, **kwargs: Any) -> Any:
@@ -3398,6 +3399,7 @@ def test_cloud_copy_reuses_startup_deadline_for_first_media(
         duration_seconds=30.0,
         max_packets=1,
         monotonic=clock,
+        capture_deadline=capture_deadline,
     )
 
     assert stream.start_deadline == expected_deadline
@@ -5360,3 +5362,59 @@ def test_open_cloud_mpegts_remux_process_reports_launch_errors(
         cloud_stream_module._open_cloud_mpegts_remux_process(  # noqa: SLF001
             "/missing/ffmpeg"
         )
+
+
+@pytest.mark.parametrize("output_format", ["mpegps", "mpegts"])
+@pytest.mark.parametrize("decrypt", [False, True])
+@pytest.mark.parametrize("metadata_elapsed", [3.0, 11.0])
+def test_cloud_absolute_deadline_counts_metadata_and_startup(
+    monkeypatch: pytest.MonkeyPatch, output_format: str, decrypt: bool,
+    metadata_elapsed: float,
+) -> None:
+    clock = [100.0]
+    durations: list[float] = []
+    started: list[bool] = []
+    closed: list[bool] = []
+
+    class Stream:
+        def start(self) -> None:
+            started.append(True)
+            clock[0] += 2.0
+
+        def close(self) -> None:
+            closed.append(True)
+
+    def open_stream(*_args: Any, **_kwargs: Any) -> Stream:
+        clock[0] += metadata_elapsed
+        return Stream()
+
+    def copy(_stream: Any, output: Any, **kwargs: Any) -> None:
+        durations.append(kwargs["duration_seconds"])
+        output.write(MPEGPS_PAYLOAD)
+
+    def collect(_stream: Any, **kwargs: Any) -> list[VtmPacket]:
+        durations.append(kwargs["duration_seconds"])
+        return [VtmPacket(VtmChannel.STREAM, len(MPEGPS_PAYLOAD), 1, 0, MPEGPS_PAYLOAD)]
+
+    monkeypatch.setattr("pyezvizapi.cloud_stream.open_cloud_stream", open_stream)
+    monkeypatch.setattr("pyezvizapi.cloud_stream._copy_cloud_stream_payloads_to_mpegps", copy)
+    monkeypatch.setattr("pyezvizapi.cloud_stream.copy_cloud_stream_packets_to_mpegts", copy)
+    monkeypatch.setattr("pyezvizapi.cloud_stream._collect_cloud_stream_packets", collect)
+    monkeypatch.setattr("pyezvizapi.cloud_stream.decrypt_hikvision_ps_video", lambda *_a, **_kw: MPEGPS_PAYLOAD)
+    monkeypatch.setattr("pyezvizapi.cloud_stream.copy_decrypted_cloud_stream_packets_to_mpegts", lambda _p, output, **_kw: output.write(MPEGPS_PAYLOAD))
+    capture = copy_cloud_stream_to_mpegps if output_format == "mpegps" else copy_cloud_stream_to_mpegts
+    output = io.BytesIO()
+    kwargs: dict[str, Any] = dict(duration_seconds=10.0, capture_deadline=110.0,
+                  decrypt_video=decrypt, media_key="media-key", monotonic=lambda: clock[0])
+    if metadata_elapsed > 10:
+        with pytest.raises(EzvizNoMediaError, match="bootstrap exhausted"):
+            capture(object(), "CAM123", output, **kwargs)
+        assert started == []
+        assert durations == []
+        assert not output.getvalue()
+    else:
+        capture(object(), "CAM123", output, **kwargs)
+        assert started == [True]
+        assert durations == [5.0]
+        assert output.getvalue() == MPEGPS_PAYLOAD
+    assert closed == [True]

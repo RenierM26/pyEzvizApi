@@ -421,6 +421,7 @@ def test_auto_clip_connection_fallback_only_before_staged_bytes(monkeypatch, par
 
     def cloud(serial, output, **kwargs):
         called.append("cloud")
+        assert kwargs["capture_deadline"] is not None
         output.write(PAYLOAD)
         return {"ok": True, "source": "cloud", "format": "mpegts"}
 

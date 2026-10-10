@@ -3501,7 +3501,10 @@ class EzvizClient:
             )
             with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staged:
                 try:
-                    result = self.save_clip_with_options(serial, cast(BinaryIO, staged), selected_options)
+                    if isinstance(source, CloudClipSource):
+                        result = self._save_auto_cloud_clip(serial, cast(BinaryIO, staged), selected_options, deadline)
+                    else:
+                        result = self.save_clip_with_options(serial, cast(BinaryIO, staged), selected_options)
                     size = staged.tell()
                     if not size:
                         raise EzvizNoMediaError("Automatic playback did not contain media")
@@ -3536,6 +3539,23 @@ class EzvizClient:
                     output, default="video/mp2t" if result.get("format") == "mpegts" else "video/mpeg",
                 )
                 return result
+
+    def _save_auto_cloud_clip(
+        self, serial: str, output: BinaryIO, options: ClipOptions, deadline: float | None,
+    ) -> SaveMediaResult:
+        source = cast(CloudClipSource, options.source)
+        mux = options.resolved_mux()
+        decode = options.decode
+        return self._save_cloud_clip(
+            serial, output, output_format=mux.output_format,
+            duration_seconds=options.duration_seconds, max_packets=options.max_packets,
+            channel=options.channel, ffmpeg_path=mux.ffmpeg_path,
+            decrypt_video=decode.decrypt_video, media_key=decode.media_key,
+            nalu_header_size=decode.nalu_header_size, timeout=source.timeout,
+            client_type=source.client_type, token_index=source.token_index,
+            refresh_vtm=source.refresh_vtm, smscode=source.smscode,
+            capture_deadline=deadline,
+        )
 
     def _save_local_sdk_ecdh_clip(  # noqa: PLR0913
         self,
@@ -3992,11 +4012,15 @@ class EzvizClient:
         token_index: int,
         refresh_vtm: bool,
         smscode: str | int | None,
+        capture_deadline: float | None = None,
     ) -> SaveMediaResult:
         """Save a clip through the EZVIZ VTM cloud live stream path."""
 
         start_position = None
         staged_size: int | None = None
+        deadline_options: dict[str, Any] = (
+            {"capture_deadline": capture_deadline} if capture_deadline is not None else {}
+        )
 
         def copy_cloud(output_file: BinaryIO) -> None:
             if output_format == "mpegts":
@@ -4016,6 +4040,7 @@ class EzvizClient:
                     media_key=media_key,
                     nalu_header_size=nalu_header_size,
                     smscode=smscode,
+                    **deadline_options,
                 )
                 return
             copy_cloud_stream_to_mpegps(
@@ -4033,6 +4058,7 @@ class EzvizClient:
                 media_key=media_key,
                 nalu_header_size=nalu_header_size,
                 smscode=smscode,
+                **deadline_options,
             )
 
         if decrypt_video and duration_seconds is None and max_packets is None:

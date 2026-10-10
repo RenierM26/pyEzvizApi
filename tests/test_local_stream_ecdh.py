@@ -751,8 +751,19 @@ def test_open_local_sdk_ecdh_stream_from_client_skips_media_key_lookup(
     assert stream.max_prefix_bytes == 8192
 
 
+@pytest.fixture
+def discovered_credentials(monkeypatch: pytest.MonkeyPatch) -> EzvizLocalSdkCredentials:
+    result = EzvizLocalSdkCredentials(
+        endpoint=HcNetSdkLanEndpoint(serial="CAM123", host="192.0.2.10", command_port=9010, stream_port=9020),
+        device_info=EzvizCasDeviceInfo(serial="CAM123", operation_code="0123456", key="1234567890abcdef"),
+        media_key="media-secret",
+    )
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.get_local_sdk_stream_credentials_from_client", lambda *_a, **_kw: result)
+    return result
+
+
 def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials,
 ) -> None:
     copied: list[dict[str, object]] = []
 
@@ -827,7 +838,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_writes_decoded_packets(
 
 
 def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials,
 ) -> None:
     calls: list[dict[str, object]] = []
 
@@ -897,7 +908,7 @@ def test_copy_local_sdk_ecdh_stream_from_client_decrypts_idmx_to_mpegts(
 
 
 def test_copy_local_sdk_ecdh_retries_rate_zero_after_premedia_close(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials,
 ) -> None:
     rates: list[int] = []
 
@@ -936,7 +947,7 @@ def test_copy_local_sdk_ecdh_retries_rate_zero_after_premedia_close(
 
 
 def test_copy_local_sdk_ecdh_does_not_retry_after_output(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials,
 ) -> None:
     rates: list[int] = []
 
@@ -1452,7 +1463,7 @@ def test_protocol_probe_propagates_bootstrap_deadline_failure(monkeypatch: Any) 
 
 @pytest.mark.parametrize("elapsed", [8.0, 11.0])
 def test_ecdh_rate_retry_preserves_total_duration_budget(
-    monkeypatch: pytest.MonkeyPatch, elapsed: float,
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials, elapsed: float,
 ) -> None:
     clock = [100.0]
     rates: list[int] = []
@@ -1499,7 +1510,7 @@ def test_ecdh_rate_retry_preserves_total_duration_budget(
 
 @pytest.mark.parametrize("fresh", [False, True])
 def test_saved_ecdh_rate_retry_can_isolate_source_port(
-    monkeypatch: pytest.MonkeyPatch, fresh: bool,
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials, fresh: bool,
 ) -> None:
     calls: list[tuple[int, int]] = []
 
@@ -1525,3 +1536,43 @@ def test_saved_ecdh_rate_retry_can_isolate_source_port(
     copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", BytesIO(),
                                           receiver_port=10101, fresh_retry_port=fresh)
     assert calls == [(1, 10101), (0, 12345 if fresh else 10101)]
+
+
+def test_ecdh_retry_discovers_credentials_once_before_capture_budget(
+    monkeypatch: pytest.MonkeyPatch, discovered_credentials: EzvizLocalSdkCredentials,
+) -> None:
+    clock = [0.0]
+    discoveries: list[object] = []
+    opened: list[object] = []
+    durations: list[float] = []
+
+    def discover(*_args: object, **_kwargs: object) -> EzvizLocalSdkCredentials:
+        discoveries.append(True)
+        clock[0] += 30.0
+        return discovered_credentials
+
+    class Stream:
+        def __enter__(self) -> Stream:
+            return self
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    def open_stream(*_args: object, **kwargs: Any) -> Stream:
+        opened.append(kwargs["credentials"])
+        return Stream()
+
+    def copy(_stream: object, output: BytesIO, **kwargs: Any) -> None:
+        durations.append(kwargs["duration_seconds"])
+        if len(opened) == 1:
+            clock[0] += 8.0
+            raise EzvizLocalSdkStreamClosed("rate 1 closed")
+        output.write(b"media")
+
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.get_local_sdk_stream_credentials_from_client", discover)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
+    copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", BytesIO(),
+                                          duration_seconds=10.0, monotonic=lambda: clock[0])
+    assert discoveries == [True]
+    assert opened == [discovered_credentials, discovered_credentials]
+    assert durations == [10.0, 2.0]

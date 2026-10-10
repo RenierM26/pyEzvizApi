@@ -7,7 +7,13 @@ from heapq import merge
 from itertools import groupby
 
 from .exceptions import EzvizUnsupportedMediaError, PyEzvizError
-from .rtp import ANNEX_B_START_CODE, RtpAacStream, RtpVideoCodec, rtp_nal_units_have_vcl
+from .rtp import (
+    ANNEX_B_START_CODE,
+    RtpAacStream,
+    RtpVideoCodec,
+    _aac_timestamp_delta_is_supported,
+    rtp_nal_units_have_vcl,
+)
 
 _PES_CHUNK_BYTES = 60_000
 _RTP_VIDEO_CLOCK = 90_000
@@ -123,9 +129,10 @@ class NativeRtpPsMuxer:
     Track origins are independently zero; no absolute RTCP alignment is inferred.
     """
 
-    def __init__(self, codec: RtpVideoCodec, *, audio: bool) -> None:
+    def __init__(self, codec: RtpVideoCodec, *, audio: bool, allow_audio_clock_jitter: bool = False) -> None:
         self.codec: RtpVideoCodec = codec
         self._map = _program_stream_map(codec, audio=audio)
+        self._allow_audio_clock_jitter = allow_audio_clock_jitter
         self._video_raw: int | None = None
         self._audio_raw: int | None = None
         self._video_elapsed = 0
@@ -163,7 +170,7 @@ class NativeRtpPsMuxer:
         """Preserve forward whole-AU gaps without generating silence."""
 
         delta = (timestamp - self._audio_raw) & 0xFFFFFFFF if self._audio_raw is not None else 0
-        if self._audio_raw is not None and (delta == 0 or delta >= 0x80000000 or delta % 1024):
+        if self._audio_raw is not None and (not _aac_timestamp_delta_is_supported(delta, audio.sample_rate, self._allow_audio_clock_jitter)):
             raise PyEzvizError("Native RTP AAC clock reset or invalid access-unit spacing")
         self._audio_raw = timestamp
         self._audio_elapsed += delta

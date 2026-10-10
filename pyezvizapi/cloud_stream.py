@@ -1134,7 +1134,7 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
                 "Cloud RTP capture contained no complete video frame; "
                 "increase the capture duration"
             )
-        audio = decrypt_idmx_aac_packets(parsed, media_key, require_contiguous=False)
+        audio = decrypt_idmx_aac_packets(parsed, media_key, require_contiguous=False, allow_timestamp_jitter=True)
         native_timing = idmx_video_frame_rate(parsed) is not None and any(
             packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06")
             for packet in parsed
@@ -1620,6 +1620,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     audio_metadata=audio_metadata,
                     audio_payload_types=aac_payload_types,
                     require_contiguous=False,
+                    allow_timestamp_jitter=True,
                 )
                 is not None
                 for candidate in prefix
@@ -1735,7 +1736,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         )
         nal_count = 0
         audio_enabled = selected_audio_key is not None
-        timed_muxer = NativeRtpPsMuxer(codec, audio=audio_enabled) if native_timing else None
+        timed_muxer = NativeRtpPsMuxer(codec, audio=audio_enabled, allow_audio_clock_jitter=True) if native_timing else None
         last_audio_sequence: dict[int, int] = {}
         next_audio_timestamp: dict[int, int] = {}
 
@@ -1807,6 +1808,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         audio_metadata=audio_metadata,
                         audio_payload_types=current_aac_payload_types,
                         require_contiguous=False,
+                    allow_timestamp_jitter=True,
                     )
                     if audio is None:
                         _disable_audio()

@@ -196,3 +196,10 @@ def test_incremental_audio_unwraps_elapsed_samples_and_mpeg_pts_rollover() -> No
         payload = next(muxer.audio(timestamp, audio))
         expected = (index * 0x40000000 * 90000 + 8000) // 16000
         assert _pes_timestamp(payload, 0xC0) == expected & 0x1FFFFFFFF
+
+
+def test_incremental_native_aac_retains_clock_jitter_when_explicitly_enabled() -> None:
+    muxer = NativeRtpPsMuxer("h264", audio=True, allow_audio_clock_jitter=True)
+    audio = RtpAacStream(b"\xff\xf1\x60\x40\x00\xff\xfc", 16000, 1, 1)
+    pts = [_pes_timestamp(next(muxer.audio(timestamp, audio)), 0xC0) for timestamp in (0, 1024, 2064, 3072)]
+    assert pts == [0, 5760, 11610, 17280]

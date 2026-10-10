@@ -2373,6 +2373,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 audio_metadata=_idmx_audio_metadata(packets, media_key),
                 audio_payload_types=_idmx_audio_payload_types(packets),
                 require_contiguous=False,
+                allow_timestamp_jitter=True,
             )
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
@@ -2507,7 +2508,7 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 audio = (
                     _decrypt_idmx_local_packets_to_adts_aac(
                         packets, b"", audio_metadata=audio_metadata,
-                        require_contiguous=False, decrypt_audio=False,
+                        require_contiguous=False, decrypt_audio=False, allow_timestamp_jitter=True,
                     ) if audio_metadata is not None else None
                 )
                 if _copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path=ffmpeg_path):
@@ -2557,7 +2558,7 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             audio_metadata = _idmx_audio_descriptor(packets)
             if audio_metadata is not None:
                 audio = _decrypt_idmx_local_packets_to_adts_aac(
-                    packets, b"", audio_metadata=audio_metadata, require_contiguous=False, decrypt_audio=False,
+                    packets, b"", audio_metadata=audio_metadata, require_contiguous=False, decrypt_audio=False, allow_timestamp_jitter=True,
                 )
                 if audio is not None:
                     _copy_idmx_audio_video_to_mpegts(
@@ -6533,6 +6534,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
     decrypt_audio: bool = True,
+    allow_timestamp_jitter: bool = False,
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
 
@@ -6583,6 +6585,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         audio_payload_types=selected_audio_payload_types,
         require_contiguous=require_contiguous,
         decrypt_audio=decrypt_audio,
+        allow_timestamp_jitter=allow_timestamp_jitter,
     )
 
 

@@ -2327,7 +2327,7 @@ def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> N
 def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     """Save a short direct-local camera clip to disk."""
 
-    if args.channel is None and args.source != "cloud":
+    if args.channel is None and args.source not in {"cloud", "auto"}:
         args.channel = 1
 
     decrypt_codec = args.decrypt_codec or (

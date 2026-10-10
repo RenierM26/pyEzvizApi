@@ -1066,9 +1066,11 @@ def test_save_clip_uses_direct_local_stream_and_outputs_json(
     }
 
 
+@pytest.mark.parametrize("source", ["cloud", "auto"])
+@pytest.mark.parametrize("channel", [None, 2])
 def test_save_clip_cloud_defaults_to_resource_auto_selection(
     monkeypatch,
-    tmp_path,
+    tmp_path, source: str, channel: int | None,
 ) -> None:
     fake_client = _install_fake_client(monkeypatch)
 
@@ -1080,17 +1082,18 @@ def test_save_clip_cloud_defaults_to_resource_auto_selection(
                 "save",
                 "clip",
                 "--source",
-                "cloud",
+                source,
                 "--serial",
                 "CAM123",
                 "--output",
                 str(tmp_path / "front.ts"),
+                *([] if channel is None else ["--channel", str(channel)]),
             ]
         )
         == 0
     )
 
-    assert fake_client.instances[0].save_clip_request["channel"] is None
+    assert fake_client.instances[0].save_clip_request["channel"] == channel
 
 
 @pytest.mark.parametrize("source", ["auto", "local-sdk", "local-sdk-ecdh"])

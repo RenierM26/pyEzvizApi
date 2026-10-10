@@ -19,7 +19,7 @@ from pyezvizapi.local_stream_transport import (
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     hcnetsdk_command_port_native_lan_live_view_plan,
 )
-from pyezvizapi.rtp import RtpAacStream
+from pyezvizapi.rtp import RtpAacStream, RtpPacket
 
 
 @pytest.mark.parametrize(("native", "override", "expected"), [(True, None, 8000), (True, 8001, 8001), (False, None, None)])
@@ -69,10 +69,24 @@ def test_native_clear_capture_does_not_run_whole_clip_suffix_decode(monkeypatch:
     assert frame_payload in output.getvalue()
 
 
-def test_native_wrapper_uses_advertised_fractional_period_once_per_picture() -> None:
-    units = (b"\x67parameters", b"\x68parameters", b"\x65\x80slice", b"\x65\x40slice2", b"\x41\x80next")
-    # Wrapper ticks advance by one, not the standard 90 kHz clock.
-    assert _local_stream._native_wrapper_video_timestamps(units, [10, 10, 10, 10, 11], "h264", "30000/1001") == [0, 0, 0, 0, 3003]  # noqa: SLF001
+@pytest.mark.parametrize("prefix", [b"\xfa\x90", b"\x80"])
+def test_legacy_hevc_wrapper_stays_on_existing_annexb_parser(monkeypatch: Any, prefix: bytes) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+    unit = b"\x26\x01\x80picture"
+    legacy = prefix + b"\xe0\0\1" + b"\0" * 4 + b"\x55\x66\x77\x88" + wrapper + unit
+    def forbidden_generic_depacketizer(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Legacy wrapper must not be mistaken for a VPS")
+    monkeypatch.setattr(_local_stream, "rtp_packets_to_nal_units", forbidden_generic_depacketizer)
+    assert not _local_stream._copy_clear_native_idmx_timed_av([metadata, legacy], None, io.BytesIO(), ffmpeg_path="ffmpeg")  # noqa: SLF001
+    assert unit in _local_stream._idmx_local_packets_to_hevc_annexb([metadata, legacy])  # noqa: SLF001
+
+
+def test_legacy_video_normalizer_does_not_strip_native_audio_wrapper() -> None:
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+    packet = RtpPacket(wrapper + b"\x00\x10audio", 104, 1, 1024, 2, True)
+    assert _local_stream._strip_legacy_idmx_video_wrapper(packet) is packet  # noqa: SLF001
 
 
 @pytest.mark.parametrize("video_payloads", [(b"\x67parameters", b"\x68parameters"), (b"\x67parameters", b"\x7c\x85unfinished")])

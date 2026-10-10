@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import hashlib
 import ipaddress
-from itertools import chain, groupby, pairwise
+from itertools import chain, pairwise
 from pathlib import Path
 import subprocess
 import tempfile
@@ -2616,7 +2616,14 @@ def _copy_clear_native_idmx_timed_av(
             if packet is not None:
                 rtp_packets.append(packet)
                 if packet.payload_type in video_types:
-                    legacy_video_clock |= not _is_complete_idmx_rtp_frame(frame)
+                    legacy_video_clock |= (
+                        not _is_complete_idmx_rtp_frame(frame)
+                        or (packet.extension_profile is None and _looks_like_idmx_hevc_media_frame(_idmx_local_frame_media_body(frame, header)))
+                    )
+    if legacy_video_clock:
+        # Legacy/native-body wrappers need the existing Annex-B parser's
+        # unwrapping, and their synthetic fields do not prove an RTP clock.
+        return False
     advertised_rate = idmx_video_frame_rate(rtp_packets)
     if advertised_rate is None:
         return False
@@ -2630,10 +2637,6 @@ def _copy_clear_native_idmx_timed_av(
         raise EzvizNoMediaError(
             "Native capture contained no complete video frame; increase the capture duration"
         )
-    if legacy_video_clock:
-        # Legacy synthetic transport fields do not prove a 90 kHz RTP clock.
-        # Complete native-wrapper RTP does: retain actual cadence and gaps.
-        timestamps = _native_wrapper_video_timestamps(units, timestamps, codec, advertised_rate)
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
     )
@@ -2644,22 +2647,6 @@ def _copy_clear_native_idmx_timed_av(
 
     copy_remuxed_output(process, output, write_input=write_input)
     return True
-
-
-def _native_wrapper_video_timestamps(
-    units: tuple[bytes, ...], timestamps: list[int], codec: RtpVideoCodec, advertised_rate: str,
-) -> list[int]:
-    """Use the native advertised period once per completed picture, not per NAL."""
-
-    period = Fraction(IDMX_VIDEO_RTP_CLOCK_RATE) / Fraction(advertised_rate)
-    frame_index = 0
-    result: list[int] = []
-    for _timestamp, entries in groupby(zip(timestamps, units, strict=True), key=lambda item: item[0]):
-        group_units = [unit for _time, unit in entries]
-        result.extend([round(frame_index * period)] * len(group_units))
-        if rtp_nal_units_have_vcl(group_units, codec=codec):
-            frame_index += 1
-    return result
 
 
 def _copy_decrypted_native_idmx_timed_av(
@@ -5630,21 +5617,30 @@ def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | 
         packet = parse_rtp_packet(rtp_frame, idmx=True)
         if header_size == 13 and packet.extension_profile is None:
             packet = replace(packet, payload=_strip_idmx_command_h264_record_trailer(packet.payload))
-        return packet
+        return _strip_legacy_idmx_video_wrapper(packet)
     transport = _idmx_local_frame_transport_fields(frame, header_size)
     payload_type = transport.get("rtp_payload_type")
     sequence = transport.get("sequence_number")
     timestamp = transport.get("rtp_timestamp")
     if not all(isinstance(value, int) for value in (payload_type, sequence, timestamp)):
         return None
-    return RtpPacket(
+    return _strip_legacy_idmx_video_wrapper(RtpPacket(
         payload=_idmx_local_frame_media_body(frame, header_size),
         payload_type=cast(int, payload_type),
         sequence=cast(int, sequence),
         timestamp=cast(int, timestamp),
         ssrc=0,
         marker=bool(transport.get("rtp_marker")),
-    )
+    ))
+
+
+def _strip_legacy_idmx_video_wrapper(packet: RtpPacket) -> RtpPacket:
+    """Normalize an in-body native video wrapper, not an audio wrapper."""
+
+    payload = packet.payload
+    if _looks_like_idmx_hevc_media_frame(payload) and payload[8] & 0xF0 == 0x10:
+        return replace(packet, payload=payload[IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET:])
+    return packet
 
 
 def _summarize_idmx_h264_local_frame(  # noqa: PLR0911

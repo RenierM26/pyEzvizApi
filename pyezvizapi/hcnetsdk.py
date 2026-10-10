@@ -2357,6 +2357,7 @@ class HcNetSdkStreamDetails:
     configuration: EzvizLanCompressionConfig = field(repr=False)
     capabilities: EzvizLanAudioVideoCompressInfo
     reported_login_serial: str = field(default="", repr=False)
+    capabilities_error: int | None = None
 
     def configured_media(self, *, sub_stream: bool = False) -> HcNetSdkConfiguredMedia | None:
         """Translate configured SDK codes; this is not a negotiated media profile."""
@@ -2411,6 +2412,7 @@ class HcNetSdkStreamDetails:
             "main_resolution": asdict(r) if (r := self.configured_resolution()) is not None else None,
             "sub_resolution": asdict(r) if (r := self.configured_resolution(sub_stream=True)) is not None else None,
             "capabilities": asdict(self.capabilities),
+            "capabilities_error": self.capabilities_error,
         }
 
 
@@ -12696,7 +12698,8 @@ def discover_hcnetsdk_stream_details(
     Supplied credentials only: never renew or retry authentication. The finite
     network deadline covers login and both reads; RSA generation precedes it.
     Native frame-rate/resolution/codec IDs are preserved, not guessed as FPS or
-    encryption protocols. Unsupported/malformed/authentication errors propagate.
+    encryption protocols. Explicit capability-query rejection retains configuration
+    with its raw error code; malformed/authentication/network errors propagate.
     """
     if not isinstance(channel, int) or isinstance(channel, bool) or not 1 <= channel <= 255:
         raise PyEzvizError("Stream discovery channel must be between 1 and 255")
@@ -12713,17 +12716,25 @@ def discover_hcnetsdk_stream_details(
         address = local_ip if local_ip is not None else str(sock.getsockname()[0])
         session = client.login(password=password, username=username, local_ip=address,
                                rsa_key=key, max_frame_bytes=max_response_bytes, deadline=deadline, monotonic=monotonic)
-    config_template = hcnetsdk_dvr_config_command_port_template(ezviz_lan_video_coding_get_config_request(1, channel))
-    ability_template = hcnetsdk_device_ability_command_port_template(ezviz_lan_audio_video_compress_info_ability_request(1, channel))
-    config = _hcnetsdk_stream_details_query(endpoint, config_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
-    configuration = ezviz_lan_compression_config(config.body)
-    ability = _hcnetsdk_stream_details_query(endpoint, ability_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
-    capabilities = ezviz_lan_audio_video_compress_info(hcnetsdk_command_port_response_payload(ability))
-    if not capabilities.success:
-        raise PyEzvizError("Camera did not return audio/video compression capabilities")
-    if monotonic() >= deadline:
-        raise EzvizLocalSdkDeadlineExpired("Camera stream discovery exhausted its deadline")
-    return HcNetSdkStreamDetails(channel, configuration, capabilities, session.serial)
+        config_template = hcnetsdk_dvr_config_command_port_template(ezviz_lan_video_coding_get_config_request(1, channel))
+        ability_template = hcnetsdk_device_ability_command_port_template(ezviz_lan_audio_video_compress_info_ability_request(1, channel))
+        config = _hcnetsdk_stream_details_query(endpoint, config_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
+        configuration = ezviz_lan_compression_config(config.body)
+        ability = _hcnetsdk_stream_details_query(endpoint, ability_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
+        # A complete header-only device rejection is distinct from empty success,
+        # malformed XML or a network timeout. Retain the confirmed configuration
+        # without pretending that the camera advertised no supported profiles.
+        capabilities_error = None
+        if not ability.body and ability.header.field_4 == ability.header.field_8 and ability.header.field_8 not in (0, 1):
+            capabilities_error = ability.header.field_8
+            capabilities = EzvizLanAudioVideoCompressInfo()
+        else:
+            capabilities = ezviz_lan_audio_video_compress_info(hcnetsdk_command_port_response_payload(ability))
+            if not capabilities.success:
+                raise PyEzvizError("Camera did not return audio/video compression capabilities")
+        if monotonic() >= deadline:
+            raise EzvizLocalSdkDeadlineExpired("Camera stream discovery exhausted its deadline")
+        return HcNetSdkStreamDetails(channel, configuration, capabilities, session.serial, capabilities_error)
 
 
 def _hcnetsdk_stream_details_query(

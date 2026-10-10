@@ -673,3 +673,35 @@ def test_auto_clip_packet_bound_allows_handshake_and_legacy_detection(
     assert output.getvalue() == PAYLOAD * packet_limit
     assert len(opened) == 1
     assert len(frames_read) == (71 if legacy else 2 + packet_limit)
+
+
+@pytest.mark.parametrize("skip", [False, True])
+@pytest.mark.parametrize("packet_limit", [1, 2])
+def test_local_nonempty_packet_budget_preserves_explicit_defaults(monkeypatch, skip, packet_limit) -> None:
+    reads: list[bytes] = []
+    calls: list[dict[str, Any]] = []
+    closed: list[bool] = []
+
+    class Stream:
+        supports_deadline_iter_packets = True
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            closed.append(True)
+        def iter_packets(self, **kwargs):
+            calls.append(kwargs)
+            for body in [b"", b"", PAYLOAD, PAYLOAD][:kwargs["max_packets"]]:
+                reads.append(body)
+                yield _local_stream.EzvizLocalStreamPacket(channel=0, length=len(body), body=body)
+
+    monkeypatch.setattr(_local_stream, "open_local_sdk_stream", lambda *_a, **_kw: Stream())
+    output = BytesIO()
+    _local_stream.copy_local_sdk_stream_from_client(NoCloudClient(), CAMERA, output,
+        credentials=credentials(), output_format="mpegps", max_packets=packet_limit,
+        skip_empty_packets=skip)
+    assert output.getvalue() == (PAYLOAD * packet_limit if skip else b"")
+    assert calls[0]["max_packets"] == (packet_limit + 1024 if skip else packet_limit)
+    if skip:
+        assert calls[0]["duration_from_start"] is True
+    assert len(reads) == (2 + packet_limit if skip else packet_limit)
+    assert closed == [True]

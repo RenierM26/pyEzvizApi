@@ -238,6 +238,10 @@ def _retry_port_options(enabled: bool) -> dict[str, Any]:
     return {"fresh_retry_port": True} if enabled else {}
 
 
+def _nonempty_packet_options(enabled: bool) -> dict[str, Any]:
+    return {"skip_empty_packets": True} if enabled else {}
+
+
 class SaveMediaResult(TypedDict, total=False):
     """Result returned by media save helpers."""
 
@@ -3387,6 +3391,7 @@ class EzvizClient:
                 timeout=source.timeout,
                 smscode=source.smscode,
                 **_credential_options(source.credentials),
+                **_nonempty_packet_options(source.skip_empty_packets),
                 **_receiver_options(source.receiver_port),
             )
         if isinstance(source, LocalSdkEcdhClipSource):
@@ -3470,7 +3475,7 @@ class EzvizClient:
             )
         raise PyEzvizError(f"Unsupported clip source options: {type(source).__name__}")
 
-    def _save_auto_clip(
+    def _save_auto_clip(  # noqa: PLR0912
         self,
         serial: str,
         output: str | Path | BinaryIO,
@@ -3503,6 +3508,8 @@ class EzvizClient:
             else None
         )
         while True:
+            if isinstance(source, LocalSdkClipSource):
+                source = replace(source, skip_empty_packets=True)
             duration = None if deadline is None else deadline - time.monotonic()
             if duration is not None and duration <= 0:
                 raise EzvizNoMediaError("Automatic playback exhausted its capture deadline")
@@ -3701,6 +3708,7 @@ class EzvizClient:
         smscode: str | int | None,
         credentials: EzvizLocalSdkCredentials | None = None,
         receiver_port: int = 10101,
+        skip_empty_packets: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through the direct-local SDK path."""
 
@@ -3727,6 +3735,7 @@ class EzvizClient:
                     ffmpeg_path=ffmpeg_path,
                     smscode=smscode,
                     **_credential_options(credentials),
+                    **_nonempty_packet_options(skip_empty_packets),
                     **_receiver_options(receiver_port, receiver_ex=True),
                 )
         else:
@@ -3749,6 +3758,7 @@ class EzvizClient:
                 ffmpeg_path=ffmpeg_path,
                 smscode=smscode,
                 **_credential_options(credentials),
+                **_nonempty_packet_options(skip_empty_packets),
                 **_receiver_options(receiver_port, receiver_ex=True),
             )
 

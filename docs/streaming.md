@@ -393,3 +393,7 @@ input frames: packet-bounded attempts allow up to `max_packets + 1024` input
 frames for handshake, descriptors and protocol detection. This remains a finite
 input allowance; duration-bounded attempts also retain their shared deadline.
 Existing explicit ECDH source frame-limit behavior is unchanged.
+
+Automatic legacy LAN clips likewise count nonempty media packets, skipping empty
+leading records within a finite `max_packets + 1024` input allowance. The local
+capture duration includes startup. Existing explicit-source defaults are unchanged.

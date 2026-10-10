@@ -26,6 +26,7 @@ class LocalSdkClipSource:
 
     kind: Literal["local-sdk"] = field(default="local-sdk", init=False)
     credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
+    skip_empty_packets: bool = field(default=False, kw_only=True)
     cas_serial: str | None = None
     register_p2p_session: bool = True
     p2p_register_max_retries: int = MAX_RETRIES

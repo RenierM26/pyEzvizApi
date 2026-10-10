@@ -755,7 +755,7 @@ if TYPE_CHECKING:
 
 _EXPORTS = {
     "HcNetSdkStreamDetails": "hcnetsdk",
-    "discover_hcnetsdk_stream_details": "local_stream_details",
+    "discover_hcnetsdk_stream_details": "hcnetsdk",
     "EzvizLanVideoResolution": "hcnetsdk",
     "AlarmDetectHumanCar": "constants",
     "AuthTestResultFailed": "exceptions",

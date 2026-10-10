@@ -216,12 +216,12 @@ def test_non_capability_xml_is_not_success(wire) -> None:
 
 
 def test_pure_client_discovery_convenience_preserves_inputs(monkeypatch) -> None:
-    from pyezvizapi import local_stream_details  # noqa: PLC0415
+    from pyezvizapi import hcnetsdk  # noqa: PLC0415
     calls = []
     def query(endpoint, password, **kwargs):
         calls.append((endpoint, password, kwargs))
         return "sentinel"
-    monkeypatch.setattr(local_stream_details, "discover_hcnetsdk_stream_details", query)
+    monkeypatch.setattr(hcnetsdk, "discover_hcnetsdk_stream_details", query)
     endpoint = HcNetSdkLanEndpoint("CAM123", "192.0.2.10")
     client = HcNetSdkPurePythonClient(endpoint, "password", timeout=5)
     assert client.stream_details(2) == "sentinel"

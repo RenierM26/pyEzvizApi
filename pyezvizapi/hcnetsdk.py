@@ -16,7 +16,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from enum import IntEnum
@@ -11290,8 +11290,6 @@ class HcNetSdkPurePythonClient:
 
     def stream_details(self, channel: int = 1) -> HcNetSdkStreamDetails:
         """Read current compression and per-resolution abilities without cloud IO."""
-        from .local_stream_details import discover_hcnetsdk_stream_details  # noqa: PLC0415
-
         return discover_hcnetsdk_stream_details(
             self.endpoint, self.password, channel=channel, username=self.username,
             local_ip=self.local_ip, timeout=self.timeout, socket_factory=self.socket_factory,
@@ -12654,3 +12652,64 @@ def _probe_port(
         passive_bytes=passive_bytes,
         tls_error=tls_error,
     )
+
+
+def discover_hcnetsdk_stream_details(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    *,
+    channel: int = 1,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    max_response_bytes: int = 524_288,
+) -> HcNetSdkStreamDetails:
+    """Login once and issue native GET1040 and ability8 queries on fresh sockets.
+
+    Supplied credentials only: never renew or retry authentication. The finite
+    network deadline covers login and both reads; RSA generation precedes it.
+    Native frame-rate/resolution/codec IDs are preserved, not guessed as FPS or
+    encryption protocols. Unsupported/malformed/authentication errors propagate.
+    """
+    if not isinstance(channel, int) or isinstance(channel, bool) or not 1 <= channel <= 255:
+        raise PyEzvizError("Stream discovery channel must be between 1 and 255")
+    if timeout is None or not math.isfinite(timeout) or timeout <= 0:
+        raise PyEzvizError("Stream discovery requires a positive finite timeout")
+    if not isinstance(max_response_bytes, int) or isinstance(max_response_bytes, bool) or max_response_bytes < 16:
+        raise PyEzvizError("Discovery response limit must include the 16-byte header")
+    if not password:
+        raise PyEzvizError("Stream discovery requires supplied local credentials")
+    key = rsa_key if rsa_key is not None else hcnetsdk_command_port_rsa_key()
+    deadline = monotonic() + timeout
+    with closing(HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)) as client:
+        sock = client.connect(deadline=deadline, monotonic=monotonic)
+        address = local_ip if local_ip is not None else str(sock.getsockname()[0])
+        session = client.login(password=password, username=username, local_ip=address,
+                               rsa_key=key, max_frame_bytes=max_response_bytes, deadline=deadline, monotonic=monotonic)
+    config_template = hcnetsdk_dvr_config_command_port_template(ezviz_lan_video_coding_get_config_request(1, channel))
+    ability_template = hcnetsdk_device_ability_command_port_template(ezviz_lan_audio_video_compress_info_ability_request(1, channel))
+    config = _hcnetsdk_stream_details_query(endpoint, config_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
+    configuration = ezviz_lan_compression_config(config.body)
+    ability = _hcnetsdk_stream_details_query(endpoint, ability_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
+    capabilities = ezviz_lan_audio_video_compress_info(hcnetsdk_command_port_response_payload(ability))
+    if not capabilities.success:
+        raise PyEzvizError("Camera did not return audio/video compression capabilities")
+    if monotonic() >= deadline:
+        raise EzvizLocalSdkDeadlineExpired("Camera stream discovery exhausted its deadline")
+    return HcNetSdkStreamDetails(channel, configuration, capabilities, session.serial)
+
+
+def _hcnetsdk_stream_details_query(
+    endpoint: HcNetSdkLanEndpoint, template: HcNetSdkCommandPortControlTemplate,
+    session: HcNetSdkCommandPortLoginSession, address: str, timeout: float,
+    socket_factory: SocketFactory, deadline: float, monotonic: Callable[[], float],
+    max_response_bytes: int,
+) -> HcNetSdkTcpFrame:
+    request = template.to_frame(session_id=session.session_id, auth_seed=session.auth_seed,
+                                key=session.challenge, local_ip=address)
+    with closing(HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)) as client:
+        client.send_command_frame(request, deadline=deadline, monotonic=monotonic)
+        return client.read_tcp_frame(deadline=deadline, monotonic=monotonic, max_frame_bytes=max_response_bytes)

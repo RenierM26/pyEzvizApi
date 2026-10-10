@@ -98,6 +98,32 @@ def test_decrypted_native_source_clock_preserves_missing_picture_gap() -> None:
         _local_stream._native_decrypted_rtp_timeline(packets, annexb + b"extra", "h264", b"", None)  # noqa: SLF001
 
 
+def test_public_decrypted_native_video_without_audio_preserves_source_gap(monkeypatch: Any) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    units = (b"\x65\x80first", b"\x41\x80next", b"\x41\x80after-gap")
+    packets = [metadata, *(b"\x80\xe0" + index.to_bytes(2, "big") + timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88" + unit for index, (timestamp, unit) in enumerate(zip((1000, 7000, 19000), units, strict=True)))]
+    class Stream:
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(SimpleNamespace(body=p) for p in packets)
+    def remux(_path: str, **options: Any) -> subprocess.Popen[bytes]:
+        assert options["input_format"] == "mpeg"
+        assert options["preserve_timestamps"] is True
+        return subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", remux)
+    output = io.BytesIO()
+    _local_stream.copy_local_stream_to_decrypted_mpegts(Stream(), output, b"", max_packets=len(packets))
+    payload = output.getvalue()
+    pts_values = []
+    for piece in payload.split(b"\x00\x00\x01\xe0")[1:]:
+        pts = piece[5:10]
+        pts_values.append(((pts[0] >> 1) & 7) << 30 | pts[1] << 22 | (pts[2] >> 1) << 15 | pts[3] << 7 | pts[4] >> 1)
+    assert pts_values == [0, 6000, 18000]
+    audio_pes_prefix = b"\x00\x00\x01\xc0"
+    assert audio_pes_prefix not in payload
+
+
 def test_decrypted_native_hevc_timeline_honors_parameter_set_policy() -> None:
     media_key = "test-media-key"
     units = (b"\x40\x01" + b"V" * 16, b"\x26\x01" + b"\x80" + b"I" * 15)

@@ -2377,11 +2377,11 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 require_contiguous=False,
                 allow_timestamp_jitter=True,
             )
+        if annexb == full_annexb:
+            codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
+            if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets):
+                return
         if audio is not None:
-            if annexb == full_annexb:
-                codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
-                if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets):
-                    return
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
                 audio,
@@ -2659,7 +2659,7 @@ def _native_wrapper_video_timestamps(
 
 
 def _copy_decrypted_native_idmx_timed_av(
-    packets: list[bytes], annexb: bytes, audio: RtpAacStream, output: BinaryIO, *,
+    packets: list[bytes], annexb: bytes, audio: RtpAacStream | None, output: BinaryIO, *,
     codec: RtpVideoCodec, ffmpeg_path: str, media_key: str | bytes = b"",
     nalu_header_size: int | None = None,
     decrypt_hevc_parameter_sets: bool = False,

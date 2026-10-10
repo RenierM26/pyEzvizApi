@@ -1374,7 +1374,7 @@ def test_generated_stream_ends_normally_when_bootstrap_uses_capture_budget() -> 
     rendered = RenderedStream()
     stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
     stream.bootstrap = cast(Any, object())
-    stream._stream = cast(Any, rendered)  # noqa: SLF001
+    vars(stream)["_stream"] = cast(Any, rendered)
     stream.rsa_key = object()
     ticks = iter((0.0, 1.0))
 
@@ -1431,7 +1431,7 @@ def test_prestarted_generated_stream_skips_unused_rsa_key(monkeypatch) -> None:
 
     stream = object.__new__(HcNetSdkCommandPortGeneratedMultiSocketMediaStream)
     stream.bootstrap = cast(Any, object())
-    stream._stream = cast(Any, RenderedStream())  # noqa: SLF001
+    vars(stream)["_stream"] = cast(Any, RenderedStream())
     stream.rsa_key = None
     monkeypatch.setattr(
         "pyezvizapi.local_stream.hcnetsdk_command_port_rsa_key",

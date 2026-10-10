@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from itertools import pairwise
 from typing import Literal
 
@@ -156,6 +157,8 @@ class RtpAacStream:
     sample_rate: int
     channels: int
     frame_count: int
+    # Contiguous ADTS blocks with sample offsets from the first received AU.
+    timed_segments: tuple[tuple[int, bytes], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -562,6 +565,36 @@ def rtp_codec_payload_types(
     return fallback_payload_types - assigned_payload_types
 
 
+def idmx_video_frame_rate(packets: Iterable[RtpPacket]) -> str | None:
+    """Read the native 0x42 descriptor's 90 kHz frame-period field.
+
+    PlayCtrl rtp_parse_hik_video_descriptor packs bytes 13..15 into a
+    23-bit period and divides 90000 by it. Reserved/invalid periods do
+    not establish timing; never invent the native parser's 25 fps default.
+    """
+
+    selected: Fraction | None = None
+    for packet in packets:
+        if not packet.idmx:
+            continue
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            end = offset + data[offset + 1] + 2
+            if end > len(data):
+                break
+            if data[offset] == 0x42 and data[offset + 1] >= 14:
+                descriptor = data[offset:end]
+                period = (descriptor[13] << 15) | (descriptor[14] << 7) | (descriptor[15] >> 1)
+                if 186 < period <= 1_530_000:
+                    rate = Fraction(90000, period)
+                    # Startup metadata can advertise a placeholder period;
+                    # subsequent native metadata corrects it (as for AAC).
+                    selected = rate
+            offset = end
+    return str(selected) if selected is not None else None
+
+
 def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
     """Return authoritative sample-rate/channel metadata from descriptor ``0x43``."""
 
@@ -701,10 +734,13 @@ def decrypt_idmx_aac_packets(
         encrypted_access_units.append(access_unit)
     if not encrypted_access_units:
         return None
-    if require_contiguous and any(
-        ((current - previous) & 0xFFFFFFFF) != IDMX_AAC_SAMPLES_PER_FRAME
+    deltas = [
+        (current - previous) & 0xFFFFFFFF
         for previous, current in pairwise(timestamps)
-    ):
+    ]
+    if any(delta == 0 or delta >= 0x80000000 or delta % IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
+        return None
+    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
         return None
     descriptor = route_profile.audio_metadata or audio_metadata
     if descriptor is None:
@@ -715,15 +751,35 @@ def decrypt_idmx_aac_packets(
         _decrypt_idmx_aac_access_unit(access_unit, aes_key)
         for access_unit in encrypted_access_units
     ]
+    adts_frames = [
+        _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
+        for access_unit in access_units
+    ]
     return RtpAacStream(
-        adts=b"".join(
-            _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
-            for access_unit in access_units
-        ),
+        adts=b"".join(adts_frames),
         sample_rate=sample_rate,
         channels=channels,
         frame_count=len(access_units),
+        timed_segments=_aac_timed_segments(adts_frames, deltas),
     )
+
+
+def _aac_timed_segments(adts_frames: list[bytes], deltas: list[int]) -> tuple[tuple[int, bytes], ...]:
+    """Split received ADTS only at missing-AU boundaries."""
+
+    segments: list[tuple[int, bytes]] = []
+    segment_start = 0
+    segment_offset = 0
+    sample_offset = 0
+    for index, delta in enumerate(deltas, start=1):
+        sample_offset += delta
+        if delta != IDMX_AAC_SAMPLES_PER_FRAME:
+            segments.append((segment_offset, b"".join(adts_frames[segment_start:index])))
+            segment_start = index
+            segment_offset = sample_offset
+    if segments:
+        segments.append((segment_offset, b"".join(adts_frames[segment_start:])))
+    return tuple(segments)
 
 
 def rtp_payload_video_codec(payload: bytes) -> RtpVideoCodec | None:

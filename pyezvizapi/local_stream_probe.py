@@ -56,8 +56,9 @@ def probe_local_sdk_stream_from_client(
         client, serial, receiver_port=receiver_port
     ) as stream:
         deadline = time.monotonic() + duration_seconds
+        # Failure to establish a session is not evidence of stream silence.
+        stream.start(read_first_media=False, deadline=deadline)
         try:
-            stream.start(read_first_media=False, deadline=deadline)
             while frames < max_frames and received < max_bytes:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

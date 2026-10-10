@@ -1434,3 +1434,17 @@ def test_protocol_probe_requires_verified_handshake(monkeypatch: Any, tampered: 
         assert result.authenticated_ecdh
         assert result.recommended_source == "local-sdk-ecdh"
     assert stream.closed
+
+
+def test_protocol_probe_propagates_bootstrap_deadline_failure(monkeypatch: Any) -> None:
+    stream = _ProbeStream([], EzvizLocalSdkEcdhStreamDecoder(None))
+
+    def failed_start(**_kwargs: Any) -> None:
+        raise EzvizLocalSdkDeadlineExpired("preview setup deadline expired")
+
+    monkeypatch.setattr(stream, "start", failed_start)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", lambda *_args, **_kwargs: stream)
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="preview setup"):
+        probe_local_sdk_stream_from_client(None, "CAM123")
+    assert stream.reads == 0
+    assert stream.closed

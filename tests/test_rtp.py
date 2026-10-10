@@ -2158,3 +2158,31 @@ def test_bounded_aac_does_not_convert_reorder_or_invalid_clock_to_gap(delta: int
             timestamp=timestamp, payload_type=104, extension_profile=0x4000,
             extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01"), idmx=True))
     assert decrypt_idmx_aac_packets(packets, b"key", require_contiguous=False) is None
+
+
+def test_clear_idmx_aac_explicitly_bypasses_aes_without_changing_payload() -> None:
+    plain = b"received-clear-aac-payload"
+    packet = RtpPacket(b"\x00\x10" + (len(plain) << 3).to_bytes(2, "big") + plain,
+        104, 1, 0, 1, True, 0x4000, b"\x80\x06\x00\x01\x21\x21\x02\x01", True)
+    clear = decrypt_idmx_aac_packets((packet,), b"", audio_metadata=(16000, 1), decrypt_audio=False)
+    encrypted = decrypt_idmx_aac_packets((packet,), b"", audio_metadata=(16000, 1))
+    assert clear is not None and encrypted is not None
+    assert clear.adts[7:] == plain
+    assert encrypted.adts[7:] != plain
+
+
+def test_clear_descriptor_backed_rfc3640_aac_keeps_observed_timestamp_jitter() -> None:
+    descriptor = b"\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
+    metadata = RtpPacket(b"metadata", 112, 0, 0, 1, False, 1, descriptor, True)
+    payload = b"received-clear-aac-payload"
+    packets = (metadata, *(RtpPacket(b"\x00\x10" + (len(payload) << 3).to_bytes(2, "big") + payload,
+        104, index + 1, timestamp, 2, True, idmx=True) for index, timestamp in enumerate((1000, 2024, 3032, 4072))))
+    audio = decrypt_idmx_aac_packets(packets, b"", require_contiguous=False, decrypt_audio=False)
+    assert audio is not None
+    assert audio.frame_count == 4
+    assert [offset for offset, _data in audio.timed_segments] == [0, 2032, 3072]
+    assert all(data.endswith(payload) for _offset, data in audio.timed_segments)
+    # Plain RTP payload alone is not enough to infer AAC or its sample rate.
+    assert decrypt_idmx_aac_packets(packets[1:], b"", require_contiguous=False, decrypt_audio=False) is None
+    # Existing encrypted-IDMX eligibility remains strict.
+    assert decrypt_idmx_aac_packets(packets, b"", require_contiguous=False) is None

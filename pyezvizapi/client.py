@@ -189,6 +189,7 @@ from .local_stream_transport import (
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortMultiSocketPlan,
     copy_local_sdk_stream_from_client,
+    hcnetsdk_command_port_native_lan_live_view_plan,
     open_hcnetsdk_command_port_generated_multi_socket_stream,
     open_hcnetsdk_command_port_multi_socket_stream,
     open_hcnetsdk_command_port_stream,
@@ -3858,6 +3859,9 @@ class EzvizClient:
             raise PyEzvizError(
                 "source='hcnetsdk-command-port' generated plans require hcnetsdk_command_password"
             )
+        if command_port is None and generated_plan == hcnetsdk_command_port_native_lan_live_view_plan():
+            # CONNECTION.command_port is the separate EZVIZ CAS service (9010).
+            command_port = 8000
         endpoint = self._hcnetsdk_command_port_endpoint(
             serial,
             host=host,

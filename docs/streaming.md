@@ -565,3 +565,20 @@ with an interrupted partial frame is removed from parsing and retained only for
 this bounded teardown. Further reads on that client are rejected rather than
 opening an unrelated socket. Consuming an explicit stop also makes the client
 terminal, including when the stop fails; callers must close it before reopening.
+
+### Native clear LAN preview
+
+The built-in `app-lan-live-view` command plan selects its observed HCNetSDK port
+8000 when no command-port override is supplied. The API's `CONNECTION.command_port`
+can instead name the separate EZVIZ CAS service at9010; it is not a native preview
+endpoint. Explicit ports and caller-supplied custom plans retain their behavior.
+Use the camera's current native login key, not a stale saved password.
+
+Clear native IDMX captures use the advertised HEVC period and retain descriptor-
+backed, well-framed RFC3640 AAC even when individual audio packets have no encrypted
+IDMX extension. Clear input bypasses AES explicitly. Received AAC timestamp gaps
+and jitter are retained; no silence or guessed timestamps are added. Undescribed
+plain RTP is not inferred as AAC. Encrypted IDMX eligibility stays unchanged.
+Startup-trim/wait modes do not add clear audio without evidence for matching the
+selected video interval. The built-in app-observed native plan remains a single-
+channel plan, not a way to force a second lens.

@@ -2433,7 +2433,7 @@ def _require_bounded_idmx_capture(
         )
 
 
-def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
+def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
     stream: Any,
     output: BinaryIO,
     *,
@@ -2524,7 +2524,8 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
                         ffmpeg_path=ffmpeg_path,
                         max_windows=h264_clean_idr_max_windows,
                     )
-            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+            video_input_format = "hevc"
+            video_frame_rate = None if h264_wait_for_clean_idr_window else _idmx_local_video_frame_rate(packets)
         else:
             annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
@@ -2536,7 +2537,24 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
                     ffmpeg_path=ffmpeg_path,
                     max_windows=h264_clean_idr_max_windows,
                 )
-            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+            video_input_format = "h264"
+            video_frame_rate = None
+        if not (is_h264_startup_options or h264_wait_for_clean_idr_window):
+            audio_metadata = _idmx_audio_descriptor(packets)
+            if audio_metadata is not None:
+                audio = _decrypt_idmx_local_packets_to_adts_aac(
+                    packets, b"", audio_metadata=audio_metadata, require_contiguous=False, decrypt_audio=False,
+                )
+                if audio is not None:
+                    _copy_idmx_audio_video_to_mpegts(
+                        annexb, audio, output, ffmpeg_path=ffmpeg_path,
+                        video_input_format=video_input_format, video_frame_rate=video_frame_rate,
+                    )
+                    return
+        process = (
+            _open_local_hevc_mpegts_remux_process(ffmpeg_path, frame_rate=video_frame_rate)
+            if video_input_format == "hevc" else _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        )
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
     if (
@@ -6467,6 +6485,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    decrypt_audio: bool = True,
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
 
@@ -6505,6 +6524,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         if (
             packet.payload_type in descriptor_aac_payload_types
             and _rtp_packet_route_descriptor(route_epoch_profile, packet) is None
+            and decrypt_audio
             and not rtp_packet_has_valid_idmx_aac_frame(packet)
         ):
             continue
@@ -6515,6 +6535,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         audio_metadata=audio_metadata,
         audio_payload_types=selected_audio_payload_types,
         require_contiguous=require_contiguous,
+        decrypt_audio=decrypt_audio,
     )
 
 

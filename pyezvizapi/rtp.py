@@ -704,8 +704,9 @@ def decrypt_idmx_aac_packets(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    decrypt_audio: bool = True,
 ) -> RtpAacStream | None:
-    """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
+    """Return descriptor-backed IDMX AAC as ADTS; explicitly bypass AES for clear input."""
 
     packet_list = list(packets)
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
@@ -724,7 +725,15 @@ def decrypt_idmx_aac_packets(
             continue
         if route_epoch is not None and route_epoch.codec != "aac":
             continue
-        if not rtp_packet_has_valid_idmx_aac_frame(packet):
+        clear_access_unit = _idmx_aac_access_unit(packet.payload) if not decrypt_audio else None
+        clear_routed_aac = (
+            not decrypt_audio and (
+                route_epoch.codec == "aac" if route_epoch is not None else route_profile.audio_metadata is not None
+            )
+            and clear_access_unit is not None
+            and len(clear_access_unit) + IDMX_AAC_ADTS_HEADER_SIZE <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        )
+        if not (clear_routed_aac or rtp_packet_has_valid_idmx_aac_frame(packet)):
             if route_epoch is None:
                 continue
             return None
@@ -738,7 +747,7 @@ def decrypt_idmx_aac_packets(
         (current - previous) & 0xFFFFFFFF
         for previous, current in pairwise(timestamps)
     ]
-    if any(delta == 0 or delta >= 0x80000000 or delta % IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
+    if any(delta == 0 or delta >= 0x80000000 or (decrypt_audio and delta % IDMX_AAC_SAMPLES_PER_FRAME) for delta in deltas):
         return None
     if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
         return None
@@ -748,7 +757,7 @@ def decrypt_idmx_aac_packets(
     sample_rate, channels = descriptor
     aes_key = _rtp_media_aes_key(media_key)
     access_units = [
-        _decrypt_idmx_aac_access_unit(access_unit, aes_key)
+        _decrypt_idmx_aac_access_unit(access_unit, aes_key) if decrypt_audio else access_unit
         for access_unit in encrypted_access_units
     ]
     adts_frames = [

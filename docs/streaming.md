@@ -457,3 +457,70 @@ These queries do not establish ECDH support. A codec or resolution alone cannot
 choose the encryption protocol. Automatic playback keeps its existing
 metadata/negotiation policy; this explicit discovery API does not introduce an
 extra password login or cloud dependency into the strict offline path.
+
+
+### Normalized configuration and negotiated session headers
+
+`details.configured_media()` (and `sub_stream=True`) returns configured codec,
+frame rate, bitrate in bits/second, audio sample rate and camera-associated
+resolution. Raw SDK codes remain intact. Native code 14 maps to 15 fps; code 0
+means full 25/30 rate without choosing either, and automatic/unknown values remain
+`None`. Bitrate units follow the native 1024 conversion. Configuration is not
+proof of emitted media, and never selects link encryption.
+
+A successful local preview returns `bootstrap.stream_header`: a sanitized
+`EzvizStreamHeader` from the camera's 40-byte PlayM4 header. The parser keeps
+this namespace separate from SDK configuration and RTP payload IDs. It exposes
+negotiated video/audio codecs and audio parameters, but not session IDs, keys,
+video dimensions/FPS that the header does not provide, or guessed encryption.
+Absent headers return `None`; malformed or unsupported layouts raise
+`PyEzvizError` when explicitly inspected. Optional metadata failure does not
+prevent otherwise playable automatic live streams.
+
+```python
+from pyezvizapi import AutoClipSource, CaptureLimits, LocalStreamDiscoveryCache
+
+cache = LocalStreamDiscoveryCache(ttl=300, max_entries=32)
+source = AutoClipSource(
+    mode="offline", credentials=local_credentials,
+    discovery_cache=cache, discovery_generation="configuration-v1",
+)
+with client.open_stream(serial, source=source) as stream:
+    for packet in stream.iter_media_packets(limits=CaptureLimits(duration_seconds=30)):
+        consume(packet)
+        # stream.discovery contains fresh negotiated metadata, not decoded proof.
+```
+
+The cache belongs to the caller and stores no authentication material. Identity
+is hashed from endpoint, channel, credentials, cached device metadata and the
+caller's generation. A successful emitted local input can reuse its transport
+choice on the next live open, avoiding repeated protocol mismatches. Every new
+session still authenticates and parses a fresh header. TTL expiry, changed
+identity/generation, explicit `cache.invalidate()`, or transport failure force
+fresh selection. Reads never extend TTL. No source switch occurs after output.
+Malformed optional headers are not cached. Full offline policy remains enforced.
+Clip capture may use a matching cached hint, but does not populate the live cache.
+After camera configuration changes, invalidate the cache or advance its generation.
+
+### Explicit native LAN authentication profiles
+
+```python
+from pyezvizapi import discover_hcnetsdk_stream_details_for_login, ezviz_lan_login_candidates
+
+# Select one profile using known device/scan information; do not loop passwords.
+profile = ezviz_lan_login_candidates(local_password)[0]
+details = discover_hcnetsdk_stream_details_for_login(
+    endpoint, profile, tls_context=trusted_camera_ssl_context, timeout=10,
+)
+```
+
+The TLS V40 profile carries the native binary command protocol, not an HTTP GET.
+Default TLS verifies the camera certificate using system trust; private CA trust
+can be provided through an `SSLContext`. TCP connect and TLS handshake share
+one remaining deadline, followed by login/config/ability queries in the same
+total budget. Plain V30 and derived `EZ_LOCAL_USER` profiles are explicit choices.
+Only the selected supplied credential is attempted, with no profile/password
+fallback, cloud retrieval or renewal. Login rejection does not imply unsupported
+stream capabilities. Cameras accepting TLS but rejecting the available LAN
+credential still need the correct app/local password for configuration queries;
+CAS-authorized preview headers remain an independent discovery source.

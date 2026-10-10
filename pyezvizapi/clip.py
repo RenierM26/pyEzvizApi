@@ -15,6 +15,7 @@ from .local_stream_transport import (
     HcNetSdkCommandPortMultiSocketPlan,
 )
 from .media import CaptureLimits, MediaDecodeOptions, MediaMuxOptions
+from .stream_discovery import LocalStreamDiscoveryCache
 
 ClipSource = Literal["auto", "local-sdk", "local-sdk-ecdh", "hcnetsdk-command-port", "cloud"]
 ClipOutputFormat = Literal["mpegps", "mpegts"]
@@ -97,6 +98,8 @@ class AutoClipSource:
     device: dict[str, Any] | None = field(default=None, repr=False)
     credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
     allow_cloud_fallback: bool = True
+    discovery_cache: LocalStreamDiscoveryCache | None = field(default=None, repr=False)
+    discovery_generation: str = ""
     timeout: float = 10.0
     receiver_port: int | None = None
     smscode: str | int | None = field(default=None, repr=False)

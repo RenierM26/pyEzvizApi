@@ -385,6 +385,7 @@ if TYPE_CHECKING:
         classify_lan_ports,
         decode_hcnetsdk_command_port_login_challenge,
         decrypt_ezviz_local_sdk_body_aes_cbc,
+        discover_hcnetsdk_stream_details_for_login,
         encrypt_ezviz_local_sdk_body_aes_cbc,
         ezviz_cas_ptz_command,
         ezviz_hcnetsdk_local_ability_parse_request,
@@ -612,6 +613,7 @@ if TYPE_CHECKING:
         sadp_stop_request,
         summarize_hcnetsdk_command_trace,
     )
+    from .hcnetsdk_parameters import HcNetSdkConfiguredMedia
     from .light_bulb import EzvizLightBulb
     from .local_stream_details import discover_hcnetsdk_stream_details
     from .local_stream_ecdh import (
@@ -711,6 +713,8 @@ if TYPE_CHECKING:
         rtp_payload_video_codec,
     )
     from .smart_plug import EzvizSmartPlug
+    from .stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
+    from .stream_header import EzvizStreamHeader, parse_ezviz_stream_header
     from .stream_media import (
         decrypt_hikvision_ps_video,
         detect_hikvision_ps_video_nalu_header_size,
@@ -755,6 +759,12 @@ if TYPE_CHECKING:
 
 _EXPORTS = {
     "HcNetSdkStreamDetails": "hcnetsdk",
+    "discover_hcnetsdk_stream_details_for_login": "hcnetsdk",
+    "HcNetSdkConfiguredMedia": "hcnetsdk_parameters",
+    "EzvizStreamHeader": "stream_header",
+    "parse_ezviz_stream_header": "stream_header",
+    "LocalStreamDiscovery": "stream_discovery",
+    "LocalStreamDiscoveryCache": "stream_discovery",
     "discover_hcnetsdk_stream_details": "hcnetsdk",
     "EzvizLanVideoResolution": "hcnetsdk",
     "AlarmDetectHumanCar": "constants",

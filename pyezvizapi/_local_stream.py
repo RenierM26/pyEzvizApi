@@ -1758,6 +1758,7 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     serial: str,
     *,
     channel: int = 1,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     register_p2p_session: bool = True,
     p2p_register_max_retries: int = MAX_RETRIES,
@@ -1790,6 +1791,7 @@ def open_local_sdk_stream_from_client(  # noqa: PLR0913
     credentials = get_local_sdk_stream_credentials_from_client(
         client,
         serial,
+        credentials=credentials,
         cas_serial=cas_serial,
         fetch_media_key=False,
         register_p2p_session=register_p2p_session,
@@ -1835,6 +1837,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     media_key: str | bytes | None = None,
     nalu_header_size: int | None = 0,
     channel: int = 1,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     register_p2p_session: bool = True,
     p2p_register_max_retries: int = MAX_RETRIES,
@@ -1880,6 +1883,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     credentials = get_local_sdk_stream_credentials_from_client(
         client,
         serial,
+        credentials=credentials,
         cas_serial=cas_serial,
         fetch_media_key=decrypt_video and media_key is None,
         register_p2p_session=register_p2p_session,
@@ -1965,6 +1969,8 @@ def get_local_sdk_stream_credentials_from_client(
     client: Any,
     serial: str,
     *,
+    credentials: EzvizLocalSdkCredentials | None = None,
+    endpoint: HcNetSdkLanEndpoint | None = None,
     cas_serial: str | None = None,
     fetch_media_key: bool = True,
     register_p2p_session: bool = True,
@@ -1973,7 +1979,13 @@ def get_local_sdk_stream_credentials_from_client(
     cam_key_max_retries: int = 1,
 ) -> EzvizLocalSdkCredentials:
     """Fetch LAN endpoint, CAS tuple and optional media key from EZVIZ services."""
-    endpoint = _local_sdk_endpoint_from_client(client, serial)
+    if credentials is not None:
+        if credentials.device_info.serial != serial:
+            raise PyEzvizError("Local credentials do not match the requested camera")
+        if fetch_media_key and credentials.media_key is None:
+            raise PyEzvizError("Supplied local credentials require a media_key; no cloud refresh is performed")
+        return credentials
+    endpoint = endpoint or _local_sdk_endpoint_from_client(client, serial)
     if register_p2p_session:
         _register_p2p_session_for_client(
             client,

@@ -85,7 +85,10 @@ from .local_stream_media import (
     copy_local_stream_to_decrypted_mpegts,
     copy_local_stream_to_mpegts,
 )
-from .local_stream_transport import get_local_sdk_stream_credentials_from_client
+from .local_stream_transport import (
+    EzvizLocalSdkCredentials,
+    get_local_sdk_stream_credentials_from_client,
+)
 from .media import (
     LegacyPacketSource,
     MediaPacket,
@@ -841,6 +844,7 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     client: Any,
     serial: str,
     *,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     key_pair: EzvizLocalSdkEcdhKeyPair | None = None,
     channel: int = 1,
@@ -870,6 +874,8 @@ def open_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
         "register_p2p_session": register_p2p_session,
         "p2p_register_max_retries": p2p_register_max_retries,
     }
+    if credentials is not None:
+        credential_options["credentials"] = credentials
     if smscode is not None:
         credential_options["smscode"] = smscode
     credentials = get_local_sdk_stream_credentials_from_client(
@@ -906,6 +912,7 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
     serial: str,
     output: BinaryIO,
     *,
+    credentials: EzvizLocalSdkCredentials | None = None,
     cas_serial: str | None = None,
     channel: int = 1,
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
@@ -955,6 +962,7 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0913
             with open_local_sdk_ecdh_stream_from_client(
                 client,
                 serial,
+                credentials=credentials,
                 cas_serial=cas_serial,
                 channel=channel,
                 receiver_port=receiver_port,

@@ -1093,7 +1093,7 @@ def test_save_clip_cloud_defaults_to_resource_auto_selection(
     assert fake_client.instances[0].save_clip_request["channel"] is None
 
 
-@pytest.mark.parametrize("source", ["local-sdk", "local-sdk-ecdh"])
+@pytest.mark.parametrize("source", ["auto", "local-sdk", "local-sdk-ecdh"])
 def test_save_clip_decrypted_local_defaults_to_auto_header_detection(
     monkeypatch,
     tmp_path,

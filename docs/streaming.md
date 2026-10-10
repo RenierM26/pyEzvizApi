@@ -275,3 +275,110 @@ This is protocol detection, **not** codec/media-key/playback certification or a
 permanent model-capability cache. Validate actual video and audio with the
 selected source and current media key. The official app's ability to play a
 camera does not prove it used ECDH rather than a different supported transport.
+
+## Automatic playback and fully offline operation
+
+New Home Assistant-style callers can request automatic protocol/transport
+selection rather than maintaining camera-model tables:
+
+```python
+result = client.save_clip(
+    serial, "preview.ts", source="auto", decrypt_video=True,
+    duration_seconds=10,
+)
+# result["source"] names the transport that actually succeeded.
+```
+
+Auto reads the per-device pagelist metadata once, prefers the advertised LAN
+endpoint, and uses `deviceInfos.supportExt["519"]` to select ECDH for owned live
+view when member `1` is present. The official app's `DeviceParam` and
+`InitParamCreator.createDeviceCamera` use this membership check; values such as
+`2,3` or `11` are not interchangeable with `1`. Missing 519 in an otherwise
+populated support map selects legacy local streaming. Missing/malformed maps
+or parent-device metadata are treated as unknown, not as proof of support.
+Unknown profiles start with ECDH and verify the actual stream. Confirmed legacy
+RTP/PS switches to legacy using the same credentials, without a separate probe
+session. Codec routing still uses the stream descriptors described above.
+Channel and mux choices remain caller-controlled; this does not change camera
+quality, encryption, privacy, or other device settings.
+
+`AutoClipSource(device=cached_device_info)` reuses the integration's per-device
+`get_device_infos()` snapshot instead of fetching pagelist again. Automatic mode
+may still acquire CAS credentials/register P2P and fetch a media key when
+requested decryption needs one. Missing LAN metadata or a pre-output connection
+failure can select cloud. Set `allow_cloud_fallback=False` to disable that
+fallback; this alone **does not** prohibit cloud credential discovery.
+Authentication/MFA/HMAC, unsupported codec, configuration, and silent no-media
+errors are not disguised by fallback. A premature ECDH close retries the tested
+rate-0 variant before cloud. Once bytes or packets have been emitted there is no
+source switching. Auto clips stage their finite captures privately, preserving
+an existing destination on a failed attempt. Transport startup and fallback
+share the capture duration budget; account discovery happens before that budget.
+Legacy explicit sources and their defaults are unchanged.
+
+### Offline means no cloud calls
+
+Use `AutoClipSource(mode="offline", credentials=...)` with explicit LAN
+connection and CAS control credentials, plus the media key for video decryption:
+
+```python
+from pyezvizapi import (
+    AutoClipSource, CaptureLimits, ClipOptions, EzvizClient,
+    MediaDecodeOptions,
+)
+from pyezvizapi.hcnetsdk import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
+from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials
+
+credentials = EzvizLocalSdkCredentials(
+    endpoint=HcNetSdkLanEndpoint(
+        serial=serial, host=lan_ip, command_port=9010, stream_port=9020,
+    ),
+    device_info=EzvizCasDeviceInfo(
+        serial=serial, operation_code=operation_code, key=control_key,
+    ),
+    media_key=media_key,
+)
+source = AutoClipSource(
+    mode="offline", credentials=credentials,
+    device=cached_device_info,  # optional; no metadata request if omitted
+)
+local_client = EzvizClient()  # no login or cloud token needed
+result = local_client.save_clip_with_options(
+    serial, "offline.ts",
+    ClipOptions(source=source, capture=CaptureLimits(duration_seconds=10),
+                decode=MediaDecodeOptions(decrypt_video=True)),
+)
+```
+
+This policy does not call pagelist, CAS, account login, P2P registration, or key
+retrieval, and never falls back to cloud. Supplied credentials must match the
+requested camera. Missing or device-rejected credentials fail locally; they are
+not silently renewed. Obtain/export required credentials during provisioning,
+protect any stored keys, and supply the camera's actual LAN ports. Offline is a
+connection policy, not a promise that firmware never expires stored credentials.
+Explicit `LocalSdkClipSource(credentials=...)` and
+`LocalSdkEcdhClipSource(credentials=...)` also bypass discovery. Existing
+caller-supplied HCNetSDK command-port plans remain available for that offline
+native LAN path. The existing CLI `stream local-dump --credentials-file ...`
+continues to work without account login; `save clip --source auto` is the online
+automatic convenience command.
+
+### Live integration packet interface
+
+```python
+with client.open_stream(serial) as stream:  # defaults to automatic selection
+    for packet in stream.iter_media_packets():
+        consume_packet(packet)
+    selected_source = stream.source_kind
+```
+
+Pass `source=source` from the offline example to apply the same cloud-free policy
+here. Optional `CaptureLimits` apply packet, byte, and duration bounds, including
+startup and retries after account discovery. Always close the context on consumer
+disconnect; explicit `close()` cancels the active transport. Iteration is
+single-use and does not reopen a closed stream. This API yields normalized
+transport packets, not a ready-to-play URL or video-decrypted/remuxed output.
+An integration must apply the existing media transforms/mux layer before serving
+video. ECDH transport authentication/decryption remains automatic inside the
+transport; video AES decryption is separate. The existing bounded
+`probe_local_stream()` remains a diagnostic tool, not a required pre-play step.

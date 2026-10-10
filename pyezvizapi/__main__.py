@@ -666,10 +666,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument("--serial", required=True, help="camera SERIAL")
     parser_save_clip.add_argument(
         "--source",
-        choices=("local-sdk", "local-sdk-ecdh", "cloud", "hcnetsdk-command-port"),
+        choices=("auto", "local-sdk", "local-sdk-ecdh", "cloud", "hcnetsdk-command-port"),
         default="local-sdk",
         help=(
-            "Source to use: direct 9010/9020 SDK, encrypted local SDK ECDH, "
+            "Source to use: automatic metadata-first selection, direct 9010/9020 SDK, encrypted local SDK ECDH, "
             "VTM cloud live stream, or full HCNetSDK command-port media on "
             "port 8000 (default: local-sdk)"
         ),
@@ -2332,7 +2332,7 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
 
     decrypt_codec = args.decrypt_codec or (
         "auto"
-        if args.decrypt_video and args.source in {"cloud", "local-sdk", "local-sdk-ecdh"}
+        if args.decrypt_video and args.source in {"auto", "cloud", "local-sdk", "local-sdk-ecdh"}
         else "encrypted-header"
     )
 
@@ -2413,6 +2413,8 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     }
     if args.source in {"local-sdk", "local-sdk-ecdh"}:
         save_kwargs["register_p2p_session"] = not args.no_p2p_register
+    if args.source == "auto":
+        save_kwargs["local_sdk_ecdh_receiver_port"] = args.local_sdk_ecdh_receiver_port
     if args.source == "local-sdk-ecdh":
         save_kwargs.update(
             {

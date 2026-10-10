@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
+from dataclasses import replace
 import datetime as dt
 import hashlib
 import json
@@ -15,7 +16,7 @@ import shutil
 from tempfile import SpooledTemporaryFile
 from threading import RLock
 import time
-from typing import Any, BinaryIO, ClassVar, TypedDict, cast
+from typing import Any, BinaryIO, ClassVar, Literal, TypedDict, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 import zlib
@@ -137,6 +138,7 @@ from .api_endpoints import (
 )
 from .cas import EzvizCAS
 from .clip import (
+    AutoClipSource,
     ClipOptions,
     ClipOutputFormat,
     ClipSource,
@@ -182,6 +184,7 @@ from .local_stream_media import (
     summarize_idmx_h264_local_packets,
 )
 from .local_stream_transport import (
+    EzvizLocalSdkCredentials,
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
     HcNetSdkCommandPortMultiSocketPlan,
     copy_local_sdk_stream_from_client,
@@ -199,6 +202,7 @@ from .media import (
 )
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
+from .stream_selection import AutoMediaStream, fallback_stream_source, select_stream_source
 from .utils import convert_to_dict, decrypt_image, deep_merge
 
 _LOGGER = logging.getLogger(__name__)
@@ -214,6 +218,19 @@ UNIFIEDMSG_LOOKBACK_DAYS = 7
 MAX_UNIFIEDMSG_PAGES = 6
 
 JsonDict = dict[str, Any]
+
+
+def _credential_options(credentials: EzvizLocalSdkCredentials | None) -> dict[str, Any]:
+    """Pass the additive offline option only when supplied by the caller."""
+    return {"credentials": credentials} if credentials is not None else {}
+
+
+def _receiver_options(receiver_port: int, *, receiver_ex: bool = False) -> dict[str, Any]:
+    """Preserve default legacy calls while allowing automatic port selection."""
+    if receiver_port == 10101:
+        return {}
+    return ({"receiver_port": receiver_port, "receiver_ex_port": receiver_port}
+            if receiver_ex else {"receiver_port": receiver_port})
 
 
 class SaveMediaResult(TypedDict, total=False):
@@ -3071,12 +3088,31 @@ class EzvizClient:
             )
         )
 
+    def open_stream(
+        self,
+        serial: str,
+        *,
+        source: AutoClipSource | None = None,
+        channel: int = 1,
+    ) -> AutoMediaStream:
+        """Return a lazy automatic packet stream; use as a context manager.
+
+        Defaults to metadata-first auto. ``AutoClipSource(mode="offline", ... )``
+        prohibits all cloud/account discovery. Packets still require video
+        decryption/remuxing before serving them to a media player.
+        """
+        return AutoMediaStream(self, serial, source or AutoClipSource(), channel=channel)
+
     def save_clip(  # noqa: PLR0913
         self,
         serial: str,
         output: str | Path | BinaryIO,
         *,
         source: ClipSource = "local-sdk",
+        auto_mode: Literal["auto", "offline"] = "auto",
+        auto_device: dict[str, Any] | None = None,
+        allow_cloud_fallback: bool = True,
+        local_credentials: EzvizLocalSdkCredentials | None = None,
         output_format: ClipOutputFormat | None = None,
         duration_seconds: float | None = 10.0,
         max_packets: int | None = None,
@@ -3120,6 +3156,9 @@ class EzvizClient:
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
+        ``source="auto"`` selects from pagelist and verifies the stream.
+        ``auto_mode="offline"`` requires ``local_credentials`` and forbids
+        account discovery/key refresh/cloud fallback.
         ``source="local-sdk"`` uses the direct-local 9010/9020 SDK path.
         ``source="cloud"`` uses the EZVIZ VTM cloud live stream path.
         ``source="hcnetsdk-command-port"`` consumes complete caller-supplied
@@ -3141,7 +3180,7 @@ class EzvizClient:
         if nalu_header_size is _SOURCE_DEFAULT_NALU_HEADER_SIZE:
             nalu_header_size = (
                 None
-                if decrypt_video and source in {"cloud", "local-sdk", "local-sdk-ecdh"}
+                if decrypt_video and source in {"auto", "cloud", "local-sdk", "local-sdk-ecdh"}
                 else 0
             )
 
@@ -3155,8 +3194,19 @@ class EzvizClient:
         )
 
         source_options: ClipSourceOptions
-        if source == "local-sdk":
+        if source == "auto":
+            source_options = AutoClipSource(
+                mode=auto_mode,
+                device=auto_device,
+                credentials=local_credentials,
+                allow_cloud_fallback=allow_cloud_fallback,
+                timeout=10.0 if timeout is None else timeout,
+                receiver_port=local_sdk_ecdh_receiver_port,
+                smscode=smscode,
+            )
+        elif source == "local-sdk":
             source_options = LocalSdkClipSource(
+                credentials=local_credentials,
                 cas_serial=cas_serial,
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
@@ -3165,6 +3215,7 @@ class EzvizClient:
             )
         elif source == "local-sdk-ecdh":
             source_options = LocalSdkEcdhClipSource(
+                credentials=local_credentials,
                 cas_serial=cas_serial,
                 register_p2p_session=register_p2p_session,
                 p2p_register_max_retries=p2p_register_max_retries,
@@ -3215,9 +3266,7 @@ class EzvizClient:
             mux_options = MediaMuxOptions(
                 output_format=output_format,
                 ffmpeg_path=ffmpeg_path,
-                h264_skip_initial_idr_windows=(
-                    hcnetsdk_h264_skip_initial_idr_windows
-                ),
+                h264_skip_initial_idr_windows=(hcnetsdk_h264_skip_initial_idr_windows),
                 h264_trim_to_clean_idr_window=trim_to_clean_window,
                 h264_clean_idr_preroll_seconds=clean_window_preroll_seconds,
                 h264_clean_idr_max_windows=clean_window_max_windows,
@@ -3252,8 +3301,7 @@ class EzvizClient:
             capture=CaptureLimits(
                 max_packets=(
                     max_packets
-                    if max_packets is None
-                    or is_positive_capture_count_bound(max_packets)
+                    if max_packets is None or is_positive_capture_count_bound(max_packets)
                     else None
                 ),
                 duration_seconds=(
@@ -3271,12 +3319,8 @@ class EzvizClient:
             mux=mux_options,
             channel=channel,
         )
-        if (
-            max_packets is not None
-            and not is_positive_capture_count_bound(max_packets)
-        ) or (
-            duration_seconds is not None
-            and not is_positive_finite_duration_bound(duration_seconds)
+        if (max_packets is not None and not is_positive_capture_count_bound(max_packets)) or (
+            duration_seconds is not None and not is_positive_finite_duration_bound(duration_seconds)
         ):
             clip_options = _LegacyClipOptions.from_options(
                 clip_options,
@@ -3309,16 +3353,15 @@ class EzvizClient:
             mux.h264_skip_initial_idr_windows
             or mux.h264_trim_to_clean_idr_window
             or mux.h264_clean_idr_preroll_seconds
-            or mux.h264_clean_idr_max_windows
-            != default_mux.h264_clean_idr_max_windows
+            or mux.h264_clean_idr_max_windows != default_mux.h264_clean_idr_max_windows
             or mux.h264_wait_for_clean_idr_window
-            or mux.h264_clean_idr_wait_seconds
-            != default_mux.h264_clean_idr_wait_seconds
+            or mux.h264_clean_idr_wait_seconds != default_mux.h264_clean_idr_wait_seconds
         ):
             raise PyEzvizError(
-                "H.264 clean-window mux options require "
-                "HcNetSdkCommandPortClipSource"
+                "H.264 clean-window mux options require HcNetSdkCommandPortClipSource"
             )
+        if isinstance(source, AutoClipSource):
+            return self._save_auto_clip(serial, output, options)
         if isinstance(source, LocalSdkClipSource):
             return self._save_local_sdk_clip(
                 serial,
@@ -3336,6 +3379,8 @@ class EzvizClient:
                 p2p_register_max_retries=source.p2p_register_max_retries,
                 timeout=source.timeout,
                 smscode=source.smscode,
+                **_credential_options(source.credentials),
+                **_receiver_options(source.receiver_port),
             )
         if isinstance(source, LocalSdkEcdhClipSource):
             return self._save_local_sdk_ecdh_clip(
@@ -3358,6 +3403,7 @@ class EzvizClient:
                 media_key=decode.media_key,
                 nalu_header_size=decode.nalu_header_size,
                 smscode=source.smscode,
+                **_credential_options(source.credentials),
             )
         if isinstance(source, HcNetSdkCommandPortClipSource):
             return self._save_hcnetsdk_command_port_clip(
@@ -3416,6 +3462,73 @@ class EzvizClient:
             )
         raise PyEzvizError(f"Unsupported clip source options: {type(source).__name__}")
 
+    def _save_auto_clip(
+        self,
+        serial: str,
+        output: str | Path | BinaryIO,
+        options: ClipOptions,
+    ) -> SaveMediaResult:
+        """Stage bounded attempts; only commit a successful selected source."""
+        source_options = cast(AutoClipSource, options.source)
+        options.capture.require_bounded("Automatic clip capture")
+        source = select_stream_source(
+            self,
+            serial,
+            source_options,
+            fetch_media_key=options.decode.decrypt_video and options.decode.media_key is None,
+        )
+        deadline = (
+            time.monotonic() + options.duration_seconds
+            if options.duration_seconds is not None
+            else None
+        )
+        while True:
+            duration = None if deadline is None else deadline - time.monotonic()
+            if duration is not None and duration <= 0:
+                raise EzvizNoMediaError("Automatic playback exhausted its capture deadline")
+            selected_options = replace(
+                options,
+                source=source,
+                capture=replace(options.capture, duration_seconds=duration),
+            )
+            with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staged:
+                try:
+                    result = self.save_clip_with_options(serial, cast(BinaryIO, staged), selected_options)
+                    size = staged.tell()
+                    if not size:
+                        raise EzvizNoMediaError("Automatic playback did not contain media")
+                except Exception as error:
+                    fallback = (
+                        fallback_stream_source(source, source_options, error)
+                        if staged.tell() == 0
+                        else None
+                    )
+                    if fallback is None:
+                        raise
+                    source = fallback
+                    continue
+                staged.seek(0)
+                if isinstance(output, str | Path):
+                    path = Path(output)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+                    try:
+                        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(descriptor, "wb") as target:
+                            shutil.copyfileobj(staged, target)
+                        os.replace(temporary, path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                else:
+                    shutil.copyfileobj(staged, output)
+                result["output"] = _output_name(output)
+                result["bytes"] = size
+                result["duration_seconds"] = options.duration_seconds
+                result["content_type"] = _content_type_for_output(
+                    output, default="video/mp2t" if result.get("format") == "mpegts" else "video/mpeg",
+                )
+                return result
+
     def _save_local_sdk_ecdh_clip(  # noqa: PLR0913
         self,
         serial: str,
@@ -3438,6 +3551,7 @@ class EzvizClient:
         media_key: str | bytes | None,
         nalu_header_size: int | None,
         smscode: str | int | None,
+        credentials: EzvizLocalSdkCredentials | None = None,
     ) -> SaveMediaResult:
         """Save a clip through the local SDK ECDH stream path."""
 
@@ -3446,13 +3560,9 @@ class EzvizClient:
         if isinstance(output, str | Path):
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = output_path.with_name(
-                f".{output_path.name}.{uuid4().hex}.tmp"
-            )
+            temporary_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
             try:
-                descriptor = os.open(
-                    temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-                )
+                descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(descriptor, "wb") as output_file:
                     copy_local_sdk_ecdh_stream_from_client(
                         self,
@@ -3475,6 +3585,7 @@ class EzvizClient:
                         ffmpeg_path=ffmpeg_path,
                         nalu_header_size=nalu_header_size,
                         smscode=smscode,
+                        **_credential_options(credentials),
                     )
                 if temporary_path.stat().st_size == 0:
                     raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
@@ -3504,6 +3615,7 @@ class EzvizClient:
                 ffmpeg_path=ffmpeg_path,
                 nalu_header_size=nalu_header_size,
                 smscode=smscode,
+                **_credential_options(credentials),
             )
 
         bytes_written = _bytes_written_to_output(output, start_position=start_position)
@@ -3544,6 +3656,8 @@ class EzvizClient:
         p2p_register_max_retries: int,
         timeout: float | None,
         smscode: str | int | None,
+        credentials: EzvizLocalSdkCredentials | None = None,
+        receiver_port: int = 10101,
     ) -> SaveMediaResult:
         """Save a clip through the direct-local SDK path."""
 
@@ -3569,6 +3683,8 @@ class EzvizClient:
                     duration_seconds=duration_seconds,
                     ffmpeg_path=ffmpeg_path,
                     smscode=smscode,
+                    **_credential_options(credentials),
+                    **_receiver_options(receiver_port, receiver_ex=True),
                 )
         else:
             start_position = _binary_position(output)
@@ -3589,6 +3705,8 @@ class EzvizClient:
                 duration_seconds=duration_seconds,
                 ffmpeg_path=ffmpeg_path,
                 smscode=smscode,
+                **_credential_options(credentials),
+                **_receiver_options(receiver_port, receiver_ex=True),
             )
 
         return {

@@ -13,6 +13,7 @@ from pyezvizapi import (
     EzvizClient,
     _local_stream,
     local_stream_ecdh,
+    local_stream_transport,
     stream_selection,
 )
 from pyezvizapi.clip import CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
@@ -556,3 +557,31 @@ def test_ecdh_clip_source_preserves_existing_positional_constructor() -> None:
             source.max_prefix_bytes, source.max_frames) == ("cas", False, 2, 3.0, "code", 12345, True, 2048, 9)
     assert source.credentials == credentials()
     assert source.fresh_retry_port
+
+
+def test_fresh_sdk_port_matches_wildcard_scope_without_listening(monkeypatch) -> None:
+    events: list[object] = []
+    socket_api = local_stream_transport._socket  # noqa: SLF001
+
+    class Reservation:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            events.append("closed")
+        def bind(self, address):
+            events.append(address)
+        def getsockname(self):
+            return ("0.0.0.0", 12345)
+        def listen(self, *_args):
+            pytest.fail("port reservation must not expose a listener")
+        def connect(self, *_args):
+            pytest.fail("port reservation must not connect")
+
+    def create(family, kind):
+        assert family == socket_api.AF_INET
+        assert kind == socket_api.SOCK_STREAM
+        return Reservation()
+
+    monkeypatch.setattr(socket_api, "socket", create)
+    assert local_stream_transport.fresh_local_sdk_receiver_port() == 12345
+    assert events == [("", 0), "closed"]

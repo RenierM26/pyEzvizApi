@@ -585,3 +585,35 @@ def test_fresh_sdk_port_matches_wildcard_scope_without_listening(monkeypatch) ->
     monkeypatch.setattr(socket_api, "socket", create)
     assert local_stream_transport.fresh_local_sdk_receiver_port() == 12345
     assert events == [("", 0), "closed"]
+
+
+@pytest.mark.parametrize("kind", ["legacy", "ecdh", "cloud"])
+@pytest.mark.parametrize("channel", [None, 2])
+def test_open_stream_preserves_cloud_auto_channel_and_local_defaults(monkeypatch, kind, channel) -> None:
+    source = {"legacy": LocalSdkClipSource, "ecdh": LocalSdkEcdhClipSource, "cloud": CloudClipSource}[kind]()
+    requested: list[object] = []
+
+    class Stream:
+        def start(self, **_kwargs):
+            pass
+        def close(self):
+            pass
+
+    class Adapter:
+        def iter_media_packets(self, **_kwargs):
+            yield MediaPacket(PAYLOAD, MediaPacketMetadata(source="cloud_vtm"))
+
+    def open_stream(*_args, **kwargs):
+        requested.append(kwargs["channel"])
+        return Stream()
+
+    monkeypatch.setattr(stream_selection, "select_stream_source", lambda *_a, **_kw: source)
+    for name in ["open_local_sdk_stream_from_client", "open_local_sdk_ecdh_stream_from_client", "open_cloud_stream"]:
+        monkeypatch.setattr(stream_selection, name, open_stream)
+    for name in ["local_media_packet_source", "local_ecdh_media_packet_source", "vtm_media_packet_source"]:
+        monkeypatch.setattr(stream_selection, name, lambda _s: Adapter())
+    client = EzvizClient()
+    stream = client.open_stream(CAMERA) if channel is None else client.open_stream(CAMERA, channel=channel)
+    with stream:
+        assert len(list(stream.iter_media_packets(limits=CaptureLimits(max_packets=1)))) == 1
+    assert requested == [channel if kind == "cloud" or channel is not None else 1]

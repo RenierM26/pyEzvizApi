@@ -171,7 +171,7 @@ class AutoMediaStream:
         serial: str,
         options: AutoClipSource,
         *,
-        channel: int = 1,
+        channel: int | None = None,
     ) -> None:
         self._client = client
         self._serial = serial
@@ -228,7 +228,7 @@ class AutoMediaStream:
                             self._client,
                             self._serial,
                             credentials=source.credentials,
-                            channel=self._channel,
+                            channel=1 if self._channel is None else self._channel,
                             receiver_port=source.receiver_port,
                             stream_rate=ecdh_rate,
                             timeout=source.timeout,
@@ -239,7 +239,7 @@ class AutoMediaStream:
                             self._client,
                             self._serial,
                             credentials=source.credentials,
-                            channel=self._channel,
+                            channel=1 if self._channel is None else self._channel,
                             receiver_port=source.receiver_port,
                             receiver_ex_port=source.receiver_port,
                             timeout=source.timeout,

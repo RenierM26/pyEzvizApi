@@ -3098,7 +3098,7 @@ class EzvizClient:
         serial: str,
         *,
         source: AutoClipSource | None = None,
-        channel: int = 1,
+        channel: int | None = None,
     ) -> AutoMediaStream:
         """Return a lazy automatic packet stream; use as a context manager.
 

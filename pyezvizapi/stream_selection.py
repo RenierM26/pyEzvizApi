@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 import json
+import socket
 import time
 from typing import Any
 
@@ -106,15 +107,28 @@ def select_stream_source(
             credentials=credentials,
             fetch_media_key=fetch_media_key,
         )
+    receiver_port = options.receiver_port or fresh_receiver_port()
     if _live_ecdh_support(device) is False:
         return LocalSdkClipSource(
-            credentials=credentials, timeout=options.timeout, receiver_port=options.receiver_port
+            credentials=credentials, timeout=options.timeout, receiver_port=receiver_port
         )
     return LocalSdkEcdhClipSource(
         credentials=credentials,
         timeout=options.timeout,
-        receiver_port=options.receiver_port,
+        receiver_port=receiver_port,
     )
+
+
+def fresh_receiver_port() -> int:
+    """Choose a new local port instead of rebinding a closed TCP session.
+
+    The socket only reserves a kernel-selected port briefly; it never connects
+    or listens. The following SDK bind remains authoritative if a peer process
+    wins the allocation race.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(("0.0.0.0", 0))
+        return int(reservation.getsockname()[1])
 
 
 def fallback_stream_source(
@@ -131,7 +145,7 @@ def fallback_stream_source(
         return LocalSdkClipSource(
             credentials=source.credentials,
             timeout=source.timeout,
-            receiver_port=options.receiver_port,
+            receiver_port=fresh_receiver_port(),
         )
     if (
         not isinstance(source, CloudClipSource)
@@ -234,8 +248,8 @@ class AutoMediaStream:
                             self._serial,
                             credentials=source.credentials,
                             channel=self._channel,
-                            receiver_port=self._options.receiver_port,
-                            receiver_ex_port=self._options.receiver_port,
+                            receiver_port=source.receiver_port,
+                            receiver_ex_port=source.receiver_port,
                             timeout=source.timeout,
                         )
                         adapter = local_media_packet_source(self._stream)
@@ -283,6 +297,7 @@ class AutoMediaStream:
                     ):
                         # Same protocol retry mirrors the tested C8W copy path.
                         ecdh_rate = 0
+                        source = replace(source, receiver_port=fresh_receiver_port())
                         continue
                     fallback = (
                         None if emitted else fallback_stream_source(source, self._options, error)

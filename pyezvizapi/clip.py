@@ -96,7 +96,7 @@ class AutoClipSource:
     credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
     allow_cloud_fallback: bool = True
     timeout: float = 10.0
-    receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+    receiver_port: int | None = None
     smscode: str | int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -104,7 +104,7 @@ class AutoClipSource:
             raise PyEzvizError("Automatic stream mode must be auto or offline")
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise PyEzvizError("Automatic stream timeout must be positive and finite")
-        if not 1 <= self.receiver_port <= 65535:
+        if self.receiver_port is not None and not 1 <= self.receiver_port <= 65535:
             raise PyEzvizError("Automatic stream receiver_port must be a valid TCP port")
         if self.mode == "offline" and self.credentials is None:
             raise PyEzvizError("Offline playback requires caller-supplied local credentials")

@@ -310,7 +310,12 @@ failure can select cloud. Set `allow_cloud_fallback=False` to disable that
 fallback; this alone **does not** prohibit cloud credential discovery.
 Authentication/MFA/HMAC, unsupported codec, configuration, and silent no-media
 errors are not disguised by fallback. A premature ECDH close retries the tested
-rate-0 variant before cloud. Once bytes or packets have been emitted there is no
+rate-0 variant before cloud. Auto defaults to a fresh local source port for
+each stream, allowing concurrent cameras without a shared fixed-port collision.
+Automatic protocol retries and live rate retries also choose fresh ports to avoid
+rebinding the previous connection during TCP TIME_WAIT. `AutoClipSource` accepts
+an explicit `receiver_port` for the initial attempt when required.
+Once bytes or packets have been emitted there is no
 source switching. Auto clips stage their finite captures privately, preserving
 an existing destination on a failed attempt. Transport startup and fallback
 share the capture duration budget; account discovery happens before that budget.

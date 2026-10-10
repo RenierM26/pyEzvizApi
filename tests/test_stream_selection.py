@@ -177,7 +177,8 @@ def test_network_fallback_obeys_offline_policy(error: Exception) -> None:
     )
 
 
-def test_confirmed_mismatch_switches_only_to_same_credentials_locally() -> None:
+def test_confirmed_mismatch_switches_only_to_same_credentials_locally(monkeypatch) -> None:
+    monkeypatch.setattr(stream_selection, "fresh_receiver_port", lambda: 12345)
     source = LocalSdkEcdhClipSource(credentials=credentials())
     options = AutoClipSource(mode="offline", credentials=credentials())
     fallback = fallback_stream_source(
@@ -187,6 +188,7 @@ def test_confirmed_mismatch_switches_only_to_same_credentials_locally() -> None:
     )
     assert isinstance(fallback, LocalSdkClipSource)
     assert fallback.credentials is source.credentials
+    assert fallback.receiver_port == 12345
 
 
 @pytest.mark.parametrize("ecdh", [False, True])
@@ -242,6 +244,7 @@ def test_auto_clip_stages_failed_attempt_and_never_splices(
 ) -> None:
     client = EzvizClient()
     calls: list[str] = []
+    monkeypatch.setattr(stream_selection, "fresh_receiver_port", lambda: 12345)
 
     def ecdh(serial: str, output: Any, **kwargs: Any) -> Any:
         calls.append("ecdh")
@@ -253,6 +256,7 @@ def test_auto_clip_stages_failed_attempt_and_never_splices(
 
     def legacy(serial: str, output: Any, **kwargs: Any) -> dict:
         calls.append("legacy")
+        assert kwargs["receiver_port"] == 12345
         output.write(PAYLOAD)
         return {"ok": True, "source": "local-sdk", "format": "mpegts"}
 
@@ -278,6 +282,7 @@ def test_auto_clip_stages_failed_attempt_and_never_splices(
 def test_live_offline_mismatch_before_output_only_and_cleanup(
     monkeypatch, after_packet: bool
 ) -> None:
+    monkeypatch.setattr(stream_selection, "fresh_receiver_port", lambda: 12345)
     calls: list[str] = []
     streams: list[Any] = []
 
@@ -309,6 +314,7 @@ def test_live_offline_mismatch_before_output_only_and_cleanup(
         return Stream("ecdh")
 
     def open_legacy(*args, **kwargs):
+        assert kwargs["receiver_port"] == kwargs["receiver_ex_port"] == 12345
         calls.append("legacy")
         return Stream("legacy")
 
@@ -458,3 +464,18 @@ def test_live_close_cancels_transport_and_prevents_reuse(monkeypatch) -> None:
     assert closed
     with pytest.raises(PyEzvizError, match="closed"):
         next(stream.iter_media_packets())
+
+
+def test_auto_allocates_independent_ports_for_concurrent_cameras(monkeypatch) -> None:
+    ports = iter([12345, 12346])
+    monkeypatch.setattr(stream_selection, "fresh_receiver_port", lambda: next(ports))
+    options = AutoClipSource(mode="offline", credentials=credentials())
+    first = select_stream_source(NoCloudClient(), CAMERA, options)
+    second = select_stream_source(NoCloudClient(), CAMERA, options)
+    assert isinstance(first, LocalSdkEcdhClipSource)
+    assert isinstance(second, LocalSdkEcdhClipSource)
+    assert first.receiver_port != second.receiver_port
+    explicit = select_stream_source(NoCloudClient(), CAMERA, AutoClipSource(
+        mode="offline", credentials=credentials(), receiver_port=12347))
+    assert isinstance(explicit, LocalSdkEcdhClipSource)
+    assert explicit.receiver_port == 12347

@@ -1243,9 +1243,11 @@ def test_save_clip_local_sdk_ecdh_decryption_defaults_to_mpegts(
     assert fake_client.instances[0].save_clip_request["output_format"] == "mpegts"
 
 
+@pytest.mark.parametrize("source", ["auto", "local-sdk-ecdh"])
 def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
     monkeypatch,
     tmp_path,
+    source,
 ) -> None:
     class ClipClient(_FakeClient):
         service_urls_calls: int
@@ -1295,7 +1297,7 @@ def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
                 "--serial",
                 "CAM123",
                 "--source",
-                "local-sdk-ecdh",
+                source,
                 "--output",
                 str(output_path),
             ]
@@ -1309,8 +1311,8 @@ def test_save_clip_local_sdk_ecdh_refreshes_saved_service_urls(
     assert client.exported_token["service_urls"] == {
         "sysConf": [None] * 15 + ["cas.example.test", 443]
     }
-    assert client.save_clip_request["source"] == "local-sdk-ecdh"
-    assert client.save_clip_request["output_format"] == "mpegps"
+    assert client.save_clip_request["source"] == source
+    assert client.save_clip_request["output_format"] == ("mpegps" if source == "local-sdk-ecdh" else "mpegts")
 
 
 def test_save_clip_can_use_hcnetsdk_command_port_source(

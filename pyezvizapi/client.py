@@ -3201,7 +3201,10 @@ class EzvizClient:
                 credentials=local_credentials,
                 allow_cloud_fallback=allow_cloud_fallback,
                 timeout=10.0 if timeout is None else timeout,
-                receiver_port=local_sdk_ecdh_receiver_port,
+                receiver_port=(
+                    None if local_sdk_ecdh_receiver_port == LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+                    else local_sdk_ecdh_receiver_port
+                ),
                 smscode=smscode,
             )
         elif source == "local-sdk":

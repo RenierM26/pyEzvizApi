@@ -582,3 +582,21 @@ plain RTP is not inferred as AAC. Encrypted IDMX eligibility stays unchanged.
 Startup-trim/wait modes do not add clear audio without evidence for matching the
 selected video interval. The built-in app-observed native plan remains a single-
 channel plan, not a way to force a second lens.
+
+
+### Native cloud RTP clocks
+
+Bounded cloud captures and the incremental cloud proxy preserve descriptor-backed
+native RTP video access-unit timestamps through a length-delimited MPEG-PS input.
+They do not impose the advertised frame rate on variable-cadence video. Descriptor-
+backed AAC retains forward whole-access-unit gaps; no silence or extra video is
+synthesized. Large video access units are split into bounded PES packets without
+changing their NAL bytes. The proxy retains only bounded startup parameters and
+complete NAL fragments, not a whole-session media buffer.
+
+Each track starts at its first received access unit. Without an RTCP sender report,
+this preserves relative cadence and duration but does **not** establish absolute
+inter-track synchronization. Invalid/reordered native clocks are rejected rather
+than converted to a guessed frame rate. Ordinary RTP, MPEG-PS and MPEG-TS cloud
+routes keep their existing behavior. Historical intermittent upstream loss or
+corruption is not classified as fixed by a later clean capture.

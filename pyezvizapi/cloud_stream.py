@@ -52,6 +52,7 @@ from .rtp import (
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
+    idmx_video_frame_rate,
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
@@ -60,6 +61,7 @@ from .rtp import (
     rtp_packets_to_nal_units,
     rtp_payload_video_codec,
 )
+from .rtp_timing import NativeRtpPsMuxer, timed_rtp_mpegps_payloads
 from .stream_media import (
     decrypt_hikvision_ps_video,
     detect_transport,
@@ -1111,6 +1113,7 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
                 nal_unit, media_key, nalu_header_size=header_size
             )[len(ANNEX_B_START_CODE) :]
 
+        nal_timestamps: list[int] = []
         nal_units = rtp_packets_to_nal_units(
             parsed,
             codec=codec,
@@ -1118,6 +1121,7 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             completed_access_units_only=True,
             first_slice_transform=decrypted_nal if header_size != 0 else None,
             packet_nal_transform=decrypted_nal if header_size == 0 else None,
+            nal_timestamps=nal_timestamps,
         )
         decrypted_units = (
             tuple(decrypted_nal(nal_unit) for nal_unit in nal_units)
@@ -1129,10 +1133,28 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
                 "Cloud RTP capture contained no complete video frame; "
                 "increase the capture duration"
             )
+        audio = decrypt_idmx_aac_packets(parsed, media_key, require_contiguous=False)
+        native_timing = idmx_video_frame_rate(parsed) is not None and any(
+            packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06")
+            for packet in parsed
+        )
+        if native_timing:
+            process = open_mpegts_remux_process(
+                ffmpeg_path, input_format="mpeg", preserve_timestamps=True,
+                popen=subprocess.Popen,
+            )
+
+            def write_timed_input(stdin: BinaryIO) -> None:
+                for payload in timed_rtp_mpegps_payloads(
+                    decrypted_units, nal_timestamps, codec=codec, audio=audio,
+                ):
+                    stdin.write(payload)
+
+            copy_remuxed_output(process, output, write_input=write_timed_input)
+            return
         decrypted_annexb = b"".join(
             ANNEX_B_START_CODE + nal_unit for nal_unit in decrypted_units
         )
-        audio = decrypt_idmx_aac_packets(parsed, media_key, require_contiguous=False)
         if audio is not None:
             _remux_cloud_elementary_av_bytes_to_mpegts(
                 decrypted_annexb,
@@ -1651,7 +1673,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 continue
             yield parsed
 
-    selected_audio_key = audio_key if audio_decodable else None
+    native_timing = idmx_video_frame_rate(prefix) is not None and any(
+        packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06")
+        for packet in prefix
+    )
+    selected_audio_key = audio_key if (
+        audio_decodable or (native_timing and audio_metadata is not None)
+    ) else None
     stream_descriptors = route_profile.descriptors
     aac_payload_types = rtp_codec_payload_types(
         stream_descriptors,
@@ -1661,11 +1689,17 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
     if selected_audio_key is not None:
         for payload_type in aac_payload_types:
             route_profile.select_audio_fallback(payload_type, "aac")
-    audio_input = _CloudRtpAudioInput() if selected_audio_key is not None else None
+    audio_input = (
+        _CloudRtpAudioInput() if selected_audio_key is not None and not native_timing else None
+    )
     if audio_input is not None:
         audio_input.start()
     try:
-        if audio_input is None:
+        if native_timing:
+            process = open_mpegts_remux_process(
+                ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
+            )
+        elif audio_input is None:
             process = _open_cloud_elementary_mpegts_remux_process(
                 ffmpeg_path,
                 codec,
@@ -1691,17 +1725,20 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             allow_ezviz_headerless_hevc_fu=True,
         )
         nal_count = 0
-        audio_enabled = audio_input is not None
+        audio_enabled = selected_audio_key is not None
+        timed_muxer = NativeRtpPsMuxer(codec, audio=audio_enabled) if native_timing else None
         last_audio_sequence: dict[int, int] = {}
         next_audio_timestamp: dict[int, int] = {}
 
         def _disable_audio() -> None:
             nonlocal audio_enabled, audio_failed
-            if not audio_enabled or audio_input is None:
+            if not audio_enabled:
                 return
             audio_enabled = False
             audio_failed = True
             route_profile.deactivate_audio()
+            if audio_input is None:
+                return
             try:
                 audio_input.close_input()
             except (BrokenPipeError, PyEzvizError):
@@ -1738,19 +1775,18 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                     kind == "audio"
                     and packet.payload_type in current_aac_payload_types
                     and audio_enabled
-                    and audio_input is not None
                 ):
                     route_profile.mark_media(packet, absorb=False)
                     previous_sequence = last_audio_sequence.get(packet.ssrc)
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:
                         continue
-                    if previous_sequence is not None and packet.sequence != (
+                    if not native_timing and previous_sequence is not None and packet.sequence != (
                         previous_sequence + 1
                     ) & 0xFFFF:
                         _disable_audio()
                         continue
-                    if expected_timestamp is not None and (
+                    if not native_timing and expected_timestamp is not None and (
                         packet.timestamp != expected_timestamp
                     ):
                         _disable_audio()
@@ -1767,7 +1803,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                         _disable_audio()
                         continue
                     try:
-                        audio_input.write(audio.adts)
+                        if timed_muxer is not None:
+                            for framed in timed_muxer.audio(packet.timestamp, audio):
+                                stdin.write(framed)
+                            stdin.flush()
+                        else:
+                            assert audio_input is not None
+                            audio_input.write(audio.adts)
                     except (BrokenPipeError, PyEzvizError):
                         _disable_audio()
                         continue
@@ -1785,7 +1827,12 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
                 for nal_unit in depacketizer.push(packet):
                     if nal_unit:
                         annexb = ANNEX_B_START_CODE + nal_unit
-                        stdin.write(transform(annexb, codec) if transform else annexb)
+                        transformed = transform(annexb, codec) if transform else annexb
+                        if timed_muxer is not None:
+                            for framed in timed_muxer.video(packet.timestamp, transformed[len(ANNEX_B_START_CODE):]):
+                                stdin.write(framed)
+                        else:
+                            stdin.write(transformed)
                         stdin.flush()
                         nal_count += 1
             if nal_count == 0:

@@ -2186,3 +2186,14 @@ def test_clear_descriptor_backed_rfc3640_aac_keeps_observed_timestamp_jitter() -
     assert decrypt_idmx_aac_packets(packets[1:], b"", require_contiguous=False, decrypt_audio=False) is None
     # Existing encrypted-IDMX eligibility remains strict.
     assert decrypt_idmx_aac_packets(packets, b"", require_contiguous=False) is None
+
+
+def test_bounded_nal_timestamps_follow_only_accepted_picture_units() -> None:
+    packets = (
+        parse_rtp_packet(_rtp(b"\x65\x80complete", sequence=1, timestamp=1000, marker=True)),
+        parse_rtp_packet(_rtp(b"\x41\x80unfinished", sequence=2, timestamp=10000)),
+    )
+    timestamps: list[int] = []
+    assert rtp_packets_to_nal_units(packets, codec="h264", completed_access_units_only=True,
+        nal_timestamps=timestamps) == (b"\x65\x80complete",)
+    assert timestamps == [1000]

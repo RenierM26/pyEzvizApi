@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import io
+import json
+from pathlib import Path
+import shutil
 import subprocess
 from threading import Event
 from typing import Any, cast
@@ -16,7 +19,9 @@ from pyezvizapi.remux import (
     ffmpeg_mpegts_command,
     open_mpegts_remux_process,
     remux_bytes,
+    write_aac_remux_input,
 )
+from pyezvizapi.rtp import RtpAacStream
 
 PROGRAM_STREAM = b"program-stream"
 TRANSPORT_STREAM = b"transport-stream"
@@ -348,3 +353,42 @@ def test_copy_remuxed_output_escalates_from_terminate_to_kill() -> None:
 
     assert process.terminated is True
     assert process.killed is True
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")
+@pytest.mark.parametrize("missing_index", [1, 5])
+def test_aac_gap_remux_preserves_single_frame_segment_timestamps(tmp_path: Path, missing_index: int) -> None:
+    source = tmp_path / "source.aac"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+        "sine=frequency=1000:sample_rate=16000", "-ac", "1", "-frames:a", "12",
+        "-c:a", "aac", "-f", "adts", str(source)], check=True, capture_output=True)
+    frames = []
+    data = source.read_bytes()
+    offset = 0
+    while offset < len(data):
+        length = ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
+        frames.append(data[offset:offset + length])
+        offset += length
+    # Missing the second AU must remain a 128 ms jump after the first AU.
+    audio = RtpAacStream(b"".join([*frames[:missing_index], *frames[missing_index + 1:]]),
+        16000, 1, len(frames) - 1,
+        ((0, b"".join(frames[:missing_index])),
+         ((missing_index + 1) * 1024, b"".join(frames[missing_index + 1:]))))
+    path, audio_format = write_aac_remux_input(audio, tmp_path)
+    out = tmp_path / "output.ts"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", audio_format, "-i", str(path),
+        "-c", "copy", "-copyts", "-f", "mpegts", "-muxdelay", "0", str(out)], check=True, capture_output=True)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_packets",
+        "-show_entries", "packet=pts_time", "-of", "json", str(out)], check=True, capture_output=True)
+    packets = json.loads(probe.stdout)["packets"]
+    assert len(packets) == len(frames) - 1
+    assert float(packets[missing_index]["pts_time"]) - float(packets[missing_index - 1]["pts_time"]) == pytest.approx(0.128)
+    assert float(packets[-1]["pts_time"]) - float(packets[0]["pts_time"]) == pytest.approx((len(frames) - 1) * 1024 / 16000)
+
+
+def test_concat_audio_command_keeps_explicit_format_and_video_gate() -> None:
+    command = ffmpeg_mpegts_command("ffmpeg", input_format="hevc", frame_rate="15",
+        audio_path="audio.ffconcat", audio_input_format="concat")
+    assert command[command.index("audio.ffconcat") - 3:command.index("audio.ffconcat")] == ["-f", "concat", "-i"]
+    assert "-copyinkf" not in command
+    assert "-copyts" in command

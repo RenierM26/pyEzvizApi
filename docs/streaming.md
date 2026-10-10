@@ -447,6 +447,8 @@ local RSA generation precedes it. Replies have a configurable size limit
 Native codec, frame-rate and bitrate fields remain SDK codes. A frame-rate code
 of 14 does **not** mean 14 fps. Resolution dimensions come from the camera XML,
 not a guessed index table; unknown or ambiguous associations return `None`.
+Fixed bitrate choices advertised as `VideoBitrate/Range` are preserved as
+`bitrate_codes`, including when a camera supplies no custom `Min`/`Max` bounds.
 `reported_login_serial` is the native hardware/model identity string and need
 not equal the short camera serial used in `endpoint`. `as_dict()` omits raw
 reply bodies and authentication material, but includes this reported identity.

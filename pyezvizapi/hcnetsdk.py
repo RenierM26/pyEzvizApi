@@ -2266,6 +2266,7 @@ class EzvizLanVideoResolution:
     frame_rate_codes: tuple[int, ...] = ()
     bitrate_min: int | None = None
     bitrate_max: int | None = None
+    bitrate_codes: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2282,6 +2283,7 @@ class EzvizLanAudioVideoCompressStream:
     bitrate_min: int = 0
     bitrate_max: int = 0
     resolutions: tuple[EzvizLanVideoResolution, ...] = field(default=(), kw_only=True)
+    bitrate_codes: tuple[int, ...] = field(default=(), kw_only=True)
 
     @property
     def resolution_count(self) -> int:
@@ -12049,6 +12051,7 @@ def _audio_video_compress_stream(
                 frame_rate_codes=tuple(_xml_child_int_csv_with_prefix(entry, "VideoFrameRate")),
                 bitrate_min=_xml_child_optional_int(entry, ("VideoBitrate", "Min")),
                 bitrate_max=_xml_child_optional_int(entry, ("VideoBitrate", "Max")),
+                bitrate_codes=_xml_int_csv(_xml_child_text(entry, ("VideoBitrate", "Range"))),
             ))
             resolution_indexes.append(_xml_child_int(entry, ("Index",)))
             frame_rates.extend(_xml_child_int_csv_with_prefix(entry, "VideoFrameRate"))
@@ -12072,6 +12075,7 @@ def _audio_video_compress_stream(
         bitrate_min=min(bitrate_mins) if bitrate_mins else 0,
         bitrate_max=max(bitrate_maxes) if bitrate_maxes else 0,
         resolutions=tuple(resolutions),
+        bitrate_codes=_xml_int_csv(_xml_child_text(root, ("VideoBitrate", "Range"))),
     )
 
 

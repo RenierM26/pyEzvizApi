@@ -161,6 +161,21 @@ def test_ambiguous_camera_profiles_do_not_resolve_to_arbitrary_dimensions() -> N
     assert replace(result, capabilities=replace(ability, video_channels=(channel, channel))).configured_resolution() is None
 
 
+def test_range_only_bitrate_codes_survive_without_fabricated_bounds() -> None:
+    xml = ABILITY.replace(b"<Min>32</Min><Max>2048</Max>", b"<Range>15, 16, 17</Range>")
+    xml = xml.replace(b"<Min>64</Min><Max>4096</Max>", b"<Range>20,23</Range>")
+    xml = xml.replace(b"</MainChannel>", b"<VideoBitrate><Range>0,15</Range></VideoBitrate></MainChannel>")
+    ability = ezviz_lan_audio_video_compress_info(xml)
+    profile = ability.video_channels[0].main_stream
+    assert profile is not None
+    assert profile.bitrate_codes == (0, 15)
+    a, b = profile.resolutions
+    assert a.bitrate_codes == (15, 16, 17) and b.bitrate_codes == (20, 23)
+    assert a.bitrate_min is None and a.bitrate_max is None
+    result = HcNetSdkStreamDetails(2, ezviz_lan_compression_config(config_bytes()), ability)
+    assert result.as_dict()["main_resolution"]["bitrate_codes"] == (15, 16, 17)
+
+
 def test_authentication_rejection_does_not_query_retry_or_downgrade(wire) -> None:
     # Replace the entire second response rather than depending on wire length.
     first_length = int.from_bytes(wire.sockets[0].data[:4], "big")

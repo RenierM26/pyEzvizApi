@@ -32,6 +32,7 @@ from ._longlink_profile import (
     session_header_for_token,
     synchronize_http_headers,
 )
+from ._request_deadline import bounded_request_timeout, request_budget_lock
 from ._token import (
     ClientToken as ClientToken,  # noqa: PLC0414 - public type export
     validate_feature_code,
@@ -643,7 +644,7 @@ class EzvizClient:
 
     def _notify_token_updated(self) -> None:
         """Save rotating credentials before any subsequent discovery can fail."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self._on_token_updated is not None:
                 self._on_token_updated(deepcopy(dict(self._token)))
 
@@ -680,7 +681,7 @@ class EzvizClient:
                 url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
                 allow_redirects=False,
                 data=payload,
-                timeout=self._timeout,
+                timeout=bounded_request_timeout(self._timeout),
             )
 
             req.raise_for_status()
@@ -784,14 +785,14 @@ class EzvizClient:
                 self._body_debug_summary(json_body),
             )
         try:
-            with self._token_lock:
+            with request_budget_lock(self._token_lock):
                 req = self._session.request(
                     method=method,
                     url=url,
                     params=params,
                     data=data,
                     json=json_body,
-                    timeout=self._timeout,
+                    timeout=bounded_request_timeout(self._timeout),
                 )
             req.raise_for_status()
         except requests.HTTPError as err:
@@ -799,7 +800,7 @@ class EzvizClient:
                 if max_retries >= MAX_RETRIES:
                     raise HTTPError from err
                 # Re-login can also move the account to another regional API.
-                with self._token_lock:
+                with request_budget_lock(self._token_lock):
                     self.login()
                     retry_url = urlunsplit(urlsplit(url)._replace(netloc=self._token["api_url"]))
                 return self._http_request(
@@ -974,7 +975,7 @@ class EzvizClient:
         Useful for endpoints requiring special URL encoding or manual preparation.
         """
         try:
-            with self._token_lock:
+            with request_budget_lock(self._token_lock):
                 # The request may have been prepared before a profile/region
                 # migration. Refresh only authentication/routing, not its encoded
                 # body, query or endpoint-specific headers.
@@ -989,7 +990,7 @@ class EzvizClient:
                     prepared.url = urlunsplit(parts._replace(netloc=self._token["api_url"]))
                     if "Host" in prepared.headers:
                         prepared.headers["Host"] = self._token["api_url"]
-                req = self._session.send(request=prepared, timeout=self._timeout)
+                req = self._session.send(request=prepared, timeout=bounded_request_timeout(self._timeout))
             req.raise_for_status()
         except requests.HTTPError as err:
             if retry_401 and err.response is not None and err.response.status_code == 401:
@@ -1020,7 +1021,7 @@ class EzvizClient:
         max_retries: int = 0,
     ) -> JsonDict:
         """Perform request and parse JSON in one step."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             resp = self._http_request(
                 method,
                 self._url(path),
@@ -4679,7 +4680,7 @@ class EzvizClient:
         required). Merely changing headers does not migrate an existing session.
         Persist the returned token before starting push reception.
         """
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self.mqtt_client is not None:
                 raise PyEzvizError("Stop and discard the MQTT client before migrating login")
             if self._token.get("push_profile") == PUSH_PROFILE:
@@ -4705,7 +4706,7 @@ class EzvizClient:
 
     def login(self, sms_code: int | None = None) -> JsonDict:
         """Get or refresh credentials, serializing mutation and persistence with push."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             return self._login_or_refresh(sms_code)
 
     def _login_or_refresh(self, sms_code: int | None = None) -> JsonDict:
@@ -4743,11 +4744,11 @@ class EzvizClient:
 
     def logout(self) -> bool:
         """Close Ezviz session and remove login session from ezviz servers."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             try:
                 req = self._session.delete(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGOUT}",
-                    timeout=self._timeout,
+                    timeout=bounded_request_timeout(self._timeout),
                 )
                 req.raise_for_status()
 
@@ -5232,7 +5233,7 @@ class EzvizClient:
         if sensibility not in [0, 1, 2, 3, 4, 5, 6] and type_value == 0:
             raise PyEzvizError("Unproper sensibility for type 0 (should be within 1 to 6).")
         try:
-            with self._token_lock:
+            with request_budget_lock(self._token_lock):
                 req = self._session.post(
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY}",
                     data={
@@ -5241,7 +5242,7 @@ class EzvizClient:
                         "channelNo": 1,
                         "value": sensibility,
                     },
-                    timeout=self._timeout,
+                    timeout=bounded_request_timeout(self._timeout),
                 )
 
             req.raise_for_status()
@@ -6755,7 +6756,7 @@ class EzvizClient:
         self, on_message_callback: Callable[[dict[str, Any]], None] | None = None
     ) -> MQTTClient:
         """Return a push client sharing this client's session and token-save callback."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self.mqtt_client is None:
                 self.mqtt_client = MQTTClient(
                     token=cast(dict[Any, Any], self._token),
@@ -6787,7 +6788,7 @@ class EzvizClient:
     def export_token(self) -> dict[str, Any]:
         """Return an independent snapshot of the current authentication token."""
 
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             return deepcopy(cast(dict[str, Any], self._token))
 
     def get_device(self) -> Any:
@@ -6828,7 +6829,7 @@ class EzvizClient:
 
     def close_session(self) -> None:
         """Clear current session."""
-        with self._token_lock:
+        with request_budget_lock(self._token_lock):
             if self._session:
                 self._session.close()
 

@@ -400,3 +400,9 @@ capture duration includes startup. Existing explicit-source defaults are unchang
 
 Automatic live legacy streams use the same nonempty-packet accounting and bounded
 input allowance. Empty-only input fails as no media, not a successful live packet.
+
+Automatic cloud bootstrap includes metadata/key requests and token-lock waits in
+the remaining capture budget, without changing the client's default timeout.
+Byte-only automatic live captures also cap negotiation/empty input at
+`max_bytes + 1024` frames (or the tighter packet bound when both are supplied).
+Duration-only live capture retains its shared deadline.

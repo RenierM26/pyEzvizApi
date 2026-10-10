@@ -778,3 +778,56 @@ def test_auto_live_ecdh_packet_bound_limits_negotiation_input(monkeypatch, empty
             assert [p.body for p in packets] == [PAYLOAD]
             assert frames == [0, 1, 2]
     assert closed
+
+
+@pytest.mark.parametrize("ecdh", [False, True])
+def test_auto_live_byte_only_capture_bounds_nonmedia_input(monkeypatch, ecdh) -> None:
+    frames: list[int] = []
+    closed: list[bool] = []
+    class Stream:
+        def start(self, **_kwargs):
+            pass
+        def close(self):
+            closed.append(True)
+        def iter_packets(self, **kwargs):
+            count = kwargs["max_frames"] if ecdh else kwargs["max_packets"]
+            assert count == 1027
+            for i in range(count):
+                frames.append(i)
+                if not ecdh:
+                    yield _local_stream.EzvizLocalStreamPacket(channel=0, length=0, body=b"")
+    source = (LocalSdkEcdhClipSource if ecdh else LocalSdkClipSource)(credentials=credentials())
+    monkeypatch.setattr(stream_selection, "select_stream_source", lambda *_a, **_kw: source)
+    opener = "open_local_sdk_ecdh_stream_from_client" if ecdh else "open_local_sdk_stream_from_client"
+    monkeypatch.setattr(stream_selection, opener, lambda *_a, **_kw: Stream())
+    monkeypatch.setattr(stream_selection, "open_cloud_stream", fail)
+    with EzvizClient().open_stream(CAMERA) as stream:
+        assert list(stream.iter_media_packets(limits=CaptureLimits(max_bytes=3))) == []
+    assert len(frames) == 1027
+    assert closed
+
+
+def test_auto_cloud_live_metadata_and_start_share_capture_deadline(monkeypatch) -> None:
+    clock = [10.0]
+    opened: list[dict[str, Any]] = []
+    class Stream:
+        def start(self, **kwargs):
+            assert kwargs["deadline"] == 12
+            assert kwargs["monotonic"]() == 11
+        def close(self):
+            pass
+    class Adapter:
+        def iter_media_packets(self, **kwargs):
+            assert kwargs["limits"].duration_seconds == 1
+            yield MediaPacket(PAYLOAD, MediaPacketMetadata(source="cloud_vtm"))
+    def open_cloud(*_args, **kwargs):
+        assert kwargs["capture_deadline"] == 12
+        opened.append(kwargs)
+        clock[0] = 11
+        return Stream()
+    monkeypatch.setattr(stream_selection, "select_stream_source", lambda *_a, **_kw: CloudClipSource())
+    monkeypatch.setattr(stream_selection, "open_cloud_stream", open_cloud)
+    monkeypatch.setattr(stream_selection, "vtm_media_packet_source", lambda _s: Adapter())
+    with EzvizClient().open_stream(CAMERA) as stream:
+        packets = list(stream.iter_media_packets(limits=CaptureLimits(duration_seconds=2), monotonic=lambda: clock[0]))
+    assert len(opened) == len(packets) == 1

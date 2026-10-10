@@ -22,6 +22,7 @@ import time
 from typing import Any, BinaryIO, TypedDict, cast
 from urllib.parse import urlparse
 
+from ._request_deadline import request_deadline
 from .api_endpoints import API_ENDPOINT_STREAMING_VTM, API_ENDPOINT_VTDU_TOKEN_V2
 from .constants import MAX_RETRIES
 from .exceptions import (
@@ -362,6 +363,8 @@ def open_cloud_stream(
     refresh_vtm: bool = True,
     timeout: float | None = 10.0,
     socket_factory: SocketFactory | None = None,
+    capture_deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> VtmStreamClient:
     """Return a VTM TCP client bootstrapped from EZVIZ cloud metadata.
 
@@ -369,14 +372,15 @@ def open_cloud_stream(
     ``start()`` before reading packets.
     """
 
-    info = get_cloud_stream_info(
-        client,
-        serial,
-        channel=channel,
-        client_type=client_type,
-        token_index=token_index,
-        refresh_vtm=refresh_vtm,
-    )
+    with request_deadline(capture_deadline, monotonic):
+        info = get_cloud_stream_info(
+            client,
+            serial,
+            channel=channel,
+            client_type=client_type,
+            token_index=token_index,
+            refresh_vtm=refresh_vtm,
+        )
     if socket_factory is None:
         return VtmStreamClient(info["stream_url"], timeout=timeout)
     return VtmStreamClient(
@@ -462,9 +466,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             duration_seconds=duration_seconds,
         )
         if media_key is None and smscode is not None:
-            selected_key = client.get_cam_key(serial, smscode=smscode)
+            selected_key = _bounded_cloud_media_key(client, serial, smscode, capture_deadline, monotonic)
         else:
-            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+            selected_key = media_key if media_key is not None else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         stream = open_cloud_stream(
@@ -475,6 +479,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
+            **_cloud_request_budget_options(capture_deadline, monotonic),
         )
         with _closing_unconnected_cloud_stream(stream):
             startup_deadline = _start_bounded_cloud_stream(
@@ -537,6 +542,7 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
+        **_cloud_request_budget_options(capture_deadline, monotonic),
     )
     with _closing_unconnected_cloud_stream(stream):
         startup_deadline = _start_bounded_cloud_stream(
@@ -585,9 +591,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             duration_seconds=duration_seconds,
         )
         if media_key is None and smscode is not None:
-            selected_key = client.get_cam_key(serial, smscode=smscode)
+            selected_key = _bounded_cloud_media_key(client, serial, smscode, capture_deadline, monotonic)
         else:
-            selected_key = media_key if media_key is not None else client.get_cam_key(serial)
+            selected_key = media_key if media_key is not None else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         stream = open_cloud_stream(
@@ -598,6 +604,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             token_index=token_index,
             refresh_vtm=refresh_vtm,
             timeout=timeout,
+            **_cloud_request_budget_options(capture_deadline, monotonic),
         )
         with _closing_unconnected_cloud_stream(stream):
             startup_deadline = _start_bounded_cloud_stream(
@@ -661,6 +668,7 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
         token_index=token_index,
         refresh_vtm=refresh_vtm,
         timeout=timeout,
+        **_cloud_request_budget_options(capture_deadline, monotonic),
     )
     with _closing_unconnected_cloud_stream(stream):
         startup_deadline = _start_bounded_cloud_stream(
@@ -1999,3 +2007,12 @@ def _derive_auth_addr(token: Any) -> str:
         if region:
             return f"https://{region}auth.ezvizlife.com"
     raise PyEzvizError("Missing authAddr in service URLs")
+
+
+def _cloud_request_budget_options(deadline: float | None, monotonic: Callable[[], float]) -> dict[str, Any]:
+    return {} if deadline is None else {"capture_deadline": deadline, "monotonic": monotonic}
+
+
+def _bounded_cloud_media_key(client: Any, serial: str, smscode: str | int | None, deadline: float | None, monotonic: Callable[[], float]) -> Any:
+    with request_deadline(deadline, monotonic):
+        return client.get_cam_key(serial) if smscode is None else client.get_cam_key(serial, smscode=smscode)

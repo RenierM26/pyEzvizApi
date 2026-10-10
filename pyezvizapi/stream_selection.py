@@ -159,6 +159,12 @@ def fallback_stream_source(
     return None
 
 
+def _live_input_frame_limit(limits: CaptureLimits) -> int | None:
+    """Allow bounded negotiation input independently of emitted packets/bytes."""
+    counts = [value for value in (limits.max_packets, limits.max_bytes) if value is not None]
+    return min(counts) + 1024 if counts else None
+
+
 class AutoMediaStream:
     """Lazy, context-managed automatic packet source for live integrations.
 
@@ -237,7 +243,7 @@ class AutoMediaStream:
                         )
                         adapter = local_ecdh_media_packet_source(_BoundedEcdhMediaStream(
                             self._stream,
-                            None if selected_limits.max_packets is None else selected_limits.max_packets + 1024,
+                            _live_input_frame_limit(selected_limits),
                             None, monotonic,
                         ))
                     elif isinstance(source, LocalSdkClipSource):
@@ -252,18 +258,20 @@ class AutoMediaStream:
                         )
                         adapter = local_media_packet_source(_NonemptyLocalMediaStream(
                             self._stream,
-                            None if selected_limits.max_packets is None else selected_limits.max_packets + 1024,
+                            _live_input_frame_limit(selected_limits),
                         ))
                     else:
+                        cloud_deadline = monotonic() + self._options.timeout
+                        if deadline is not None:
+                            cloud_deadline = min(cloud_deadline, deadline)
                         self._stream = open_cloud_stream(
                             self._client,
                             self._serial,
                             channel=self._channel,
                             timeout=source.timeout,
+                            capture_deadline=cloud_deadline,
+                            monotonic=monotonic,
                         )
-                        cloud_deadline = monotonic() + self._options.timeout
-                        if deadline is not None:
-                            cloud_deadline = min(cloud_deadline, deadline)
                         self._stream.start(deadline=cloud_deadline, monotonic=monotonic)
                         adapter = vtm_media_packet_source(self._stream)
                     startup_deadline = monotonic() + self._options.timeout

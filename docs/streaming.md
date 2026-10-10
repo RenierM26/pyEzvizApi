@@ -406,3 +406,52 @@ the remaining capture budget, without changing the client's default timeout.
 Byte-only automatic live captures also cap negotiation/empty input at
 `max_bytes + 1024` frames (or the tighter packet bound when both are supplied).
 Duration-only live capture retains its shared deadline.
+
+## Camera-reported local stream details
+
+For compatible cameras, the pure-Python HCNetSDK command-port API can ask the
+camera for both its configured main/sub streams and its supported profiles.
+This follows the native app's `NET_DVR_GetDVRConfig` command 1040
+(`NET_DVR_COMPRESSIONCFG_V30`) and `NET_DVR_GetDeviceAbility` type 8
+(`AudioVideoCompressInfo`). It starts no preview and changes no settings.
+
+```python
+from pyezvizapi import HcNetSdkLanEndpoint, discover_hcnetsdk_stream_details
+
+endpoint = HcNetSdkLanEndpoint(serial=serial, host=lan_ip, command_port=8000)
+details = discover_hcnetsdk_stream_details(
+    endpoint, local_password, channel=1, timeout=10,
+)
+main_resolution = details.configured_resolution()
+sub_resolution = details.configured_resolution(sub_stream=True)
+summary = details.as_dict()
+```
+
+An existing `HcNetSdkPurePythonClient` also exposes `stream_details(channel=1)`.
+Both paths use supplied LAN login credentials only. Those credentials are not
+necessarily interchangeable with CAS credentials or the video encryption key.
+There are no cloud calls, credential renewal, authentication retries, or cloud
+fallbacks. Login failure is not evidence that a camera lacks the capability.
+The finite network timeout covers one login and both read-only queries;
+local RSA generation precedes it. Replies have a configurable size limit
+(`max_response_bytes`, default 512 KiB, including the frame header).
+
+| Evidence | Meaning |
+| --- | --- |
+| `configuration` / `main` / `sub` | Camera-reported configuration, not decoded media |
+| `capabilities` | Supported profiles, with per-resolution dimensions and limits |
+| `configured_resolution()` | Configuration index resolved against this camera's own capability list |
+| Stream descriptors / decoded media | What an actual preview session emits |
+| Encryption negotiation | Independent evidence needed to select legacy versus ECDH |
+
+Native codec, frame-rate and bitrate fields remain SDK codes. A frame-rate code
+of 14 does **not** mean 14 fps. Resolution dimensions come from the camera XML,
+not a guessed index table; unknown or ambiguous associations return `None`.
+`reported_login_serial` is the native hardware/model identity string and need
+not equal the short camera serial used in `endpoint`. `as_dict()` omits raw
+reply bodies and authentication material, but includes this reported identity.
+
+These queries do not establish ECDH support. A codec or resolution alone cannot
+choose the encryption protocol. Automatic playback keeps its existing
+metadata/negotiation policy; this explicit discovery API does not introduce an
+extra password login or cloud dependency into the strict offline path.

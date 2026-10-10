@@ -278,6 +278,7 @@ if TYPE_CHECKING:
         EzvizLanUserConfigV30Entry,
         EzvizLanVideoPicAbility,
         EzvizLanVideoQuality,
+        EzvizLanVideoResolution,
         EzvizLanWifiApInfo,
         EzvizLanWifiConnectStatus,
         EzvizLocalAuthenticationAttrs,
@@ -611,6 +612,7 @@ if TYPE_CHECKING:
         summarize_hcnetsdk_command_trace,
     )
     from .light_bulb import EzvizLightBulb
+    from .local_stream_details import HcNetSdkStreamDetails, discover_hcnetsdk_stream_details
     from .local_stream_ecdh import (
         EzvizLocalSdkEcdhDataPacket,
         EzvizLocalSdkEcdhHandshakePacket,
@@ -751,6 +753,9 @@ if TYPE_CHECKING:
     from .test_cam_rtsp import TestRTSPAuth
 
 _EXPORTS = {
+    "HcNetSdkStreamDetails": "local_stream_details",
+    "discover_hcnetsdk_stream_details": "local_stream_details",
+    "EzvizLanVideoResolution": "hcnetsdk",
     "AlarmDetectHumanCar": "constants",
     "AuthTestResultFailed": "exceptions",
     "BatteryCameraNewWorkMode": "constants",

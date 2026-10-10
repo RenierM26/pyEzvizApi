@@ -57,7 +57,11 @@ class LocalStreamDiscoveryCache:
     def remember(self, key: str, discovery: LocalStreamDiscovery) -> None:
         """Store successful discovery; evict oldest entries at capacity."""
         with self._lock:
-            self._entries[key] = (self._monotonic() + self._ttl, discovery)
+            now = self._monotonic()
+            expired = [identity for identity, entry in self._entries.items() if now >= entry[0]]
+            for identity in expired:
+                del self._entries[identity]
+            self._entries[key] = (now + self._ttl, discovery)
             self._entries.move_to_end(key)
             while len(self._entries) > self._max_entries:
                 self._entries.popitem(last=False)

@@ -146,3 +146,19 @@ def test_fresh_account_capability_change_invalidates_previous_hint():
     cache.remember(keys[0], LocalStreamDiscovery("local-sdk"))
     support = {"519": "1"}
     assert select_stream_source(Client(), CAMERA, options).kind == "local-sdk-ecdh"
+
+
+def test_expired_mru_never_evicts_live_lru():
+    now = [0.0]
+    cache = LocalStreamDiscoveryCache(ttl=10, max_entries=2, monotonic=lambda: now[0])
+    entry = LocalStreamDiscovery("local-sdk")
+    cache.remember("expiring", entry)
+    now[0] = 4
+    cache.remember("live", entry)
+    now[0] = 9
+    assert cache.get("expiring") == entry
+    now[0] = 11
+    cache.remember("new", entry)
+    assert cache.get("live") == entry
+    assert cache.get("expiring") is None
+    assert cache.get("new") == entry

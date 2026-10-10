@@ -75,6 +75,7 @@ from .rtp import (
     RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
+    _rtp_nal_starts_picture,
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
@@ -2377,6 +2378,10 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 allow_timestamp_jitter=True,
             )
         if audio is not None:
+            if annexb == full_annexb:
+                codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
+                if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path):
+                    return
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
                 audio,
@@ -2648,6 +2653,52 @@ def _native_wrapper_video_timestamps(
         if rtp_nal_units_have_vcl(group_units, codec=codec):
             frame_index += 1
     return result
+
+
+def _copy_decrypted_native_idmx_timed_av(
+    packets: list[bytes], annexb: bytes, audio: RtpAacStream, output: BinaryIO, *,
+    codec: RtpVideoCodec, ffmpeg_path: str,
+) -> bool:
+    """Use advertised native picture cadence and received AAC sample timestamps."""
+
+    rtp_packets: list[RtpPacket] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header = _idmx_local_frame_header_size(frame)
+        if header is not None:
+            packet = _idmx_local_frame_rtp_packet(frame, header)
+            if packet is not None:
+                rtp_packets.append(packet)
+    rate = idmx_video_frame_rate(rtp_packets)
+    if rate is None:
+        return False
+    units, timestamps = _native_decrypted_picture_timeline(annexb, codec, rate)
+    process = open_mpegts_remux_process(
+        ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
+    )
+
+    def write_input(stdin: BinaryIO) -> None:
+        for payload in timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio):
+            stdin.write(payload)
+
+    copy_remuxed_output(process, output, write_input=write_input)
+    return True
+
+
+def _native_decrypted_picture_timeline(
+    annexb: bytes, codec: RtpVideoCodec, advertised_rate: str,
+) -> tuple[tuple[bytes, ...], list[int]]:
+    period = Fraction(IDMX_VIDEO_RTP_CLOCK_RATE) / Fraction(advertised_rate)
+    units = tuple(annexb[start:end] for _prefix, start, end in _h264_annexb_nal_spans(annexb))
+    timestamps: list[int] = []
+    frame_index = -1
+    for unit in units:
+        if rtp_nal_units_have_vcl((unit,), codec=codec):
+            if _rtp_nal_starts_picture(unit, codec=codec):
+                frame_index += 1
+            if frame_index < 0:
+                raise PyEzvizError("Native clear timeline begins with an incomplete picture")
+        timestamps.append(round(max(0, frame_index) * period))
+    return units, timestamps
 
 def h264_clean_idr_capture_budgets(
     *,

@@ -537,4 +537,5 @@ stop authority. The stop envelope shares command 0x2013 with ECDH pre-start, but
 uses the owned session rather than a wildcard initialization body. A media socket
 with an interrupted partial frame is removed from parsing and retained only for
 this bounded teardown. Further reads on that client are rejected rather than
-opening an unrelated socket; callers must close it before reopening.
+opening an unrelated socket. Consuming an explicit stop also makes the client
+terminal, including when the stop fails; callers must close it before reopening.

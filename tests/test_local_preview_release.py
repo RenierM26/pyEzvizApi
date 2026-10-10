@@ -271,3 +271,24 @@ def test_bootstrap_cannot_overwrite_accepted_session_before_close(peers, structu
     assert len(peers[5]) == 2
     client.close()
     assert len(peers[5]) == 3
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_explicit_stop_consumption_blocks_reads_and_bootstrap_until_close(peers, accepted):
+    client = start(peers)
+    if accepted:
+        client.stop_preview()
+    else:
+        peers[4].data = reply(0x2014, "<Response><Result>5</Result></Response>")
+        with pytest.raises(PyEzvizError, match="not accepted"):
+            client.stop_preview()
+    with pytest.raises(PyEzvizError, match="Close this client"):
+        start(peers)
+    with pytest.raises(PyEzvizError, match="Close this client"):
+        client.bootstrap_preview(preview_body="<Request/>", stream_setup_body="<Request/>")
+    with pytest.raises(PyEzvizError, match="stopped"):
+        client.read_stream_frame_after_prefix()
+    assert len(peers[5]) == 3
+    client.close()
+    assert not client._preview_stopped  # noqa: SLF001
+    assert all(peer.closed for peer in peers[2:5])

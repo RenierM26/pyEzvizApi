@@ -9103,6 +9103,7 @@ class EzvizLocalSdkClient:
         self._stream_sock: Any | None = None
         self._owned_preview: tuple[str, str, int] | None = None
         self._retired_stream_sock: Any | None = None
+        self._preview_stopped = False
 
     def __enter__(self) -> EzvizLocalSdkClient:
         return self
@@ -9123,6 +9124,7 @@ class EzvizLocalSdkClient:
             self._command_sock = None
             self._stream_sock = None
             self._retired_stream_sock = None
+            self._preview_stopped = False
 
     def stop_preview(
         self,
@@ -9142,6 +9144,7 @@ class EzvizLocalSdkClient:
         self._owned_preview = None
         if owned is None:
             return None
+        self._preview_stopped = True
         operation_code, session, sequence = owned
         body = build_ezviz_local_stop_preview_request_body(
             operation_code=operation_code, session=session
@@ -9305,7 +9308,8 @@ class EzvizLocalSdkClient:
         method supports it as an optional supplied frame without trying to
         synthesize unknown fields.
         """
-        if self._owned_preview is not None or self._retired_stream_sock is not None:
+        if (self._owned_preview is not None or self._retired_stream_sock is not None
+                or self._preview_stopped):
             raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
@@ -9372,7 +9376,8 @@ class EzvizLocalSdkClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap preview and build 0x3105 from the 0x2012 Session."""
-        if self._owned_preview is not None or self._retired_stream_sock is not None:
+        if (self._owned_preview is not None or self._retired_stream_sock is not None
+                or self._preview_stopped):
             raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
@@ -9559,9 +9564,9 @@ class EzvizLocalSdkClient:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Any:
-        if self._retired_stream_sock is not None:
+        if self._retired_stream_sock is not None or self._preview_stopped:
             raise PyEzvizError(
-                "EZVIZ media socket was invalidated; close this client before reopening"
+                "EZVIZ media socket was invalidated or stopped; close this client before reopening"
             )
         if self._stream_sock is None:
             connect_timeout = self.timeout

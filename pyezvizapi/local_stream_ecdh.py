@@ -406,11 +406,13 @@ class EzvizLocalSdkEcdhStreamDecoder:
         *,
         data_channel: int = 1,
         require_keyframe: bool = True,
+        allow_encrypted_mpegps: bool = False,
         max_pre_keyframe_bytes: int = LOCAL_SDK_ECDH_MAX_PRE_KEYFRAME_BYTES,
     ) -> None:
         self.private_key = private_key
         self.data_channel = data_channel
         self.require_keyframe = require_keyframe
+        self.allow_encrypted_mpegps = allow_encrypted_mpegps
         self.max_pre_keyframe_bytes = max_pre_keyframe_bytes
         self._chacha20_key: bytes | None = None
         self._mpeg_started = False
@@ -540,6 +542,13 @@ class EzvizLocalSdkEcdhStreamDecoder:
                     reason="unsupported_payload",
                 )
         if first_pack_offset >= 0:
+            if self.allow_encrypted_mpegps:
+                # The inner media-key layer can encrypt SPS/VPS bytes too.
+                # Keep authenticated PS framing; keyframe validation belongs
+                # after that layer decrypts the elementary video.
+                self._mpeg_started = True
+                self._pending.clear()
+                return buffered[first_pack_offset:]
             keyframe_offset = self._find_keyframe(
                 buffered,
                 first_pack_offset + len(LOCAL_SDK_ECDH_MPEG_PS_PACK_HEADER),
@@ -1074,6 +1083,9 @@ def copy_local_sdk_ecdh_stream_to_media(  # noqa: PLR0913
     )
     if decrypt_video and media_key is None:
         raise PyEzvizError("decrypt_video requires a media_key or fetchable camera media key")
+    decoder = getattr(stream, "decoder", None)
+    if isinstance(decoder, EzvizLocalSdkEcdhStreamDecoder):
+        decoder.allow_encrypted_mpegps = decrypt_video
     if output_format == "mpegps" and not decrypt_video:
         copy_local_sdk_ecdh_stream_to_mpegps(
             stream,

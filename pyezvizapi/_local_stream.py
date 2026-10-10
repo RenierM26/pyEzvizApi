@@ -81,9 +81,11 @@ from .rtp import (
     parse_rtp_packet,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packet_is_idmx_aac,
+    rtp_packets_to_nal_units,
     rtp_payload,
     rtp_payload_video_codec,
 )
+from .rtp_timing import timed_rtp_mpegps_payloads
 from .stream_media import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
@@ -2546,6 +2548,9 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                     packets, b"", audio_metadata=audio_metadata, require_contiguous=False, decrypt_audio=False,
                 )
                 if audio is not None:
+                    codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
+                    if _copy_clear_native_idmx_timed_av(packets, audio, output, codec=codec, ffmpeg_path=ffmpeg_path):
+                        return
                     _copy_idmx_audio_video_to_mpegts(
                         annexb, audio, output, ffmpeg_path=ffmpeg_path,
                         video_input_format=video_input_format, video_frame_rate=video_frame_rate,
@@ -2577,6 +2582,38 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         process=process,
     )
 
+
+
+def _copy_clear_native_idmx_timed_av(
+    packets: list[bytes], audio: RtpAacStream, output: BinaryIO, *,
+    codec: RtpVideoCodec, ffmpeg_path: str,
+) -> bool:
+    """Keep native clear AAC jitter through one timed input, not raw-file probing."""
+
+    rtp_packets: list[RtpPacket] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header = _idmx_local_frame_header_size(frame)
+        if header is not None:
+            packet = _idmx_local_frame_rtp_packet(frame, header)
+            if packet is not None:
+                rtp_packets.append(packet)
+    if idmx_video_frame_rate(rtp_packets) is None:
+        return False
+    timestamps: list[int] = []
+    units = rtp_packets_to_nal_units(
+        rtp_packets, codec=codec, completed_access_units_only=True,
+        allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
+    )
+    process = open_mpegts_remux_process(
+        ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
+    )
+
+    def write_input(stdin: BinaryIO) -> None:
+        for payload in timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio):
+            stdin.write(payload)
+
+    copy_remuxed_output(process, output, write_input=write_input)
+    return True
 
 def h264_clean_idr_capture_budgets(
     *,

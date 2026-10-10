@@ -572,7 +572,7 @@ The built-in `app-lan-live-view` command plan selects its observed HCNetSDK port
 8000 when no command-port override is supplied. The API's `CONNECTION.command_port`
 can instead name the separate EZVIZ CAS service at9010; it is not a native preview
 endpoint. Explicit ports and caller-supplied custom plans retain their behavior.
-Use the camera's current native login key, not a stale saved password.
+Use the camera's current native login credential, which may differ from a stale saved password.
 
 Clear native IDMX captures use the advertised HEVC period and retain descriptor-
 backed, well-framed RFC3640 AAC even when individual audio packets have no encrypted

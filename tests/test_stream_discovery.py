@@ -1,15 +1,16 @@
 """Discovery reuse is bounded, credential-scoped and cloud-free."""
 
 from dataclasses import asdict, replace
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
 from test_stream_header import header
 from test_stream_selection import CAMERA, PAYLOAD, NoCloudClient, credentials
 
-from pyezvizapi import stream_selection
-from pyezvizapi.clip import AutoClipSource
-from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
+from pyezvizapi import EzvizClient, client as client_module, stream_selection
+from pyezvizapi.clip import AutoClipSource, ClipOptions
+from pyezvizapi.exceptions import EzvizNoMediaError, EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.local_stream_transport import EzvizLocalStreamPacket
 from pyezvizapi.media import CaptureLimits
 from pyezvizapi.stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
@@ -162,3 +163,21 @@ def test_expired_mru_never_evicts_live_lru():
     assert cache.get("live") == entry
     assert cache.get("expiring") is None
     assert cache.get("new") == entry
+
+
+def test_clip_failure_invalidates_hint_learned_by_live_stream(monkeypatch):
+    successful_legacy(monkeypatch)
+    cache = LocalStreamDiscoveryCache()
+    options = AutoClipSource(mode="offline", credentials=credentials(), discovery_cache=cache)
+    play(options)
+    assert select_stream_source(NoCloudClient(), CAMERA, options).kind == "local-sdk"
+    def no_media(*_args, **_kwargs):
+        raise EzvizNoMediaError("no packets")
+    monkeypatch.setattr(client_module, "copy_local_sdk_stream_from_client", no_media)
+    client = EzvizClient()
+    try:
+        with pytest.raises(EzvizNoMediaError, match="no packets"):
+            client.save_clip_with_options(CAMERA, BytesIO(), ClipOptions(source=options, capture=CaptureLimits(duration_seconds=2)))
+        assert select_stream_source(NoCloudClient(), CAMERA, options).kind == "local-sdk-ecdh"
+    finally:
+        client.close_session()

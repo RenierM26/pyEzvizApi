@@ -3476,7 +3476,7 @@ class EzvizClient:
             )
         raise PyEzvizError(f"Unsupported clip source options: {type(source).__name__}")
 
-    def _save_auto_clip(  # noqa: PLR0912
+    def _save_auto_clip(  # noqa: PLR0912, PLR0915
         self,
         serial: str,
         output: str | Path | BinaryIO,
@@ -3485,12 +3485,14 @@ class EzvizClient:
         """Stage bounded attempts; only commit a successful selected source."""
         source_options = cast(AutoClipSource, options.source)
         options.capture.require_bounded("Automatic clip capture")
+        discovery_keys: list[str] = []
         source = select_stream_source(
             self,
             serial,
             source_options,
             fetch_media_key=options.decode.decrypt_video and options.decode.media_key is None,
             channel=1 if options.channel is None else options.channel,
+            _discovery_keys=discovery_keys,
         )
         if (
             options.decode.decrypt_video and options.decode.media_key is None
@@ -3530,6 +3532,8 @@ class EzvizClient:
                     if not size:
                         raise EzvizNoMediaError("Automatic playback did not contain media")
                 except Exception as error:
+                    if source_options.discovery_cache is not None and discovery_keys and not isinstance(source, CloudClipSource):
+                        source_options.discovery_cache.invalidate(discovery_keys[-1])
                     fallback = (
                         fallback_stream_source(source, source_options, error)
                         if staged.tell() == 0

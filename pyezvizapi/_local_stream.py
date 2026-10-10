@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import hashlib
 import ipaddress
-from itertools import chain, pairwise
+from itertools import chain, groupby, pairwise
 from pathlib import Path
 import subprocess
 import tempfile
@@ -65,6 +65,7 @@ from .remux import (
     copy_remuxed_output,
     open_mpegts_remux_process,
     start_stderr_drain,
+    write_aac_remux_input,
 )
 from .rtp import (
     DEFAULT_AAC_PAYLOAD_TYPES,
@@ -74,14 +75,20 @@ from .rtp import (
     RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
+    _rtp_nal_starts_picture,
     decrypt_idmx_aac_packets,
+    detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
+    idmx_video_frame_rate,
     parse_rtp_packet,
+    rtp_nal_units_have_vcl,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packet_is_idmx_aac,
+    rtp_packets_to_nal_units,
     rtp_payload,
     rtp_payload_video_codec,
 )
+from .rtp_timing import timed_rtp_mpegps_payloads
 from .stream_media import (
     ANNEX_B_LONG_START_CODE,
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH,
@@ -2367,8 +2374,14 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 media_key,
                 audio_metadata=_idmx_audio_metadata(packets, media_key),
                 audio_payload_types=_idmx_audio_payload_types(packets),
+                require_contiguous=False,
+                allow_timestamp_jitter=True,
             )
         if audio is not None:
+            if annexb == full_annexb:
+                codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
+                if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path):
+                    return
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
                 audio,
@@ -2430,7 +2443,7 @@ def _require_bounded_idmx_capture(
         )
 
 
-def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
+def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
     stream: Any,
     output: BinaryIO,
     *,
@@ -2496,6 +2509,17 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
             annexb_is_h264 = annexb_codec == "h264"
         else:
             packets = list(chain((first_payload,), payloads))
+            if not is_h264_startup_options:
+                audio_metadata = _idmx_audio_descriptor(packets)
+                audio = (
+                    _decrypt_idmx_local_packets_to_adts_aac(
+                        packets, b"", audio_metadata=audio_metadata,
+                        require_contiguous=False, decrypt_audio=False, allow_timestamp_jitter=True,
+                    ) if audio_metadata is not None else None
+                )
+                if _copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path=ffmpeg_path):
+                    return
+
             if is_h264_startup_options:
                 annexb, annexb_codec = _idmx_local_packets_to_h264_annexb_with_codec(
                     packets
@@ -2521,7 +2545,8 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
                         ffmpeg_path=ffmpeg_path,
                         max_windows=h264_clean_idr_max_windows,
                     )
-            process = _open_local_hevc_mpegts_remux_process(ffmpeg_path)
+            video_input_format = "hevc"
+            video_frame_rate = None if h264_wait_for_clean_idr_window else _idmx_local_video_frame_rate(packets)
         else:
             annexb = skip_h264_annexb_initial_idr_windows(
                 annexb,
@@ -2533,7 +2558,24 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
                     ffmpeg_path=ffmpeg_path,
                     max_windows=h264_clean_idr_max_windows,
                 )
-            process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
+            video_input_format = "h264"
+            video_frame_rate = None
+        if not (is_h264_startup_options or h264_wait_for_clean_idr_window):
+            audio_metadata = _idmx_audio_descriptor(packets)
+            if audio_metadata is not None:
+                audio = _decrypt_idmx_local_packets_to_adts_aac(
+                    packets, b"", audio_metadata=audio_metadata, require_contiguous=False, decrypt_audio=False, allow_timestamp_jitter=True,
+                )
+                if audio is not None:
+                    _copy_idmx_audio_video_to_mpegts(
+                        annexb, audio, output, ffmpeg_path=ffmpeg_path,
+                        video_input_format=video_input_format, video_frame_rate=video_frame_rate,
+                    )
+                    return
+        process = (
+            _open_local_hevc_mpegts_remux_process(ffmpeg_path, frame_rate=video_frame_rate)
+            if video_input_format == "hevc" else _open_local_h264_mpegts_remux_process(ffmpeg_path)
+        )
         _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
         return
     if (
@@ -2556,6 +2598,107 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913
         process=process,
     )
 
+
+
+def _copy_clear_native_idmx_timed_av(
+    packets: list[bytes], audio: RtpAacStream | None, output: BinaryIO, *,
+    ffmpeg_path: str,
+) -> bool:
+    """Keep native clear AAC jitter through one timed input, not raw-file probing."""
+
+    rtp_packets: list[RtpPacket] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header = _idmx_local_frame_header_size(frame)
+        if header is not None:
+            packet = _idmx_local_frame_rtp_packet(frame, header)
+            if packet is not None:
+                rtp_packets.append(packet)
+    advertised_rate = idmx_video_frame_rate(rtp_packets)
+    if advertised_rate is None:
+        return False
+    codec = detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
+    timestamps: list[int] = []
+    units = rtp_packets_to_nal_units(
+        rtp_packets, codec=codec, completed_access_units_only=True,
+        allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
+    )
+    if any(packet.extension_profile == 0x4000 and len(packet.extension_data) >= 5
+           and packet.extension_data.startswith(b"\x80\x06")
+           and packet.extension_data[4] & 0xF0 == 0x10 for packet in rtp_packets):
+        # Local native video wrapper ticks are not a proven 90 kHz clock.
+        timestamps = _native_wrapper_video_timestamps(units, timestamps, codec, advertised_rate)
+    process = open_mpegts_remux_process(
+        ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
+    )
+
+    def write_input(stdin: BinaryIO) -> None:
+        for payload in timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio):
+            stdin.write(payload)
+
+    copy_remuxed_output(process, output, write_input=write_input)
+    return True
+
+
+def _native_wrapper_video_timestamps(
+    units: tuple[bytes, ...], timestamps: list[int], codec: RtpVideoCodec, advertised_rate: str,
+) -> list[int]:
+    """Use the native advertised period once per completed picture, not per NAL."""
+
+    period = Fraction(IDMX_VIDEO_RTP_CLOCK_RATE) / Fraction(advertised_rate)
+    frame_index = 0
+    result: list[int] = []
+    for _timestamp, entries in groupby(zip(timestamps, units, strict=True), key=lambda item: item[0]):
+        group_units = [unit for _time, unit in entries]
+        result.extend([round(frame_index * period)] * len(group_units))
+        if rtp_nal_units_have_vcl(group_units, codec=codec):
+            frame_index += 1
+    return result
+
+
+def _copy_decrypted_native_idmx_timed_av(
+    packets: list[bytes], annexb: bytes, audio: RtpAacStream, output: BinaryIO, *,
+    codec: RtpVideoCodec, ffmpeg_path: str,
+) -> bool:
+    """Use advertised native picture cadence and received AAC sample timestamps."""
+
+    rtp_packets: list[RtpPacket] = []
+    for frame in _iter_idmx_local_packet_frames(packets):
+        header = _idmx_local_frame_header_size(frame)
+        if header is not None:
+            packet = _idmx_local_frame_rtp_packet(frame, header)
+            if packet is not None:
+                rtp_packets.append(packet)
+    rate = idmx_video_frame_rate(rtp_packets)
+    if rate is None:
+        return False
+    units, timestamps = _native_decrypted_picture_timeline(annexb, codec, rate)
+    process = open_mpegts_remux_process(
+        ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
+    )
+
+    def write_input(stdin: BinaryIO) -> None:
+        for payload in timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio):
+            stdin.write(payload)
+
+    copy_remuxed_output(process, output, write_input=write_input)
+    return True
+
+
+def _native_decrypted_picture_timeline(
+    annexb: bytes, codec: RtpVideoCodec, advertised_rate: str,
+) -> tuple[tuple[bytes, ...], list[int]]:
+    period = Fraction(IDMX_VIDEO_RTP_CLOCK_RATE) / Fraction(advertised_rate)
+    units = tuple(annexb[start:end] for _prefix, start, end in _h264_annexb_nal_spans(annexb))
+    timestamps: list[int] = []
+    frame_index = -1
+    for unit in units:
+        if rtp_nal_units_have_vcl((unit,), codec=codec):
+            if _rtp_nal_starts_picture(unit, codec=codec):
+                frame_index += 1
+            if frame_index < 0:
+                raise PyEzvizError("Native clear timeline begins with an incomplete picture")
+        timestamps.append(round(max(0, frame_index) * period))
+    return units, timestamps
 
 def h264_clean_idr_capture_budgets(
     *,
@@ -5635,6 +5778,7 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
     """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
 
     rtp_packets: list[RtpPacket] = []
+    native_wrapper = False
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
@@ -5642,10 +5786,15 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
             if packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06"):
-                # Native IDMX wrapper timestamps are not guaranteed to use the
-                # standard 90 kHz clock. Let FFmpeg read HEVC SPS/VUI timing.
-                return None
+                native_wrapper = True
             rtp_packets.append(packet)
+    advertised_rate = idmx_video_frame_rate(rtp_packets)
+    if advertised_rate is not None:
+        return advertised_rate
+    if native_wrapper:
+        # Without a native descriptor, do not infer timing from wrapper
+        # timestamps. FFmpeg can still use valid HEVC SPS/VUI timing.
+        return None
     h264_types, hevc_types = _idmx_local_supported_video_payload_types(packets)
     routed_video_payload_types = h264_types | hevc_types
     route_epoch_profile = RtpRouteProfile()
@@ -6458,6 +6607,8 @@ def _decrypt_idmx_local_packets_to_adts_aac(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    decrypt_audio: bool = True,
+    allow_timestamp_jitter: bool = False,
 ) -> _IdmxAacStream | None:
     """Return supported encrypted IDMX AAC as ADTS, or None for other audio."""
 
@@ -6496,6 +6647,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         if (
             packet.payload_type in descriptor_aac_payload_types
             and _rtp_packet_route_descriptor(route_epoch_profile, packet) is None
+            and decrypt_audio
             and not rtp_packet_has_valid_idmx_aac_frame(packet)
         ):
             continue
@@ -6506,6 +6658,8 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         audio_metadata=audio_metadata,
         audio_payload_types=selected_audio_payload_types,
         require_contiguous=require_contiguous,
+        decrypt_audio=decrypt_audio,
+        allow_timestamp_jitter=allow_timestamp_jitter,
     )
 
 
@@ -7300,8 +7454,15 @@ def _copy_idmx_audio_video_to_mpegts(
     """Mux decrypted IDMX elementary video and AAC into MPEG-TS."""
 
     with tempfile.TemporaryDirectory(prefix="pyezvizapi-idmx-") as directory:
-        audio_path = Path(directory) / "audio.aac"
-        audio_path.write_bytes(audio.adts)
+        audio_path, audio_format = write_aac_remux_input(audio, Path(directory))
+        if audio_format == "concat":
+            process = open_mpegts_remux_process(
+                ffmpeg_path, input_format=video_input_format,
+                frame_rate=video_frame_rate, audio_path=str(audio_path),
+                audio_input_format=audio_format, popen=subprocess.Popen,
+            )
+            _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
+            return
         process = _open_local_idmx_audio_video_mpegts_remux_process(
             ffmpeg_path,
             video_input_format=video_input_format,

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
+from pathlib import Path
 import subprocess
 from threading import Event, Lock, Thread
-from typing import Any, BinaryIO, cast
+from typing import Any, BinaryIO, Literal, cast
 
 from .exceptions import PyEzvizError
+from .rtp import RtpAacStream
 
 FFMPEG_IO_CHUNK_SIZE = 65536
 FFMPEG_STOP_TIMEOUT_SECONDS = 2.0
@@ -50,6 +52,8 @@ def ffmpeg_mpegts_command(
     frame_rate: str | None = None,
     audio_path: str | None = None,
     audio_url: str | None = None,
+    audio_input_format: Literal["aac", "concat"] = "aac",
+    preserve_timestamps: bool = False,
 ) -> list[str]:
     """Build an FFmpeg stream-copy command producing MPEG-TS on stdout."""
 
@@ -72,7 +76,7 @@ def ffmpeg_mpegts_command(
         command.extend(
             (
                 "-f",
-                "aac",
+                audio_input_format,
                 "-i",
                 audio_input,
                 "-map",
@@ -81,8 +85,40 @@ def ffmpeg_mpegts_command(
                 "1:a:0",
             )
         )
-    command.extend(("-c", "copy", "-f", "mpegts", "pipe:1"))
+    if preserve_timestamps or audio_input_format == "concat":
+        command.append("-copyts")
+    command.extend(("-c", "copy", "-f", "mpegts"))
+    if preserve_timestamps or audio_input_format == "concat":
+        # Flush AAC PES at each timestamp: aggregation can hide a gap inside PES.
+        command.extend(("-muxdelay", "0"))
+    command.append("pipe:1")
     return command
+
+
+def write_aac_remux_input(audio: RtpAacStream, directory: Path) -> tuple[Path, Literal["aac", "concat"]]:
+    """Stage ADTS or a local concat timeline preserving observed RTP gaps.
+
+    Duration to the next block is its sample-offset difference, including
+    missing AUs. No silence is synthesized and received AAC is not retimed.
+    """
+
+    if not audio.timed_segments:
+        path = directory / "audio.aac"
+        path.write_bytes(audio.adts)
+        return path, "aac"
+    lines = ["ffconcat version 1.0"]
+    for index, (offset, data) in enumerate(audio.timed_segments):
+        name = f"audio-{index:06d}.aac"
+        (directory / name).write_bytes(data)
+        lines.append(f"file '{name}'")
+        # Raw AAC has no container start time; make each block origin explicit.
+        lines.append("inpoint 0")
+        if index + 1 < len(audio.timed_segments):
+            next_offset = audio.timed_segments[index + 1][0]
+            lines.append(f"duration {(next_offset - offset) / audio.sample_rate:.12f}")
+    path = directory / "audio.ffconcat"
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+    return path, "concat"
 
 
 def open_mpegts_remux_process(
@@ -92,6 +128,8 @@ def open_mpegts_remux_process(
     frame_rate: str | None = None,
     audio_path: str | None = None,
     audio_url: str | None = None,
+    audio_input_format: Literal["aac", "concat"] = "aac",
+    preserve_timestamps: bool = False,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> subprocess.Popen[bytes]:
     """Open one FFmpeg MPEG-TS remux process with captured stderr."""
@@ -104,6 +142,8 @@ def open_mpegts_remux_process(
                 frame_rate=frame_rate,
                 audio_path=audio_path,
                 audio_url=audio_url,
+                audio_input_format=audio_input_format,
+                preserve_timestamps=preserve_timestamps,
             ),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

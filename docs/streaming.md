@@ -61,7 +61,11 @@ is not emitted.
 - Descriptor-backed IDMX AAC uses the native sample rate and channel count and
   is retained in decrypted local and cloud RTP MPEG-TS output. Descriptor-free
   IDMX AAC stays video-only because packet cadence is not sufficient evidence
-  for a reliable sample-rate guess.
+  for a reliable sample-rate guess. Bounded IDMX captures retain positive AAC
+  timestamp gaps in local concat timelines instead of dropping the entire audio
+  track. Received access units remain unchanged; missing units are not filled
+  with generated silence. Reordered or invalid audio clocks are not accepted
+  as forward gaps. Incremental proxy audio continuity is a separate limitation.
 
 ### RTP/IDMX codec detection
 
@@ -162,8 +166,12 @@ bound before network work. New code should use valid positive, finite
   their SSRC happens to have that same value. Local
   one-byte-prefixed RTP records are normalized with their extensions and padding
   before media reassembly; padding is never part of the encrypted NAL. Native
-  HEVC media wrappers use encoded SPS/VUI timing rather than a forced RTP-clock
-  frame-rate estimate.
+  HEVC media wrappers use the advertised `0x42` video descriptor frame period
+  when present, retaining exact rational rates. Reserved or invalid periods do
+  not establish timing; without that descriptor, encoded SPS/VUI timing remains
+  the fallback rather than a forced wrapper RTP-clock estimate. Later valid metadata corrects startup
+  placeholders, as for AAC metadata. Bounded elementary-stream remuxing uses
+  that advertised rate; it does not certify arbitrary variable-frame-rate input.
 - Direct local SDK streaming requires LAN endpoint and CAS data and may require
   P2P registration before CAS lookup.
 - ECDH IDMX/RTP streaming requires the native `0x43` metadata descriptor for
@@ -557,3 +565,38 @@ with an interrupted partial frame is removed from parsing and retained only for
 this bounded teardown. Further reads on that client are rejected rather than
 opening an unrelated socket. Consuming an explicit stop also makes the client
 terminal, including when the stop fails; callers must close it before reopening.
+
+### Native clear LAN preview
+
+The built-in `app-lan-live-view` command plan selects its observed HCNetSDK port
+8000 when no command-port override is supplied. The API's `CONNECTION.command_port`
+can instead name the separate EZVIZ CAS service at9010; it is not a native preview
+endpoint. Explicit ports and caller-supplied custom plans retain their behavior.
+Use the camera's current native login credential, which may differ from a stale saved password.
+
+Clear native IDMX captures use the advertised HEVC period and retain descriptor-
+backed, well-framed RFC3640 AAC even when individual audio packets have no encrypted
+IDMX extension. Clear input bypasses AES explicitly. Received AAC timestamp gaps
+and jitter are retained; no silence or guessed timestamps are added. Undescribed
+plain RTP is not inferred as AAC. Encrypted IDMX eligibility stays unchanged.
+Startup-trim/wait modes do not add clear audio without evidence for matching the
+selected video interval. The built-in app-observed native plan remains a single-
+channel plan, not a way to force a second lens.
+
+
+### Native cloud RTP clocks
+
+Bounded cloud captures and the incremental cloud proxy preserve descriptor-backed
+native RTP video access-unit timestamps through a length-delimited MPEG-PS input.
+They do not impose the advertised frame rate on variable-cadence video. Descriptor-
+backed AAC retains forward whole-access-unit gaps; no silence or extra video is
+synthesized. Large video access units are split into bounded PES packets without
+changing their NAL bytes. The proxy retains only bounded startup parameters and
+complete NAL fragments, not a whole-session media buffer.
+
+Each track starts at its first received access unit. Without an RTCP sender report,
+this preserves relative cadence and duration but does **not** establish absolute
+inter-track synchronization. Invalid/reordered native clocks are rejected rather
+than converted to a guessed frame rate. Ordinary RTP, MPEG-PS and MPEG-TS cloud
+routes keep their existing behavior. Historical intermittent upstream loss or
+corruption is not classified as fixed by a later clean capture.

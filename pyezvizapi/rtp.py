@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from itertools import pairwise
 from typing import Literal
 
@@ -156,6 +157,8 @@ class RtpAacStream:
     sample_rate: int
     channels: int
     frame_count: int
+    # Contiguous ADTS blocks with sample offsets from the first received AU.
+    timed_segments: tuple[tuple[int, bytes], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -562,6 +565,36 @@ def rtp_codec_payload_types(
     return fallback_payload_types - assigned_payload_types
 
 
+def idmx_video_frame_rate(packets: Iterable[RtpPacket]) -> str | None:
+    """Read the native 0x42 descriptor's 90 kHz frame-period field.
+
+    PlayCtrl rtp_parse_hik_video_descriptor packs bytes 13..15 into a
+    23-bit period and divides 90000 by it. Reserved/invalid periods do
+    not establish timing; never invent the native parser's 25 fps default.
+    """
+
+    selected: Fraction | None = None
+    for packet in packets:
+        if not packet.idmx:
+            continue
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            end = offset + data[offset + 1] + 2
+            if end > len(data):
+                break
+            if data[offset] == 0x42 and data[offset + 1] >= 14:
+                descriptor = data[offset:end]
+                period = (descriptor[13] << 15) | (descriptor[14] << 7) | (descriptor[15] >> 1)
+                if 186 < period <= 1_530_000:
+                    rate = Fraction(90000, period)
+                    # Startup metadata can advertise a placeholder period;
+                    # subsequent native metadata corrects it (as for AAC).
+                    selected = rate
+            offset = end
+    return str(selected) if selected is not None else None
+
+
 def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
     """Return authoritative sample-rate/channel metadata from descriptor ``0x43``."""
 
@@ -671,8 +704,10 @@ def decrypt_idmx_aac_packets(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    decrypt_audio: bool = True,
+    allow_timestamp_jitter: bool = False,
 ) -> RtpAacStream | None:
-    """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
+    """Return descriptor-backed IDMX AAC as ADTS; explicitly bypass AES for clear input."""
 
     packet_list = list(packets)
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
@@ -691,7 +726,15 @@ def decrypt_idmx_aac_packets(
             continue
         if route_epoch is not None and route_epoch.codec != "aac":
             continue
-        if not rtp_packet_has_valid_idmx_aac_frame(packet):
+        clear_access_unit = _idmx_aac_access_unit(packet.payload) if not decrypt_audio else None
+        clear_routed_aac = (
+            not decrypt_audio and (
+                route_epoch.codec == "aac" if route_epoch is not None else route_profile.audio_metadata is not None
+            )
+            and clear_access_unit is not None
+            and len(clear_access_unit) + IDMX_AAC_ADTS_HEADER_SIZE <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        )
+        if not (clear_routed_aac or rtp_packet_has_valid_idmx_aac_frame(packet)):
             if route_epoch is None:
                 continue
             return None
@@ -701,29 +744,61 @@ def decrypt_idmx_aac_packets(
         encrypted_access_units.append(access_unit)
     if not encrypted_access_units:
         return None
-    if require_contiguous and any(
-        ((current - previous) & 0xFFFFFFFF) != IDMX_AAC_SAMPLES_PER_FRAME
+    deltas = [
+        (current - previous) & 0xFFFFFFFF
         for previous, current in pairwise(timestamps)
-    ):
-        return None
+    ]
     descriptor = route_profile.audio_metadata or audio_metadata
     if descriptor is None:
         return None
     sample_rate, channels = descriptor
+    if any(not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter) for delta in deltas):
+        return None
+    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
+        return None
     aes_key = _rtp_media_aes_key(media_key)
     access_units = [
-        _decrypt_idmx_aac_access_unit(access_unit, aes_key)
+        _decrypt_idmx_aac_access_unit(access_unit, aes_key) if decrypt_audio else access_unit
         for access_unit in encrypted_access_units
     ]
+    adts_frames = [
+        _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
+        for access_unit in access_units
+    ]
     return RtpAacStream(
-        adts=b"".join(
-            _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
-            for access_unit in access_units
-        ),
+        adts=b"".join(adts_frames),
         sample_rate=sample_rate,
         channels=channels,
         frame_count=len(access_units),
+        timed_segments=_aac_timed_segments(adts_frames, deltas),
     )
+
+
+
+def _aac_timestamp_delta_is_supported(delta: int, sample_rate: int, allow_jitter: bool) -> bool:
+    """Accept whole AUs or explicitly enabled native one-millisecond clock jitter."""
+
+    jitter = sample_rate // 1000 if allow_jitter else 0
+    remainder = delta % IDMX_AAC_SAMPLES_PER_FRAME
+    return (IDMX_AAC_SAMPLES_PER_FRAME - jitter <= delta < 0x80000000
+            and min(remainder, IDMX_AAC_SAMPLES_PER_FRAME - remainder) <= jitter)
+
+def _aac_timed_segments(adts_frames: list[bytes], deltas: list[int]) -> tuple[tuple[int, bytes], ...]:
+    """Split received ADTS only at missing-AU boundaries."""
+
+    segments: list[tuple[int, bytes]] = []
+    segment_start = 0
+    segment_offset = 0
+    sample_offset = 0
+    for index, delta in enumerate(deltas, start=1):
+        sample_offset += delta
+        if delta != IDMX_AAC_SAMPLES_PER_FRAME:
+            segments.append((segment_offset, b"".join(adts_frames[segment_start:index])))
+            segment_start = index
+            segment_offset = sample_offset
+    if segments:
+        segments.append((segment_offset, b"".join(adts_frames[segment_start:])))
+    return tuple(segments)
 
 
 def rtp_payload_video_codec(payload: bytes) -> RtpVideoCodec | None:
@@ -1366,6 +1441,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     completed_access_units_only: bool = False,
     first_slice_transform: Callable[[bytes], bytes] | None = None,
     packet_nal_transform: Callable[[bytes], bytes] | None = None,
+    nal_timestamps: list[int] | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
 
@@ -1424,6 +1500,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
+    output_timestamps: list[int] = []
     output_is_vcl: list[bool] = []
     accepted: list[bool] = []
     pending_indexes: dict[RtpSequenceKey, list[int]] = {}
@@ -1601,6 +1678,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                     )
                 pending_indexes.setdefault(sequence_key, []).append(len(output))
                 output.append(output_nal)
+                output_timestamps.append(packet.timestamp)
                 is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
@@ -1648,7 +1726,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     if completed_access_units_only:
         for ssrc in tuple(pending_indexes):
             finish_access_unit(ssrc, complete=False)
+        if nal_timestamps is not None:
+            nal_timestamps.extend(timestamp for timestamp, keep in zip(output_timestamps, accepted, strict=True) if keep)
         return tuple(nal for nal, keep in zip(output, accepted, strict=True) if keep)
+    if nal_timestamps is not None:
+        nal_timestamps.extend(output_timestamps)
     return tuple(output)
 
 

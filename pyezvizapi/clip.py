@@ -25,11 +25,11 @@ class LocalSdkClipSource:
     """Connection options for the direct local SDK stream."""
 
     kind: Literal["local-sdk"] = field(default="local-sdk", init=False)
-    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
     cas_serial: str | None = None
     register_p2p_session: bool = True
     p2p_register_max_retries: int = MAX_RETRIES
-    receiver_port: int = 10101
+    receiver_port: int = field(default=10101, kw_only=True)
     timeout: float | None = 10.0
     smscode: str | int | None = field(default=None, repr=False)
 
@@ -39,14 +39,14 @@ class LocalSdkEcdhClipSource:
     """Connection options for the local SDK ECDH stream."""
 
     kind: Literal["local-sdk-ecdh"] = field(default="local-sdk-ecdh", init=False)
-    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False)
+    credentials: EzvizLocalSdkCredentials | None = field(default=None, repr=False, kw_only=True)
     cas_serial: str | None = None
     register_p2p_session: bool = True
     p2p_register_max_retries: int = MAX_RETRIES
     timeout: float | None = 10.0
     smscode: str | int | None = field(default=None, repr=False)
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
-    fresh_retry_port: bool = False
+    fresh_retry_port: bool = field(default=False, kw_only=True)
     send_init: bool = False
     max_prefix_bytes: int = 4096
     max_frames: int | None = None

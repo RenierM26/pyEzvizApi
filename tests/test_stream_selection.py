@@ -538,3 +538,21 @@ def test_auto_cloud_fallback_reuses_discovered_key_without_second_lookup(
     assert output.getvalue() == PAYLOAD
     assert lookups == [explicit_key is None]
     assert options.decode.media_key == explicit_key
+
+
+def test_local_clip_source_preserves_existing_positional_constructor() -> None:
+    source = LocalSdkClipSource("cas", False, 2, 3.0, "code", credentials=credentials(), receiver_port=12345)
+    assert (source.cas_serial, source.register_p2p_session, source.p2p_register_max_retries,
+            source.timeout, source.smscode) == ("cas", False, 2, 3.0, "code")
+    assert source.credentials == credentials()
+    assert source.receiver_port == 12345
+
+
+def test_ecdh_clip_source_preserves_existing_positional_constructor() -> None:
+    source = LocalSdkEcdhClipSource("cas", False, 2, 3.0, "code", 12345, True, 2048, 9,
+                                   credentials=credentials(), fresh_retry_port=True)
+    assert (source.cas_serial, source.register_p2p_session, source.p2p_register_max_retries,
+            source.timeout, source.smscode, source.receiver_port, source.send_init,
+            source.max_prefix_bytes, source.max_frames) == ("cas", False, 2, 3.0, "code", 12345, True, 2048, 9)
+    assert source.credentials == credentials()
+    assert source.fresh_retry_port

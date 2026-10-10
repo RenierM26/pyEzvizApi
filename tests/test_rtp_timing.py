@@ -41,6 +41,21 @@ def test_incremental_clock_and_startup_memory_are_bounded() -> None:
         list(startup.video(0, b"\x67" + b"x" * 1_048_576))
 
 
+@pytest.mark.parametrize(("codec", "first", "continuation", "parameter"), [
+    ("h264", b"\x41\x80picture", b"\x41\x40slice", b"\x67\x80parameter"),
+    ("hevc", b"\x02\x01\x80picture", b"\x02\x01\x40slice", b"\x42\x01\x80parameter"),
+])
+def test_incremental_repeated_picture_timestamp_rejects_only_new_picture(codec, first, continuation, parameter) -> None:
+    muxer = NativeRtpPsMuxer(codec, audio=False)
+    assert list(muxer.video(100, first))
+    assert list(muxer.video(100, continuation))
+    assert list(muxer.video(100, parameter))
+    assert list(muxer.video(6100, first))
+    assert list(muxer.video(6100, continuation))
+    with pytest.raises(EzvizUnsupportedMediaError, match="repeat for a new picture"):
+        list(muxer.video(6100, first))
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")
 @pytest.mark.parametrize(("incremental", "jitter"), [(False, False), (True, False), (False, True)])
 def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: Path, incremental: bool, jitter: bool) -> None:

@@ -636,12 +636,12 @@ def test_auto_clip_packet_bound_allows_handshake_and_legacy_detection(
             pass
         def iter_packets(self, *, max_packets, max_frames, **_kwargs):
             assert max_packets == packet_limit
-            assert max_frames is not None and max_frames >= 8
+            assert max_frames is not None and max_frames >= 71
             emitted = 0
             for frame in range(max_frames):
                 frames_read.append(frame)
                 if legacy:
-                    if frame == 7:
+                    if frame == 70:  # eight PS starts separated by other frames
                         raise EzvizUnsupportedMediaError("legacy PS evidence", source="local-sdk-ecdh", reason="protocol_mismatch")
                 elif frame >= 2:  # handshake and descriptor precede media
                     yield SimpleNamespace(body=PAYLOAD)
@@ -672,4 +672,4 @@ def test_auto_clip_packet_bound_allows_handshake_and_legacy_detection(
     assert result["source"] == ("local-sdk" if legacy else "local-sdk-ecdh")
     assert output.getvalue() == PAYLOAD * packet_limit
     assert len(opened) == 1
-    assert len(frames_read) == (8 if legacy else 2 + packet_limit)
+    assert len(frames_read) == (71 if legacy else 2 + packet_limit)

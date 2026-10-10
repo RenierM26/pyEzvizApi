@@ -3496,7 +3496,7 @@ class EzvizClient:
         if isinstance(source, LocalSdkEcdhClipSource) and options.max_packets is not None:
             # Emitted media packets exclude handshake/descriptor/detection
             # frames. Retain a separate, finite negotiation allowance.
-            source = replace(source, max_frames=options.max_packets + 64)
+            source = replace(source, max_frames=options.max_packets + 1024)
         deadline = (
             time.monotonic() + options.duration_seconds
             if options.duration_seconds is not None

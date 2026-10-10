@@ -389,7 +389,7 @@ transport; video AES decryption is separate. The existing bounded
 `probe_local_stream()` remains a diagnostic tool, not a required pre-play step.
 
 Automatic saved ECDH clips keep emitted `max_packets` separate from encrypted
-input frames: packet-bounded attempts allow up to `max_packets + 64` input
+input frames: packet-bounded attempts allow up to `max_packets + 1024` input
 frames for handshake, descriptors and protocol detection. This remains a finite
 input allowance; duration-bounded attempts also retain their shared deadline.
 Existing explicit ECDH source frame-limit behavior is unchanged.

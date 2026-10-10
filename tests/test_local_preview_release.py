@@ -227,7 +227,13 @@ def test_malformed_stop_reply_is_explicit_protocol_error(peers):
 def test_malformed_stop_reply_never_masks_context_body_exception(peers):
     client = start(peers)
     peers[4].data = reply(0x2014, "<Response>")
-    with pytest.raises(ValueError, match="original context error"), client:
-        raise ValueError("original context error")
+    original = ValueError("original context error")
+    caught = None
+    try:
+        with client:
+            raise original
+    except ValueError as error:
+        caught = error
+    assert caught is original
     assert all(peer.closed for peer in peers[2:5])
     assert not peers[3].shutdown_modes

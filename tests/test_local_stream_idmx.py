@@ -20,6 +20,8 @@ from pyezvizapi._local_stream import (
     _idmx_h264_annexb_packet_spans,
     _idmx_h264_packets_from_selected_annexb,
     _idmx_hevc_annexb_packet_spans,
+    _idmx_local_frame_media_body,
+    _idmx_local_frame_rtp_packet,
     _idmx_local_packets_to_annexb_with_codec,
     _idmx_local_packets_to_h264_annexb,
     _idmx_local_packets_to_hevc_annexb,
@@ -1075,8 +1077,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "codec = sys.argv[sys.argv.index('-f') + 1]\n"
-        "assert sys.argv[sys.argv.index('-r') + 1] == '25'\n"
-        "assert sys.argv.index('-r') < sys.argv.index('-i')\n"
+        "assert '-r' not in sys.argv\n"
         "sys.stdout.buffer.write(codec.encode() + b':' + sys.stdin.buffer.read())\n",
         encoding="utf-8",
     )
@@ -1086,7 +1087,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
     slice_plain = b"slice-plain-1234"
     slice_cipher = bytes.fromhex("7a51a826f29068d1a992b0d6c59a5be9")
     ignored_parameter_frame = (
-        b"\x0d\x90\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
+        b"\xfa\x90\xf0\x50\x37\x03\xb5\xea\xee\x55\x66\x77\x88"
         b"\x00\x01\x00\x0cignored"
     )
     vps_frame = (
@@ -1100,6 +1101,7 @@ def test_copy_local_stream_to_decrypted_mpegts_decrypts_idmx_payload(
         b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
         b"\x62\x01\x93"
         + slice_cipher
+        + b"\x01"  # Declared RTP padding on the shimmed packet.
     )
 
     class FakeStream:
@@ -4344,3 +4346,112 @@ def test_summarize_h264_idr_windows_excludes_next_window_parameters() -> None:
     assert samples[0]["window_bytes"] == next_window_offset
     assert samples[1]["start_code_offset"] == next_window_offset
     assert samples[1]["leading_nal_types"] == [7, 8]
+
+
+@pytest.mark.parametrize("padding_length", [1, 2, 3])
+def test_shimmed_native_hevc_rtp_strips_padding_before_decryption(
+    padding_length: int,
+) -> None:
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+    cipher = bytes.fromhex("7a51a826f29068d1a992b0d6c59a5be9")
+    padding = b"\x00" * (padding_length - 1) + bytes((padding_length,))
+
+    def frame(payload: bytes, sequence: int, *, marker: bool) -> bytes:
+        return (
+            b"\x0d\xb0"
+            + bytes((96 | (0x80 if marker else 0),))
+            + sequence.to_bytes(2, "big")
+            + (9000).to_bytes(4, "big")
+            + b"\x55\x66\x77\x88"
+            + wrapper
+            + payload
+            + padding
+        )
+
+    start = frame(b"\x62\x01\x93" + cipher[:8], 100, marker=False)
+    end = frame(b"\x62\x01\x66" + cipher[8:] + b"4", 101, marker=True)
+    packet = _idmx_local_frame_rtp_packet(start, 13)
+    assert packet is not None
+    assert packet.ssrc == 0x55667788
+    assert packet.extension_profile == 0x4000
+    assert _idmx_local_video_frame_rate([start, end]) is None
+    assert packet.payload == b"\x62\x01\x93" + cipher[:8]
+    assert _idmx_local_frame_media_body(start, 13) == wrapper + packet.payload
+    expected = b"\x00\x00\x00\x01\x26\x01slice-plain-12344"
+    assert _decrypt_idmx_local_packets_to_annexb([start, end], IDMX_MEDIA_KEY) == expected
+
+
+@pytest.mark.parametrize("padding", [b"\x00", b"\xff"])
+def test_shimmed_native_hevc_rtp_rejects_invalid_padding(padding: bytes) -> None:
+    frame = (
+        b"\x0d\xb0\x60\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        b"\x62\x01\x93payload"
+        + padding
+    )
+    with pytest.raises(PyEzvizError, match="Invalid RTP padding"):
+        _decrypt_idmx_local_packets_to_annexb([frame], IDMX_MEDIA_KEY)
+
+
+def test_local_idmx_frame_rate_follows_verified_unused_descriptor_fallback() -> None:
+    packets = [
+        _rtp_packet(
+            b"metadata",
+            payload_type=112,
+            extension_data=b"\x45\x02\x24\x0f",
+            ssrc=b"\x55\x66\x77\x88",
+        ),
+        *(
+            _rtp_packet(
+                b"\x40\x01vps",
+                sequence=sequence,
+                timestamp=90000 + sequence * 6000,
+                ssrc=b"\x55\x66\x77\x88",
+            )
+            for sequence in range(1, 4)
+        ),
+    ]
+    assert _idmx_local_video_frame_rate(packets) == "15"
+
+
+@pytest.mark.parametrize("payload_type", [96, 104, 112])
+@pytest.mark.parametrize("padding", [b"\x00", b"\xff"])
+def test_shimmed_rtp_rejects_invalid_padding_on_every_media_route(
+    payload_type: int, padding: bytes
+) -> None:
+    frame = (
+        b"\x0d\xa0"
+        + bytes((payload_type,))
+        + b"\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        + b"\x7c\x85payload"
+        + padding
+    )
+    with pytest.raises(PyEzvizError, match="Invalid RTP padding"):
+        _idmx_local_frame_rtp_packet(frame, 13)
+    with pytest.raises(PyEzvizError, match="Invalid RTP padding"):
+        _idmx_local_frame_media_body(frame, 13)
+
+
+@pytest.mark.parametrize("payload_type", [96, 104, 112])
+def test_shimmed_rtp_rejects_invalid_extension_on_every_media_route(
+    payload_type: int,
+) -> None:
+    frame = (
+        b"\x0d\x90"
+        + bytes((payload_type,))
+        + b"\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        + b"\x00\x01\xff\xffpayload"
+    )
+    with pytest.raises(PyEzvizError, match="extension payload exceeds"):
+        _idmx_local_frame_rtp_packet(frame, 13)
+
+
+def test_explicit_legacy_command_record_does_not_claim_rtp_provenance() -> None:
+    frame = (
+        b"\xfa\x90\x60\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        b"\x00\x01\x00\x0csidecar"
+    )
+    packet = _idmx_local_frame_rtp_packet(frame, 13)
+    assert packet is not None
+    assert not packet.idmx
+    assert packet.payload == frame[13:]

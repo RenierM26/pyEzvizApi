@@ -5,7 +5,7 @@ from __future__ import annotations
 import bisect
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import hashlib
 import ipaddress
@@ -2335,7 +2335,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         if video_input_format == "hevc":
             process = _open_local_hevc_mpegts_remux_process(
                 ffmpeg_path,
-                frame_rate=video_frame_rate or str(IDMX_DEFAULT_VIDEO_FRAME_RATE),
+                frame_rate=video_frame_rate,
             )
         else:
             process = _open_local_h264_mpegts_remux_process(ffmpeg_path)
@@ -2738,7 +2738,7 @@ def _open_local_mpegts_remux_process(ffmpeg_path: str) -> subprocess.Popen[bytes
 def _open_local_hevc_mpegts_remux_process(
     ffmpeg_path: str,
     *,
-    frame_rate: str = str(IDMX_DEFAULT_VIDEO_FRAME_RATE),
+    frame_rate: str | None = str(IDMX_DEFAULT_VIDEO_FRAME_RATE),
 ) -> subprocess.Popen[bytes]:
     return open_mpegts_remux_process(
         ffmpeg_path,
@@ -5322,13 +5322,37 @@ def _hevc_annexb_irap_window_start_index(
     return start
 
 
-def _is_complete_idmx_rtp_frame(frame: bytes) -> bool:
-    """Return whether ``frame`` is one complete standards-shaped IDMX RTP packet."""
+def _idmx_local_rtp_frame(frame: bytes) -> bytes | None:
+    """Locate ordinary RTP or X80's one-byte-prefixed RTP record."""
 
-    if len(frame) < 12 or frame[0] >> 6 != 2 or frame[8:12] != IDMX_LOCAL_FRAME_SENTINEL:
+    for offset in (0, 1):
+        if (
+            len(frame) >= offset + 12
+            and (offset == 0 or frame[0] == 0x0D)
+            and frame[offset] >> 6 == 2
+            and frame[offset + 8 : offset + 12] == IDMX_LOCAL_FRAME_SENTINEL
+        ):
+            rtp_frame = frame[offset:]
+            try:
+                parse_rtp_packet(rtp_frame)
+            except PyEzvizError:
+                if offset == 1:
+                    # 0x0d identifies shimmed RTP independently of media codec.
+                    # Legacy 0xfa command records are handled outside this path.
+                    raise
+                continue
+            return rtp_frame
+    return None
+
+
+def _is_complete_idmx_rtp_frame(frame: bytes) -> bool:
+    """Return whether ``frame`` contains one complete standards-shaped RTP packet."""
+
+    rtp_frame = _idmx_local_rtp_frame(frame)
+    if rtp_frame is None:
         return False
     try:
-        parse_rtp_packet(frame)
+        parse_rtp_packet(rtp_frame)
     except PyEzvizError:
         return False
     return True
@@ -5337,16 +5361,30 @@ def _is_complete_idmx_rtp_frame(frame: bytes) -> bool:
 def _idmx_local_frame_media_body(frame: bytes, header_size: int) -> bytes:
     """Return media bytes after RTP extensions/padding or a legacy IDMX header."""
 
-    if _is_complete_idmx_rtp_frame(frame):
-        return rtp_payload(frame)
+    rtp_frame = _idmx_local_rtp_frame(frame)
+    if rtp_frame is not None:
+        packet = parse_rtp_packet(rtp_frame)
+        if header_size == 13 and _looks_like_idmx_hevc_media_frame(frame[header_size:]):
+            # Retain the native HEVC wrapper's encrypted-parameter-set signal,
+            # but never append RTP padding to the fragmented NAL body.
+            return frame[header_size : header_size + IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET] + packet.payload
+        return (
+            _strip_idmx_command_h264_record_trailer(packet.payload)
+            if header_size == 13 and packet.extension_profile is None
+            else packet.payload
+        )
     return _strip_idmx_command_h264_record_trailer(frame[header_size:])
 
 
 def _idmx_local_frame_rtp_packet(frame: bytes, header_size: int) -> RtpPacket | None:
     """Normalize standards-shaped and legacy IDMX headers into one RTP model."""
 
-    if _is_complete_idmx_rtp_frame(frame):
-        return parse_rtp_packet(frame)
+    rtp_frame = _idmx_local_rtp_frame(frame)
+    if rtp_frame is not None:
+        packet = parse_rtp_packet(rtp_frame, idmx=True)
+        if header_size == 13 and packet.extension_profile is None:
+            packet = replace(packet, payload=_strip_idmx_command_h264_record_trailer(packet.payload))
+        return packet
     transport = _idmx_local_frame_transport_fields(frame, header_size)
     payload_type = transport.get("rtp_payload_type")
     sequence = transport.get("sequence_number")
@@ -5423,7 +5461,8 @@ def _idmx_local_frame_transport_fields(
     """Return sanitized RTP-like fields from an IDMX local frame header."""
 
     if _is_complete_idmx_rtp_frame(frame):
-        packet = parse_rtp_packet(frame)
+        packet = _idmx_local_frame_rtp_packet(frame, header_size)
+        assert packet is not None
         return {
             "rtp_marker": packet.marker,
             "rtp_payload_type": packet.payload_type,
@@ -5479,7 +5518,7 @@ def _idmx_rtp_extension(frame: bytes) -> tuple[int, bytes] | None:
 
     if not _is_complete_idmx_rtp_frame(frame):
         return None
-    packet = parse_rtp_packet(frame)
+    packet = parse_rtp_packet(_idmx_local_rtp_frame(frame) or frame)
     if packet.extension_profile is None:
         return None
     return packet.extension_profile, packet.extension_data
@@ -5536,7 +5575,7 @@ def _idmx_local_packets_have_aac(packets: list[bytes]) -> bool:
     return False
 
 
-def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
+def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
     """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
 
     rtp_packets: list[RtpPacket] = []
@@ -5546,8 +5585,13 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str:
             continue
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
+            if packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06"):
+                # Native IDMX wrapper timestamps are not guaranteed to use the
+                # standard 90 kHz clock. Let FFmpeg read HEVC SPS/VUI timing.
+                return None
             rtp_packets.append(packet)
-    routed_video_payload_types = _idmx_local_video_payload_types(packets)
+    h264_types, hevc_types = _idmx_local_supported_video_payload_types(packets)
+    routed_video_payload_types = h264_types | hevc_types
     route_epoch_profile = RtpRouteProfile()
     timestamps: list[int] = []
     for packet in rtp_packets:

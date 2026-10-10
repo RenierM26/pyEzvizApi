@@ -1008,7 +1008,7 @@ def _parse_cloud_rtp_packet(body: bytes) -> RtpPacket | None:
     if not body or detect_transport(body) != StreamTransport.RTP:
         return None
     try:
-        return parse_rtp_packet(body)
+        return parse_rtp_packet(body, idmx=True)
     except PyEzvizError:
         return None
 

@@ -6,6 +6,12 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Fixed
+
+- Keep IDMX video, audio, and metadata sequence counters independent when native transport provenance and the fixed RTP source marker are present; preserve shared-counter continuity checks for ordinary RTP.
+- Use encoded HEVC timing for native media-wrapper records instead of assuming a 90 kHz clock or forcing 25 fps.
+- Parse X80 one-byte-prefixed RTP records and remove declared padding before HEVC decryption, preventing fragment-tail corruption and retaining supported AAC.
+
 ### Changed
 
 - Recover expired push-only HTTPS sessions before registration retry; expose fatal persistence/recovery failures through `MQTTClient.raise_if_failed()` and stop automatic retries.

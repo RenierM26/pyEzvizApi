@@ -45,6 +45,12 @@ IDMX_AAC_SAMPLE_RATES = (
     7_350,
 )
 
+# IDMX uses this fixed wire marker instead of a distinct RTP source ID.
+# Its video, audio, and metadata routes carry independent sequence counters.
+IDMX_RTP_SOURCE_MARKER = 0x55667788
+RtpSequenceKey = tuple[int, int | None]
+
+
 RtpMediaKind = Literal["video", "audio", "metadata", "unknown"]
 RtpVideoCodec = Literal["h264", "hevc"]
 RtpCodec = Literal[
@@ -127,6 +133,7 @@ class RtpPacket:
     marker: bool
     extension_profile: int | None = None
     extension_data: bytes = b""
+    idmx: bool = False
 
 
 @dataclass
@@ -408,8 +415,8 @@ class _FragmentedNal:
     timestamp: int
 
 
-def parse_rtp_packet(data: bytes) -> RtpPacket:
-    """Parse an RTP v2 packet, including CSRC, extension, and padding fields."""
+def parse_rtp_packet(data: bytes, *, idmx: bool = False) -> RtpPacket:
+    """Parse RTP v2; only native transport callers may assert IDMX provenance."""
 
     if len(data) < 12:
         raise PyEzvizError("RTP packet is too short")
@@ -457,6 +464,7 @@ def parse_rtp_packet(data: bytes) -> RtpPacket:
         marker=bool(data[1] & 0x80),
         extension_profile=extension_profile,
         extension_data=extension_data,
+        idmx=idmx,
     )
 
 
@@ -891,6 +899,15 @@ def detect_rtp_video_codec(  # noqa: PLR0912
     raise PyEzvizError("Could not detect RTP video codec")
 
 
+def _rtp_sequence_key(packet: RtpPacket) -> RtpSequenceKey:
+    """Keep real RTP SSRC counters shared; separate IDMX placeholder routes."""
+
+    return (
+        packet.ssrc,
+        packet.payload_type if packet.idmx and packet.ssrc == IDMX_RTP_SOURCE_MARKER else None,
+    )
+
+
 class RtpVideoDepacketizer:
     """Reassemble H.264 or HEVC NAL units while enforcing RTP continuity.
 
@@ -908,26 +925,27 @@ class RtpVideoDepacketizer:
         self.codec = codec
         self.allow_ezviz_headerless_hevc_fu = allow_ezviz_headerless_hevc_fu
         self.stats = RtpContinuityStats()
-        self._last_sequence_by_ssrc: dict[int, int] = {}
-        self._last_identity_by_ssrc: dict[int, tuple[int, int, bool, bytes]] = {}
-        self._fragment_by_ssrc: dict[int, _FragmentedNal] = {}
+        self._last_sequence_by_ssrc: dict[RtpSequenceKey, int] = {}
+        self._last_identity_by_ssrc: dict[RtpSequenceKey, tuple[int, int, bool, bytes]] = {}
+        self._fragment_by_ssrc: dict[RtpSequenceKey, _FragmentedNal] = {}
 
     def push(self, packet: RtpPacket) -> tuple[bytes, ...]:
         """Consume one routed video packet and return complete NAL units."""
 
+        sequence_key = _rtp_sequence_key(packet)
         continuity = self._continuity(packet)
         if continuity in {"duplicate", "reordered"}:
             return ()
         if continuity == "conflict":
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         if continuity == "gap":
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
 
-        fragment = self._fragment_by_ssrc.get(packet.ssrc)
+        fragment = self._fragment_by_ssrc.get(sequence_key)
         if fragment is not None and fragment.timestamp != packet.timestamp:
             self.stats.timestamp_changes += 1
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
 
         if self.codec == "h264":
             return self._push_h264(packet)
@@ -938,25 +956,29 @@ class RtpVideoDepacketizer:
     def observe_nonvideo_packet(self, packet: RtpPacket) -> None:
         """Advance a shared SSRC sequence without interpreting its payload."""
 
+        sequence_key = _rtp_sequence_key(packet)
         continuity = self._continuity(packet)
         if continuity in {"gap", "conflict"}:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
 
-    def has_incomplete_nal(self, ssrc: int) -> bool:
-        """Report an unfinished fragmented NAL for one video SSRC."""
+    def has_incomplete_nal(self, ssrc: int, *, payload_type: int | None = None) -> bool:
+        """Report an unfinished NAL, optionally scoped to an IDMX route."""
 
-        return ssrc in self._fragment_by_ssrc
+        if payload_type is None:
+            return any(key[0] == ssrc for key in self._fragment_by_ssrc)
+        return (ssrc, None) in self._fragment_by_ssrc or (ssrc, payload_type) in self._fragment_by_ssrc
 
     def _continuity(self, packet: RtpPacket) -> str:
-        previous = self._last_sequence_by_ssrc.get(packet.ssrc)
+        sequence_key = _rtp_sequence_key(packet)
+        previous = self._last_sequence_by_ssrc.get(sequence_key)
         identity = (packet.sequence, packet.timestamp, packet.marker, packet.payload)
         if previous is None:
-            self._last_sequence_by_ssrc[packet.ssrc] = packet.sequence
-            self._last_identity_by_ssrc[packet.ssrc] = identity
+            self._last_sequence_by_ssrc[sequence_key] = packet.sequence
+            self._last_identity_by_ssrc[sequence_key] = identity
             return "first"
         delta = (packet.sequence - previous) & 0xFFFF
         if delta == 0:
-            if self._last_identity_by_ssrc.get(packet.ssrc) == identity:
+            if self._last_identity_by_ssrc.get(sequence_key) == identity:
                 self.stats.duplicates += 1
                 return "duplicate"
             self.stats.sequence_conflicts += 1
@@ -964,129 +986,125 @@ class RtpVideoDepacketizer:
         if delta >= 0x8000:
             self.stats.reordered += 1
             return "reordered"
-        self._last_sequence_by_ssrc[packet.ssrc] = packet.sequence
-        self._last_identity_by_ssrc[packet.ssrc] = identity
+        self._last_sequence_by_ssrc[sequence_key] = packet.sequence
+        self._last_identity_by_ssrc[sequence_key] = identity
         if delta > 1:
             self.stats.sequence_gaps += 1
             return "gap"
         return "next"
 
-    def _discard_fragment(self, ssrc: int) -> None:
+    def _discard_fragment(self, ssrc: RtpSequenceKey) -> None:
         if self._fragment_by_ssrc.pop(ssrc, None) is not None:
             self.stats.discarded_fragments += 1
 
     def _push_h264(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
+        sequence_key = _rtp_sequence_key(packet)
         payload = packet.payload
         if not payload:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         nal_type = payload[0] & 0x1F
         if 1 <= nal_type <= 23:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return (payload,)
         if nal_type == 24:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return _aggregation_units(payload, header_size=1)
         if nal_type != 28:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         if len(payload) < 2:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
 
         fu_header = payload[1]
         is_start = bool(fu_header & 0x80)
         is_end = bool(fu_header & 0x40)
         if is_start and is_end:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         if is_start:
-            self._discard_fragment(packet.ssrc)
-            self._fragment_by_ssrc[packet.ssrc] = _FragmentedNal(
-                data=bytearray([(payload[0] & 0xE0) | (fu_header & 0x1F)])
-                + payload[2:],
+            self._discard_fragment(sequence_key)
+            self._fragment_by_ssrc[sequence_key] = _FragmentedNal(
+                data=bytearray([(payload[0] & 0xE0) | (fu_header & 0x1F)]) + payload[2:],
                 last_sequence=packet.sequence,
                 timestamp=packet.timestamp,
             )
         else:
-            fragment = self._fragment_by_ssrc.get(packet.ssrc)
+            fragment = self._fragment_by_ssrc.get(sequence_key)
             if fragment is None:
                 self.stats.discarded_fragments += 1
                 return ()
             reconstructed_header = (payload[0] & 0xE0) | (fu_header & 0x1F)
             if reconstructed_header != fragment.data[0]:
-                self._discard_fragment(packet.ssrc)
+                self._discard_fragment(sequence_key)
                 return ()
             fragment.data.extend(payload[2:])
             fragment.last_sequence = packet.sequence
         if not is_end:
             return ()
-        fragment = self._fragment_by_ssrc.pop(packet.ssrc, None)
+        fragment = self._fragment_by_ssrc.pop(sequence_key, None)
         return (bytes(fragment.data),) if fragment is not None else ()
 
     def _push_hevc(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
+        sequence_key = _rtp_sequence_key(packet)
         payload = packet.payload
         if not payload:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         nal_type = (payload[0] >> 1) & 0x3F
         if nal_type == 49 and len(payload) < 3:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         if len(payload) < 2:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         if nal_type == 48:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return _aggregation_units(payload, header_size=2)
         if nal_type != 49:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return (payload,)
         fu_header = payload[2]
         is_start = bool(fu_header & 0x80)
         is_end = bool(fu_header & 0x40)
         if is_start and is_end:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             return ()
         if is_start:
-            self._discard_fragment(packet.ssrc)
+            self._discard_fragment(sequence_key)
             original_type = fu_header & 0x3F
-            self._fragment_by_ssrc[packet.ssrc] = _FragmentedNal(
-                data=bytearray(
-                    [(payload[0] & 0x81) | (original_type << 1), payload[1]]
-                )
+            self._fragment_by_ssrc[sequence_key] = _FragmentedNal(
+                data=bytearray([(payload[0] & 0x81) | (original_type << 1), payload[1]])
                 + payload[3:],
                 last_sequence=packet.sequence,
                 timestamp=packet.timestamp,
             )
         else:
-            fragment = self._fragment_by_ssrc.get(packet.ssrc)
+            fragment = self._fragment_by_ssrc.get(sequence_key)
             if fragment is None:
                 self.stats.discarded_fragments += 1
                 return ()
-            if (
-                payload[0] & 0x81 != fragment.data[0] & 0x81
-                or payload[1] != fragment.data[1]
-            ):
-                self._discard_fragment(packet.ssrc)
+            if payload[0] & 0x81 != fragment.data[0] & 0x81 or payload[1] != fragment.data[1]:
+                self._discard_fragment(sequence_key)
                 return ()
             original_type = fu_header & 0x3F
             active_type = (fragment.data[0] >> 1) & 0x3F
             active_header0 = fragment.data[0]
-            has_pseudo_header = (
-                self.allow_ezviz_headerless_hevc_fu
-                and fu_header in {active_header0, active_header0 | 0x40}
-            )
+            has_pseudo_header = self.allow_ezviz_headerless_hevc_fu and fu_header in {
+                active_header0,
+                active_header0 | 0x40,
+            }
             has_fu_header = original_type == active_type or has_pseudo_header
             if not has_fu_header and not self.allow_ezviz_headerless_hevc_fu:
-                self._discard_fragment(packet.ssrc)
+                self._discard_fragment(sequence_key)
                 return ()
             fragment.data.extend(payload[3:] if has_fu_header else payload[2:])
             fragment.last_sequence = packet.sequence
             is_end = is_end if has_fu_header else packet.marker
         if not is_end:
             return ()
-        fragment = self._fragment_by_ssrc.pop(packet.ssrc, None)
+        fragment = self._fragment_by_ssrc.pop(sequence_key, None)
         return (bytes(fragment.data),) if fragment is not None else ()
 
 
@@ -1169,11 +1187,11 @@ def _encrypted_fu_chain_is_fragmented_nal(
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     chain_indexes = set(chain)
-    ssrc = packets[chain[0]].ssrc
+    sequence_key = _rtp_sequence_key(packets[chain[0]])
     assembled: list[bytes] = []
     for index in range(chain[0], chain[-1] + 1):
         packet = packets[index]
-        if packet.ssrc != ssrc:
+        if _rtp_sequence_key(packet) != sequence_key:
             continue
         if index in chain_indexes:
             assembled.extend(depacketizer.push(packet))
@@ -1229,7 +1247,7 @@ def _complete_fu_chain_indexes(  # noqa: PLR0912
         previous_index = start_index
         for index in range(start_index + 1, len(packets)):
             current = packets[index]
-            if current.ssrc != packet.ssrc:
+            if _rtp_sequence_key(current) != _rtp_sequence_key(packet):
                 continue
             if (
                 current.sequence == previous.sequence
@@ -1364,9 +1382,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         codec,
         fallback_payload_types=video_payload_types,
     )
-    if not any(
-        packet.payload_type in routed_video_payload_types for packet in packet_list
-    ):
+    if not any(packet.payload_type in routed_video_payload_types for packet in packet_list):
         # Some cameras advertise a video payload type in IDMX metadata that
         # never appears on the wire (observed: HEVC PT 15, packets on PT 96).
         # Fall back only when the advertised route is entirely absent; an
@@ -1397,9 +1413,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             )
             if packet.payload_type in routed_video_payload_types
             and (route_epoch is None or route_epoch.media_kind == "video")
-            and _encrypted_aggregation_packet(
-                packet.payload, codec, packet_nal_transform
-            )
+            and _encrypted_aggregation_packet(packet.payload, codec, packet_nal_transform)
         )
         if packet_nal_transform is not None
         else frozenset()
@@ -1412,20 +1426,20 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     output: list[bytes] = []
     output_is_vcl: list[bool] = []
     accepted: list[bool] = []
-    pending_indexes: dict[int, list[int]] = {}
-    active_timestamps: dict[int, int] = {}
-    active_sequences: dict[int, int] = {}
-    pending_vcl: dict[int, bool] = {}
-    pending_gap: dict[int, bool] = {}
-    gap_timestamp: dict[int, int] = {}
-    unassigned_gap: dict[int, bool] = {}
-    pending_corrupt: dict[int, bool] = {}
-    predescriptor_codec_mismatch: dict[int, bool] = {}
-    first_vcl_au_pending: dict[int, bool] = {}
-    first_slice_seen: dict[int, bool] = {}
-    new_timestamp_au: dict[int, bool] = {}
+    pending_indexes: dict[RtpSequenceKey, list[int]] = {}
+    active_timestamps: dict[RtpSequenceKey, int] = {}
+    active_sequences: dict[RtpSequenceKey, int] = {}
+    pending_vcl: dict[RtpSequenceKey, bool] = {}
+    pending_gap: dict[RtpSequenceKey, bool] = {}
+    gap_timestamp: dict[RtpSequenceKey, int] = {}
+    unassigned_gap: dict[RtpSequenceKey, bool] = {}
+    pending_corrupt: dict[RtpSequenceKey, bool] = {}
+    predescriptor_codec_mismatch: dict[RtpSequenceKey, bool] = {}
+    first_vcl_au_pending: dict[RtpSequenceKey, bool] = {}
+    first_slice_seen: dict[RtpSequenceKey, bool] = {}
+    new_timestamp_au: dict[RtpSequenceKey, bool] = {}
 
-    def finish_access_unit(ssrc: int, *, complete: bool) -> None:
+    def finish_access_unit(ssrc: RtpSequenceKey, *, complete: bool) -> None:
         if pending_vcl.get(ssrc) and first_vcl_au_pending.get(ssrc, True):
             complete = complete and first_slice_seen.get(ssrc, False)
             first_vcl_au_pending[ssrc] = False
@@ -1438,6 +1452,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     for packet_index, (packet, route_epoch) in enumerate(
         zip(packet_list, route_epochs, strict=True)
     ):
+        sequence_key = _rtp_sequence_key(packet)
         candidate_video = packet.payload_type in routed_video_payload_types
         routed_packet = (
             replace(packet, payload=packet_nal_transform(packet.payload))
@@ -1447,28 +1462,25 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             and (route_epoch is None or route_epoch.media_kind == "video")
             else packet
         )
-        is_video = (
-            candidate_video
-            and _rtp_packet_matches_codec_epoch(routed_packet, route_epoch, codec)
+        is_video = candidate_video and _rtp_packet_matches_codec_epoch(
+            routed_packet, route_epoch, codec
         )
         if (
             is_video
             and route_epoch is not None
-            and predescriptor_codec_mismatch.pop(packet.ssrc, False)
+            and predescriptor_codec_mismatch.pop(sequence_key, False)
         ):
             # A newly advertised video route supersedes a conflicting packet
             # observed before its descriptor; do not poison the new epoch.
-            finish_access_unit(packet.ssrc, complete=False)
-            pending_vcl[packet.ssrc] = False
-            pending_gap[packet.ssrc] = False
-            gap_timestamp.pop(packet.ssrc, None)
-            unassigned_gap.pop(packet.ssrc, None)
-            pending_corrupt[packet.ssrc] = False
-        previous_sequence = active_sequences.get(packet.ssrc)
+            finish_access_unit(sequence_key, complete=False)
+            pending_vcl[sequence_key] = False
+            pending_gap[sequence_key] = False
+            gap_timestamp.pop(sequence_key, None)
+            unassigned_gap.pop(sequence_key, None)
+            pending_corrupt[sequence_key] = False
+        previous_sequence = active_sequences.get(sequence_key)
         sequence_delta = (
-            (packet.sequence - previous_sequence) & 0xFFFF
-            if previous_sequence is not None
-            else 1
+            (packet.sequence - previous_sequence) & 0xFFFF if previous_sequence is not None else 1
         )
         if sequence_delta == 0 or sequence_delta >= 0x8000:
             conflicts_before = depacketizer.stats.sequence_conflicts
@@ -1477,14 +1489,14 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             else:
                 depacketizer.observe_nonvideo_packet(packet)
             if depacketizer.stats.sequence_conflicts > conflicts_before:
-                pending_gap[packet.ssrc] = True
+                pending_gap[sequence_key] = True
                 if is_video:
-                    gap_timestamp[packet.ssrc] = packet.timestamp
+                    gap_timestamp[sequence_key] = packet.timestamp
                 else:
-                    unassigned_gap[packet.ssrc] = True
-                pending_corrupt[packet.ssrc] = True
+                    unassigned_gap[sequence_key] = True
+                pending_corrupt[sequence_key] = True
             continue
-        active_sequences[packet.ssrc] = packet.sequence
+        active_sequences[sequence_key] = packet.sequence
         contiguous = sequence_delta == 1
         if not is_video:
             depacketizer.observe_nonvideo_packet(packet)
@@ -1494,61 +1506,66 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             if codec_mismatch:
                 # A packet on the selected video route cannot silently turn
                 # into other media when its codec header is damaged.
-                pending_gap[packet.ssrc] = True
-                gap_timestamp[packet.ssrc] = packet.timestamp
-                pending_corrupt[packet.ssrc] = True
+                pending_gap[sequence_key] = True
+                gap_timestamp[sequence_key] = packet.timestamp
+                pending_corrupt[sequence_key] = True
                 if route_epoch is None:
-                    predescriptor_codec_mismatch[packet.ssrc] = True
+                    predescriptor_codec_mismatch[sequence_key] = True
             elif not contiguous:
-                pending_gap[packet.ssrc] = True
-                unassigned_gap[packet.ssrc] = True
+                pending_gap[sequence_key] = True
+                unassigned_gap[sequence_key] = True
             continue
-        previous_timestamp = active_timestamps.get(packet.ssrc)
+        previous_timestamp = active_timestamps.get(sequence_key)
         if previous_timestamp is not None and packet.timestamp != previous_timestamp:
             finish_access_unit(
-                packet.ssrc,
+                sequence_key,
                 complete=bool(
-                    pending_vcl.get(packet.ssrc)
+                    pending_vcl.get(sequence_key)
                     and contiguous
-                    and not pending_gap.get(packet.ssrc)
-                    and not depacketizer.has_incomplete_nal(packet.ssrc)
+                    and not pending_gap.get(sequence_key)
+                    and not depacketizer.has_incomplete_nal(
+                        packet.ssrc, payload_type=packet.payload_type
+                    )
                 ),
             )
-            pending_vcl[packet.ssrc] = False
-            pending_corrupt[packet.ssrc] = False
-            pending_gap[packet.ssrc] = not contiguous or (
-                pending_gap.get(packet.ssrc, False)
+            pending_vcl[sequence_key] = False
+            pending_corrupt[sequence_key] = False
+            pending_gap[sequence_key] = not contiguous or (
+                pending_gap.get(sequence_key, False)
                 and (
-                    unassigned_gap.get(packet.ssrc, False)
-                    or gap_timestamp.get(packet.ssrc) == packet.timestamp
+                    unassigned_gap.get(sequence_key, False)
+                    or gap_timestamp.get(sequence_key) == packet.timestamp
                 )
             )
-            if pending_gap[packet.ssrc]:
-                gap_timestamp[packet.ssrc] = packet.timestamp
+            if pending_gap[sequence_key]:
+                gap_timestamp[sequence_key] = packet.timestamp
             else:
-                gap_timestamp.pop(packet.ssrc, None)
-                unassigned_gap.pop(packet.ssrc, None)
-            new_timestamp_au[packet.ssrc] = True
+                gap_timestamp.pop(sequence_key, None)
+                unassigned_gap.pop(sequence_key, None)
+            new_timestamp_au[sequence_key] = True
         elif not contiguous:
-            pending_gap[packet.ssrc] = True
-            gap_timestamp[packet.ssrc] = packet.timestamp
-        active_timestamps[packet.ssrc] = packet.timestamp
-        prior_fragment_open = depacketizer.has_incomplete_nal(packet.ssrc)
+            pending_gap[sequence_key] = True
+            gap_timestamp[sequence_key] = packet.timestamp
+        active_timestamps[sequence_key] = packet.timestamp
+        prior_fragment_open = depacketizer.has_incomplete_nal(
+            packet.ssrc, payload_type=packet.payload_type
+        )
         discarded_before = depacketizer.stats.discarded_fragments
         packet_nals = depacketizer.push(routed_packet)
-        if not packet_nals and not depacketizer.has_incomplete_nal(packet.ssrc):
+        if not packet_nals and not depacketizer.has_incomplete_nal(
+            packet.ssrc, payload_type=packet.payload_type
+        ):
             # A rejected video payload may represent a missing slice even when
             # no active fragmented NAL existed to increment discard stats.
-            pending_gap[packet.ssrc] = True
-            gap_timestamp[packet.ssrc] = packet.timestamp
-            pending_corrupt[packet.ssrc] = True
-        if (
-            depacketizer.stats.discarded_fragments > discarded_before
-            and not (previous_timestamp != packet.timestamp and prior_fragment_open)
+            pending_gap[sequence_key] = True
+            gap_timestamp[sequence_key] = packet.timestamp
+            pending_corrupt[sequence_key] = True
+        if depacketizer.stats.discarded_fragments > discarded_before and not (
+            previous_timestamp != packet.timestamp and prior_fragment_open
         ):
-            pending_gap[packet.ssrc] = True
-            gap_timestamp[packet.ssrc] = packet.timestamp
-            pending_corrupt[packet.ssrc] = True
+            pending_gap[sequence_key] = True
+            gap_timestamp[sequence_key] = packet.timestamp
+            pending_corrupt[sequence_key] = True
         for nal in packet_nals:
             if nal:
                 # FU/AP framing is clear, but each resulting NAL is encrypted.
@@ -1566,9 +1583,9 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 if completed_access_units_only and not _valid_rtp_nal_header(
                     classified_nal, codec=codec
                 ):
-                    pending_gap[packet.ssrc] = True
-                    gap_timestamp[packet.ssrc] = packet.timestamp
-                    pending_corrupt[packet.ssrc] = True
+                    pending_gap[sequence_key] = True
+                    gap_timestamp[sequence_key] = packet.timestamp
+                    pending_corrupt[sequence_key] = True
                     continue
                 if (
                     completed_access_units_only
@@ -1582,49 +1599,52 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                         source="rtp",
                         reason="unsupported_h264_data_partition",
                     )
-                pending_indexes.setdefault(packet.ssrc, []).append(len(output))
+                pending_indexes.setdefault(sequence_key, []).append(len(output))
                 output.append(output_nal)
                 is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
                 if is_vcl:
-                    starts_picture = _rtp_nal_starts_picture(
-                        classified_nal, codec=codec
-                    )
-                    if not pending_vcl.get(packet.ssrc):
-                        first_slice_seen[packet.ssrc] = starts_picture
+                    starts_picture = _rtp_nal_starts_picture(classified_nal, codec=codec)
+                    if not pending_vcl.get(sequence_key):
+                        first_slice_seen[sequence_key] = starts_picture
                         if (
-                            new_timestamp_au.get(packet.ssrc)
-                            or first_vcl_au_pending.get(packet.ssrc, True)
-                        ) and starts_picture and codec == "hevc" and not pending_corrupt.get(
-                            packet.ssrc, False
+                            (
+                                new_timestamp_au.get(sequence_key)
+                                or first_vcl_au_pending.get(sequence_key, True)
+                            )
+                            and starts_picture
+                            and codec == "hevc"
+                            and not pending_corrupt.get(sequence_key, False)
                         ):
                             # HEVC's first-slice flag establishes a new picture.
                             # H.264 macroblock zero can arrive later under ASO/FMO.
-                            pending_gap[packet.ssrc] = False
-                            gap_timestamp.pop(packet.ssrc, None)
-                            unassigned_gap.pop(packet.ssrc, None)
+                            pending_gap[sequence_key] = False
+                            gap_timestamp.pop(sequence_key, None)
+                            unassigned_gap.pop(sequence_key, None)
                     elif codec == "h264" and starts_picture:
                         # ASO/FMO may transmit macroblock zero after another
                         # slice of the same access unit.
-                        first_slice_seen[packet.ssrc] = True
-                    pending_vcl[packet.ssrc] = True
+                        first_slice_seen[sequence_key] = True
+                    pending_vcl[sequence_key] = True
         if packet.marker:
             finish_access_unit(
-                packet.ssrc,
+                sequence_key,
                 complete=bool(
                     packet_nals
-                    and pending_vcl.get(packet.ssrc)
-                    and not pending_gap.get(packet.ssrc)
-                    and not depacketizer.has_incomplete_nal(packet.ssrc)
+                    and pending_vcl.get(sequence_key)
+                    and not pending_gap.get(sequence_key)
+                    and not depacketizer.has_incomplete_nal(
+                        packet.ssrc, payload_type=packet.payload_type
+                    )
                 ),
             )
-            pending_vcl[packet.ssrc] = False
-            pending_gap[packet.ssrc] = False
-            gap_timestamp.pop(packet.ssrc, None)
-            unassigned_gap.pop(packet.ssrc, None)
-            pending_corrupt[packet.ssrc] = False
-            new_timestamp_au[packet.ssrc] = False
+            pending_vcl[sequence_key] = False
+            pending_gap[sequence_key] = False
+            gap_timestamp.pop(sequence_key, None)
+            unassigned_gap.pop(sequence_key, None)
+            pending_corrupt[sequence_key] = False
+            new_timestamp_au[sequence_key] = False
     if completed_access_units_only:
         for ssrc in tuple(pending_indexes):
             finish_access_unit(ssrc, complete=False)

@@ -2696,11 +2696,14 @@ def _hcnetsdk_hrudp_video_payload(payload: bytes) -> bytes | None:
 
 
 def _looks_like_hcnetsdk_wrapped_media_payload(payload: bytes) -> bool:
-    if payload.startswith(MPEG_PS_START_CODE):
-        return True
     if _looks_like_idmx_local_payload(payload):
         return True
-    return _strip_local_sdk_payload_header(payload).startswith(MPEG_PS_START_CODE)
+    normalized = _strip_local_sdk_payload_header(payload)
+    return (
+        len(normalized) >= 4
+        and normalized.startswith(MPEG_START_CODE_PREFIX)
+        and _is_mpeg_ps_packet_start_id(normalized[3])
+    )
 
 
 def _strip_local_sdk_payload_header(payload: bytes) -> bytes:

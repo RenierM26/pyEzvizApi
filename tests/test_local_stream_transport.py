@@ -8,7 +8,7 @@ import io
 from threading import Event
 import time
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
@@ -1588,6 +1588,52 @@ def test_local_sdk_media_stream_keeps_non_ps_shim_lookalikes(payload: bytes) -> 
     )
 
     assert next(stream.iter_packets(max_packets=1)).body == payload
+
+
+@pytest.mark.parametrize("rtp_wrapped", [False, True])
+@pytest.mark.parametrize("byte_order", ["little", "big"])
+@pytest.mark.parametrize("marker", [b"", b"\x0d", b"\x1c\x80"])
+@pytest.mark.parametrize("stream_id", [0xBA, 0xBC, 0xBD, 0xC0, 0xE0])
+def test_command_port_hrudp_preserves_ps_pack_and_pes_records(
+    rtp_wrapped: bool, byte_order: Literal["little", "big"], marker: bytes, stream_id: int
+) -> None:
+    record = b"\x00\x00\x01" + bytes((stream_id,)) + b"record"
+    payload = marker + record
+    header = (
+        len(payload).to_bytes(4, byte_order)
+        + (3).to_bytes(4, byte_order)
+        + (42).to_bytes(4, byte_order)
+    )
+    frame = _media(header + payload) if rtp_wrapped else _raw_media(header + payload)
+    stream = HcNetSdkCommandPortMediaStream(
+        _FakeCommandPortClient(frame),  # type: ignore[arg-type]
+        (b"preview-start",),
+    )
+
+    packet = next(stream.iter_packets(max_packets=1))
+
+    assert packet.body == record
+    assert packet.encrypted is False
+
+
+@pytest.mark.parametrize("rtp_wrapped", [False, True])
+@pytest.mark.parametrize("payload", [b"\x0d\x00\x00\x01", b"\x0d\x00\x00\x01\x40\x01hevc"])
+def test_command_port_hrudp_keeps_non_ps_candidates(
+    rtp_wrapped: bool, payload: bytes
+) -> None:
+    wrapped = (
+        len(payload).to_bytes(4, "little")
+        + (3).to_bytes(4, "little")
+        + (42).to_bytes(4, "little")
+        + payload
+    )
+    frame = _media(wrapped) if rtp_wrapped else _raw_media(wrapped)
+    stream = HcNetSdkCommandPortMediaStream(
+        _FakeCommandPortClient(frame),  # type: ignore[arg-type]
+        (b"preview-start",),
+    )
+
+    assert next(stream.iter_packets(max_packets=1)).body == wrapped
 
 def test_hcnetsdk_command_port_media_stream_strips_rtp_continuation_fragments() -> None:
     first_payload = b"\x1c\x80\x00\x00\x01\xbaabc"

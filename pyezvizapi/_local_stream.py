@@ -76,6 +76,7 @@ from .rtp import (
     RtpVideoCodec,
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
+    detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
     idmx_video_frame_rate,
     parse_rtp_packet,
@@ -2501,6 +2502,17 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             annexb_is_h264 = annexb_codec == "h264"
         else:
             packets = list(chain((first_payload,), payloads))
+            if not is_h264_startup_options:
+                audio_metadata = _idmx_audio_descriptor(packets)
+                audio = (
+                    _decrypt_idmx_local_packets_to_adts_aac(
+                        packets, b"", audio_metadata=audio_metadata,
+                        require_contiguous=False, decrypt_audio=False,
+                    ) if audio_metadata is not None else None
+                )
+                if _copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path=ffmpeg_path):
+                    return
+
             if is_h264_startup_options:
                 annexb, annexb_codec = _idmx_local_packets_to_h264_annexb_with_codec(
                     packets
@@ -2548,9 +2560,6 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                     packets, b"", audio_metadata=audio_metadata, require_contiguous=False, decrypt_audio=False,
                 )
                 if audio is not None:
-                    codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
-                    if _copy_clear_native_idmx_timed_av(packets, audio, output, codec=codec, ffmpeg_path=ffmpeg_path):
-                        return
                     _copy_idmx_audio_video_to_mpegts(
                         annexb, audio, output, ffmpeg_path=ffmpeg_path,
                         video_input_format=video_input_format, video_frame_rate=video_frame_rate,
@@ -2585,8 +2594,8 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
 
 
 def _copy_clear_native_idmx_timed_av(
-    packets: list[bytes], audio: RtpAacStream, output: BinaryIO, *,
-    codec: RtpVideoCodec, ffmpeg_path: str,
+    packets: list[bytes], audio: RtpAacStream | None, output: BinaryIO, *,
+    ffmpeg_path: str,
 ) -> bool:
     """Keep native clear AAC jitter through one timed input, not raw-file probing."""
 
@@ -2599,6 +2608,7 @@ def _copy_clear_native_idmx_timed_av(
                 rtp_packets.append(packet)
     if idmx_video_frame_rate(rtp_packets) is None:
         return False
+    codec = detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
     units = rtp_packets_to_nal_units(
         rtp_packets, codec=codec, completed_access_units_only=True,

@@ -514,7 +514,7 @@ def test_auto_cloud_fallback_reuses_discovered_key_without_second_lookup(
     selected = (LocalSdkClipSource if kind == "legacy" else LocalSdkEcdhClipSource)(credentials=credentials())
     lookups: list[bool] = []
 
-    def select(_client, _serial, _options, *, fetch_media_key):
+    def select(_client, _serial, _options, *, fetch_media_key, channel=1):
         lookups.append(fetch_media_key)
         return selected
 

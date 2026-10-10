@@ -3490,6 +3490,7 @@ class EzvizClient:
             serial,
             source_options,
             fetch_media_key=options.decode.decrypt_video and options.decode.media_key is None,
+            channel=1 if options.channel is None else options.channel,
         )
         if (
             options.decode.decrypt_video and options.decode.media_key is None

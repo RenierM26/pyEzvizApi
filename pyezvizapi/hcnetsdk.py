@@ -17,7 +17,7 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import closing, suppress
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from enum import IntEnum
 import errno
@@ -47,7 +47,9 @@ from .exceptions import (
     EzvizLocalSdkStreamClosed,
     PyEzvizError,
 )
+from .hcnetsdk_parameters import HcNetSdkConfiguredMedia, normalize_hcnetsdk_parameters
 from .media import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
+from .stream_header import EzvizStreamHeader, stream_header_from_preview
 
 HCNETSDK_DEFAULT_SERVER_PORT = 8000
 HCNETSDK_DEFAULT_TLS_PORT = 8443
@@ -1045,7 +1047,7 @@ class HcNetSdkLoginCandidate:
     """One LAN login mode observed in the EZVIZ Android app."""
 
     username: str
-    password: str
+    password: str = field(repr=False)
     port: int
     api: str
     https: bool = False
@@ -2356,6 +2358,21 @@ class HcNetSdkStreamDetails:
     capabilities: EzvizLanAudioVideoCompressInfo
     reported_login_serial: str = field(default="", repr=False)
 
+    def configured_media(self, *, sub_stream: bool = False) -> HcNetSdkConfiguredMedia | None:
+        """Translate configured SDK codes; this is not a negotiated media profile."""
+        block = self.configuration.network if sub_stream else self.configuration.normal_record
+        if block is None:
+            return None
+        resolution = self.configured_resolution(sub_stream=sub_stream)
+        return normalize_hcnetsdk_parameters(
+            video_encoding_type=block.video_encoding_type,
+            audio_encoding_type=block.audio_encoding_type,
+            video_frame_rate=block.video_frame_rate, video_bitrate=block.video_bitrate,
+            audio_sampling_rate=block.audio_sampling_rate, format_type=block.format_type,
+            width=resolution.width if resolution else None,
+            height=resolution.height if resolution else None,
+        )
+
     def configured_resolution(self, *, sub_stream: bool = False) -> EzvizLanVideoResolution | None:
         """Resolve a configured SDK index using this camera's own resolution list."""
         block = self.configuration.network if sub_stream else self.configuration.normal_record
@@ -2389,6 +2406,8 @@ class HcNetSdkStreamDetails:
             "transport_protocol": None,
             "main": configured(self.configuration.normal_record),
             "sub": configured(self.configuration.network),
+            "main_configured_media": asdict(p) if (p := self.configured_media()) is not None else None,
+            "sub_configured_media": asdict(p) if (p := self.configured_media(sub_stream=True)) is not None else None,
             "main_resolution": asdict(r) if (r := self.configured_resolution()) is not None else None,
             "sub_resolution": asdict(r) if (r := self.configured_resolution(sub_stream=True)) is not None else None,
             "capabilities": asdict(self.capabilities),
@@ -3236,6 +3255,11 @@ class EzvizLocalSdkStreamBootstrap:
     stream_setup: EzvizLocalSdkExchange
     pre_start: EzvizLocalSdkExchange | None = None
     first_media: EzvizInterleavedRtpFrameWithPrefix | None = None
+
+    @property
+    def stream_header(self) -> EzvizStreamHeader | None:
+        """Return camera-negotiated media fields without session/auth data."""
+        return stream_header_from_preview(self.preview.response.body)
 
 
 @dataclass(frozen=True)
@@ -12713,3 +12737,56 @@ def _hcnetsdk_stream_details_query(
     with closing(HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)) as client:
         client.send_command_frame(request, deadline=deadline, monotonic=monotonic)
         return client.read_tcp_frame(deadline=deadline, monotonic=monotonic, max_frame_bytes=max_response_bytes)
+
+
+def discover_hcnetsdk_stream_details_for_login(
+    endpoint: HcNetSdkLanEndpoint,
+    login: HcNetSdkLoginCandidate,
+    *,
+    tls_context: ssl.SSLContext | None = None,
+    channel: int = 1,
+    timeout: float = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    max_response_bytes: int = 524_288,
+) -> HcNetSdkStreamDetails:
+    """Query one explicit native login profile, never enumerate or renew secrets.
+
+    HTTPSV40 means the native binary SDK over TLS, not HTTP/ISAPI. Default TLS
+    verifies certificates; private CA/self-signed handling belongs to a supplied
+    SSLContext. TCP and TLS handshake share each connection's remaining budget.
+    Authentication rejection propagates without a second credential/profile.
+    """
+    if login.api not in {"NET_DVR_Login_V30", "NET_DVR_Login_V40"}:
+        raise PyEzvizError("Unsupported native stream discovery login profile")
+    if isinstance(login.port, bool) or not 1 <= login.port <= 65535:
+        raise PyEzvizError("Native stream discovery login port is invalid")
+    if login.https and login.api != "NET_DVR_Login_V40":
+        raise PyEzvizError("TLS stream discovery requires the native V40 profile")
+    selected_factory = socket_factory
+    if login.https:
+        context = tls_context if tls_context is not None else ssl.create_default_context()
+
+        def connect_tls(address: tuple[str, int], budget: float | None) -> Any:
+            started = monotonic()
+            raw = socket_factory(address, budget)
+            try:
+                remaining = None if budget is None else budget - (monotonic() - started)
+                if remaining is not None and remaining <= 0:
+                    raise EzvizLocalSdkDeadlineExpired("Native discovery TLS deadline exhausted")
+                raw.settimeout(remaining)
+                return context.wrap_socket(raw, server_hostname=address[0])
+            except BaseException:
+                raw.close()
+                raise
+
+        selected_factory = connect_tls
+    elif tls_context is not None:
+        raise PyEzvizError("TLS context supplied for a plain native login profile")
+    return discover_hcnetsdk_stream_details(
+        replace(endpoint, command_port=login.port), login.password,
+        username=login.username, channel=channel, timeout=timeout,
+        socket_factory=selected_factory, rsa_key=rsa_key, monotonic=monotonic,
+        max_response_bytes=max_response_bytes,
+    )

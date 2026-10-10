@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 import errno
+import hashlib
 import json
 import time
 from typing import Any
@@ -32,6 +33,8 @@ from .local_stream_transport import (
     open_local_sdk_stream_from_client,
 )
 from .media import CaptureLimits, MediaPacket, MediaPacketSource
+from .stream_discovery import LocalStreamDiscovery
+from .stream_header import EzvizStreamHeader
 from .stream_transport import vtm_media_packet_source
 
 type SelectedClipSource = LocalSdkClipSource | LocalSdkEcdhClipSource | CloudClipSource
@@ -70,6 +73,8 @@ def select_stream_source(
     options: AutoClipSource,
     *,
     fetch_media_key: bool = False,
+    channel: int = 1,
+    _discovery_keys: list[str] | None = None,
 ) -> SelectedClipSource:
     """Resolve one playback candidate, never fetching account data offline."""
     device = options.device
@@ -111,7 +116,15 @@ def select_stream_source(
             fetch_media_key=fetch_media_key,
         )
     receiver_port = options.receiver_port or fresh_receiver_port()
-    if _live_ecdh_support(device) is False:
+    cached = None
+    if options.discovery_cache is not None:
+        key = _discovery_key(credentials, replace(options, device=device), channel)
+        if _discovery_keys is not None:
+            _discovery_keys.append(key)
+        cached = options.discovery_cache.get(key)
+    if (cached is not None and cached.source_kind == "local-sdk") or (
+        cached is None and _live_ecdh_support(device) is False
+    ):
         return LocalSdkClipSource(
             credentials=credentials, timeout=options.timeout, receiver_port=receiver_port
         )
@@ -121,6 +134,16 @@ def select_stream_source(
         receiver_port=receiver_port,
         fresh_retry_port=True,
     )
+
+
+def _discovery_key(credentials: Any, options: AutoClipSource, channel: int) -> str:
+    """Hash identity/generation without retaining authentication in the cache."""
+    identity = {
+        "credentials": credentials.as_dict(include_media_key=True),
+        "channel": channel, "generation": options.discovery_generation,
+        "device": options.device,
+    }
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
 def _connection_failure(error: Exception) -> bool:
@@ -189,6 +212,8 @@ class AutoMediaStream:
         self._closed = False
         self._started = False
         self.source_kind: str | None = None
+        self.discovery: LocalStreamDiscovery | None = None
+        self._discovery_keys: list[str] = []
 
     def __enter__(self) -> AutoMediaStream:
         return self
@@ -213,7 +238,9 @@ class AutoMediaStream:
             raise PyEzvizError("Automatic stream is closed or already consumed")
         self._started = True
         selected_limits = limits or CaptureLimits()
-        source = select_stream_source(self._client, self._serial, self._options)
+        source = select_stream_source(self._client, self._serial, self._options,
+                                      channel=1 if self._channel is None else self._channel,
+                                      _discovery_keys=self._discovery_keys)
         # Account discovery is separate; subsequent LAN/cloud startup and retries
         # share the requested capture duration rather than restarting its budget.
         deadline = (
@@ -286,6 +313,20 @@ class AutoMediaStream:
                         raise EzvizLocalSdkDeadlineExpired(
                             "Automatic stream startup exhausted capture deadline"
                         )
+                    negotiated_header: EzvizStreamHeader | None = None
+                    header_valid = True
+                    if not isinstance(source, CloudClipSource):
+                        bootstrap = getattr(self._stream, "bootstrap", None)
+                        if bootstrap is not None:
+                            try:
+                                negotiated_header = bootstrap.stream_header
+                            except PyEzvizError:
+                                header_valid = False
+                                # Unsupported/malformed optional metadata must not
+                                # turn a playable session into a transport failure.
+                                if self._options.discovery_cache is not None:
+                                    self._options.discovery_cache.invalidate(self._discovery_keys[-1])
+                        self.discovery = LocalStreamDiscovery(source.kind, negotiated_header)
                     for packet in adapter.iter_media_packets(
                         limits=replace(selected_limits, duration_seconds=remaining),
                         monotonic=monotonic,
@@ -294,12 +335,17 @@ class AutoMediaStream:
                             return
                         if not packet.body:
                             continue
+                        if not emitted and header_valid and self.discovery is not None and self._options.discovery_cache is not None and not isinstance(source, CloudClipSource):
+                            self._options.discovery_cache.remember(self._discovery_keys[-1], self.discovery)
                         emitted = True
                         yield packet
                     if not emitted and selected_limits.max_bytes is None:
                         raise EzvizNoMediaError("Automatic stream did not contain media")
                     return
                 except Exception as error:
+                    self.discovery = None
+                    if self._options.discovery_cache is not None and not isinstance(source, CloudClipSource):
+                        self._options.discovery_cache.invalidate(self._discovery_keys[-1])
                     if (
                         not emitted
                         and isinstance(source, LocalSdkEcdhClipSource)

@@ -77,6 +77,7 @@ from .stream_transport import (
 JsonDict = dict[str, Any]
 _RTP_CODEC_PROBE_MAX_PACKETS = 32
 _RTP_AUDIO_PROBE_MAX_PACKETS = 256
+_RTP_TIMING_PROBE_MAX_PACKETS = 256
 _RTP_AUDIO_QUEUE_MAX_FRAMES = 128
 _RTP_AUDIO_QUEUE_TIMEOUT_SECONDS = 2.0
 _MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS = 5.0
@@ -1640,6 +1641,14 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
             not video_route_is_authoritative
             and consumed_packets < _RTP_CODEC_PROBE_MAX_PACKETS
         ):
+            continue
+        native_wrapper_seen = any(
+            candidate.extension_profile == 0x4000
+            and candidate.extension_data.startswith(b"\x80\x06")
+            for candidate in prefix
+        )
+        if (native_wrapper_seen and idmx_video_frame_rate(prefix) is None
+                and consumed_packets < _RTP_TIMING_PROBE_MAX_PACKETS):
             continue
         if audio_key is None or audio_decodable:
             break

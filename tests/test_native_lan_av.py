@@ -10,6 +10,7 @@ import subprocess
 from types import SimpleNamespace
 from typing import Any
 
+from Crypto.Cipher import AES
 import pytest
 
 from pyezvizapi import EzvizClient, _local_stream
@@ -83,6 +84,32 @@ def test_decrypted_native_picture_clock_counts_pictures_not_slices() -> None:
     assert timestamps == [0, 0, 0, 3003]
     with pytest.raises(PyEzvizError, match="incomplete picture"):
         _local_stream._native_decrypted_picture_timeline(b"\x00\x00\x00\x01\x41\x40partial", "h264", "15")  # noqa: SLF001
+
+
+def test_decrypted_native_source_clock_preserves_missing_picture_gap() -> None:
+    # Short clear VCL payloads contain no complete AES block, so the real
+    # native decrypt/span parser can round-trip these without a mock decoder.
+    units = (b"\x65\x80first", b"\x41\x80next", b"\x41\x80after-gap")
+    packets = [b"\x80\xe0" + index.to_bytes(2, "big") + timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88" + unit for index, (timestamp, unit) in enumerate(zip((1000, 7000, 19000), units, strict=True))]
+    annexb, _spans = _local_stream._idmx_h264_annexb_packet_spans(packets, b"", nalu_header_size=None, stream_is_clear=False)  # noqa: SLF001
+    result = _local_stream._native_decrypted_rtp_timeline(packets, annexb, "h264", b"", None)  # noqa: SLF001
+    assert result == (units, [1000, 7000, 19000])
+    with pytest.raises(PyEzvizError, match="cannot be matched"):
+        _local_stream._native_decrypted_rtp_timeline(packets, annexb + b"extra", "h264", b"", None)  # noqa: SLF001
+
+
+def test_decrypted_native_hevc_timeline_honors_parameter_set_policy() -> None:
+    media_key = "test-media-key"
+    cipher = AES.new(_local_stream._local_media_aes_key(media_key), AES.MODE_ECB)  # noqa: SLF001
+    units = (b"\x40\x01" + b"V" * 16, b"\x26\x01" + b"\x80" + b"I" * 15)
+    packets = [b"\x90\xe0" + index.to_bytes(2, "big") + (1000 + index * 6000).to_bytes(4, "big")
+        + b"\x55\x66\x77\x88\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        + unit[:2] + cipher.encrypt(unit[2:]) for index, unit in enumerate(units)]
+    annexb = b"".join(b"\x00\x00\x00\x01" + unit for unit in units)
+    assert _local_stream._native_decrypted_rtp_timeline(packets, annexb, "hevc", media_key, None, True) == (units, [1000, 7000])  # noqa: SLF001
+    with pytest.raises(PyEzvizError, match="cannot be matched"):
+        _local_stream._native_decrypted_rtp_timeline(packets, annexb, "hevc", media_key, None, False)  # noqa: SLF001
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")

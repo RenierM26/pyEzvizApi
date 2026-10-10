@@ -706,8 +706,14 @@ def decrypt_idmx_aac_packets(
     require_contiguous: bool = True,
     decrypt_audio: bool = True,
     allow_timestamp_jitter: bool = False,
+    preserve_clear_timestamps: bool = False,
 ) -> RtpAacStream | None:
-    """Return descriptor-backed IDMX AAC as ADTS; explicitly bypass AES for clear input."""
+    """Return descriptor-backed IDMX AAC as ADTS; explicitly bypass AES for clear input.
+
+    ``preserve_clear_timestamps`` retains any forward received AAC sample-clock
+    spacing for explicitly clear, fully framed, descriptor-backed input. It
+    neither rounds timestamps nor relaxes encrypted-IDMX eligibility.
+    """
 
     packet_list = list(packets)
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
@@ -752,7 +758,12 @@ def decrypt_idmx_aac_packets(
     if descriptor is None:
         return None
     sample_rate, channels = descriptor
-    if any(not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter) for delta in deltas):
+    clear_forward_clock = preserve_clear_timestamps and not decrypt_audio
+    if any(
+        not (0 < delta < 0x80000000) if clear_forward_clock
+        else not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter)
+        for delta in deltas
+    ):
         return None
     if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
         return None

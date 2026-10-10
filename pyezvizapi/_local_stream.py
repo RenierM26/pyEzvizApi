@@ -2380,7 +2380,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         if audio is not None:
             if annexb == full_annexb:
                 codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
-                if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path):
+                if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets):
                     return
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
@@ -2607,12 +2607,16 @@ def _copy_clear_native_idmx_timed_av(
     """Keep native clear AAC jitter through one timed input, not raw-file probing."""
 
     rtp_packets: list[RtpPacket] = []
+    legacy_video_clock = False
+    video_types = _idmx_local_video_payload_types(packets, codec="h264") | _idmx_local_video_payload_types(packets, codec="hevc")
     for frame in _iter_idmx_local_packet_frames(packets):
         header = _idmx_local_frame_header_size(frame)
         if header is not None:
             packet = _idmx_local_frame_rtp_packet(frame, header)
             if packet is not None:
                 rtp_packets.append(packet)
+                if packet.payload_type in video_types:
+                    legacy_video_clock |= not _is_complete_idmx_rtp_frame(frame)
     advertised_rate = idmx_video_frame_rate(rtp_packets)
     if advertised_rate is None:
         return False
@@ -2622,10 +2626,9 @@ def _copy_clear_native_idmx_timed_av(
         rtp_packets, codec=codec, completed_access_units_only=True,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
     )
-    if any(packet.extension_profile == 0x4000 and len(packet.extension_data) >= 5
-           and packet.extension_data.startswith(b"\x80\x06")
-           and packet.extension_data[4] & 0xF0 == 0x10 for packet in rtp_packets):
-        # Local native video wrapper ticks are not a proven 90 kHz clock.
+    if legacy_video_clock:
+        # Legacy synthetic transport fields do not prove a 90 kHz RTP clock.
+        # Complete native-wrapper RTP does: retain actual cadence and gaps.
         timestamps = _native_wrapper_video_timestamps(units, timestamps, codec, advertised_rate)
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
@@ -2657,7 +2660,9 @@ def _native_wrapper_video_timestamps(
 
 def _copy_decrypted_native_idmx_timed_av(
     packets: list[bytes], annexb: bytes, audio: RtpAacStream, output: BinaryIO, *,
-    codec: RtpVideoCodec, ffmpeg_path: str,
+    codec: RtpVideoCodec, ffmpeg_path: str, media_key: str | bytes = b"",
+    nalu_header_size: int | None = None,
+    decrypt_hevc_parameter_sets: bool = False,
 ) -> bool:
     """Use advertised native picture cadence and received AAC sample timestamps."""
 
@@ -2671,7 +2676,8 @@ def _copy_decrypted_native_idmx_timed_av(
     rate = idmx_video_frame_rate(rtp_packets)
     if rate is None:
         return False
-    units, timestamps = _native_decrypted_picture_timeline(annexb, codec, rate)
+    source_timeline = _native_decrypted_rtp_timeline(packets, annexb, codec, media_key, nalu_header_size, decrypt_hevc_parameter_sets)
+    units, timestamps = source_timeline if source_timeline is not None else _native_decrypted_picture_timeline(annexb, codec, rate)
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
     )
@@ -2682,6 +2688,39 @@ def _copy_decrypted_native_idmx_timed_av(
 
     copy_remuxed_output(process, output, write_input=write_input)
     return True
+
+
+def _native_decrypted_rtp_timeline(
+    packets: list[bytes], annexb: bytes, codec: RtpVideoCodec, media_key: str | bytes,
+    nalu_header_size: int | None, decrypt_hevc_parameter_sets: bool = False,
+) -> tuple[tuple[bytes, ...], list[int]] | None:
+    """Match decrypted NAL spans to their real RTP clocks without renumbering gaps."""
+
+    reconstructed, spans = (
+        _idmx_hevc_annexb_packet_spans(packets, media_key, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets) if codec == "hevc"
+        else _idmx_h264_annexb_packet_spans(packets, media_key, nalu_header_size=nalu_header_size, stream_is_clear=False)
+    )
+    if not spans:
+        return None
+    if reconstructed != annexb:
+        raise PyEzvizError("Native decrypted video cannot be matched to source RTP timing")
+    routed_types = _idmx_local_video_payload_types(packets, codec=codec)
+    frames: dict[int, list[bytes]] = {}
+    timestamps: list[int] = []
+    units: list[bytes] = []
+    for start, end, packet_index, _end_packet, _nal_type, frame_index, _end_frame in spans:
+        if packet_index not in frames:
+            frames[packet_index] = list(_iter_idmx_local_packet_frame(packets[packet_index], video_payload_types=routed_types))
+        frame = frames[packet_index][frame_index]
+        if not _is_complete_idmx_rtp_frame(frame):
+            return None
+        header = _idmx_local_frame_header_size(frame)
+        packet = _idmx_local_frame_rtp_packet(frame, header) if header is not None else None
+        if packet is None:
+            raise PyEzvizError("Native decrypted NAL has no matching RTP packet")
+        units.append(reconstructed[start + len(ANNEX_B_LONG_START_CODE):end])
+        timestamps.append(packet.timestamp)
+    return tuple(units), timestamps
 
 
 def _native_decrypted_picture_timeline(
@@ -4923,6 +4962,8 @@ def _idmx_h264_annexb_packet_spans(  # noqa: PLR0912, PLR0915
 def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
     packets: list[bytes],
     media_key: str | bytes,
+    *,
+    decrypt_hevc_parameter_sets: bool = False,
 ) -> tuple[bytes, list[tuple[int, int, int, int, int, int, int]]]:
     """Assemble decrypted HEVC while recording each NAL's packet span."""
 
@@ -5002,7 +5043,7 @@ def _idmx_hevc_annexb_packet_spans(  # noqa: PLR0912, PLR0915
             elif direct_media:
                 hevc_evidence_seen = True
                 payload = body
-                decrypt_parameter_sets = False
+                decrypt_parameter_sets = decrypt_hevc_parameter_sets
             else:
                 continue
             if len(payload) < HEVC_NAL_HEADER_SIZE:
@@ -6660,6 +6701,7 @@ def _decrypt_idmx_local_packets_to_adts_aac(
         require_contiguous=require_contiguous,
         decrypt_audio=decrypt_audio,
         allow_timestamp_jitter=allow_timestamp_jitter,
+        preserve_clear_timestamps=not decrypt_audio and not require_contiguous,
     )
 
 

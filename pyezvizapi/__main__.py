@@ -777,10 +777,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser_save_clip.add_argument(
         "--local-sdk-ecdh-receiver-port",
         type=int,
-        default=LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        default=None,
         help=(
             "Receiver port to include in local SDK ECDH preview XML "
-            f"(default: {LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT})"
+            f"(default: auto allocates a fresh port; explicit ECDH uses {LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT})"
         ),
     )
     parser_save_clip.add_argument(
@@ -2418,7 +2418,9 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     if args.source == "local-sdk-ecdh":
         save_kwargs.update(
             {
-                "local_sdk_ecdh_receiver_port": args.local_sdk_ecdh_receiver_port,
+                "local_sdk_ecdh_receiver_port": (LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+                    if args.local_sdk_ecdh_receiver_port is None
+                    else args.local_sdk_ecdh_receiver_port),
                 "local_sdk_ecdh_send_init": args.local_sdk_ecdh_send_init,
                 "local_sdk_ecdh_max_prefix_bytes": args.local_sdk_ecdh_max_prefix_bytes,
                 "local_sdk_ecdh_max_frames": args.local_sdk_ecdh_max_frames,

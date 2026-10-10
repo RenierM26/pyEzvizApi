@@ -46,6 +46,7 @@ class LocalSdkEcdhClipSource:
     timeout: float | None = 10.0
     smscode: str | int | None = field(default=None, repr=False)
     receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+    fresh_retry_port: bool = False
     send_init: bool = False
     max_prefix_bytes: int = 4096
     max_frames: int | None = None

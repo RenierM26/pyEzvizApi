@@ -6426,3 +6426,14 @@ def test_cli_cloud_rtp_marks_native_independent_sequence_counters(codec: str) ->
     assert all(packet.idmx for packet in parsed)
     expected = (b"\x00\x00\x00\x01" + nal,)
     assert cli_module._rtp_packets_to_annexb_units(packets, codec=codec) == expected  # noqa: SLF001
+
+
+@pytest.mark.parametrize("port", [None, 10101])
+def test_save_clip_auto_preserves_explicit_receiver_port(monkeypatch, tmp_path, port) -> None:
+    fake_client = _install_fake_client(monkeypatch)
+    args = ["--token-file", _token_file(tmp_path), "save", "clip", "--source", "auto",
+            "--serial", "CAM123", "--output", str(tmp_path / "preview.ts")]
+    if port is not None:
+        args.extend(["--local-sdk-ecdh-receiver-port", str(port)])
+    assert cli_module.main(args) == 0
+    assert fake_client.instances[0].save_clip_request["local_sdk_ecdh_receiver_port"] == port

@@ -1448,3 +1448,80 @@ def test_protocol_probe_propagates_bootstrap_deadline_failure(monkeypatch: Any) 
         probe_local_sdk_stream_from_client(None, "CAM123")
     assert stream.reads == 0
     assert stream.closed
+
+
+@pytest.mark.parametrize("elapsed", [8.0, 11.0])
+def test_ecdh_rate_retry_preserves_total_duration_budget(
+    monkeypatch: pytest.MonkeyPatch, elapsed: float,
+) -> None:
+    clock = [100.0]
+    rates: list[int] = []
+    durations: list[float] = []
+    closed: list[bool] = []
+
+    class Stream:
+        def __enter__(self) -> Stream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            closed.append(True)
+
+    def open_stream(*_args: object, stream_rate: int, **_kwargs: object) -> Stream:
+        rates.append(stream_rate)
+        return Stream()
+
+    def copy(_stream: object, output: BytesIO, **kwargs: Any) -> None:
+        durations.append(kwargs["duration_seconds"])
+        if rates[-1] == 1:
+            clock[0] += elapsed
+            raise EzvizLocalSdkStreamClosed("rate 1 closed")
+        output.write(LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
+    output = BytesIO()
+    if elapsed < 10:
+        copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", output,
+                                              duration_seconds=10, monotonic=lambda: clock[0])
+        assert rates == [1, 0]
+        assert durations == [10, 2]
+        assert output.getvalue() == LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD
+        assert len(closed) == len(rates)
+    else:
+        with pytest.raises(EzvizLocalSdkDeadlineExpired, match="exhausted"):
+            copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", output,
+                                                  duration_seconds=10, monotonic=lambda: clock[0])
+        assert rates == [1]
+        assert durations == [10]
+        assert not output.getvalue()
+        assert len(closed) == len(rates)
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+def test_saved_ecdh_rate_retry_can_isolate_source_port(
+    monkeypatch: pytest.MonkeyPatch, fresh: bool,
+) -> None:
+    calls: list[tuple[int, int]] = []
+
+    class Stream:
+        def __enter__(self) -> Stream:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    def open_stream(*_args: object, stream_rate: int, receiver_port: int, **_kwargs: object) -> Stream:
+        calls.append((stream_rate, receiver_port))
+        return Stream()
+
+    def copy(_stream: object, output: BytesIO, **_kwargs: object) -> None:
+        if calls[-1][0] == 1:
+            raise EzvizLocalSdkStreamClosed("rate 1 closed")
+        output.write(LOCAL_SDK_ECDH_TEST_MPEGPS_PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.fresh_local_sdk_receiver_port", lambda: 12345)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.open_local_sdk_ecdh_stream_from_client", open_stream)
+    monkeypatch.setattr("pyezvizapi.local_stream_ecdh.copy_local_sdk_ecdh_stream_to_media", copy)
+    copy_local_sdk_ecdh_stream_from_client(object(), "CAM123", BytesIO(),
+                                          receiver_port=10101, fresh_retry_port=fresh)
+    assert calls == [(1, 10101), (0, 12345 if fresh else 10101)]

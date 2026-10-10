@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
+import errno
 import json
-import socket
 import time
 from typing import Any
 
@@ -24,6 +24,7 @@ from .local_stream_ecdh import (
     open_local_sdk_ecdh_stream_from_client,
 )
 from .local_stream_transport import (
+    fresh_local_sdk_receiver_port as fresh_receiver_port,
     get_local_sdk_stream_credentials_from_client,
     local_media_packet_source,
     open_local_sdk_stream_from_client,
@@ -116,19 +117,18 @@ def select_stream_source(
         credentials=credentials,
         timeout=options.timeout,
         receiver_port=receiver_port,
+        fresh_retry_port=True,
     )
 
 
-def fresh_receiver_port() -> int:
-    """Choose a new local port instead of rebinding a closed TCP session.
-
-    The socket only reserves a kernel-selected port briefly; it never connects
-    or listens. The following SDK bind remains authoritative if a peer process
-    wins the allocation race.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-        reservation.bind(("0.0.0.0", 0))
-        return int(reservation.getsockname()[1])
+def _connection_failure(error: Exception) -> bool:
+    """Recognize TCP/network reachability errors without hiding file errors."""
+    return isinstance(error, (
+        ConnectionError, TimeoutError, EzvizLocalSdkDeadlineExpired, EzvizLocalSdkStreamClosed,
+    )) or (
+        isinstance(error, OSError)
+        and error.errno in {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN}
+    )
 
 
 def fallback_stream_source(
@@ -151,15 +151,7 @@ def fallback_stream_source(
         not isinstance(source, CloudClipSource)
         and options.mode == "auto"
         and options.allow_cloud_fallback
-        and isinstance(
-            error,
-            (
-                ConnectionError,
-                TimeoutError,
-                EzvizLocalSdkDeadlineExpired,
-                EzvizLocalSdkStreamClosed,
-            ),
-        )
+        and _connection_failure(error)
     ):
         return CloudClipSource(timeout=options.timeout, smscode=options.smscode)
     return None

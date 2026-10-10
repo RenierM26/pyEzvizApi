@@ -233,6 +233,11 @@ def _receiver_options(receiver_port: int, *, receiver_ex: bool = False) -> dict[
             if receiver_ex else {"receiver_port": receiver_port})
 
 
+def _retry_port_options(enabled: bool) -> dict[str, Any]:
+    """Preserve explicit-source calls while isolating automatic rate retries."""
+    return {"fresh_retry_port": True} if enabled else {}
+
+
 class SaveMediaResult(TypedDict, total=False):
     """Result returned by media save helpers."""
 
@@ -3149,7 +3154,7 @@ class EzvizClient:
         cloud_client_type: int = 9,
         cloud_token_index: int = 0,
         cloud_refresh_vtm: bool = True,
-        local_sdk_ecdh_receiver_port: int = LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        local_sdk_ecdh_receiver_port: int | None = None,
         local_sdk_ecdh_send_init: bool = False,
         local_sdk_ecdh_max_prefix_bytes: int = 4096,
         local_sdk_ecdh_max_frames: int | None = None,
@@ -3201,10 +3206,7 @@ class EzvizClient:
                 credentials=local_credentials,
                 allow_cloud_fallback=allow_cloud_fallback,
                 timeout=10.0 if timeout is None else timeout,
-                receiver_port=(
-                    None if local_sdk_ecdh_receiver_port == LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
-                    else local_sdk_ecdh_receiver_port
-                ),
+                receiver_port=local_sdk_ecdh_receiver_port,
                 smscode=smscode,
             )
         elif source == "local-sdk":
@@ -3224,7 +3226,9 @@ class EzvizClient:
                 p2p_register_max_retries=p2p_register_max_retries,
                 timeout=timeout,
                 smscode=smscode,
-                receiver_port=local_sdk_ecdh_receiver_port,
+                receiver_port=(LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
+                               if local_sdk_ecdh_receiver_port is None
+                               else local_sdk_ecdh_receiver_port),
                 send_init=local_sdk_ecdh_send_init,
                 max_prefix_bytes=local_sdk_ecdh_max_prefix_bytes,
                 max_frames=local_sdk_ecdh_max_frames,
@@ -3407,6 +3411,7 @@ class EzvizClient:
                 nalu_header_size=decode.nalu_header_size,
                 smscode=source.smscode,
                 **_credential_options(source.credentials),
+                **_retry_port_options(source.fresh_retry_port),
             )
         if isinstance(source, HcNetSdkCommandPortClipSource):
             return self._save_hcnetsdk_command_port_clip(
@@ -3555,6 +3560,7 @@ class EzvizClient:
         nalu_header_size: int | None,
         smscode: str | int | None,
         credentials: EzvizLocalSdkCredentials | None = None,
+        fresh_retry_port: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through the local SDK ECDH stream path."""
 
@@ -3589,6 +3595,7 @@ class EzvizClient:
                         nalu_header_size=nalu_header_size,
                         smscode=smscode,
                         **_credential_options(credentials),
+                        **_retry_port_options(fresh_retry_port),
                     )
                 if temporary_path.stat().st_size == 0:
                     raise EzvizNoMediaError("Local SDK ECDH capture did not contain media")
@@ -3619,6 +3626,7 @@ class EzvizClient:
                 nalu_header_size=nalu_header_size,
                 smscode=smscode,
                 **_credential_options(credentials),
+                **_retry_port_options(fresh_retry_port),
             )
 
         bytes_written = _bytes_written_to_output(output, start_position=start_position)

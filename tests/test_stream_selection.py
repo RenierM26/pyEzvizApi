@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
@@ -148,6 +149,7 @@ def test_supplied_credentials_fail_closed_on_identity_and_missing_key(monkeypatc
         EzvizAuthVerificationCode("MFA"),
         PyEzvizError("HMAC failed"),
         FileNotFoundError("ffmpeg"),
+        PermissionError(errno.EACCES, "output denied"),
         EzvizNoMediaError("silence"),
         EzvizUnsupportedMediaError("codec", source="local-sdk-ecdh", reason="unsupported_codec"),
     ],
@@ -163,6 +165,9 @@ def test_auth_codec_and_configuration_errors_never_fallback(error: Exception) ->
         TimeoutError(),
         EzvizLocalSdkDeadlineExpired(),
         EzvizLocalSdkStreamClosed(),
+        OSError(errno.ENETUNREACH, "network unreachable"),
+        OSError(errno.EHOSTUNREACH, "host unreachable"),
+        OSError(errno.ENETDOWN, "network down"),
     ],
 )
 def test_network_fallback_obeys_offline_policy(error: Exception) -> None:
@@ -479,3 +484,19 @@ def test_auto_allocates_independent_ports_for_concurrent_cameras(monkeypatch) ->
         mode="offline", credentials=credentials(), receiver_port=12347))
     assert isinstance(explicit, LocalSdkEcdhClipSource)
     assert explicit.receiver_port == 12347
+
+
+@pytest.mark.parametrize("port", [None, 10101])
+def test_auto_long_form_preserves_explicit_default_port(monkeypatch, port: int | None) -> None:
+    client = EzvizClient()
+    captured: list[ClipOptions] = []
+
+    def capture(serial, output, options):
+        captured.append(options)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "save_clip_with_options", capture)
+    client.save_clip(CAMERA, BytesIO(), source="auto", local_sdk_ecdh_receiver_port=port)
+    source = captured[0].source
+    assert isinstance(source, AutoClipSource)
+    assert source.receiver_port == port

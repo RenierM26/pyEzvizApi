@@ -8017,7 +8017,7 @@ def parse_hcnetsdk_tcp_frame(data: bytes) -> HcNetSdkTcpFrame:
     )
 
 
-def read_hcnetsdk_tcp_frame(sock: Any, *, max_frame_bytes: int | None = None) -> HcNetSdkTcpFrame:
+def read_hcnetsdk_tcp_frame(sock: Any, *, max_frame_bytes: int | None = None, allow_short_ack: bool = True) -> HcNetSdkTcpFrame:
     """Read one complete HCNetSDK command-port frame from a socket-like object."""
     if max_frame_bytes is not None and max_frame_bytes < HCNETSDK_TCP_HEADER_LENGTH:
         raise PyEzvizError("HCNetSDK frame limit must include the 16-byte header")
@@ -8026,6 +8026,8 @@ def read_hcnetsdk_tcp_frame(sock: Any, *, max_frame_bytes: int | None = None) ->
     if max_frame_bytes is not None and total_length > max_frame_bytes:
         raise PyEzvizError("HCNetSDK response exceeds discovery frame limit")
     if total_length < HCNETSDK_TCP_HEADER_LENGTH:
+        if not allow_short_ack:
+            raise PyEzvizError("HCNetSDK TCP frame total length is too small")
         header = HcNetSdkTcpFrameHeader(
             total_length=HCNETSDK_TCP_HEADER_LENGTH,
             field_4=int.from_bytes(header_bytes[4:8], "big"),
@@ -10453,6 +10455,7 @@ class HcNetSdkCommandPortClient:
         self,
         *,
         max_frame_bytes: int | None = None,
+        allow_short_ack: bool = True,
         timeout: float | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -10461,6 +10464,7 @@ class HcNetSdkCommandPortClient:
         with self._read_lock:
             return self._read_tcp_frame_unlocked(
                 max_frame_bytes=max_frame_bytes,
+                allow_short_ack=allow_short_ack,
                 timeout=timeout,
                 deadline=deadline,
                 monotonic=monotonic,
@@ -10470,6 +10474,7 @@ class HcNetSdkCommandPortClient:
         self,
         *,
         max_frame_bytes: int | None = None,
+        allow_short_ack: bool = True,
         timeout: float | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -10487,9 +10492,9 @@ class HcNetSdkCommandPortClient:
         )
         if effective_timeout is None:
             try:
-                return read_hcnetsdk_tcp_frame(sock, **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}))
+                return read_hcnetsdk_tcp_frame(sock, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack)
             except PyEzvizError:
-                if max_frame_bytes is not None:
+                if max_frame_bytes is not None or not allow_short_ack:
                     self._invalidate_socket(sock)
                 raise
         previous_timeout = sock.gettimeout()
@@ -10502,12 +10507,12 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         try:
-            return read_hcnetsdk_tcp_frame(deadline_socket, **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}))
+            return read_hcnetsdk_tcp_frame(deadline_socket, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack)
         except EzvizLocalSdkDeadlineExpired:
             self._invalidate_socket(sock)
             raise
         except PyEzvizError:
-            if max_frame_bytes is not None:
+            if max_frame_bytes is not None or not allow_short_ack:
                 self._invalidate_socket(sock)
             raise
 
@@ -10618,7 +10623,7 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         first_response = self.read_tcp_frame(
-            **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}),
+            max_frame_bytes=max_frame_bytes,
             deadline=deadline,
             monotonic=monotonic,
         )
@@ -10635,7 +10640,7 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         second_response = self.read_tcp_frame(
-            **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}),
+            max_frame_bytes=max_frame_bytes,
             deadline=deadline,
             monotonic=monotonic,
         )
@@ -12747,7 +12752,7 @@ def _hcnetsdk_stream_details_query(
                                 key=session.challenge, local_ip=address)
     with closing(HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)) as client:
         client.send_command_frame(request, deadline=deadline, monotonic=monotonic)
-        return client.read_tcp_frame(deadline=deadline, monotonic=monotonic, max_frame_bytes=max_response_bytes)
+        return client.read_tcp_frame(deadline=deadline, monotonic=monotonic, max_frame_bytes=max_response_bytes, allow_short_ack=False)
 
 
 def discover_hcnetsdk_stream_details_for_login(

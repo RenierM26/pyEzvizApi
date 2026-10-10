@@ -272,3 +272,12 @@ def test_empty_or_inconsistent_ability_response_is_not_partial_success(wire, fie
     with pytest.raises(PyEzvizError, match='Invalid EZVIZ LAN audio/video compress XML'):
         discover(wire)
     assert all(socket.closed for socket in wire.sockets)
+
+
+@pytest.mark.parametrize('declared_length', [0, 8, 15])
+def test_short_ack_cannot_masquerade_as_capability_rejection(wire, declared_length) -> None:
+    raw = build_hcnetsdk_tcp_frame(b'', field_4=151, field_8=151)
+    wire.sockets[2].data = declared_length.to_bytes(4, 'big') + raw[4:]
+    with pytest.raises(PyEzvizError, match='total length is too small'):
+        discover(wire)
+    assert all(socket.closed for socket in wire.sockets)

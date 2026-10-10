@@ -8,6 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Read-only, cloud-free `discover_hcnetsdk_stream_details()` and `HcNetSdkPurePythonClient.stream_details()` queries for camera-reported main/sub configuration and supported profiles, retaining each resolution's dimensions and associated frame-rate/bitrate limits.
 - Metadata-first automatic streaming (`source="auto"`, `AutoClipSource`, and context-managed `open_stream`), with capability-guided local protocol selection and pre-output connection fallback to cloud.
 - A strict offline playback policy using caller-supplied local credentials; no account discovery, registration, key renewal, or cloud fallback. Explicit legacy/ECDH sources also accept supplied credentials.
 

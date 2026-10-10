@@ -16,8 +16,8 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import suppress
-from dataclasses import dataclass, field
+from contextlib import closing, suppress
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from enum import IntEnum
 import errno
@@ -2255,6 +2255,21 @@ class EzvizLanIpcFrontParameterAbility:
 
 
 @dataclass(frozen=True)
+class EzvizLanVideoResolution:
+    """Camera-advertised resolution with its own native rate/bitrate limits."""
+
+    index: int | None = None
+    name: str | None = None
+    dimensions: str | None = None
+    width: int | None = None
+    height: int | None = None
+    frame_rate_codes: tuple[int, ...] = ()
+    bitrate_min: int | None = None
+    bitrate_max: int | None = None
+    bitrate_codes: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class EzvizLanAudioVideoCompressStream:
     """One video stream profile from ``AudioVideoCompressInfo`` XML."""
 
@@ -2267,6 +2282,8 @@ class EzvizLanAudioVideoCompressStream:
     frame_rates: tuple[int, ...] = ()
     bitrate_min: int = 0
     bitrate_max: int = 0
+    resolutions: tuple[EzvizLanVideoResolution, ...] = field(default=(), kw_only=True)
+    bitrate_codes: tuple[int, ...] = field(default=(), kw_only=True)
 
     @property
     def resolution_count(self) -> int:
@@ -2328,6 +2345,54 @@ class EzvizLanAudioVideoCompressInfo:
     def supports_sub_stream(self) -> bool:
         """Return whether any video channel advertises sub-stream support."""
         return any(channel.supports_sub_stream for channel in self.video_channels)
+
+
+@dataclass(frozen=True)
+class HcNetSdkStreamDetails:
+    """One fresh camera snapshot: current configuration is not observed media."""
+
+    channel: int
+    configuration: EzvizLanCompressionConfig = field(repr=False)
+    capabilities: EzvizLanAudioVideoCompressInfo
+    reported_login_serial: str = field(default="", repr=False)
+
+    def configured_resolution(self, *, sub_stream: bool = False) -> EzvizLanVideoResolution | None:
+        """Resolve a configured SDK index using this camera's own resolution list."""
+        block = self.configuration.network if sub_stream else self.configuration.normal_record
+        if block is None:
+            return None
+        channels = [c for c in self.capabilities.video_channels if c.channel_number == self.channel]
+        if len(channels) != 1:
+            return None
+        channel = channels[0]
+        if sub_stream:
+            profiles = [p for p in channel.sub_streams if p.index == 1]
+            profile = profiles[0] if len(profiles) == 1 else None
+        else:
+            profile = channel.main_stream
+        if profile is None:
+            return None
+        matches = [r for r in profile.resolutions if r.index == block.resolution]
+        return matches[0] if len(matches) == 1 else None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return configuration and capability fields without raw replies/auth data."""
+        def configured(block: EzvizLanCompressionInfoV30 | None) -> dict[str, Any] | None:
+            if block is None:
+                return None
+            return {key: value for key, value in asdict(block).items() if key != "raw"}
+        return {
+            "channel": self.channel,
+            "reported_login_serial": self.reported_login_serial,
+            "source": "hcnetsdk_command_port",
+            "observed_media": False,
+            "transport_protocol": None,
+            "main": configured(self.configuration.normal_record),
+            "sub": configured(self.configuration.network),
+            "main_resolution": asdict(r) if (r := self.configured_resolution()) is not None else None,
+            "sub_resolution": asdict(r) if (r := self.configured_resolution(sub_stream=True)) is not None else None,
+            "capabilities": asdict(self.capabilities),
+        }
 
 
 @dataclass(frozen=True)
@@ -7926,10 +7991,14 @@ def parse_hcnetsdk_tcp_frame(data: bytes) -> HcNetSdkTcpFrame:
     )
 
 
-def read_hcnetsdk_tcp_frame(sock: Any) -> HcNetSdkTcpFrame:
+def read_hcnetsdk_tcp_frame(sock: Any, *, max_frame_bytes: int | None = None) -> HcNetSdkTcpFrame:
     """Read one complete HCNetSDK command-port frame from a socket-like object."""
+    if max_frame_bytes is not None and max_frame_bytes < HCNETSDK_TCP_HEADER_LENGTH:
+        raise PyEzvizError("HCNetSDK frame limit must include the 16-byte header")
     header_bytes = _recv_exact(sock, HCNETSDK_TCP_HEADER_LENGTH)
     total_length = int.from_bytes(header_bytes[0:4], "big")
+    if max_frame_bytes is not None and total_length > max_frame_bytes:
+        raise PyEzvizError("HCNetSDK response exceeds discovery frame limit")
     if total_length < HCNETSDK_TCP_HEADER_LENGTH:
         header = HcNetSdkTcpFrameHeader(
             total_length=HCNETSDK_TCP_HEADER_LENGTH,
@@ -10357,6 +10426,7 @@ class HcNetSdkCommandPortClient:
     def read_tcp_frame(
         self,
         *,
+        max_frame_bytes: int | None = None,
         timeout: float | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -10364,6 +10434,7 @@ class HcNetSdkCommandPortClient:
         """Read one non-media command-port response frame."""
         with self._read_lock:
             return self._read_tcp_frame_unlocked(
+                max_frame_bytes=max_frame_bytes,
                 timeout=timeout,
                 deadline=deadline,
                 monotonic=monotonic,
@@ -10372,6 +10443,7 @@ class HcNetSdkCommandPortClient:
     def _read_tcp_frame_unlocked(
         self,
         *,
+        max_frame_bytes: int | None = None,
         timeout: float | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -10388,7 +10460,12 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         if effective_timeout is None:
-            return read_hcnetsdk_tcp_frame(sock)
+            try:
+                return read_hcnetsdk_tcp_frame(sock, **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}))
+            except PyEzvizError:
+                if max_frame_bytes is not None:
+                    self._invalidate_socket(sock)
+                raise
         previous_timeout = sock.gettimeout()
         deadline_socket = _DeadlineBoundRecvSocket(
             sock,
@@ -10399,9 +10476,13 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         try:
-            return read_hcnetsdk_tcp_frame(deadline_socket)
+            return read_hcnetsdk_tcp_frame(deadline_socket, **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}))
         except EzvizLocalSdkDeadlineExpired:
             self._invalidate_socket(sock)
+            raise
+        except PyEzvizError:
+            if max_frame_bytes is not None:
+                self._invalidate_socket(sock)
             raise
 
     def read_media_frame_after_prefix(
@@ -10475,6 +10556,7 @@ class HcNetSdkCommandPortClient:
         username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
         local_ip: str | None = None,
         rsa_key: Any | None = None,
+        max_frame_bytes: int | None = None,
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkCommandPortLoginSession:
@@ -10510,6 +10592,7 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         first_response = self.read_tcp_frame(
+            **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}),
             deadline=deadline,
             monotonic=monotonic,
         )
@@ -10526,6 +10609,7 @@ class HcNetSdkCommandPortClient:
             monotonic=monotonic,
         )
         second_response = self.read_tcp_frame(
+            **({} if max_frame_bytes is None else {"max_frame_bytes": max_frame_bytes}),
             deadline=deadline,
             monotonic=monotonic,
         )
@@ -11202,6 +11286,14 @@ class HcNetSdkPurePythonClient:
         """Read and parse traced ``NET_DVR_AUDIOOUT_VOLUME`` output."""
         return ezviz_lan_audio_output_volume(
             self.dvr_config(ezviz_lan_audioout_volume_get_config_request(1, channel))
+        )
+
+    def stream_details(self, channel: int = 1) -> HcNetSdkStreamDetails:
+        """Read current compression and per-resolution abilities without cloud IO."""
+        return discover_hcnetsdk_stream_details(
+            self.endpoint, self.password, channel=channel, username=self.username,
+            local_ip=self.local_ip, timeout=self.timeout, socket_factory=self.socket_factory,
+            rsa_key=self.rsa_key,
         )
 
     def compression_config(self, channel: int = 1) -> EzvizLanCompressionConfig:
@@ -11935,6 +12027,7 @@ def _audio_video_compress_stream(
     *,
     index: int | None = None,
 ) -> EzvizLanAudioVideoCompressStream:
+    resolutions: list[EzvizLanVideoResolution] = []
     bitrate_mins: list[int] = []
     bitrate_maxes: list[int] = []
     resolution_indexes: list[int] = []
@@ -11943,6 +12036,21 @@ def _audio_video_compress_stream(
     resolution_list = _xml_first_child(root, "VideoResolutionList")
     if resolution_list is not None:
         for entry in _xml_children(resolution_list, "VideoResolutionEntry"):
+            dimensions = _xml_child_text(entry, ("Resolution",))
+            size = re.fullmatch(r"([0-9]+)\s*[*xX]\s*([0-9]+)", dimensions or "")
+            width = int(size[1]) if size and int(size[1]) > 0 else None
+            height = int(size[2]) if size and int(size[2]) > 0 else None
+            if width is None or height is None:
+                width = height = None
+            resolutions.append(EzvizLanVideoResolution(
+                index=_xml_child_optional_int(entry, ("Index",)),
+                name=_xml_child_text(entry, ("Name",)), dimensions=dimensions,
+                width=width, height=height,
+                frame_rate_codes=tuple(_xml_child_int_csv_with_prefix(entry, "VideoFrameRate")),
+                bitrate_min=_xml_child_optional_int(entry, ("VideoBitrate", "Min")),
+                bitrate_max=_xml_child_optional_int(entry, ("VideoBitrate", "Max")),
+                bitrate_codes=_xml_int_csv(_xml_child_text(entry, ("VideoBitrate", "Range"))),
+            ))
             resolution_indexes.append(_xml_child_int(entry, ("Index",)))
             frame_rates.extend(_xml_child_int_csv_with_prefix(entry, "VideoFrameRate"))
             bitrate_min = _xml_child_int(entry, ("VideoBitrate", "Min"))
@@ -11964,6 +12072,8 @@ def _audio_video_compress_stream(
         frame_rates=tuple(dict.fromkeys(frame_rates)),
         bitrate_min=min(bitrate_mins) if bitrate_mins else 0,
         bitrate_max=max(bitrate_maxes) if bitrate_maxes else 0,
+        resolutions=tuple(resolutions),
+        bitrate_codes=_xml_int_csv(_xml_child_text(root, ("VideoBitrate", "Range"))),
     )
 
 
@@ -12542,3 +12652,64 @@ def _probe_port(
         passive_bytes=passive_bytes,
         tls_error=tls_error,
     )
+
+
+def discover_hcnetsdk_stream_details(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    *,
+    channel: int = 1,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    max_response_bytes: int = 524_288,
+) -> HcNetSdkStreamDetails:
+    """Login once and issue native GET1040 and ability8 queries on fresh sockets.
+
+    Supplied credentials only: never renew or retry authentication. The finite
+    network deadline covers login and both reads; RSA generation precedes it.
+    Native frame-rate/resolution/codec IDs are preserved, not guessed as FPS or
+    encryption protocols. Unsupported/malformed/authentication errors propagate.
+    """
+    if not isinstance(channel, int) or isinstance(channel, bool) or not 1 <= channel <= 255:
+        raise PyEzvizError("Stream discovery channel must be between 1 and 255")
+    if timeout is None or not math.isfinite(timeout) or timeout <= 0:
+        raise PyEzvizError("Stream discovery requires a positive finite timeout")
+    if not isinstance(max_response_bytes, int) or isinstance(max_response_bytes, bool) or max_response_bytes < 16:
+        raise PyEzvizError("Discovery response limit must include the 16-byte header")
+    if not password:
+        raise PyEzvizError("Stream discovery requires supplied local credentials")
+    key = rsa_key if rsa_key is not None else hcnetsdk_command_port_rsa_key()
+    deadline = monotonic() + timeout
+    with closing(HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)) as client:
+        sock = client.connect(deadline=deadline, monotonic=monotonic)
+        address = local_ip if local_ip is not None else str(sock.getsockname()[0])
+        session = client.login(password=password, username=username, local_ip=address,
+                               rsa_key=key, max_frame_bytes=max_response_bytes, deadline=deadline, monotonic=monotonic)
+    config_template = hcnetsdk_dvr_config_command_port_template(ezviz_lan_video_coding_get_config_request(1, channel))
+    ability_template = hcnetsdk_device_ability_command_port_template(ezviz_lan_audio_video_compress_info_ability_request(1, channel))
+    config = _hcnetsdk_stream_details_query(endpoint, config_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
+    configuration = ezviz_lan_compression_config(config.body)
+    ability = _hcnetsdk_stream_details_query(endpoint, ability_template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes)
+    capabilities = ezviz_lan_audio_video_compress_info(hcnetsdk_command_port_response_payload(ability))
+    if not capabilities.success:
+        raise PyEzvizError("Camera did not return audio/video compression capabilities")
+    if monotonic() >= deadline:
+        raise EzvizLocalSdkDeadlineExpired("Camera stream discovery exhausted its deadline")
+    return HcNetSdkStreamDetails(channel, configuration, capabilities, session.serial)
+
+
+def _hcnetsdk_stream_details_query(
+    endpoint: HcNetSdkLanEndpoint, template: HcNetSdkCommandPortControlTemplate,
+    session: HcNetSdkCommandPortLoginSession, address: str, timeout: float,
+    socket_factory: SocketFactory, deadline: float, monotonic: Callable[[], float],
+    max_response_bytes: int,
+) -> HcNetSdkTcpFrame:
+    request = template.to_frame(session_id=session.session_id, auth_seed=session.auth_seed,
+                                key=session.challenge, local_ip=address)
+    with closing(HcNetSdkCommandPortClient(endpoint, timeout=timeout, socket_factory=socket_factory)) as client:
+        client.send_command_frame(request, deadline=deadline, monotonic=monotonic)
+        return client.read_tcp_frame(deadline=deadline, monotonic=monotonic, max_frame_bytes=max_response_bytes)

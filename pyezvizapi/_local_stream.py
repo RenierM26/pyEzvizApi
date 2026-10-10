@@ -2626,6 +2626,10 @@ def _copy_clear_native_idmx_timed_av(
         rtp_packets, codec=codec, completed_access_units_only=True,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
     )
+    if not rtp_nal_units_have_vcl(units, codec=codec):
+        raise EzvizNoMediaError(
+            "Native capture contained no complete video frame; increase the capture duration"
+        )
     if legacy_video_clock:
         # Legacy synthetic transport fields do not prove a 90 kHz RTP clock.
         # Complete native-wrapper RTP does: retain actual cadence and gaps.
@@ -2678,6 +2682,8 @@ def _copy_decrypted_native_idmx_timed_av(
         return False
     source_timeline = _native_decrypted_rtp_timeline(packets, annexb, codec, media_key, nalu_header_size, decrypt_hevc_parameter_sets)
     units, timestamps = source_timeline if source_timeline is not None else _native_decrypted_picture_timeline(annexb, codec, rate)
+    if not rtp_nal_units_have_vcl(units, codec=codec):
+        raise EzvizNoMediaError("Native decrypted capture contained no video picture")
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
     )

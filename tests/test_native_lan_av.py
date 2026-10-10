@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from pyezvizapi import EzvizClient, _local_stream
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizNoMediaError, PyEzvizError
 from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint
 from pyezvizapi.local_stream_transport import (
     HcNetSdkCommandPortGeneratedMultiSocketPlan,
@@ -73,6 +73,35 @@ def test_native_wrapper_uses_advertised_fractional_period_once_per_picture() -> 
     units = (b"\x67parameters", b"\x68parameters", b"\x65\x80slice", b"\x65\x40slice2", b"\x41\x80next")
     # Wrapper ticks advance by one, not the standard 90 kHz clock.
     assert _local_stream._native_wrapper_video_timestamps(units, [10, 10, 10, 10, 11], "h264", "30000/1001") == [0, 0, 0, 0, 3003]  # noqa: SLF001
+
+
+@pytest.mark.parametrize("video_payloads", [(b"\x67parameters", b"\x68parameters"), (b"\x67parameters", b"\x7c\x85unfinished")])
+def test_clear_native_audio_cannot_hide_missing_complete_video(monkeypatch: Any, video_payloads: tuple[bytes, ...]) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    packets = [metadata, *(b"\x80\x60" + index.to_bytes(2, "big") + b"\0" * 4
+        + b"\x55\x66\x77\x88" + unit for index, unit in enumerate(video_payloads))]
+    def forbidden_remux(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An audio-only success must not start FFmpeg")
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", forbidden_remux)
+    audio = RtpAacStream(b"received-audio", 16000, 1, 1)
+    output = io.BytesIO()
+    with pytest.raises(EzvizNoMediaError) as error:
+        _local_stream._copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path="ffmpeg")  # noqa: SLF001
+    assert error.value.reason == "no_media"
+    assert not output.getvalue()
+
+
+def test_decrypted_native_parameters_cannot_publish_audio_only(monkeypatch: Any) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    unit = b"\x67parameters"
+    packets = [metadata, b"\x80\x60\0\1" + b"\0" * 4 + b"\x55\x66\x77\x88" + unit]
+    def forbidden_remux(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Parameter-only SDK capture must not start FFmpeg")
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", forbidden_remux)
+    with pytest.raises(EzvizNoMediaError):
+        _local_stream._copy_decrypted_native_idmx_timed_av(packets, b"\x00\x00\x00\x01" + unit, RtpAacStream(b"audio",16000,1,1), io.BytesIO(), codec="h264", ffmpeg_path="ffmpeg")  # noqa: SLF001
 
 
 def test_decrypted_native_picture_clock_counts_pictures_not_slices() -> None:

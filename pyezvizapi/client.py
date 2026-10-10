@@ -644,7 +644,7 @@ class EzvizClient:
 
     def _notify_token_updated(self) -> None:
         """Save rotating credentials before any subsequent discovery can fail."""
-        with request_budget_lock(self._token_lock):
+        with self._token_lock:
             if self._on_token_updated is not None:
                 self._on_token_updated(deepcopy(dict(self._token)))
 
@@ -4719,7 +4719,7 @@ class EzvizClient:
                 refresh_credentials(
                     self._session,
                     cast(dict[str, Any], self._token),
-                    self._timeout,
+                    bounded_request_timeout(self._timeout),
                     self._notify_token_updated,
                     self.get_service_urls,
                 )

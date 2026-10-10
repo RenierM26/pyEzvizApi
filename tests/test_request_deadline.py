@@ -81,3 +81,47 @@ def test_expired_unauthorized_request_cannot_start_login(monkeypatch) -> None:
     with pytest.raises(TimeoutError), request_deadline(12, lambda: clock[0]):
         client._http_request("GET", "https://example.invalid")  # noqa: SLF001
     login.assert_not_called()
+
+
+@pytest.mark.parametrize("expires_during_refresh", [False, True])
+def test_401_refresh_and_retry_share_budget_and_preserve_rotated_token(monkeypatch, expires_during_refresh) -> None:
+    import json  # noqa: PLC0415
+
+    import requests  # noqa: PLC0415
+    saved: list[dict] = []
+    client = EzvizClient(timeout=30, token={
+        "session_id": "old-session", "rf_session_id": "old-refresh",
+        "api_url": "example.invalid", "service_urls": {"existing": True},
+    }, on_token_updated=saved.append)
+    clock = [10.0]
+    timeouts: list[float] = []
+    def response(status, body):
+        result = requests.Response()
+        result.status_code = status
+        result._content = json.dumps(body).encode()  # noqa: SLF001
+        return result
+    calls = [0]
+    def request(**kwargs):
+        timeouts.append(kwargs["timeout"].total)
+        calls[0] += 1
+        clock[0] += 0.5
+        return response(401 if calls[0] == 1 else 200, {})
+    def refresh(**kwargs):
+        timeouts.append(kwargs["timeout"].total)
+        clock[0] = 12 if expires_during_refresh else 11
+        return response(200, {"meta": {"code": 200}, "sessionInfo": {
+            "sessionId": "new-session", "refreshSessionId": "new-refresh",
+        }})
+    monkeypatch.setattr(client._session, "request", request)  # noqa: SLF001
+    monkeypatch.setattr(client._session, "put", refresh)  # noqa: SLF001
+    if expires_during_refresh:
+        with pytest.raises(TimeoutError), request_deadline(12, lambda: clock[0]):
+            client._http_request("GET", "https://example.invalid")  # noqa: SLF001
+        assert timeouts == [2, 1.5]
+    else:
+        with request_deadline(12, lambda: clock[0]):
+            client._http_request("GET", "https://example.invalid")  # noqa: SLF001
+        assert timeouts == [2, 1.5, 1]
+    assert saved[0]["session_id"] == "new-session"
+    assert saved[0]["rf_session_id"] == "new-refresh"
+    assert client._timeout == 30  # noqa: SLF001

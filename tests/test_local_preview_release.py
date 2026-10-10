@@ -213,3 +213,21 @@ def test_invalidated_owned_media_is_retained_only_for_stop_drain(peers):
     assert media.shutdown_modes == [socket.SHUT_WR]
     assert media.eof_reads == 1 and media.closed
     assert client._retired_stream_sock is None  # noqa: SLF001
+
+
+def test_malformed_stop_reply_is_explicit_protocol_error(peers):
+    client = start(peers)
+    peers[4].data = reply(0x2014, "<Response>")
+    with pytest.raises(PyEzvizError, match="malformed XML"):
+        client.stop_preview()
+    client.close()
+    assert all(peer.closed for peer in peers[2:5])
+
+
+def test_malformed_stop_reply_never_masks_context_body_exception(peers):
+    client = start(peers)
+    peers[4].data = reply(0x2014, "<Response>")
+    with pytest.raises(ValueError, match="original context error"), client:
+        raise ValueError("original context error")
+    assert all(peer.closed for peer in peers[2:5])
+    assert not peers[3].shutdown_modes

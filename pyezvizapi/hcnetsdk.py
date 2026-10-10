@@ -9168,7 +9168,11 @@ class EzvizLocalSdkClient:
             )
         if exchange.response.header.command != EZVIZ_LOCAL_SDK_STOP_PREVIEW_RESPONSE:
             raise PyEzvizError("EZVIZ stop preview returned unexpected command")
-        if parse_ezviz_local_sdk_xml_fields(exchange.response).get("Result") != "0":
+        try:
+            result = parse_ezviz_local_sdk_xml_fields(exchange.response).get("Result")
+        except ET.ParseError as err:
+            raise PyEzvizError("EZVIZ stop preview returned malformed XML") from err
+        if result != "0":
             raise PyEzvizError("EZVIZ stop preview was not accepted")
         sock = self._stream_sock if self._stream_sock is not None else self._retired_stream_sock
         if sock is not None:

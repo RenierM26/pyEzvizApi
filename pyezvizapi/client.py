@@ -3493,6 +3493,10 @@ class EzvizClient:
             # Account discovery already fetched this key. Preserve it across
             # local protocol/rate retries and any eligible cloud fallback.
             options = replace(options, decode=replace(options.decode, media_key=source.credentials.media_key))
+        if isinstance(source, LocalSdkEcdhClipSource) and options.max_packets is not None:
+            # Emitted media packets exclude handshake/descriptor/detection
+            # frames. Retain a separate, finite negotiation allowance.
+            source = replace(source, max_frames=options.max_packets + 64)
         deadline = (
             time.monotonic() + options.duration_seconds
             if options.duration_seconds is not None

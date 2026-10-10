@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import pytest
@@ -617,3 +618,58 @@ def test_open_stream_preserves_cloud_auto_channel_and_local_defaults(monkeypatch
     with stream:
         assert len(list(stream.iter_media_packets(limits=CaptureLimits(max_packets=1)))) == 1
     assert requested == [channel if kind == "cloud" or channel is not None else 1]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("packet_limit", [1, 2])
+def test_auto_clip_packet_bound_allows_handshake_and_legacy_detection(
+    monkeypatch, legacy: bool, packet_limit: int,
+) -> None:
+    opened: list[dict[str, Any]] = []
+    frames_read: list[int] = []
+
+    class Stream:
+        media_key = "media-key"
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            pass
+        def iter_packets(self, *, max_packets, max_frames, **_kwargs):
+            assert max_packets == packet_limit
+            assert max_frames is not None and max_frames >= 8
+            emitted = 0
+            for frame in range(max_frames):
+                frames_read.append(frame)
+                if legacy:
+                    if frame == 7:
+                        raise EzvizUnsupportedMediaError("legacy PS evidence", source="local-sdk-ecdh", reason="protocol_mismatch")
+                elif frame >= 2:  # handshake and descriptor precede media
+                    yield SimpleNamespace(body=PAYLOAD)
+                    emitted += 1
+                    if emitted == max_packets:
+                        return
+
+    def open_ecdh(*_args, **kwargs):
+        opened.append(kwargs)
+        return Stream()
+
+    def save_legacy(_serial, output, **kwargs):
+        assert kwargs["max_packets"] == packet_limit
+        assert kwargs["credentials"] == credentials()
+        output.write(PAYLOAD * packet_limit)
+        return {"source": "local-sdk", "format": "mpegps"}
+
+    client = EzvizClient()
+    monkeypatch.setattr(client, "get_cam_key", fail)
+    monkeypatch.setattr(client, "get_device_infos", fail)
+    monkeypatch.setattr(client, "_save_local_sdk_clip", save_legacy)
+    monkeypatch.setattr(local_stream_ecdh, "open_local_sdk_ecdh_stream_from_client", open_ecdh)
+    output = BytesIO()
+    result = client.save_clip_with_options(CAMERA, output, ClipOptions(
+        source=AutoClipSource(mode="offline", credentials=credentials()),
+        capture=CaptureLimits(max_packets=packet_limit),
+    ))
+    assert result["source"] == ("local-sdk" if legacy else "local-sdk-ecdh")
+    assert output.getvalue() == PAYLOAD * packet_limit
+    assert len(opened) == 1
+    assert len(frames_read) == (8 if legacy else 2 + packet_limit)

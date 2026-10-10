@@ -1645,7 +1645,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912,PLR0915
         native_wrapper_seen = any(
             candidate.extension_profile == 0x4000
             and candidate.extension_data.startswith(b"\x80\x06")
-            for candidate in prefix
+            for candidate in video_probe
         )
         if (native_wrapper_seen and idmx_video_frame_rate(prefix) is None
                 and consumed_packets < _RTP_TIMING_PROBE_MAX_PACKETS):

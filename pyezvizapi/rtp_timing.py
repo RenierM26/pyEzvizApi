@@ -61,23 +61,22 @@ def _video_events(
     nal_units: Iterable[bytes], timestamps: Iterable[int], codec: RtpVideoCodec,
 ) -> Iterator[tuple[int, int, bytes]]:
     pending: list[bytes] = []
-    origin: int | None = None
-    previous = -1
+    previous_raw: int | None = None
+    elapsed = 0
     for timestamp, entries in groupby(zip(timestamps, nal_units, strict=True), key=lambda pair: pair[0]):
         units = [unit for _timestamp, unit in entries]
         pending.extend(units)
         if not rtp_nal_units_have_vcl(units, codec=codec):
             continue
-        if origin is None:
-            origin = timestamp
-        relative = (timestamp - origin) & 0xFFFFFFFF
-        if relative <= previous or relative >= 0x80000000:
+        delta = (timestamp - previous_raw) & 0xFFFFFFFF if previous_raw is not None else 0
+        if previous_raw is not None and (delta == 0 or delta >= 0x80000000):
             raise EzvizUnsupportedMediaError(
                 "Native RTP video timestamps are nonmonotonic; use another stream source",
                 source="rtp", reason="unsupported_video_timing",
             )
-        previous = relative
-        yield relative, 0xE0, b"".join(ANNEX_B_START_CODE + unit for unit in pending)
+        previous_raw = timestamp
+        elapsed += delta
+        yield elapsed, 0xE0, b"".join(ANNEX_B_START_CODE + unit for unit in pending)
         pending.clear()
 
 
@@ -127,10 +126,10 @@ class NativeRtpPsMuxer:
     def __init__(self, codec: RtpVideoCodec, *, audio: bool) -> None:
         self.codec: RtpVideoCodec = codec
         self._map = _program_stream_map(codec, audio=audio)
-        self._video_origin: int | None = None
-        self._audio_origin: int | None = None
-        self._video_previous = -1
-        self._audio_previous = -1
+        self._video_raw: int | None = None
+        self._audio_raw: int | None = None
+        self._video_elapsed = 0
+        self._audio_elapsed = 0
         self._scr = 0
         self._pending = bytearray()
 
@@ -143,32 +142,31 @@ class NativeRtpPsMuxer:
     def video(self, timestamp: int, nal_unit: bytes) -> Iterator[bytes]:
         """Frame completed NALs, holding only bounded initial parameter data."""
 
-        if self._video_origin is None:
+        if self._video_raw is None:
             self._pending.extend(ANNEX_B_START_CODE + nal_unit)
             if not rtp_nal_units_have_vcl((nal_unit,), codec=self.codec):
                 if len(self._pending) > 1_048_576:
                     raise PyEzvizError("Native RTP video startup parameters exceed buffer limit")
                 return
-            self._video_origin = timestamp
             payload = bytes(self._pending)
             self._pending.clear()
         else:
             payload = ANNEX_B_START_CODE + nal_unit
-        relative = (timestamp - self._video_origin) & 0xFFFFFFFF
-        if relative < self._video_previous or relative >= 0x80000000:
+        delta = (timestamp - self._video_raw) & 0xFFFFFFFF if self._video_raw is not None else 0
+        if delta >= 0x80000000:
             raise PyEzvizError("Native RTP video clock reset or reordered access unit")
-        self._video_previous = relative
-        yield from self._frame(relative, 0xE0, payload)
+        self._video_raw = timestamp
+        self._video_elapsed += delta
+        yield from self._frame(self._video_elapsed, 0xE0, payload)
 
     def audio(self, timestamp: int, audio: RtpAacStream) -> Iterator[bytes]:
         """Preserve forward whole-AU gaps without generating silence."""
 
-        if self._audio_origin is None:
-            self._audio_origin = timestamp
-        relative = (timestamp - self._audio_origin) & 0xFFFFFFFF
-        if relative <= self._audio_previous or relative >= 0x80000000 or relative % 1024:
+        delta = (timestamp - self._audio_raw) & 0xFFFFFFFF if self._audio_raw is not None else 0
+        if self._audio_raw is not None and (delta == 0 or delta >= 0x80000000 or delta % 1024):
             raise PyEzvizError("Native RTP AAC clock reset or invalid access-unit spacing")
-        self._audio_previous = relative
+        self._audio_raw = timestamp
+        self._audio_elapsed += delta
         for offset, stream_id, payload in _audio_events(audio):
-            clock = (relative * _RTP_VIDEO_CLOCK + audio.sample_rate // 2) // audio.sample_rate + offset
+            clock = (self._audio_elapsed * _RTP_VIDEO_CLOCK + audio.sample_rate // 2) // audio.sample_rate + offset
             yield from self._frame(clock, stream_id, payload)

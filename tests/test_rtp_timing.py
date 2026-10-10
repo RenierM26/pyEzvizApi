@@ -158,3 +158,31 @@ def test_native_proxy_accepts_descriptor_backed_aac_after_startup_probe(monkeypa
     assert audio_pes_start in output.getvalue()
     assert adts in output.getvalue()
     assert frame_payload in output.getvalue()
+
+
+def _pes_timestamp(payload: bytes, stream_id: int) -> int:
+    start = payload.index(b"\x00\x00\x01" + bytes((stream_id,)))
+    a, b, c, d, e = payload[start + 9:start + 14]
+    return ((a & 14) << 29) | (b << 22) | ((c & 254) << 14) | (d << 7) | (e >> 1)
+
+
+@pytest.mark.parametrize("incremental", [False, True])
+def test_video_unwraps_multiple_rtp_wraps_without_fixed_origin_timeout(incremental: bool) -> None:
+    raw = [(123 + index * 0x40000000) & 0xFFFFFFFF for index in range(6)]
+    units = [b"\x65\x80frame"] * len(raw)
+    if incremental:
+        muxer = NativeRtpPsMuxer("h264", audio=False)
+        payloads = [p for timestamp, unit in zip(raw, units, strict=True) for p in muxer.video(timestamp, unit)]
+    else:
+        payloads = list(timed_rtp_mpegps_payloads(units, raw, codec="h264"))
+    assert [_pes_timestamp(payload, 0xE0) for payload in payloads] == [index * 0x40000000 for index in range(6)]
+
+
+def test_incremental_audio_unwraps_elapsed_samples_and_mpeg_pts_rollover() -> None:
+    muxer = NativeRtpPsMuxer("h264", audio=True)
+    audio = RtpAacStream(b"\xff\xf1\x60\x40\x00\xff\xfc", 16000, 1, 1)
+    for index in range(6):
+        timestamp = (100 + index * 0x40000000) & 0xFFFFFFFF
+        payload = next(muxer.audio(timestamp, audio))
+        expected = (index * 0x40000000 * 90000 + 8000) // 16000
+        assert _pes_timestamp(payload, 0xC0) == expected & 0x1FFFFFFFF

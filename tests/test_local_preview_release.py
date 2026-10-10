@@ -33,11 +33,14 @@ class Peer:
         self.eof_reads = 0
         self.clock = None
         self.receive_step = 0.0
+        self.receive_error = None
 
     def sendall(self, data):
         self.sent.append(data)
 
     def recv(self, count):
+        if self.receive_error is not None:
+            raise self.receive_error
         if self.clock is not None:
             self.clock[0] += self.receive_step
         part, self.data = self.data[:count], self.data[count:]
@@ -237,3 +240,13 @@ def test_malformed_stop_reply_never_masks_context_body_exception(peers):
     assert caught is original
     assert all(peer.closed for peer in peers[2:5])
     assert not peers[3].shutdown_modes
+
+
+def test_stop_drain_os_timeout_is_sdk_deadline_error(peers):
+    client = start(peers)
+    peers[3].receive_error = TimeoutError("OS receive deadline")
+    with pytest.raises(EzvizLocalSdkDeadlineExpired, match="drain exceeded") as caught:
+        client.stop_preview()
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    client.close()
+    assert all(peer.closed for peer in peers[2:5])

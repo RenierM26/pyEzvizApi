@@ -9182,7 +9182,12 @@ class EzvizLocalSdkClient:
             try:
                 while drained < EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES:
                     sock.settimeout(_remaining_timeout(deadline, monotonic))
-                    chunk = sock.recv(min(65536, EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES - drained))
+                    try:
+                        chunk = sock.recv(min(65536, EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES - drained))
+                    except TimeoutError as err:
+                        raise EzvizLocalSdkDeadlineExpired(
+                            "EZVIZ stop preview drain exceeded its deadline"
+                        ) from err
                     if not chunk:
                         break
                     drained += len(chunk)

@@ -61,7 +61,11 @@ is not emitted.
 - Descriptor-backed IDMX AAC uses the native sample rate and channel count and
   is retained in decrypted local and cloud RTP MPEG-TS output. Descriptor-free
   IDMX AAC stays video-only because packet cadence is not sufficient evidence
-  for a reliable sample-rate guess.
+  for a reliable sample-rate guess. Bounded IDMX captures retain positive AAC
+  timestamp gaps in local concat timelines instead of dropping the entire audio
+  track. Received access units remain unchanged; missing units are not filled
+  with generated silence. Reordered or invalid audio clocks are not accepted
+  as forward gaps. Incremental proxy audio continuity is a separate limitation.
 
 ### RTP/IDMX codec detection
 
@@ -162,8 +166,12 @@ bound before network work. New code should use valid positive, finite
   their SSRC happens to have that same value. Local
   one-byte-prefixed RTP records are normalized with their extensions and padding
   before media reassembly; padding is never part of the encrypted NAL. Native
-  HEVC media wrappers use encoded SPS/VUI timing rather than a forced RTP-clock
-  frame-rate estimate.
+  HEVC media wrappers use the advertised `0x42` video descriptor frame period
+  when present, retaining exact rational rates. Reserved or invalid periods do
+  not establish timing; without that descriptor, encoded SPS/VUI timing remains
+  the fallback rather than a forced wrapper RTP-clock estimate. Later valid metadata corrects startup
+  placeholders, as for AAC metadata. Bounded elementary-stream remuxing uses
+  that advertised rate; it does not certify arbitrary variable-frame-rate input.
 - Direct local SDK streaming requires LAN endpoint and CAS data and may require
   P2P registration before CAS lookup.
 - ECDH IDMX/RTP streaming requires the native `0x43` metadata descriptor for

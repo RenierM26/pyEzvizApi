@@ -9,6 +9,7 @@ from pyezvizapi.rtp import (
     KNOWN_AUDIO_PAYLOAD_TYPES,
     KNOWN_VIDEO_PAYLOAD_TYPES,
     RtpAacStream,
+    RtpPacket,
     RtpRouteProfile,
     RtpStreamDescriptor,
     RtpVideoCodec,
@@ -16,6 +17,7 @@ from pyezvizapi.rtp import (
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
+    idmx_video_frame_rate,
     parse_rtp_packet,
     rtp_codec_payload_types,
     rtp_media_kind,
@@ -2094,3 +2096,65 @@ def test_ordinary_rtp_may_share_idmx_marker_without_independent_counters() -> No
     assert rtp_packets_to_nal_units(
         (start, audio, end), codec="h264", completed_access_units_only=True
     ) == (expected,)
+
+
+def _native_video_period_packet(period: int, *, idmx: bool = True) -> RtpPacket:
+    descriptor = b"\x42\x0e" + b"\x00" * 11 + (period << 1).to_bytes(3, "big")
+    return parse_rtp_packet(
+        _rtp(b"metadata", sequence=1, payload_type=112,
+             extension_profile=2, extension_data=descriptor), idmx=idmx,
+    )
+
+
+@pytest.mark.parametrize(("period", "rate"), [(6000, "15"), (3003, "30000/1001"), (3600, "25")])
+def test_native_video_descriptor_retains_exact_frame_rate(period: int, rate: str) -> None:
+    assert idmx_video_frame_rate((_native_video_period_packet(period),)) == rate
+
+
+@pytest.mark.parametrize("period", [0, 186, 1530001, 0x7FFFFE, 0x7FFFFF])
+def test_native_video_descriptor_does_not_invent_reserved_timing(period: int) -> None:
+    assert idmx_video_frame_rate((_native_video_period_packet(period),)) is None
+
+
+def test_native_video_descriptor_requires_native_provenance() -> None:
+    assert idmx_video_frame_rate((_native_video_period_packet(6000, idmx=False),)) is None
+
+
+def test_native_video_descriptor_uses_corrected_startup_period() -> None:
+    assert idmx_video_frame_rate((
+        _native_video_period_packet(3600), _native_video_period_packet(6000),
+        _native_video_period_packet(0x7FFFFF),
+    )) == "15"
+
+
+def test_native_video_descriptor_ignores_truncated_extension() -> None:
+    packet = parse_rtp_packet(_rtp(b"media", sequence=1, extension_profile=2,
+        extension_data=b"\x42\x0e" + b"\x00" * 10), idmx=True)
+    assert idmx_video_frame_rate((packet,)) is None
+
+
+@pytest.mark.parametrize("origin", [0, 0xFFFFFC00])
+def test_bounded_aac_retains_missing_au_sample_offsets_across_wrap(origin: int) -> None:
+    packets = [parse_rtp_packet(_rtp(b"metadata", sequence=0, payload_type=112,
+        extension_profile=2, extension_data=bytes.fromhex("430a0090fe00fa0301f403ff")), idmx=True)]
+    for sequence, offset in enumerate([0, 1024, 4096, 5120], start=1):
+        packets.append(parse_rtp_packet(_rtp(b"\x00\x10\x00\x10xy", sequence=sequence,
+            timestamp=(origin + offset) & 0xFFFFFFFF, payload_type=104,
+            extension_profile=0x4000, extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01"), idmx=True))
+    assert decrypt_idmx_aac_packets(packets, b"key") is None
+    audio = decrypt_idmx_aac_packets(packets, b"key", require_contiguous=False)
+    assert audio is not None
+    assert audio.frame_count == 4
+    assert [offset for offset, _data in audio.timed_segments] == [0, 4096]
+    assert b"".join(data for _offset, data in audio.timed_segments) == audio.adts
+
+
+@pytest.mark.parametrize("delta", [0, 1023, 0xFFFFFFFF])
+def test_bounded_aac_does_not_convert_reorder_or_invalid_clock_to_gap(delta: int) -> None:
+    packets = [parse_rtp_packet(_rtp(b"metadata", sequence=0, payload_type=112,
+        extension_profile=2, extension_data=bytes.fromhex("430a0090fe00fa0301f403ff")), idmx=True)]
+    for sequence, timestamp in enumerate([0, delta], start=1):
+        packets.append(parse_rtp_packet(_rtp(b"\x00\x10\x00\x10xy", sequence=sequence,
+            timestamp=timestamp, payload_type=104, extension_profile=0x4000,
+            extension_data=b"\x80\x06\x00\x01\x21\x21\x02\x01"), idmx=True))
+    assert decrypt_idmx_aac_packets(packets, b"key", require_contiguous=False) is None

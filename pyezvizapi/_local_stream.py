@@ -88,6 +88,7 @@ from .stream_media import (
     MPEG_PS_START_CODE,
     MPEG_START_CODE_PREFIX,
     _hikvision_aes_ecb_cipher,
+    _is_mpeg_ps_packet_start_id,
     decrypt_hikvision_ps_video,
 )
 
@@ -2703,15 +2704,22 @@ def _looks_like_hcnetsdk_wrapped_media_payload(payload: bytes) -> bool:
 
 
 def _strip_local_sdk_payload_header(payload: bytes) -> bytes:
-    """Remove the 2-byte EZVIZ local stream fragment header before MPEG-PS.
+    """Remove native EZVIZ local transport markers before MPEG-PS.
 
     The direct-local 9020 path wraps every RTP payload body with a small
-    fragment marker. Observed local-SDK values are 1c80 for the first fragment
-    of a PS packet and 1c00 for continuations. FFmpeg expects concatenated
-    MPEG-PS bytes, so callers should not see this local transport marker.
+    fragment marker. Observed values are 1c80 for the first fragment, 1c00 for
+    continuations, and 1c40 for the final fragment. Unfragmented PS records,
+    including audio PES packets, instead use a one-byte 0d marker. Strip that
+    marker only before a recognized PS packet start, not arbitrary media bytes.
     """
     if len(payload) >= 2 and payload[0] == 0x1C:
         return payload[2:]
+    if (
+        len(payload) >= 5
+        and payload[:4] == b"\x0d" + MPEG_START_CODE_PREFIX
+        and _is_mpeg_ps_packet_start_id(payload[4])
+    ):
+        return payload[1:]
     return payload
 
 

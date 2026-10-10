@@ -1542,6 +1542,53 @@ def test_local_sdk_media_stream_strips_ezviz_fragment_headers() -> None:
         b"def",
     ]
 
+@pytest.mark.parametrize("command_port", [False, True])
+@pytest.mark.parametrize("stream_id", [0xBA, 0xBC, 0xC0, 0xE0])
+def test_local_media_stream_preserves_mixed_fragmented_and_single_ps_records(
+    command_port: bool, stream_id: int
+) -> None:
+    first = b"\x00\x00\x01\xba" + b"pack"
+    record = b"\x00\x00\x01" + bytes((stream_id,)) + b"record"
+    frames = (
+        _media(b"\x1c\x80" + first, sequence=1),
+        _media(b"\x1c\x00middle", sequence=1),
+        _media(b"\x1c\x40tail", sequence=1),
+        _media(b"\x0d" + record, sequence=2),
+    )
+    stream: HcNetSdkCommandPortMediaStream | EzvizLocalSdkMediaStream
+    if command_port:
+        stream = HcNetSdkCommandPortMediaStream(
+            _FakeCommandPortClient(*frames),  # type: ignore[arg-type]
+            (b"preview-start",),
+        )
+    else:
+        stream = EzvizLocalSdkMediaStream(
+            _FakeSdkClient(*frames), _preview_request()  # type: ignore[arg-type]
+        )
+
+    packets = list(stream.iter_packets(max_packets=4))
+
+    assert b"".join(packet.body for packet in packets) == first + b"middletail" + record
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"\x0d",
+        b"\x0d\x00\x00\x01",
+        b"\x0d\x00\x00\x01\x40\x01hevc",
+        b"\x0d\x80\x60rtp",
+        b"\x0dmedia",
+        b"\x00\x00\x01\xbapack",
+    ],
+)
+def test_local_sdk_media_stream_keeps_non_ps_shim_lookalikes(payload: bytes) -> None:
+    stream = EzvizLocalSdkMediaStream(
+        _FakeSdkClient(_media(payload)), _preview_request()  # type: ignore[arg-type]
+    )
+
+    assert next(stream.iter_packets(max_packets=1)).body == payload
+
 def test_hcnetsdk_command_port_media_stream_strips_rtp_continuation_fragments() -> None:
     first_payload = b"\x1c\x80\x00\x00\x01\xbaabc"
     continuation_payload = b"\x1c\x00def"

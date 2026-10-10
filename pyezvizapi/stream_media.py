@@ -8,6 +8,7 @@ from ._stream import (  # noqa: F401
     MPEG_TS_SYNC_BYTE,
     _find_hevc_nal_start_codes,
     _hikvision_aes_ecb_cipher,
+    _is_mpeg_ps_packet_start_id,
     decrypt_hikvision_ps_video,
     detect_hikvision_ps_video_nalu_header_size,
     detect_transport,

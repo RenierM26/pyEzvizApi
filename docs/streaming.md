@@ -429,10 +429,15 @@ summary = details.as_dict()
 
 An existing `HcNetSdkPurePythonClient` also exposes `stream_details(channel=1)`.
 Both paths use supplied LAN login credentials only. Those credentials are not
-necessarily interchangeable with CAS credentials or the video encryption key.
+necessarily interchangeable with CAS credentials. The app can use the original
+sticker verification code or the current user-defined encryption password for
+local login; supply the known current value explicitly. Do not substitute a
+CAS operation key or a derived AES key, or enumerate passwords automatically.
 There are no cloud calls, credential renewal, authentication retries, or cloud
 fallbacks. Login failure is not evidence that a camera lacks the capability.
-The finite network timeout covers one login and both read-only queries;
+The login connection stays open while both authenticated queries run: newer
+cameras invalidate the session when that connection closes. The finite network
+timeout covers one login and both read-only queries;
 local RSA generation precedes it. Replies have a configurable size limit
 (`max_response_bytes`, default 512 KiB, including the frame header).
 
@@ -440,6 +445,7 @@ local RSA generation precedes it. Replies have a configurable size limit
 | --- | --- |
 | `configuration` / `main` / `sub` | Camera-reported configuration, not decoded media |
 | `capabilities` | Supported profiles, with per-resolution dimensions and limits |
+| `capabilities_error` | Raw device rejection code when ranges could not be retrieved; `None` on success |
 | `configured_resolution()` | Configuration index resolved against this camera's own capability list |
 | Stream descriptors / decoded media | What an actual preview session emits |
 | Encryption negotiation | Independent evidence needed to select legacy versus ECDH |
@@ -447,6 +453,11 @@ local RSA generation precedes it. Replies have a configurable size limit
 Native codec, frame-rate and bitrate fields remain SDK codes. A frame-rate code
 of 14 does **not** mean 14 fps. Resolution dimensions come from the camera XML,
 not a guessed index table; unknown or ambiguous associations return `None`.
+A complete header-only rejection of the optional capability query retains the
+confirmed configuration and exposes `capabilities_error`; it is not evidence
+that the camera supports no profiles. Dimensions/ranges remain unknown. Empty
+success, malformed responses, login failure and network timeouts still raise.
+
 Fixed bitrate choices advertised as `VideoBitrate/Range` are preserved as
 `bitrate_codes`, including when a camera supplies no custom `Min`/`Max` bounds.
 `reported_login_serial` is the native hardware/model identity string and need

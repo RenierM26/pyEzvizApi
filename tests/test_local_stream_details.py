@@ -237,3 +237,47 @@ def test_frame_limit_failure_invalidates_attached_transport(wire) -> None:
     with pytest.raises(PyEzvizError, match="frame limit"):
         client.read_tcp_frame(deadline=20, monotonic=lambda: 10, max_frame_bytes=32)
     assert sock.closed and not client.connected
+
+
+def test_discovery_retains_login_connection_until_both_queries_finish(wire) -> None:
+    # These cameras invalidate the session when the login socket closes.
+    factory = wire.factory
+    def session_bound_factory(address, timeout):
+        if wire.calls:
+            assert not wire.sockets[0].closed, 'query used an expired login session'
+        return factory(address, timeout)
+    wire.factory = session_bound_factory
+    discover(wire)
+    assert all(socket.closed for socket in wire.sockets)
+
+
+def test_explicit_capability_rejection_retains_configuration_without_guessed_limits(wire) -> None:
+    wire.sockets[2].data = build_hcnetsdk_tcp_frame(b'', field_4=151, field_8=151)
+    result = discover(wire)
+    assert result.capabilities_error == 151
+    assert not result.capabilities.success
+    assert result.configured_media().video_codec == 'h264'
+    assert result.configured_resolution() is None
+    assert result.configured_resolution(sub_stream=True) is None
+    summary = result.as_dict()
+    assert summary['capabilities_error'] == 151
+    assert summary['main']['resolution'] == 27
+    assert summary['main_configured_media']['width'] is None
+    assert all(socket.closed for socket in wire.sockets)
+
+
+@pytest.mark.parametrize('fields', [(0, 0), (1, 1), (151, 1), (1, 151)])
+def test_empty_or_inconsistent_ability_response_is_not_partial_success(wire, fields) -> None:
+    wire.sockets[2].data = build_hcnetsdk_tcp_frame(b'', field_4=fields[0], field_8=fields[1])
+    with pytest.raises(PyEzvizError, match='Invalid EZVIZ LAN audio/video compress XML'):
+        discover(wire)
+    assert all(socket.closed for socket in wire.sockets)
+
+
+@pytest.mark.parametrize('declared_length', [0, 8, 15])
+def test_short_ack_cannot_masquerade_as_capability_rejection(wire, declared_length) -> None:
+    raw = build_hcnetsdk_tcp_frame(b'', field_4=151, field_8=151)
+    wire.sockets[2].data = declared_length.to_bytes(4, 'big') + raw[4:]
+    with pytest.raises(PyEzvizError, match='total length is too small'):
+        discover(wire)
+    assert all(socket.closed for socket in wire.sockets)

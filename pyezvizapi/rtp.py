@@ -1813,6 +1813,9 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if codec == "hevc":
         # first_slice_segment_in_pic_flag follows the two-byte NAL header.
         return len(nal) > 2 and bool(nal[2] & 0x80)
+    # Data partitions B/C begin with slice_id, not first_mb_in_slice.
+    if nal and (nal[0] & 0x1F) in {3, 4}:
+        return False
     header_size = _h264_slice_header_offset(nal)
     return len(nal) > header_size and bool(nal[header_size] & 0x80)
 

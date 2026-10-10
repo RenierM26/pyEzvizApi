@@ -56,6 +56,18 @@ def test_incremental_repeated_picture_timestamp_rejects_only_new_picture(codec, 
         list(muxer.video(6100, first))
 
 
+def test_incremental_h264_data_partitions_share_the_partition_a_picture_clock() -> None:
+    muxer = NativeRtpPsMuxer("h264", audio=False)
+    partition_a = b"\x42\x80slice_header"
+    assert list(muxer.video(100, partition_a))
+    # slice_id zero has the same leading bit as first_mb_in_slice zero.
+    assert list(muxer.video(100, b"\x43\x80partition_b"))
+    assert list(muxer.video(100, b"\x44\x80partition_c"))
+    assert list(muxer.video(6100, partition_a))
+    with pytest.raises(EzvizUnsupportedMediaError, match="repeat for a new picture"):
+        list(muxer.video(6100, partition_a))
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")
 @pytest.mark.parametrize(("incremental", "jitter"), [(False, False), (True, False), (False, True)])
 def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: Path, incremental: bool, jitter: bool) -> None:

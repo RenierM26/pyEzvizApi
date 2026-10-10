@@ -3485,6 +3485,14 @@ class EzvizClient:
             source_options,
             fetch_media_key=options.decode.decrypt_video and options.decode.media_key is None,
         )
+        if (
+            options.decode.decrypt_video and options.decode.media_key is None
+            and isinstance(source, LocalSdkClipSource | LocalSdkEcdhClipSource)
+            and source.credentials is not None
+        ):
+            # Account discovery already fetched this key. Preserve it across
+            # local protocol/rate retries and any eligible cloud fallback.
+            options = replace(options, decode=replace(options.decode, media_key=source.credentials.media_key))
         deadline = (
             time.monotonic() + options.duration_seconds
             if options.duration_seconds is not None

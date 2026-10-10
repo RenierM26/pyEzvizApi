@@ -501,3 +501,40 @@ def test_auto_long_form_preserves_explicit_default_port(monkeypatch, port: int |
     source = captured[0].source
     assert isinstance(source, AutoClipSource)
     assert source.receiver_port == port
+
+
+@pytest.mark.parametrize("kind", ["legacy", "ecdh"])
+@pytest.mark.parametrize("explicit_key", [None, "caller-key"])
+def test_auto_cloud_fallback_reuses_discovered_key_without_second_lookup(
+    monkeypatch, kind: str, explicit_key: str | None,
+) -> None:
+    client = EzvizClient()
+    selected = (LocalSdkClipSource if kind == "legacy" else LocalSdkEcdhClipSource)(credentials=credentials())
+    lookups: list[bool] = []
+
+    def select(_client, _serial, _options, *, fetch_media_key):
+        lookups.append(fetch_media_key)
+        return selected
+
+    def local(_serial, _output, **kwargs):
+        assert kwargs["media_key"] == (explicit_key or "media-key")
+        raise TimeoutError("LAN unavailable")
+
+    def cloud(_client, _serial, output, **kwargs):
+        assert kwargs["media_key"] == (explicit_key or "media-key")
+        assert kwargs["capture_deadline"] is not None
+        output.write(PAYLOAD)
+
+    monkeypatch.setattr("pyezvizapi.client.select_stream_source", select)
+    monkeypatch.setattr(client, "get_cam_key", fail)
+    monkeypatch.setattr(client, "_save_local_sdk_clip", local)
+    monkeypatch.setattr(client, "_save_local_sdk_ecdh_clip", local)
+    monkeypatch.setattr("pyezvizapi.client.copy_cloud_stream_to_mpegts", cloud)
+    output = BytesIO()
+    options = ClipOptions(source=AutoClipSource(),
+                          decode=MediaDecodeOptions(decrypt_video=True, media_key=explicit_key))
+    result = client.save_clip_with_options(CAMERA, output, options)
+    assert result["source"] == "cloud"
+    assert output.getvalue() == PAYLOAD
+    assert lookups == [explicit_key is None]
+    assert options.decode.media_key == explicit_key

@@ -535,3 +535,18 @@ fallback, cloud retrieval or renewal. Login rejection does not imply unsupported
 stream capabilities. Cameras accepting TLS but rejecting the available LAN
 credential still need the correct app/local password for configuration queries;
 CAS-authorized preview headers remain an independent discovery source.
+
+### Owned local preview cleanup
+
+Structured local SDK previews remember only their accepted positive session.
+Closing releases that session using the native stop request on a fresh command
+connection, then drains the stopped media socket before closing it. Cleanup is
+best-effort and bounded by one two-second deadline and a 4 MiB drain limit; it
+never calls the cloud or retries credentials. Explicit `stop_preview()` exposes
+stop errors to low-level callers. Raw caller-supplied setup bodies do not grant
+stop authority. The stop envelope shares command 0x2013 with ECDH pre-start, but
+uses the owned session rather than a wildcard initialization body. A media socket
+with an interrupted partial frame is removed from parsing and retained only for
+this bounded teardown. Further reads on that client are rejected rather than
+opening an unrelated socket. Consuming an explicit stop also makes the client
+terminal, including when the stop fails; callers must close it before reopening.

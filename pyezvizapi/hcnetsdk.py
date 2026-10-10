@@ -305,6 +305,11 @@ EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE = 16
 EZVIZ_LOCAL_SDK_SSL_IV_PREFIX = b"01234567"
 EZVIZ_LOCAL_SDK_PRE_START_COMMAND = 0x2013
 EZVIZ_LOCAL_SDK_PRE_START_RESPONSE = 0x2014
+# Native SendByeStream uses the same envelope ID with an owned Session.
+EZVIZ_LOCAL_SDK_STOP_PREVIEW_COMMAND = 0x2013
+EZVIZ_LOCAL_SDK_STOP_PREVIEW_RESPONSE = 0x2014
+EZVIZ_LOCAL_SDK_STOP_TIMEOUT = 2.0
+EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES = 4 * 1024 * 1024
 EZVIZ_LOCAL_SDK_PREVIEW_COMMAND = 0x2011
 EZVIZ_LOCAL_SDK_PREVIEW_RESPONSE = 0x2012
 EZVIZ_LOCAL_SDK_STREAM_SETUP_COMMAND = 0x3105
@@ -8837,6 +8842,23 @@ def build_ezviz_local_stream_setup_request_body(
     )
 
 
+def build_ezviz_local_stop_preview_request_body(
+    *, operation_code: str, session: str | int
+) -> bytes:
+    """Build the native session-scoped bye; never generate wildcard stops."""
+    if (
+        isinstance(session, bool)
+        or not str(session).isascii()
+        or not str(session).isdigit()
+        or len(str(session)) > 10
+        or not 0 < int(session) <= 0x7FFFFFFF
+    ):
+        raise PyEzvizError("EZVIZ stop preview requires a positive owned session")
+    if not operation_code:
+        raise PyEzvizError("EZVIZ stop preview requires supplied operation code")
+    return _build_local_sdk_request_xml((("OperationCode", operation_code), ("Session", session)))
+
+
 class _DeadlineBoundRecvSocket:
     """Apply an absolute deadline and configured timeout to every receive."""
 
@@ -9083,6 +9105,9 @@ class EzvizLocalSdkClient:
         self.command_source_host = command_source_host
         self._command_sock: Any | None = None
         self._stream_sock: Any | None = None
+        self._owned_preview: tuple[str, str, int] | None = None
+        self._retired_stream_sock: Any | None = None
+        self._preview_stopped = False
 
     def __enter__(self) -> EzvizLocalSdkClient:
         return self
@@ -9091,12 +9116,91 @@ class EzvizLocalSdkClient:
         self.close()
 
     def close(self) -> None:
-        """Close any opened local sockets."""
-        for sock in (self._command_sock, self._stream_sock):
-            if sock is not None:
-                sock.close()
-        self._command_sock = None
-        self._stream_sock = None
+        """Release this preview best-effort, then close sockets (at most 2s cleanup)."""
+        try:
+            with suppress(OSError, PyEzvizError):
+                self.stop_preview()
+        finally:
+            for sock in (self._command_sock, self._stream_sock, self._retired_stream_sock):
+                if sock is not None:
+                    with suppress(OSError):
+                        sock.close()
+            self._command_sock = None
+            self._stream_sock = None
+            self._retired_stream_sock = None
+            self._preview_stopped = False
+
+    def stop_preview(
+        self,
+        *,
+        timeout: float = EZVIZ_LOCAL_SDK_STOP_TIMEOUT,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> EzvizLocalSdkExchange | None:
+        """Release only a preview accepted on this client, once, without retries.
+
+        Native SendByeStream uses a fresh command connection. After its ACK,
+        drain the stopped media socket to EOF instead of resetting unread data.
+        One finite deadline covers connect, send, response and bounded drain.
+        """
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise PyEzvizError("EZVIZ stop preview requires a finite positive timeout")
+        owned = self._owned_preview
+        self._owned_preview = None
+        if owned is None:
+            return None
+        self._preview_stopped = True
+        operation_code, session, sequence = owned
+        body = build_ezviz_local_stop_preview_request_body(
+            operation_code=operation_code, session=session
+        )
+        deadline = monotonic() + timeout
+        # Do not reuse the preview connection or its bound source port: the
+        # camera may already have closed it and the port may be in TIME_WAIT.
+        with closing(
+            EzvizLocalSdkClient(
+                self.endpoint,
+                self.device_info,
+                timeout=timeout,
+                socket_factory=self.socket_factory,
+                iv_factory=self.iv_factory,
+                response_trailer_length=self.response_trailer_length,
+            )
+        ) as stop_client:
+            exchange = stop_client.send_encrypted_command(
+                EZVIZ_LOCAL_SDK_STOP_PREVIEW_COMMAND,
+                body,
+                sequence=sequence,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        if exchange.response.header.command != EZVIZ_LOCAL_SDK_STOP_PREVIEW_RESPONSE:
+            raise PyEzvizError("EZVIZ stop preview returned unexpected command")
+        try:
+            result = parse_ezviz_local_sdk_xml_fields(exchange.response).get("Result")
+        except ET.ParseError as err:
+            raise PyEzvizError("EZVIZ stop preview returned malformed XML") from err
+        if result != "0":
+            raise PyEzvizError("EZVIZ stop preview was not accepted")
+        sock = self._stream_sock if self._stream_sock is not None else self._retired_stream_sock
+        if sock is not None:
+            sock.shutdown(socket.SHUT_WR)
+            previous_timeout = sock.gettimeout()
+            drained = 0
+            try:
+                while drained < EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES:
+                    sock.settimeout(_remaining_timeout(deadline, monotonic))
+                    try:
+                        chunk = sock.recv(min(65536, EZVIZ_LOCAL_SDK_STOP_DRAIN_BYTES - drained))
+                    except TimeoutError as err:
+                        raise EzvizLocalSdkDeadlineExpired(
+                            "EZVIZ stop preview drain exceeded its deadline"
+                        ) from err
+                    if not chunk:
+                        break
+                    drained += len(chunk)
+            finally:
+                sock.settimeout(previous_timeout)
+        return exchange
 
     def _invalidate_socket(self, sock: Any) -> None:
         """Detach and close a socket whose protocol framing may be corrupt."""
@@ -9104,6 +9208,12 @@ class EzvizLocalSdkClient:
             self._command_sock = None
         if self._stream_sock is sock:
             self._stream_sock = None
+            if self._owned_preview is not None and self._retired_stream_sock is None:
+                # A partial frame cannot be parsed again, but closing unread
+                # media before the owned stop ACK can strand the camera session.
+                # Keep it only for bounded raw teardown, never further parsing.
+                self._retired_stream_sock = sock
+                return
         with suppress(Exception):
             sock.close()
 
@@ -9202,6 +9312,9 @@ class EzvizLocalSdkClient:
         method supports it as an optional supplied frame without trying to
         synthesize unknown fields.
         """
+        if (self._owned_preview is not None or self._retired_stream_sock is not None
+                or self._preview_stopped):
+            raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
             pre_start = self.send_encrypted_command(
@@ -9267,6 +9380,9 @@ class EzvizLocalSdkClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap preview and build 0x3105 from the 0x2012 Session."""
+        if (self._owned_preview is not None or self._retired_stream_sock is not None
+                or self._preview_stopped):
+            raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
             pre_start = self.send_encrypted_command(
@@ -9296,6 +9412,22 @@ class EzvizLocalSdkClient:
             suffix = f" (Result={result})" if result else ""
             raise PyEzvizError(
                 "EZVIZ local preview response is missing Session" + suffix
+            )
+
+        # Remember only a positive accepted session generated by our structured
+        # preview path. Raw caller-owned setup bodies never imply stop authority.
+        fields = parse_ezviz_local_sdk_xml_fields(preview.response)
+        if (
+            fields.get("Result", "0") == "0"
+            and session.isascii()
+            and session.isdigit()
+            and len(session) <= 10
+            and 0 < int(session) <= 0x7FFFFFFF
+        ):
+            self._owned_preview = (
+                preview_request.operation_code,
+                session,
+                (max(preview_sequence, stream_setup_sequence) + 1) & 0xFFFFFFFF,
             )
 
         stream_setup = self.send_encrypted_command(
@@ -9436,6 +9568,10 @@ class EzvizLocalSdkClient:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Any:
+        if self._retired_stream_sock is not None or self._preview_stopped:
+            raise PyEzvizError(
+                "EZVIZ media socket was invalidated or stopped; close this client before reopening"
+            )
         if self._stream_sock is None:
             connect_timeout = self.timeout
             if timeout is not None:

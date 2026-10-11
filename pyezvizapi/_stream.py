@@ -1186,12 +1186,13 @@ def _mpeg_ps_complete_packet_ranges(
     data: bytes | bytearray,
     *,
     include_trailing_unbounded_video: bool = False,
+    start_offset: int = 0,
 ) -> list[_MpegPsPacketRange]:
-    """Return fully parsed MPEG-PS packet ranges from the start of ``data``."""
+    """Return complete packet ranges with absolute bounds from ``start_offset``."""
 
-    view = bytes(data)
+    view = data if isinstance(data, bytes) else bytes(data)
     ranges: list[_MpegPsPacketRange] = []
-    i = 0
+    i = start_offset
     while i < len(view):
         packet_end = _mpeg_ps_packet_end(view, i)
         if packet_end is not None:
@@ -1240,14 +1241,11 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
     offset = 0
     while offset < len(data):
         parsed = _mpeg_ps_complete_packet_ranges(
-            data[offset:], include_trailing_unbounded_video=True
+            data, include_trailing_unbounded_video=True, start_offset=offset
         )
         if not parsed:
             break
-        ranges.extend(
-            _MpegPsPacketRange(offset + item.start, offset + item.end, item.stream_id)
-            for item in parsed
-        )
+        ranges.extend(parsed)
         parsed_end = ranges[-1].end
         if parsed_end >= len(data):
             break
@@ -1260,8 +1258,23 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
             break
         if _is_video_pes_stream_id(ranges[-1].stream_id):
             previous = ranges[-1]
+            # A vendor continuation can bridge unparsed bytes, but must never
+            # include a complete audio/private/metadata packet found in the gap.
+            # Skip complete video bodies while searching, just as the walker
+            # does, rather than interpreting their compressed bytes as packets.
+            recovery_end = next_pack
+            candidate = data.find(MPEG_START_CODE_PREFIX, parsed_end, next_pack)
+            while candidate >= 0:
+                candidate_end = _mpeg_ps_packet_end(data, candidate)
+                if candidate_end is not None:
+                    if not _is_video_pes_stream_id(data[candidate + 3]):
+                        recovery_end = candidate
+                        break
+                    candidate = data.find(MPEG_START_CODE_PREFIX, candidate_end, next_pack)
+                else:
+                    candidate = data.find(MPEG_START_CODE_PREFIX, candidate + 3, next_pack)
             ranges[-1] = _MpegPsPacketRange(
-                previous.start, next_pack, previous.stream_id
+                previous.start, recovery_end, previous.stream_id
             )
         offset = next_pack
     return ranges

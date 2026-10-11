@@ -2750,29 +2750,21 @@ def _clear_native_selected_timeline(
     # from discarded startup or next-picture AAC. One successor video packet
     # proves the final timestamp boundary during strict reconstruction only;
     # output still uses the selected NAL suffix. Track origins remain independent.
-    profile = RtpRouteProfile()
-    for packet in packets[:end_packet]:
-        profile.absorb(packet)
-    audio_types = profile.codec_payload_types(
-        "aac", fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
-    )
     selected_packets: list[RtpPacket] = []
     boundary_index: int | None = None
     for i, packet in enumerate(packets[:end_packet + 1]):
-        if (packet.payload_type not in (audio_types | video_types)
-                or (first_packet <= i < end_packet and (packet.payload_type not in video_types
-                    or _rtp_sequence_key(packet) == selected_source))
-                or (i == end_packet and packet.payload_type in video_types)):
-            if i == end_packet and packet.payload_type in video_types:
-                boundary_index = len(selected_packets)
-                # The successor proves continuity, not a future profile epoch.
-                selected_packets.append(replace(packet, extension_data=b""))
-            else:
-                selected_packets.append(packet)
+        if i == end_packet:
+            boundary_index = len(selected_packets)
+            # The successor proves continuity, not a future profile epoch.
+            selected_packets.append(replace(packet, extension_data=b""))
+        elif (first_packet <= i < end_packet
+                and (packet.payload_type not in video_types
+                     or _rtp_sequence_key(packet) == selected_source)):
+            # Keep real non-video continuity events only inside the wire window.
+            selected_packets.append(packet)
         elif packet.extension_data:
-            # Internal descriptor-only event: impossible wire PT and SSRC keep
-            # discarded metadata out of real video sequence continuity. Never
-            # serialize it or dispatch its discarded media.
+            # Every discarded startup/control/media event is descriptor-only:
+            # impossible wire PT/SSRC isolate it from real source continuity.
             selected_packets.append(replace(packet, payload=b"", payload_type=-1, ssrc=-1))
     prefix = selected[:first_vcl]
     return prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets, boundary_index

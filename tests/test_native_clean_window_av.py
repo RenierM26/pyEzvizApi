@@ -168,17 +168,21 @@ def test_boundary_only_successor_proves_continuity_without_decoding_its_media(ne
     assert units == ((first,) if complete else ())
 
 
-def test_discarded_descriptor_does_not_create_loss_on_real_video_ssrc():
+@pytest.mark.parametrize(("startup_payload_type", "with_descriptor"), [(96, True), (112, True), (112, False)])
+def test_discarded_descriptor_does_not_create_loss_on_real_video_ssrc(startup_payload_type, with_descriptor):
     first, last, after = b"\x65\xb8first", b"\x41\xb8last", b"\x41\xb8after"
     descriptor = b"\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
-    packets = [RtpPacket(b"discarded", 96, 1, 0, 123, False, 1, descriptor),
+    packets = [RtpPacket(b"discarded", startup_payload_type, 1, 0, 123, False, 1, descriptor if with_descriptor else b""),
                RtpPacket(first, 96, 3, 9000, 123, False),
                RtpPacket(last, 96, 4, 15000, 123, False),
                RtpPacket(after, 96, 5, 21000, 123, False)]
     selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
     _units, _times, events, boundary = _clear_native_selected_timeline(
         (first, last, after), [9000, 15000, 21000], packets, selected, "h264")
-    assert events[0].extension_data == descriptor and events[0].ssrc == -1
+    if with_descriptor:
+        assert events[0].extension_data == descriptor and events[0].ssrc == -1
+    else:
+        assert events[0].payload == first
     reconstructed = local.rtp_packets_to_nal_units(events, codec="h264",
         completed_access_units_only=True, boundary_only_packet_index=boundary)
     assert reconstructed == (first, last)
@@ -232,3 +236,17 @@ def test_clean_native_window_rejects_mixed_source_picture_identities():
     with pytest.raises(PyEzvizError, match="mixes different source RTP identities"):
         _clear_native_selected_timeline((first, last), [9000, 15000], [], selected, "h264",
             nal_source_keys=[(123, None), (456, None)])
+
+
+def test_unknown_control_inside_selected_window_keeps_real_sequence_continuity():
+    first, last, after = b"\x65\xb8first", b"\x41\xb8last", b"\x41\xb8after"
+    control = RtpPacket(b"control", 112, 4, 12000, 123, False)
+    packets = [RtpPacket(first, 96, 3, 9000, 123, False), control,
+               RtpPacket(last, 96, 5, 15000, 123, False),
+               RtpPacket(after, 96, 6, 21000, 123, False)]
+    selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
+    _units, _times, events, boundary = _clear_native_selected_timeline(
+        (first, last, after), [9000, 15000, 21000], packets, selected, "h264")
+    assert control in events
+    assert local.rtp_packets_to_nal_units(events, codec="h264", completed_access_units_only=True,
+        boundary_only_packet_index=boundary) == (first, last)

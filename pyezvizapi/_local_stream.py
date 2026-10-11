@@ -2642,7 +2642,7 @@ def _copy_clear_native_idmx_timed_av(
     codec = detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
     units = rtp_packets_to_nal_units(
-        rtp_packets, codec=codec, completed_access_units_only=True,
+        rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
     )
     if not rtp_nal_units_have_vcl(units, codec=codec):
@@ -2653,6 +2653,16 @@ def _copy_clear_native_idmx_timed_av(
         units, timestamps, selected_packets = _clear_native_selected_timeline(
             units, timestamps, rtp_packets, selected_annexb, codec, video_types=video_types,
         )
+        # Startup selection already decoded the clean suffix. Reconstruct only
+        # its source interval strictly: discarded malformed startup is not media.
+        strict_units = rtp_packets_to_nal_units(
+            selected_packets, codec=codec, completed_access_units_only=True,
+            allow_ezviz_headerless_hevc_fu=True,
+        )
+        selected_vcl = tuple(unit for unit in units if rtp_nal_units_have_vcl((unit,), codec=codec))
+        strict_vcl = tuple(unit for unit in strict_units if rtp_nal_units_have_vcl((unit,), codec=codec))
+        if strict_vcl[:len(selected_vcl)] != selected_vcl:
+            raise PyEzvizError("Clean native video contains an incomplete source picture")
         audio = decrypt_idmx_aac_packets(
             selected_packets, b"", require_contiguous=False,
             decrypt_audio=False, preserve_clear_timestamps=True,
@@ -2697,17 +2707,21 @@ def _clear_native_selected_timeline(
     first_packet, last_packet = first_packets[0], last_packets[-1]
     end_packet = next((i for i in range(last_packet + 1, len(packets)) if packets[i].payload_type in video_types), len(packets))
     # Keep descriptor epochs from outside the selected interval, but never media
-    # from discarded startup or the next picture. Track origins remain independent.
+    # from discarded startup or next-picture AAC. One successor video packet
+    # proves the final timestamp boundary during strict reconstruction only;
+    # output still uses the selected NAL suffix. Track origins remain independent.
     audio_types = profile.codec_payload_types(
         "aac", fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
     selected_packets = []
     for i, packet in enumerate(packets):
-        if packet.payload_type not in audio_types or first_packet <= i < end_packet:
+        if (packet.payload_type not in (audio_types | video_types)
+                or first_packet <= i < end_packet
+                or (i == end_packet and packet.payload_type in video_types)):
             selected_packets.append(packet)
         elif packet.extension_data:
             # Internal descriptor-only event: -1 cannot collide with a wire RTP
-            # payload type. Never serialize it or dispatch its discarded AAC.
+            # payload type. Never serialize it or dispatch discarded media.
             selected_packets.append(replace(packet, payload=b"", payload_type=-1))
     prefix = selected[:first_vcl]
     return prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets

@@ -11,7 +11,7 @@ from pyezvizapi._local_stream import (
     _clear_native_selected_timeline,
     _ffmpeg_video_decode_probe_timeout_seconds,
 )
-from pyezvizapi.exceptions import PyEzvizError
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
 from pyezvizapi.rtp import RtpPacket, decrypt_idmx_aac_packets
 
 
@@ -60,9 +60,10 @@ def test_full_suffix_decode_budget_scales_beyond_ten_seconds_but_is_bounded():
     assert _ffmpeg_video_decode_probe_timeout_seconds(bytes(400_000_000)) == 180
 
 
-def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch):
+@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False)])
+def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_partition, selected_partition, marker):
     def raw(payload, pt, timestamp, sequence, extension=b""):
-        header = bytes((0x90 if extension else 0x80, pt | 0x80))
+        header = bytes((0x90 if extension else 0x80, pt | (0x80 if marker else 0)))
         header += sequence.to_bytes(2, "big") + timestamp.to_bytes(4, "big") + b"\x55\x66\x77\x88"
         if extension:
             header += b"\0\2" + (len(extension) // 4).to_bytes(2, "big") + extension
@@ -72,6 +73,10 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch):
     descriptor = b"\x42\x0e" + bytes(11) + (6000 << 1).to_bytes(3, "big")
     descriptor += b"\x45\x02\x1b\x60\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
     dirty, clean, last, after = b"\x65\xb8dirty", b"\x65\xb8clean", b"\x41\xb8last", b"\x41\xb8after"
+    if selected_partition:
+        clean = b"\x62\xb8unsupported-selected-partition"
+    if dirty_partition:
+        dirty = b"\x62\xb8unsupported-startup-partition"
     discarded, retained, beyond = b"discarded-audio", b"retained-audio", b"beyond-audio"
     def audio(payload):
         return b"\0\x10" + (len(payload) << 3).to_bytes(2, "big") + payload
@@ -90,6 +95,12 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch):
     monkeypatch.setattr(local, "open_mpegts_remux_process", remux)
     stream = SimpleNamespace(iter_packets=lambda **kwargs: iter(SimpleNamespace(body=p) for p in payloads))
     output = io.BytesIO()
+    if selected_partition:
+        with pytest.raises(EzvizUnsupportedMediaError) as caught:
+            local.copy_local_stream_to_mpegts(stream, output, duration_seconds=1, h264_wait_for_clean_idr_window=True)
+        assert caught.value.reason == "unsupported_h264_data_partition"
+        assert not output.getvalue()
+        return
     local.copy_local_stream_to_mpegts(stream, output, duration_seconds=1, h264_wait_for_clean_idr_window=True)
     result = output.getvalue()
     video_pes, audio_pes = b"\0\0\1\xe0", b"\0\0\1\xc0"

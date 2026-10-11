@@ -69,13 +69,16 @@ from .remux import (
 )
 from .rtp import (
     DEFAULT_AAC_PAYLOAD_TYPES,
+    DEFAULT_VIDEO_PAYLOAD_TYPES,
     RtpAacStream,
     RtpPacket,
     RtpRouteProfile,
+    RtpSequenceKey,
     RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     _rtp_nal_starts_picture,
+    _rtp_sequence_key,
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
@@ -114,7 +117,7 @@ _CLEAN_WINDOW_PROBE_PACKET_INTERVAL = 32
 _CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL = 256
 _CLEAN_WINDOW_SUFFIX_PROBE_MAX_CANDIDATES = 8
 _FFMPEG_VIDEO_DECODE_PROBE_TIMEOUT_SECONDS = 1
-_FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS = 10
+_FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS = 180
 _FFMPEG_VIDEO_DECODE_PROBE_BYTES_PER_EXTRA_SECOND = 2_000_000
 
 _HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL = bytes.fromhex(
@@ -2497,9 +2500,15 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         )
         annexb_codec: str | None = None
         annexb_is_h264 = False
+        packets: list[bytes] = []
         if h264_wait_for_clean_idr_window:
+            def recorded_payloads() -> Iterator[bytes]:
+                for payload in chain((first_payload,), payloads):
+                    packets.append(payload)
+                    yield payload
+
             annexb, annexb_codec = collect_idmx_annexb_after_first_clean_video_window(
-                chain((first_payload,), payloads),
+                recorded_payloads(),
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
                 ffmpeg_path=ffmpeg_path,
@@ -2560,6 +2569,11 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 )
             video_input_format = "h264"
             video_frame_rate = None
+        if (is_h264_startup_options or h264_wait_for_clean_idr_window) and _copy_clear_native_idmx_timed_av(
+            packets, None, output, ffmpeg_path=ffmpeg_path, selected_annexb=annexb,
+            selected_codec=cast(RtpVideoCodec, video_input_format),
+        ):
+            return
         if not (is_h264_startup_options or h264_wait_for_clean_idr_window):
             audio_metadata = _idmx_audio_descriptor(packets)
             if audio_metadata is not None:
@@ -2600,42 +2614,88 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
 
 
 
-def _copy_clear_native_idmx_timed_av(
-    packets: list[bytes], audio: RtpAacStream | None, output: BinaryIO, *,
-    ffmpeg_path: str,
-) -> bool:
-    """Keep native clear AAC jitter through one timed input, not raw-file probing."""
+def _clear_native_rtp_packets_with_legacy_indices(
+    packets: list[bytes], video_types: frozenset[int],
+) -> tuple[list[RtpPacket], set[int]]:
+    """Separate genuine RTP media clocks from legacy native-body wrappers."""
 
     rtp_packets: list[RtpPacket] = []
-    legacy_video_clock = False
-    video_types = _idmx_local_video_payload_types(packets, codec="h264") | _idmx_local_video_payload_types(packets, codec="hevc")
+    legacy_video_indices: set[int] = set()
     for frame in _iter_idmx_local_packet_frames(packets):
         header = _idmx_local_frame_header_size(frame)
         if header is not None:
             packet = _idmx_local_frame_rtp_packet(frame, header)
             if packet is not None:
                 rtp_packets.append(packet)
-                if packet.payload_type in video_types:
-                    legacy_video_clock |= (
-                        not _is_complete_idmx_rtp_frame(frame)
-                        or (packet.extension_profile is None and _looks_like_idmx_hevc_media_frame(_idmx_local_frame_media_body(frame, header)))
-                    )
-    if legacy_video_clock:
+                if (packet.payload_type in video_types
+                        and (not _is_complete_idmx_rtp_frame(frame)
+                             or (packet.extension_profile is None and _looks_like_idmx_hevc_media_frame(_idmx_local_frame_media_body(frame, header))))):
+                    legacy_video_indices.add(len(rtp_packets) - 1)
+    return rtp_packets, legacy_video_indices
+
+
+def _copy_clear_native_idmx_timed_av(
+    packets: list[bytes], audio: RtpAacStream | None, output: BinaryIO, *,
+    ffmpeg_path: str,
+    selected_annexb: bytes | None = None,
+    selected_codec: RtpVideoCodec | None = None,
+) -> bool:
+    """Keep native clear AAC jitter through one timed input, not raw-file probing."""
+
+    video_types = _idmx_local_video_payload_types(packets, codec="h264") | _idmx_local_video_payload_types(packets, codec="hevc")
+    rtp_packets, legacy_video_indices = _clear_native_rtp_packets_with_legacy_indices(packets, video_types)
+    if legacy_video_indices and selected_annexb is None:
         # Legacy/native-body wrappers need the existing Annex-B parser's
         # unwrapping, and their synthetic fields do not prove an RTP clock.
         return False
+    if legacy_video_indices:
+        # Discarded native-body startup cannot disqualify a selected standard
+        # RTP suffix. Keep its descriptors, not synthetic media/clock fields.
+        rtp_packets = [replace(packet, payload=b"", payload_type=-1, ssrc=-1)
+                       if i in legacy_video_indices else packet
+                       for i, packet in enumerate(rtp_packets)]
     advertised_rate = idmx_video_frame_rate(rtp_packets)
     if advertised_rate is None:
         return False
-    codec = detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
+    codec = selected_codec if selected_annexb is not None and selected_codec is not None else detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
+    source_keys: list[RtpSequenceKey] = []
     units = rtp_packets_to_nal_units(
-        rtp_packets, codec=codec, completed_access_units_only=True,
-        allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
+        rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
+        allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps, nal_source_keys=source_keys,
     )
     if not rtp_nal_units_have_vcl(units, codec=codec):
+        if legacy_video_indices:
+            return False
         raise EzvizNoMediaError(
             "Native capture contained no complete video frame; increase the capture duration"
+        )
+    if selected_annexb is not None:
+        try:
+            units, timestamps, selected_packets, boundary_index = _clear_native_selected_timeline(
+                units, timestamps, rtp_packets, selected_annexb, codec,
+                video_types=_idmx_local_video_payload_types(packets, codec=codec), nal_source_keys=source_keys,
+            )
+        except PyEzvizError:
+            if legacy_video_indices:
+                # A selected legacy picture has no proven standard RTP mapping;
+                # preserve the existing Annex-B fallback, never invent timing.
+                return False
+            raise
+        # Startup selection already decoded the clean suffix. Reconstruct only
+        # its source interval strictly: discarded malformed startup is not media.
+        strict_units = rtp_packets_to_nal_units(
+            selected_packets, codec=codec, completed_access_units_only=True,
+            allow_ezviz_headerless_hevc_fu=True, boundary_only_packet_index=boundary_index,
+            video_payload_types=_idmx_local_video_payload_types(packets, codec=codec),
+        )
+        selected_vcl = tuple(unit for unit in units if rtp_nal_units_have_vcl((unit,), codec=codec))
+        strict_vcl = tuple(unit for unit in strict_units if rtp_nal_units_have_vcl((unit,), codec=codec))
+        if strict_vcl[:len(selected_vcl)] != selected_vcl:
+            raise PyEzvizError("Clean native video contains an incomplete source picture")
+        audio = decrypt_idmx_aac_packets(
+            selected_packets, b"", require_contiguous=False,
+            decrypt_audio=False, preserve_clear_timestamps=True,
         )
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
@@ -2647,6 +2707,68 @@ def _copy_clear_native_idmx_timed_av(
 
     copy_remuxed_output(process, output, write_input=write_input)
     return True
+
+
+def _clear_native_selected_timeline(
+    units: tuple[bytes, ...], timestamps: list[int], packets: list[RtpPacket],
+    selected_annexb: bytes, codec: RtpVideoCodec,
+    *, video_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    nal_source_keys: list[RtpSequenceKey] | None = None,
+) -> tuple[tuple[bytes, ...], list[int], list[RtpPacket], int | None]:
+    """Match the decoded clean suffix, retaining audio only inside its wire interval."""
+
+    selected = tuple(selected_annexb[start:end] for _prefix, start, end in _h264_annexb_nal_spans(selected_annexb))
+    first_vcl = next((i for i, unit in enumerate(selected) if rtp_nal_units_have_vcl((unit,), codec=codec)), None)
+    if first_vcl is None:
+        raise EzvizNoMediaError("Clean native window contained no complete video picture")
+    tail = selected[first_vcl:]
+    matches = [i for i, unit in enumerate(units) if unit == tail[0] and units[i:i + len(tail)] == tail]
+    if len(matches) != 1:
+        raise PyEzvizError("Clean native video cannot be uniquely matched to source RTP timing")
+    start = matches[0]
+    stop = start + len(tail)
+    last_vcl = max(i for i in range(start, stop) if rtp_nal_units_have_vcl((units[i],), codec=codec))
+    if nal_source_keys is not None and len(nal_source_keys) != len(units):
+        raise PyEzvizError("Clean native video has no aligned source RTP identities")
+    selected_source = None if nal_source_keys is None else nal_source_keys[last_vcl]
+    if nal_source_keys is not None and any(nal_source_keys[i] != selected_source
+            for i in range(start, stop) if rtp_nal_units_have_vcl((units[i],), codec=codec)):
+        raise PyEzvizError("Clean native video mixes different source RTP identities")
+    first_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types
+                     and packet.timestamp == timestamps[start]
+                     and (selected_source is None or _rtp_sequence_key(packet) == selected_source)]
+    last_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types
+                    and packet.timestamp == timestamps[last_vcl]
+                    and (selected_source is None or _rtp_sequence_key(packet) == selected_source)]
+    if not first_packets or not last_packets:
+        raise PyEzvizError("Clean native video has no matching source RTP interval")
+    first_packet, last_packet = first_packets[0], last_packets[-1]
+    selected_source = _rtp_sequence_key(packets[last_packet])
+    end_packet = next((i for i in range(last_packet + 1, len(packets))
+                       if packets[i].payload_type in video_types
+                       and _rtp_sequence_key(packets[i]) == selected_source), len(packets))
+    # Keep descriptor epochs from outside the selected interval, but never media
+    # from discarded startup or next-picture AAC. One successor video packet
+    # proves the final timestamp boundary during strict reconstruction only;
+    # output still uses the selected NAL suffix. Track origins remain independent.
+    selected_packets: list[RtpPacket] = []
+    boundary_index: int | None = None
+    for i, packet in enumerate(packets[:end_packet + 1]):
+        if i == end_packet:
+            boundary_index = len(selected_packets)
+            # The successor proves continuity, not a future profile epoch.
+            selected_packets.append(replace(packet, extension_data=b""))
+        elif (first_packet <= i < end_packet
+                and (packet.payload_type not in video_types
+                     or _rtp_sequence_key(packet) == selected_source)):
+            # Keep real non-video continuity events only inside the wire window.
+            selected_packets.append(packet)
+        elif packet.extension_data:
+            # Every discarded startup/control/media event is descriptor-only:
+            # impossible wire PT/SSRC isolate it from real source continuity.
+            selected_packets.append(replace(packet, payload=b"", payload_type=-1, ssrc=-1))
+    prefix = selected[:first_vcl]
+    return prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets, boundary_index
 
 
 def _copy_decrypted_native_idmx_timed_av(

@@ -1453,15 +1453,27 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     first_slice_transform: Callable[[bytes], bytes] | None = None,
     packet_nal_transform: Callable[[bytes], bytes] | None = None,
     nal_timestamps: list[int] | None = None,
+    nal_source_keys: list[RtpSequenceKey] | None = None,
+    boundary_only_packet_index: int | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
 
     A marker or the next video RTP timestamp closes an access unit. A bounded
     capture ending after one slice but before the picture boundary is not a
     playable frame, even when that slice is a complete NAL unit.
+    Optional ``nal_timestamps`` and ``nal_source_keys`` are aligned with the
+    returned NAL units, including when incomplete pictures are filtered out.
+    ``boundary_only_packet_index`` consumes only observed sequence/timestamp
+    continuity from that successor packet, never its unselected media payload.
     """
 
     packet_list = list(packets)
+    if boundary_only_packet_index is not None and (
+        not isinstance(boundary_only_packet_index, int)
+        or isinstance(boundary_only_packet_index, bool)
+        or not 0 <= boundary_only_packet_index < len(packet_list)
+    ):
+        raise PyEzvizError("RTP boundary packet index is outside the capture")
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
     descriptors = route_profile.descriptors
     routed_video_payload_types = rtp_codec_payload_types(
@@ -1512,6 +1524,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     )
     output: list[bytes] = []
     output_timestamps: list[int] = []
+    output_source_keys: list[RtpSequenceKey] = []
     output_is_vcl: list[bool] = []
     accepted: list[bool] = []
     pending_indexes: dict[RtpSequenceKey, list[int]] = {}
@@ -1541,6 +1554,17 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         zip(packet_list, route_epochs, strict=True)
     ):
         sequence_key = _rtp_sequence_key(packet)
+        if packet_index == boundary_only_packet_index:
+            if packet.payload_type not in routed_video_payload_types:
+                raise PyEzvizError("RTP boundary packet is not on the selected video route")
+            previous = active_sequences.get(sequence_key)
+            finish_access_unit(sequence_key, complete=bool(
+                previous is not None and ((packet.sequence - previous) & 0xFFFF) == 1
+                and active_timestamps.get(sequence_key) != packet.timestamp
+                and pending_vcl.get(sequence_key) and not pending_gap.get(sequence_key)
+                and not depacketizer.has_incomplete_nal(packet.ssrc, payload_type=packet.payload_type)
+            ))
+            break
         candidate_video = packet.payload_type in routed_video_payload_types
         routed_packet = (
             replace(packet, payload=packet_nal_transform(packet.payload))
@@ -1690,6 +1714,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 pending_indexes.setdefault(sequence_key, []).append(len(output))
                 output.append(output_nal)
                 output_timestamps.append(packet.timestamp)
+                output_source_keys.append(sequence_key)
                 is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
@@ -1739,7 +1764,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             finish_access_unit(ssrc, complete=False)
         if nal_timestamps is not None:
             nal_timestamps.extend(timestamp for timestamp, keep in zip(output_timestamps, accepted, strict=True) if keep)
+        if nal_source_keys is not None:
+            nal_source_keys.extend(source for source, keep in zip(output_source_keys, accepted, strict=True) if keep)
         return tuple(nal for nal, keep in zip(output, accepted, strict=True) if keep)
+    if nal_source_keys is not None:
+        nal_source_keys.extend(output_source_keys)
     if nal_timestamps is not None:
         nal_timestamps.extend(output_timestamps)
     return tuple(output)

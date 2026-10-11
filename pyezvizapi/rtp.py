@@ -1453,15 +1453,24 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     first_slice_transform: Callable[[bytes], bytes] | None = None,
     packet_nal_transform: Callable[[bytes], bytes] | None = None,
     nal_timestamps: list[int] | None = None,
+    boundary_only_packet_index: int | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
 
     A marker or the next video RTP timestamp closes an access unit. A bounded
     capture ending after one slice but before the picture boundary is not a
     playable frame, even when that slice is a complete NAL unit.
+    ``boundary_only_packet_index`` consumes only observed sequence/timestamp
+    continuity from that successor packet, never its unselected media payload.
     """
 
     packet_list = list(packets)
+    if boundary_only_packet_index is not None and (
+        not isinstance(boundary_only_packet_index, int)
+        or isinstance(boundary_only_packet_index, bool)
+        or not 0 <= boundary_only_packet_index < len(packet_list)
+    ):
+        raise PyEzvizError("RTP boundary packet index is outside the capture")
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
     descriptors = route_profile.descriptors
     routed_video_payload_types = rtp_codec_payload_types(
@@ -1541,6 +1550,17 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         zip(packet_list, route_epochs, strict=True)
     ):
         sequence_key = _rtp_sequence_key(packet)
+        if packet_index == boundary_only_packet_index:
+            if packet.payload_type not in routed_video_payload_types:
+                raise PyEzvizError("RTP boundary packet is not on the selected video route")
+            previous = active_sequences.get(sequence_key)
+            finish_access_unit(sequence_key, complete=bool(
+                previous is not None and ((packet.sequence - previous) & 0xFFFF) == 1
+                and active_timestamps.get(sequence_key) != packet.timestamp
+                and pending_vcl.get(sequence_key) and not pending_gap.get(sequence_key)
+                and not depacketizer.has_incomplete_nal(packet.ssrc, payload_type=packet.payload_type)
+            ))
+            break
         candidate_video = packet.payload_type in routed_video_payload_types
         routed_packet = (
             replace(packet, payload=packet_nal_transform(packet.payload))

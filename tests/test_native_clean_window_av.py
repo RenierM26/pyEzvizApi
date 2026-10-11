@@ -38,7 +38,7 @@ def test_clean_window_excludes_discarded_startup_and_next_picture_audio(unfinish
         timestamps = [*timestamps[:4], 27000, 27000]
         packets.insert(8, video(sei, 27000))
         selected += b"\0\0\0\1" + sei
-    retained_units, retained_times, retained_packets = _clear_native_selected_timeline(units, timestamps, packets, selected, "h264")
+    retained_units, retained_times, retained_packets, _boundary = _clear_native_selected_timeline(units, timestamps, packets, selected, "h264")
     assert retained_units[:3] == (sps, first, last)
     assert retained_times[:3] == [9000, 9000, 21000]
     result = decrypt_idmx_aac_packets(retained_packets, b"", require_contiguous=False, decrypt_audio=False, preserve_clear_timestamps=True)
@@ -60,7 +60,7 @@ def test_full_suffix_decode_budget_scales_beyond_ten_seconds_but_is_bounded():
     assert _ffmpeg_video_decode_probe_timeout_seconds(bytes(400_000_000)) == 180
 
 
-@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False)])
+@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False)])
 def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_partition, selected_partition, marker):
     def raw(payload, pt, timestamp, sequence, extension=b""):
         header = bytes((0x90 if extension else 0x80, pt | (0x80 if marker else 0)))
@@ -73,6 +73,8 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_pa
     descriptor = b"\x42\x0e" + bytes(11) + (6000 << 1).to_bytes(3, "big")
     descriptor += b"\x45\x02\x1b\x60\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
     dirty, clean, last, after = b"\x65\xb8dirty", b"\x65\xb8clean", b"\x41\xb8last", b"\x41\xb8after"
+    if not marker and not dirty_partition:
+        after = b"\x62\xb8unsupported-next-picture-partition"
     if selected_partition:
         clean = b"\x62\xb8unsupported-selected-partition"
     if dirty_partition:
@@ -128,10 +130,21 @@ def test_clean_window_preserves_descriptor_from_discarded_audio():
                audio(retained, 1024), video(last, 15000), video(after, 21000),
                audio(beyond, 2048)]
     selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
-    _units, _times, events = _clear_native_selected_timeline(
+    _units, _times, events, _boundary = _clear_native_selected_timeline(
         (first, last, after), [9000, 15000, 21000], packets, selected, "h264")
     result = decrypt_idmx_aac_packets(events, b"", decrypt_audio=False, preserve_clear_timestamps=True)
     assert result is not None and result.frame_count == 1
     assert result.sample_rate == 16000 and result.channels == 1
     assert retained in result.adts and discarded not in result.adts and beyond not in result.adts
     assert events[0].extension_data == descriptor and not events[0].payload
+
+
+@pytest.mark.parametrize(("next_sequence", "complete"), [(2, True), (3, False)])
+def test_boundary_only_successor_proves_continuity_without_decoding_its_media(next_sequence, complete):
+    first = b"\x65\xb8selected"
+    next_picture = b"\x62\xb8unsupported-next-picture"
+    packets = [RtpPacket(first, 96, 1, 0, 1, False),
+               RtpPacket(next_picture, 96, next_sequence, 6000, 1, True)]
+    units = local.rtp_packets_to_nal_units(packets, codec="h264",
+        completed_access_units_only=True, boundary_only_packet_index=1)
+    assert units == ((first,) if complete else ())

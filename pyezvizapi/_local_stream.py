@@ -2650,14 +2650,14 @@ def _copy_clear_native_idmx_timed_av(
             "Native capture contained no complete video frame; increase the capture duration"
         )
     if selected_annexb is not None:
-        units, timestamps, selected_packets = _clear_native_selected_timeline(
+        units, timestamps, selected_packets, boundary_index = _clear_native_selected_timeline(
             units, timestamps, rtp_packets, selected_annexb, codec, video_types=video_types,
         )
         # Startup selection already decoded the clean suffix. Reconstruct only
         # its source interval strictly: discarded malformed startup is not media.
         strict_units = rtp_packets_to_nal_units(
             selected_packets, codec=codec, completed_access_units_only=True,
-            allow_ezviz_headerless_hevc_fu=True,
+            allow_ezviz_headerless_hevc_fu=True, boundary_only_packet_index=boundary_index,
         )
         selected_vcl = tuple(unit for unit in units if rtp_nal_units_have_vcl((unit,), codec=codec))
         strict_vcl = tuple(unit for unit in strict_units if rtp_nal_units_have_vcl((unit,), codec=codec))
@@ -2683,7 +2683,7 @@ def _clear_native_selected_timeline(
     units: tuple[bytes, ...], timestamps: list[int], packets: list[RtpPacket],
     selected_annexb: bytes, codec: RtpVideoCodec,
     *, video_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
-) -> tuple[tuple[bytes, ...], list[int], list[RtpPacket]]:
+) -> tuple[tuple[bytes, ...], list[int], list[RtpPacket], int | None]:
     """Match the decoded clean suffix, retaining audio only inside its wire interval."""
 
     selected = tuple(selected_annexb[start:end] for _prefix, start, end in _h264_annexb_nal_spans(selected_annexb))
@@ -2713,18 +2713,21 @@ def _clear_native_selected_timeline(
     audio_types = profile.codec_payload_types(
         "aac", fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
-    selected_packets = []
+    selected_packets: list[RtpPacket] = []
+    boundary_index: int | None = None
     for i, packet in enumerate(packets):
         if (packet.payload_type not in (audio_types | video_types)
                 or first_packet <= i < end_packet
                 or (i == end_packet and packet.payload_type in video_types)):
+            if i == end_packet and packet.payload_type in video_types:
+                boundary_index = len(selected_packets)
             selected_packets.append(packet)
         elif packet.extension_data:
             # Internal descriptor-only event: -1 cannot collide with a wire RTP
             # payload type. Never serialize it or dispatch discarded media.
             selected_packets.append(replace(packet, payload=b"", payload_type=-1))
     prefix = selected[:first_vcl]
-    return prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets
+    return prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets, boundary_index
 
 
 def _copy_decrypted_native_idmx_timed_av(

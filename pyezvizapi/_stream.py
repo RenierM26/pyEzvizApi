@@ -1107,6 +1107,15 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
         while offset < len(data) - 9:
             packet_end = _mpeg_ps_packet_end(data, offset)
             if packet_end is None:
+                if _is_zero_length_video_pes_start(data, offset):
+                    payload_start = _pes_payload_start(data, offset)
+                    assert payload_start is not None
+                    packet_end = _next_unbounded_video_pes_boundary(data, payload_start)
+                    packet_end = len(data) if packet_end is None else packet_end
+                    if payload_start < packet_end:
+                        ranges.append((payload_start, packet_end))
+                    offset = packet_end
+                    continue
                 offset += 1
                 continue
             if _is_video_pes_stream_id(data[offset + 3]):

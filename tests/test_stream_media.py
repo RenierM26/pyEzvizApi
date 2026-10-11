@@ -5445,3 +5445,16 @@ def test_ps_header_detection_does_not_score_nals_inside_audio():
     false_h264 = pes(0xE0, (b"\0\0\1\x67" + b"s" * 20) * 8)
     audio = pes(0xC0, b"audio-prefix" + false_h264 + b"audio-suffix")
     assert detect_hikvision_ps_video_nalu_header_size(hevc + audio + hevc, key) == 2
+
+
+@pytest.mark.parametrize("trailing_audio", [False, True])
+def test_ps_prefix_recovery_preserves_zero_length_video_pes(trailing_audio: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    prefix = b"\0\0\1\xbd\0\xffbroken-private-stream"
+    header = b"\0\0\1\xe0\0\0\x80\0\0\0\0\0\1"
+    audio = b"\0\0\1\xc0\0\x08\x80\0\0audio" if trailing_audio else b""
+    capture = prefix + header + encrypted_nal + audio
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == prefix + header + clear_nal + audio

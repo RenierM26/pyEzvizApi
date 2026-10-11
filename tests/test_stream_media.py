@@ -558,6 +558,27 @@ def test_ps_gap_recovery_excludes_intervening_non_video(stream_id: int) -> None:
     assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == expected
 
 
+@pytest.mark.parametrize("zero_length", [False, True])
+def test_ps_gap_recovery_preserves_later_video_pes_header(zero_length: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+
+    def pes(payload: bytes, *, unbounded: bool = False) -> bytes:
+        length = 0 if unbounded else len(payload) + 3
+        return b"\0\0\1\xe0" + length.to_bytes(2, "big") + b"\x80\0\0" + payload
+
+    # An incomplete AES block must not consume the next packet's clear header.
+    short_video = pes(b"\0\0\0\1\x65short")
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    later_video = pes(b"\0\0\0\1" + encrypted_nal, unbounded=zero_length)
+    clear_video = pes(b"\0\0\0\1" + clear_nal, unbounded=zero_length)
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    capture = short_video + b"gap" + later_video + pack
+    expected = short_video + b"gap" + clear_video + pack
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == expected
+
+
 def test_ps_gap_recovery_header_detection_excludes_audio_nals() -> None:
     def pes(kind: int, payload: bytes) -> bytes:
         return b"\0\0\1" + bytes((kind,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload

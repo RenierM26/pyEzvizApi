@@ -1259,23 +1259,22 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
         if _is_video_pes_stream_id(ranges[-1].stream_id):
             previous = ranges[-1]
             # A vendor continuation can bridge unparsed bytes, but must never
-            # include a complete audio/private/metadata packet found in the gap.
-            # Skip complete video bodies while searching, just as the walker
-            # does, rather than interpreting their compressed bytes as packets.
+            # include any later packet's clear header in the video payload.
+            # Resume the authoritative walker at that packet so its body is
+            # bounded independently, including zero-length video PES packets.
             recovery_end = next_pack
             candidate = data.find(MPEG_START_CODE_PREFIX, parsed_end, next_pack)
             while candidate >= 0:
                 candidate_end = _mpeg_ps_packet_end(data, candidate)
-                if candidate_end is not None:
-                    if not _is_video_pes_stream_id(data[candidate + 3]):
-                        recovery_end = candidate
-                        break
-                    candidate = data.find(MPEG_START_CODE_PREFIX, candidate_end, next_pack)
-                else:
-                    candidate = data.find(MPEG_START_CODE_PREFIX, candidate + 3, next_pack)
+                if candidate_end is not None or _is_zero_length_video_pes_start(data, candidate):
+                    recovery_end = candidate
+                    break
+                candidate = data.find(MPEG_START_CODE_PREFIX, candidate + 3, next_pack)
             ranges[-1] = _MpegPsPacketRange(
                 previous.start, recovery_end, previous.stream_id
             )
+            offset = recovery_end
+            continue
         offset = next_pack
     return ranges
 

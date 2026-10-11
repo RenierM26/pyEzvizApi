@@ -548,7 +548,14 @@ def test_ps_overlong_recovery_rejects_unanchored_packet_lookalikes(stream_id: in
         + b"\0\0\1" + bytes((stream_id,)) + b"\0\x07\x80\0\0keep"
         + b"y" * 27
     )
-    clear_body = AES.new(aes_key, AES.MODE_ECB).decrypt(encrypted_body)
+    # A fresh zero-IV CBC cipher for each single block is the same independent
+    # block fixture transform used by _encrypt_hikvision_fixture_blocks above.
+    clear_body = b"".join(
+        AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size)).decrypt(
+            encrypted_body[pos : pos + AES.block_size]
+        )
+        for pos in range(0, len(encrypted_body), AES.block_size)
+    )
     header = b"\0\0\1\xe0\0\x18\x80\0\0"
     pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
     encrypted = header + b"\0\0\0\1\x65" + encrypted_body + pack

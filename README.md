@@ -193,6 +193,33 @@ result = client.save_clip_with_options(
 )
 ```
 
+For bounded H9c native captures, an **experimental opt-in** preserves the
+observed shared 90 kHz video / 16 kHz AAC epoch instead of independently
+zeroing both tracks:
+
+```python
+from pyezvizapi import LocalSdkClipSource
+
+options = ClipOptions(
+    source=LocalSdkClipSource(),  # Uses native TCP.
+    capture=CaptureLimits(duration_seconds=20),
+    mux=MediaMuxOptions(output_format="mpegts", native_shared_clock=True),
+)
+result = client.save_clip_with_options("ABC123", "h9c.ts", options)
+```
+
+This also supports an explicit `HcNetSdkCommandPortClipSource`. Defaults remain
+unchanged. The mode requires real RTP timestamps and source-timestamped AAC;
+incompatible origins (more than one second apart), missing timing, unsupported
+sample rates, synthetic cadence, and encrypted startup trimming fail explicitly.
+Cloud, automatic fallback, ECDH and UDP capture are not supported by this mode.
+A nearby clock origin alone does not prove a shared epoch: enable it only for
+an independently validated native source. It preserves frames and received
+clock gaps without a fixed correction, resampling, or synthesized silence.
+The retained H9c clap test recovered about 128 ms of received clock offset,
+but residual physical audio lag remains; this is **not a lip-sync guarantee**.
+High-level captures are staged so timing failures leave the destination intact.
+
 The original `save_clip(...)` keywords and imports from `pyezvizapi.stream` or
 `pyezvizapi.local_stream` remain compatible. New lower-level code should import
 from `stream_transport`, `stream_media`, `local_stream_transport`,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from heapq import merge
-from itertools import groupby
+from itertools import chain, groupby, tee
 
 from .exceptions import EzvizUnsupportedMediaError, PyEzvizError
 from .rtp import (
@@ -105,19 +105,72 @@ def _audio_events(audio: RtpAacStream | None) -> Iterator[tuple[int, int, bytes]
             sample_offset += 1024
 
 
+def _shared_clock_error(message: str) -> EzvizUnsupportedMediaError:
+    return EzvizUnsupportedMediaError(message, source="rtp", reason="unsupported_av_clock")
+
+
+def shared_rtp_clock_offsets(
+    video_timestamp: int, audio_timestamp: int, sample_rate: int,
+) -> tuple[int, int]:
+    """Return nonnegative 90kHz offsets for explicitly shared native clocks.
+
+    Limited to observed native/TCP 90kHz video and 16kHz AAC. RTP epochs are
+    normally independent: opting in is a caller assertion, not auto-detection.
+    A one-second startup bound rejects observed unrelated UDP origins. Such a
+    bound is not authentication of a shared epoch. Both 32-bit wraps are handled
+    with integer arithmetic on a 720kHz common grid; no wall-clock guess, drift
+    correction, trimming or synthesized media is applied.
+    """
+    if sample_rate != 16000:
+        raise _shared_clock_error("Shared native clocks currently require 16kHz AAC")
+    if not (0 <= video_timestamp < 2**32 and 0 <= audio_timestamp < 2**32):
+        raise _shared_clock_error("Shared native clocks require unsigned 32-bit RTP timestamps")
+    difference = ((45 * audio_timestamp - 8 * video_timestamp + 2**31) % 2**32) - 2**31
+    if abs(difference) > 720000:
+        raise _shared_clock_error("Native RTP origins are incompatible with a shared clock (over one second apart)")
+    return (max(-difference, 0) + 4) // 8, (max(difference, 0) + 4) // 8
+
+
 def timed_rtp_mpegps_payloads(
     nal_units: Iterable[bytes], timestamps: Iterable[int], *,
     codec: RtpVideoCodec, audio: RtpAacStream | None = None,
+    shared_clock: bool = False,
 ) -> Iterator[bytes]:
     """Preserve relative native clocks, with each track's first received AU at zero.
 
-    This does not infer absolute inter-track synchronization without RTCP.
+    Default origins remain independent. Explicit ``shared_clock`` preserves a
+    caller-verified native 90kHz/16kHz shared epoch; never infer this for UDP.
+    It is not proof of physical lip-sync or a camera-processing correction.
     PES chunks are length-delimited, including large video access units; a
     zero-length video PES is not reliably recognized by MPEG-PS demuxers.
     """
 
+    video_offset = audio_offset = 0
+    if shared_clock:
+        if audio is None or audio.origin_timestamp is None or not audio.adts or audio.frame_count <= 0:
+            raise _shared_clock_error("Shared native clocks require source-timestamped AAC")
+        pairs = iter(zip(timestamps, nal_units, strict=True))
+        prefix: list[tuple[int, bytes]] = []
+        prefix_bytes = 0
+        for stamp, unit in pairs:
+            prefix.append((stamp, unit))
+            prefix_bytes += len(unit)
+            if prefix_bytes > 1_048_576:
+                raise _shared_clock_error("Shared native clock startup exceeds buffer limit")
+            if rtp_nal_units_have_vcl((unit,), codec=codec):
+                video_offset, audio_offset = shared_rtp_clock_offsets(
+                    stamp, audio.origin_timestamp, audio.sample_rate,
+                )
+                break
+        else:
+            raise _shared_clock_error("Shared native clocks require a source-timestamped video picture")
+        left, right = tee(chain(prefix, pairs))
+        timestamps = (stamp for stamp, _unit in left)
+        nal_units = (unit for _stamp, unit in right)
     stream_map = _program_stream_map(codec, audio=audio is not None)
-    events = merge(_video_events(nal_units, timestamps, codec), _audio_events(audio), key=lambda item: item[0])
+    video = ((stamp + video_offset, stream, body) for stamp, stream, body in _video_events(nal_units, timestamps, codec))
+    audio_events = ((stamp + audio_offset, stream, body) for stamp, stream, body in _audio_events(audio))
+    events = merge(video, audio_events, key=lambda item: item[0])
     for timestamp, stream_id, payload in events:
         for offset in range(0, len(payload), _PES_CHUNK_BYTES):
             yield (_pack_header(timestamp) + stream_map

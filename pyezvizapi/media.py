@@ -16,7 +16,7 @@ from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
 import time
 from types import MappingProxyType
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, TypedDict, cast, runtime_checkable
 
 from .exceptions import PyEzvizError
 
@@ -236,6 +236,15 @@ class MediaDecodeOptions:
             raise PyEzvizError("nalu_header_size must be non-negative or None")
 
 
+class _NativeSharedClockOptions(TypedDict, total=False):
+    native_shared_clock: bool
+
+
+def _native_shared_clock_options(enabled: bool) -> _NativeSharedClockOptions:
+    """Forward only the opt-in keyword; preserve historical default call shapes."""
+    return {"native_shared_clock": True} if enabled else {}
+
+
 @dataclass(frozen=True)
 class MediaMuxOptions:
     """Common output and FFmpeg options for downstream muxing."""
@@ -248,6 +257,8 @@ class MediaMuxOptions:
     h264_clean_idr_max_windows: int = 32
     h264_wait_for_clean_idr_window: bool = False
     h264_clean_idr_wait_seconds: float = 60.0
+    # Explicit H9c/native 90kHz video + 16kHz AAC shared-epoch hypothesis.
+    native_shared_clock: bool = False
 
     def __post_init__(self) -> None:
         if self.output_format not in ("mpegps", "mpegts"):

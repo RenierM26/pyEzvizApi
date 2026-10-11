@@ -159,6 +159,8 @@ class RtpAacStream:
     frame_count: int
     # Contiguous ADTS blocks with sample offsets from the first received AU.
     timed_segments: tuple[tuple[int, bytes], ...] = ()
+    # Raw source clock of the first accepted AU; absent for synthesized audio.
+    origin_timestamp: int | None = None
 
 
 @dataclass(frozen=True)
@@ -782,6 +784,7 @@ def decrypt_idmx_aac_packets(
         channels=channels,
         frame_count=len(access_units),
         timed_segments=_aac_timed_segments(adts_frames, deltas),
+        origin_timestamp=timestamps[0],
     )
 
 

@@ -15,7 +15,8 @@ from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.rtp import RtpPacket, decrypt_idmx_aac_packets
 
 
-def test_clean_window_excludes_discarded_startup_and_next_picture_audio():
+@pytest.mark.parametrize("unfinished_metadata", [False, True])
+def test_clean_window_excludes_discarded_startup_and_next_picture_audio(unfinished_metadata):
     sps, dirty, first, last, after = (b"\x67sps", b"\x41\x80dirty", b"\x65\x80clean", b"\x41\x80last", b"\x41\x80after")
     units = (sps, dirty, first, last, after)
     timestamps = [0, 0, 9000, 21000, 27000]
@@ -31,9 +32,15 @@ def test_clean_window_excludes_discarded_startup_and_next_picture_audio():
         video(last, 21000), audio(late, 3072),
         video(after, 27000), audio(beyond, 4096)]
     selected = b"".join(b"\0\0\0\1" + unit for unit in (sps, first, last))
+    if unfinished_metadata:
+        sei = b"\x06next-access-unit"
+        units = (*units[:4], sei, after)
+        timestamps = [*timestamps[:4], 27000, 27000]
+        packets.insert(8, video(sei, 27000))
+        selected += b"\0\0\0\1" + sei
     retained_units, retained_times, retained_packets = _clear_native_selected_timeline(units, timestamps, packets, selected, "h264")
-    assert retained_units == (sps, first, last)
-    assert retained_times == [9000, 9000, 21000]
+    assert retained_units[:3] == (sps, first, last)
+    assert retained_times[:3] == [9000, 9000, 21000]
     result = decrypt_idmx_aac_packets(retained_packets, b"", require_contiguous=False, decrypt_audio=False, preserve_clear_timestamps=True)
     assert result is not None and result.frame_count == 2
     assert [offset for offset, _data in result.timed_segments] == [0, 2048]

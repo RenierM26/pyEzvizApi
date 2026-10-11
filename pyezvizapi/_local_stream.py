@@ -2686,11 +2686,12 @@ def _clear_native_selected_timeline(
         raise PyEzvizError("Clean native video cannot be uniquely matched to source RTP timing")
     start = matches[0]
     stop = start + len(tail)
+    last_vcl = max(i for i in range(start, stop) if rtp_nal_units_have_vcl((units[i],), codec=codec))
     profile = RtpRouteProfile()
     for packet in packets:
         profile.absorb(packet)
     first_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[start]]
-    last_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[stop - 1]]
+    last_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[last_vcl]]
     if not first_packets or not last_packets:
         raise PyEzvizError("Clean native video has no matching source RTP interval")
     first_packet, last_packet = first_packets[0], last_packets[-1]

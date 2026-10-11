@@ -2569,6 +2569,7 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             video_frame_rate = None
         if (is_h264_startup_options or h264_wait_for_clean_idr_window) and _copy_clear_native_idmx_timed_av(
             packets, None, output, ffmpeg_path=ffmpeg_path, selected_annexb=annexb,
+            selected_codec=cast(RtpVideoCodec, video_input_format),
         ):
             return
         if not (is_h264_startup_options or h264_wait_for_clean_idr_window):
@@ -2615,6 +2616,7 @@ def _copy_clear_native_idmx_timed_av(
     packets: list[bytes], audio: RtpAacStream | None, output: BinaryIO, *,
     ffmpeg_path: str,
     selected_annexb: bytes | None = None,
+    selected_codec: RtpVideoCodec | None = None,
 ) -> bool:
     """Keep native clear AAC jitter through one timed input, not raw-file probing."""
 
@@ -2639,7 +2641,7 @@ def _copy_clear_native_idmx_timed_av(
     advertised_rate = idmx_video_frame_rate(rtp_packets)
     if advertised_rate is None:
         return False
-    codec = detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
+    codec = selected_codec if selected_annexb is not None and selected_codec is not None else detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
     units = rtp_packets_to_nal_units(
         rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
@@ -2697,9 +2699,6 @@ def _clear_native_selected_timeline(
     start = matches[0]
     stop = start + len(tail)
     last_vcl = max(i for i in range(start, stop) if rtp_nal_units_have_vcl((units[i],), codec=codec))
-    profile = RtpRouteProfile()
-    for packet in packets:
-        profile.absorb(packet)
     first_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[start]]
     last_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[last_vcl]]
     if not first_packets or not last_packets:
@@ -2710,18 +2709,24 @@ def _clear_native_selected_timeline(
     # from discarded startup or next-picture AAC. One successor video packet
     # proves the final timestamp boundary during strict reconstruction only;
     # output still uses the selected NAL suffix. Track origins remain independent.
+    profile = RtpRouteProfile()
+    for packet in packets[:end_packet]:
+        profile.absorb(packet)
     audio_types = profile.codec_payload_types(
         "aac", fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
     selected_packets: list[RtpPacket] = []
     boundary_index: int | None = None
-    for i, packet in enumerate(packets):
+    for i, packet in enumerate(packets[:end_packet + 1]):
         if (packet.payload_type not in (audio_types | video_types)
                 or first_packet <= i < end_packet
                 or (i == end_packet and packet.payload_type in video_types)):
             if i == end_packet and packet.payload_type in video_types:
                 boundary_index = len(selected_packets)
-            selected_packets.append(packet)
+                # The successor proves continuity, not a future profile epoch.
+                selected_packets.append(replace(packet, extension_data=b""))
+            else:
+                selected_packets.append(packet)
         elif packet.extension_data:
             # Internal descriptor-only event: -1 cannot collide with a wire RTP
             # payload type. Never serialize it or dispatch discarded media.

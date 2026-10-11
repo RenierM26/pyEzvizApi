@@ -60,7 +60,7 @@ def test_full_suffix_decode_budget_scales_beyond_ten_seconds_but_is_bounded():
     assert _ffmpeg_video_decode_probe_timeout_seconds(bytes(400_000_000)) == 180
 
 
-@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False)])
+@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False), ("mpeg", False, True)])
 def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_partition, selected_partition, marker):
     def raw(payload, pt, timestamp, sequence, extension=b""):
         header = bytes((0x90 if extension else 0x80, pt | (0x80 if marker else 0)))
@@ -77,7 +77,9 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_pa
         after = b"\x62\xb8unsupported-next-picture-partition"
     if selected_partition:
         clean = b"\x62\xb8unsupported-selected-partition"
-    if dirty_partition:
+    if dirty_partition == "mpeg":
+        dirty = b"\0\0\1\xb3unsupported-startup-mpeg"
+    elif dirty_partition:
         dirty = b"\x62\xb8unsupported-startup-partition"
     discarded, retained, beyond = b"discarded-audio", b"retained-audio", b"beyond-audio"
     def audio(payload):
@@ -117,7 +119,8 @@ def test_clean_window_missing_packet_mapping_is_a_protocol_error():
         _clear_native_selected_timeline((unit,), [0], [], b"\0\0\0\1" + unit, "h264")
 
 
-def test_clean_window_preserves_descriptor_from_discarded_audio():
+@pytest.mark.parametrize("future_profile_on_boundary", [False, True])
+def test_clean_window_preserves_descriptor_from_discarded_audio(future_profile_on_boundary):
     first, last, after = b"\x65\x80first", b"\x41\x80last", b"\x41\x80after"
     descriptor = b"\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
     def audio(payload, timestamp, extension=b""):
@@ -125,10 +128,15 @@ def test_clean_window_preserves_descriptor_from_discarded_audio():
                          104, 1, timestamp, 2, True, 1, extension, True)
     def video(payload, timestamp):
         return RtpPacket(payload, 96, 1, timestamp, 1, True)
+    future = bytearray(descriptor)
+    future[8] = 3  # stereo
+    future[9:12] = bytes((2, 238, 0))  # 48000 Hz
+    future_descriptor = bytes(future)
     discarded, retained, beyond = b"startup", b"retained", b"next-picture"
     packets = [audio(discarded, 0, descriptor), video(first, 9000),
-               audio(retained, 1024), video(last, 15000), video(after, 21000),
-               audio(beyond, 2048)]
+               audio(retained, 1024), video(last, 15000),
+               RtpPacket(after, 96, 1, 21000, 1, True, 1, future_descriptor if future_profile_on_boundary else b""),
+               audio(beyond, 2048, b"" if future_profile_on_boundary else future_descriptor)]
     selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
     _units, _times, events, _boundary = _clear_native_selected_timeline(
         (first, last, after), [9000, 15000, 21000], packets, selected, "h264")

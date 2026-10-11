@@ -784,6 +784,11 @@ without changing timestamps or weakening the video keyframe gate. Verify full
 audio decoding as well as video; an AAC stream listed with zero sample rate or
 channels is not evidence of usable audio.
 
+For multi-lens H9c offline selection and retained-wire RTSP AV checks, see
+[the streaming guide](docs/streaming.md#multi-lens-offline-selection-and-h9c-validation).
+Those RTSP checks preserve source cadence but do not prove absolute lip-sync
+when camera clock-origin metadata is inconsistent and sender reports are absent.
+
 ## Development
 
 Install the project with development dependencies:

@@ -9,6 +9,7 @@ import pytest
 from pyezvizapi import _local_stream as local
 from pyezvizapi._local_stream import (
     _clear_native_selected_timeline,
+    _copy_clear_native_idmx_timed_av,
     _ffmpeg_video_decode_probe_timeout_seconds,
 )
 from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError
@@ -60,7 +61,7 @@ def test_full_suffix_decode_budget_scales_beyond_ten_seconds_but_is_bounded():
     assert _ffmpeg_video_decode_probe_timeout_seconds(bytes(400_000_000)) == 180
 
 
-@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False), ("mpeg", False, True)])
+@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False), ("mpeg", False, True), ("legacy", False, True)])
 def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_partition, selected_partition, marker):
     def raw(payload, pt, timestamp, sequence, extension=b""):
         header = bytes((0x90 if extension else 0x80, pt | (0x80 if marker else 0)))
@@ -77,7 +78,9 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_pa
         after = b"\x62\xb8unsupported-next-picture-partition"
     if selected_partition:
         clean = b"\x62\xb8unsupported-selected-partition"
-    if dirty_partition == "mpeg":
+    if dirty_partition == "legacy":
+        dirty = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01\x26\x01\x80legacy"
+    elif dirty_partition == "mpeg":
         dirty = b"\0\0\1\xb3unsupported-startup-mpeg"
     elif dirty_partition:
         dirty = b"\x62\xb8unsupported-startup-partition"
@@ -156,3 +159,29 @@ def test_boundary_only_successor_proves_continuity_without_decoding_its_media(ne
     units = local.rtp_packets_to_nal_units(packets, codec="h264",
         completed_access_units_only=True, boundary_only_packet_index=1)
     assert units == ((first,) if complete else ())
+
+
+def test_discarded_descriptor_does_not_create_loss_on_real_video_ssrc():
+    first, last, after = b"\x65\xb8first", b"\x41\xb8last", b"\x41\xb8after"
+    descriptor = b"\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
+    packets = [RtpPacket(b"discarded", 96, 1, 0, 123, False, 1, descriptor),
+               RtpPacket(first, 96, 3, 9000, 123, False),
+               RtpPacket(last, 96, 4, 15000, 123, False),
+               RtpPacket(after, 96, 5, 21000, 123, False)]
+    selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
+    _units, _times, events, boundary = _clear_native_selected_timeline(
+        (first, last, after), [9000, 15000, 21000], packets, selected, "h264")
+    assert events[0].extension_data == descriptor and events[0].ssrc == -1
+    reconstructed = local.rtp_packets_to_nal_units(events, codec="h264",
+        completed_access_units_only=True, boundary_only_packet_index=boundary)
+    assert reconstructed == (first, last)
+
+
+def test_selected_legacy_video_preserves_unproven_clock_fallback():
+    descriptor = b"\x42\x0e" + bytes(11) + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + bytes(4) + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+    unit = b"\x26\x01\x80picture"
+    legacy = b"\xfa\x90\xe0\0\1" + bytes(4) + b"\x55\x66\x77\x88" + wrapper + unit
+    assert not _copy_clear_native_idmx_timed_av([metadata, legacy], None, io.BytesIO(),
+        ffmpeg_path="ffmpeg", selected_annexb=b"\0\0\0\1" + unit, selected_codec="hevc")

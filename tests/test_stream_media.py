@@ -5458,3 +5458,20 @@ def test_ps_prefix_recovery_preserves_zero_length_video_pes(trailing_audio: bool
     audio = b"\0\0\1\xc0\0\x08\x80\0\0audio" if trailing_audio else b""
     capture = prefix + header + encrypted_nal + audio
     assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == prefix + header + clear_nal + audio
+
+
+@pytest.mark.parametrize("zero_length", [False, True])
+def test_ps_decryption_recovers_video_after_parsed_prefix_and_malformed_gap(zero_length: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    def video(payload: bytes) -> bytes:
+        length = 0 if zero_length else len(payload) + 7
+        return b"\0\0\1\xe0" + length.to_bytes(2, "big") + b"\x80\0\0\0\0\0\1" + payload
+    # A complete audio prefix makes the authoritative walker return nonempty;
+    # the malformed private packet then stops it without a following pack anchor.
+    audio = b"\0\0\1\xc0\0\x08\x80\0\0audio"
+    gap = b"\0\0\1\xbd\0\xffbroken-private-stream"
+    capture = audio + gap + video(encrypted_nal) + audio
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == audio + gap + video(clear_nal) + audio

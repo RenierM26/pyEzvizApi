@@ -1098,38 +1098,28 @@ def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
     """
 
     ranges: list[tuple[int, int]] = []
-    packets = _mpeg_ps_video_decrypt_ranges(data)
-    if not packets:
-        # Preserve legacy leading-malformed-prefix recovery. Even while
-        # resynchronizing, skip any complete non-video packet by its bounds;
-        # never search that packet's compressed payload for video headers.
-        offset = 0
-        while offset < len(data) - 9:
-            packet_end = _mpeg_ps_packet_end(data, offset)
-            if packet_end is None:
-                if _is_zero_length_video_pes_start(data, offset):
-                    payload_start = _pes_payload_start(data, offset)
-                    assert payload_start is not None
-                    packet_end = _next_unbounded_video_pes_boundary(data, payload_start)
-                    packet_end = len(data) if packet_end is None else packet_end
-                    if payload_start < packet_end:
-                        ranges.append((payload_start, packet_end))
-                    offset = packet_end
-                    continue
+    packets = {packet.start: packet for packet in _mpeg_ps_video_decrypt_ranges(data)}
+    offset = 0
+    while offset < len(data) - 9:
+        # Prefer authoritative bounds, including pack-anchored vendor recovery.
+        # Between those ranges resynchronize one byte at a time, but always skip
+        # a complete non-video packet's body rather than scanning its payload.
+        packet = packets.get(offset)
+        packet_end = packet.end if packet is not None else _mpeg_ps_packet_end(data, offset)
+        if packet_end is None:
+            if _is_zero_length_video_pes_start(data, offset):
+                payload_start = _pes_payload_start(data, offset)
+                assert payload_start is not None
+                packet_end = _next_unbounded_video_pes_boundary(data, payload_start)
+                packet_end = len(data) if packet_end is None else packet_end
+            else:
                 offset += 1
                 continue
-            if _is_video_pes_stream_id(data[offset + 3]):
-                payload_start = _pes_payload_start(data, offset)
-                if payload_start is not None and payload_start < packet_end:
-                    ranges.append((payload_start, packet_end))
-            offset = packet_end
-        return ranges
-    for packet in packets:
-        if not _is_video_pes_stream_id(packet.stream_id):
-            continue
-        payload_start = _pes_payload_start(data, packet.start)
-        if payload_start is not None and payload_start < packet.end:
-            ranges.append((payload_start, packet.end))
+        if _is_video_pes_stream_id(data[offset + 3]):
+            payload_start = _pes_payload_start(data, offset)
+            if payload_start is not None and payload_start < packet_end:
+                ranges.append((payload_start, packet_end))
+        offset = packet_end
     return ranges
 
 

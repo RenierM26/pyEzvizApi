@@ -537,6 +537,25 @@ def test_decrypt_hikvision_ps_video_recovers_overlong_pes_at_valid_pack() -> Non
     assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=2) == expected
 
 
+@pytest.mark.parametrize("stream_id", [0xC0, 0xBD, 0xE0])
+def test_ps_overlong_recovery_rejects_unanchored_packet_lookalikes(stream_id: int) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    # A complete-looking packet inside ciphertext ends in more ciphertext,
+    # not a chain of PS packets reaching the known pack boundary.
+    encrypted_body = (
+        b"x" * 24
+        + b"\0\0\1" + bytes((stream_id,)) + b"\0\x07\x80\0\0keep"
+        + b"y" * 27
+    )
+    clear_body = AES.new(aes_key, AES.MODE_ECB).decrypt(encrypted_body)
+    header = b"\0\0\1\xe0\0\x18\x80\0\0"
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    encrypted = header + b"\0\0\0\1\x65" + encrypted_body + pack
+    expected = header + b"\0\0\0\1\x65" + clear_body + pack
+    assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=1) == expected
+
+
 @pytest.mark.parametrize("stream_id", [0xC0, 0xBD])
 def test_ps_gap_recovery_excludes_intervening_non_video(stream_id: int) -> None:
     key = "camera-key"

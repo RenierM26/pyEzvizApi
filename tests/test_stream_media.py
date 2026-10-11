@@ -536,6 +536,101 @@ def test_decrypt_hikvision_ps_video_recovers_overlong_pes_at_valid_pack() -> Non
 
     assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=2) == expected
 
+
+@pytest.mark.parametrize("stream_id", [0xC0, 0xBD, 0xE0])
+def test_ps_overlong_recovery_rejects_unanchored_packet_lookalikes(stream_id: int) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    # A complete-looking packet inside ciphertext ends in more ciphertext,
+    # not a chain of PS packets reaching the known pack boundary.
+    encrypted_body = (
+        b"x" * 24
+        + b"\0\0\1" + bytes((stream_id,)) + b"\0\x07\x80\0\0keep"
+        + b"y" * 27
+    )
+    # A fresh zero-IV CBC cipher for each single block is the same independent
+    # block fixture transform used by _encrypt_hikvision_fixture_blocks above.
+    clear_body = b"".join(
+        AES.new(aes_key, AES.MODE_CBC, iv=bytes(AES.block_size)).decrypt(
+            encrypted_body[pos : pos + AES.block_size]
+        )
+        for pos in range(0, len(encrypted_body), AES.block_size)
+    )
+    header = b"\0\0\1\xe0\0\x18\x80\0\0"
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    encrypted = header + b"\0\0\0\1\x65" + encrypted_body + pack
+    expected = header + b"\0\0\0\1\x65" + clear_body + pack
+    assert decrypt_hikvision_ps_video(encrypted, key, nalu_header_size=1) == expected
+
+
+@pytest.mark.parametrize("stream_id", [0xC0, 0xBD])
+def test_ps_gap_recovery_excludes_intervening_non_video(stream_id: int) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+
+    def pes(kind: int, payload: bytes) -> bytes:
+        return b"\0\0\1" + bytes((kind,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload
+
+    encrypted_video = pes(0xE0, b"\0\0\0\1" + encrypted_nal)
+    clear_video = pes(0xE0, b"\0\0\0\1" + clear_nal)
+    # These encrypted-looking NAL bytes belong to audio/private data, not video.
+    other = pes(stream_id, b"audio-prefix\0\0\0\1" + encrypted_nal + b"audio-suffix")
+    gap = b"broken-gap"
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    capture = encrypted_video + gap + other + pack + encrypted_video
+    expected = clear_video + gap + other + pack + clear_video
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == expected
+
+
+@pytest.mark.parametrize("zero_length", [False, True])
+def test_ps_gap_recovery_preserves_later_video_pes_header(zero_length: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+
+    def pes(payload: bytes, *, unbounded: bool = False) -> bytes:
+        length = 0 if unbounded else len(payload) + 3
+        return b"\0\0\1\xe0" + length.to_bytes(2, "big") + b"\x80\0\0" + payload
+
+    # An incomplete AES block must not consume the next packet's clear header.
+    short_video = pes(b"\0\0\0\1\x65short")
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    later_video = pes(b"\0\0\0\1" + encrypted_nal, unbounded=zero_length)
+    clear_video = pes(b"\0\0\0\1" + clear_nal, unbounded=zero_length)
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    capture = short_video + b"gap" + later_video + pack
+    expected = short_video + b"gap" + clear_video + pack
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == expected
+
+
+def test_ps_gap_recovery_header_detection_excludes_audio_nals() -> None:
+    def pes(kind: int, payload: bytes) -> bytes:
+        return b"\0\0\1" + bytes((kind,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload
+
+    video = pes(0xE0, b"\0\0\1\x26\x01" + b"video" * 8)
+    audio = pes(0xC0, (b"\0\0\1\x67" + b"s" * 20) * 8)
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    assert detect_hikvision_ps_video_nalu_header_size(video + b"gap" + audio + pack + video, "camera-key") == 2
+
+
+def test_ps_overlong_recovery_does_not_copy_capture_suffixes() -> None:
+    class TrackedBytes(bytes):
+        suffix_bytes = 0
+
+        def __getitem__(self, key: Any) -> Any:
+            if isinstance(key, slice) and key.stop is None:
+                self.suffix_bytes += len(self) - (key.start or 0)
+            return super().__getitem__(key)
+
+    pack = b"\0\0\1\xba\x44\0\x04\0\x04\x01\0\x01\xff\xf8"
+    # Each capped video PES stops parsing before the next recovery anchor.
+    run = b"\0\0\1\xe0\0\x08\x80\0\0\0\0\1\x26\x01" + b"v" * 4096 + pack
+    capture = TrackedBytes(run * 128)
+    assert detect_hikvision_ps_video_nalu_header_size(capture, "camera-key") == 2
+    assert capture.suffix_bytes == 0
+
 def test_decrypt_hikvision_ps_video_honors_h264_nal_headers() -> None:
     key = "camera-key"
     clear_body = b"fedcba9876543210" * 2
@@ -5418,3 +5513,60 @@ def test_cloud_absolute_deadline_counts_metadata_and_startup(
         assert durations == [5.0]
         assert output.getvalue() == MPEGPS_PAYLOAD
     assert closed == [True]
+
+
+@pytest.mark.parametrize(("fake_length", "valid_header", "malformed_prefix"), [(32, False, False), (65535, False, False), (32, True, False), (32, True, True)])
+def test_encrypted_header_ps_decrypt_ignores_video_lookalike_inside_audio(fake_length: int, valid_header: bool, malformed_prefix: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    def pes(stream_id: int, payload: bytes) -> bytes:
+        return b"\0\0\1" + bytes((stream_id,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload
+    clear_video = pes(0xE0, b"\0\0\0\1" + clear_nal)
+    encrypted_video = pes(0xE0, b"\0\0\0\1" + encrypted_nal)
+    fake_video = b"\0\0\1\xe0" + fake_length.to_bytes(2, "big") + (b"\x80\0\0" if valid_header else b"\0\0\0")
+    audio = pes(0xC0, b"audio-prefix" + fake_video + b"audio-suffix")
+    prefix = b"\0\0\1\xbd\0\xffbroken-private-stream" if malformed_prefix else b""
+    capture = prefix + encrypted_video + audio + encrypted_video
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == prefix + clear_video + audio + clear_video
+
+
+def test_ps_header_detection_does_not_score_nals_inside_audio():
+    key = "camera-key"
+    def pes(stream_id: int, payload: bytes) -> bytes:
+        return b"\0\0\1" + bytes((stream_id,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload
+    hevc = pes(0xE0, b"\0\0\1\x26\x01" + b"video" * 8)
+    false_h264 = pes(0xE0, (b"\0\0\1\x67" + b"s" * 20) * 8)
+    audio = pes(0xC0, b"audio-prefix" + false_h264 + b"audio-suffix")
+    assert detect_hikvision_ps_video_nalu_header_size(hevc + audio + hevc, key) == 2
+
+
+@pytest.mark.parametrize("trailing_audio", [False, True])
+def test_ps_prefix_recovery_preserves_zero_length_video_pes(trailing_audio: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    prefix = b"\0\0\1\xbd\0\xffbroken-private-stream"
+    header = b"\0\0\1\xe0\0\0\x80\0\0\0\0\0\1"
+    audio = b"\0\0\1\xc0\0\x08\x80\0\0audio" if trailing_audio else b""
+    capture = prefix + header + encrypted_nal + audio
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == prefix + header + clear_nal + audio
+
+
+@pytest.mark.parametrize("zero_length", [False, True])
+def test_ps_decryption_recovers_video_after_parsed_prefix_and_malformed_gap(zero_length: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    def video(payload: bytes) -> bytes:
+        length = 0 if zero_length else len(payload) + 7
+        return b"\0\0\1\xe0" + length.to_bytes(2, "big") + b"\x80\0\0\0\0\0\1" + payload
+    # A complete audio prefix makes the authoritative walker return nonempty;
+    # the malformed private packet then stops it without a following pack anchor.
+    audio = b"\0\0\1\xc0\0\x08\x80\0\0audio"
+    gap = b"\0\0\1\xbd\0\xffbroken-private-stream"
+    capture = audio + gap + video(encrypted_nal) + audio
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == audio + gap + video(clear_nal) + audio

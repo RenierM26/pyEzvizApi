@@ -383,6 +383,52 @@ native LAN path. The existing CLI `stream local-dump --credentials-file ...`
 continues to work without account login; `save clip --source auto` is the online
 automatic convenience command.
 
+### Multi-lens offline selection and H9c validation
+
+Keep the per-device capability snapshot alongside provisioned LAN credentials.
+Credentials identify the camera but do not determine whether its live-view
+protocol is ECDH or legacy SDK. If `device` is omitted in offline mode, metadata
+is not fetched and the unknown-profile ECDH attempt may return no media. This
+is not evidence that a lens is unsupported, and silent no-media errors do not
+trigger a protocol or cloud fallback.
+
+On the tested H9c, `supportExt["519"]` is `"3"` (not member `1`), so supplying
+its existing `get_device_infos()` snapshot selects legacy SDK locally. Reuse
+`source` and `local_client` from the offline example, with the caller-selected
+channel:
+
+```python
+result = local_client.save_clip_with_options(
+    serial, "lens2.ts",
+    ClipOptions(source=source, channel=2,
+                capture=CaptureLimits(duration_seconds=300),
+                decode=MediaDecodeOptions(decrypt_video=True)),
+)
+```
+
+A five-minute channel-2 SDK control retained HEVC video and 16 kHz mono AAC,
+fully decoded both tracks without diagnostics, and reopened successfully. Its
+capture and reopen made zero cloud calls. Provisioning/account discovery is a
+separate step, not included in that offline claim. A model name alone is not a
+protocol selector; other devices/firmware require their own metadata and checks.
+The built-in native port-8000 app plan is independently observed for channel 1;
+it is not a substitute for selecting SDK channel 2.
+
+Both H9c RTSP routes `/Streaming/Channels/101` and
+`/Streaming/Channels/201` also retained five minutes of clear HEVC/AAC on the
+wire. SDP describes H.265 at 90 kHz and MPEG4-GENERIC AAC at 16 kHz, mono.
+Retained-wire replays used `allow_ezviz_headerless_hevc_fu=True` for the observed
+vendor HEVC fragmentation and source RTP timestamp deltas. Full video and audio
+decoding passed; missing access-unit gaps were preserved, without synthesized
+silence or timing filters. This is validation of received media, not a new public
+RTSP capture adapter or a claim that an arbitrary FFmpeg invocation is correct.
+
+The tested camera's PLAY `RTP-Info` clock origins disagree with received packets,
+and no RTCP sender reports arrived during either five-minute control. Independent
+per-track origins preserve cadence/duration but cannot prove absolute audio/video
+synchronization. Do not use a guessed offset to declare lip-sync fixed; common-
+clock RTSP synchronization remains an unverified firmware/transport limitation.
+
 ### Live integration packet interface
 
 ```python

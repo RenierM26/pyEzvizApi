@@ -1089,37 +1089,38 @@ def detect_transport(data: bytes) -> StreamTransport:
 
 
 def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
-    """Return payload byte ranges for MPEG-PS video PES packets."""
+    """Return bounded-capture video payloads from authoritative PS packet bounds.
+
+    Scanning every byte for a video start code can mistake AAC payload bytes
+    for PES headers and stop decryption of the remaining capture. The common
+    packet walker skips non-video bodies by their lengths and retains existing
+    pack-anchored recovery for overlong vendor video PES runs.
+    """
 
     ranges: list[tuple[int, int]] = []
-    i = 0
-    while i < len(data) - 9:
-        if data[i : i + 3] != MPEG_START_CODE_PREFIX:
-            i += 1
+    packets = _mpeg_ps_video_decrypt_ranges(data)
+    if not packets:
+        # Preserve legacy leading-malformed-prefix recovery. Even while
+        # resynchronizing, skip any complete non-video packet by its bounds;
+        # never search that packet's compressed payload for video headers.
+        offset = 0
+        while offset < len(data) - 9:
+            packet_end = _mpeg_ps_packet_end(data, offset)
+            if packet_end is None:
+                offset += 1
+                continue
+            if _is_video_pes_stream_id(data[offset + 3]):
+                payload_start = _pes_payload_start(data, offset)
+                if payload_start is not None and payload_start < packet_end:
+                    ranges.append((payload_start, packet_end))
+            offset = packet_end
+        return ranges
+    for packet in packets:
+        if not _is_video_pes_stream_id(packet.stream_id):
             continue
-
-        stream_id = data[i + 3]
-        if not _is_video_pes_stream_id(stream_id):
-            i += 4
-            continue
-
-        pes_length = int.from_bytes(data[i + 4 : i + 6], "big")
-
-        payload_start = _pes_payload_start(data, i)
-        if payload_start is None:
-            break
-
-        packet_end = (
-            i + 6 + pes_length
-            if pes_length
-            else _next_unbounded_video_pes_boundary(data, payload_start) or len(data)
-        )
-        if packet_end > len(data):
-            break
-
-        if payload_start < packet_end:
-            ranges.append((payload_start, packet_end))
-        i = max(i + 4, packet_end)
+        payload_start = _pes_payload_start(data, packet.start)
+        if payload_start is not None and payload_start < packet.end:
+            ranges.append((payload_start, packet.end))
     return ranges
 
 

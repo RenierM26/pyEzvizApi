@@ -5418,3 +5418,30 @@ def test_cloud_absolute_deadline_counts_metadata_and_startup(
         assert durations == [5.0]
         assert output.getvalue() == MPEGPS_PAYLOAD
     assert closed == [True]
+
+
+@pytest.mark.parametrize(("fake_length", "valid_header", "malformed_prefix"), [(32, False, False), (65535, False, False), (32, True, False), (32, True, True)])
+def test_encrypted_header_ps_decrypt_ignores_video_lookalike_inside_audio(fake_length: int, valid_header: bool, malformed_prefix: bool) -> None:
+    key = "camera-key"
+    aes_key = key.encode().ljust(16, b"\0")[:16]
+    clear_nal = b"\x65" + b"selected-video" + bytes(17)
+    encrypted_nal = _encrypt_hikvision_fixture_blocks(aes_key, clear_nal)
+    def pes(stream_id: int, payload: bytes) -> bytes:
+        return b"\0\0\1" + bytes((stream_id,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload
+    clear_video = pes(0xE0, b"\0\0\0\1" + clear_nal)
+    encrypted_video = pes(0xE0, b"\0\0\0\1" + encrypted_nal)
+    fake_video = b"\0\0\1\xe0" + fake_length.to_bytes(2, "big") + (b"\x80\0\0" if valid_header else b"\0\0\0")
+    audio = pes(0xC0, b"audio-prefix" + fake_video + b"audio-suffix")
+    prefix = b"\0\0\1\xbd\0\xffbroken-private-stream" if malformed_prefix else b""
+    capture = prefix + encrypted_video + audio + encrypted_video
+    assert decrypt_hikvision_ps_video(capture, key, nalu_header_size=0) == prefix + clear_video + audio + clear_video
+
+
+def test_ps_header_detection_does_not_score_nals_inside_audio():
+    key = "camera-key"
+    def pes(stream_id: int, payload: bytes) -> bytes:
+        return b"\0\0\1" + bytes((stream_id,)) + (len(payload) + 3).to_bytes(2, "big") + b"\x80\0\0" + payload
+    hevc = pes(0xE0, b"\0\0\1\x26\x01" + b"video" * 8)
+    false_h264 = pes(0xE0, (b"\0\0\1\x67" + b"s" * 20) * 8)
+    audio = pes(0xC0, b"audio-prefix" + false_h264 + b"audio-suffix")
+    assert detect_hikvision_ps_video_nalu_header_size(hevc + audio + hevc, key) == 2

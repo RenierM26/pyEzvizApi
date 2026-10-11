@@ -2670,7 +2670,8 @@ def _copy_clear_native_idmx_timed_av(
     if selected_annexb is not None:
         try:
             units, timestamps, selected_packets, boundary_index = _clear_native_selected_timeline(
-                units, timestamps, rtp_packets, selected_annexb, codec, video_types=video_types,
+                units, timestamps, rtp_packets, selected_annexb, codec,
+                video_types=_idmx_local_video_payload_types(packets, codec=codec),
             )
         except PyEzvizError:
             if legacy_video_indices:

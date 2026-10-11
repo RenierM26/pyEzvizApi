@@ -192,3 +192,43 @@ def test_selected_legacy_video_preserves_unproven_clock_fallback():
     legacy = b"\xfa\x90\xe0\0\1" + bytes(4) + b"\x55\x66\x77\x88" + wrapper + unit
     assert not _copy_clear_native_idmx_timed_av([metadata, legacy], None, io.BytesIO(),
         ffmpeg_path="ffmpeg", selected_annexb=b"\0\0\0\1" + unit, selected_codec="hevc")
+
+
+@pytest.mark.parametrize("other_timestamp", [15000, 18000])
+def test_markerless_boundary_ignores_interleaved_other_video_ssrc(other_timestamp):
+    first, last, other, after = b"\x65\xb8first", b"\x41\xb8last", b"\x41\xb8other", b"\x41\xb8after"
+    packets = [RtpPacket(first, 96, 1, 9000, 123, False),
+               RtpPacket(last, 96, 2, 15000, 123, False),
+               RtpPacket(other, 96, 1, other_timestamp, 456, False),
+               RtpPacket(after, 96, 3, 21000, 123, False)]
+    selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
+    _units, _times, events, boundary = _clear_native_selected_timeline(
+        (first, last, other, after), [9000, 15000, other_timestamp, 21000], packets, selected, "h264",
+        nal_source_keys=[(123, None), (123, None), (456, None), (123, None)])
+    assert boundary == 2 and events[boundary].ssrc == 123
+    assert all(packet.ssrc != 456 for packet in events)
+    reconstructed = local.rtp_packets_to_nal_units(events, codec="h264",
+        completed_access_units_only=True, boundary_only_packet_index=boundary)
+    assert reconstructed == (first, last)
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_nal_source_identity_stays_aligned_when_unfinished_other_source_is_filtered(complete):
+    first, other = b"\x65\xb8first", b"\x65\xb8other"
+    packets = [RtpPacket(first, 96, 1, 9000, 123, True),
+               RtpPacket(other, 96, 1, 9000, 456, False)]
+    timestamps: list[int] = []
+    sources: list[tuple[int, int | None]] = []
+    units = local.rtp_packets_to_nal_units(packets, codec="h264",
+        completed_access_units_only=complete, nal_timestamps=timestamps, nal_source_keys=sources)
+    assert units == ((first,) if complete else (first, other))
+    assert timestamps == ([9000] if complete else [9000, 9000])
+    assert sources == ([(123, None)] if complete else [(123, None), (456, None)])
+
+
+def test_clean_native_window_rejects_mixed_source_picture_identities():
+    first, last = b"\x65\xb8first", b"\x41\xb8last"
+    selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
+    with pytest.raises(PyEzvizError, match="mixes different source RTP identities"):
+        _clear_native_selected_timeline((first, last), [9000, 15000], [], selected, "h264",
+            nal_source_keys=[(123, None), (456, None)])

@@ -73,10 +73,12 @@ from .rtp import (
     RtpAacStream,
     RtpPacket,
     RtpRouteProfile,
+    RtpSequenceKey,
     RtpStreamDescriptor,
     RtpVideoCodec,
     RtpVideoDepacketizer,
     _rtp_nal_starts_picture,
+    _rtp_sequence_key,
     decrypt_idmx_aac_packets,
     detect_rtp_video_codec,
     idmx_rtp_stream_descriptors,
@@ -2657,9 +2659,10 @@ def _copy_clear_native_idmx_timed_av(
         return False
     codec = selected_codec if selected_annexb is not None and selected_codec is not None else detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
+    source_keys: list[RtpSequenceKey] = []
     units = rtp_packets_to_nal_units(
         rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
-        allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps,
+        allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps, nal_source_keys=source_keys,
     )
     if not rtp_nal_units_have_vcl(units, codec=codec):
         if legacy_video_indices:
@@ -2671,7 +2674,7 @@ def _copy_clear_native_idmx_timed_av(
         try:
             units, timestamps, selected_packets, boundary_index = _clear_native_selected_timeline(
                 units, timestamps, rtp_packets, selected_annexb, codec,
-                video_types=_idmx_local_video_payload_types(packets, codec=codec),
+                video_types=_idmx_local_video_payload_types(packets, codec=codec), nal_source_keys=source_keys,
             )
         except PyEzvizError:
             if legacy_video_indices:
@@ -2709,6 +2712,7 @@ def _clear_native_selected_timeline(
     units: tuple[bytes, ...], timestamps: list[int], packets: list[RtpPacket],
     selected_annexb: bytes, codec: RtpVideoCodec,
     *, video_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    nal_source_keys: list[RtpSequenceKey] | None = None,
 ) -> tuple[tuple[bytes, ...], list[int], list[RtpPacket], int | None]:
     """Match the decoded clean suffix, retaining audio only inside its wire interval."""
 
@@ -2723,12 +2727,25 @@ def _clear_native_selected_timeline(
     start = matches[0]
     stop = start + len(tail)
     last_vcl = max(i for i in range(start, stop) if rtp_nal_units_have_vcl((units[i],), codec=codec))
-    first_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[start]]
-    last_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types and packet.timestamp == timestamps[last_vcl]]
+    if nal_source_keys is not None and len(nal_source_keys) != len(units):
+        raise PyEzvizError("Clean native video has no aligned source RTP identities")
+    selected_source = None if nal_source_keys is None else nal_source_keys[last_vcl]
+    if nal_source_keys is not None and any(nal_source_keys[i] != selected_source
+            for i in range(start, stop) if rtp_nal_units_have_vcl((units[i],), codec=codec)):
+        raise PyEzvizError("Clean native video mixes different source RTP identities")
+    first_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types
+                     and packet.timestamp == timestamps[start]
+                     and (selected_source is None or _rtp_sequence_key(packet) == selected_source)]
+    last_packets = [i for i, packet in enumerate(packets) if packet.payload_type in video_types
+                    and packet.timestamp == timestamps[last_vcl]
+                    and (selected_source is None or _rtp_sequence_key(packet) == selected_source)]
     if not first_packets or not last_packets:
         raise PyEzvizError("Clean native video has no matching source RTP interval")
     first_packet, last_packet = first_packets[0], last_packets[-1]
-    end_packet = next((i for i in range(last_packet + 1, len(packets)) if packets[i].payload_type in video_types), len(packets))
+    selected_source = _rtp_sequence_key(packets[last_packet])
+    end_packet = next((i for i in range(last_packet + 1, len(packets))
+                       if packets[i].payload_type in video_types
+                       and _rtp_sequence_key(packets[i]) == selected_source), len(packets))
     # Keep descriptor epochs from outside the selected interval, but never media
     # from discarded startup or next-picture AAC. One successor video packet
     # proves the final timestamp boundary during strict reconstruction only;
@@ -2743,7 +2760,8 @@ def _clear_native_selected_timeline(
     boundary_index: int | None = None
     for i, packet in enumerate(packets[:end_packet + 1]):
         if (packet.payload_type not in (audio_types | video_types)
-                or first_packet <= i < end_packet
+                or (first_packet <= i < end_packet and (packet.payload_type not in video_types
+                    or _rtp_sequence_key(packet) == selected_source))
                 or (i == end_packet and packet.payload_type in video_types)):
             if i == end_packet and packet.payload_type in video_types:
                 boundary_index = len(selected_packets)

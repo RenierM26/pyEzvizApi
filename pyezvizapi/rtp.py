@@ -1453,6 +1453,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     first_slice_transform: Callable[[bytes], bytes] | None = None,
     packet_nal_transform: Callable[[bytes], bytes] | None = None,
     nal_timestamps: list[int] | None = None,
+    nal_source_keys: list[RtpSequenceKey] | None = None,
     boundary_only_packet_index: int | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
@@ -1460,6 +1461,8 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     A marker or the next video RTP timestamp closes an access unit. A bounded
     capture ending after one slice but before the picture boundary is not a
     playable frame, even when that slice is a complete NAL unit.
+    Optional ``nal_timestamps`` and ``nal_source_keys`` are aligned with the
+    returned NAL units, including when incomplete pictures are filtered out.
     ``boundary_only_packet_index`` consumes only observed sequence/timestamp
     continuity from that successor packet, never its unselected media payload.
     """
@@ -1521,6 +1524,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     )
     output: list[bytes] = []
     output_timestamps: list[int] = []
+    output_source_keys: list[RtpSequenceKey] = []
     output_is_vcl: list[bool] = []
     accepted: list[bool] = []
     pending_indexes: dict[RtpSequenceKey, list[int]] = {}
@@ -1710,6 +1714,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                 pending_indexes.setdefault(sequence_key, []).append(len(output))
                 output.append(output_nal)
                 output_timestamps.append(packet.timestamp)
+                output_source_keys.append(sequence_key)
                 is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
@@ -1759,7 +1764,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
             finish_access_unit(ssrc, complete=False)
         if nal_timestamps is not None:
             nal_timestamps.extend(timestamp for timestamp, keep in zip(output_timestamps, accepted, strict=True) if keep)
+        if nal_source_keys is not None:
+            nal_source_keys.extend(source for source, keep in zip(output_source_keys, accepted, strict=True) if keep)
         return tuple(nal for nal, keep in zip(output, accepted, strict=True) if keep)
+    if nal_source_keys is not None:
+        nal_source_keys.extend(output_source_keys)
     if nal_timestamps is not None:
         nal_timestamps.extend(output_timestamps)
     return tuple(output)

@@ -2687,6 +2687,7 @@ def _copy_clear_native_idmx_timed_av(
         strict_units = rtp_packets_to_nal_units(
             selected_packets, codec=codec, completed_access_units_only=True,
             allow_ezviz_headerless_hevc_fu=True, boundary_only_packet_index=boundary_index,
+            video_payload_types=_idmx_local_video_payload_types(packets, codec=codec),
         )
         selected_vcl = tuple(unit for unit in units if rtp_nal_units_have_vcl((unit,), codec=codec))
         strict_vcl = tuple(unit for unit in strict_units if rtp_nal_units_have_vcl((unit,), codec=codec))

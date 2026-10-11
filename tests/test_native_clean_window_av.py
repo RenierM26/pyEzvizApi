@@ -61,7 +61,7 @@ def test_full_suffix_decode_budget_scales_beyond_ten_seconds_but_is_bounded():
     assert _ffmpeg_video_decode_probe_timeout_seconds(bytes(400_000_000)) == 180
 
 
-@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False), ("mpeg", False, True), ("legacy", False, True), ("other_codec", False, False)])
+@pytest.mark.parametrize(("dirty_partition", "selected_partition", "marker"), [(False, False, True), (True, False, True), (False, True, True), (True, False, False), (False, False, False), ("mpeg", False, True), ("legacy", False, True), ("other_codec", False, False), ("delayed_route", False, False)])
 def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_partition, selected_partition, marker):
     def raw(payload, pt, timestamp, sequence, extension=b""):
         header = bytes((0x90 if extension else 0x80, pt | (0x80 if marker else 0)))
@@ -73,14 +73,16 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_pa
 
     descriptor = b"\x42\x0e" + bytes(11) + (6000 << 1).to_bytes(3, "big")
     descriptor += b"\x45\x02\x1b\x60\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
-    if dirty_partition == "other_codec":
-        descriptor += b"\x45\x02\x24\x61"
+    descriptor += b"\x45\x02\x24\x61" if dirty_partition == "other_codec" else b""
+    descriptor = descriptor.replace(b"\x45\x02\x1b\x60", b"") if dirty_partition == "delayed_route" else descriptor
+    video_pt = 110 if dirty_partition == "delayed_route" else 96
+    boundary_descriptor = b"\x45\x02\x1b\x6e" if dirty_partition == "delayed_route" else b""
     dirty, clean, last, after = b"\x65\xb8dirty", b"\x65\xb8clean", b"\x41\xb8last", b"\x41\xb8after"
     if not marker and not dirty_partition:
         after = b"\x62\xb8unsupported-next-picture-partition"
     if selected_partition:
         clean = b"\x62\xb8unsupported-selected-partition"
-    if dirty_partition == "other_codec":
+    if dirty_partition in ("other_codec", "delayed_route"):
         pass
     elif dirty_partition == "legacy":
         dirty = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01\x26\x01\x80legacy"
@@ -92,9 +94,9 @@ def test_public_clean_window_wait_retains_only_matched_aac(monkeypatch, dirty_pa
     def audio(payload):
         return b"\0\x10" + (len(payload) << 3).to_bytes(2, "big") + payload
     payloads = [raw(b"metadata", 112, 0, 0, descriptor),
-        raw(dirty, 96, 0, 1), raw(audio(discarded), 104, 0, 1),
-        raw(clean, 96, 6000, 2), raw(audio(retained), 104, 1024, 2),
-        raw(last, 96, 12000, 3), raw(after, 96, 18000, 4), raw(audio(beyond), 104, 2048, 3)]
+        raw(dirty, video_pt, 0, 1), raw(audio(discarded), 104, 0, 1),
+        raw(clean, video_pt, 6000, 2), raw(audio(retained), 104, 1024, 2),
+        raw(last, video_pt, 12000, 3), raw(after, video_pt, 18000, 4, boundary_descriptor), raw(audio(beyond), 104, 2048, 3)]
     if dirty_partition == "other_codec":
         # The other codec's next packet must not close this H.264 interval.
         payloads.insert(6, raw(b"\x26\x01\x80other-route", 97, 18000, 1))

@@ -65,6 +65,7 @@ from .remux import (
     copy_remuxed_output,
     open_mpegts_remux_process,
     start_stderr_drain,
+    write_aac_remux_input,
 )
 from .rtp import (
     DEFAULT_AAC_PAYLOAD_TYPES,
@@ -76,6 +77,7 @@ from .rtp import (
     RtpVideoDepacketizer,
     decrypt_idmx_aac_packets,
     idmx_rtp_stream_descriptors,
+    idmx_video_frame_rate,
     parse_rtp_packet,
     rtp_packet_has_valid_idmx_aac_frame,
     rtp_packet_is_idmx_aac,
@@ -2367,6 +2369,7 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                 media_key,
                 audio_metadata=_idmx_audio_metadata(packets, media_key),
                 audio_payload_types=_idmx_audio_payload_types(packets),
+                require_contiguous=False,
             )
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
@@ -5635,6 +5638,7 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
     """Estimate video frame rate from the standard 90 kHz RTP timestamp clock."""
 
     rtp_packets: list[RtpPacket] = []
+    native_wrapper = False
     for frame in _iter_idmx_local_packet_frames(packets):
         header_size = _idmx_local_frame_header_size(frame)
         if header_size is None:
@@ -5642,10 +5646,15 @@ def _idmx_local_video_frame_rate(packets: list[bytes]) -> str | None:
         packet = _idmx_local_frame_rtp_packet(frame, header_size)
         if packet is not None:
             if packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06"):
-                # Native IDMX wrapper timestamps are not guaranteed to use the
-                # standard 90 kHz clock. Let FFmpeg read HEVC SPS/VUI timing.
-                return None
+                native_wrapper = True
             rtp_packets.append(packet)
+    advertised_rate = idmx_video_frame_rate(rtp_packets)
+    if advertised_rate is not None:
+        return advertised_rate
+    if native_wrapper:
+        # Without a native descriptor, do not infer timing from wrapper
+        # timestamps. FFmpeg can still use valid HEVC SPS/VUI timing.
+        return None
     h264_types, hevc_types = _idmx_local_supported_video_payload_types(packets)
     routed_video_payload_types = h264_types | hevc_types
     route_epoch_profile = RtpRouteProfile()
@@ -7300,8 +7309,15 @@ def _copy_idmx_audio_video_to_mpegts(
     """Mux decrypted IDMX elementary video and AAC into MPEG-TS."""
 
     with tempfile.TemporaryDirectory(prefix="pyezvizapi-idmx-") as directory:
-        audio_path = Path(directory) / "audio.aac"
-        audio_path.write_bytes(audio.adts)
+        audio_path, audio_format = write_aac_remux_input(audio, Path(directory))
+        if audio_format == "concat":
+            process = open_mpegts_remux_process(
+                ffmpeg_path, input_format=video_input_format,
+                frame_rate=video_frame_rate, audio_path=str(audio_path),
+                audio_input_format=audio_format, popen=subprocess.Popen,
+            )
+            _copy_mpegps_payloads_to_mpegts([annexb], output, process=process)
+            return
         process = _open_local_idmx_audio_video_mpegts_remux_process(
             ffmpeg_path,
             video_input_format=video_input_format,

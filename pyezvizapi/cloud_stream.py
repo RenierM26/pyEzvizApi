@@ -33,7 +33,12 @@ from .exceptions import (
     UnsupportedRtpVideoCodecError,
 )
 from .media import has_positive_finite_capture_bound, is_positive_finite_duration_bound
-from .remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
+from .remux import (
+    copy_remuxed_output,
+    open_mpegts_remux_process,
+    remux_bytes,
+    write_aac_remux_input,
+)
 from .rtp import (
     ANNEX_B_START_CODE,
     DEFAULT_AAC_PAYLOAD_TYPES,
@@ -1127,7 +1132,7 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
         decrypted_annexb = b"".join(
             ANNEX_B_START_CODE + nal_unit for nal_unit in decrypted_units
         )
-        audio = decrypt_idmx_aac_packets(parsed, media_key)
+        audio = decrypt_idmx_aac_packets(parsed, media_key, require_contiguous=False)
         if audio is not None:
             _remux_cloud_elementary_av_bytes_to_mpegts(
                 decrypted_annexb,
@@ -1851,8 +1856,14 @@ def _remux_cloud_elementary_av_bytes_to_mpegts(
     """Remux bounded Annex-B video and descriptor-backed AAC into MPEG-TS."""
 
     with tempfile.TemporaryDirectory(prefix="pyezvizapi-cloud-rtp-") as directory:
-        audio_path = Path(directory) / "audio.aac"
-        audio_path.write_bytes(audio.adts)
+        audio_path, audio_format = write_aac_remux_input(audio, Path(directory))
+        if audio_format == "concat":
+            process = open_mpegts_remux_process(
+                ffmpeg_path, input_format=codec, audio_path=str(audio_path),
+                audio_input_format=audio_format, popen=subprocess.Popen,
+            )
+            remux_bytes(process, video, output)
+            return
         process = open_mpegts_remux_process(
             ffmpeg_path,
             input_format=codec,

@@ -1905,7 +1905,9 @@ def test_copy_decrypted_mpegts_keeps_all_packets_when_video_is_untrimmed(
         *,
         audio_metadata: tuple[int, int] | None = None,
         audio_payload_types: frozenset[int] | None = None,
+        require_contiguous: bool = True,
     ) -> Any:
+        assert not require_contiguous
         audio_calls.append(
             (candidate_packets, audio_metadata, audio_payload_types)
         )
@@ -4455,3 +4457,14 @@ def test_explicit_legacy_command_record_does_not_claim_rtp_provenance() -> None:
     assert packet is not None
     assert not packet.idmx
     assert packet.payload == frame[13:]
+
+
+@pytest.mark.parametrize("metadata_first", [True, False])
+def test_native_wrapper_uses_video_descriptor_not_wrapper_timestamps(metadata_first: bool) -> None:
+    metadata = _rtp_packet(b"metadata", payload_type=112,
+        extension_data=bytes.fromhex("420e071010ea07800440111f00002ee0"),
+        ssrc=b"\x55\x66\x77\x88")
+    video = (b"\x0d\x90\x60\x00\x01\x00\x00\x23\x28\x55\x66\x77\x88"
+        b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01\x40\x01vps")
+    packets = [metadata, video] if metadata_first else [video, metadata]
+    assert _idmx_local_video_frame_rate(packets) == "15"

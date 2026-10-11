@@ -18,7 +18,7 @@ from pyezvizapi.rtp import RtpPacket, decrypt_idmx_aac_packets
 @pytest.mark.parametrize("unfinished_metadata", [False, True])
 def test_clean_window_excludes_discarded_startup_and_next_picture_audio(unfinished_metadata):
     sps, dirty, first, last, after = (b"\x67sps", b"\x41\x80dirty", b"\x65\x80clean", b"\x41\x80last", b"\x41\x80after")
-    units = (sps, dirty, first, last, after)
+    units: tuple[bytes, ...] = (sps, dirty, first, last, after)
     timestamps = [0, 0, 9000, 21000, 27000]
     descriptor = b"\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
     def video(payload, timestamp):

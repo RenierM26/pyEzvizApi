@@ -2701,7 +2701,14 @@ def _clear_native_selected_timeline(
     audio_types = profile.codec_payload_types(
         "aac", fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
     )
-    selected_packets = [packet for i, packet in enumerate(packets) if packet.payload_type not in audio_types or first_packet <= i < end_packet]
+    selected_packets = []
+    for i, packet in enumerate(packets):
+        if packet.payload_type not in audio_types or first_packet <= i < end_packet:
+            selected_packets.append(packet)
+        elif packet.extension_data:
+            # Internal descriptor-only event: -1 cannot collide with a wire RTP
+            # payload type. Never serialize it or dispatch its discarded AAC.
+            selected_packets.append(replace(packet, payload=b"", payload_type=-1))
     prefix = selected[:first_vcl]
     return prefix + tail, [timestamps[start]] * len(prefix) + timestamps[start:stop], selected_packets
 

@@ -102,3 +102,25 @@ def test_clean_window_missing_packet_mapping_is_a_protocol_error():
     unit = b"\x65\x80picture"
     with pytest.raises(PyEzvizError, match="no matching source RTP interval"):
         _clear_native_selected_timeline((unit,), [0], [], b"\0\0\0\1" + unit, "h264")
+
+
+def test_clean_window_preserves_descriptor_from_discarded_audio():
+    first, last, after = b"\x65\x80first", b"\x41\x80last", b"\x41\x80after"
+    descriptor = b"\x45\x02\x0f\x68\x43\x0a\0\x01\x02\0\xfa\x03\0\0\x03\xff"
+    def audio(payload, timestamp, extension=b""):
+        return RtpPacket(b"\0\x10" + (len(payload) << 3).to_bytes(2, "big") + payload,
+                         104, 1, timestamp, 2, True, 1, extension, True)
+    def video(payload, timestamp):
+        return RtpPacket(payload, 96, 1, timestamp, 1, True)
+    discarded, retained, beyond = b"startup", b"retained", b"next-picture"
+    packets = [audio(discarded, 0, descriptor), video(first, 9000),
+               audio(retained, 1024), video(last, 15000), video(after, 21000),
+               audio(beyond, 2048)]
+    selected = b"\0\0\0\1" + first + b"\0\0\0\1" + last
+    _units, _times, events = _clear_native_selected_timeline(
+        (first, last, after), [9000, 15000, 21000], packets, selected, "h264")
+    result = decrypt_idmx_aac_packets(events, b"", decrypt_audio=False, preserve_clear_timestamps=True)
+    assert result is not None and result.frame_count == 1
+    assert result.sample_rate == 16000 and result.channels == 1
+    assert retained in result.adts and discarded not in result.adts and beyond not in result.adts
+    assert events[0].extension_data == descriptor and not events[0].payload

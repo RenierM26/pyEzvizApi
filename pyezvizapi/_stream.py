@@ -1089,37 +1089,37 @@ def detect_transport(data: bytes) -> StreamTransport:
 
 
 def _video_pes_payload_ranges(data: bytes) -> list[tuple[int, int]]:
-    """Return payload byte ranges for MPEG-PS video PES packets."""
+    """Return bounded-capture video payloads from authoritative PS packet bounds.
+
+    Scanning every byte for a video start code can mistake AAC payload bytes
+    for PES headers and stop decryption of the remaining capture. The common
+    packet walker skips non-video bodies by their lengths and retains existing
+    pack-anchored recovery for overlong vendor video PES runs.
+    """
 
     ranges: list[tuple[int, int]] = []
-    i = 0
-    while i < len(data) - 9:
-        if data[i : i + 3] != MPEG_START_CODE_PREFIX:
-            i += 1
-            continue
-
-        stream_id = data[i + 3]
-        if not _is_video_pes_stream_id(stream_id):
-            i += 4
-            continue
-
-        pes_length = int.from_bytes(data[i + 4 : i + 6], "big")
-
-        payload_start = _pes_payload_start(data, i)
-        if payload_start is None:
-            break
-
-        packet_end = (
-            i + 6 + pes_length
-            if pes_length
-            else _next_unbounded_video_pes_boundary(data, payload_start) or len(data)
-        )
-        if packet_end > len(data):
-            break
-
-        if payload_start < packet_end:
-            ranges.append((payload_start, packet_end))
-        i = max(i + 4, packet_end)
+    packets = {packet.start: packet for packet in _mpeg_ps_video_decrypt_ranges(data)}
+    offset = 0
+    while offset < len(data) - 9:
+        # Prefer authoritative bounds, including pack-anchored vendor recovery.
+        # Between those ranges resynchronize one byte at a time, but always skip
+        # a complete non-video packet's body rather than scanning its payload.
+        packet = packets.get(offset)
+        packet_end = packet.end if packet is not None else _mpeg_ps_packet_end(data, offset)
+        if packet_end is None:
+            if _is_zero_length_video_pes_start(data, offset):
+                payload_start = _pes_payload_start(data, offset)
+                assert payload_start is not None
+                packet_end = _next_unbounded_video_pes_boundary(data, payload_start)
+                packet_end = len(data) if packet_end is None else packet_end
+            else:
+                offset += 1
+                continue
+        if _is_video_pes_stream_id(data[offset + 3]):
+            payload_start = _pes_payload_start(data, offset)
+            if payload_start is not None and payload_start < packet_end:
+                ranges.append((payload_start, packet_end))
+        offset = packet_end
     return ranges
 
 
@@ -1186,12 +1186,13 @@ def _mpeg_ps_complete_packet_ranges(
     data: bytes | bytearray,
     *,
     include_trailing_unbounded_video: bool = False,
+    start_offset: int = 0,
 ) -> list[_MpegPsPacketRange]:
-    """Return fully parsed MPEG-PS packet ranges from the start of ``data``."""
+    """Return complete packet ranges with absolute bounds from ``start_offset``."""
 
-    view = bytes(data)
+    view = data if isinstance(data, bytes) else bytes(data)
     ranges: list[_MpegPsPacketRange] = []
-    i = 0
+    i = start_offset
     while i < len(view):
         packet_end = _mpeg_ps_packet_end(view, i)
         if packet_end is not None:
@@ -1227,6 +1228,36 @@ def _mpeg_ps_complete_packet_ranges(
     return ranges
 
 
+def _mpeg_ps_anchored_recovery_start(data: bytes, start: int, pack_start: int) -> int:
+    """Find a packet chain reaching the known pack, not an isolated lookalike.
+
+    Ciphertext can contain locally valid packet headers. Only boundaries whose
+    declared ends lead contiguously to the pack are evidence of real framing.
+    Resolve candidates backward once, avoiding repeated suffix walks/copies.
+    """
+
+    candidates: list[tuple[int, int | None]] = []
+    candidate = data.find(MPEG_START_CODE_PREFIX, start, pack_start)
+    while candidate >= 0:
+        packet_end = _mpeg_ps_packet_end(data, candidate)
+        if packet_end is not None or _is_zero_length_video_pes_start(data, candidate):
+            candidates.append((candidate, packet_end))
+        candidate = data.find(MPEG_START_CODE_PREFIX, candidate + 3, pack_start)
+
+    anchored = {pack_start}
+    next_boundary = pack_start
+    recovery_start = pack_start
+    for candidate, packet_end in reversed(candidates):
+        # The normal walker bounds a zero-length video at the next locally
+        # valid packet; require that boundary to be independently anchored too.
+        boundary = next_boundary if packet_end is None else packet_end
+        if boundary in anchored:
+            anchored.add(candidate)
+            recovery_start = candidate
+        next_boundary = candidate
+    return recovery_start
+
+
 def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
     """Recover overlong EZVIZ video PES runs for the bounded decrypt pass.
 
@@ -1240,14 +1271,11 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
     offset = 0
     while offset < len(data):
         parsed = _mpeg_ps_complete_packet_ranges(
-            data[offset:], include_trailing_unbounded_video=True
+            data, include_trailing_unbounded_video=True, start_offset=offset
         )
         if not parsed:
             break
-        ranges.extend(
-            _MpegPsPacketRange(offset + item.start, offset + item.end, item.stream_id)
-            for item in parsed
-        )
+        ranges.extend(parsed)
         parsed_end = ranges[-1].end
         if parsed_end >= len(data):
             break
@@ -1260,9 +1288,16 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
             break
         if _is_video_pes_stream_id(ranges[-1].stream_id):
             previous = ranges[-1]
+            # A vendor continuation can bridge unparsed bytes, but must never
+            # include any later packet's clear header in the video payload.
+            # Resume the authoritative walker at that packet so its body is
+            # bounded independently, including zero-length video PES packets.
+            recovery_end = _mpeg_ps_anchored_recovery_start(data, parsed_end, next_pack)
             ranges[-1] = _MpegPsPacketRange(
-                previous.start, next_pack, previous.stream_id
+                previous.start, recovery_end, previous.stream_id
             )
+            offset = recovery_end
+            continue
         offset = next_pack
     return ranges
 

@@ -704,6 +704,7 @@ def decrypt_idmx_aac_packets(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    allow_timestamp_jitter: bool = False,
 ) -> RtpAacStream | None:
     """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
 
@@ -738,14 +739,14 @@ def decrypt_idmx_aac_packets(
         (current - previous) & 0xFFFFFFFF
         for previous, current in pairwise(timestamps)
     ]
-    if any(delta == 0 or delta >= 0x80000000 or delta % IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
-        return None
-    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
-        return None
     descriptor = route_profile.audio_metadata or audio_metadata
     if descriptor is None:
         return None
     sample_rate, channels = descriptor
+    if any(not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter) for delta in deltas):
+        return None
+    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
+        return None
     aes_key = _rtp_media_aes_key(media_key)
     access_units = [
         _decrypt_idmx_aac_access_unit(access_unit, aes_key)
@@ -763,6 +764,15 @@ def decrypt_idmx_aac_packets(
         timed_segments=_aac_timed_segments(adts_frames, deltas),
     )
 
+
+
+def _aac_timestamp_delta_is_supported(delta: int, sample_rate: int, allow_jitter: bool) -> bool:
+    """Accept whole AUs or explicitly enabled native one-millisecond clock jitter."""
+
+    jitter = sample_rate // 1000 if allow_jitter else 0
+    remainder = delta % IDMX_AAC_SAMPLES_PER_FRAME
+    return (IDMX_AAC_SAMPLES_PER_FRAME - jitter <= delta < 0x80000000
+            and min(remainder, IDMX_AAC_SAMPLES_PER_FRAME - remainder) <= jitter)
 
 def _aac_timed_segments(adts_frames: list[bytes], deltas: list[int]) -> tuple[tuple[int, bytes], ...]:
     """Split received ADTS only at missing-AU boundaries."""
@@ -1422,6 +1432,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     completed_access_units_only: bool = False,
     first_slice_transform: Callable[[bytes], bytes] | None = None,
     packet_nal_transform: Callable[[bytes], bytes] | None = None,
+    nal_timestamps: list[int] | None = None,
 ) -> tuple[bytes, ...]:
     """Route RTP video and optionally discard an unfinished trailing picture.
 
@@ -1480,6 +1491,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
         allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
     )
     output: list[bytes] = []
+    output_timestamps: list[int] = []
     output_is_vcl: list[bool] = []
     accepted: list[bool] = []
     pending_indexes: dict[RtpSequenceKey, list[int]] = {}
@@ -1657,6 +1669,7 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
                     )
                 pending_indexes.setdefault(sequence_key, []).append(len(output))
                 output.append(output_nal)
+                output_timestamps.append(packet.timestamp)
                 is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
                 output_is_vcl.append(is_vcl)
                 accepted.append(False)
@@ -1704,7 +1717,11 @@ def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
     if completed_access_units_only:
         for ssrc in tuple(pending_indexes):
             finish_access_unit(ssrc, complete=False)
+        if nal_timestamps is not None:
+            nal_timestamps.extend(timestamp for timestamp, keep in zip(output_timestamps, accepted, strict=True) if keep)
         return tuple(nal for nal, keep in zip(output, accepted, strict=True) if keep)
+    if nal_timestamps is not None:
+        nal_timestamps.extend(output_timestamps)
     return tuple(output)
 
 

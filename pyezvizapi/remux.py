@@ -53,6 +53,7 @@ def ffmpeg_mpegts_command(
     audio_path: str | None = None,
     audio_url: str | None = None,
     audio_input_format: Literal["aac", "concat"] = "aac",
+    preserve_timestamps: bool = False,
 ) -> list[str]:
     """Build an FFmpeg stream-copy command producing MPEG-TS on stdout."""
 
@@ -84,10 +85,10 @@ def ffmpeg_mpegts_command(
                 "1:a:0",
             )
         )
-    if audio_input_format == "concat":
+    if preserve_timestamps or audio_input_format == "concat":
         command.append("-copyts")
     command.extend(("-c", "copy", "-f", "mpegts"))
-    if audio_input_format == "concat":
+    if preserve_timestamps or audio_input_format == "concat":
         # Flush AAC PES at each timestamp: aggregation can hide a gap inside PES.
         command.extend(("-muxdelay", "0"))
     command.append("pipe:1")
@@ -128,6 +129,7 @@ def open_mpegts_remux_process(
     audio_path: str | None = None,
     audio_url: str | None = None,
     audio_input_format: Literal["aac", "concat"] = "aac",
+    preserve_timestamps: bool = False,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> subprocess.Popen[bytes]:
     """Open one FFmpeg MPEG-TS remux process with captured stderr."""
@@ -141,6 +143,7 @@ def open_mpegts_remux_process(
                 audio_path=audio_path,
                 audio_url=audio_url,
                 audio_input_format=audio_input_format,
+                preserve_timestamps=preserve_timestamps,
             ),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

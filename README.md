@@ -388,14 +388,17 @@ then starts the requested duration window. Bound that pre-capture wait with
 If a camera does not supply a decodable refresh window before the bounded
 startup deadline, the save fails instead of publishing a misleading clip.
 
-For descriptor-backed native clear **AV** captures, the Python API can retain
-received RTP video cadence and clear AAC timestamps with
-`hcnetsdk_video_wait_for_clean_window=False` passed to `save_clip()`. The
-generated-plan convenience API otherwise enables the legacy clean-window wait
-for bounded clear clips. That wait/trim path is currently video-only and may
-hit its whole-clip decoder timeout on long captures; it is not a full AV path.
-Disabling it preserves received media rather than promising a clean startup.
-Native SDK untrimmed captures also retain source RTP gaps after decryption.
+Descriptor-backed native clear **AV** captures retain received RTP video cadence
+and clear AAC timestamps, including automatic clean-window wait/trim. The selected
+clean video is matched back to its source packets; audio from discarded startup
+and the following picture is excluded. AAC gaps are retained without synthesizing
+silence. Unsupported legacy clocks keep their existing video-only fallback.
+Whole-suffix decode checks use a bounded input-size-scaled budget for long clips;
+small startup probes remain short. `hcnetsdk_video_wait_for_clean_window=False`
+passed to `save_clip()` still disables startup filtering and does not promise a
+clean startup. Track origins are independently zeroed; absolute AV synchronization
+is not inferred without RTCP. Native SDK untrimmed captures also retain source RTP
+gaps after decryption.
 Neither route infers absolute inter-track synchronization without RTCP.
 
 Experimental plan JSON can set

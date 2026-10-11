@@ -579,8 +579,11 @@ backed, well-framed RFC3640 AAC even when individual audio packets have no encry
 IDMX extension. Clear input bypasses AES explicitly. Received AAC timestamp gaps
 and jitter are retained; no silence or guessed timestamps are added. Undescribed
 plain RTP is not inferred as AAC. Encrypted IDMX eligibility stays unchanged.
-Startup-trim/wait modes do not add clear audio without evidence for matching the
-selected video interval. The built-in app-observed native plan remains a single-
+Startup-trim/wait modes match the selected clean NAL suffix to complete RTP video
+units and retain clear AAC only within that selected wire interval. Audio from
+discarded startup or the next picture is not attached. Legacy/synthetic clocks
+retain the existing video-only fallback. Full-suffix decoding uses an input-size-
+scaled bounded budget; small startup probes are unchanged. The built-in app-observed native plan remains a single-
 channel plan, not a way to force a second lens.
 
 

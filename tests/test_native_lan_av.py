@@ -1,0 +1,213 @@
+"""Protocol-specific defaults and received clear AV preservation."""
+
+from __future__ import annotations
+
+import io
+import json
+from pathlib import Path
+import shutil
+import subprocess
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from pyezvizapi import EzvizClient, _local_stream
+from pyezvizapi.exceptions import EzvizNoMediaError, PyEzvizError
+from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint
+from pyezvizapi.local_stream_transport import (
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    hcnetsdk_command_port_native_lan_live_view_plan,
+)
+from pyezvizapi.rtp import RtpAacStream, RtpPacket
+
+
+@pytest.mark.parametrize(("native", "override", "expected"), [(True, None, 8000), (True, 8001, 8001), (False, None, None)])
+def test_only_builtin_native_plan_selects_its_protocol_port(monkeypatch: Any, native: bool, override: int | None, expected: int | None) -> None:
+    client = EzvizClient()
+    ports: list[int | None] = []
+
+    def endpoint(_serial: str, *, host: str | None, command_port: int | None) -> HcNetSdkLanEndpoint:
+        ports.append(command_port)
+        return HcNetSdkLanEndpoint("TESTCAM", "192.0.2.10", command_port=command_port or 9010)
+
+    def stop_before_network(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("endpoint captured")
+
+    monkeypatch.setattr(client, "_hcnetsdk_command_port_endpoint", endpoint)
+    monkeypatch.setattr(client, "_open_hcnetsdk_command_port_clip_stream", stop_before_network)
+    plan = hcnetsdk_command_port_native_lan_live_view_plan() if native else HcNetSdkCommandPortGeneratedMultiSocketPlan(())
+    with pytest.raises(RuntimeError, match="endpoint captured"):
+        client.save_clip("TESTCAM", io.BytesIO(), source="hcnetsdk-command-port", output_format="mpegts",
+            duration_seconds=20, command_port=override, hcnetsdk_command_generated_plan=plan,
+            hcnetsdk_command_password="synthetic-password")
+    assert ports == [expected]
+
+
+def test_native_clear_capture_does_not_run_whole_clip_suffix_decode(monkeypatch: Any) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    video = b"\x80\xe0\0\x01\0\0\x23\x28\x55\x66\x77\x88\x65\x80frame"
+
+    def forbidden_legacy_decode(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("Native timing must not decode/trim the full capture with a fixed ten-second budget")
+
+    def remux(_path: str, **options: Any) -> subprocess.Popen[bytes]:
+        assert options["input_format"] == "mpeg"
+        assert options["preserve_timestamps"] is True
+        return subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    class Stream:
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter([SimpleNamespace(body=metadata), SimpleNamespace(body=video)])
+
+    monkeypatch.setattr(_local_stream, "_idmx_local_packets_to_annexb_with_codec", forbidden_legacy_decode)
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", remux)
+    output = io.BytesIO()
+    _local_stream.copy_local_stream_to_mpegts(Stream(), output, max_packets=2)
+    frame_payload = b"\x65\x80frame"
+    assert frame_payload in output.getvalue()
+
+
+@pytest.mark.parametrize("prefix", [b"\xfa\x90", b"\x80"])
+def test_legacy_hevc_wrapper_stays_on_existing_annexb_parser(monkeypatch: Any, prefix: bytes) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+    unit = b"\x26\x01\x80picture"
+    legacy = prefix + b"\xe0\0\1" + b"\0" * 4 + b"\x55\x66\x77\x88" + wrapper + unit
+    def forbidden_generic_depacketizer(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Legacy wrapper must not be mistaken for a VPS")
+    monkeypatch.setattr(_local_stream, "rtp_packets_to_nal_units", forbidden_generic_depacketizer)
+    assert not _local_stream._copy_clear_native_idmx_timed_av([metadata, legacy], None, io.BytesIO(), ffmpeg_path="ffmpeg")  # noqa: SLF001
+    assert unit in _local_stream._idmx_local_packets_to_hevc_annexb([metadata, legacy])  # noqa: SLF001
+
+
+def test_legacy_video_normalizer_does_not_strip_native_audio_wrapper() -> None:
+    wrapper = b"\x40\x00\x00\x02\x80\x06\x00\x01\x21\x21\x02\x01"
+    packet = RtpPacket(wrapper + b"\x00\x10audio", 104, 1, 1024, 2, True)
+    assert _local_stream._strip_legacy_idmx_video_wrapper(packet) is packet  # noqa: SLF001
+
+
+@pytest.mark.parametrize("video_payloads", [(b"\x67parameters", b"\x68parameters"), (b"\x67parameters", b"\x7c\x85unfinished")])
+def test_clear_native_audio_cannot_hide_missing_complete_video(monkeypatch: Any, video_payloads: tuple[bytes, ...]) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    packets = [metadata, *(b"\x80\x60" + index.to_bytes(2, "big") + b"\0" * 4
+        + b"\x55\x66\x77\x88" + unit for index, unit in enumerate(video_payloads))]
+    def forbidden_remux(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An audio-only success must not start FFmpeg")
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", forbidden_remux)
+    audio = RtpAacStream(b"received-audio", 16000, 1, 1)
+    output = io.BytesIO()
+    with pytest.raises(EzvizNoMediaError) as error:
+        _local_stream._copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path="ffmpeg")  # noqa: SLF001
+    assert error.value.reason == "no_media"
+    assert not output.getvalue()
+
+
+def test_decrypted_native_parameters_cannot_publish_audio_only(monkeypatch: Any) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    unit = b"\x67parameters"
+    packets = [metadata, b"\x80\x60\0\1" + b"\0" * 4 + b"\x55\x66\x77\x88" + unit]
+    def forbidden_remux(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Parameter-only SDK capture must not start FFmpeg")
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", forbidden_remux)
+    with pytest.raises(EzvizNoMediaError):
+        _local_stream._copy_decrypted_native_idmx_timed_av(packets, b"\x00\x00\x00\x01" + unit, RtpAacStream(b"audio",16000,1,1), io.BytesIO(), codec="h264", ffmpeg_path="ffmpeg")  # noqa: SLF001
+
+
+def test_decrypted_native_picture_clock_counts_pictures_not_slices() -> None:
+    units = (b"\x67parameters", b"\x65\x80first", b"\x65\x40second-slice", b"\x41\x80next")
+    annexb = b"".join(b"\x00\x00\x00\x01" + unit for unit in units)
+    received, timestamps = _local_stream._native_decrypted_picture_timeline(annexb, "h264", "30000/1001")  # noqa: SLF001
+    assert received == units
+    assert timestamps == [0, 0, 0, 3003]
+    with pytest.raises(PyEzvizError, match="incomplete picture"):
+        _local_stream._native_decrypted_picture_timeline(b"\x00\x00\x00\x01\x41\x40partial", "h264", "15")  # noqa: SLF001
+
+
+def test_decrypted_native_source_clock_preserves_missing_picture_gap() -> None:
+    # Short clear VCL payloads contain no complete AES block, so the real
+    # native decrypt/span parser can round-trip these without a mock decoder.
+    units = (b"\x65\x80first", b"\x41\x80next", b"\x41\x80after-gap")
+    packets = [b"\x80\xe0" + index.to_bytes(2, "big") + timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88" + unit for index, (timestamp, unit) in enumerate(zip((1000, 7000, 19000), units, strict=True))]
+    annexb, _spans = _local_stream._idmx_h264_annexb_packet_spans(packets, b"", nalu_header_size=None, stream_is_clear=False)  # noqa: SLF001
+    result = _local_stream._native_decrypted_rtp_timeline(packets, annexb, "h264", b"", None)  # noqa: SLF001
+    assert result == (units, [1000, 7000, 19000])
+    with pytest.raises(PyEzvizError, match="cannot be matched"):
+        _local_stream._native_decrypted_rtp_timeline(packets, annexb + b"extra", "h264", b"", None)  # noqa: SLF001
+
+
+def test_public_decrypted_native_video_without_audio_preserves_source_gap(monkeypatch: Any) -> None:
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    units = (b"\x65\x80first", b"\x41\x80next", b"\x41\x80after-gap")
+    packets = [metadata, *(b"\x80\xe0" + index.to_bytes(2, "big") + timestamp.to_bytes(4, "big")
+        + b"\x55\x66\x77\x88" + unit for index, (timestamp, unit) in enumerate(zip((1000, 7000, 19000), units, strict=True)))]
+    class Stream:
+        def iter_packets(self, **_kwargs: Any) -> Any:
+            return iter(SimpleNamespace(body=p) for p in packets)
+    def remux(_path: str, **options: Any) -> subprocess.Popen[bytes]:
+        assert options["input_format"] == "mpeg"
+        assert options["preserve_timestamps"] is True
+        return subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    monkeypatch.setattr(_local_stream, "open_mpegts_remux_process", remux)
+    output = io.BytesIO()
+    _local_stream.copy_local_stream_to_decrypted_mpegts(Stream(), output, b"", max_packets=len(packets))
+    payload = output.getvalue()
+    pts_values = []
+    for piece in payload.split(b"\x00\x00\x01\xe0")[1:]:
+        pts = piece[5:10]
+        pts_values.append(((pts[0] >> 1) & 7) << 30 | pts[1] << 22 | (pts[2] >> 1) << 15 | pts[3] << 7 | pts[4] >> 1)
+    assert pts_values == [0, 6000, 18000]
+    audio_pes_prefix = b"\x00\x00\x01\xc0"
+    assert audio_pes_prefix not in payload
+
+
+def test_decrypted_native_hevc_timeline_honors_parameter_set_policy() -> None:
+    media_key = "test-media-key"
+    units = (b"\x40\x01" + b"V" * 16, b"\x26\x01" + b"\x80" + b"I" * 15)
+    # Fixed native-protocol known-answer vectors keep fixture construction
+    # independent of the decrypt implementation being tested.
+    ciphertexts = (bytes.fromhex("4f6978232cd789e6912542612655feb5"), bytes.fromhex("2a6f97bb5cbf3482e855259a2d1ea297"))
+    packets = [b"\x90\xe0" + index.to_bytes(2, "big") + (1000 + index * 6000).to_bytes(4, "big")
+        + b"\x55\x66\x77\x88\x40\x00\x00\x02\x80\x06\x00\x01\x11\x21\x02\x01"
+        + unit[:2] + ciphertext for index, (unit, ciphertext) in enumerate(zip(units, ciphertexts, strict=True))]
+    annexb = b"".join(b"\x00\x00\x00\x01" + unit for unit in units)
+    assert _local_stream._native_decrypted_rtp_timeline(packets, annexb, "hevc", media_key, None, True) == (units, [1000, 7000])  # noqa: SLF001
+    with pytest.raises(PyEzvizError, match="cannot be matched"):
+        _local_stream._native_decrypted_rtp_timeline(packets, annexb, "hevc", media_key, None, False)  # noqa: SLF001
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")
+def test_decrypted_native_sdk_retains_all_jittered_aac_units(tmp_path: Path) -> None:
+    video = tmp_path / "source.h264"
+    source = tmp_path / "source.aac"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=32x32:rate=15",
+        "-frames:v", "4", "-c:v", "libx264", "-tune", "zerolatency", "-f", "h264", str(video)], check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=sample_rate=16000",
+        "-ac", "1", "-frames:a", "12", "-c:a", "aac", "-f", "adts", str(source)], check=True, capture_output=True)
+    data = source.read_bytes()
+    frames: list[bytes] = []
+    offset = 0
+    while offset < len(data):
+        length = ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
+        frames.append(data[offset:offset + length])
+        offset += length
+    audio = RtpAacStream(data, 16000, 1, len(frames),
+        ((0, b"".join(frames[:2])), (2032, frames[2]), (3072, b"".join(frames[3:]))))
+    descriptor = b"\x42\x0e" + b"\0" * 11 + (6000 << 1).to_bytes(3, "big")
+    metadata = b"\x90\x70\0\0" + b"\0" * 4 + b"\x55\x66\x77\x88\0\x02\0\x04" + descriptor
+    out = tmp_path / "output.ts"
+    with out.open("wb") as stream:
+        assert _local_stream._copy_decrypted_native_idmx_timed_av([metadata], video.read_bytes(), audio, stream, codec="h264", ffmpeg_path="ffmpeg")  # noqa: SLF001
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_packets",
+        "-show_entries", "packet=pts_time", "-of", "json", str(out)], check=True, capture_output=True)
+    packets = json.loads(probe.stdout)["packets"]
+    assert len(packets) == len(frames)
+    timestamps = [float(p["pts_time"]) for p in packets]
+    assert timestamps[2] - timestamps[1] == pytest.approx(0.063)
+    assert timestamps[3] - timestamps[2] == pytest.approx(0.065)

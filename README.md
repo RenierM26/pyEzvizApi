@@ -387,6 +387,17 @@ then starts the requested duration window. Bound that pre-capture wait with
 `--hcnetsdk-h264-*clean-idr*` names remain accepted as compatibility aliases.
 If a camera does not supply a decodable refresh window before the bounded
 startup deadline, the save fails instead of publishing a misleading clip.
+
+For descriptor-backed native clear **AV** captures, the Python API can retain
+received RTP video cadence and clear AAC timestamps with
+`hcnetsdk_video_wait_for_clean_window=False` passed to `save_clip()`. The
+generated-plan convenience API otherwise enables the legacy clean-window wait
+for bounded clear clips. That wait/trim path is currently video-only and may
+hit its whole-clip decoder timeout on long captures; it is not a full AV path.
+Disabling it preserves received media rather than promising a clean startup.
+Native SDK untrimmed captures also retain source RTP gaps after decryption.
+Neither route infers absolute inter-track synchronization without RTCP.
+
 Experimental plan JSON can set
 `read_first_media_immediately` on the media socket step to drain one media
 packet before later short command sockets, which is useful when comparing native

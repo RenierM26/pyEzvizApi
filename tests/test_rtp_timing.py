@@ -41,9 +41,36 @@ def test_incremental_clock_and_startup_memory_are_bounded() -> None:
         list(startup.video(0, b"\x67" + b"x" * 1_048_576))
 
 
+@pytest.mark.parametrize(("codec", "first", "continuation", "parameter"), [
+    ("h264", b"\x41\x80picture", b"\x41\x40slice", b"\x67\x80parameter"),
+    ("hevc", b"\x02\x01\x80picture", b"\x02\x01\x40slice", b"\x42\x01\x80parameter"),
+])
+def test_incremental_repeated_picture_timestamp_rejects_only_new_picture(codec, first, continuation, parameter) -> None:
+    muxer = NativeRtpPsMuxer(codec, audio=False)
+    assert list(muxer.video(100, first))
+    assert list(muxer.video(100, continuation))
+    assert list(muxer.video(100, parameter))
+    assert list(muxer.video(6100, first))
+    assert list(muxer.video(6100, continuation))
+    with pytest.raises(EzvizUnsupportedMediaError, match="repeat for a new picture"):
+        list(muxer.video(6100, first))
+
+
+def test_incremental_h264_data_partitions_share_the_partition_a_picture_clock() -> None:
+    muxer = NativeRtpPsMuxer("h264", audio=False)
+    partition_a = b"\x42\x80slice_header"
+    assert list(muxer.video(100, partition_a))
+    # slice_id zero has the same leading bit as first_mb_in_slice zero.
+    assert list(muxer.video(100, b"\x43\x80partition_b"))
+    assert list(muxer.video(100, b"\x44\x80partition_c"))
+    assert list(muxer.video(6100, partition_a))
+    with pytest.raises(EzvizUnsupportedMediaError, match="repeat for a new picture"):
+        list(muxer.video(6100, partition_a))
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")
-@pytest.mark.parametrize("incremental", [False, True])
-def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: Path, incremental: bool) -> None:
+@pytest.mark.parametrize(("incremental", "jitter"), [(False, False), (True, False), (False, True)])
+def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: Path, incremental: bool, jitter: bool) -> None:
     video_path = tmp_path / "video.h264"
     audio_path = tmp_path / "audio.aac"
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=32x32:rate=10",
@@ -67,6 +94,9 @@ def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: 
         times.append((1000, 10000, 28000, 37000)[frame_index])
     audio = RtpAacStream(b"".join(frames[:1] + frames[2:]), 16000, 1, len(frames) - 1,
         ((0, frames[0]), (2048, b"".join(frames[2:]))))
+    if jitter:
+        audio = RtpAacStream(b"".join(frames), 16000, 1, len(frames),
+            ((0, b"".join(frames[:2])), (2032, frames[2]), (3072, b"".join(frames[3:]))))
     if incremental:
         muxer = NativeRtpPsMuxer("h264", audio=True)
         payloads = [p for unit, timestamp in zip(units, times, strict=True) for p in muxer.video(timestamp, unit)]
@@ -90,9 +120,12 @@ def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: 
     video_times = [float(p["pts_time"]) for p in packets if p["codec_type"] == "video"]
     audio_times = [float(p["pts_time"]) for p in packets if p["codec_type"] == "audio"]
     assert len(video_times) == 4
-    assert len(audio_times) == len(frames) - 1
+    assert len(audio_times) == len(frames) - (0 if jitter else 1)
     assert [b - a for a, b in pairwise(video_times)] == pytest.approx([0.1, 0.2, 0.1])
-    assert audio_times[1] - audio_times[0] == pytest.approx(0.128)
+    if jitter:
+        assert [b - a for a, b in pairwise(audio_times[:4])] == pytest.approx([0.064, 0.063, 0.065])
+    else:
+        assert audio_times[1] - audio_times[0] == pytest.approx(0.128)
     assert audio_times[-1] - audio_times[0] == pytest.approx((len(frames) - 1) * 1024 / 16000)
     decoded = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-enc_time_base", "-1",
         "-f", "null", "-"], check=True, capture_output=True)

@@ -704,9 +704,16 @@ def decrypt_idmx_aac_packets(
     audio_metadata: tuple[int, int] | None = None,
     audio_payload_types: frozenset[int] | None = None,
     require_contiguous: bool = True,
+    decrypt_audio: bool = True,
     allow_timestamp_jitter: bool = False,
+    preserve_clear_timestamps: bool = False,
 ) -> RtpAacStream | None:
-    """Return descriptor-backed encrypted IDMX AAC as ADTS when safely decodable."""
+    """Return descriptor-backed IDMX AAC as ADTS; explicitly bypass AES for clear input.
+
+    ``preserve_clear_timestamps`` retains any forward received AAC sample-clock
+    spacing for explicitly clear, fully framed, descriptor-backed input. It
+    neither rounds timestamps nor relaxes encrypted-IDMX eligibility.
+    """
 
     packet_list = list(packets)
     route_profile, route_epochs = _rtp_route_epochs(packet_list)
@@ -725,7 +732,15 @@ def decrypt_idmx_aac_packets(
             continue
         if route_epoch is not None and route_epoch.codec != "aac":
             continue
-        if not rtp_packet_has_valid_idmx_aac_frame(packet):
+        clear_access_unit = _idmx_aac_access_unit(packet.payload) if not decrypt_audio else None
+        clear_routed_aac = (
+            not decrypt_audio and (
+                route_epoch.codec == "aac" if route_epoch is not None else route_profile.audio_metadata is not None
+            )
+            and clear_access_unit is not None
+            and len(clear_access_unit) + IDMX_AAC_ADTS_HEADER_SIZE <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        )
+        if not (clear_routed_aac or rtp_packet_has_valid_idmx_aac_frame(packet)):
             if route_epoch is None:
                 continue
             return None
@@ -743,13 +758,18 @@ def decrypt_idmx_aac_packets(
     if descriptor is None:
         return None
     sample_rate, channels = descriptor
-    if any(not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter) for delta in deltas):
+    clear_forward_clock = preserve_clear_timestamps and not decrypt_audio
+    if any(
+        not (0 < delta < 0x80000000) if clear_forward_clock
+        else not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter)
+        for delta in deltas
+    ):
         return None
     if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
         return None
     aes_key = _rtp_media_aes_key(media_key)
     access_units = [
-        _decrypt_idmx_aac_access_unit(access_unit, aes_key)
+        _decrypt_idmx_aac_access_unit(access_unit, aes_key) if decrypt_audio else access_unit
         for access_unit in encrypted_access_units
     ]
     adts_frames = [
@@ -1793,6 +1813,9 @@ def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
     if codec == "hevc":
         # first_slice_segment_in_pic_flag follows the two-byte NAL header.
         return len(nal) > 2 and bool(nal[2] & 0x80)
+    # Data partitions B/C begin with slice_id, not first_mb_in_slice.
+    if nal and (nal[0] & 0x1F) in {3, 4}:
+        return False
     header_size = _h264_slice_header_offset(nal)
     return len(nal) > header_size and bool(nal[header_size] & 0x80)
 

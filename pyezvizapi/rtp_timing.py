@@ -12,6 +12,7 @@ from .rtp import (
     RtpAacStream,
     RtpVideoCodec,
     _aac_timestamp_delta_is_supported,
+    _rtp_nal_starts_picture,
     rtp_nal_units_have_vcl,
 )
 
@@ -134,6 +135,7 @@ class NativeRtpPsMuxer:
         self._map = _program_stream_map(codec, audio=audio)
         self._allow_audio_clock_jitter = allow_audio_clock_jitter
         self._video_raw: int | None = None
+        self._video_picture_raw: int | None = None
         self._audio_raw: int | None = None
         self._video_elapsed = 0
         self._audio_elapsed = 0
@@ -149,6 +151,14 @@ class NativeRtpPsMuxer:
     def video(self, timestamp: int, nal_unit: bytes) -> Iterator[bytes]:
         """Frame completed NALs, holding only bounded initial parameter data."""
 
+        if (rtp_nal_units_have_vcl((nal_unit,), codec=self.codec)
+                and _rtp_nal_starts_picture(nal_unit, codec=self.codec)):
+            if timestamp == self._video_picture_raw:
+                raise EzvizUnsupportedMediaError(
+                    "Native RTP video timestamps repeat for a new picture",
+                    source="rtp", reason="unsupported_video_timing",
+                )
+            self._video_picture_raw = timestamp
         if self._video_raw is None:
             self._pending.extend(ANNEX_B_START_CODE + nal_unit)
             if not rtp_nal_units_have_vcl((nal_unit,), codec=self.codec):

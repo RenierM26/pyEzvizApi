@@ -1906,8 +1906,10 @@ def test_copy_decrypted_mpegts_keeps_all_packets_when_video_is_untrimmed(
         audio_metadata: tuple[int, int] | None = None,
         audio_payload_types: frozenset[int] | None = None,
         require_contiguous: bool = True,
+        allow_timestamp_jitter: bool = False,
     ) -> Any:
         assert not require_contiguous
+        assert allow_timestamp_jitter
         audio_calls.append(
             (candidate_packets, audio_metadata, audio_payload_types)
         )

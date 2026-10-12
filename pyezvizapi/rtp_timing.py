@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
 from heapq import merge
 from itertools import chain, groupby, tee
 
@@ -121,14 +122,55 @@ def shared_rtp_clock_offsets(
     with integer arithmetic on a 720kHz common grid; no wall-clock guess, drift
     correction, trimming or synthesized media is applied.
     """
-    if sample_rate != 16000:
+    if not isinstance(sample_rate, int) or isinstance(sample_rate, bool) or sample_rate != 16000:
         raise _shared_clock_error("Shared native clocks currently require 16kHz AAC")
-    if not (0 <= video_timestamp < 2**32 and 0 <= audio_timestamp < 2**32):
+    if not all(isinstance(stamp, int) and not isinstance(stamp, bool)
+               and 0 <= stamp < 2**32 for stamp in (video_timestamp, audio_timestamp)):
         raise _shared_clock_error("Shared native clocks require unsigned 32-bit RTP timestamps")
     difference = ((45 * audio_timestamp - 8 * video_timestamp + 2**31) % 2**32) - 2**31
     if abs(difference) > 720000:
         raise _shared_clock_error("Native RTP origins are incompatible with a shared clock (over one second apart)")
     return (max(-difference, 0) + 4) // 8, (max(difference, 0) + 4) // 8
+
+
+@dataclass(frozen=True)
+class NativeRtpClockProbe:
+    """Payload-free clock assessment; plausibility is not shared-epoch proof."""
+
+    video_origin: int | None
+    audio_origin: int | None
+    audio_sample_rate: int | None
+    audio_source_count: int
+    candidate_offsets_90khz: tuple[int, int] | None
+    reason: str | None
+    shared_epoch_verified: bool = field(default=False, init=False)
+
+
+def probe_native_rtp_clock(video_origin: int | None, audio: RtpAacStream | None) -> NativeRtpClockProbe:
+    """Inspect already parsed native clocks without contacting a camera.
+
+    Nearby counters, capability 915 and audio availability do NOT establish a
+    shared epoch. Callers still have to verify a native TCP source independently.
+    Default muxing continues to rebase each track and preserve received gaps.
+    """
+    origin = None if audio is None else audio.origin_timestamp
+    rate = None if audio is None else audio.sample_rate
+    sources = 0 if audio is None else len(set(audio.source_keys))
+    offsets = None
+    if video_origin is None:
+        reason = "missing source video picture timestamp"
+    elif audio is None or origin is None or not audio.adts or audio.frame_count <= 0:
+        reason = "missing source-timestamped AAC"
+    elif sources > 1:
+        reason = "multiple AAC source clocks"
+    else:
+        try:
+            offsets = shared_rtp_clock_offsets(video_origin, origin, audio.sample_rate)
+        except EzvizUnsupportedMediaError as error:
+            reason = str(error)
+        else:
+            reason = None
+    return NativeRtpClockProbe(video_origin, origin, rate, sources, offsets, reason)
 
 
 def timed_rtp_mpegps_payloads(
@@ -158,9 +200,10 @@ def timed_rtp_mpegps_payloads(
             if prefix_bytes > 1_048_576:
                 raise _shared_clock_error("Shared native clock startup exceeds buffer limit")
             if rtp_nal_units_have_vcl((unit,), codec=codec):
-                video_offset, audio_offset = shared_rtp_clock_offsets(
-                    stamp, audio.origin_timestamp, audio.sample_rate,
-                )
+                probe = probe_native_rtp_clock(stamp, audio)
+                if probe.candidate_offsets_90khz is None:
+                    raise _shared_clock_error(probe.reason or "Unsupported native clocks")
+                video_offset, audio_offset = probe.candidate_offsets_90khz
                 break
         else:
             raise _shared_clock_error("Shared native clocks require a source-timestamped video picture")

@@ -141,3 +141,128 @@ def test_shared_high_level_forwards_to_command_port(monkeypatch):
         mux=MediaMuxOptions(native_shared_clock=True),
     ))
     assert output.getvalue() == complete
+
+
+def test_clock_probe_is_advisory_and_cannot_authenticate_an_epoch():
+    from pyezvizapi import probe_native_rtp_clock  # noqa: PLC0415
+    audio = RtpAacStream(b"frame", 16000, 1, 1, origin_timestamp=157952, source_keys=((2, None),))
+    report = probe_native_rtp_clock(900000, audio)
+    assert report.candidate_offsets_90khz == (11520, 0)
+    assert report.audio_source_count == 1
+    assert report.shared_epoch_verified is False
+    assert report.reason is None
+
+
+@pytest.mark.parametrize(("origin", "audio"), [
+    (None, None), (0, None), (0, RtpAacStream(b"frame", 16000, 1, 1)),
+    (0, RtpAacStream(b"frame", 8000, 1, 1, origin_timestamp=0)),
+    (0, RtpAacStream(b"frame", 16000, 1, 1, origin_timestamp=32000)),
+])
+def test_clock_probe_reports_missing_or_incompatible_timing_without_network(origin, audio):
+    from pyezvizapi import probe_native_rtp_clock  # noqa: PLC0415
+    report = probe_native_rtp_clock(origin, audio)
+    assert report.candidate_offsets_90khz is None
+    assert report.reason
+    assert report.shared_epoch_verified is False
+
+
+def test_shared_clock_rejects_multiple_accepted_aac_sources_even_with_near_origins():
+    from pyezvizapi import probe_native_rtp_clock  # noqa: PLC0415
+    frame = b"\xff\xf1\x60\x40\x00\xff\xfc"
+    audio = RtpAacStream(frame, 16000, 1, 1, origin_timestamp=0, source_keys=((2, None), (3, None)))
+    report = probe_native_rtp_clock(0, audio)
+    assert report.reason == "multiple AAC source clocks"
+    assert report.candidate_offsets_90khz is None
+    with pytest.raises(EzvizUnsupportedMediaError, match="multiple AAC"):
+        list(timed_rtp_mpegps_payloads((b"\x65\x80frame",), (0,), codec="h264", audio=audio, shared_clock=True))
+    # Default output retains the prior independent-origin behavior.
+    assert list(timed_rtp_mpegps_payloads((b"\x65\x80frame",), (0,), codec="h264", audio=audio))
+
+
+def test_encrypted_trim_combination_rejected_before_connection_and_output(monkeypatch):
+    from pyezvizapi import MediaDecodeOptions  # noqa: PLC0415
+    client = EzvizClient()
+    existing = b"existing"
+    output = io.BytesIO(existing)
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid timing options must be rejected before connecting")
+    monkeypatch.setattr(client, "_save_hcnetsdk_command_port_clip", forbidden)
+    options = ClipOptions(source=HcNetSdkCommandPortClipSource(),
+                          decode=MediaDecodeOptions(decrypt_video=True),
+                          mux=MediaMuxOptions(native_shared_clock=True, h264_wait_for_clean_idr_window=True))
+    with pytest.raises(PyEzvizError, match="encrypted startup trimming"):
+        client.save_clip_with_options("camera", output, options)
+    assert output.getvalue() == existing
+
+
+@pytest.mark.parametrize("source", ["local-sdk", "hcnetsdk-command-port"])
+def test_long_form_save_clip_preserves_shared_opt_in_when_building_mux(monkeypatch, source):
+    client = EzvizClient()
+    observed = []
+    def typed(serial, output, options):
+        observed.append(options.resolved_mux())
+        return {"ok": True}
+    monkeypatch.setattr(client, "save_clip_with_options", typed)
+    client.save_clip("camera", io.BytesIO(), source=source, native_shared_clock=True)
+    assert observed[0].native_shared_clock is True
+
+
+def test_aac_provenance_tracks_only_accepted_media_not_metadata_or_invalid_packets():
+    from pyezvizapi.rtp import RtpPacket, decrypt_idmx_aac_packets  # noqa: PLC0415
+    extension = b"\x80\x06\x00\x01\x21\x21\x02\x01"
+    payload = b"\x00\x10\x00\x08x"
+    packets = [RtpPacket(b"metadata", 112, 1, 0, 77, False),
+               RtpPacket(b"bad", 104, 1, 0, 99, False),
+               RtpPacket(payload, 104, 1, 0, 2, False, 0x4000, extension, True),
+               RtpPacket(payload, 104, 1, 1024, 3, False, 0x4000, extension, True)]
+    audio = decrypt_idmx_aac_packets(packets, b"", audio_metadata=(16000, 1), decrypt_audio=False)
+    assert audio is not None
+    assert audio.source_keys == ((2, None), (3, None))
+    assert audio.origin_timestamp == 0
+
+
+def test_native_shared_clock_rejects_multiple_completed_video_sources_before_ffmpeg(monkeypatch):
+    from fractions import Fraction  # noqa: PLC0415
+
+    from pyezvizapi import _local_stream as local  # noqa: PLC0415
+    monkeypatch.setattr(local, "_idmx_local_video_payload_types", lambda *a, **k: frozenset({96}))
+    monkeypatch.setattr(local, "_clear_native_rtp_packets_with_legacy_indices", lambda *a: ([], set()))
+    monkeypatch.setattr(local, "idmx_video_frame_rate", lambda *a: Fraction(15))
+    monkeypatch.setattr(local, "detect_rtp_video_codec", lambda *a, **k: "h264")
+    def units(packets, **kwargs):
+        kwargs["nal_timestamps"].extend([0, 6000])
+        kwargs["nal_source_keys"].extend([(2, None), (3, None)])
+        return [b"\x65\x80one", b"\x41\x80two"]
+    monkeypatch.setattr(local, "rtp_packets_to_nal_units", units)
+    def forbidden(*args, **kwargs):
+        pytest.fail("mixed clocks must fail before starting FFmpeg")
+    monkeypatch.setattr(local, "open_mpegts_remux_process", forbidden)
+    with pytest.raises(EzvizUnsupportedMediaError, match="multiple video source clocks"):
+        local._copy_clear_native_idmx_timed_av([], None, io.BytesIO(), ffmpeg_path="unused", native_shared_clock=True)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(("video", "audio", "rate"), [(True, 0, 16000), (0.0, 0, 16000), (0, 0, 16000.0)])
+def test_shared_clock_rejects_non_integer_timestamp_and_rate_values(video, audio, rate):
+    with pytest.raises(EzvizUnsupportedMediaError):
+        shared_rtp_clock_offsets(video, audio, rate)
+
+
+@pytest.mark.parametrize("value", [1, "true", None])
+def test_shared_mux_assertion_must_be_boolean(value):
+    with pytest.raises(PyEzvizError, match="boolean assertion"):
+        MediaMuxOptions(native_shared_clock=value)
+
+
+def test_encrypted_timed_path_rejects_mixed_video_sources_before_ffmpeg(monkeypatch):
+    from pyezvizapi import _local_stream as local  # noqa: PLC0415
+    from pyezvizapi.rtp import RtpPacket  # noqa: PLC0415
+    monkeypatch.setattr(local, "_iter_idmx_local_packet_frame", lambda packet, **kwargs: (packet,))
+    monkeypatch.setattr(local, "_idmx_local_frame_header_size", lambda frame: 12)
+    monkeypatch.setattr(local, "_idmx_local_frame_rtp_packet",
+                        lambda frame, size: RtpPacket(b"\x65\x80picture", 96, 1, 0, frame[0], True))
+    monkeypatch.setattr(local, "_idmx_local_video_payload_types", lambda *a, **k: frozenset({96}))
+    def forbidden(*args, **kwargs):
+        pytest.fail("mixed video sources must fail before starting FFmpeg")
+    monkeypatch.setattr(local, "open_mpegts_remux_process", forbidden)
+    with pytest.raises(EzvizUnsupportedMediaError, match="multiple video source clocks"):
+        local._copy_decrypted_native_idmx_timed_av([b"\x02", b"\x03"], b"", None, io.BytesIO(), codec="h264", ffmpeg_path="unused", native_shared_clock=True)  # noqa: SLF001

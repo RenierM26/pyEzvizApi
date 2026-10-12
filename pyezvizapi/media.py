@@ -261,6 +261,8 @@ class MediaMuxOptions:
     native_shared_clock: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.native_shared_clock, bool):
+            raise PyEzvizError("native_shared_clock must be a boolean assertion")
         if self.output_format not in ("mpegps", "mpegts"):
             raise PyEzvizError("output_format must be 'mpegps' or 'mpegts'")
         if not self.ffmpeg_path:

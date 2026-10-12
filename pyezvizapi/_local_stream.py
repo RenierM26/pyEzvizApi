@@ -2697,6 +2697,14 @@ def _copy_clear_native_idmx_timed_av(
         rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps, nal_source_keys=source_keys,
     )
+    if native_shared_clock and selected_annexb is None and len({
+        source_keys[i] for i, unit in enumerate(units)
+        if rtp_nal_units_have_vcl((unit,), codec=codec)
+    }) > 1:
+        raise EzvizUnsupportedMediaError(
+            "native_shared_clock cannot combine multiple video source clocks",
+            source="rtp", reason="unsupported_av_clock",
+        )
     if not rtp_nal_units_have_vcl(units, codec=codec):
         if legacy_video_indices:
             return False
@@ -2822,6 +2830,14 @@ def _copy_decrypted_native_idmx_timed_av(
             packet = _idmx_local_frame_rtp_packet(frame, header)
             if packet is not None:
                 rtp_packets.append(packet)
+    if native_shared_clock:
+        video_types = _idmx_local_video_payload_types(packets, codec=codec)
+        if len({_rtp_sequence_key(packet) for packet in rtp_packets
+                if packet.payload_type in video_types and packet.payload}) > 1:
+            raise EzvizUnsupportedMediaError(
+                "native_shared_clock cannot combine multiple video source clocks",
+                source="rtp", reason="unsupported_av_clock",
+            )
     rate = idmx_video_frame_rate(rtp_packets)
     if rate is None:
         if native_shared_clock:

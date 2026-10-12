@@ -220,6 +220,29 @@ The retained H9c clap test recovered about 128 ms of received clock offset,
 but residual physical audio lag remains; this is **not a lip-sync guarantee**.
 High-level captures are staged so timing failures leave the destination intact.
 
+The long-form API also accepts `save_clip(..., native_shared_clock=True)`, and
+CLI users can pass `save clip --native-shared-clock`. Unsupported CLI combinations
+are rejected before login. Shared mode rejects multiple accepted AAC/video clock
+sources rather than selecting the first plausible origin.
+
+The app's verified capability **915** enables automatic smoothing only when its
+integer value is **1**; it is not a clock-alignment capability. Inspect supplied
+metadata offline without changing playback or contacting a device:
+
+```python
+from pyezvizapi import inspect_app_playback_support, probe_native_rtp_clock
+
+support = inspect_app_playback_support(device_snapshot)
+# support.auto_smooth_play is True/False, or None for unavailable metadata.
+clock = probe_native_rtp_clock(first_video_timestamp, parsed_aac_stream)
+# candidate_offsets_90khz may be present; shared_epoch_verified is always False.
+```
+
+The traced H9c app uses MPEG-PS and subsequently rebases each track separately.
+Its speaker/display buffering is not copied into file timestamps. Defaults keep
+independent native origins and received gaps; this opt-in is not an app-player
+replica. See [verified playback probes and conditions](docs/playback-timing.md).
+
 The original `save_clip(...)` keywords and imports from `pyezvizapi.stream` or
 `pyezvizapi.local_stream` remain compatible. New lower-level code should import
 from `stream_transport`, `stream_media`, `local_stream_transport`,

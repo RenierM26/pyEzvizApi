@@ -161,6 +161,8 @@ class RtpAacStream:
     timed_segments: tuple[tuple[int, bytes], ...] = ()
     # Raw source clock of the first accepted AU; absent for synthesized audio.
     origin_timestamp: int | None = None
+    # Accepted source clocks only; never metadata or rejected payloads.
+    source_keys: tuple[RtpSequenceKey, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -729,6 +731,7 @@ def decrypt_idmx_aac_packets(
         )
     encrypted_access_units: list[bytes] = []
     timestamps: list[int] = []
+    source_keys: dict[RtpSequenceKey, None] = {}
     for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
         if packet.payload_type not in selected_audio_payload_types:
             continue
@@ -749,6 +752,7 @@ def decrypt_idmx_aac_packets(
         access_unit = _idmx_aac_access_unit(packet.payload)
         assert access_unit is not None
         timestamps.append(packet.timestamp)
+        source_keys[_rtp_sequence_key(packet)] = None
         encrypted_access_units.append(access_unit)
     if not encrypted_access_units:
         return None
@@ -785,6 +789,7 @@ def decrypt_idmx_aac_packets(
         frame_count=len(access_units),
         timed_segments=_aac_timed_segments(adts_frames, deltas),
         origin_timestamp=timestamps[0],
+        source_keys=tuple(source_keys),
     )
 
 

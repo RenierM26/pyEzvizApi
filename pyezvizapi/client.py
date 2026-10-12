@@ -3165,6 +3165,7 @@ class EzvizClient:
         local_sdk_ecdh_send_init: bool = False,
         local_sdk_ecdh_max_prefix_bytes: int = 4096,
         local_sdk_ecdh_max_frames: int | None = None,
+        native_shared_clock: bool = False,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
@@ -3203,6 +3204,7 @@ class EzvizClient:
         mux_options = MediaMuxOptions(
             output_format=output_format,
             ffmpeg_path=ffmpeg_path,
+            native_shared_clock=native_shared_clock,
         )
 
         source_options: ClipSourceOptions
@@ -3286,6 +3288,7 @@ class EzvizClient:
                 h264_clean_idr_max_windows=clean_window_max_windows,
                 h264_wait_for_clean_idr_window=wait_for_clean_window,
                 h264_clean_idr_wait_seconds=clean_window_wait_seconds,
+                native_shared_clock=native_shared_clock,
             )
             source_options = HcNetSdkCommandPortClipSource(
                 timeout=timeout,
@@ -3362,6 +3365,11 @@ class EzvizClient:
         if mux.output_format != "mpegts":
             raise PyEzvizError("native_shared_clock requires MPEG-TS output")
         options.capture.require_bounded("Shared native clock capture")
+        if options.decode.decrypt_video and (
+            mux.h264_wait_for_clean_idr_window or mux.h264_skip_initial_idr_windows
+            or mux.h264_trim_to_clean_idr_window or mux.h264_clean_idr_preroll_seconds
+        ):
+            raise PyEzvizError("native_shared_clock does not support encrypted startup trimming")
         with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staged:
             result = self._save_clip_with_options(serial, cast(BinaryIO, staged), options)
             size = staged.tell()

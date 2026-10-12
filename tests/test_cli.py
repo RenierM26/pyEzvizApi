@@ -6440,3 +6440,27 @@ def test_save_clip_auto_preserves_explicit_receiver_port(monkeypatch, tmp_path, 
         args.extend(["--local-sdk-ecdh-receiver-port", str(port)])
     assert cli_module.main(args) == 0
     assert fake_client.instances[0].save_clip_request["local_sdk_ecdh_receiver_port"] == port
+
+
+def test_save_clip_forwards_explicit_shared_clock_option(monkeypatch, tmp_path):
+    fake_client = _install_fake_client(monkeypatch)
+    assert cli_module.main(["--token-file", _token_file(tmp_path), "save", "clip",
+                            "--serial", "CAM123", "--output", str(tmp_path / "clip.ts"),
+                            "--native-shared-clock"]) == 0
+    assert fake_client.instances[0].save_clip_request["native_shared_clock"] is True
+
+
+@pytest.mark.parametrize("source", ["cloud", "auto", "local-sdk-ecdh"])
+def test_save_clip_rejects_shared_clock_non_native_source(monkeypatch, tmp_path, source):
+    fake_client = _install_fake_client(monkeypatch)
+    assert cli_module.main(["--token-file", _token_file(tmp_path), "save", "clip",
+                            "--serial", "CAM123", "--output", str(tmp_path / "clip.ts"),
+                            "--source", source, "--native-shared-clock"]) == 1
+    assert fake_client.instances == []
+
+
+def test_shared_clock_ps_output_is_rejected_before_authentication(monkeypatch, tmp_path):
+    fake_client = _install_fake_client(monkeypatch)
+    assert cli_module.main(["save", "clip", "--serial", "CAM123", "--output", str(tmp_path / "clip.ps"),
+                            "--format", "mpegps", "--native-shared-clock"]) == 1
+    assert fake_client.instances == []

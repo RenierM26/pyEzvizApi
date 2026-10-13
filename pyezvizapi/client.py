@@ -351,6 +351,19 @@ def _content_type_for_output(
     return default
 
 
+def _copy_clip_xattrs(source: Path, target: Path) -> None:
+    """Preserve ACLs and extended attributes, failing before publication on errors."""
+    if not hasattr(os, "listxattr"):
+        return
+    source_attributes = os.listxattr(source)
+    # Remove inherited attributes absent from the original inode as well.
+    for name in os.listxattr(target):
+        if name not in source_attributes:
+            os.removexattr(target, name)
+    for name in source_attributes:
+        os.setxattr(target, name, os.getxattr(source, name))
+
+
 def _write_staged_clip_path(staged: BinaryIO, output: str | Path) -> None:
     """Atomically publish a staged clip while preserving destination metadata."""
     # Follow output symlinks just as the normal open("wb") path does.
@@ -382,8 +395,10 @@ def _write_staged_clip_path(staged: BinaryIO, output: str | Path) -> None:
                     destination_stat.st_uid, destination_stat.st_gid,
                 ):
                     os.fchown(target.fileno(), destination_stat.st_uid, destination_stat.st_gid)
-                # chown can clear special mode bits, so restore mode last.
+                # chown can clear special mode bits, so restore mode afterward.
                 os.fchmod(target.fileno(), stat.S_IMODE(destination_stat.st_mode))
+                # Restore ACLs after chmod, which can alter their access mask.
+                _copy_clip_xattrs(path, temporary)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

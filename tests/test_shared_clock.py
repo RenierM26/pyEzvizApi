@@ -449,3 +449,64 @@ def test_shared_replacement_rejects_hard_links_without_splitting_inode(monkeypat
     if symlink:
         assert destination.is_symlink()
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("attribute_failure", [False, True])
+def test_shared_replacement_preserves_xattrs_or_leaves_original(monkeypatch, tmp_path, attribute_failure):
+    import os  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    existing = b"existing"
+    complete = b"complete"
+    destination.write_bytes(existing)
+    access = b"media-server"
+    os.setxattr(destination, "user.clip-access", access)
+    original_inode = destination.stat().st_ino
+    original_setxattr = os.setxattr
+    def set_attribute(path, name, value):
+        if attribute_failure and path != destination:
+            raise PermissionError("cannot preserve extended attributes")
+        original_setxattr(path, name, value)
+    monkeypatch.setattr(os, "setxattr", set_attribute)
+    def successful(serial, output, **kwargs):
+        output.write(complete)
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    options = ClipOptions(source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True))
+    if attribute_failure:
+        with pytest.raises(PermissionError, match="cannot preserve extended attributes"):
+            client.save_clip_with_options("camera", destination, options)
+        assert destination.read_bytes() == existing
+        assert destination.stat().st_ino == original_inode
+    else:
+        client.save_clip_with_options("camera", destination, options)
+        assert destination.read_bytes() == complete
+    assert os.getxattr(destination, "user.clip-access") == access
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_shared_replacement_restores_posix_acl_after_mode(monkeypatch, tmp_path):
+    import os  # noqa: PLC0415
+    import struct  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    existing = b"existing"
+    complete = b"complete"
+    destination.write_bytes(existing)
+    # Linux ACL v2: owner, named user, owning group, mask, other.
+    entries = [(1, 6, 0xFFFFFFFF), (2, 4, os.getuid() + 1),
+               (4, 0, 0xFFFFFFFF), (16, 4, 0xFFFFFFFF), (32, 0, 0xFFFFFFFF)]
+    acl = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *entry) for entry in entries)
+    os.setxattr(destination, "system.posix_acl_access", acl)
+    original_mode = destination.stat().st_mode
+    def successful(serial, output, **kwargs):
+        output.write(complete)
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    client.save_clip_with_options("camera", destination, ClipOptions(
+        source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+    ))
+    assert destination.read_bytes() == complete
+    assert destination.stat().st_mode == original_mode
+    assert os.getxattr(destination, "system.posix_acl_access") == acl
+    assert not list(tmp_path.glob(".*.tmp"))

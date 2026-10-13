@@ -419,3 +419,33 @@ def test_shared_replacement_rejects_fifo_without_destroying_it(monkeypatch, tmp_
     if symlink:
         assert destination.is_symlink()
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_shared_replacement_rejects_hard_links_without_splitting_inode(monkeypatch, tmp_path, symlink):
+    import os  # noqa: PLC0415
+    client = EzvizClient()
+    target = tmp_path / "clip.ts"
+    existing = b"existing"
+    target.write_bytes(existing)
+    alias = tmp_path / "alias.ts"
+    os.link(target, alias)
+    original_inode = target.stat().st_ino
+    destination = target
+    if symlink:
+        destination = tmp_path / "output.ts"
+        destination.symlink_to(target.name)
+    def successful(serial, output, **kwargs):
+        output.write(b"complete")
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    with pytest.raises(PyEzvizError, match="must not have multiple hard links"):
+        client.save_clip_with_options("camera", destination, ClipOptions(
+            source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+        ))
+    assert target.read_bytes() == alias.read_bytes() == existing
+    assert target.stat().st_ino == alias.stat().st_ino == original_inode
+    assert target.stat().st_nlink == 2
+    if symlink:
+        assert destination.is_symlink()
+    assert not list(tmp_path.glob(".*.tmp"))

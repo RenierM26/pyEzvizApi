@@ -363,6 +363,8 @@ def _write_staged_clip_path(staged: BinaryIO, output: str | Path) -> None:
         destination_stat = None
     if destination_stat is not None and not stat.S_ISREG(destination_stat.st_mode):
         raise PyEzvizError("Shared native clock output must be a regular file")
+    if destination_stat is not None and destination_stat.st_nlink > 1:
+        raise PyEzvizError("Shared native clock output must not have multiple hard links")
     try:
         # New clips use normal creation permissions under the caller's
         # umask. Existing clips retain their mode after replacement.

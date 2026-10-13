@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import time
 from typing import Any, cast
 
@@ -178,3 +179,21 @@ def test_camera_fetch_key_and_refresh_alarms_delegate(monkeypatch) -> None:
     camera.refresh_alarms()
 
     assert calls == 1
+
+
+def test_camera_tzinfo_applies_daylight_saving_flag(monkeypatch) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+    payload = _camera_payload()
+    optionals = payload["STATUS"]["optionals"]
+    optionals["timeZone"] = "UTC+01:00"
+
+    optionals["daylightSavingTime"] = "1"
+    camera = EzvizCamera(cast(EzvizClient, object()), "CAM123", device_obj=payload)
+    tz = camera._get_tzinfo()  # noqa: SLF001
+    assert tz.utcoffset(datetime(2026, 7, 1)) == timedelta(hours=2)
+    assert tz.utcoffset(datetime(2026, 1, 1)) == timedelta(hours=1)
+
+    optionals["daylightSavingTime"] = "0"
+    camera = EzvizCamera(cast(EzvizClient, object()), "CAM123", device_obj=payload)
+    tz = camera._get_tzinfo()  # noqa: SLF001
+    assert tz.utcoffset(datetime(2026, 7, 1)) == timedelta(hours=1)

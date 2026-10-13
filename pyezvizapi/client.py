@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import stat
 from tempfile import SpooledTemporaryFile
 from threading import RLock
 import time
@@ -3381,9 +3382,19 @@ class EzvizClient:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
                 try:
-                    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    destination_mode = stat.S_IMODE(path.stat().st_mode)
+                except FileNotFoundError:
+                    destination_mode = None
+                try:
+                    # New clips use normal creation permissions under the caller's
+                    # umask. Existing clips retain their mode after replacement.
+                    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                                         0o666 if destination_mode is None else 0o600)
                     with os.fdopen(descriptor, "wb") as target:
                         shutil.copyfileobj(staged, target)
+                        if destination_mode is not None:
+                            target.flush()
+                            os.fchmod(target.fileno(), destination_mode)
                     os.replace(temporary, path)
                 finally:
                     temporary.unlink(missing_ok=True)

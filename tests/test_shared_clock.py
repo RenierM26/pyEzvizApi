@@ -266,3 +266,46 @@ def test_encrypted_timed_path_rejects_mixed_video_sources_before_ffmpeg(monkeypa
     monkeypatch.setattr(local, "open_mpegts_remux_process", forbidden)
     with pytest.raises(EzvizUnsupportedMediaError, match="multiple video source clocks"):
         local._copy_decrypted_native_idmx_timed_av([b"\x02", b"\x03"], b"", None, io.BytesIO(), codec="h264", ffmpeg_path="unused", native_shared_clock=True)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o600])
+def test_shared_atomic_replace_preserves_existing_permissions(monkeypatch, tmp_path, mode):
+    import stat  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    destination.write_bytes(b"existing")
+    destination.chmod(mode)
+    complete = b"complete"
+    def successful(serial, output, **kwargs):
+        output.write(complete)
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    client.save_clip_with_options("camera", destination, ClipOptions(
+        source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+    ))
+    assert destination.read_bytes() == complete
+    assert stat.S_IMODE(destination.stat().st_mode) == mode
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("mask", [0o022, 0o027, 0o077])
+def test_shared_new_clip_uses_normal_umask_permissions(monkeypatch, tmp_path, mask):
+    import os  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    def successful(serial, output, **kwargs):
+        output.write(b"complete")
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    previous = os.umask(mask)
+    try:
+        client.save_clip_with_options("camera", destination, ClipOptions(
+            source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+        ))
+        normal = tmp_path / "normal.ts"
+        normal.write_bytes(b"normal")
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(destination.stat().st_mode) == stat.S_IMODE(normal.stat().st_mode)
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o666 & ~mask

@@ -401,7 +401,11 @@ def _write_staged_clip_path(staged: BinaryIO, output: str | Path) -> None:
                 ):
                     os.fchown(target.fileno(), destination_stat.st_uid, destination_stat.st_gid)
                 # chown can clear special mode bits, so restore mode afterward.
-                os.fchmod(target.fileno(), stat.S_IMODE(destination_stat.st_mode))
+                mode = stat.S_IMODE(destination_stat.st_mode)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(target.fileno(), mode)
+                else:
+                    os.chmod(temporary, mode)
                 # Restore ACLs after chmod, which can alter their access mask.
                 _copy_clip_xattrs(path, temporary)
         os.replace(temporary, path)

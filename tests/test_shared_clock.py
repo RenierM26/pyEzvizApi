@@ -569,3 +569,27 @@ def test_shared_replacement_checks_kernel_write_access_without_truncation(monkey
     assert destination.read_bytes() == existing
     assert destination.stat().st_ino == original_inode
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o600])
+def test_shared_replace_without_unix_mode_api(monkeypatch, tmp_path, mode):
+    import os  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    complete = b"complete"
+    destination.write_bytes(b"existing")
+    destination.chmod(mode)
+    # Windows has no descriptor-based chmod/chown or extended-attribute APIs.
+    for name in ("fchmod", "fchown", "listxattr"):
+        monkeypatch.delattr(os, name, raising=False)
+    def successful(serial, output, **kwargs):
+        output.write(complete)
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    client.save_clip_with_options("camera", destination, ClipOptions(
+        source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+    ))
+    assert destination.read_bytes() == complete
+    assert stat.S_IMODE(destination.stat().st_mode) == mode
+    assert not list(tmp_path.glob(".*.tmp"))

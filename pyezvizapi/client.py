@@ -3378,7 +3378,8 @@ class EzvizClient:
                 raise EzvizNoMediaError("Shared native clock capture did not contain media")
             staged.seek(0)
             if isinstance(output, str | Path):
-                path = Path(output)
+                # Follow output symlinks just as the normal open("wb") path does.
+                path = Path(output).resolve()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
                 try:

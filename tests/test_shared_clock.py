@@ -309,3 +309,37 @@ def test_shared_new_clip_uses_normal_umask_permissions(monkeypatch, tmp_path, ma
         os.umask(previous)
     assert stat.S_IMODE(destination.stat().st_mode) == stat.S_IMODE(normal.stat().st_mode)
     assert stat.S_IMODE(destination.stat().st_mode) == 0o666 & ~mask
+
+
+@pytest.mark.parametrize("existing", [True, False])
+@pytest.mark.parametrize("chained", [True, False])
+def test_shared_atomic_replace_preserves_symlink_target(monkeypatch, tmp_path, existing, chained):
+    import stat  # noqa: PLC0415
+    client = EzvizClient()
+    target = tmp_path / "media" / "clip.ts"
+    if existing:
+        target.parent.mkdir()
+        target.write_bytes(b"existing")
+        target.chmod(0o640)
+    destination = tmp_path / "output.ts"
+    destination.symlink_to("media/clip.ts")
+    output = destination
+    if chained:
+        output = tmp_path / "chain.ts"
+        output.symlink_to(destination.name)
+    complete = b"complete"
+    def successful(serial, output, **kwargs):
+        output.write(complete)
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    result = client.save_clip_with_options("camera", output, ClipOptions(
+        source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+    ))
+    assert output.is_symlink()
+    assert destination.is_symlink()
+    assert destination.readlink().as_posix() == "media/clip.ts"
+    assert target.read_bytes() == complete
+    assert result["output"] == str(output)
+    if existing:
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    assert not list(tmp_path.rglob(".*.tmp"))

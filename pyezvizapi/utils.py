@@ -350,10 +350,18 @@ def normalize_alarm_time(
                     dt_str_local = datetime.datetime.strptime(
                         raw_norm, "%Y-%m-%d %H:%M:%S"
                     ).replace(tzinfo=tzinfo)
-                    diff = abs(
-                        (
-                            event_utc - dt_str_local.astimezone(datetime.UTC)
-                        ).total_seconds()
+                    # Check both folds so the repeated hour at the end of DST
+                    # matches the epoch instead of looking one hour off.
+                    diff = min(
+                        abs(
+                            (
+                                event_utc
+                                - dt_str_local.replace(fold=fold).astimezone(
+                                    datetime.UTC
+                                )
+                            ).total_seconds()
+                        )
+                        for fold in (0, 1)
                     )
                     if diff > 120:
                         # Reinterpret epoch as local clock time in camera tz
@@ -424,6 +432,8 @@ def compute_motion_from_alarm(
 
 # Representative IANA zones used when a camera reports a fixed standard offset
 # with daylight saving time enabled, keyed by standard offset in minutes.
+# Offsets where major regions observe DST in opposite seasons (e.g. UTC-04:00:
+# America/Halifax vs America/Santiago) are left out on purpose.
 _DST_ZONES_BY_STANDARD_OFFSET: dict[int, str] = {
     -600: "America/Adak",
     -540: "America/Anchorage",
@@ -431,7 +441,6 @@ _DST_ZONES_BY_STANDARD_OFFSET: dict[int, str] = {
     -420: "America/Denver",
     -360: "America/Chicago",
     -300: "America/New_York",
-    -240: "America/Halifax",
     -210: "America/St_Johns",
     0: "Europe/London",
     60: "Europe/Paris",
@@ -447,8 +456,11 @@ def _observes_dst_with_standard_offset(
 ) -> bool:
     """Return True if zone observes DST and its standard offset matches."""
     year = datetime.datetime.now(tz=datetime.UTC).year
+    # Sample twice a month so short DST periods (e.g. around Ramadan) are seen.
     offsets = {
-        zone.utcoffset(datetime.datetime(year, month, 1)) for month in (1, 7)
+        zone.utcoffset(datetime.datetime(year, month, day))
+        for month in range(1, 13)
+        for day in (1, 15)
     }
     if len(offsets) < 2 or None in offsets:
         return False

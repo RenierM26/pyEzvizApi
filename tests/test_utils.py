@@ -355,3 +355,48 @@ def test_compute_motion_from_alarm_is_active_on_time_during_dst(monkeypatch) -> 
         0.0,
         "2026-10-13 07:06:50",
     )
+
+
+def test_parse_timezone_value_skips_ambiguous_hemisphere_offsets(monkeypatch) -> None:
+    # UTC-04:00 is shared by Atlantic Canada and Chile with opposite seasons.
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC-04:00", dst_enabled=True)
+    assert tz.utcoffset(dt.datetime(2026, 1, 15)) == -dt.timedelta(hours=4)
+    assert tz.utcoffset(dt.datetime(2026, 7, 15)) == -dt.timedelta(hours=4)
+
+    monkeypatch.setenv("TZ", "America/Santiago")
+    tz = parse_timezone_value("UTC-04:00", dst_enabled=True)
+    assert tz == ZoneInfo("America/Santiago")
+
+
+def test_parse_timezone_value_detects_short_host_dst_periods(monkeypatch) -> None:
+    # Morocco is UTC+01:00 most of the year and UTC+00:00 around Ramadan.
+    monkeypatch.setenv("TZ", "Africa/Casablanca")
+    tz = parse_timezone_value("UTC+00:00", dst_enabled=True)
+    assert tz == ZoneInfo("Africa/Casablanca")
+
+
+@pytest.mark.parametrize(
+    "expected_utc",
+    [
+        # First 02:30 (CEST) and repeated 02:30 (CET) on the fall-back day.
+        dt.datetime(2026, 10, 25, 0, 30, tzinfo=dt.UTC),
+        dt.datetime(2026, 10, 25, 1, 30, tzinfo=dt.UTC),
+    ],
+)
+def test_normalize_alarm_time_handles_repeated_dst_hour(
+    monkeypatch, expected_utc: dt.datetime
+) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+
+    _, utc_dt, alarm_str = normalize_alarm_time(
+        {
+            "alarmStartTime": int(expected_utc.timestamp() * 1000),
+            "alarmStartTimeStr": "2026-10-25 02:30:00",
+        },
+        tz,
+    )
+
+    assert utc_dt == expected_utc
+    assert alarm_str == "2026-10-25 02:30:00"

@@ -510,3 +510,62 @@ def test_shared_replacement_restores_posix_acl_after_mode(monkeypatch, tmp_path)
     assert destination.stat().st_mode == original_mode
     assert os.getxattr(destination, "system.posix_acl_access") == acl
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_shared_replacement_honors_read_only_destination(monkeypatch, tmp_path, symlink):
+    import os  # noqa: PLC0415
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses normal file write permission checks")
+    client = EzvizClient()
+    target = tmp_path / "target.ts"
+    existing = b"existing"
+    target.write_bytes(existing)
+    target.chmod(0o444)
+    original_inode = target.stat().st_ino
+    destination = tmp_path / "clip.ts" if symlink else target
+    if symlink:
+        destination.symlink_to(target.name)
+    def successful(serial, output, **kwargs):
+        output.write(b"complete")
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    with pytest.raises(PermissionError):
+        client.save_clip_with_options("camera", destination, ClipOptions(
+            source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+        ))
+    assert target.read_bytes() == existing
+    assert target.stat().st_ino == original_inode
+    if symlink:
+        assert destination.is_symlink()
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_shared_replacement_checks_kernel_write_access_without_truncation(monkeypatch, tmp_path):
+    import os  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    existing = b"existing"
+    destination.write_bytes(existing)
+    original_inode = destination.stat().st_ino
+    original_open = os.open
+    probes = []
+    def denied_open(path, flags, *args, **kwargs):
+        if path == destination:
+            probes.append(flags)
+            assert destination.read_bytes() == existing
+            raise PermissionError("write denied by access ACL")
+        return original_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(os, "open", denied_open)
+    def successful(serial, output, **kwargs):
+        output.write(b"complete")
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    with pytest.raises(PermissionError, match="write denied by access ACL"):
+        client.save_clip_with_options("camera", destination, ClipOptions(
+            source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+        ))
+    assert probes == [os.O_WRONLY]
+    assert destination.read_bytes() == existing
+    assert destination.stat().st_ino == original_inode
+    assert not list(tmp_path.glob(".*.tmp"))

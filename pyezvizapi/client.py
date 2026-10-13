@@ -3388,9 +3388,12 @@ class EzvizClient:
                 try:
                     # New clips use normal creation permissions under the caller's
                     # umask. Existing clips retain their mode after replacement.
-                    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                                         0o666 if destination_mode is None else 0o600)
-                    with os.fdopen(descriptor, "wb") as target:
+                    if destination_mode is None:
+                        target_file = temporary.open("xb")
+                    else:
+                        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        target_file = os.fdopen(descriptor, "wb")
+                    with target_file as target:
                         shutil.copyfileobj(staged, target)
                         if destination_mode is not None:
                             target.flush()

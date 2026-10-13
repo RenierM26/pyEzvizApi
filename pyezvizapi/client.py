@@ -351,6 +351,42 @@ def _content_type_for_output(
     return default
 
 
+def _write_staged_clip_path(staged: BinaryIO, output: str | Path) -> None:
+    """Atomically publish a staged clip while preserving destination metadata."""
+    # Follow output symlinks just as the normal open("wb") path does.
+    path = Path(output).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        destination_stat = path.stat()
+    except FileNotFoundError:
+        destination_stat = None
+    if destination_stat is not None and not stat.S_ISREG(destination_stat.st_mode):
+        raise PyEzvizError("Shared native clock output must be a regular file")
+    try:
+        # New clips use normal creation permissions under the caller's
+        # umask. Existing clips retain their mode after replacement.
+        if destination_stat is None:
+            target_file = temporary.open("xb")
+        else:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            target_file = os.fdopen(descriptor, "wb")
+        with target_file as target:
+            shutil.copyfileobj(staged, target)
+            if destination_stat is not None:
+                target.flush()
+                temporary_stat = os.fstat(target.fileno())
+                if (temporary_stat.st_uid, temporary_stat.st_gid) != (
+                    destination_stat.st_uid, destination_stat.st_gid,
+                ):
+                    os.fchown(target.fileno(), destination_stat.st_uid, destination_stat.st_gid)
+                # chown can clear special mode bits, so restore mode last.
+                os.fchmod(target.fileno(), stat.S_IMODE(destination_stat.st_mode))
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _output_name(output: str | Path | BinaryIO) -> str | None:
     """Return a stable output name for result metadata."""
 
@@ -3378,30 +3414,7 @@ class EzvizClient:
                 raise EzvizNoMediaError("Shared native clock capture did not contain media")
             staged.seek(0)
             if isinstance(output, str | Path):
-                # Follow output symlinks just as the normal open("wb") path does.
-                path = Path(output).resolve()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-                try:
-                    destination_mode = stat.S_IMODE(path.stat().st_mode)
-                except FileNotFoundError:
-                    destination_mode = None
-                try:
-                    # New clips use normal creation permissions under the caller's
-                    # umask. Existing clips retain their mode after replacement.
-                    if destination_mode is None:
-                        target_file = temporary.open("xb")
-                    else:
-                        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                        target_file = os.fdopen(descriptor, "wb")
-                    with target_file as target:
-                        shutil.copyfileobj(staged, target)
-                        if destination_mode is not None:
-                            target.flush()
-                            os.fchmod(target.fileno(), destination_mode)
-                    os.replace(temporary, path)
-                finally:
-                    temporary.unlink(missing_ok=True)
+                _write_staged_clip_path(cast(BinaryIO, staged), output)
             else:
                 shutil.copyfileobj(staged, output)
             result["output"] = _output_name(output)

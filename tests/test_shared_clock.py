@@ -343,3 +343,79 @@ def test_shared_atomic_replace_preserves_symlink_target(monkeypatch, tmp_path, e
     if existing:
         assert stat.S_IMODE(target.stat().st_mode) == 0o640
     assert not list(tmp_path.rglob(".*.tmp"))
+
+
+@pytest.mark.parametrize("ownership_allowed", [True, False])
+def test_shared_replacement_copies_ownership_before_mode(monkeypatch, tmp_path, ownership_allowed):
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    client = EzvizClient()
+    destination = tmp_path / "clip.ts"
+    existing = b"existing"
+    complete = b"complete"
+    destination.write_bytes(existing)
+    destination.chmod(0o640)
+    original_stat = Path.stat
+    existing_stat = destination.stat()
+    owner = (existing_stat.st_uid + 1, existing_stat.st_gid + 1)
+    def destination_stat(path, **kwargs):
+        result = original_stat(path, **kwargs)
+        if path == destination:
+            fields = list(result)
+            fields[4:6] = owner
+            return os.stat_result(fields)
+        return result
+    monkeypatch.setattr(Path, "stat", destination_stat)
+    calls: list[tuple[object, ...]] = []
+    original_chmod = os.fchmod
+    def copy_owner(descriptor, uid, gid):
+        calls.append(("owner", uid, gid))
+        if not ownership_allowed:
+            raise PermissionError("cannot preserve ownership")
+    def copy_mode(descriptor, mode):
+        calls.append(("mode", mode))
+        original_chmod(descriptor, mode)
+    monkeypatch.setattr(os, "fchown", copy_owner)
+    monkeypatch.setattr(os, "fchmod", copy_mode)
+    def successful(serial, output, **kwargs):
+        output.write(complete)
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    options = ClipOptions(source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True))
+    if ownership_allowed:
+        client.save_clip_with_options("camera", destination, options)
+        assert calls == [("owner", *owner), ("mode", 0o640)]
+        assert destination.read_bytes() == complete
+    else:
+        with pytest.raises(PermissionError, match="cannot preserve ownership"):
+            client.save_clip_with_options("camera", destination, options)
+        assert destination.read_bytes() == existing
+        assert calls == [("owner", *owner)]
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_shared_replacement_rejects_fifo_without_destroying_it(monkeypatch, tmp_path, symlink):
+    import os  # noqa: PLC0415
+    import stat  # noqa: PLC0415
+    client = EzvizClient()
+    fifo = tmp_path / "consumer.ts"
+    os.mkfifo(fifo)
+    original_inode = fifo.stat().st_ino
+    destination = fifo
+    if symlink:
+        destination = tmp_path / "clip.ts"
+        destination.symlink_to(fifo.name)
+    def successful(serial, output, **kwargs):
+        output.write(b"complete")
+        return {"ok": True, "format": "mpegts"}
+    monkeypatch.setattr(client, "_save_local_sdk_clip", successful)
+    with pytest.raises(PyEzvizError, match="must be a regular file"):
+        client.save_clip_with_options("camera", destination, ClipOptions(
+            source=LocalSdkClipSource(), mux=MediaMuxOptions(native_shared_clock=True),
+        ))
+    assert stat.S_ISFIFO(fifo.stat().st_mode)
+    assert fifo.stat().st_ino == original_inode
+    if symlink:
+        assert destination.is_symlink()
+    assert not list(tmp_path.glob(".*.tmp"))

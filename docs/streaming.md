@@ -633,6 +633,22 @@ scaled bounded budget; small startup probes are unchanged. The built-in app-obse
 channel plan, not a way to force a second lens.
 
 
+### Playback capabilities and native clock assertions
+
+[Playback timing](playback-timing.md) records the verified app conditions and
+separates source probing from live renderer behavior. `inspect_app_playback_support`
+reads an already supplied `deviceInfos.supportExt` snapshot, including the explicit
+915 == 1 smoothing condition. It performs no network/account discovery. Neither
+915 nor sound capability 63 establishes a common media clock.
+
+`probe_native_rtp_clock` reports source origins, AAC sample rate/source count,
+shared-clock candidate offsets and a rejection reason. It never reports a verified
+epoch or silently changes policy. `native_shared_clock=True` remains an explicit,
+bounded native TCP/MPEG-TS assertion; mixed accepted audio/video clocks are
+rejected, even when first timestamp values happen to be nearby. CLI equivalents
+reject incompatible source/container/known encrypted-trim options before login;
+high-level shared output is committed only after a successful staged capture.
+
 ### Native cloud RTP clocks
 
 Bounded cloud captures and the incremental cloud proxy preserve descriptor-backed

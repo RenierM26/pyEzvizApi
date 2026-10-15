@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import stat
 from tempfile import SpooledTemporaryFile
 from threading import RLock
 import time
@@ -198,6 +199,7 @@ from .media import (
     CaptureLimits,
     MediaDecodeOptions,
     MediaMuxOptions,
+    _native_shared_clock_options,
     has_positive_finite_capture_bound,
     is_positive_capture_count_bound,
     is_positive_finite_duration_bound,
@@ -347,6 +349,68 @@ def _content_type_for_output(
     if suffix in {".ps", ".mpeg", ".mpg"}:
         return "video/mpeg"
     return default
+
+
+def _copy_clip_xattrs(source: Path, target: Path) -> None:
+    """Preserve ACLs and extended attributes, failing before publication on errors."""
+    if not hasattr(os, "listxattr"):
+        return
+    source_attributes = os.listxattr(source)
+    # Remove inherited attributes absent from the original inode as well.
+    for name in os.listxattr(target):
+        if name not in source_attributes:
+            os.removexattr(target, name)
+    for name in source_attributes:
+        os.setxattr(target, name, os.getxattr(source, name))
+
+
+def _write_staged_clip_path(staged: BinaryIO, output: str | Path) -> None:
+    """Atomically publish a staged clip while preserving destination metadata."""
+    # Follow output symlinks just as the normal open("wb") path does.
+    path = Path(output).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        destination_stat = path.stat()
+    except FileNotFoundError:
+        destination_stat = None
+    if destination_stat is not None and not stat.S_ISREG(destination_stat.st_mode):
+        raise PyEzvizError("Shared native clock output must be a regular file")
+    if destination_stat is not None and destination_stat.st_nlink > 1:
+        raise PyEzvizError("Shared native clock output must not have multiple hard links")
+    if destination_stat is not None:
+        # Opening without truncation checks actual write permission (including
+        # ACLs) without modifying the old clip before staged publication.
+        descriptor = os.open(path, os.O_WRONLY)
+        os.close(descriptor)
+    try:
+        # New clips use normal creation permissions under the caller's
+        # umask. Existing clips retain their mode after replacement.
+        if destination_stat is None:
+            target_file = temporary.open("xb")
+        else:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            target_file = os.fdopen(descriptor, "wb")
+        with target_file as target:
+            shutil.copyfileobj(staged, target)
+            if destination_stat is not None:
+                target.flush()
+                temporary_stat = os.fstat(target.fileno())
+                if (temporary_stat.st_uid, temporary_stat.st_gid) != (
+                    destination_stat.st_uid, destination_stat.st_gid,
+                ):
+                    os.fchown(target.fileno(), destination_stat.st_uid, destination_stat.st_gid)
+                # chown can clear special mode bits, so restore mode afterward.
+                mode = stat.S_IMODE(destination_stat.st_mode)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(target.fileno(), mode)
+                else:
+                    os.chmod(temporary, mode)
+                # Restore ACLs after chmod, which can alter their access mask.
+                _copy_clip_xattrs(path, temporary)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _output_name(output: str | Path | BinaryIO) -> str | None:
@@ -3164,6 +3228,7 @@ class EzvizClient:
         local_sdk_ecdh_send_init: bool = False,
         local_sdk_ecdh_max_prefix_bytes: int = 4096,
         local_sdk_ecdh_max_frames: int | None = None,
+        native_shared_clock: bool = False,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
@@ -3202,6 +3267,7 @@ class EzvizClient:
         mux_options = MediaMuxOptions(
             output_format=output_format,
             ffmpeg_path=ffmpeg_path,
+            native_shared_clock=native_shared_clock,
         )
 
         source_options: ClipSourceOptions
@@ -3285,6 +3351,7 @@ class EzvizClient:
                 h264_clean_idr_max_windows=clean_window_max_windows,
                 h264_wait_for_clean_idr_window=wait_for_clean_window,
                 h264_clean_idr_wait_seconds=clean_window_wait_seconds,
+                native_shared_clock=native_shared_clock,
             )
             source_options = HcNetSdkCommandPortClipSource(
                 timeout=timeout,
@@ -3348,7 +3415,43 @@ class EzvizClient:
         output: str | Path | BinaryIO,
         options: ClipOptions,
     ) -> SaveMediaResult:
-        """Save a camera clip from a grouped, typed configuration."""
+        """Save a camera clip from a grouped, typed configuration.
+
+        Explicit shared-clock captures are staged: unsupported clocks must not
+        truncate an existing output or append partial media to a caller buffer.
+        """
+        mux = options.resolved_mux()
+        if not mux.native_shared_clock:
+            return self._save_clip_with_options(serial, output, options)
+        if not isinstance(options.source, LocalSdkClipSource | HcNetSdkCommandPortClipSource):
+            raise PyEzvizError("native_shared_clock requires an explicit local-sdk or hcnetsdk-command-port source")
+        if mux.output_format != "mpegts":
+            raise PyEzvizError("native_shared_clock requires MPEG-TS output")
+        options.capture.require_bounded("Shared native clock capture")
+        if options.decode.decrypt_video and (
+            mux.h264_wait_for_clean_idr_window or mux.h264_skip_initial_idr_windows
+            or mux.h264_trim_to_clean_idr_window or mux.h264_clean_idr_preroll_seconds
+        ):
+            raise PyEzvizError("native_shared_clock does not support encrypted startup trimming")
+        with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staged:
+            result = self._save_clip_with_options(serial, cast(BinaryIO, staged), options)
+            size = staged.tell()
+            if not size:
+                raise EzvizNoMediaError("Shared native clock capture did not contain media")
+            staged.seek(0)
+            if isinstance(output, str | Path):
+                _write_staged_clip_path(cast(BinaryIO, staged), output)
+            else:
+                shutil.copyfileobj(staged, output)
+            result["output"] = _output_name(output)
+            result["bytes"] = size
+            result["content_type"] = _content_type_for_output(output, default="video/mp2t")
+            return result
+
+    def _save_clip_with_options(
+        self, serial: str, output: str | Path | BinaryIO, options: ClipOptions,
+    ) -> SaveMediaResult:
+        """Dispatch an already validated/staged typed capture."""
 
         if options.capture.max_bytes is not None:
             raise PyEzvizError("save_clip_with_options does not support CaptureLimits.max_bytes")
@@ -3395,6 +3498,7 @@ class EzvizClient:
                 **_credential_options(source.credentials),
                 **_nonempty_packet_options(source.skip_empty_packets),
                 **_receiver_options(source.receiver_port),
+                **_native_shared_clock_options(mux.native_shared_clock),
             )
         if isinstance(source, LocalSdkEcdhClipSource):
             return self._save_local_sdk_ecdh_clip(
@@ -3456,6 +3560,7 @@ class EzvizClient:
                     )
                 ),
                 h264_clean_idr_wait_seconds=mux.h264_clean_idr_wait_seconds,
+                **_native_shared_clock_options(mux.native_shared_clock),
             )
         if isinstance(source, CloudClipSource):
             return self._save_cloud_clip(
@@ -3716,6 +3821,7 @@ class EzvizClient:
         credentials: EzvizLocalSdkCredentials | None = None,
         receiver_port: int = 10101,
         skip_empty_packets: bool = False,
+        native_shared_clock: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through the direct-local SDK path."""
 
@@ -3741,6 +3847,7 @@ class EzvizClient:
                     duration_seconds=duration_seconds,
                     ffmpeg_path=ffmpeg_path,
                     smscode=smscode,
+                    **_native_shared_clock_options(native_shared_clock),
                     **_credential_options(credentials),
                     **_nonempty_packet_options(skip_empty_packets),
                     **_receiver_options(receiver_port, receiver_ex=True),
@@ -3764,6 +3871,7 @@ class EzvizClient:
                 duration_seconds=duration_seconds,
                 ffmpeg_path=ffmpeg_path,
                 smscode=smscode,
+                **_native_shared_clock_options(native_shared_clock),
                 **_credential_options(credentials),
                 **_nonempty_packet_options(skip_empty_packets),
                 **_receiver_options(receiver_port, receiver_ex=True),
@@ -3814,6 +3922,7 @@ class EzvizClient:
         h264_clean_idr_max_windows: int = 32,
         h264_wait_for_clean_idr_window: bool = False,
         h264_clean_idr_wait_seconds: float = 60.0,
+        native_shared_clock: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through caller-supplied port-8000 HCNetSDK frames."""
 
@@ -3904,6 +4013,7 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                            **_native_shared_clock_options(native_shared_clock),
                         )
                     else:
                         copy_local_stream_to_mpegts(
@@ -3918,6 +4028,7 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                            **_native_shared_clock_options(native_shared_clock),
                         )
                 finally:
                     if metadata_callback is not None:
@@ -3957,6 +4068,7 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                            **_native_shared_clock_options(native_shared_clock),
                         )
                     else:
                         copy_local_stream_to_mpegts(
@@ -3971,6 +4083,7 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
+                            **_native_shared_clock_options(native_shared_clock),
                         )
                 finally:
                     if metadata_callback is not None:

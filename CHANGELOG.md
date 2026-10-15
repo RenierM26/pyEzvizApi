@@ -17,6 +17,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Apply daylight saving time to cameras that report a fixed `timeZone` offset (for example `UTC+01:00`) with `daylightSavingTime` enabled, so `Motion_Trigger` no longer fires one hour late during summer time (#314).
+
 - Detect repeated legacy RTP/PS on ECDH-requested sessions and report an actionable protocol mismatch instead of generic no-media; add a bounded, sanitized `probe_local_stream` API with explicit source recommendations.
 
 - Remove the native one-byte prefix from unfragmented local MPEG-PS records, restoring Gate video continuity and AAC without trimming received media.

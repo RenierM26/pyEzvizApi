@@ -1003,6 +1003,8 @@ def test_decrypt_idmx_aac_packets_uses_native_descriptor() -> None:
         sample_rate=sample_rate,
         channels=1,
         frame_count=1,
+        origin_timestamp=0,
+        source_keys=((2, None),),
     )
 
 

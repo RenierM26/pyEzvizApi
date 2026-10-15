@@ -231,6 +231,7 @@ class SupportExt(Enum):
     SupportAutoAdjust = 45
     SupportAutoOffline = 8
     SupportAutoSleep = 144
+    SupportAutoSmoothPlay = 915
     SupportBackLight = 303
     SupportBackendLinkIpcStream = 596
     SupportBatteryDeviceP2p = 336

@@ -57,6 +57,7 @@ from .media import (
     MediaPacket,
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
+    _native_shared_clock_options,
     has_positive_finite_capture_bound,
     is_positive_finite_duration_bound,
 )
@@ -1904,6 +1905,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     smscode: str | int | None = None,
     cam_key_max_retries: int = 1,
     skip_empty_packets: bool = False,
+    native_shared_clock: bool = False,
 ) -> EzvizLocalSdkCredentials:
     """Open a direct-local SDK stream from an authenticated client and copy bytes.
 
@@ -1913,6 +1915,10 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     """
     if output_format not in ("mpegps", "mpegts"):
         raise PyEzvizError("output_format must be 'mpegps' or 'mpegts'")
+    if native_shared_clock:
+        if output_format != "mpegts" or receiver_trans_proto.upper() != "TCP":
+            raise PyEzvizError("native_shared_clock requires MPEG-TS over native TCP")
+        _require_bounded_idmx_capture(max_packets=max_packets, duration_seconds=duration_seconds)
     if decrypt_video:
         _require_bounded_decrypt_capture(
             max_packets=max_packets,
@@ -1995,6 +2001,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                **_native_shared_clock_options(native_shared_clock),
             )
         else:
             copy_local_stream_to_mpegts(
@@ -2004,6 +2011,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                **_native_shared_clock_options(native_shared_clock),
             )
     return credentials
 
@@ -2208,8 +2216,14 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
     h264_wait_for_clean_idr_window: bool = False,
     h264_clean_idr_wait_seconds: float = 60.0,
     decrypt_hevc_parameter_sets: bool = False,
+    native_shared_clock: bool = False,
 ) -> None:
     """Collect, decrypt, remux and write local MPEG-TS bytes."""
+    if native_shared_clock and (
+        h264_wait_for_clean_idr_window or h264_skip_initial_idr_windows
+        or h264_trim_to_clean_idr_window or h264_clean_idr_preroll_seconds
+    ):
+        raise PyEzvizError("native_shared_clock does not support encrypted startup trimming")
     if h264_wait_for_clean_idr_window:
         _, payload_duration_seconds = h264_clean_idr_capture_budgets(
             duration_seconds=duration_seconds,
@@ -2278,6 +2292,8 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             audio_metadata=audio_metadata,
             audio_payload_types=audio_payload_types,
         )
+        if native_shared_clock:
+            raise PyEzvizError("native_shared_clock requires genuine native RTP AV timing")
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
@@ -2382,8 +2398,10 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
             )
         if annexb == full_annexb:
             codec: RtpVideoCodec = "hevc" if video_input_format == "hevc" else "h264"
-            if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets):
+            if _copy_decrypted_native_idmx_timed_av(packets, annexb, audio, output, codec=codec, ffmpeg_path=ffmpeg_path, media_key=media_key, nalu_header_size=nalu_header_size, decrypt_hevc_parameter_sets=decrypt_hevc_parameter_sets, **_native_shared_clock_options(native_shared_clock)):
                 return
+        if native_shared_clock:
+            raise PyEzvizError("native_shared_clock requires genuine native RTP AV timing")
         if audio is not None:
             _copy_idmx_audio_video_to_mpegts(
                 annexb,
@@ -2411,6 +2429,8 @@ def copy_local_stream_to_decrypted_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         raise PyEzvizError(
             "H.264 startup trim options require a decrypted H.264 IDMX stream"
         )
+    if native_shared_clock:
+        raise PyEzvizError("native_shared_clock requires native RTP media, not MPEG-PS")
     decrypted = decrypt_hikvision_ps_video(
         b"".join(packets),
         media_key,
@@ -2460,8 +2480,11 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
     h264_clean_idr_max_windows: int = 32,
     h264_wait_for_clean_idr_window: bool = False,
     h264_clean_idr_wait_seconds: float = 60.0,
+    native_shared_clock: bool = False,
 ) -> None:
     """Pipe local media payloads through FFmpeg and write MPEG-TS bytes."""
+    if native_shared_clock:
+        _require_bounded_idmx_capture(max_packets=max_packets, duration_seconds=duration_seconds)
     _, payload_duration_seconds = h264_clean_idr_capture_budgets(
         duration_seconds=duration_seconds,
         h264_skip_initial_idr_windows=h264_skip_initial_idr_windows,
@@ -2526,7 +2549,7 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
                         require_contiguous=False, decrypt_audio=False, allow_timestamp_jitter=True,
                     ) if audio_metadata is not None else None
                 )
-                if _copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path=ffmpeg_path):
+                if _copy_clear_native_idmx_timed_av(packets, audio, output, ffmpeg_path=ffmpeg_path, **_native_shared_clock_options(native_shared_clock)):
                     return
 
             if is_h264_startup_options:
@@ -2572,8 +2595,11 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         if (is_h264_startup_options or h264_wait_for_clean_idr_window) and _copy_clear_native_idmx_timed_av(
             packets, None, output, ffmpeg_path=ffmpeg_path, selected_annexb=annexb,
             selected_codec=cast(RtpVideoCodec, video_input_format),
+            **_native_shared_clock_options(native_shared_clock),
         ):
             return
+        if native_shared_clock:
+            raise PyEzvizError("native_shared_clock requires genuine native RTP AV timing")
         if not (is_h264_startup_options or h264_wait_for_clean_idr_window):
             audio_metadata = _idmx_audio_descriptor(packets)
             if audio_metadata is not None:
@@ -2600,6 +2626,8 @@ def copy_local_stream_to_mpegts(  # noqa: PLR0912, PLR0913, PLR0915
         raise PyEzvizError(
             "H.264 startup trim options require a clear H.264 IDMX stream"
         )
+    if native_shared_clock:
+        raise PyEzvizError("native_shared_clock requires native RTP media, not MPEG-PS")
     if not first_payload.startswith(MPEG_PS_START_CODE):
         raise PyEzvizError(
             "Unsupported EZVIZ local stream payload format: expected MPEG-PS payload"
@@ -2639,6 +2667,7 @@ def _copy_clear_native_idmx_timed_av(
     ffmpeg_path: str,
     selected_annexb: bytes | None = None,
     selected_codec: RtpVideoCodec | None = None,
+    native_shared_clock: bool = False,
 ) -> bool:
     """Keep native clear AAC jitter through one timed input, not raw-file probing."""
 
@@ -2647,6 +2676,8 @@ def _copy_clear_native_idmx_timed_av(
     if legacy_video_indices and selected_annexb is None:
         # Legacy/native-body wrappers need the existing Annex-B parser's
         # unwrapping, and their synthetic fields do not prove an RTP clock.
+        if native_shared_clock:
+            raise PyEzvizError("native_shared_clock requires genuine native RTP video timing")
         return False
     if legacy_video_indices:
         # Discarded native-body startup cannot disqualify a selected standard
@@ -2656,6 +2687,8 @@ def _copy_clear_native_idmx_timed_av(
                        for i, packet in enumerate(rtp_packets)]
     advertised_rate = idmx_video_frame_rate(rtp_packets)
     if advertised_rate is None:
+        if native_shared_clock:
+            raise PyEzvizError("native_shared_clock requires genuine native RTP video timing")
         return False
     codec = selected_codec if selected_annexb is not None and selected_codec is not None else detect_rtp_video_codec(rtp_packets, allow_ezviz_headerless_hevc_fu=True)
     timestamps: list[int] = []
@@ -2664,6 +2697,14 @@ def _copy_clear_native_idmx_timed_av(
         rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps, nal_source_keys=source_keys,
     )
+    if native_shared_clock and selected_annexb is None and len({
+        source_keys[i] for i, unit in enumerate(units)
+        if rtp_nal_units_have_vcl((unit,), codec=codec)
+    }) > 1:
+        raise EzvizUnsupportedMediaError(
+            "native_shared_clock cannot combine multiple video source clocks",
+            source="rtp", reason="unsupported_av_clock",
+        )
     if not rtp_nal_units_have_vcl(units, codec=codec):
         if legacy_video_indices:
             return False
@@ -2697,12 +2738,14 @@ def _copy_clear_native_idmx_timed_av(
             selected_packets, b"", require_contiguous=False,
             decrypt_audio=False, preserve_clear_timestamps=True,
         )
+    payloads = timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio, shared_clock=native_shared_clock)
+    first_payload = next(payloads)
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
     )
 
     def write_input(stdin: BinaryIO) -> None:
-        for payload in timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio):
+        for payload in chain((first_payload,), payloads):
             stdin.write(payload)
 
     copy_remuxed_output(process, output, write_input=write_input)
@@ -2776,6 +2819,7 @@ def _copy_decrypted_native_idmx_timed_av(
     codec: RtpVideoCodec, ffmpeg_path: str, media_key: str | bytes = b"",
     nalu_header_size: int | None = None,
     decrypt_hevc_parameter_sets: bool = False,
+    native_shared_clock: bool = False,
 ) -> bool:
     """Use advertised native picture cadence and received AAC sample timestamps."""
 
@@ -2786,19 +2830,33 @@ def _copy_decrypted_native_idmx_timed_av(
             packet = _idmx_local_frame_rtp_packet(frame, header)
             if packet is not None:
                 rtp_packets.append(packet)
+    if native_shared_clock:
+        video_types = _idmx_local_video_payload_types(packets, codec=codec)
+        if len({_rtp_sequence_key(packet) for packet in rtp_packets
+                if packet.payload_type in video_types and packet.payload}) > 1:
+            raise EzvizUnsupportedMediaError(
+                "native_shared_clock cannot combine multiple video source clocks",
+                source="rtp", reason="unsupported_av_clock",
+            )
     rate = idmx_video_frame_rate(rtp_packets)
     if rate is None:
+        if native_shared_clock:
+            raise PyEzvizError("native_shared_clock requires native video metadata")
         return False
     source_timeline = _native_decrypted_rtp_timeline(packets, annexb, codec, media_key, nalu_header_size, decrypt_hevc_parameter_sets)
+    if native_shared_clock and source_timeline is None:
+        raise PyEzvizError("native_shared_clock cannot use synthetic video timestamps")
     units, timestamps = source_timeline if source_timeline is not None else _native_decrypted_picture_timeline(annexb, codec, rate)
     if not rtp_nal_units_have_vcl(units, codec=codec):
         raise EzvizNoMediaError("Native decrypted capture contained no video picture")
+    payloads = timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio, shared_clock=native_shared_clock)
+    first_payload = next(payloads)
     process = open_mpegts_remux_process(
         ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
     )
 
     def write_input(stdin: BinaryIO) -> None:
-        for payload in timed_rtp_mpegps_payloads(units, timestamps, codec=codec, audio=audio):
+        for payload in chain((first_payload,), payloads):
             stdin.write(payload)
 
     copy_remuxed_output(process, output, write_input=write_input)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import io
 from itertools import pairwise
 import json
@@ -68,9 +69,19 @@ def test_incremental_h264_data_partitions_share_the_partition_a_picture_clock() 
         list(muxer.video(6100, partition_a))
 
 
+def _adts_frames(data: bytes) -> list[bytes]:
+    frames: list[bytes] = []
+    offset = 0
+    while offset < len(data):
+        length = ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
+        frames.append(data[offset:offset + length])
+        offset += length
+    return frames
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg tools unavailable")
-@pytest.mark.parametrize(("incremental", "jitter"), [(False, False), (True, False), (False, True)])
-def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: Path, incremental: bool, jitter: bool) -> None:
+@pytest.mark.parametrize(("incremental", "jitter", "shared_clock"), [(False, False, False), (True, False, False), (False, True, False), (False, False, True), (False, True, True)])
+def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: Path, incremental: bool, jitter: bool, shared_clock: bool) -> None:
     video_path = tmp_path / "video.h264"
     audio_path = tmp_path / "audio.aac"
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=32x32:rate=10",
@@ -79,13 +90,7 @@ def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: 
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=sample_rate=16000",
         "-ac", "1", "-frames:a", "12", "-c:a", "aac", "-f", "adts", str(audio_path)], check=True, capture_output=True)
     units = [unit for unit in re.split(b"\x00\x00(?:\x00)?\x01", video_path.read_bytes()) if unit]
-    frames: list[bytes] = []
-    data = audio_path.read_bytes()
-    offset = 0
-    while offset < len(data):
-        length = ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
-        frames.append(data[offset:offset + length])
-        offset += length
+    frames = _adts_frames(audio_path.read_bytes())
     times: list[int] = []
     frame_index = -1
     for unit in units:
@@ -97,6 +102,9 @@ def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: 
     if jitter:
         audio = RtpAacStream(b"".join(frames), 16000, 1, len(frames),
             ((0, b"".join(frames[:2])), (2032, frames[2]), (3072, b"".join(frames[3:]))))
+    if shared_clock:
+        times = [stamp + 899000 for stamp in times]
+        audio = replace(audio, origin_timestamp=157952)
     if incremental:
         muxer = NativeRtpPsMuxer("h264", audio=True)
         payloads = [p for unit, timestamp in zip(units, times, strict=True) for p in muxer.video(timestamp, unit)]
@@ -104,7 +112,7 @@ def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: 
             if index != 1:
                 payloads.extend(muxer.audio(50_000 + index * 1024, RtpAacStream(frame, 16000, 1, 1)))
     else:
-        payloads = list(timed_rtp_mpegps_payloads(units, times, codec="h264", audio=audio))
+        payloads = list(timed_rtp_mpegps_payloads(units, times, codec="h264", audio=audio, shared_clock=shared_clock))
     output = io.BytesIO()
     process = open_mpegts_remux_process("ffmpeg", preserve_timestamps=True)
     def write_input(stream: BinaryIO) -> None:
@@ -119,6 +127,8 @@ def test_native_timing_remux_preserves_variable_video_and_missing_aac(tmp_path: 
     packets = json.loads(probe.stdout)["packets"]
     video_times = [float(p["pts_time"]) for p in packets if p["codec_type"] == "video"]
     audio_times = [float(p["pts_time"]) for p in packets if p["codec_type"] == "audio"]
+    if shared_clock:
+        assert video_times[0] - audio_times[0] == pytest.approx(0.128)
     assert len(video_times) == 4
     assert len(audio_times) == len(frames) - (0 if jitter else 1)
     assert [b - a for a, b in pairwise(video_times)] == pytest.approx([0.1, 0.2, 0.1])

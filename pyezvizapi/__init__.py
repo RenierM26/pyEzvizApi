@@ -700,6 +700,7 @@ if TYPE_CHECKING:
         build_device_records_map,
     )
     from .mqtt import EzvizToken, MQTTClient, MqttData, ServiceUrls
+    from .playback import EzvizAppPlaybackSupport, inspect_app_playback_support
     from .rtp import (
         RtpCodec,
         RtpContinuityStats,
@@ -715,6 +716,7 @@ if TYPE_CHECKING:
         rtp_payload,
         rtp_payload_video_codec,
     )
+    from .rtp_timing import NativeRtpClockProbe, probe_native_rtp_clock
     from .smart_plug import EzvizSmartPlug
     from .stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache
     from .stream_header import EzvizStreamHeader, parse_ezviz_stream_header
@@ -1082,6 +1084,10 @@ _EXPORTS = {
     "MessageFilterType": "constants",
     "MediaDecodeOptions": "media",
     "MediaMuxOptions": "media",
+    "EzvizAppPlaybackSupport": "playback",
+    "inspect_app_playback_support": "playback",
+    "NativeRtpClockProbe": "rtp_timing",
+    "probe_native_rtp_clock": "rtp_timing",
     "MediaPacket": "media",
     "MediaPacketMetadata": "media",
     "MediaPacketSource": "media",

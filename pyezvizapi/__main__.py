@@ -712,6 +712,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="FFmpeg executable to use for MPEG-TS remuxing (default: ffmpeg)",
     )
     parser_save_clip.add_argument(
+        "--native-shared-clock",
+        action="store_true",
+        help=("Experimental native TCP 90kHz/16kHz shared-epoch assertion; "
+              "explicit local-sdk/hcnetsdk-command-port MPEG-TS only, not app smoothing"),
+    )
+    parser_save_clip.add_argument(
         "--decrypt-video",
         action="store_true",
         help=(
@@ -2324,9 +2330,23 @@ def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> N
         sys.stdout.write(f"Wrote {result['bytes']} bytes to {result['output']}\n")
 
 
+def _validate_shared_clip_args(args: argparse.Namespace) -> None:
+    """Reject unsupported clock assertions before account or camera access."""
+    if not args.native_shared_clock:
+        return
+    if args.source not in {"local-sdk", "hcnetsdk-command-port"} or args.format not in {None, "mpegts"}:
+        raise PyEzvizError("--native-shared-clock requires explicit native MPEG-TS capture")
+    if args.decrypt_video and (
+        args.hcnetsdk_h264_wait_for_clean_idr_window or args.hcnetsdk_h264_skip_initial_idr_windows
+        or args.hcnetsdk_h264_trim_to_clean_idr_window or args.hcnetsdk_h264_clean_idr_preroll_seconds
+    ):
+        raise PyEzvizError("--native-shared-clock does not support encrypted startup trimming")
+
+
 def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     """Save a short direct-local camera clip to disk."""
 
+    _validate_shared_clip_args(args)
     if args.channel is None and args.source not in {"cloud", "auto"}:
         args.channel = 1
 
@@ -2411,6 +2431,8 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
         "hcnetsdk_h264_wait_for_clean_idr_window": (args.hcnetsdk_h264_wait_for_clean_idr_window),
         "hcnetsdk_h264_clean_idr_wait_seconds": (args.hcnetsdk_h264_clean_idr_wait_seconds),
     }
+    if args.native_shared_clock:
+        save_kwargs["native_shared_clock"] = True
     if args.source in {"local-sdk", "local-sdk-ecdh"}:
         save_kwargs["register_p2p_session"] = not args.no_p2p_register
     if args.source == "auto":
@@ -5577,6 +5599,12 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     args = _parse_args(argv)
     _setup_logging(args.debug)
+    if args.action == "save" and args.save_action == "clip":
+        try:
+            _validate_shared_clip_args(args)
+        except PyEzvizError as error:
+            _LOGGER.error("%s", error)
+            return 1
 
     if args.action == "mqtt" and not args.token_file:
         args.token_file = "ezviz_token.json"

@@ -114,3 +114,52 @@ PTS **70, 155, 400 ms**, distinct from source media times **0, 66, 132 ms** and 
 elapsed/completion readings. PyAV and independent FFprobe verify frame timestamps;
 PyAV and FFmpeg rawvideo hashes match the expected composed pixels. These are
 synthetic local-media checks, not a fresh native trace or physical display test.
+
+## Observed queue-boundary mode
+
+Add `--observed-queues` when importing native operations that can overlap in
+flight. The default remains the original **atomic normalized event** contract;
+it must not be mistaken for the entry time of a partially executed native call.
+A lens-input call can begin before a display completes, but publish its new pair
+only afterward. Sampling input entry is not observing render-queue admission.
+
+In observed mode the unified map additionally requires:
+
+| Event | Fields besides `kind`, `at_ms` | Contract |
+|---|---|---|
+| `render_admit` | `id` | Publish the next assembled/reserved pair to the scheduler at an independently observed queue admission boundary |
+| `render_release` | `id` | Release the next dropped/selected FIFO slot at the observed queue-consumer boundary |
+
+Both events require exact fields, valid identities and FIFO order. An admission
+cannot fabricate or skip a pair. When completed work is blocked in staging, an
+admission observation is itself explicit evidence of transfer: it can advance
+the already-complete FIFO head into the newly available reserved slot. This does
+not synthesize another lens offer, retry, native clock tick or EOF drain.
+
+Assembled/reserved pairs are not visible to scheduler depth until `render_admit`.
+A dropped or selected slot remains owned until `render_release`; an in-flight
+display therefore still occupies render capacity. Releasing the slot is separate
+from display completion, which still requires its own matching event. Completion
+before release rejects the replay. The scheduler's elapsed timer domain is
+unchanged; boundary `at_ms` is the separate common observation clock.
+
+Receipts identify `queue_boundary_mode` and retain `queue_admissions_pending`,
+`queue_releases_pending` and per-request `queue_released`. EOF invents neither
+publication, slot release nor display completion. The existing atomic mode still
+rejects these boundary events unless explicitly enabled. Queue ownership here is
+metadata/host ownership, not Android decoder-buffer release or optical display.
+
+A fresh private metadata-only audit exposed the overlapping-call case and checked
+this mode against 3,703 ordered events: all 201 admissions and 193 completed
+callback identities match; two drops, one in-flight request, five queued pairs
+and two complete staged pairs remain separately accounted. Render-release IDs
+were independently cross-checked against native queue-head headers before the
+observed CommitRead call; this is not a sub-call atomic-timing proof. Five null,
+zero-length input calls were excluded using their actual arguments, not guessed
+from zero-valued headers. No private trace, native pointers or media are shipped.
+
+That audit did **not** capture decoded pixels or link a different session's video
+file to these native headers. The public real-codec regression uses synthetic
+media with complete exact pixel bindings and verifies both queue modes preserve
+the same lossless artifact/PTS. Header/observation provenance and physical display
+remain unverified even when all model checks pass.

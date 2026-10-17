@@ -23,17 +23,21 @@ DECODE = PREVIEW['DECODE']
 SIM = runpy.run_path(str(Path(__file__).with_name('app_playback_simulator.py')))
 ALLOWED = {'lens_picture', 'stage_push', 'video_epoch', 'video_unavailable',
            'video_observed_tick', 'video_display_complete'}
+OBSERVED = {'render_admit', 'render_release'}
 MAX_OUTPUT_BYTES = 512 * 1024 * 1024
 MAX_EXPORT_PIXELS = DECODE['MAX_TOTAL_PIXELS']
 MAX_EXPORT_SECONDS = 60
 
 
 class CoupledReplay:
-    """One ordered model stream; native decisions consume the actual staging FIFO."""
+    """One ordered model stream with optional explicit admission/release boundaries."""
 
-    def __init__(self, report: dict[str, Any]) -> None:
+    def __init__(self, report: dict[str, Any], observed_queues: bool = False) -> None:
         self.decoded = {row['decoded_id']: row for row in report['decoded_frames']}
         self.streams = (report['primary_stream'], report['secondary_stream'])
+        self.observed_queues = observed_queues
+        self.admissions: list[dict[str, Any]] = []
+        self.releases: list[dict[str, Any]] = []
         self.staging = DECODE['PAIR']['Pairing']()
         self.scheduler = SIM['ObservedClockReplay']()
         self.bindings: dict[str, str] = {}
@@ -49,13 +53,15 @@ class CoupledReplay:
         if not isinstance(event, dict) or not isinstance(event.get('kind'), str):
             raise ValueError('coupled source event requires an object and string kind')
         kind = event['kind']
-        if kind not in ALLOWED:
+        if kind not in (ALLOWED | OBSERVED if self.observed_queues else ALLOWED):
             raise ValueError('unsupported coupled event; admissions/takes are model-generated')
         at = SIM['integer'](event.get('at_ms'), 'at_ms')
         if at < self.last_at:
             raise ValueError('coupled events must retain nondecreasing observation time')
         before_scheduler = len(self.scheduler.actions)
-        if kind in ('lens_picture', 'stage_push'):
+        if kind in OBSERVED:
+            self.queue_event(event)
+        elif kind in ('lens_picture', 'stage_push'):
             self.staging_event(event)
         else:
             self.scheduler.step(event)
@@ -63,11 +69,11 @@ class CoupledReplay:
                 if action['kind'] in ('video_drop_oldest', 'video_display_requested'):
                     self.take(action)
                 elif action['kind'] == 'video_display_complete':
-                    if self.pending is None or self.pending['pair_id'] != action['id']:
-                        raise ValueError('scheduler completion has no matching selected pixels')
-                    self.selected.append(dict(self.pending, observed_complete_at_ms=at))
-                    self.pending = None
-        if [p['pair_id'] for p in self.staging.render] != [p['id'] for p in self.scheduler.video]:
+                    self.complete(action, at)
+        expected = [p['id'] for p in self.scheduler.video]
+        if self.observed_queues:
+            expected = [p['id'] for p in self.releases] + expected + [p['id'] for p in self.admissions]
+        if [p['pair_id'] for p in self.staging.render] != expected:
             raise ValueError('staging/scheduler queues diverged')
         self.events += 1
         self.last_at = at
@@ -83,30 +89,75 @@ class CoupledReplay:
             self.staging.step(event)
         for action in self.staging.actions[before:]:
             if action['kind'] == 'render_queue_admitted':
-                self.scheduler.step(action['simulator_event'])
+                if self.observed_queues:
+                    self.admissions.append(action['simulator_event'])
+                else:
+                    self.scheduler.step(action['simulator_event'])
+
+    def queue_event(self, event: dict[str, Any]) -> None:
+        if set(event) != {'kind', 'at_ms', 'id'}:
+            raise ValueError('queue boundary requires exactly kind, at_ms and id')
+        identity = SIM['identity'](event['id'])
+        if event['kind'] == 'render_admit':
+            if not self.admissions:
+                self.staging_event(dict(kind='stage_push', at_ms=event['at_ms']))
+            if not self.admissions or self.admissions[0]['id'] != identity:
+                raise ValueError('admission must match the next reserved pair')
+            admission = self.admissions.pop(0)
+            self.scheduler.step(dict(admission, at_ms=event['at_ms']))
+        else:
+            if not self.releases or self.releases[0]['id'] != identity:
+                raise ValueError('release must match the next selected or dropped pair')
+            self.staging.step(dict(kind='render_take', at_ms=event['at_ms']))
+            taken = self.staging.actions[-1]
+            if taken['kind'] != 'render_queue_taken' or taken['pair']['pair_id'] != identity:
+                raise ValueError('release does not match the owned FIFO head')
+            self.releases.pop(0)
+            if self.pending is not None and self.pending['pair_id'] == identity:
+                self.pending['queue_released'] = True
+
+    def complete(self, action: dict[str, Any], at: int) -> None:
+        if self.pending is None or self.pending['pair_id'] != action['id']:
+            raise ValueError('scheduler completion has no matching selected pixels')
+        if self.observed_queues and not self.pending['queue_released']:
+            raise ValueError('display completion requires its observed queue release')
+        self.selected.append(dict(self.pending, observed_complete_at_ms=at))
+        self.pending = None
 
     def take(self, action: dict[str, Any]) -> None:
-        self.staging.step(dict(kind='render_take', at_ms=action['at_ms']))
-        taken = self.staging.actions[-1]
-        if taken['kind'] != 'render_queue_taken' or taken['pair']['pair_id'] != action['id']:
-            raise ValueError('scheduler decision does not match staging FIFO ownership')
-        pair = taken['pair']
-        if [p['id'] for p in pair['lenses']] != action['lenses']:
-            raise ValueError('scheduler lens identity disagrees with staged pixels')
+        if self.observed_queues:
+            index = len(self.releases)
+            if index >= len(self.staging.render):
+                raise ValueError('scheduler selection has no owned staging pair')
+            pair = self.staging.render[index]
+            self.releases.append(dict(id=action['id'], reason=action['kind']))
+        else:
+            self.staging.step(dict(kind='render_take', at_ms=action['at_ms']))
+            taken = self.staging.actions[-1]
+            if taken['kind'] != 'render_queue_taken':
+                raise ValueError('scheduler decision has no staging FIFO ownership')
+            pair = taken['pair']
+        if pair['pair_id'] != action['id'] or [p['id'] for p in pair['lenses']] != action['lenses']:
+            raise ValueError('scheduler identity disagrees with staged pixels')
         if action['kind'] == 'video_display_requested':
             self.pending = dict(pair_id=action['id'],
                 offer_ids=action['lenses'], decoded_ids=[self.bindings[p] for p in action['lenses']],
                 primary_media_ms=action['media_ms'], request_at_ms=action['at_ms'])
+            if self.observed_queues:
+                self.pending['queue_released'] = False
 
     def result(self) -> dict[str, Any]:
         if self.used != self.decoded.keys():
             raise ValueError('unified event map must account for every decoded picture')
         return dict(events=self.events, selected=self.selected, request_pending=self.pending,
+                    queue_boundary_mode='observed-commit-boundaries' if self.observed_queues else 'atomic-normalized-events',
+                    queue_admissions_pending=[p['id'] for p in self.admissions],
+                    queue_releases_pending=list(self.releases),
                     offer_bindings=self.bindings, staging=self.staging.result(), scheduler=self.scheduler.result())
 
 
-def replay(report: dict[str, Any], source: Any) -> dict[str, Any]:
-    model = CoupledReplay(report)
+def replay(report: dict[str, Any], source: Any, observed_queues: bool = False) -> dict[str, Any]:
+    model = CoupledReplay(report, observed_queues)
     for _ in range(SIM['MAX_EVENTS'] + 1):
         line = source.readline(SIM['MAX_LINE_BYTES'] + 1)
         if not line:
@@ -208,6 +259,8 @@ def main() -> int:
     parser.add_argument('--primary-stream', required=True, type=int)
     parser.add_argument('--secondary-stream', required=True, type=int)
     parser.add_argument('--event-map', required=True, type=Path)
+    parser.add_argument('--observed-queues', action='store_true',
+                        help='require explicit render admission/release commit observations')
     parser.add_argument('--pts-clock', required=True, choices=('request-observation',))
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--receipt', required=True, type=Path)
@@ -225,7 +278,7 @@ def main() -> int:
                         report = DECODE['decode'](source, args.container,
                             (args.primary_stream, args.secondary_stream), spool.capture)
                     with DECODE['AUDIO']['open_source'](args.event_map) as events:
-                        result = replay(report, events)
+                        result = replay(report, events, args.observed_queues)
                     evidence = dict(artifact_published=False, replay=result, decoded_frames=report['decoded_frames'],
                                     decoder=dict(pyav_version=report['pyav_version'],
                                                  library_versions=report['library_versions']))

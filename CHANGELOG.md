@@ -19,6 +19,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Isolate MPEG-PS clear-header H.264/HEVC decryption state by video stream, preserve timestamped AES continuations across interleaved audio, and recognize new-picture parameter sets without weakening legacy tail-lookalike safeguards.
+
 - Detect repeated legacy RTP/PS on ECDH-requested sessions and report an actionable protocol mismatch instead of generic no-media; add a bounded, sanitized `probe_local_stream` API with explicit source recommendations.
 
 - Remove the native one-byte prefix from unfragmented local MPEG-PS records, restoring Gate video continuity and AAC without trimming received media.

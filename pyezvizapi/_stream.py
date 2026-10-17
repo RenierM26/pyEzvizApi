@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import IntEnum
 import hashlib
 from ipaddress import IPv6Address, ip_address
@@ -1152,6 +1152,24 @@ class _MpegPsPacketRange:
     stream_id: int
 
 
+@dataclass
+class _MpegPsVideoDecryptState:
+    """Pending NAL/AES bytes for one video stream and PES picture epoch."""
+
+    pending_block_positions: list[int] = field(default_factory=list)
+    pending_block: bytearray = field(default_factory=bytearray)
+    active_nal: bool = False
+    active_nal_decrypted: int = 0
+    active_nal_body_start: int = 0
+    picture_pts: int | None = None
+
+    def reset(self) -> None:
+        self.pending_block_positions.clear()
+        self.pending_block.clear()
+        self.active_nal = False
+        self.active_nal_decrypted = self.active_nal_body_start = 0
+
+
 def mpeg_ps_complete_prefix_length(data: bytes | bytearray) -> int:
     """Return the length of the fully parsed MPEG-PS packet prefix."""
 
@@ -1302,6 +1320,33 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
     return ranges
 
 
+def _mpeg_ps_packet_pts(data: bytes, start: int, end: int) -> int | None:
+    """Read a complete, marker-validated MPEG-2 PES presentation timestamp."""
+
+    if start + 14 > end or (data[start + 6] & 0xC0) != 0x80 or data[start + 8] < 5:
+        return None
+    if start + 9 + data[start + 8] > end:
+        return None
+    flags = data[start + 7] & 0xC0
+    if flags not in (0x80, 0xC0) or (flags == 0xC0 and data[start + 8] < 10):
+        return None
+    encoded = data[start + 9:start + 14]
+    prefix = 0x20 if flags == 0x80 else 0x30
+    if (encoded[0] & 0xF0) != prefix or not all(encoded[index] & 1 for index in (0, 2, 4)):
+        return None
+    if flags == 0xC0:
+        dts = data[start + 14:start + 19]
+        if (dts[0] & 0xF0) != 0x10 or not all(dts[index] & 1 for index in (0, 2, 4)):
+            return None
+    return (
+        ((encoded[0] >> 1) & 7) << 30
+        | encoded[1] << 22
+        | (encoded[2] >> 1) << 15
+        | encoded[3] << 7
+        | encoded[4] >> 1
+    )
+
+
 def mpeg_ps_video_pts_span_seconds(
     data: bytes, *, max_gap_seconds: float | None = None
 ) -> float | None:
@@ -1317,24 +1362,9 @@ def mpeg_ps_video_pts_span_seconds(
         start = packet.start
         if not _is_video_pes_stream_id(packet.stream_id) or start + 14 > len(data):
             continue
-        if (data[start + 6] & 0xC0) != 0x80 or data[start + 8] < 5:
+        pts = _mpeg_ps_packet_pts(data, start, packet.end)
+        if pts is None:
             continue
-        pts_dts_flags = data[start + 7] & 0xC0
-        if pts_dts_flags not in (0x80, 0xC0):
-            continue
-        encoded = data[start + 9 : start + 14]
-        expected_prefix = 0x20 if pts_dts_flags == 0x80 else 0x30
-        if (encoded[0] & 0xF0) != expected_prefix or not all(
-            encoded[index] & 1 for index in (0, 2, 4)
-        ):
-            continue
-        pts = (
-            ((encoded[0] >> 1) & 0x07) << 30
-            | encoded[1] << 22
-            | (encoded[2] >> 1) << 15
-            | encoded[3] << 7
-            | encoded[4] >> 1
-        )
         timestamps.append(pts)
     if len(timestamps) < 2:
         return None
@@ -1784,46 +1814,35 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
 
     if nalu_header_size != 0:
         output = bytearray(data)
-        pending_block_positions: list[int] = []
-        pending_block = bytearray()
-        active_nal = False
-        active_nal_decrypted = active_nal_body_start = 0
+        states: dict[int, _MpegPsVideoDecryptState] = {}
 
-        def reset_nal_state() -> None:
-            nonlocal active_nal, active_nal_body_start, active_nal_decrypted
-            pending_block_positions.clear()
-            pending_block.clear()
-            active_nal = False
-            active_nal_decrypted = active_nal_body_start = 0
-
-        def decrypt_nal_body_segment(start: int, end: int) -> None:
-            nonlocal active_nal_decrypted
+        def decrypt_nal_body_segment(state: _MpegPsVideoDecryptState, start: int, end: int) -> None:
             if end <= start:
                 return
-            remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - active_nal_decrypted
+            remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - state.active_nal_decrypted
             if remaining <= 0:
                 return
             decrypt_end = min(end, start + remaining)
             for pos in range(start, decrypt_end):
-                pending_block_positions.append(pos)
-                pending_block.append(output[pos])
-                active_nal_decrypted += 1
-                if len(pending_block) != AES.block_size:
+                state.pending_block_positions.append(pos)
+                state.pending_block.append(output[pos])
+                state.active_nal_decrypted += 1
+                if len(state.pending_block) != AES.block_size:
                     continue
                 cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
                     aes_key
                 )
                 decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                    bytes(pending_block)
+                    bytes(state.pending_block)
                 )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
                 for block_pos, decrypted_byte in zip(
-                    pending_block_positions,
+                    state.pending_block_positions,
                     decrypted,
                     strict=True,
                 ):
                     output[block_pos] = decrypted_byte
-                pending_block_positions.clear()
-                pending_block.clear()
+                state.pending_block_positions.clear()
+                state.pending_block.clear()
 
         def is_post_prefix_tail_lookalike(
             start_code_pos: int,
@@ -1839,18 +1858,25 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
             if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
                 continue
             if not _is_video_pes_stream_id(packet_range.stream_id):
-                reset_nal_state()
+                # Untimed legacy packets retain their old non-video boundary
+                # semantics. Timed picture continuations may span audio packets.
+                for legacy_state in states.values():
+                    if legacy_state.picture_pts is None:
+                        legacy_state.reset()
                 continue
 
+            state = states.setdefault(packet_range.stream_id, _MpegPsVideoDecryptState())
             payload_start = _pes_payload_start(data, packet_range.start)
             if payload_start is None or payload_start >= packet_range.end:
                 continue
             payload_end = packet_range.end
+            picture_pts = _mpeg_ps_packet_pts(data, packet_range.start, payload_end)
+            new_picture = picture_pts is not None and picture_pts != state.picture_pts
             nal_starts = find_nal_start_codes(data, payload_start, payload_end)
             segment_start = payload_start
             if not nal_starts:
-                if active_nal:
-                    decrypt_nal_body_segment(payload_start, payload_end)
+                if state.active_nal:
+                    decrypt_nal_body_segment(state, payload_start, payload_end)
                 continue
 
             for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
@@ -1859,8 +1885,16 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                     if idx + 1 < len(nal_starts)
                     else payload_end
                 )
-                if active_nal:
-                    candidate_decrypted = active_nal_decrypted + max(
+                if new_picture:
+                    # PES PTS belongs to the first access unit starting here;
+                    # its payload may first finish the previous picture's NAL.
+                    if state.active_nal and segment_start < start_code_pos:
+                        decrypt_nal_body_segment(state, segment_start, start_code_pos)
+                    state.reset()
+                    state.picture_pts = picture_pts
+                    new_picture = False
+                if state.active_nal:
+                    candidate_decrypted = state.active_nal_decrypted + max(
                         0,
                         start_code_pos - segment_start,
                     )
@@ -1871,23 +1905,23 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                     ):
                         continue
                 if (
-                    active_nal
-                    and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    state.active_nal
+                    and state.active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                     and start_code_pos
-                    > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    > state.active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                     and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
                 ):
                     continue
-                if active_nal and segment_start < start_code_pos:
-                    decrypt_nal_body_segment(segment_start, start_code_pos)
-                reset_nal_state()
-                active_nal = True
+                if state.active_nal and segment_start < start_code_pos:
+                    decrypt_nal_body_segment(state, segment_start, start_code_pos)
+                state.reset()
+                state.active_nal = True
                 decrypt_start = start_code_pos + start_code_len + nalu_header_size
-                active_nal_body_start = decrypt_start
-                decrypt_nal_body_segment(decrypt_start, decrypt_end)
+                state.active_nal_body_start = decrypt_start
+                decrypt_nal_body_segment(state, decrypt_start, decrypt_end)
                 segment_start = decrypt_end
-            if active_nal and segment_start < payload_end:
-                decrypt_nal_body_segment(segment_start, payload_end)
+            if state.active_nal and segment_start < payload_end:
+                decrypt_nal_body_segment(state, segment_start, payload_end)
 
         return bytes(output)
 

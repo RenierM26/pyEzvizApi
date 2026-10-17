@@ -146,3 +146,8 @@ prefix was exported. The private traces, headers, images and resulting artifact
 are not distributed. This establishes an observed native-source artifact, not
 real-time playback, authenticated capture provenance, RGB calibration or physical
 A/V synchronization. Preview was closed and instrumentation detached afterward.
+
+For bounded, explicitly anchored host wall-clock replay of these completed
+selections, see [paced native snapshot preview](native-video-preview.md).
+It is separate from artifact publication and does not establish live camera or
+physical display timing.

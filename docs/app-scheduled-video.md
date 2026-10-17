@@ -163,3 +163,9 @@ file to these native headers. The public real-codec regression uses synthetic
 media with complete exact pixel bindings and verifies both queue modes preserve
 the same lossless artifact/PTS. Header/observation provenance and physical display
 remain unverified even when all model checks pass.
+
+### Native pixel provenance boundary
+
+The separate [native pixel crop audit](native-pixel-crop-audit.md) checks private
+same-session input/render snapshots under the observed bottom-only planar crop.
+It does not infer colour order or convert those samples into scheduled playback.

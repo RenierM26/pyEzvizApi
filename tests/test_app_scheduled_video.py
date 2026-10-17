@@ -151,7 +151,8 @@ def test_geometry_and_strict_request_pts_reject_before_artifact():
         MODULE['plan_frames'](result, spool)
 
 
-def test_real_lossless_variable_pts_artifact_and_cli(tmp_path):
+@pytest.mark.parametrize('observed_queues', [False, True])
+def test_real_lossless_variable_pts_artifact_and_cli(tmp_path, observed_queues):
     source = DECODE_TEST['encode_paired_file'](tmp_path)
     av = pytest.importorskip('av')
     decode = MODULE['DECODE']
@@ -164,19 +165,28 @@ def test_real_lossless_variable_pts_artifact_and_cli(tmp_path):
                        if r['stream_index'] == lens and r['frame_index'] == index)
             events.append(DECODE_TEST['offer'](row, lens, f'{lens}:{index}',
                                               raw_time=index, media_ms=index * 66))
+    if observed_queues:
+        events.extend(dict(kind='render_admit', at_ms=0, id=f'pair:{i}') for i in range(3))
     events.append(dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0))
     for i, (at, elapsed) in enumerate(((70, 50), (155, 116), (400, 250))):
-        events.extend([tick(i, at, elapsed, 3 - i, i * 66), completion(i, at + 1, 2 - i)])
+        events.append(tick(i, at, elapsed, 3 - i, i * 66))
+        if observed_queues:
+            events.append(dict(kind='render_release', at_ms=at + 1, id=f'pair:{i}'))
+        events.append(completion(i, at + 2, 2 - i))
     event_map = tmp_path / 'events.jsonl'
     event_map.write_bytes(DECODE_TEST['header_source'](events).getvalue())
     artifact, receipt = tmp_path / 'scheduled.mkv', tmp_path / 'receipt.json'
     command = [sys.executable, str(SCRIPT), str(source), '--container', 'matroska',
         '--primary-stream', '0', '--secondary-stream', '1', '--event-map', str(event_map),
         '--pts-clock', 'request-observation', '--output', str(artifact), '--receipt', str(receipt)]
+    if observed_queues:
+        command.insert(2, '--observed-queues')
     p = subprocess.run(command, capture_output=True, timeout=20, check=False)
     assert p.returncode == 0, p.stderr.decode()
     result = json.loads(receipt.read_text())
     assert result['status'] == 'completed' and not result['artifact_is_physical_display']
+    assert result['replay']['queue_boundary_mode'] == (
+        'observed-commit-boundaries' if observed_queues else 'atomic-normalized-events')
     with av.open(str(artifact)) as container:
         frames = list(container.decode(video=0))
         assert container.streams.video[0].codec_context.name == 'ffv1'
@@ -291,3 +301,116 @@ def test_main_cancelled_export_keeps_verified_replay_and_unpublished_receipt(mon
     # The same receipt cannot be overwritten on another run.
     old = receipt.read_bytes()
     assert MODULE['main']() == 2 and receipt.read_bytes() == old
+
+
+
+def boundary(kind, pair, at):
+    return dict(kind=kind, id=f'pair:{pair}', at_ms=at)
+
+
+def observed_model(count):
+    spool, report, events = synthetic(count)
+    model = MODULE['CoupledReplay'](report, observed_queues=True)
+    for event in events[:-1]:  # Explicit admissions must precede the epoch.
+        model.step(event)
+    return spool, model
+
+
+def test_reserved_input_is_not_visible_to_scheduler_before_admission_commit():
+    _, model = observed_model(2)
+    model.step(boundary('render_admit', 0, 0))
+    model.step(dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0))
+    model.step(tick(0, 50, 50, 1))
+    model.step(boundary('render_release', 0, 51))
+    model.step(completion(0, 52, 0))  # Reserved pair:1 must NOT count toward this depth.
+    result = model.result()
+    assert result['queue_admissions_pending'] == ['pair:1']
+    assert result['scheduler']['summary']['video_offered'] == 1
+    assert result['scheduler']['summary']['video_pending'] == []
+    assert result['staging']['summary']['render_pending'][0]['pair_id'] == 'pair:1'
+    model.step(boundary('render_admit', 1, 53))
+    model.step(tick(1, 116, 116, 1, 66))
+    model.step(boundary('render_release', 1, 117))
+    model.step(completion(1, 118, 0))
+    assert [p['pair_id'] for p in model.result()['selected']] == ['pair:0', 'pair:1']
+
+
+def test_inflight_slot_is_owned_until_observed_release_and_commit_can_transfer_staged_head():
+    _, model = observed_model(7)
+    for i in range(6):
+        model.step(boundary('render_admit', i, 0))
+    model.step(dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0))
+    model.step(tick(0, 50, 50, 6))
+    model.step(dict(kind='stage_push', at_ms=51))
+    result = model.result()
+    assert len(result['staging']['summary']['render_pending']) == 6
+    assert len(result['staging']['summary']['staging_pending']) == 1
+    assert not result['queue_admissions_pending']
+    assert result['queue_releases_pending'] == [dict(id='pair:0', reason='video_display_requested')]
+    model.step(boundary('render_release', 0, 52))
+    # The commit observation itself is explicit evidence of transfer; no fabricated source offer.
+    model.step(boundary('render_admit', 6, 53))
+    model.step(completion(0, 54, 6))
+    result = model.result()
+    assert result['staging']['summary']['staging_pending'] == []
+    assert len(result['scheduler']['summary']['video_pending']) == 6
+    assert not result['queue_releases_pending']
+
+
+@pytest.mark.parametrize('released', [False, True])
+def test_observed_eof_never_invents_release_or_completion(released):
+    spool, model = observed_model(1)
+    model.step(boundary('render_admit', 0, 0))
+    model.step(dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0))
+    model.step(tick(0, 50, 50, 1))
+    if released:
+        model.step(boundary('render_release', 0, 51))
+    result = model.result()
+    assert not result['selected']
+    assert result['request_pending']['queue_released'] is released
+    assert len(result['staging']['summary']['render_pending']) == (0 if released else 1)
+    with pytest.raises(ValueError, match='no completed'):
+        MODULE['plan_frames'](result, spool)
+
+
+def test_dropped_and_displayed_slots_release_in_actual_fifo_order():
+    _, model = observed_model(3)
+    for i in range(3):
+        model.step(boundary('render_admit', i, 0))
+    model.step(dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0))
+    model.step(tick(0, 300, 300, 3))
+    assert [r['id'] for r in model.releases] == ['pair:0', 'pair:1', 'pair:2']
+    for i in range(3):
+        model.step(boundary('render_release', i, 301 + i))
+    model.step(completion(2, 304, 0))
+    result = model.result()
+    assert result['staging']['summary']['render_taken'] == 3
+    assert result['scheduler']['summary']['video_dropped'] == 2
+    assert [p['pair_id'] for p in result['selected']] == ['pair:2']
+
+
+@pytest.mark.parametrize('event', [boundary('render_admit', 1, 0),
+    boundary('render_release', 0, 0), dict(kind='render_admit', at_ms=0, id=True),
+    dict(kind='render_admit', at_ms=0), dict(kind='render_admit', at_ms=0, id='pair:0', extra=0)])
+def test_observed_boundary_identity_fields_and_order_are_strict(event):
+    _, model = observed_model(1)
+    with pytest.raises(ValueError):
+        model.step(event)
+
+
+def test_completion_before_release_and_repeated_commit_reject():
+    _, model = observed_model(1)
+    model.step(boundary('render_admit', 0, 0))
+    with pytest.raises(ValueError, match='next reserved'):
+        model.step(boundary('render_admit', 0, 0))
+    model.step(dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0))
+    model.step(tick(0, 50, 50, 1))
+    with pytest.raises(ValueError, match='observed queue release'):
+        model.step(completion(0, 51, 0))
+
+
+@pytest.mark.parametrize('kind', ['render_admit', 'render_release'])
+def test_atomic_mode_does_not_silently_accept_native_boundaries(kind):
+    _, report, _ = synthetic(1)
+    with pytest.raises(ValueError, match='unsupported coupled'):
+        MODULE['CoupledReplay'](report).step(boundary(kind, 0, 0))

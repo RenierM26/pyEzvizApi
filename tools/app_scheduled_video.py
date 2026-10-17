@@ -40,7 +40,7 @@ class CoupledReplay:
         self.releases: list[dict[str, Any]] = []
         self.staging = DECODE['PAIR']['Pairing']()
         self.scheduler = SIM['ObservedClockReplay']()
-        self.bindings: dict[str, str] = {}
+        self.bindings: dict[str, str | None] = {}
         self.used: set[str] = set()
         self.selected: list[dict[str, Any]] = []
         self.pending: dict[str, Any] | None = None
@@ -84,7 +84,8 @@ class CoupledReplay:
             event, binding = self.bind_picture(event)
             self.staging.step(event)
             self.bindings[binding['offer_id']] = binding['decoded_id']
-            self.used.add(binding['decoded_id'])
+            if binding['decoded_id'] is not None:
+                self.used.add(binding['decoded_id'])
         else:
             self.staging.step(event)
         for action in self.staging.actions[before:]:

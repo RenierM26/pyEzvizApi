@@ -283,3 +283,129 @@ def test_real_native_lens_geometry_fits_bounded_native_plan_not_old_hevc_default
         row.update(width=4096, height=4096)
     with pytest.raises(ValueError, match='paired pixel limit'):
         MODULE['SCHEDULED']['plan_frames'](result, spool, max_pair_pixels=MODULE['MAX_PAIR_PIXELS'])
+
+
+def metadata_offers():
+    rows, _, _ = snapshots(2)
+    return [dict(kind='lens_picture', at_ms=0, id=f'metadata:{i}', lens=row['input_header'][1] - 224,
+                 raw_time=row['input_header'][7], media_ms=row['input_header'][5],
+                 frame_number=row['input_header'][10], native_header=row['input_header'])
+            for i, row in enumerate(rows[2:])]
+
+
+def sparse_events(report, complete_metadata=False):
+    rows = [*offers(report), *metadata_offers(), dict(kind='render_admit', at_ms=0, id='pair:0'),
+            dict(kind='render_admit', at_ms=0, id='pair:1'),
+            dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0),
+            SCHEDULE_TEST['tick'](0, 70, 50, 2, 0),
+            dict(kind='render_release', at_ms=71, id='pair:0'),
+            SCHEDULE_TEST['completion'](0, 72, 1)]
+    if complete_metadata:
+        rows.extend([SCHEDULE_TEST['tick'](1, 155, 116, 1, 66),
+                     dict(kind='render_release', at_ms=156, id='pair:1'),
+                     SCHEDULE_TEST['completion'](1, 157, 0)])
+    return rows
+
+
+def test_metadata_only_opt_in_preserves_unsampled_queue_and_null_pixel_bindings():
+    spool, report = load(*snapshots(1))
+    data = sparse_events(report)
+    with pytest.raises(ValueError, match='explicit opt-in'):
+        MODULE['replay'](report, jsonl(data))
+    result = MODULE['replay'](report, jsonl(data), allow_metadata_only=True)
+    assert len(result['metadata_only_offers']) == 2
+    assert result['offer_bindings']['metadata:0'] is None
+    assert not result['metadata_only_offers']['metadata:0']['pixels_verified']
+    assert result['scheduler']['summary']['video_pending'] == ['pair:1']
+    plan, width, height = MODULE['plan_frames'](result, spool)
+    assert len(plan) == 1 and (width, height) == (8, 6)
+    assert plan[0]['decoded_ids'] == ['native:0:0', 'native:1:0']
+
+
+@pytest.mark.parametrize(('key', 'value'), [('lens', False), ('raw_time', 0),
+    ('media_ms', 0.0), ('frame_number', 7), ('sample_id', 'native:0:0'),
+    ('pixel_sha256', '0' * 64), ('id', []), ('native_header', [0] * 49)])
+def test_metadata_only_rejects_relabelled_or_mixed_header_contract(key, value):
+    _, report = load(*snapshots(1))
+    row = dict(metadata_offers()[0], **{key: value})
+    with pytest.raises(ValueError):
+        MODULE['replay'](report, jsonl([row]), allow_metadata_only=True)
+
+
+def test_metadata_only_header_is_complete_uint32_geometry_and_offer_identity_is_unique():
+    _, report = load(*snapshots(1))
+    row = metadata_offers()[0]
+    for offset, value in [(0, 0), (1, 226), (37, 3), (10, True)]:
+        header = list(row['native_header'])
+        header[offset] = value
+        with pytest.raises(ValueError):
+            MODULE['replay'](report, jsonl([dict(row, native_header=header)]), allow_metadata_only=True)
+    with pytest.raises(ValueError, match='unique bounded identity'):
+        MODULE['replay'](report, jsonl([row, row]), allow_metadata_only=True)
+
+
+def test_completed_metadata_only_selection_fails_instead_of_omitting_or_reusing_pixels():
+    spool, report = load(*snapshots(1))
+    result = MODULE['replay'](report, jsonl(sparse_events(report, True)), allow_metadata_only=True)
+    assert len(result['selected']) == 2
+    assert result['selected'][1]['decoded_ids'] == [None, None]
+    with pytest.raises(ValueError, match='completed selection lacks verified native pixels'):
+        MODULE['plan_frames'](result, spool)
+
+
+@pytest.mark.parametrize('complete_metadata', [False, True])
+def test_sparse_cli_exports_bound_completion_only_and_fails_before_publish_for_unbound(tmp_path, complete_metadata):
+    if not complete_metadata:
+        pytest.importorskip('av')
+    rows, inputs, renders = snapshots(1)
+    _, report = load(rows, inputs, renders)
+    cmd, artifact, receipt = cli(tmp_path, rows, inputs, renders, sparse_events(report, complete_metadata))
+    p = subprocess.run([*cmd, '--allow-metadata-only'], capture_output=True, timeout=20, check=False)
+    result = json.loads(receipt.read_text())
+    assert result['metadata_only_offers_allowed']
+    assert result['replay']['offer_bindings']['metadata:0'] is None
+    if complete_metadata:
+        assert p.returncode == 2 and not artifact.exists()
+        assert not result['artifact_published']
+        assert 'completed selection lacks verified native pixels' in result['error']
+        assert result['replay']['selected'][1]['native_sample_ids'] == [None, None]
+    else:
+        assert p.returncode == 0 and result['artifact_published']
+        assert len(result['artifact_frames']) == 1
+        assert result['replay']['scheduler']['summary']['video_pending'] == ['pair:1']
+    assert not list(tmp_path.glob('.scheduled-*'))
+
+
+def test_metadata_offer_ids_are_opaque_in_receipts():
+    value = dict(metadata_only_offers={'decoded_ids': dict(native_header=[1], pixels_verified=False)})
+    assert MODULE['receipt_names'](value) == value
+
+
+def test_metadata_only_drop_consumes_fifo_without_requiring_or_exporting_pixels():
+    spool, report = load(*snapshots(1))
+    metadata = metadata_offers()
+    for row in metadata:
+        row['media_ms'] = row['native_header'][5] = 0
+    rows = [*metadata, *offers(report),
+            *[dict(kind='render_admit', at_ms=0, id=f'pair:{i}') for i in range(2)],
+            dict(kind='video_epoch', at_ms=0, epoch=0, origin_ms=0),
+            SCHEDULE_TEST['tick'](0, 300, 300, 2),
+            *[dict(kind='render_release', at_ms=301, id=f'pair:{i}') for i in range(2)],
+            SCHEDULE_TEST['completion'](1, 302, 0)]
+    result = MODULE['replay'](report, jsonl(rows), allow_metadata_only=True)
+    assert result['scheduler']['summary']['video_dropped'] == 1
+    assert result['staging']['summary']['render_taken'] == 2
+    plan, _, _ = MODULE['plan_frames'](result, spool)
+    assert len(plan) == 1 and plan[0]['pair_id'] == 'pair:1'
+
+
+def test_one_unverified_lens_is_not_filled_from_a_different_sample():
+    rows, inputs, renders = snapshots(2)
+    spool, report = load(rows[:3], inputs[:3 * 96], renders[:3 * 72])
+    data = sparse_events(report, True)
+    # sparse_events includes the third audited offer; supply only its missing counterpart.
+    data = [e for e in data if e.get('id') != 'metadata:0']
+    result = MODULE['replay'](report, jsonl(data), allow_metadata_only=True)
+    assert result['selected'][1]['decoded_ids'] == [None, 'native:1:1']
+    with pytest.raises(ValueError, match='completed selection lacks verified native pixels'):
+        MODULE['plan_frames'](result, spool)

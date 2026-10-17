@@ -1,0 +1,23 @@
+[
+  {
+    "width": 8,
+    "height": 8,
+    "bottom": 2,
+    "bytes": 72,
+    "sha256": "70037eb13c44e3897494475c4668b92291b21b03144b89da3182de4628858103"
+  },
+  {
+    "width": 16,
+    "height": 12,
+    "bottom": 4,
+    "bytes": 192,
+    "sha256": "e5da99ec126d16e9e07ca1240d03f1f056db3f47a94f1387d3ecf0fb6add91cb"
+  },
+  {
+    "width": 32,
+    "height": 16,
+    "bottom": 6,
+    "bytes": 480,
+    "sha256": "04dede46471bb538c778079434be2222765313bc5a2d2cc90c6a18085804d69b"
+  }
+]

@@ -81,7 +81,7 @@ class CoupledReplay:
     def staging_event(self, event: dict[str, Any]) -> None:
         before = len(self.staging.actions)
         if event['kind'] == 'lens_picture':
-            event, binding = DECODE['bind_picture'](event, self.decoded, self.streams)
+            event, binding = self.bind_picture(event)
             self.staging.step(event)
             self.bindings[binding['offer_id']] = binding['decoded_id']
             self.used.add(binding['decoded_id'])
@@ -93,6 +93,10 @@ class CoupledReplay:
                     self.admissions.append(action['simulator_event'])
                 else:
                     self.scheduler.step(action['simulator_event'])
+
+    def bind_picture(self, event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Source adapter boundary; default remains exact local decoded-frame binding."""
+        return DECODE['bind_picture'](event, self.decoded, self.streams)
 
     def queue_event(self, event: dict[str, Any]) -> None:
         if set(event) != {'kind', 'at_ms', 'id'}:

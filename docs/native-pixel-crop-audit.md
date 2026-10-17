@@ -148,3 +148,10 @@ harness executes only these original selection branches, intercepts upload calls
 to record their arguments and hashes, and stops before render-to-target. It is
 not a GPU or full-renderer oracle. Shader sampler semantics come from the live
 renderer trace, not from helper names or grayscale image guesses.
+
+The CLI remains audit-only. An optional in-process observer can receive one
+verified canonical pixel copy per sample, and is rejected without renderer
+verification. Samples arrive before final EOF/whole-source validation; observers
+must keep them private until the audit returns successfully. The development
+[native scheduled exporter](native-scheduled-video.md) uses this boundary with a
+temporary spool, exact native header binding and explicit observed queue events.

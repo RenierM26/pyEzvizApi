@@ -72,8 +72,9 @@ Final stdout JSON has `status`, `error`, metadata-only `actions` and a `summary`
 with offered/rejected counts, full pipe-write completions, pending ring IDs,
 in-flight ID and partial pipe-byte count. Unlike offline simulation, playback
 cannot be undone: earlier blocks may already have been sent before a later input
-error. Failure/cancellation reports retain that partial work rather than emitting
-success. Argument errors occur before starting a child and have no result JSON.
+error. Valid records are admitted incrementally before a later malformed or
+oversized record raises an error, independent of pipe read fragmentation.
+Failure/cancellation reports retain that partial work rather than emitting success. Argument errors occur before starting a child and have no result JSON.
 
 A completed pipe write means only bytes accepted into the child pipe. Even a
 successful ffplay exit is **not an acoustic measurement** or proof of exact physical

@@ -10,6 +10,7 @@ import argparse
 import base64
 import binascii
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 import json
 import math
@@ -186,21 +187,21 @@ class JsonlInput:
     def __init__(self) -> None:
         self.buffer = bytearray()
 
-    def feed(self, chunk: bytes) -> list[Block]:
+    def feed(self, chunk: bytes) -> Iterator[Block]:
+        # Yield each valid prefix record before parsing the next one. A later
+        # failure must not erase admissions merely because reads coalesced.
         self.buffer.extend(chunk)
-        rows = []
         while NEWLINE in self.buffer:
             line, _, remainder = self.buffer.partition(NEWLINE)
             self.buffer = bytearray(remainder)
             if len(line) + 1 > MAX_LINE:
                 raise ValueError('JSONL line limit exceeded')
-            rows.append(parse_block(json.loads(line)))
+            yield parse_block(json.loads(line))
         if len(self.buffer) > MAX_LINE:
             raise ValueError('JSONL line limit exceeded')
         if not chunk and self.buffer:
-            rows.append(parse_block(json.loads(self.buffer)))
+            yield parse_block(json.loads(self.buffer))
             self.buffer.clear()
-        return rows
 
 
 def run(queue: PcmQueue, backend: Ffplay, input_fd: int, timeout: float) -> None:

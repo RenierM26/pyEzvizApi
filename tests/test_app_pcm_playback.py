@@ -118,18 +118,18 @@ def test_bad_pcm_input_rejected(patch):
 def test_fragmented_input_and_eof_tail():
     raw = json.dumps(row()).encode()
     source = JsonlInput()
-    assert not source.feed(raw[:1])
-    assert not source.feed(raw[1:-1])
-    assert source.feed(raw[-1:] + b'\n') == [block(0)]
-    assert not source.feed(raw)
-    assert source.feed(b'') == [block(0)]
-    assert not source.feed(b'')
+    assert not list(source.feed(raw[:1]))
+    assert not list(source.feed(raw[1:-1]))
+    assert list(source.feed(raw[-1:] + b'\n')) == [block(0)]
+    assert not list(source.feed(raw))
+    assert list(source.feed(b'')) == [block(0)]
+    assert not list(source.feed(b''))
     with pytest.raises(ValueError, match='line limit'):
-        JsonlInput().feed(b' ' * 8193)
+        list(JsonlInput().feed(b' ' * 8193))
     with pytest.raises(ValueError, match='line limit'):
-        JsonlInput().feed(b' ' * 8192 + b'\n')
+        list(JsonlInput().feed(b' ' * 8192 + b'\n'))
     with pytest.raises(ValueError):
-        JsonlInput().feed(b'\n')
+        list(JsonlInput().feed(b'\n'))
 
 
 @pytest.fixture
@@ -285,3 +285,34 @@ def test_pipe_setup_failure_reaps_spawned_child(monkeypatch):
             if p.poll() is None:
                 p.kill()
             p.wait(timeout=2)
+
+
+@pytest.mark.parametrize('split', [None, 10, -6])
+@pytest.mark.parametrize('invalid', [b'{bad}\n', b'{}\n', b' ' * 8193])
+def test_valid_prefix_is_admitted_before_later_invalid_record(split, invalid):
+    valid = json.dumps(row()).encode() + b'\n'
+    raw = valid + invalid
+    # Coalesced, fragmented inside the valid row, or near the bad suffix.
+    chunks = [raw] if split is None else [raw[:split], raw[split:]]
+    source, q = JsonlInput(), PcmQueue()
+    with pytest.raises(ValueError):
+        for chunk in chunks:
+            for parsed in source.feed(chunk):
+                q.offer(parsed, 0)
+    summary = q.result('failed')['summary']
+    assert summary['offered'] == 1
+    assert summary['ring_pending'] == ['b0']
+    assert q.actions[0]['id'] == 'b0'
+
+
+def test_run_reports_valid_prefix_when_read_coalesces_bad_line(child, tmp_path):
+    backend = child('import sys; sys.stdin.buffer.read()')
+    source = tmp_path / 'bad.jsonl'
+    source.write_text(json.dumps(row()) + '\n{bad}\n')
+    q = PcmQueue()
+    try:
+        with source.open('rb') as f, pytest.raises(ValueError):
+            run(q, backend, f.fileno(), 1)
+    finally:
+        backend.abort()
+    assert q.offered == 1 and q.result('failed')['summary']['ring_pending'] == ['b0']

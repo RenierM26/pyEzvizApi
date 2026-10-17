@@ -8,7 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
-- Explicit parsed-frame app-compatible HEVC/AAC playback timing and stream-copy remux helpers, with per-session track origins, configured discontinuity repair and paired-picture reuse. Includes an explicit `app_relative_clock` opt-in for bounded single-source native HEVC/16 kHz AAC live capture, with strict provenance checks and staged high-level output. Default timestamp policies are unchanged.
+- Explicit parsed-frame app-compatible HEVC/AAC playback timing and stream-copy remux helpers, with per-session track origins, configured discontinuity repair and paired-picture reuse. Includes an explicit `app_relative_clock` opt-in for bounded single-source native HEVC/16 kHz AAC live capture, with strict provenance checks and staged high-level output. The typed native app-relative profile accepts explicit HEVC parameter-set decryption for encrypted SDK streams. Default timestamp policies are unchanged.
 
 - Camera-negotiated PlayM4 stream-header descriptors, field-specific SDK codec/FPS/bitrate normalization, and bounded caller-owned discovery reuse for automatic live playback.
 - Explicit native LAN discovery login profiles, including verified TLS command-port transport, without credential enumeration or cloud dependencies.

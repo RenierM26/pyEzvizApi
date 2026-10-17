@@ -1,6 +1,7 @@
 """Native capture profile contracts, output isolation and real timing adapter."""
 
 # ruff: noqa: SLF001
+from contextlib import nullcontext
 from dataclasses import replace
 import io
 from pathlib import Path
@@ -12,6 +13,7 @@ from pyezvizapi import (
     CaptureLimits,
     ClipOptions,
     EzvizClient,
+    MediaDecodeOptions,
     MediaMuxOptions,
     _local_stream as local,
 )
@@ -327,3 +329,121 @@ def test_decrypted_profile_rejects_synthetic_clock(monkeypatch):
             ffmpeg_path="unused",
             app_relative_clock=True,
         )
+
+
+@pytest.mark.parametrize("source", [LocalSdkClipSource(), HcNetSdkCommandPortClipSource()])
+def test_typed_encrypted_profile_forwards_parameter_set_policy(monkeypatch, source):
+    client = EzvizClient()
+    target = io.BytesIO()
+    complete = b"complete"
+
+    def save(serial, output, **kwargs):
+        assert kwargs["app_relative_clock"] is True
+        assert kwargs["decrypt_video"] is True
+        assert kwargs["decrypt_hevc_parameter_sets"] is True
+        output.write(complete)
+        return {"ok": True}
+
+    method = (
+        "_save_local_sdk_clip"
+        if isinstance(source, LocalSdkClipSource)
+        else "_save_hcnetsdk_command_port_clip"
+    )
+    monkeypatch.setattr(client, method, save)
+    client.save_clip_with_options(
+        "camera",
+        target,
+        ClipOptions(
+            source=source,
+            capture=CaptureLimits(max_packets=10),
+            decode=MediaDecodeOptions(
+                decrypt_video=True, media_key=b"key", decrypt_hevc_parameter_sets=True
+            ),
+            mux=MediaMuxOptions(app_relative_clock=True),
+        ),
+    )
+    assert target.getvalue() == complete
+
+
+@pytest.mark.parametrize("decrypt,profile", [(False, True), (True, False)])
+def test_parameter_set_policy_requires_explicit_encrypted_profile(decrypt, profile):
+    original = b"original"
+    target = io.BytesIO(original)
+    with pytest.raises(PyEzvizError, match="does not support"):
+        EzvizClient().save_clip_with_options(
+            "camera",
+            target,
+            ClipOptions(
+                source=LocalSdkClipSource(),
+                capture=CaptureLimits(max_packets=10),
+                decode=MediaDecodeOptions(decrypt_video=decrypt, decrypt_hevc_parameter_sets=True),
+                mux=MediaMuxOptions(app_relative_clock=profile),
+            ),
+        )
+    assert target.getvalue() == original
+
+
+def test_sdk_convenience_forwards_parameter_decryption(monkeypatch):
+    credentials = SimpleNamespace(endpoint=object(), device_info=object(), media_key=b"key")
+    stream = object()
+    monkeypatch.setattr(
+        local, "get_local_sdk_stream_credentials_from_client", lambda *a, **k: credentials
+    )
+    monkeypatch.setattr(
+        local, "_local_sdk_preview_request_from_credentials", lambda *a, **k: object()
+    )
+    monkeypatch.setattr(local, "open_local_sdk_stream", lambda *a, **k: nullcontext(stream))
+    calls = []
+
+    def copy(received, output, key, **kwargs):
+        assert received is stream
+        assert key == credentials.media_key
+        calls.append(kwargs)
+
+    monkeypatch.setattr(local, "copy_local_stream_to_decrypted_mpegts", copy)
+    local.copy_local_sdk_stream_from_client(
+        None,
+        "camera",
+        io.BytesIO(),
+        output_format="mpegts",
+        decrypt_video=True,
+        max_packets=10,
+        app_relative_clock=True,
+        decrypt_hevc_parameter_sets=True,
+    )
+    assert calls[0]["decrypt_hevc_parameter_sets"] is True
+    assert calls[0]["app_relative_clock"] is True
+
+
+def test_command_capture_forwards_parameter_policy_to_decryptor(monkeypatch):
+    client = EzvizClient()
+    monkeypatch.setattr(
+        client,
+        "_hcnetsdk_command_port_endpoint",
+        lambda *a, **k: SimpleNamespace(command_port=8000),
+    )
+    monkeypatch.setattr(
+        client, "_open_hcnetsdk_command_port_clip_stream", lambda *a, **k: nullcontext(object())
+    )
+    complete = b"complete"
+
+    def copy(stream, output, key, **kwargs):
+        assert kwargs["decrypt_hevc_parameter_sets"] is True
+        assert kwargs["app_relative_clock"] is True
+        output.write(complete)
+
+    monkeypatch.setattr("pyezvizapi.client.copy_local_stream_to_decrypted_mpegts", copy)
+    target = io.BytesIO()
+    client.save_clip_with_options(
+        "camera",
+        target,
+        ClipOptions(
+            source=HcNetSdkCommandPortClipSource(command_frames=(b"command",)),
+            capture=CaptureLimits(max_packets=10),
+            decode=MediaDecodeOptions(
+                decrypt_video=True, media_key=b"key", decrypt_hevc_parameter_sets=True
+            ),
+            mux=MediaMuxOptions(app_relative_clock=True),
+        ),
+    )
+    assert target.getvalue() == complete

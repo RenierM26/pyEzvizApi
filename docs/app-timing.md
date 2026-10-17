@@ -106,6 +106,24 @@ Automatic/cloud/ECDH sources, UDP, raw PS, missing or synthetic clocks, H.264,
 multiple accepted video/audio source clocks and video-only fallback are rejected.
 The usual explicit decode/key policy still applies to encrypted native payloads;
 selecting a clock does not enable decryption or repair damaged encoded frames.
+For the observed encrypted SDK path, the HEVC parameter sets are encrypted too.
+Use the typed API with:
+
+```python
+from pyezvizapi import MediaDecodeOptions
+
+decode = MediaDecodeOptions(
+    decrypt_video=True, media_key=media_key,
+    decrypt_hevc_parameter_sets=True,
+)
+# Pass decode=decode in ClipOptions together with the explicit native source,
+# bounded capture and mux=MediaMuxOptions(app_relative_clock=True).
+```
+
+Parameter-set decryption is explicit, not auto-detected. The typed option is
+supported only for this encrypted native app-relative profile; other high-level
+combinations remain rejected. The long-form API does not expose this decode
+option: use `save_clip_with_options` when the stream requires it.
 This adapter currently captures one video source in live mode: paired-lens
 recordings and SD playback/seek use the explicit parsed-frame API above. Late
 recording selection must retain all earlier clock continuity, not just an origin.
@@ -130,3 +148,12 @@ records through the real IDMX/RTP parser and new capture adapter: FFprobe and
 full FFmpeg decode both succeeded, with 225 HEVC frames and 241 AAC frames and
 no decoder diagnostics. This verifies the clear native transport path; it is not
 an end-to-end encrypted-wire decryption test or a physical latency measurement.
+
+The retained encrypted native SDK replay also passes the typed public API with
+explicit parameter-set decryption: 224 HEVC frames and 238 AAC frames, no decode
+diagnostics. Credential lookup, preview request and socket opening were stubbed;
+real retained wire data passed through parsing, decryption, timing, remux and
+staged output. All decoded video/audio hashes match a source-preserving reference.
+Audio relative PTS match exactly; maximum video difference is 32/90000 seconds
+(about 0.36 ms), within the intentional integer-millisecond quantization. This is
+not a fresh camera connection or a test of raw encrypted MPEG-PS extraction.

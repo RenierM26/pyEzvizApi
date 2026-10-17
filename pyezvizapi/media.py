@@ -236,6 +236,15 @@ class MediaDecodeOptions:
             raise PyEzvizError("nalu_header_size must be non-negative or None")
 
 
+class _HevcParameterOptions(TypedDict, total=False):
+    decrypt_hevc_parameter_sets: bool
+
+
+def _hevc_parameter_options(enabled: bool) -> _HevcParameterOptions:
+    """Keep historical call shapes unless explicit parameter-set decode is requested."""
+    return {"decrypt_hevc_parameter_sets": True} if enabled else {}
+
+
 class _AppRemuxOptions(TypedDict, total=False):
     map_all_streams: bool
 

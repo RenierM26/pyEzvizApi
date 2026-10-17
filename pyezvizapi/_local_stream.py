@@ -59,6 +59,7 @@ from .media import (
     MediaPacketMetadata,
     MediaPacketSourceAdapter,
     _app_remux_options,
+    _hevc_parameter_options,
     _native_timing_options,
     has_positive_finite_capture_bound,
     is_positive_finite_duration_bound,
@@ -1909,6 +1910,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     skip_empty_packets: bool = False,
     native_shared_clock: bool = False,
     app_relative_clock: bool = False,
+    decrypt_hevc_parameter_sets: bool = False,
 ) -> EzvizLocalSdkCredentials:
     """Open a direct-local SDK stream from an authenticated client and copy bytes.
 
@@ -1918,6 +1920,8 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
     """
     if output_format not in ("mpegps", "mpegts"):
         raise PyEzvizError("output_format must be 'mpegps' or 'mpegts'")
+    if decrypt_hevc_parameter_sets and (not decrypt_video or output_format != "mpegts"):
+        raise PyEzvizError("HEVC parameter-set decryption requires decrypted MPEG-TS output")
     if native_shared_clock or app_relative_clock:
         if output_format != "mpegts" or receiver_trans_proto.upper() != "TCP":
             raise PyEzvizError(f"{'app_relative_clock' if app_relative_clock else 'native_shared_clock'} requires MPEG-TS over native TCP")
@@ -2004,6 +2008,7 @@ def copy_local_sdk_stream_from_client(  # noqa: PLR0913
                 max_packets=max_packets,
                 duration_seconds=duration_seconds,
                 monotonic=monotonic,
+                **_hevc_parameter_options(decrypt_hevc_parameter_sets),
                 **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
             )
         else:

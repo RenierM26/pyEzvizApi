@@ -1,0 +1,6115 @@
+{
+  "profile": "H9c codec133, two lenses, assigned YUV, stage4/render6; offline original ARM input/match/fill/copy/cleanup and native queue controllers; allocator/mutex/log/decoder-return/sublist externals stubbed; consumer is queue dequeue, not physical render",
+  "binary_sha256": "a719ac549516df28345536d7baf1cc22145996949e89f8c7fae2dc73a379cddc",
+  "cases": [
+    {
+      "name": "normal",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 100,
+          "frame_number": 2,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        }
+      ],
+      "summary": {
+        "lens_offered": 2,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "reverse",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 2,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        }
+      ],
+      "summary": {
+        "lens_offered": 2,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "different-media-same-raw",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 1000
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 100,
+          "frame_number": 99,
+          "media_ms": 2000
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        }
+      ],
+      "summary": {
+        "lens_offered": 2,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "same-media-different-raw",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 1000
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 200,
+          "frame_number": 2,
+          "media_ms": 1000
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        }
+      ],
+      "summary": {
+        "lens_offered": 2,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 0,
+        "render_admitted": 0,
+        "render_taken": 0,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:1",
+                "lens": 0,
+                "raw_time": 100,
+                "media_ms": 1000,
+                "frame_number": 1,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:2",
+                "lens": 1,
+                "raw_time": 200,
+                "media_ms": 1000,
+                "frame_number": 2,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [],
+      "taken_pairs": []
+    },
+    {
+      "name": "duplicate-primary",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 2,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 100,
+          "frame_number": 3,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 100,
+          "frame_number": 4,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        }
+      ],
+      "summary": {
+        "lens_offered": 4,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 2,
+        "render_admitted": 2,
+        "render_taken": 2,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1"
+      ]
+    },
+    {
+      "name": "late-complete",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 200,
+          "frame_number": 2,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 200,
+          "frame_number": 3,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        }
+      ],
+      "summary": {
+        "lens_offered": 3,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 1,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [
+        "s:1"
+      ],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "late-complete-reverse",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 200,
+          "frame_number": 2,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 200,
+          "frame_number": 3,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        }
+      ],
+      "summary": {
+        "lens_offered": 3,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 1,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [
+        "s:1"
+      ],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "full-unmatched",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 200,
+          "frame_number": 2,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 300,
+          "frame_number": 3,
+          "media_ms": 300
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 400,
+          "frame_number": 4,
+          "media_ms": 400
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 500,
+          "frame_number": 5,
+          "media_ms": 500
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        }
+      ],
+      "summary": {
+        "lens_offered": 5,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 1,
+        "pairs_assembled": 0,
+        "render_admitted": 0,
+        "render_taken": 0,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:2",
+                "lens": 0,
+                "raw_time": 200,
+                "media_ms": 200,
+                "frame_number": 2,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:3",
+                "lens": 0,
+                "raw_time": 300,
+                "media_ms": 300,
+                "frame_number": 3,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:4",
+                "lens": 0,
+                "raw_time": 400,
+                "media_ms": 400,
+                "frame_number": 4,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [
+        "s:5"
+      ],
+      "orphaned_ids": [
+        "s:1"
+      ],
+      "admitted_pairs": [],
+      "taken_pairs": []
+    },
+    {
+      "name": "explicit-retry",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 200,
+          "frame_number": 2,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 300,
+          "frame_number": 3,
+          "media_ms": 300
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 400,
+          "frame_number": 4,
+          "media_ms": 400
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 500,
+          "frame_number": 5,
+          "media_ms": 500
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:6",
+          "lens": 0,
+          "raw_time": 500,
+          "frame_number": 6,
+          "media_ms": 500
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        }
+      ],
+      "summary": {
+        "lens_offered": 6,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 1,
+        "pairs_assembled": 0,
+        "render_admitted": 0,
+        "render_taken": 0,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:2",
+                "lens": 0,
+                "raw_time": 200,
+                "media_ms": 200,
+                "frame_number": 2,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:3",
+                "lens": 0,
+                "raw_time": 300,
+                "media_ms": 300,
+                "frame_number": 3,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:4",
+                "lens": 0,
+                "raw_time": 400,
+                "media_ms": 400,
+                "frame_number": 4,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:6",
+                "lens": 0,
+                "raw_time": 500,
+                "media_ms": 500,
+                "frame_number": 6,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [
+        "s:5"
+      ],
+      "orphaned_ids": [
+        "s:1"
+      ],
+      "admitted_pairs": [],
+      "taken_pairs": []
+    },
+    {
+      "name": "complete-last",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 100,
+          "frame_number": 1,
+          "media_ms": 100
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 200,
+          "frame_number": 2,
+          "media_ms": 200
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 300,
+          "frame_number": 3,
+          "media_ms": 300
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 400,
+          "frame_number": 4,
+          "media_ms": 400
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 400,
+          "frame_number": 5,
+          "media_ms": 400
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        }
+      ],
+      "summary": {
+        "lens_offered": 5,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 3,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [
+        "s:1",
+        "s:2",
+        "s:3"
+      ],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "raw-zero",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 1,
+          "media_ms": 0
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 2,
+          "media_ms": 0
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        }
+      ],
+      "summary": {
+        "lens_offered": 2,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "wrap",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 1,
+          "media_ms": 0
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 2,
+          "media_ms": 0
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 3,
+          "media_ms": 66
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 4,
+          "media_ms": 66
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 5,
+          "media_ms": 132
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 6,
+          "media_ms": 132
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 7,
+          "media_ms": 198
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 8,
+          "media_ms": 198
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 15
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 264,
+          "frame_number": 9,
+          "media_ms": 264
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 18,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 264,
+          "frame_number": 10,
+          "media_ms": 264
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 20,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 330,
+          "frame_number": 11,
+          "media_ms": 330
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 22,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 330,
+          "frame_number": 12,
+          "media_ms": 330
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 24,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 396,
+          "frame_number": 13,
+          "media_ms": 396
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 26,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 396,
+          "frame_number": 14,
+          "media_ms": 396
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 28,
+          "id": "s:15",
+          "lens": 0,
+          "raw_time": 462,
+          "frame_number": 15,
+          "media_ms": 462
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 30,
+          "id": "s:16",
+          "lens": 1,
+          "raw_time": 462,
+          "frame_number": 16,
+          "media_ms": 462
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 32,
+          "id": "s:17",
+          "lens": 0,
+          "raw_time": 528,
+          "frame_number": 17,
+          "media_ms": 528
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 34,
+          "id": "s:18",
+          "lens": 1,
+          "raw_time": 528,
+          "frame_number": 18,
+          "media_ms": 528
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 36,
+          "id": "s:19",
+          "lens": 0,
+          "raw_time": 594,
+          "frame_number": 19,
+          "media_ms": 594
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 38,
+          "id": "s:20",
+          "lens": 1,
+          "raw_time": 594,
+          "frame_number": 20,
+          "media_ms": 594
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 39
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 40,
+          "id": "s:21",
+          "lens": 0,
+          "raw_time": 660,
+          "frame_number": 21,
+          "media_ms": 660
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 41
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 42,
+          "id": "s:22",
+          "lens": 1,
+          "raw_time": 660,
+          "frame_number": 22,
+          "media_ms": 660
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 43
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 44,
+          "id": "s:23",
+          "lens": 0,
+          "raw_time": 726,
+          "frame_number": 23,
+          "media_ms": 726
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 45
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 46,
+          "id": "s:24",
+          "lens": 1,
+          "raw_time": 726,
+          "frame_number": 24,
+          "media_ms": 726
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 47
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 48,
+          "id": "s:25",
+          "lens": 0,
+          "raw_time": 792,
+          "frame_number": 25,
+          "media_ms": 792
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 49
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 50,
+          "id": "s:26",
+          "lens": 1,
+          "raw_time": 792,
+          "frame_number": 26,
+          "media_ms": 792
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 51
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 52,
+          "id": "s:27",
+          "lens": 0,
+          "raw_time": 858,
+          "frame_number": 27,
+          "media_ms": 858
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 53
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 54,
+          "id": "s:28",
+          "lens": 1,
+          "raw_time": 858,
+          "frame_number": 28,
+          "media_ms": 858
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 55
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 56,
+          "id": "s:29",
+          "lens": 0,
+          "raw_time": 924,
+          "frame_number": 29,
+          "media_ms": 924
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 57
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 58,
+          "id": "s:30",
+          "lens": 1,
+          "raw_time": 924,
+          "frame_number": 30,
+          "media_ms": 924
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 59
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 60,
+          "id": "s:31",
+          "lens": 0,
+          "raw_time": 990,
+          "frame_number": 31,
+          "media_ms": 990
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 61
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 62,
+          "id": "s:32",
+          "lens": 1,
+          "raw_time": 990,
+          "frame_number": 32,
+          "media_ms": 990
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 63
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 64,
+          "id": "s:33",
+          "lens": 0,
+          "raw_time": 1056,
+          "frame_number": 33,
+          "media_ms": 1056
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 65
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 66,
+          "id": "s:34",
+          "lens": 1,
+          "raw_time": 1056,
+          "frame_number": 34,
+          "media_ms": 1056
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 67
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 68,
+          "id": "s:35",
+          "lens": 0,
+          "raw_time": 1122,
+          "frame_number": 35,
+          "media_ms": 1122
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 69
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 70,
+          "id": "s:36",
+          "lens": 1,
+          "raw_time": 1122,
+          "frame_number": 36,
+          "media_ms": 1122
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 71
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 72,
+          "id": "s:37",
+          "lens": 0,
+          "raw_time": 1188,
+          "frame_number": 37,
+          "media_ms": 1188
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 73
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 74,
+          "id": "s:38",
+          "lens": 1,
+          "raw_time": 1188,
+          "frame_number": 38,
+          "media_ms": 1188
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 75
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 76,
+          "id": "s:39",
+          "lens": 0,
+          "raw_time": 1254,
+          "frame_number": 39,
+          "media_ms": 1254
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 77
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 78,
+          "id": "s:40",
+          "lens": 1,
+          "raw_time": 1254,
+          "frame_number": 40,
+          "media_ms": 1254
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 79
+        }
+      ],
+      "summary": {
+        "lens_offered": 40,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 20,
+        "render_admitted": 20,
+        "render_taken": 20,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3",
+        "pair:4",
+        "pair:5",
+        "pair:6",
+        "pair:7",
+        "pair:8",
+        "pair:9",
+        "pair:10",
+        "pair:11",
+        "pair:12",
+        "pair:13",
+        "pair:14",
+        "pair:15",
+        "pair:16",
+        "pair:17",
+        "pair:18",
+        "pair:19"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3",
+        "pair:4",
+        "pair:5",
+        "pair:6",
+        "pair:7",
+        "pair:8",
+        "pair:9",
+        "pair:10",
+        "pair:11",
+        "pair:12",
+        "pair:13",
+        "pair:14",
+        "pair:15",
+        "pair:16",
+        "pair:17",
+        "pair:18",
+        "pair:19"
+      ]
+    },
+    {
+      "name": "backpressure",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 1,
+          "media_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 2,
+          "media_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 3,
+          "media_ms": 66
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 3,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 4,
+          "media_ms": 66
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 5,
+          "media_ms": 132
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 5,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 6,
+          "media_ms": 132
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 7,
+          "media_ms": 198
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 7,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 8,
+          "media_ms": 198
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 264,
+          "frame_number": 9,
+          "media_ms": 264
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 264,
+          "frame_number": 10,
+          "media_ms": 264
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 330,
+          "frame_number": 11,
+          "media_ms": 330
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 330,
+          "frame_number": 12,
+          "media_ms": 330
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 396,
+          "frame_number": 13,
+          "media_ms": 396
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 396,
+          "frame_number": 14,
+          "media_ms": 396
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:15",
+          "lens": 0,
+          "raw_time": 462,
+          "frame_number": 15,
+          "media_ms": 462
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:16",
+          "lens": 1,
+          "raw_time": 462,
+          "frame_number": 16,
+          "media_ms": 462
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:17",
+          "lens": 0,
+          "raw_time": 528,
+          "frame_number": 17,
+          "media_ms": 528
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 17,
+          "id": "s:18",
+          "lens": 1,
+          "raw_time": 528,
+          "frame_number": 18,
+          "media_ms": 528
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 18,
+          "id": "s:19",
+          "lens": 0,
+          "raw_time": 594,
+          "frame_number": 19,
+          "media_ms": 594
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 19,
+          "id": "s:20",
+          "lens": 1,
+          "raw_time": 594,
+          "frame_number": 20,
+          "media_ms": 594
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 20,
+          "id": "s:21",
+          "lens": 0,
+          "raw_time": 660,
+          "frame_number": 21,
+          "media_ms": 660
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 21,
+          "id": "s:22",
+          "lens": 1,
+          "raw_time": 660,
+          "frame_number": 22,
+          "media_ms": 660
+        }
+      ],
+      "summary": {
+        "lens_offered": 22,
+        "lens_unaccepted": 2,
+        "lens_orphaned": 0,
+        "pairs_assembled": 10,
+        "render_admitted": 6,
+        "render_taken": 0,
+        "committed_staging": 4,
+        "staging_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:6",
+            "lenses": [
+              {
+                "id": "s:13",
+                "lens": 0,
+                "raw_time": 396,
+                "media_ms": 396,
+                "frame_number": 13,
+                "stream_id": 224
+              },
+              {
+                "id": "s:14",
+                "lens": 1,
+                "raw_time": 396,
+                "media_ms": 396,
+                "frame_number": 14,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:7",
+            "lenses": [
+              {
+                "id": "s:15",
+                "lens": 0,
+                "raw_time": 462,
+                "media_ms": 462,
+                "frame_number": 15,
+                "stream_id": 224
+              },
+              {
+                "id": "s:16",
+                "lens": 1,
+                "raw_time": 462,
+                "media_ms": 462,
+                "frame_number": 16,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:8",
+            "lenses": [
+              {
+                "id": "s:17",
+                "lens": 0,
+                "raw_time": 528,
+                "media_ms": 528,
+                "frame_number": 17,
+                "stream_id": 224
+              },
+              {
+                "id": "s:18",
+                "lens": 1,
+                "raw_time": 528,
+                "media_ms": 528,
+                "frame_number": 18,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:9",
+            "lenses": [
+              {
+                "id": "s:19",
+                "lens": 0,
+                "raw_time": 594,
+                "media_ms": 594,
+                "frame_number": 19,
+                "stream_id": 224
+              },
+              {
+                "id": "s:20",
+                "lens": 1,
+                "raw_time": 594,
+                "media_ms": 594,
+                "frame_number": 20,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:0",
+            "lenses": [
+              {
+                "id": "s:1",
+                "lens": 0,
+                "raw_time": 0,
+                "media_ms": 0,
+                "frame_number": 1,
+                "stream_id": 224
+              },
+              {
+                "id": "s:2",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 0,
+                "frame_number": 2,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:1",
+            "lenses": [
+              {
+                "id": "s:3",
+                "lens": 0,
+                "raw_time": 66,
+                "media_ms": 66,
+                "frame_number": 3,
+                "stream_id": 224
+              },
+              {
+                "id": "s:4",
+                "lens": 1,
+                "raw_time": 66,
+                "media_ms": 66,
+                "frame_number": 4,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:2",
+            "lenses": [
+              {
+                "id": "s:5",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 132,
+                "frame_number": 5,
+                "stream_id": 224
+              },
+              {
+                "id": "s:6",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 132,
+                "frame_number": 6,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:3",
+            "lenses": [
+              {
+                "id": "s:7",
+                "lens": 0,
+                "raw_time": 198,
+                "media_ms": 198,
+                "frame_number": 7,
+                "stream_id": 224
+              },
+              {
+                "id": "s:8",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 198,
+                "frame_number": 8,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:4",
+            "lenses": [
+              {
+                "id": "s:9",
+                "lens": 0,
+                "raw_time": 264,
+                "media_ms": 264,
+                "frame_number": 9,
+                "stream_id": 224
+              },
+              {
+                "id": "s:10",
+                "lens": 1,
+                "raw_time": 264,
+                "media_ms": 264,
+                "frame_number": 10,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:5",
+            "lenses": [
+              {
+                "id": "s:11",
+                "lens": 0,
+                "raw_time": 330,
+                "media_ms": 330,
+                "frame_number": 11,
+                "stream_id": 224
+              },
+              {
+                "id": "s:12",
+                "lens": 1,
+                "raw_time": 330,
+                "media_ms": 330,
+                "frame_number": 12,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:21",
+        "s:22"
+      ],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3",
+        "pair:4",
+        "pair:5"
+      ],
+      "taken_pairs": []
+    },
+    {
+      "name": "backpressure-drain-push",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 1,
+          "media_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 2,
+          "media_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 3,
+          "media_ms": 66
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 3,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 4,
+          "media_ms": 66
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 5,
+          "media_ms": 132
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 5,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 6,
+          "media_ms": 132
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 7,
+          "media_ms": 198
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 7,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 8,
+          "media_ms": 198
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 264,
+          "frame_number": 9,
+          "media_ms": 264
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 264,
+          "frame_number": 10,
+          "media_ms": 264
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 330,
+          "frame_number": 11,
+          "media_ms": 330
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 330,
+          "frame_number": 12,
+          "media_ms": 330
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 396,
+          "frame_number": 13,
+          "media_ms": 396
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 396,
+          "frame_number": 14,
+          "media_ms": 396
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:15",
+          "lens": 0,
+          "raw_time": 462,
+          "frame_number": 15,
+          "media_ms": 462
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:16",
+          "lens": 1,
+          "raw_time": 462,
+          "frame_number": 16,
+          "media_ms": 462
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:17",
+          "lens": 0,
+          "raw_time": 528,
+          "frame_number": 17,
+          "media_ms": 528
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 17,
+          "id": "s:18",
+          "lens": 1,
+          "raw_time": 528,
+          "frame_number": 18,
+          "media_ms": 528
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 18,
+          "id": "s:19",
+          "lens": 0,
+          "raw_time": 594,
+          "frame_number": 19,
+          "media_ms": 594
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 19,
+          "id": "s:20",
+          "lens": 1,
+          "raw_time": 594,
+          "frame_number": 20,
+          "media_ms": 594
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 30
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 32
+        }
+      ],
+      "summary": {
+        "lens_offered": 20,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 0,
+        "pairs_assembled": 10,
+        "render_admitted": 10,
+        "render_taken": 10,
+        "committed_staging": 0,
+        "staging_pending": [],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3",
+        "pair:4",
+        "pair:5",
+        "pair:6",
+        "pair:7",
+        "pair:8",
+        "pair:9"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3",
+        "pair:4",
+        "pair:5",
+        "pair:6",
+        "pair:7",
+        "pair:8",
+        "pair:9"
+      ]
+    },
+    {
+      "name": "synthetic-seed-0",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 265,
+          "media_ms": 8376
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 7,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 366,
+          "media_ms": 9558
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 143,
+          "media_ms": 1553
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 9
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 101,
+          "media_ms": 1208
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 362,
+          "media_ms": 7113
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:6",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 453,
+          "media_ms": 8541
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 95,
+          "media_ms": 6534
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 249,
+          "media_ms": 5328
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 244,
+          "media_ms": 2334
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 16
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 28,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 896,
+          "media_ms": 8322
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 30
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 32
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 35,
+          "id": "s:11",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 723,
+          "media_ms": 2044
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 38
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 39
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 40
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 41
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 42,
+          "id": "s:12",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 455,
+          "media_ms": 1501
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 43
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 44,
+          "id": "s:13",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 297,
+          "media_ms": 3012
+        }
+      ],
+      "summary": {
+        "lens_offered": 13,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 2,
+        "pairs_assembled": 4,
+        "render_admitted": 4,
+        "render_taken": 3,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:10",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 8322,
+                "frame_number": 896,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:12",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 1501,
+                "frame_number": 455,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:3",
+            "lenses": [
+              {
+                "id": "s:9",
+                "lens": 0,
+                "raw_time": 66,
+                "media_ms": 2334,
+                "frame_number": 244,
+                "stream_id": 224
+              },
+              {
+                "id": "s:13",
+                "lens": 1,
+                "raw_time": 66,
+                "media_ms": 3012,
+                "frame_number": 297,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:5"
+      ],
+      "orphaned_ids": [
+        "s:1",
+        "s:7"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ]
+    },
+    {
+      "name": "synthetic-seed-1",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 120,
+          "media_ms": 8117
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 10
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 12
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 499,
+          "media_ms": 464
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 712,
+          "media_ms": 7297
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 923,
+          "media_ms": 5200
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 665,
+          "media_ms": 8870
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 17,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 992,
+          "media_ms": 6915
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 18,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 961,
+          "media_ms": 8123
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 25,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 693,
+          "media_ms": 3584
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 30
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 32,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 857,
+          "media_ms": 9116
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 33,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 123,
+          "media_ms": 5450
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 38
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 39
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 40,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 290,
+          "media_ms": 9626
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 41
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 42
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 43
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 44
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 45
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 46
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 47
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 48
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 49
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 50
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 51
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 52
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 53,
+          "id": "s:12",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 248,
+          "media_ms": 6623
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 54,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 561,
+          "media_ms": 6139
+        }
+      ],
+      "summary": {
+        "lens_offered": 13,
+        "lens_unaccepted": 3,
+        "lens_orphaned": 4,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:7",
+                "lens": 0,
+                "raw_time": 198,
+                "media_ms": 8123,
+                "frame_number": 961,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:9",
+                "lens": 0,
+                "raw_time": 198,
+                "media_ms": 9116,
+                "frame_number": 857,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:11",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 9626,
+                "frame_number": 290,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:13",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 6139,
+                "frame_number": 561,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [
+        "s:8",
+        "s:10",
+        "s:12"
+      ],
+      "orphaned_ids": [
+        "s:1",
+        "s:4",
+        "s:5",
+        "s:6"
+      ],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "synthetic-seed-2",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 369,
+          "media_ms": 2770
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 621,
+          "media_ms": 585
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 2
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 3,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 822,
+          "media_ms": 8340
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 922,
+          "media_ms": 588
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 5,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 954,
+          "media_ms": 5217
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 573,
+          "media_ms": 2907
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 7,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 180,
+          "media_ms": 5327
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:8",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 526,
+          "media_ms": 9173
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:9",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 752,
+          "media_ms": 8607
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 879,
+          "media_ms": 7303
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:11",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 670,
+          "media_ms": 8689
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 947,
+          "media_ms": 8160
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 14
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 15
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 16
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 25,
+          "id": "s:13",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 359,
+          "media_ms": 9301
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 30
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 32
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 38
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 39
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 40
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 41
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 42
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 43
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 44,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 897,
+          "media_ms": 4393
+        }
+      ],
+      "summary": {
+        "lens_offered": 14,
+        "lens_unaccepted": 4,
+        "lens_orphaned": 5,
+        "pairs_assembled": 1,
+        "render_admitted": 1,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:10",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 7303,
+                "frame_number": 879,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:11",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 8689,
+                "frame_number": 670,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:13",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 9301,
+                "frame_number": 359,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [
+        "s:5",
+        "s:7",
+        "s:12",
+        "s:14"
+      ],
+      "orphaned_ids": [
+        "s:1",
+        "s:2",
+        "s:3",
+        "s:6",
+        "s:9"
+      ],
+      "admitted_pairs": [
+        "pair:0"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "synthetic-seed-3",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 937,
+          "media_ms": 9894
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 265,
+          "media_ms": 9024
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 553,
+          "media_ms": 9005
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 10
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 12
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 14
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 15
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 650,
+          "media_ms": 2484
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 23,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 163,
+          "media_ms": 9684
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 24,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 843,
+          "media_ms": 4414
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 30
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 31
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 32,
+          "id": "s:7",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 745,
+          "media_ms": 9452
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 38
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 39,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 36,
+          "media_ms": 2227
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 40
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 41
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 42
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 43
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 44
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 45
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 46,
+          "id": "s:9",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 797,
+          "media_ms": 4932
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 47,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 546,
+          "media_ms": 9585
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 48,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 698,
+          "media_ms": 469
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 49,
+          "id": "s:12",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 987,
+          "media_ms": 8876
+        }
+      ],
+      "summary": {
+        "lens_offered": 12,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 4,
+        "pairs_assembled": 3,
+        "render_admitted": 3,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:12",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 8876,
+                "frame_number": 987,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:1",
+            "lenses": [
+              {
+                "id": "s:3",
+                "lens": 0,
+                "raw_time": 198,
+                "media_ms": 9005,
+                "frame_number": 553,
+                "stream_id": 224
+              },
+              {
+                "id": "s:9",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 4932,
+                "frame_number": 797,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:2",
+            "lenses": [
+              {
+                "id": "s:11",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 469,
+                "frame_number": 698,
+                "stream_id": 224
+              },
+              {
+                "id": "s:10",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 9585,
+                "frame_number": 546,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:5"
+      ],
+      "orphaned_ids": [
+        "s:1",
+        "s:4",
+        "s:6",
+        "s:8"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "synthetic-seed-4",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 738,
+          "media_ms": 6489
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 7,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 20,
+          "media_ms": 6579
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 10
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 12
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 532,
+          "media_ms": 8792
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 846,
+          "media_ms": 1739
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 848,
+          "media_ms": 4264
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 17,
+          "id": "s:6",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 317,
+          "media_ms": 4745
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 18,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 687,
+          "media_ms": 6355
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 25,
+          "id": "s:8",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 484,
+          "media_ms": 4587
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 26,
+          "id": "s:9",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 930,
+          "media_ms": 4783
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 27
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 28,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 433,
+          "media_ms": 9812
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 29,
+          "id": "s:11",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 165,
+          "media_ms": 3821
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 30,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 83,
+          "media_ms": 758
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 32
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 37,
+          "id": "s:13",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 148,
+          "media_ms": 3204
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 38,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 650,
+          "media_ms": 7227
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 39,
+          "id": "s:15",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 446,
+          "media_ms": 9646
+        }
+      ],
+      "summary": {
+        "lens_offered": 15,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 4,
+        "pairs_assembled": 5,
+        "render_admitted": 5,
+        "render_taken": 4,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:14",
+                "lens": 1,
+                "raw_time": 66,
+                "media_ms": 7227,
+                "frame_number": 650,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:4",
+            "lenses": [
+              {
+                "id": "s:15",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 9646,
+                "frame_number": 446,
+                "stream_id": 224
+              },
+              {
+                "id": "s:13",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 3204,
+                "frame_number": 148,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [
+        "s:6",
+        "s:7",
+        "s:8",
+        "s:12"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3",
+        "pair:4"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3"
+      ]
+    },
+    {
+      "name": "synthetic-seed-5",
+      "events": [
+        {
+          "kind": "stage_push",
+          "at_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 860,
+          "media_ms": 7628
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 115,
+          "media_ms": 6091
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 587,
+          "media_ms": 4085
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 286,
+          "media_ms": 2983
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 142,
+          "media_ms": 7288
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:6",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 995,
+          "media_ms": 87
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 893,
+          "media_ms": 2727
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 552,
+          "media_ms": 3355
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 305,
+          "media_ms": 353
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 958,
+          "media_ms": 2387
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 17,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 308,
+          "media_ms": 9881
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 18
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 19,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 317,
+          "media_ms": 5822
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 20,
+          "id": "s:13",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 189,
+          "media_ms": 7884
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 27,
+          "id": "s:14",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 998,
+          "media_ms": 374
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 28,
+          "id": "s:15",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 562,
+          "media_ms": 6862
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 29,
+          "id": "s:16",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 463,
+          "media_ms": 765
+        }
+      ],
+      "summary": {
+        "lens_offered": 16,
+        "lens_unaccepted": 0,
+        "lens_orphaned": 4,
+        "pairs_assembled": 4,
+        "render_admitted": 4,
+        "render_taken": 4,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:12",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 5822,
+                "frame_number": 317,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:14",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 374,
+                "frame_number": 998,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:15",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 6862,
+                "frame_number": 562,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:16",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 765,
+                "frame_number": 463,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [],
+      "orphaned_ids": [
+        "s:2",
+        "s:4",
+        "s:9",
+        "s:10"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3"
+      ]
+    },
+    {
+      "name": "synthetic-seed-6",
+      "events": [
+        {
+          "kind": "stage_push",
+          "at_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 37,
+          "media_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 327,
+          "media_ms": 358
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 3,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 747,
+          "media_ms": 6783
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 10
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 12
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 14
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 15
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 678,
+          "media_ms": 9995
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 17,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 95,
+          "media_ms": 5933
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 18,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 716,
+          "media_ms": 1536
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 19,
+          "id": "s:7",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 974,
+          "media_ms": 748
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 20
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 21,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 955,
+          "media_ms": 3173
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 28
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 30
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 31
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 32
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 35,
+          "id": "s:9",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 616,
+          "media_ms": 7040
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 36,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 91,
+          "media_ms": 8194
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 38
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 39
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 40
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 41
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 42
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 43,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 319,
+          "media_ms": 3214
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 44,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 141,
+          "media_ms": 9786
+        }
+      ],
+      "summary": {
+        "lens_offered": 12,
+        "lens_unaccepted": 2,
+        "lens_orphaned": 2,
+        "pairs_assembled": 2,
+        "render_admitted": 2,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:6",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 1536,
+                "frame_number": 716,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:8",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 3173,
+                "frame_number": 955,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:10",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 8194,
+                "frame_number": 91,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:12",
+                "lens": 1,
+                "raw_time": 66,
+                "media_ms": 9786,
+                "frame_number": 141,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:1",
+            "lenses": [
+              {
+                "id": "s:11",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 3214,
+                "frame_number": 319,
+                "stream_id": 224
+              },
+              {
+                "id": "s:5",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 5933,
+                "frame_number": 95,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:7",
+        "s:9"
+      ],
+      "orphaned_ids": [
+        "s:2",
+        "s:3"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "synthetic-seed-7",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 666,
+          "media_ms": 791
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 596,
+          "media_ms": 950
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 444,
+          "media_ms": 6851
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 564,
+          "media_ms": 6955
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 645,
+          "media_ms": 9551
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 999,
+          "media_ms": 3622
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 429,
+          "media_ms": 2363
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 14
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 15
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 16
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 19,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 105,
+          "media_ms": 9528
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 20
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 21,
+          "id": "s:9",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 560,
+          "media_ms": 1028
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 22
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 23,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 696,
+          "media_ms": 8711
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 24,
+          "id": "s:11",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 599,
+          "media_ms": 7424
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 25,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 813,
+          "media_ms": 2945
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 26,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 537,
+          "media_ms": 8111
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 27,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 623,
+          "media_ms": 1199
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 28,
+          "id": "s:15",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 775,
+          "media_ms": 5604
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 29,
+          "id": "s:16",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 40,
+          "media_ms": 1271
+        }
+      ],
+      "summary": {
+        "lens_offered": 16,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 5,
+        "pairs_assembled": 4,
+        "render_admitted": 4,
+        "render_taken": 1,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:15",
+                "lens": 1,
+                "raw_time": 66,
+                "media_ms": 5604,
+                "frame_number": 775,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:16",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 1271,
+                "frame_number": 40,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:1",
+            "lenses": [
+              {
+                "id": "s:4",
+                "lens": 0,
+                "raw_time": 0,
+                "media_ms": 6955,
+                "frame_number": 564,
+                "stream_id": 224
+              },
+              {
+                "id": "s:9",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 1028,
+                "frame_number": 560,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:2",
+            "lenses": [
+              {
+                "id": "s:10",
+                "lens": 0,
+                "raw_time": 198,
+                "media_ms": 8711,
+                "frame_number": 696,
+                "stream_id": 224
+              },
+              {
+                "id": "s:11",
+                "lens": 1,
+                "raw_time": 198,
+                "media_ms": 7424,
+                "frame_number": 599,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 2,
+            "pair_id": "pair:3",
+            "lenses": [
+              {
+                "id": "s:13",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 8111,
+                "frame_number": 537,
+                "stream_id": 224
+              },
+              {
+                "id": "s:14",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 1199,
+                "frame_number": 623,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:5"
+      ],
+      "orphaned_ids": [
+        "s:1",
+        "s:2",
+        "s:7",
+        "s:8",
+        "s:12"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2",
+        "pair:3"
+      ],
+      "taken_pairs": [
+        "pair:0"
+      ]
+    },
+    {
+      "name": "synthetic-seed-8",
+      "events": [
+        {
+          "kind": "lens_picture",
+          "at_ms": 0,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 129,
+          "media_ms": 3164
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:2",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 253,
+          "media_ms": 8296
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 470,
+          "media_ms": 7985
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 9,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 918,
+          "media_ms": 6597
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 777,
+          "media_ms": 327
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 923,
+          "media_ms": 6210
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:7",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 833,
+          "media_ms": 1033
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 676,
+          "media_ms": 951
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 509,
+          "media_ms": 8467
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 552,
+          "media_ms": 613
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 16
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 22,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 746,
+          "media_ms": 9574
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 29,
+          "id": "s:12",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 138,
+          "media_ms": 2593
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 30
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 31,
+          "id": "s:13",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 972,
+          "media_ms": 8104
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 32
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 38
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 39,
+          "id": "s:14",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 364,
+          "media_ms": 8662
+        }
+      ],
+      "summary": {
+        "lens_offered": 14,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 5,
+        "pairs_assembled": 3,
+        "render_admitted": 3,
+        "render_taken": 3,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:13",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 8104,
+                "frame_number": 972,
+                "stream_id": 225
+              }
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:14",
+                "lens": 1,
+                "raw_time": 66,
+                "media_ms": 8662,
+                "frame_number": 364,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [
+        "s:8"
+      ],
+      "orphaned_ids": [
+        "s:1",
+        "s:3",
+        "s:5",
+        "s:6",
+        "s:10"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ]
+    },
+    {
+      "name": "synthetic-seed-9",
+      "events": [
+        {
+          "kind": "render_take",
+          "at_ms": 0
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 6
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 7,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 190,
+          "media_ms": 105
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 8,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 342,
+          "media_ms": 9081
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 9
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 10,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 720,
+          "media_ms": 7405
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 11,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 243,
+          "media_ms": 841
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 12,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 792,
+          "media_ms": 6285
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 66,
+          "frame_number": 690,
+          "media_ms": 3674
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:7",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 933,
+          "media_ms": 3438
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 828,
+          "media_ms": 707
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 16,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 56,
+          "media_ms": 6206
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 23,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 434,
+          "media_ms": 1835
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 24
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 25,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 916,
+          "media_ms": 3326
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 26,
+          "id": "s:12",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 136,
+          "media_ms": 8843
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 27,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 550,
+          "media_ms": 3246
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 28,
+          "id": "s:14",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 196,
+          "media_ms": 1530
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 29
+        }
+      ],
+      "summary": {
+        "lens_offered": 14,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 3,
+        "pairs_assembled": 3,
+        "render_admitted": 3,
+        "render_taken": 3,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:10",
+                "lens": 0,
+                "raw_time": 66,
+                "media_ms": 1835,
+                "frame_number": 434,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:11",
+                "lens": 0,
+                "raw_time": 66,
+                "media_ms": 3326,
+                "frame_number": 916,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:12",
+                "lens": 0,
+                "raw_time": 0,
+                "media_ms": 8843,
+                "frame_number": 136,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:14",
+                "lens": 0,
+                "raw_time": 198,
+                "media_ms": 1530,
+                "frame_number": 196,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": []
+      },
+      "unaccepted_ids": [
+        "s:13"
+      ],
+      "orphaned_ids": [
+        "s:3",
+        "s:6",
+        "s:9"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ]
+    },
+    {
+      "name": "synthetic-seed-10",
+      "events": [
+        {
+          "kind": "stage_push",
+          "at_ms": 0
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 1,
+          "id": "s:1",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 591,
+          "media_ms": 243
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 2,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 843,
+          "media_ms": 4546
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 3,
+          "id": "s:3",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 335,
+          "media_ms": 1246
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 4,
+          "id": "s:4",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 430,
+          "media_ms": 2272
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 5
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 6,
+          "id": "s:5",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 290,
+          "media_ms": 4297
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 10
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 12
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 13,
+          "id": "s:6",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 136,
+          "media_ms": 7486
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 14,
+          "id": "s:7",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 45,
+          "media_ms": 9550
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 15,
+          "id": "s:8",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 199,
+          "media_ms": 4962
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 16
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 22,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 682,
+          "media_ms": 8994
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 29,
+          "id": "s:10",
+          "lens": 1,
+          "raw_time": 0,
+          "frame_number": 668,
+          "media_ms": 9577
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 30,
+          "id": "s:11",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 993,
+          "media_ms": 6764
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 31,
+          "id": "s:12",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 508,
+          "media_ms": 4934
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 32
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 33,
+          "id": "s:13",
+          "lens": 0,
+          "raw_time": 66,
+          "frame_number": 393,
+          "media_ms": 9293
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 34,
+          "id": "s:14",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 986,
+          "media_ms": 1582
+        }
+      ],
+      "summary": {
+        "lens_offered": 14,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 4,
+        "pairs_assembled": 3,
+        "render_admitted": 3,
+        "render_taken": 2,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:11",
+                "lens": 0,
+                "raw_time": 66,
+                "media_ms": 6764,
+                "frame_number": 993,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:13",
+                "lens": 0,
+                "raw_time": 66,
+                "media_ms": 9293,
+                "frame_number": 393,
+                "stream_id": 224
+              },
+              null
+            ]
+          },
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              {
+                "id": "s:14",
+                "lens": 0,
+                "raw_time": 0,
+                "media_ms": 1582,
+                "frame_number": 986,
+                "stream_id": 224
+              },
+              null
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:2",
+            "lenses": [
+              {
+                "id": "s:12",
+                "lens": 0,
+                "raw_time": 0,
+                "media_ms": 4934,
+                "frame_number": 508,
+                "stream_id": 224
+              },
+              {
+                "id": "s:10",
+                "lens": 1,
+                "raw_time": 0,
+                "media_ms": 9577,
+                "frame_number": 668,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:7"
+      ],
+      "orphaned_ids": [
+        "s:2",
+        "s:4",
+        "s:5",
+        "s:8"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1"
+      ]
+    },
+    {
+      "name": "synthetic-seed-11",
+      "events": [
+        {
+          "kind": "render_take",
+          "at_ms": 0
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 1
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 2
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 3
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 4
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 5
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 6
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 7
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 8
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 9
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 10
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 11
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 12
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 13
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 14
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 15
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 16
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 17
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 18
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 19
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 20
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 21
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 22
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 23
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 24
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 25
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 26
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 27
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 28
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 29
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 30
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 31,
+          "id": "s:1",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 644,
+          "media_ms": 3050
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 32,
+          "id": "s:2",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 145,
+          "media_ms": 1485
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 33
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 34
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 35
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 36
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 37
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 38
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 39,
+          "id": "s:3",
+          "lens": 1,
+          "raw_time": 198,
+          "frame_number": 669,
+          "media_ms": 2580
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 40
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 41,
+          "id": "s:4",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 36,
+          "media_ms": 3116
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 42,
+          "id": "s:5",
+          "lens": 0,
+          "raw_time": 198,
+          "frame_number": 334,
+          "media_ms": 7217
+        },
+        {
+          "kind": "stage_push",
+          "at_ms": 43
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 44,
+          "id": "s:6",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 511,
+          "media_ms": 75
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 45,
+          "id": "s:7",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 416,
+          "media_ms": 9031
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 46,
+          "id": "s:8",
+          "lens": 1,
+          "raw_time": 132,
+          "frame_number": 776,
+          "media_ms": 3762
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 47
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 48
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 49
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 50
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 51
+        },
+        {
+          "kind": "render_take",
+          "at_ms": 52
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 53,
+          "id": "s:9",
+          "lens": 0,
+          "raw_time": 0,
+          "frame_number": 576,
+          "media_ms": 1768
+        },
+        {
+          "kind": "lens_picture",
+          "at_ms": 54,
+          "id": "s:10",
+          "lens": 0,
+          "raw_time": 132,
+          "frame_number": 395,
+          "media_ms": 1094
+        }
+      ],
+      "summary": {
+        "lens_offered": 10,
+        "lens_unaccepted": 1,
+        "lens_orphaned": 2,
+        "pairs_assembled": 3,
+        "render_admitted": 3,
+        "render_taken": 2,
+        "committed_staging": 0,
+        "staging_pending": [
+          {
+            "state": 1,
+            "pair_id": null,
+            "lenses": [
+              null,
+              {
+                "id": "s:8",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 3762,
+                "frame_number": 776,
+                "stream_id": 225
+              }
+            ]
+          }
+        ],
+        "render_pending": [
+          {
+            "state": 2,
+            "pair_id": "pair:2",
+            "lenses": [
+              {
+                "id": "s:10",
+                "lens": 0,
+                "raw_time": 132,
+                "media_ms": 1094,
+                "frame_number": 395,
+                "stream_id": 224
+              },
+              {
+                "id": "s:7",
+                "lens": 1,
+                "raw_time": 132,
+                "media_ms": 9031,
+                "frame_number": 416,
+                "stream_id": 225
+              }
+            ]
+          }
+        ]
+      },
+      "unaccepted_ids": [
+        "s:9"
+      ],
+      "orphaned_ids": [
+        "s:4",
+        "s:5"
+      ],
+      "admitted_pairs": [
+        "pair:0",
+        "pair:1",
+        "pair:2"
+      ],
+      "taken_pairs": [
+        "pair:0",
+        "pair:1"
+      ]
+    }
+  ]
+}

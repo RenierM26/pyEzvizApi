@@ -189,3 +189,10 @@ A separate [PCM/ffplay backend](app-pcm-playback.md) now exercises real pipe
 output with bounded queue admission, backpressure and cancellation. It requires
 explicit playback and passthrough selection; it does not provide VQE, video output
 or physical sync validation. The simulator itself stays network/media/output-free.
+
+## Pre-scheduler two-lens staging
+
+A separate [two-lens staging model](app-video-pairing.md) normalizes decoded lens
+metadata into complete paired queue admissions, with native-verified partial-node
+cleanup and backpressure. Its nested `simulator_event` can feed this simulator.
+It does not supply pixels, decoder-buffer ownership or physical video output.

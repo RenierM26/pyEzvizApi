@@ -182,3 +182,10 @@ contract. Do not infer optical output from render callbacks or silently omit an
 in-flight final call. Raw device traces and the build-specific adapter stay
 private; committed fixtures/tests are synthetic. This replay mode does not supply
 a real-time backend, proprietary VQE replacement or physical AV calibration.
+
+## Experimental real audio transport
+
+A separate [PCM/ffplay backend](app-pcm-playback.md) now exercises real pipe
+output with bounded queue admission, backpressure and cancellation. It requires
+explicit playback and passthrough selection; it does not provide VQE, video output
+or physical sync validation. The simulator itself stays network/media/output-free.

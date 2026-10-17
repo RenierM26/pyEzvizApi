@@ -81,7 +81,7 @@ class CoupledReplay:
     def staging_event(self, event: dict[str, Any]) -> None:
         before = len(self.staging.actions)
         if event['kind'] == 'lens_picture':
-            event, binding = DECODE['bind_picture'](event, self.decoded, self.streams)
+            event, binding = self.bind_picture(event)
             self.staging.step(event)
             self.bindings[binding['offer_id']] = binding['decoded_id']
             self.used.add(binding['decoded_id'])
@@ -93,6 +93,10 @@ class CoupledReplay:
                     self.admissions.append(action['simulator_event'])
                 else:
                     self.scheduler.step(action['simulator_event'])
+
+    def bind_picture(self, event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Source adapter boundary; default remains exact local decoded-frame binding."""
+        return DECODE['bind_picture'](event, self.decoded, self.streams)
 
     def queue_event(self, event: dict[str, Any]) -> None:
         if set(event) != {'kind', 'at_ms', 'id'}:
@@ -170,18 +174,20 @@ def replay(report: dict[str, Any], source: Any, observed_queues: bool = False) -
     return model.result()
 
 
-def plan_frames(result: dict[str, Any], spool: Any) -> tuple[list[dict[str, Any]], int, int]:
+def plan_frames(result: dict[str, Any], spool: Any,
+                max_pair_pixels: int | None = None) -> tuple[list[dict[str, Any]], int, int]:
     """Only completed requests become artifact frames; timing is not media PTS."""
     plan = result['selected']
     geometry = None
     previous = -1
     pixels = 0
+    pair_limit = PREVIEW['MAX_PAIR_PIXELS'] if max_pair_pixels is None else max_pair_pixels
     for pair in plan:
         rows = [spool.records[identity] for identity in pair['decoded_ids']]
         current = (rows[0]['width'], rows[0]['height'])
         if (current != (rows[1]['width'], rows[1]['height'])
                 or (geometry is not None and geometry != current)
-                or current[0] * 2 * current[1] > PREVIEW['MAX_PAIR_PIXELS']):
+                or current[0] * 2 * current[1] > pair_limit):
             raise ValueError('requires constant equal lens geometry within paired pixel limit')
         if pair['request_at_ms'] <= previous:
             raise ValueError('artifact request observation PTS must be strictly increasing')

@@ -7,6 +7,7 @@ The JSONL map is caller-supplied provenance, not an authenticated trace.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import hashlib
 import json
 from pathlib import Path
@@ -115,8 +116,11 @@ def renderer_fingerprint(row: dict[str, Any], rendered: bytes) -> dict[str, Any]
 
 
 def audit(source: BinaryIO, rendered: BinaryIO, manifest: BinaryIO,
-          verify_renderer: bool = False) -> dict[str, Any]:
+          verify_renderer: bool = False,
+          observer: Callable[[dict[str, Any], bytes], None] | None = None) -> dict[str, Any]:
     """Require contiguous complete snapshot coverage; never select trace-named paths."""
+    if observer is not None and not verify_renderer:
+        raise ValueError('canonical pixel observer requires renderer verification')
     offsets = [0, 0]
     rows: list[dict[str, Any]] = []
     identities = set()
@@ -142,6 +146,11 @@ def audit(source: BinaryIO, rendered: BinaryIO, manifest: BinaryIO,
         result = verify(row, input_pixels, render_pixels)
         if verify_renderer:
             result.update(renderer_fingerprint(row, render_pixels))
+            if observer is not None:
+                pixels = width * visible
+                canonical = (render_pixels[:pixels] + render_pixels[pixels * 5 // 4:]
+                             + render_pixels[pixels:pixels * 5 // 4])
+                observer(dict(result), canonical)
         rows.append(result)
         identities.add(row['id'])
         offsets = [offset + length for offset, length in zip(offsets, lengths, strict=True)]

@@ -169,3 +169,6 @@ remain unverified even when all model checks pass.
 The separate [native pixel crop audit](native-pixel-crop-audit.md) checks private
 same-session input/render snapshots under the observed bottom-only planar crop.
 It does not infer colour order or convert those samples into scheduled playback.
+The separate opt-in [native snapshot source](native-scheduled-video.md) requires
+the renderer-verified canonical pixel boundary and exact native header bindings;
+it reuses this scheduler/exporter without substituting a different session's HEVC.

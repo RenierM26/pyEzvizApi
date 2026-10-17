@@ -236,13 +236,34 @@ class MediaDecodeOptions:
             raise PyEzvizError("nalu_header_size must be non-negative or None")
 
 
-class _NativeSharedClockOptions(TypedDict, total=False):
+class _HevcParameterOptions(TypedDict, total=False):
+    decrypt_hevc_parameter_sets: bool
+
+
+def _hevc_parameter_options(enabled: bool) -> _HevcParameterOptions:
+    """Keep historical call shapes unless explicit parameter-set decode is requested."""
+    return {"decrypt_hevc_parameter_sets": True} if enabled else {}
+
+
+class _AppRemuxOptions(TypedDict, total=False):
+    map_all_streams: bool
+
+
+def _app_remux_options(enabled: bool) -> _AppRemuxOptions:
+    return {"map_all_streams": True} if enabled else {}
+
+
+class _NativeTimingOptions(TypedDict, total=False):
     native_shared_clock: bool
+    app_relative_clock: bool
 
 
-def _native_shared_clock_options(enabled: bool) -> _NativeSharedClockOptions:
+def _native_timing_options(enabled: bool, *, app_relative_clock: bool = False) -> _NativeTimingOptions:
     """Forward only the opt-in keyword; preserve historical default call shapes."""
-    return {"native_shared_clock": True} if enabled else {}
+    options: _NativeTimingOptions = {"native_shared_clock": True} if enabled else {}
+    if app_relative_clock:
+        options["app_relative_clock"] = True
+    return options
 
 
 @dataclass(frozen=True)
@@ -259,8 +280,14 @@ class MediaMuxOptions:
     h264_clean_idr_wait_seconds: float = 60.0
     # Explicit H9c/native 90kHz video + 16kHz AAC shared-epoch hypothesis.
     native_shared_clock: bool = False
+    # Explicit full-startup single-source native HEVC/AAC app profile.
+    app_relative_clock: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.app_relative_clock, bool):
+            raise PyEzvizError("app_relative_clock must be a boolean assertion")
+        if self.app_relative_clock and self.native_shared_clock:
+            raise PyEzvizError("app_relative_clock and native_shared_clock are mutually exclusive")
         if not isinstance(self.native_shared_clock, bool):
             raise PyEzvizError("native_shared_clock must be a boolean assertion")
         if self.output_format not in ("mpegps", "mpegts"):

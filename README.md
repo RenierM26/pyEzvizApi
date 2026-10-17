@@ -923,3 +923,13 @@ Apache 2.0 — see `LICENSE.md`.
 ---
 
 Draft versions: 0.0.x
+
+### Experimental app-compatible frame timing
+
+For explicitly parsed, clear HEVC/AAC frames and bounded native live capture, see
+[app-compatible timing](docs/app-timing.md). Use
+`MediaMuxOptions(app_relative_clock=True)` or
+`save_clip(..., app_relative_clock=True)` for the strict single-source native
+HEVC/mono 16 kHz AAC capture profile. No startup trimming or automatic fallback
+is allowed; unsupported timing fails without replacing a high-level destination.
+This is distinct from `native_shared_clock` and leaves existing defaults unchanged.

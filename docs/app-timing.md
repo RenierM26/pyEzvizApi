@@ -157,3 +157,12 @@ staged output. All decoded video/audio hashes match a source-preserving referenc
 Audio relative PTS match exactly; maximum video difference is 32/90000 seconds
 (about 0.36 ms), within the intentional integer-millisecond quantization. This is
 not a fresh camera connection or a test of raw encrypted MPEG-PS extraction.
+
+A fresh, bounded 15-second H9c encrypted SDK session also passed from the installed
+wheel, using supplied local credentials without cloud login or changed camera
+settings: 3572 retained wire records, 226 HEVC frames (2880x1620 at 15 fps), and
+234 mono 16 kHz AAC frames. FFprobe and complete video/audio decode reported zero
+diagnostics. Both tracks start at zero; packet timestamps increase throughout.
+This verifies a real encrypted SDK connection, not physical lip-sync or arbitrary
+raw encrypted PS support. Different final audio/video packet times at the capture
+cut are not by themselves a clock-drift measurement.

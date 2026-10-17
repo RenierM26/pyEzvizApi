@@ -71,7 +71,9 @@ def test_timing_regression_and_block_limit_are_not_repaired():
 
 
 @pytest.mark.parametrize('outputs', [[], [frame(), frame()], [frame(1)],
-                                     [frame(samples=512)]])
+                                     [frame(samples=512)], [frame(time_base=Fraction(0))],
+                                     [frame(time_base=Fraction(-1))], [frame(time_base=None)],
+                                     [frame(pts=None)], [frame(pts=True)]])
 def test_resampling_delay_split_or_retiming_rejected(outputs):
     convert = SimpleNamespace(resample=lambda _: outputs)
     with pytest.raises(ValueError, match='conversion'):
@@ -250,3 +252,26 @@ def test_optional_real_aac_container_to_sink_contract(tmp_path):
         exact_ms = metadata['source_pts'] * Fraction(metadata['time_base_num'],
                                                     metadata['time_base_den']) * 1000
         assert parsed.media_ms == exact_ms.numerator // exact_ms.denominator
+
+
+
+def test_open_time_size_caps_reads_and_seeks_after_file_growth(tmp_path):
+    path = tmp_path / 'growing-source'
+    original = b'local'
+    path.write_bytes(original)
+    with MODULE['open_source'](path) as source:
+        with path.open('ab') as append:
+            append.write(b'new bytes must not be read')
+        assert source.seek(0, os.SEEK_END) == len(original)
+        assert not source.read()
+        assert source.seek(0) == 0
+        assert source.read(100) == original
+        assert source.seek(-2, os.SEEK_END) == len(original) - 2
+        assert source.read() == original[-2:]
+        assert source.seek(-len(original), os.SEEK_CUR) == 0
+        buffer = bytearray(100)
+        assert source.readinto(buffer) == len(original)
+        assert bytes(buffer[:len(original)]) == original
+        source.seek(100)
+        assert not source.read(100)
+    assert source.closed

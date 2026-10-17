@@ -11,6 +11,7 @@ import base64
 from fractions import Fraction
 import hashlib
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -66,7 +67,8 @@ class FrameAdapter:
         output = converted[0]
         if (output.sample_rate != SAMPLE_RATE or output.layout.name != 'mono'
                 or output.samples != SAMPLES or output.format.name != 's16'
-                or output.pts is None or output.time_base is None
+                or type(output.pts) is not int or output.time_base is None
+                or output.time_base <= 0
                 or output.pts * Fraction(output.time_base) != source_time):
             raise ValueError('format conversion changed samples or exact source timing')
         pcm = bytes(output.planes[0])
@@ -86,14 +88,59 @@ class FrameAdapter:
         return row, metadata
 
 
-def open_source(path: Path) -> BinaryIO:
+class BoundedSource(io.RawIOBase):
+    """Seekable reader whose EOF remains the validated open-time file size."""
+
+    def __init__(self, source: BinaryIO, size: int) -> None:
+        super().__init__()
+        self.source = source
+        self.size = size
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self.source.tell()
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        if whence == os.SEEK_SET:
+            target = offset
+        elif whence == os.SEEK_CUR:
+            target = self.tell() + offset
+        elif whence == os.SEEK_END:
+            target = self.size + offset
+        else:
+            raise ValueError('unsupported seek mode')
+        return self.source.seek(target, os.SEEK_SET)
+
+    def read(self, size: int = -1) -> bytes:
+        remaining = max(0, self.size - self.tell())
+        return self.source.read(remaining if size < 0 else min(size, remaining))
+
+    def readinto(self, buffer: Any) -> int:
+        view = memoryview(buffer).cast('B')
+        data = self.read(len(view))
+        view[:len(data)] = data
+        return len(data)
+
+    def close(self) -> None:
+        try:
+            self.source.close()
+        finally:
+            super().close()
+
+
+def open_source(path: Path) -> BoundedSource:
     """Open only a bounded regular local file, never a FIFO/URL/demux playlist."""
     fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_FILE_BYTES:
             raise ValueError('source must be a nonempty regular file at most 256 MiB')
-        return os.fdopen(fd, 'rb')
+        return BoundedSource(os.fdopen(fd, 'rb', buffering=0), info.st_size)
     except BaseException:
         os.close(fd)
         raise
@@ -153,7 +200,7 @@ def packet_metadata(packet: Any, index: int, decoded_frames: int) -> dict[str, A
                 encoded_bytes=packet.size, side_data=sides, decoded_frames=decoded_frames)
 
 
-def decode(source: BinaryIO, container_format: str, stream_index: int,
+def decode(source: BinaryIO | BoundedSource, container_format: str, stream_index: int,
            writer: JsonlWriter, manifest: Any) -> int:
     """Decode a deliberately selected local track; never derive timing from count."""
     av = load_av()

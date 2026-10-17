@@ -93,7 +93,9 @@ follows from the pipeline.
 
 ## Bounds and partial work
 
-Input is a nonempty regular local file up to 256 MiB. Limits: 100,000 selected
+Input is a nonempty regular local file up to 256 MiB. Reads and end-relative
+seeks are capped at its validated open-time size, even if the file later grows.
+Limits: 100,000 selected
 packets, 8,192 encoded bytes per packet, 10,000 decoded blocks and one hour of
 packet polling. JSONL output uses nonblocking writes with a five-second deadline
 per record. This bounds output backpressure, not time spent inside an individual

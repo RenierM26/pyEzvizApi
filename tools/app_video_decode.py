@@ -6,6 +6,7 @@ Optional PyAV; no native arrival inference, pixel output, camera access or pacin
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from fractions import Fraction
 import hashlib
 import json
@@ -57,7 +58,12 @@ def fingerprint(frame: Any, stream_index: int, index: int) -> dict[str, Any]:
                 pixel_sha256=digest.hexdigest())
 
 
-def decode(source: Any, container_format: str, streams: tuple[int, int]) -> dict[str, Any]:
+def ignore_pixels(_row: dict[str, Any], _frame: Any) -> None:
+    """Default observer retains no pixel reference beyond the current iteration."""
+
+
+def decode(source: Any, container_format: str, streams: tuple[int, int],
+           consume_frame: Callable[[dict[str, Any], Any], None] = ignore_pixels) -> dict[str, Any]:
     """Inspect exactly two selected HEVC tracks; release pixels after hashing."""
     if (len(set(streams)) != 2 or any(type(i) is not int or i < 0 for i in streams)
             or container_format not in AUDIO['FORMATS']):
@@ -98,6 +104,7 @@ def decode(source: Any, container_format: str, streams: tuple[int, int]) -> dict
                 previous[stream_index] = exact
                 counts[stream_index] += 1
                 rows.append(row)
+                consume_frame(dict(row), frame)
         if not all(counts.values()):
             raise ValueError('both selected tracks must produce supported pictures')
     return dict(decoded_frames=rows, pyav_version=av.__version__, library_versions=av.library_versions,

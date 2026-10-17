@@ -96,3 +96,11 @@ pictures, joins reverse-lens offers into three queued pairs and rejects a change
 pixel digest without success output. When FFmpeg is available, all six tightly
 packed decoded pixel hashes are also compared with its independent rawvideo output.
 This is not app-equivalent decoding, fresh native tracing or physical A/V sync.
+
+## Explicit pixel preview
+
+The separate [paired-video preview](app-video-preview.md) uses an internal borrowed
+frame observer to copy validated pixels into bounded temporary storage, then
+prevalidates an explicit header map before ffplay output. Inspection and mapping
+still retain no pixels by default. Preview cadence/layout must be supplied;
+queue takes and pipe completions are not native display measurements.

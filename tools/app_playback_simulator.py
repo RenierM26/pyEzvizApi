@@ -7,12 +7,13 @@ is not a decoder, audio processor, real-time sink or physical AV calibration.
 
 from __future__ import annotations
 
+import argparse
 from collections import deque
 from dataclasses import dataclass
 import json
 import struct
 import sys
-from typing import Any
+from typing import Any, ClassVar
 
 MAX_EVENTS = 10_000
 MAX_LINE_BYTES = 8192
@@ -103,6 +104,15 @@ class PlaybackSimulator:
     overflow is rejected as unsupported, not assigned an unverified loss rule.
     """
 
+    event_fields: ClassVar[dict[str, set[str]]] = {
+        'video_picture': {'id', 'media_ms', 'lenses'},
+        'video_tick': {'staging_result'},
+        'audio_enqueue': {'id', 'media_ms'},
+        'audio_begin': set(),
+        'audio_release': {'id'},
+        'audio_write_complete': {'id', 'accepted_bytes'},
+    }
+
     def __init__(self) -> None:
         self.video: deque[dict[str, Any]] = deque()
         self.audio: deque[str] = deque()
@@ -133,22 +143,14 @@ class PlaybackSimulator:
         if at < self.last_at:
             raise ValueError('events must be in nondecreasing at_ms order')
         kind = event.get('kind')
-        allowed = {
-            'video_picture': {'id', 'media_ms', 'lenses'},
-            'video_tick': {'staging_result'},
-            'audio_enqueue': {'id', 'media_ms'},
-            'audio_begin': set(),
-            'audio_release': {'id'},
-            'audio_write_complete': {'id', 'accepted_bytes'},
-        }
-        if not isinstance(kind, str) or kind not in allowed:
+        if not isinstance(kind, str) or kind not in self.event_fields:
             raise ValueError('unknown event kind')
-        if set(event) - {'kind', 'at_ms'} - allowed[kind]:
+        if set(event) - {'kind', 'at_ms'} - self.event_fields[kind]:
             raise ValueError('unknown event fields')
         if kind in ('video_picture', 'audio_enqueue'):
             self.enqueue(event, at)
-        elif kind == 'video_tick':
-            self.video_tick(event, at)
+        elif kind.startswith('video_'):
+            self.video_event(event, at)
         else:
             self.audio_step(event, at)
         self.events += 1
@@ -211,6 +213,10 @@ class PlaybackSimulator:
             self.counts['audio_written'] += 1
             self.emit('audio_write_completed', at, id=item_id, media_ms=self.audio_media[item_id])
 
+    def video_event(self, event: dict[str, Any], at: int) -> None:
+        """Dispatch the autonomous scheduler event."""
+        self.video_tick(event, at)
+
     def video_tick(self, event: dict[str, Any], at: int) -> None:
         if at < self.not_before:
             raise ValueError('video tick precedes the requested scheduler wake time')
@@ -256,9 +262,129 @@ class PlaybackSimulator:
                             'audio_write_pending': self.writing}}
 
 
+class ObservedClockReplay(PlaybackSimulator):
+    """Replay native timer snapshots, never derive elapsed time from callbacks.
+
+    This mode validates explicit epochs, head identity, sampled depth and speed.
+    Display completion is separate from selection. An unavailable-head staging
+    return can occur after staging has admitted a picture; it is not inferred
+    from the current queue depth. Sleep constraints use the native timer domain.
+    """
+
+    event_fields: ClassVar[dict[str, set[str]]] = {
+        **{k: v for k, v in PlaybackSimulator.event_fields.items() if k != 'video_tick'},
+        'video_epoch': {'epoch', 'origin_ms'},
+        'video_unavailable': {'staging_result'},
+        'video_observed_tick': {'epoch', 'id', 'relative_ms', 'elapsed_ms',
+                                'depth', 'speed', 'bias_ms', 'interval_ms'},
+        'video_display_complete': {'id', 'depth'},
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.epoch: int | None = None
+        self.elapsed = 0
+        self.wake_elapsed = 0
+        self.displaying: dict[str, Any] | None = None
+        self.completed = 0
+        self.interval = 0
+
+    def video_event(self, event: dict[str, Any], at: int) -> None:
+        kind = event['kind']
+        if kind == 'video_epoch':
+            self.start_epoch(event, at)
+        elif kind == 'video_unavailable':
+            if self.displaying is not None:
+                raise ValueError('unavailable event during active display')
+            result = event.get('staging_result')
+            if type(result) is not int or not -(2**31) <= result < 2**31:
+                raise ValueError('unavailable event requires signed staging_result')
+            self.clock.unavailable(result)
+            self.emit(kind, at, staging_result=result, speed=self.clock.speed,
+                      rebase_pending=self.clock.rebase_pending)
+        elif kind == 'video_display_complete':
+            item_id = identity(event.get('id'))
+            if self.displaying is None or item_id != self.displaying['id']:
+                raise ValueError('completion must match the active display')
+            if integer(event.get('depth'), 'depth', VIDEO_NODES) != len(self.video):
+                raise ValueError('post-display depth disagrees with admitted queue')
+            self.clock.after_display(len(self.video))
+            self.displaying = None
+            self.completed += 1
+            self.emit(kind, at, id=item_id, speed=self.clock.speed)
+        else:
+            self.observed_tick(event, at)
+
+    def start_epoch(self, event: dict[str, Any], at: int) -> None:
+        epoch = integer(event.get('epoch'), 'epoch', MAX_EVENTS)
+        origin = integer(event.get('origin_ms'), 'origin_ms', 0xffffffff)
+        expected = 0 if self.epoch is None else self.epoch + 1
+        if epoch != expected or not self.clock.rebase_pending or self.displaying is not None:
+            raise ValueError('epoch requires a pending rebase and sequential epoch id')
+        if not self.video or self.video[0]['media_ms'] != origin:
+            raise ValueError('epoch origin must match the unconsumed head')
+        self.epoch = epoch
+        self.clock.rebase(origin)
+        self.elapsed = self.wake_elapsed = 0
+        self.emit('video_observed_epoch', at, epoch=epoch, origin_ms=origin)
+
+    def observed_tick(self, event: dict[str, Any], at: int) -> None:
+        if self.epoch is None or self.clock.rebase_pending:
+            raise ValueError('observed tick requires an established epoch')
+        if self.displaying is not None or not self.video:
+            raise ValueError('observed tick requires an available head and idle display')
+        epoch = integer(event.get('epoch'), 'epoch', MAX_EVENTS)
+        elapsed = integer(event.get('elapsed_ms'), 'elapsed_ms', 0xffffffff)
+        relative = integer(event.get('relative_ms'), 'relative_ms', 0xffffffff)
+        depth = integer(event.get('depth'), 'depth', VIDEO_NODES)
+        bias = integer(event.get('bias_ms'), 'bias_ms', 0xffffffff)
+        interval = integer(event.get('interval_ms'), 'interval_ms', 66)
+        speed = event.get('speed')
+        head = self.video[0]
+        if epoch != self.epoch or elapsed < max(self.elapsed, self.wake_elapsed):
+            raise ValueError('native epoch/timer order or requested sleep violated')
+        if identity(event.get('id')) != head['id'] or depth != len(self.video):
+            raise ValueError('native head/depth disagrees with admitted queue')
+        if relative != ((head['media_ms'] - self.clock.origin_ms) & 0xffffffff):
+            raise ValueError('native relative time disagrees with picture origin')
+        if (type(speed) not in (int, float) or speed != self.clock.speed
+                or bias != self.clock.bias_ms or interval not in (0, 66)
+                or (interval == 0 and (self.interval == 66 or head['media_ms'] != 0))):
+            raise ValueError('native profile state disagrees with modeled state')
+        decision = self.clock.decision(relative, elapsed, depth, interval)
+        self.interval = interval
+        self.elapsed = elapsed
+        self.wake_elapsed = elapsed + decision.sleep_ms
+        self.emit('video_observed_decision', at, epoch=epoch, id=head['id'],
+                  elapsed_ms=elapsed, display=decision.display,
+                  drops=decision.drops, sleep_ms=decision.sleep_ms)
+        for _ in range(decision.drops):
+            picture = self.video.popleft()
+            self.counts['video_dropped'] += 1
+            self.emit('video_drop_oldest', at, **picture)
+        if decision.display:
+            self.displaying = self.video.popleft()
+            self.counts['video_displayed'] += 1
+            self.emit('video_display_requested', at, **self.displaying)
+
+    def result(self) -> dict[str, Any]:
+        """Keep display requests, completions and boundary-pending output distinct."""
+        result = super().result()
+        result['profile'] = 'observed-h9c-native-clock-replay-v1'
+        result['clock_source'] = 'explicit-native-timer-snapshots'
+        result['summary'].update(video_display_completed=self.completed,
+                                 video_display_pending=self.displaying,
+                                 video_epoch=self.epoch)
+        return result
+
+
 def main() -> int:
     """Stage all output until validation succeeds; no partial success JSON."""
-    simulator = PlaybackSimulator()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--observed-clock', action='store_true',
+                        help='require explicit native timer epochs and decision snapshots')
+    args = parser.parse_args()
+    simulator = ObservedClockReplay() if args.observed_clock else PlaybackSimulator()
     try:
         for _ in range(MAX_EVENTS + 1):
             line = sys.stdin.buffer.readline(MAX_LINE_BYTES + 1)

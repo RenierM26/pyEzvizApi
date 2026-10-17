@@ -103,3 +103,82 @@ ring admission, composite video catch-up, speed/reset lifecycle, rejection rules
 and CLI staging. Private retained traces are validated separately and are never
 committed as fixtures. Physical screen-versus-speaker alignment remains a separate
 measurement and a real output backend remains out of scope.
+
+## Strict observed-native-clock replay
+
+```sh
+python tools/app_playback_simulator.py --observed-clock < observations.jsonl > replay.json
+```
+
+This separate mode consumes **native elapsed-timer readings**, not elapsed time
+reconstructed from callback timestamps or media PTS. `at_ms` still orders events
+on one normalized observation clock, with input order breaking ties; it does not
+supply the video's elapsed timer. All original bounds and audio events apply.
+Autonomous `video_tick` events are rejected in this mode, and observed-clock
+control events are rejected without the flag.
+
+| kind | Required fields beyond `kind`, `at_ms` | Meaning |
+|---|---|---|
+| `video_picture` | Same as above | Admit a complete paired picture at its observed queue admission |
+| `video_epoch` | `epoch`, `origin_ms` | Establish the observed native picture origin, leaving the matching head unconsumed |
+| `video_unavailable` | signed32-bit `staging_result` | Supply an observed unavailable-head staging return, including zero returns |
+| `video_observed_tick` | `epoch`, `id`, `relative_ms`, `elapsed_ms`, `depth`, `speed`, `bias_ms`, `interval_ms` | Evaluate one native scheduler sample against the currently admitted head and sampled depth |
+| `video_display_complete` | `id`, `depth` | Complete the active display call at its post-display queue-depth sample; update adaptive speed |
+
+Epoch IDs start at zero and increase by one. Initial/recovery epoch establishment
+requires a pending rebase and an origin matching the queued head. A nonzero
+unavailable staging return while speed is between 1 and 2 requests the next rebase.
+The unavailable-head observation can precede staging admission: a picture may
+already be queued when the staging function returns. Consequently unavailability
+is an **explicit input**, not inferred from current queue emptiness. This mode does
+not manufacture missing reset/staging observations or initialize itself from an
+arbitrary mid-session speed snapshot.
+
+Each tick must match the current epoch, head ID, queue depth, computed relative
+picture time, bias and modeled adaptive speed (exact float32 value). Elapsed time
+is uint32 milliseconds, nondecreasing within an epoch, and must honor the previous
+native-domain requested sleep. Timer wrap within an epoch is unsupported and
+rejected. `interval_ms` is the observed 66-ms frame interval, or zero during the
+observed startup state at media time zero. Once a 66-ms interval is observed,
+returning to zero is rejected. Other intervals/profiles are rejected.
+
+Selection removes dropped pictures and transfers the selected picture to an
+explicit in-flight display slot. New admissions and audio events can proceed
+while that call is blocked. A new tick, unavailable return or epoch cannot occur
+during the active display. Completion must match its ID and the actual retained
+post-display queue depth. Only completion updates speed. Output
+`video_displayed` counts **requests**, `video_display_completed` counts completed
+calls, and `video_display_pending` retains the entire in-flight picture at EOF.
+Neither request nor completion proves optical presentation.
+
+For example, these observations request a display even though its callback is
+recorded much later: the native elapsed value, not `at_ms`, determines the due band.
+
+```jsonl
+{"kind":"video_picture","at_ms":0,"id":"v0","media_ms":0,"lenses":["main:0","secondary:0"]}
+{"kind":"video_epoch","at_ms":0,"epoch":0,"origin_ms":0}
+{"kind":"video_observed_tick","at_ms":999,"epoch":0,"id":"v0","relative_ms":0,"elapsed_ms":36,"depth":1,"speed":1,"bias_ms":50,"interval_ms":66}
+{"kind":"video_display_complete","at_ms":1200,"id":"v0","depth":0}
+```
+
+### Adapter requirements
+
+The JSONL interface is a normalized metadata contract, not an importer for
+arbitrary app versions. A trace adapter must retain the actual timer value passed
+to the scheduler and its picture-origin epoch. Normalize admissions, audio
+processing/release/write events, native queue-depth samples and staging returns
+using one monotonic observation session, preserving finer-resolution order before
+rounding `at_ms`. Never substitute source media timestamps for queue arrivals.
+Use the scheduler's initial native queue-depth sample for a decision and its
+post-display depth sample for completion. Preserve the passed timer reading even
+when its observation timestamp is earlier than that queue-depth sample.
+
+An adapter must verify the supported native profile and pairing, reject hook
+errors/missing provenance, and compare decision actions and output identities
+with the native observations. Selection's queue transfer is a model boundary,
+not a claim that the native dequeue happened at the timer-read instant; reject
+traces whose intervening admissions/queue samples cannot be represented by this
+contract. Do not infer optical output from render callbacks or silently omit an
+in-flight final call. Raw device traces and the build-specific adapter stay
+private; committed fixtures/tests are synthetic. This replay mode does not supply
+a real-time backend, proprietary VQE replacement or physical AV calibration.

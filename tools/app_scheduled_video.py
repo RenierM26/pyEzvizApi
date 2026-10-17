@@ -174,18 +174,20 @@ def replay(report: dict[str, Any], source: Any, observed_queues: bool = False) -
     return model.result()
 
 
-def plan_frames(result: dict[str, Any], spool: Any) -> tuple[list[dict[str, Any]], int, int]:
+def plan_frames(result: dict[str, Any], spool: Any,
+                max_pair_pixels: int | None = None) -> tuple[list[dict[str, Any]], int, int]:
     """Only completed requests become artifact frames; timing is not media PTS."""
     plan = result['selected']
     geometry = None
     previous = -1
     pixels = 0
+    pair_limit = PREVIEW['MAX_PAIR_PIXELS'] if max_pair_pixels is None else max_pair_pixels
     for pair in plan:
         rows = [spool.records[identity] for identity in pair['decoded_ids']]
         current = (rows[0]['width'], rows[0]['height'])
         if (current != (rows[1]['width'], rows[1]['height'])
                 or (geometry is not None and geometry != current)
-                or current[0] * 2 * current[1] > PREVIEW['MAX_PAIR_PIXELS']):
+                or current[0] * 2 * current[1] > pair_limit):
             raise ValueError('requires constant equal lens geometry within paired pixel limit')
         if pair['request_at_ms'] <= previous:
             raise ValueError('artifact request observation PTS must be strictly increasing')

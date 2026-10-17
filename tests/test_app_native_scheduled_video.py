@@ -268,3 +268,18 @@ def test_receipt_preserves_opaque_offer_ids_that_resemble_schema_keys():
         selected=[dict(decoded_ids=['native:0', 'native:1'])]))
     assert result['offer_bindings'] == {'decoded_ids': 'native:0', 'native_sample_ids': 'native:1'}
     assert result['selected'][0]['native_sample_ids'] == ['native:0', 'native:1']
+
+
+def test_real_native_lens_geometry_fits_bounded_native_plan_not_old_hevc_default():
+    spool = MODULE['NativeSpool'](io.BytesIO())
+    spool.records = {identity: dict(width=2880, height=1620) for identity in ('left', 'right')}
+    result = dict(selected=[dict(decoded_ids=['left', 'right'], request_at_ms=70)])
+    with pytest.raises(ValueError, match='paired pixel limit'):
+        MODULE['SCHEDULED']['plan_frames'](result, spool)
+    _, width, height = MODULE['SCHEDULED']['plan_frames'](
+        result, spool, max_pair_pixels=MODULE['MAX_PAIR_PIXELS'])
+    assert (width, height) == (2880, 1620)
+    for row in spool.records.values():
+        row.update(width=4096, height=4096)
+    with pytest.raises(ValueError, match='paired pixel limit'):
+        MODULE['SCHEDULED']['plan_frames'](result, spool, max_pair_pixels=MODULE['MAX_PAIR_PIXELS'])

@@ -19,6 +19,7 @@ from typing import Any, BinaryIO
 AUDIT = runpy.run_path(str(Path(__file__).with_name('app_native_pixel_audit.py')))
 SCHEDULED = runpy.run_path(str(Path(__file__).with_name('app_scheduled_video.py')))
 NATIVE_FIELDS = {'sample_id', 'pixel_sha256'}
+MAX_PAIR_PIXELS = 2 * AUDIT['MAX_PIXELS']
 SpoolBase: Any = SCHEDULED['PREVIEW']['Spool']
 ReplayBase: Any = SCHEDULED['CoupledReplay']
 
@@ -126,7 +127,8 @@ def main() -> int:
                     with AUDIT['SOURCE']['open_source'](args.event_map) as events:
                         result = replay(report, events)
                     evidence['replay'] = result
-                    plan, width, height = SCHEDULED['plan_frames'](result, spool)
+                    plan, width, height = SCHEDULED['plan_frames'](
+                        result, spool, max_pair_pixels=MAX_PAIR_PIXELS)
                     evidence['artifact_frames'] = SCHEDULED['export'](
                         plan, spool, width, height, args.output, evidence)
             except (Exception, KeyboardInterrupt) as failure:

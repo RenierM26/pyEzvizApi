@@ -80,9 +80,11 @@ not decoded HEVC IDs. Opaque offer IDs are retained verbatim.
 Inherited source bounds: 32 snapshots, 4096 per dimension, 8,388,608 coded luma
 pixels per sample, 256 MiB combined original snapshots, contiguous complete file
 coverage, 8 KiB JSONL lines and 10,000 source/model events. The canonical spool
-is additionally bounded to 256 MiB. Artifact limits are 8,388,608 paired luma
+is additionally bounded to 256 MiB. Artifact limits are 16,777,216 paired luma
 pixels per frame, 268,435,456 total exported pixels and 512 MiB encoded output;
-the 60-second encode budget is cooperative, not a hard FFmpeg interrupt.
+the 60-second encode budget is cooperative, not a hard FFmpeg interrupt. The
+native-specific paired limit accommodates two actual 2880×1620 lens images;
+the older HEVC source keeps its original 8,388,608 paired-pixel default.
 
 Successful replay authenticates neither the manifests nor their joint-session
 provenance. Timing/headers/renderer observations remain caller evidence; this

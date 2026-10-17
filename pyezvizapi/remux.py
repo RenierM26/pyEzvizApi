@@ -54,6 +54,7 @@ def ffmpeg_mpegts_command(
     audio_url: str | None = None,
     audio_input_format: Literal["aac", "concat"] = "aac",
     preserve_timestamps: bool = False,
+    map_all_streams: bool = False,
 ) -> list[str]:
     """Build an FFmpeg stream-copy command producing MPEG-TS on stdout."""
 
@@ -85,12 +86,19 @@ def ffmpeg_mpegts_command(
                 "1:a:0",
             )
         )
+    if map_all_streams:
+        if audio_input is not None:
+            raise PyEzvizError("FFmpeg map_all_streams requires a single input")
+        command.extend(("-map", "0"))
     if preserve_timestamps or audio_input_format == "concat":
         command.append("-copyts")
     command.extend(("-c", "copy", "-f", "mpegts"))
     if preserve_timestamps or audio_input_format == "concat":
         # Flush AAC PES at each timestamp: aggregation can hide a gap inside PES.
         command.extend(("-muxdelay", "0"))
+        if map_all_streams:
+            # Explicit parsed-frame output must retain the playback session epoch.
+            command.extend(("-mpegts_copyts", "1"))
     command.append("pipe:1")
     return command
 
@@ -130,6 +138,7 @@ def open_mpegts_remux_process(
     audio_url: str | None = None,
     audio_input_format: Literal["aac", "concat"] = "aac",
     preserve_timestamps: bool = False,
+    map_all_streams: bool = False,
     popen: Callable[..., Any] = subprocess.Popen,
 ) -> subprocess.Popen[bytes]:
     """Open one FFmpeg MPEG-TS remux process with captured stderr."""
@@ -144,6 +153,7 @@ def open_mpegts_remux_process(
                 audio_url=audio_url,
                 audio_input_format=audio_input_format,
                 preserve_timestamps=preserve_timestamps,
+                map_all_streams=map_all_streams,
             ),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

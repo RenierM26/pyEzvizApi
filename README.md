@@ -923,3 +923,7 @@ Apache 2.0 — see `LICENSE.md`.
 ---
 
 Draft versions: 0.0.x
+
+### Experimental app-compatible frame timing
+
+For explicitly parsed, clear HEVC/AAC frames, see [app-compatible timing](docs/app-timing.md). This is opt-in and does not change `save_clip`, automatic capture, or source-preserving/shared-clock defaults.

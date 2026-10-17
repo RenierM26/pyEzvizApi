@@ -13,6 +13,12 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .app_timing import (
+        AppPlaybackClock,
+        AppTimedFrame,
+        app_timed_mpegps_payloads,
+        copy_app_timed_frames_to_mpegts,
+    )
     from .camera import EzvizCamera
     from .cas import EzvizCAS
     from .client import EzvizClient
@@ -1084,6 +1090,10 @@ _EXPORTS = {
     "MessageFilterType": "constants",
     "MediaDecodeOptions": "media",
     "MediaMuxOptions": "media",
+    "AppPlaybackClock": "app_timing",
+    "AppTimedFrame": "app_timing",
+    "app_timed_mpegps_payloads": "app_timing",
+    "copy_app_timed_frames_to_mpegts": "app_timing",
     "EzvizAppPlaybackSupport": "playback",
     "inspect_app_playback_support": "playback",
     "NativeRtpClockProbe": "rtp_timing",

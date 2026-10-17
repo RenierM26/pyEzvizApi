@@ -110,3 +110,9 @@ Remaining integration work includes decoded-source arrivals, video/lens lifecycl
 real video output, a deliberate voice-processing replacement and physical
 screen-versus-speaker validation. No fixed-offset correction follows from this
 transport experiment.
+
+## Local decoded-source adapter
+
+The separate [local AAC adapter](app-aac-decode.md) can feed this contract from
+clear MPEG-TS/Matroska files while retaining exact PTS and decoder priming metadata.
+It does not reproduce native live arrival times or add voice processing.

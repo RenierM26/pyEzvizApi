@@ -665,3 +665,33 @@ inter-track synchronization. Invalid/reordered native clocks are rejected rather
 than converted to a guessed frame rate. Ordinary RTP, MPEG-PS and MPEG-TS cloud
 routes keep their existing behavior. Historical intermittent upstream loss or
 corruption is not classified as fixed by a later clean capture.
+
+
+## Bounded MPEG-PS decryption and interleaved video
+
+`decrypt_hikvision_ps_video()` keeps clear-codec-header H.264/HEVC AES prefix
+state separately for each video PES stream. A continuation can cross another
+video stream or, when picture timing is present, an audio packet. A validated
+new-picture PES timestamp plus explicit PES data alignment and a NAL at payload
+start permits new parameter sets after a completed slice. Unaligned tail
+lookalikes remain protected even when a new PTS is present;
+any preceding continuation bytes in that PES finish before the new NAL starts.
+Malformed PTS/DTS headers do not establish picture boundaries. Legacy untimed
+non-video resets and post-prefix ciphertext/tail-lookalike guards remain.
+
+This is state within one bounded decrypt call, not a persistent cross-call
+streaming decryptor. The encrypted-codec-header mode (`nalu_header_size=0`) is
+unchanged. Container/PES headers, timestamps and audio bytes are not retimed or
+rewritten. No fixed AV correction, resampling or duplicate removal is added.
+
+For instrumentation captures, retain only accepted player input, not every
+attempted `PlayM4_InputData` call: rejected calls can retry the same buffer.
+Repeated captured bytes can corrupt a valid encoded stream. Removing identical
+buffers is a diagnostic control, not a generally safe network/media policy.
+
+Private H9c validation compares the bounded library output byte-for-byte with an
+independent per-lens recovery: both video tracks decode 2,147 frames, audio also
+decodes without diagnostics, and all 835 video plus 437 AAC packets overlapping
+the official-app export match payloads and source timing. A previously clean
+preflight remains byte-for-byte unchanged. No camera media or keys are included
+in the repository, and this does not measure physical screen/speaker latency.

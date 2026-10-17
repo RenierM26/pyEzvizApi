@@ -11,9 +11,12 @@ _CIPHER = bytes.fromhex("34a1119c1a165ddeb3ad0fffba9282ec")
 _START = b"\x00\x00\x00\x01"
 
 
-def pes(stream, payload, pts=None):
+def pes(stream, payload, pts=None, *, aligned=False):
     if pts is not None:
-        return _pes(pts, stream, payload)
+        packet = bytearray(_pes(pts, stream, payload))
+        if aligned:
+            packet[6] |= 0x04
+        return bytes(packet)
     return (
         b"\x00\x00\x01"
         + bytes((stream,))
@@ -55,17 +58,24 @@ def test_new_picture_pts_decrypts_real_parameter_set_after_large_slice(header_si
     header = _START + (b"\x26\x01" if header_size == 2 else b"\x65")
     parameter = _START + (b"\x40\x01" if header_size == 2 else b"\x67")
     tail = b"clear slice tail"
-    source = pes(0xE0, header + _CIPHER * 256 + tail, 0) + pes(0xE0, parameter + _CIPHER, 6000)
-    expected = pes(0xE0, header + _CLEAR * 256 + tail, 0) + pes(0xE0, parameter + _CLEAR, 6000)
+    source = pes(0xE0, header + _CIPHER * 256 + tail, 0) + pes(
+        0xE0, parameter + _CIPHER, 6000, aligned=True
+    )
+    expected = pes(0xE0, header + _CLEAR * 256 + tail, 0) + pes(
+        0xE0, parameter + _CLEAR, 6000, aligned=True
+    )
     assert decrypt_hikvision_ps_video(source, _KEY, nalu_header_size=header_size) == expected
 
 
 @pytest.mark.parametrize("malformed", [False, True])
-def test_same_picture_or_invalid_pts_preserves_tail_lookalike(malformed):
+@pytest.mark.parametrize("aligned", [False, True])
+def test_same_picture_or_invalid_pts_preserves_tail_lookalike(malformed, aligned):
     header = _START + b"\x26\x01"
     first_encrypted = pes(0xE0, header + _CIPHER * 256 + b"tail", 0)
     first_clear = pes(0xE0, header + _CLEAR * 256 + b"tail", 0)
-    lookalike = bytearray(pes(0xE0, _START + b"\x42\x01" + _CIPHER, 6000 if malformed else 0))
+    lookalike = bytearray(
+        pes(0xE0, _START + b"\x42\x01" + _CIPHER, 6000 if malformed else 0, aligned=aligned)
+    )
     if malformed:
         lookalike[9] &= 0xFE  # Invalid PTS marker must not establish a new picture.
     assert decrypt_hikvision_ps_video(first_encrypted + lookalike, _KEY) == first_clear + lookalike
@@ -91,6 +101,7 @@ def test_pts_dts_picture_boundaries_require_complete_timestamp_markers(dts_mode)
 
     def parameter(body):
         packet = bytearray(pes(0xE0, _START + b"\x40\x01" + body, 6000))
+        packet[6] |= 0x04
         packet[7] = 0xC0
         packet[9] = (packet[9] & 0x0F) | 0x30
         if dts_mode != "missing":
@@ -110,3 +121,21 @@ def test_pts_dts_picture_boundaries_require_complete_timestamp_markers(dts_mode)
         decrypt_hikvision_ps_video(first_encrypted + parameter(_CIPHER), _KEY)
         == first_clear + expected
     )
+
+
+@pytest.mark.parametrize(
+    "leading_tail,aligned",
+    [(b"", False), (b"old-picture-tail", False), (b"old-picture-tail", True)],
+)
+def test_new_pts_does_not_promote_unaligned_tail_parameter_lookalike(leading_tail, aligned):
+    header = _START + b"\x26\x01"
+    false_parameter = _START + b"\x42\x01" + _CIPHER
+    first_encrypted = pes(0xE0, header + _CIPHER * 256 + b"tail", 0)
+    first_clear = pes(0xE0, header + _CLEAR * 256 + b"tail", 0)
+    source = first_encrypted + pes(
+        0xE0, leading_tail + false_parameter + header + _CIPHER, 6000, aligned=aligned
+    )
+    expected = first_clear + pes(
+        0xE0, leading_tail + false_parameter + header + _CLEAR, 6000, aligned=aligned
+    )
+    assert decrypt_hikvision_ps_video(source, _KEY) == expected

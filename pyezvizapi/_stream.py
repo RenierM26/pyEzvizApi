@@ -1885,6 +1885,22 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                     if idx + 1 < len(nal_starts)
                     else payload_end
                 )
+                # PTS alone does not locate an AU within a PES that may start
+                # with an older NAL's tail. Only an explicitly aligned payload
+                # start may promote a post-prefix non-VCL candidate here.
+                aligned_picture_start = (
+                    new_picture and bool(data[packet_range.start + 6] & 0x04)
+                    and start_code_pos == payload_start
+                )
+                if (
+                    state.active_nal
+                    and state.active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    and start_code_pos
+                    > state.active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
+                    and not aligned_picture_start
+                ):
+                    continue
                 if new_picture:
                     # PES PTS belongs to the first access unit starting here;
                     # its payload may first finish the previous picture's NAL.
@@ -1904,14 +1920,6 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
                         and candidate_decrypted == 0
                     ):
                         continue
-                if (
-                    state.active_nal
-                    and state.active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                    and start_code_pos
-                    > state.active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                    and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
-                ):
-                    continue
                 if state.active_nal and segment_start < start_code_pos:
                     decrypt_nal_body_segment(state, segment_start, start_code_pos)
                 state.reset()

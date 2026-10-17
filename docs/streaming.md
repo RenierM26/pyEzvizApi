@@ -672,7 +672,9 @@ corruption is not classified as fixed by a later clean capture.
 `decrypt_hikvision_ps_video()` keeps clear-codec-header H.264/HEVC AES prefix
 state separately for each video PES stream. A continuation can cross another
 video stream or, when picture timing is present, an audio packet. A validated
-new-picture PES timestamp permits new parameter sets after a completed slice;
+new-picture PES timestamp plus explicit PES data alignment and a NAL at payload
+start permits new parameter sets after a completed slice. Unaligned tail
+lookalikes remain protected even when a new PTS is present;
 any preceding continuation bytes in that PES finish before the new NAL starts.
 Malformed PTS/DTS headers do not establish picture boundaries. Legacy untimed
 non-video resets and post-prefix ciphertext/tail-lookalike guards remain.

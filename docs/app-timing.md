@@ -1,9 +1,9 @@
 # Experimental app-compatible HEVC/AAC timing
 
-This is an **explicit parsed-frame API**, not a new `save_clip` flag or automatic
-capture policy. Existing transport/remux defaults and `native_shared_clock` are
-unchanged. Arbitrary RTP epochs, encrypted PS, and media decoding are not accepted
-or inferred by this API.
+This provides an **explicit parsed-frame API** and an opt-in native live-capture
+profile. Existing transport/remux defaults and `native_shared_clock` are unchanged.
+Neither profile is automatically selected. Arbitrary RTP epochs, encrypted PS,
+and media decoding are not inferred by the parsed-frame API.
 
 ## Use
 
@@ -73,11 +73,42 @@ cloud seek, raw counter wrap conversion, missing-source transitions and native
 reset modes beyond the observed UI seek path require separate validation. The
 package does not include private camera footage, credentials or native binaries.
 
-The draft parsed-frame entry point intentionally avoids claiming end-to-end
-transport integration. Follow-up capture integration must carry pre-selection
-origins and stable source/picture identity, rather than rebasing the first packets
-remaining after trimming. This must be established per transport before wiring a
-high-level capture flag.
+## Explicit native live capture
+
+```python
+from pyezvizapi import CaptureLimits, ClipOptions, LocalSdkClipSource, MediaMuxOptions
+
+options = ClipOptions(
+    source=LocalSdkClipSource(),
+    capture=CaptureLimits(duration_seconds=20),
+    mux=MediaMuxOptions(app_relative_clock=True),
+)
+result = client.save_clip_with_options("ABC123", "app-relative.ts", options)
+```
+
+The long-form API accepts `save_clip(..., app_relative_clock=True)`. No CLI flag
+is added. An explicit `HcNetSdkCommandPortClipSource` is also supported; supply its
+usual connection/command settings. This profile is mutually exclusive with
+`native_shared_clock`: app-relative timing removes the independent track origins
+instead of preserving a hypothesized shared source epoch.
+
+The capture adapter requires bounded MPEG-TS output, genuine single-source native
+HEVC RTP timing, advertised video cadence and source-timestamped mono 16 kHz AAC.
+It unwraps video counters and converts each track to integer source milliseconds
+before applying the live profile. Audio gaps remain. Both tracks start from the
+full received startup timeline, not from independently trimmed later packets.
+Generated command plans do not implicitly enable clean-window startup skipping
+when this profile is selected. Explicit startup skip/trim/preroll/wait options
+are rejected. High-level output is staged, preserving an existing destination if
+capture or timing validation fails.
+
+Automatic/cloud/ECDH sources, UDP, raw PS, missing or synthetic clocks, H.264,
+multiple accepted video/audio source clocks and video-only fallback are rejected.
+The usual explicit decode/key policy still applies to encrypted native payloads;
+selecting a clock does not enable decryption or repair damaged encoded frames.
+This adapter currently captures one video source in live mode: paired-lens
+recordings and SD playback/seek use the explicit parsed-frame API above. Late
+recording selection must retain all earlier clock continuity, not just an origin.
 
 ## Private real-media integration check
 
@@ -93,3 +124,9 @@ reference boundary, not new errors. No private payloads are in this repository.
 This checks the parsed-frame remux path, **not** direct decryption of the retained
 raw encrypted live stream or automatic transport selection. The earlier raw-live
 video extraction issue is not fixed by this timing feature.
+
+A separate native live-capture check replayed 5000 retained clear camera-wire
+records through the real IDMX/RTP parser and new capture adapter: FFprobe and
+full FFmpeg decode both succeeded, with 225 HEVC frames and 241 AAC frames and
+no decoder diagnostics. This verifies the clear native transport path; it is not
+an end-to-end encrypted-wire decryption test or a physical latency measurement.

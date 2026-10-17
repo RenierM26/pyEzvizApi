@@ -73,7 +73,49 @@ def verify(row: dict[str, Any], source: bytes, rendered: bytes) -> dict[str, Any
                 ordered_plane_sha256=[hashlib.sha256(p).hexdigest() for p in rendered_planes])
 
 
-def audit(source: BinaryIO, rendered: BinaryIO, manifest: BinaryIO) -> dict[str, Any]:
+def renderer_fingerprint(row: dict[str, Any], rendered: bytes) -> dict[str, Any]:
+    """Validate caller-observed format-1 uploads and sampler bindings before YVU → YUV."""
+    layout = row.get('renderer_layout')
+    before, after = header(row.get('input_header')), header(row.get('render_header'))
+    width, _, height = geometry(before, after)
+    pixels = width * height
+    expected = dict(renderer_format=1, width=width, height=height, sid=before[1],
+                    raw_timestamp=before[7], frame_index=before[10])
+    if (not isinstance(layout, dict) or layout.get('payload_matches') is not True
+            or any(type(layout.get(k)) is not int or layout[k] != v for k, v in expected.items())):
+        raise ValueError('renderer layout must match format 1 and exact native picture identity')
+    uploads, samplers = layout.get('uploads'), layout.get('samplers')
+    if (not isinstance(uploads, list) or len(uploads) != 3
+            or not isinstance(samplers, list) or len(samplers) != 3):
+        raise ValueError('renderer layout requires three ordered uploads and sampler bindings')
+    textures = set()
+    for index, (name, offset) in enumerate(zip(('Ytexture', 'Utexture', 'Vtexture'),
+                                               (0, pixels * 5 // 4, pixels), strict=True)):
+        upload, sampler = uploads[index], samplers[index]
+        size = (width, height) if index == 0 else (width // 2, height // 2)
+        fields = dict(offset=offset, width=size[0], height=size[1], format=5)
+        if (not isinstance(upload, dict)
+                or any(type(upload.get(k)) is not int or upload[k] != v for k, v in fields.items())
+                or type(upload.get('texture')) is not int
+                or not 0 < upload['texture'] < UINT32 or upload['texture'] in textures):
+            raise ValueError('renderer upload does not match the native format-1 YVU profile')
+        if (not isinstance(sampler, dict) or sampler.get('name') != name
+                or type(sampler.get('unit')) is not int or sampler['unit'] != index
+                or type(sampler.get('texture')) is not int
+                or sampler['texture'] != upload['texture']):
+            raise ValueError('renderer sampler is not bound to the matching plane texture')
+        textures.add(upload['texture'])
+    planes = (rendered[:pixels], rendered[pixels * 5 // 4:], rendered[pixels:pixels * 5 // 4])
+    digest = hashlib.sha256()
+    for plane in planes:
+        digest.update(plane)
+    return dict(native_pixel_format='yvu420p', canonical_pixel_format='yuv420p',
+                canonical_pixel_sha256=digest.hexdigest(),
+                canonical_plane_sha256=[hashlib.sha256(plane).hexdigest() for plane in planes])
+
+
+def audit(source: BinaryIO, rendered: BinaryIO, manifest: BinaryIO,
+          verify_renderer: bool = False) -> dict[str, Any]:
     """Require contiguous complete snapshot coverage; never select trace-named paths."""
     offsets = [0, 0]
     rows: list[dict[str, Any]] = []
@@ -96,14 +138,20 @@ def audit(source: BinaryIO, rendered: BinaryIO, manifest: BinaryIO) -> dict[str,
                 raise ValueError('snapshot offsets must provide contiguous complete coverage')
         if sum(offsets) + sum(lengths) > MAX_TOTAL_BYTES:
             raise ValueError('native snapshot total byte limit exceeded')
-        rows.append(verify(row, source.read(lengths[0]), rendered.read(lengths[1])))
+        input_pixels, render_pixels = source.read(lengths[0]), rendered.read(lengths[1])
+        result = verify(row, input_pixels, render_pixels)
+        if verify_renderer:
+            result.update(renderer_fingerprint(row, render_pixels))
+        rows.append(result)
         identities.add(row['id'])
         offsets = [offset + length for offset, length in zip(offsets, lengths, strict=True)]
     if not rows or source.read(1) or rendered.read(1):
         raise ValueError('requires nonempty complete native snapshot coverage')
     return dict(mode='native-bottom-crop-audit', samples=rows, samples_verified=len(rows),
                 input_bytes=offsets[0], render_bytes=offsets[1],
-                exact_ordered_plane_crop_verified=True, chroma_order_verified=False,
+                exact_ordered_plane_crop_verified=True, chroma_order_verified=verify_renderer,
+                chroma_order_source='caller-render-observations-native-format-1-profile'
+                    if verify_renderer else None,
                 provenance='caller-manifest-not-authenticated',
                 physical_display_verified=False, decoder_buffer_ownership_verified=False)
 
@@ -113,12 +161,14 @@ def main() -> int:
     parser.add_argument('input_snapshots', type=Path)
     parser.add_argument('render_snapshots', type=Path)
     parser.add_argument('manifest', type=Path)
+    parser.add_argument('--verify-yv12-renderer', action='store_true',
+                        help='require per-sample format-1 uploads/samplers; emit canonical YUV hashes')
     args = parser.parse_args()
     try:
         with (SOURCE['open_source'](args.input_snapshots) as source,
               SOURCE['open_source'](args.render_snapshots) as rendered,
               SOURCE['open_source'](args.manifest) as manifest):
-            report = audit(source, rendered, manifest)
+            report = audit(source, rendered, manifest, verify_renderer=args.verify_yv12_renderer)
         print(json.dumps(report, sort_keys=True))
     except (OSError, ValueError, TypeError) as error:
         print(f'native pixel audit failed: {error}', file=sys.stderr)

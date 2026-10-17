@@ -198,3 +198,138 @@ def test_zero_bottom_crop():
     row['render_header'][4] = 8
     row['render_sha256'] = row['input_sha256']
     assert run_audit(row, source, source)['samples'][0]['bottom_rows'] == 0
+
+
+def renderer_sample():
+    row, source, rendered = sample()
+    row['renderer_layout'] = dict(renderer_format=1, width=8, height=6, sid=224,
+        raw_timestamp=3000, frame_index=1, payload_matches=True,
+        uploads=[dict(offset=offset, width=width, height=height, format=5, texture=index + 1)
+                 for index, (offset, width, height) in enumerate([(0, 8, 6), (60, 4, 3), (48, 4, 3)])],
+        samplers=[dict(name=name, unit=index, texture=index + 1)
+                  for index, name in enumerate(('Ytexture', 'Utexture', 'Vtexture'))])
+    return row, source, rendered
+
+
+def run_renderer_audit(row, source, rendered, enabled=True):
+    return MODULE['audit'](io.BytesIO(source), io.BytesIO(rendered),
+                           io.BytesIO(json.dumps(row).encode()), verify_renderer=enabled)
+
+
+def test_explicit_renderer_binding_fingerprint():
+    row, source, rendered = renderer_sample()
+    report = run_renderer_audit(row, source, rendered)
+    assert report['chroma_order_verified'] is True
+    assert report['chroma_order_source'] == 'caller-render-observations-native-format-1-profile'
+    assert report['provenance'] == 'caller-manifest-not-authenticated'
+    result = report['samples'][0]
+    canonical = rendered[:48] + rendered[60:] + rendered[48:60]
+    assert result['canonical_pixel_sha256'] == hashlib.sha256(canonical).hexdigest()
+    assert result['canonical_pixel_sha256'] != result['render_sha256']
+    assert result['native_pixel_format'] == 'yvu420p'
+    assert result['canonical_pixel_format'] == 'yuv420p'
+    assert result['canonical_plane_sha256'] == [hashlib.sha256(p).hexdigest()
+                                               for p in (rendered[:48], rendered[60:], rendered[48:60])]
+
+
+def test_crop_only_does_not_infer_chroma_order_from_optional_fields():
+    row, source, rendered = renderer_sample()
+    row['renderer_layout']['renderer_format'] = 3
+    report = run_renderer_audit(row, source, rendered, enabled=False)
+    assert report['chroma_order_verified'] is False
+    assert report['chroma_order_source'] is None
+    assert 'canonical_pixel_sha256' not in report['samples'][0]
+
+
+@pytest.mark.parametrize(('key', 'value'), [('renderer_format', 3), ('renderer_format', True),
+    ('width', 10), ('height', 8), ('sid', 225), ('raw_timestamp', 3001), ('frame_index', 2),
+    ('payload_matches', False), ('payload_matches', 1)])
+def test_renderer_rejects_wrong_profile_or_identity(key, value):
+    row, source, rendered = renderer_sample()
+    row['renderer_layout'][key] = value
+    with pytest.raises(ValueError, match='format 1 and exact native picture'):
+        run_renderer_audit(row, source, rendered)
+
+
+@pytest.mark.parametrize('value', [None, {}, [], 1])
+def test_renderer_mode_requires_explicit_observations(value):
+    row, source, rendered = renderer_sample()
+    row['renderer_layout'] = value
+    with pytest.raises(ValueError):
+        run_renderer_audit(row, source, rendered)
+
+
+@pytest.mark.parametrize('key', ['uploads', 'samplers'])
+@pytest.mark.parametrize('value', [None, [], [{}, {}], [{}, {}, {}, {}]])
+def test_renderer_rejects_incomplete_or_extra_bindings(key, value):
+    row, source, rendered = renderer_sample()
+    row['renderer_layout'][key] = value
+    with pytest.raises(ValueError, match='three ordered'):
+        run_renderer_audit(row, source, rendered)
+
+
+@pytest.mark.parametrize(('key', 'value'), [('offset', 48), ('offset', 60.0), ('width', 8),
+    ('height', 6), ('format', 6), ('texture', True), ('texture', 0), ('texture', 2**32),
+    ('texture', 1)])
+def test_renderer_rejects_wrong_plane_upload(key, value):
+    row, source, rendered = renderer_sample()
+    row['renderer_layout']['uploads'][1][key] = value
+    with pytest.raises(ValueError, match='native format-1 YVU profile'):
+        run_renderer_audit(row, source, rendered)
+
+
+@pytest.mark.parametrize(('key', 'value'), [('name', 'Vtexture'), ('unit', 2), ('unit', True),
+                                           ('texture', 3), ('texture', 2.0)])
+def test_renderer_rejects_wrong_sampler_binding(key, value):
+    row, source, rendered = renderer_sample()
+    row['renderer_layout']['samplers'][1][key] = value
+    with pytest.raises(ValueError, match='sampler is not bound'):
+        run_renderer_audit(row, source, rendered)
+
+
+@pytest.mark.parametrize('case', json.loads((TOOL.parents[1] / 'tests' / 'fixtures' /
+                                            'app_native_texture_oracle.json').read_text()))
+def test_original_arm_upload_selection_controls(case):
+    row, _, _ = renderer_sample()
+    width, height = case['width'], case['height']
+    pixels = width * height
+    source = (bytes((i * 17 + 3) % 256 for i in range(pixels))
+              + bytes((i * 7 + 51) % 256 for i in range(pixels // 4))
+              + bytes((i * 11 + 149) % 256 for i in range(pixels // 4)))
+    for field in ('input_header', 'render_header'):
+        for index, value in {3: width, 4: height, 37: width, 38: height, 39: 0}.items():
+            row[field][index] = value
+    row.update(input_sha256=hashlib.sha256(source).hexdigest(),
+               render_sha256=hashlib.sha256(source).hexdigest())
+    layout = row['renderer_layout']
+    layout.update(width=width, height=height)
+    layout['uploads'] = [dict(offset=u['offset'], width=u['width'], height=u['height'],
+                              format=u['format'], texture=u['slot'] + 1) for u in case['uploads']]
+    # Each native upload digest independently validates the retained control bytes.
+    for upload in case['uploads']:
+        offset = upload['offset']
+        assert hashlib.sha256(source[offset:offset + upload['width'] * upload['height']]).hexdigest() == upload['sha256']
+    if case['renderer_format'] == 1:
+        result = run_renderer_audit(row, source, source)['samples'][0]
+        assert result['canonical_plane_sha256'] == [u['sha256'] for u in case['uploads']]
+    else:
+        # Native format 3 uses opposite chroma offsets; never accept it as format 1.
+        with pytest.raises(ValueError, match='native format-1 YVU profile'):
+            run_renderer_audit(row, source, source)
+
+
+def test_renderer_cli_opt_in(tmp_path):
+    row, source, rendered = renderer_sample()
+    paths = [tmp_path / name for name in ('input.bin', 'render.bin', 'map.jsonl')]
+    for path, data in zip(paths, (source, rendered, json.dumps(row).encode()), strict=True):
+        path.write_bytes(data)
+    result = subprocess.run([sys.executable, str(TOOL), *map(str, paths), '--verify-yv12-renderer'],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['chroma_order_verified'] is True
+    row.pop('renderer_layout')
+    paths[2].write_text(json.dumps(row))
+    result = subprocess.run([sys.executable, str(TOOL), *map(str, paths), '--verify-yv12-renderer'],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 2
+    assert not result.stdout

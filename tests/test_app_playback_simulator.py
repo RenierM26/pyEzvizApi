@@ -2,14 +2,19 @@
 
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 
 import pytest
-from tools.app_playback_simulator import Decision, PlaybackSimulator, VideoClock, float32
 
 ORACLE = json.loads((Path(__file__).parent / 'fixtures/app_playback_native_oracle.json').read_text())
 SCRIPT = Path(__file__).parents[1] / 'tools/app_playback_simulator.py'
+SIMULATOR = runpy.run_path(str(SCRIPT))
+Decision = SIMULATOR['Decision']
+PlaybackSimulator = SIMULATOR['PlaybackSimulator']
+VideoClock = SIMULATOR['VideoClock']
+float32 = SIMULATOR['float32']
 
 
 @pytest.mark.parametrize('case', ORACLE['decisions'])

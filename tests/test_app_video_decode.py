@@ -208,7 +208,7 @@ def test_unsupported_decoder_sessions_fail(monkeypatch, change):
             MODULE['decode'].__globals__[key] = MODULE[key]
 
 
-def test_real_two_track_hevc_decode_and_mapped_cli(tmp_path):
+def encode_paired_file(tmp_path):
     av = pytest.importorskip('av', reason='optional real HEVC integration')
     try:
         av.codec.Codec('libx265', 'w')
@@ -233,6 +233,11 @@ def test_real_two_track_hevc_decode_and_mapped_cli(tmp_path):
         for track in tracks:
             for packet in track.encode():
                 output.mux(packet)
+    return source
+
+
+def test_real_two_track_hevc_decode_and_mapped_cli(tmp_path):
+    source = encode_paired_file(tmp_path)
     command = [sys.executable, str(SCRIPT), str(source), '--container', 'matroska',
                '--primary-stream', '0', '--secondary-stream', '1']
     inspect = subprocess.run(command, capture_output=True, timeout=20, check=False)
@@ -303,3 +308,22 @@ def test_event_bound_is_not_bypassed_by_control_only_map_tail():
     events.extend(dict(kind='stage_push', at_ms=0) for _ in range(9999))
     with pytest.raises(ValueError, match='event limit'):
         MODULE['join_headers'](r, header_source(events))
+
+
+def test_borrowed_pixel_observer_cannot_rewrite_report_identity(monkeypatch):
+    fake_container(monkeypatch)
+    observations = []
+    def consume(row, picture):
+        observations.append((row['decoded_id'], picture.pts))
+        row['decoded_id'] = 'observer-local-change'
+    r = MODULE['decode'](None, 'matroska', (2, 5), consume)
+    assert observations == [('video:2:0', 0), ('video:5:0', 7)]
+    assert [row['decoded_id'] for row in r['decoded_frames']] == ['video:2:0', 'video:5:0']
+
+
+def test_invalid_pixels_never_reach_observer(monkeypatch):
+    fake_container(monkeypatch, packets=lambda tracks, make: [make(tracks[0], [frame(is_corrupt=True)])])
+    observed = []
+    with pytest.raises(ValueError, match='noncorrupt'):
+        MODULE['decode'](None, 'matroska', (2, 5), lambda row, picture: observed.append(row))
+    assert not observed

@@ -121,3 +121,11 @@ These are native-code policy oracles, not fresh live-app or optical/acoustic
 measurements. Control-call arguments missing from older traces are not inferred.
 A live paired-decoder source adapter and actual video/output lifecycle integration
 remain separate work.
+
+## Local decoded source
+
+The optional [local HEVC decoder adapter](app-video-decode.md) fingerprints two
+real decoded tracks and validates explicit header bindings before staging.
+Original raw pairing headers and arrival order must be supplied; remuxed PTS and
+host decode time do not recreate them. It is not a native decoder-buffer owner
+or a video output backend.

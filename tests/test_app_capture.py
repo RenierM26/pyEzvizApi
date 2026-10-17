@@ -239,7 +239,8 @@ def test_clear_capture_routes_into_app_adapter(monkeypatch):
     assert calls[0]["preserve_timestamps"] is True
 
 
-def test_mixed_video_identity_rejected_before_mux(monkeypatch):
+@pytest.mark.parametrize("foreign_headers", [False, True])
+def test_mixed_video_identity_rejected_before_mux(monkeypatch, foreign_headers):
     monkeypatch.setattr(local, "_idmx_local_video_payload_types", lambda *a, **k: frozenset({96}))
     monkeypatch.setattr(
         local, "_clear_native_rtp_packets_with_legacy_indices", lambda *a: ([], set())
@@ -248,6 +249,10 @@ def test_mixed_video_identity_rejected_before_mux(monkeypatch):
     monkeypatch.setattr(local, "detect_rtp_video_codec", lambda *a, **k: "hevc")
 
     def units(packets, **kwargs):
+        if foreign_headers:
+            kwargs["nal_timestamps"].extend([0, 900000, 906000])
+            kwargs["nal_source_keys"].extend([(3, None), (2, None), (2, None)])
+            return _UNITS
         kwargs["nal_timestamps"].extend([900000, 906000])
         kwargs["nal_source_keys"].extend([(2, None), (3, None)])
         return _UNITS[1:]

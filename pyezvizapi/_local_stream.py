@@ -2726,6 +2726,13 @@ def _copy_clear_native_idmx_timed_av(  # noqa: PLR0912
         rtp_packets, codec=codec, completed_access_units_only=selected_annexb is None,
         allow_ezviz_headerless_hevc_fu=True, nal_timestamps=timestamps, nal_source_keys=source_keys,
     )
+    if app_relative_clock and len(set(source_keys)) > 1:
+        # Parameter sets/SEI from another source can corrupt the selected video
+        # even when all VCL pictures come from a single source clock.
+        raise EzvizUnsupportedMediaError(
+            "app_relative_clock cannot combine multiple video source clocks",
+            source="rtp", reason="unsupported_av_clock",
+        )
     if (native_shared_clock or app_relative_clock) and selected_annexb is None and len({
         source_keys[i] for i, unit in enumerate(units)
         if rtp_nal_units_have_vcl((unit,), codec=codec)

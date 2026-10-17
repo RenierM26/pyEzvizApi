@@ -37,7 +37,6 @@ def native_app_timed_payloads(
         or audio.channels != 1
         or not audio.adts
         or audio.frame_count <= 0
-        or not audio.timed_segments
         or len(set(audio.source_keys)) != 1
     ):
         raise PyEzvizError("app_relative_clock requires single-source timestamped mono 16kHz AAC")
@@ -49,13 +48,20 @@ def native_app_timed_payloads(
     if rate <= 0 or duration_ms <= 0:
         raise PyEzvizError("app_relative_clock requires positive native frame cadence")
     clock = AppPlaybackClock(mode="live")
+    video_timestamps = tuple(timestamps)
+    # This is a bounded, fully collected capture. Reserve one counter range per
+    # NAL so even repeated signed backward wraps cannot make source_ms negative.
+    # A whole-millisecond shift cancels at origin subtraction and preserves the
+    # original sub-ms phase; adding arbitrary 2**32 tick epochs would not.
+    range_ms = (_RTP_WRAP + _VIDEO_TICKS_PER_MS - 1) // _VIDEO_TICKS_PER_MS
+    video_epoch_ticks = len(video_timestamps) * range_ms * _VIDEO_TICKS_PER_MS
 
     def video_events() -> Iterator[tuple[int, int, bytes]]:
         previous: int | None = None
         unwrapped = 0
         pending: list[bytes] = []
         for raw, entries in groupby(
-            zip(timestamps, nal_units, strict=True), key=lambda pair: pair[0]
+            zip(video_timestamps, nal_units, strict=True), key=lambda pair: pair[0]
         ):
             if type(raw) is not int or not 0 <= raw < _RTP_WRAP:
                 raise PyEzvizError("app_relative_clock requires unsigned native RTP video counters")
@@ -64,7 +70,7 @@ def native_app_timed_payloads(
             if not rtp_nal_units_have_vcl(units, codec="hevc"):
                 continue
             if previous is None:
-                unwrapped = raw
+                unwrapped = video_epoch_ticks + raw
             else:
                 delta = (raw - previous + _RTP_WRAP // 2) % _RTP_WRAP - _RTP_WRAP // 2
                 unwrapped += delta

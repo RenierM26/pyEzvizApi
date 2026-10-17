@@ -67,6 +67,8 @@ def test_real_source_cadence_and_ordinary_audio_gap():
         ((0, 900000, 900000 + 18000 * 90), 66),
         ((0, 900000, 899910), 66),
         ((0, 2**32 - 3000, 3000), 67),
+        ((0, 100, 2**32 - 100), 66),
+        ((0, 1, 2**32 - 1), 66),
     ],
 )
 def test_video_repair_and_counter_wrap(times, expected):
@@ -78,7 +80,6 @@ def test_video_repair_and_counter_wrap(times, expected):
     "changes",
     [
         {"origin_timestamp": None},
-        {"timed_segments": ()},
         {"sample_rate": 8000},
         {"channels": 2},
         {"source_keys": ()},
@@ -452,3 +453,20 @@ def test_command_capture_forwards_parameter_policy_to_decryptor(monkeypatch):
         ),
     )
     assert target.getvalue() == complete
+
+
+@pytest.mark.parametrize("frame_count", [1, 3])
+def test_contiguous_native_audio_does_not_require_gap_metadata(frame_count):
+    audio = replace(sound(), adts=_ADTS * frame_count, frame_count=frame_count, timed_segments=())
+    result = pts(
+        native_app_timed_payloads(_UNITS, (0, 900000, 906000), audio=audio, frame_rate="15")
+    )
+    assert result[0xC0] == [index * 64 * 90 for index in range(frame_count)]
+
+
+def test_repeated_backward_wraps_repair_without_losing_submillisecond_phase():
+    units = (_UNITS[1],) * 5
+    # Each signed delta crosses backwards by almost half a counter range.
+    timestamps = tuple((100 - index * (2**31 - 100)) % 2**32 for index in range(5))
+    result = pts(native_app_timed_payloads(units, iter(timestamps), audio=sound(), frame_rate="15"))
+    assert result[0xE0] == [index * 66 * 90 for index in range(5)]

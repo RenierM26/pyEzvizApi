@@ -96,3 +96,11 @@ drivers**: two explicitly consumed pairs are pipe-written, one remains queued.
 This exercises real output transport, not a visible window or physical display.
 Future work remains native-source metadata binding, real scheduler/output
 integration and optical/acoustic validation.
+
+## Scheduler-selected artifact
+
+The separate [scheduled-video exporter](app-scheduled-video.md) couples staging
+and explicit native-clock replay to a lossless variable-PTS Matroska artifact.
+It selects only completed requests and retains drop/hold/pending outcomes. Unlike
+this preview, it does not impose a fixed playback cadence or open ffplay; its
+chosen request-observation PTS still does not measure physical presentation.

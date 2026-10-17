@@ -111,6 +111,25 @@ def decode(source: Any, container_format: str, streams: tuple[int, int],
                 primary_stream=streams[0], secondary_stream=streams[1])
 
 
+def bind_picture(event: dict[str, Any], decoded: dict[str, Any],
+                 streams: tuple[int, int]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate one caller header against its exact decoded picture fingerprint."""
+    if not event.keys() >= BINDING:
+        raise ValueError('lens offer requires exact decoded-frame binding')
+    identity = event['decoded_id']
+    if not isinstance(identity, str) or identity not in decoded:
+        raise ValueError('unknown decoded picture identity')
+    row = decoded[identity]
+    for key in BINDING:
+        if type(event[key]) is not type(row[key]) or event[key] != row[key]:
+            raise ValueError(f'decoded-frame binding mismatch: {key}')
+    expected = streams[0] if event.get('lens') == 0 else streams[1]
+    if row['stream_index'] != expected:
+        raise ValueError('decoded track does not match the declared lens')
+    normalized = {key: value for key, value in event.items() if key not in BINDING}
+    return normalized, dict(offer_id=event.get('id'), decoded_id=identity)
+
+
 def join_headers(report: dict[str, Any], source: Any) -> dict[str, Any]:
     """Validate explicit source bindings before replay, never derive raw headers from PTS."""
     decoded = {row['decoded_id']: row for row in report['decoded_frames']}
@@ -128,22 +147,10 @@ def join_headers(report: dict[str, Any], source: Any) -> dict[str, Any]:
         if not isinstance(event, dict):
             raise ValueError('header-map event must be an object')
         if event.get('kind') == 'lens_picture':
-            if not event.keys() >= BINDING:
-                raise ValueError('lens offer requires exact decoded-frame binding')
-            identity = event['decoded_id']
-            if not isinstance(identity, str) or identity not in decoded:
-                raise ValueError('unknown decoded picture identity')
-            row = decoded[identity]
-            for key in BINDING:
-                if type(event[key]) is not type(row[key]) or event[key] != row[key]:
-                    raise ValueError(f'decoded-frame binding mismatch: {key}')
-            lens = event.get('lens')
-            expected = report['primary_stream'] if lens == 0 else report['secondary_stream']
-            if row['stream_index'] != expected:
-                raise ValueError('decoded track does not match the declared lens')
-            used.add(identity)
-            bindings.append(dict(offer_id=event.get('id'), decoded_id=identity))
-            event = {key: value for key, value in event.items() if key not in BINDING}
+            event, binding = bind_picture(event, decoded,
+                (report['primary_stream'], report['secondary_stream']))
+            used.add(binding['decoded_id'])
+            bindings.append(binding)
         model.step(event)
         events.append(event)
     else:

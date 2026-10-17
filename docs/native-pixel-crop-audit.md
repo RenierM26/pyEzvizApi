@@ -65,14 +65,14 @@ Private camera pixels and native binaries are not repository fixtures.
 planar versus semiplanar interpretation by image bytes alone.** The actual native
 crop path and synthetic controls establish the ordered-planar crop operation,
 not a colour-label mapping for the real buffer. The receipt therefore uses
-`ordered_plane_sha256`, never U/V labels, and always reports
+`ordered_plane_sha256`, never U/V labels, and in default crop-only mode reports
 `chroma_order_verified: false`.
 
 A successful receipt establishes equality under this explicit crop operation and
 caller-provided descriptors; it does not authenticate provenance, prove native
 memory ownership, cover uncaptured frames, prove physical display, or measure
-lip sync. The tool does not turn these snapshots into a colour-correct playback
-source or substitute footage from another session. Existing scheduler replay,
+lip sync. The tool does not play or export these snapshots or substitute footage from
+another session. Existing scheduler replay,
 HEVC decoding, previews and scheduled export are unchanged.
 
 `tests/fixtures/app_native_crop_oracle.json` stores only the three synthetic
@@ -81,3 +81,70 @@ The tested library SHA-256 is
 `a719ac549516df28345536d7baf1cc22145996949e89f8c7fae2dc73a379cddc`.
 Control input planes use `(i*17+3)%256`, `(i*7+51)%256`, `(i*11+149)%256`
 respectively. These are arithmetic patterns, not captured imagery.
+
+## Opt-in renderer plane binding
+
+A later combined same-session input/render/renderer trace established that the
+observed software path uses **renderer format 1** with YV12 storage (`Y, V, U`).
+For each captured lens sample, the renderer input pointer matched the sampled
+native node payload and its SID/raw/frame identity matched the saved descriptors.
+Three single-channel uploads use offsets `0`, `5*W*H/4`, `W*H`, bound respectively
+to `Ytexture`, `Utexture`, `Vtexture` at texture units 0, 1, 2. The observed shader
+reads those named samplers as Y, U, V. The grayscale pixels alone still do not
+establish this ordering; the renderer path does.
+
+To validate those explicit caller observations and emit canonical **YUV420P**
+fingerprints (`Y, U, V`) without outputting or playing pixels:
+
+```sh
+python tools/app_native_pixel_audit.py input.bin render.bin renderer-map.jsonl \
+  --verify-yv12-renderer
+```
+
+Each original sample line must additionally contain a `renderer_layout` object.
+This 8×6 example shows its complete required shape (adapt dimensions, offsets,
+identity and texture IDs from the actual observations):
+
+```json
+{
+  "renderer_format": 1, "width": 8, "height": 6,
+  "sid": 224, "raw_timestamp": 3000, "frame_index": 1,
+  "payload_matches": true,
+  "uploads": [
+    {"offset": 0, "width": 8, "height": 6, "format": 5, "texture": 1},
+    {"offset": 60, "width": 4, "height": 3, "format": 5, "texture": 2},
+    {"offset": 48, "width": 4, "height": 3, "format": 5, "texture": 3}
+  ],
+  "samplers": [
+    {"name": "Ytexture", "unit": 0, "texture": 1},
+    {"name": "Utexture", "unit": 1, "texture": 2},
+    {"name": "Vtexture", "unit": 2, "texture": 3}
+  ]
+}
+```
+
+The format numbers belong to different native APIs: renderer format 1 is not
+header word 0 (3), nor single-channel texture upload format (5). Other renderer
+formats, mismatched identities, nonmatching payload assertions, different upload
+offsets/sizes, missing/extra planes, reused texture IDs or swapped samplers fail.
+Texture IDs must be distinct positive uint32 values; bools are not integers here.
+Every sample requires observations; no fallback from one lens or frame to another.
+
+Only this opt-in mode sets `chroma_order_verified: true`, with the explicit source
+`caller-render-observations-native-format-1-profile`. This means the **provided
+observations match the supported native renderer profile**, not that the tool
+authenticated their origin. Each sample adds `native_pixel_format: "yvu420p"`,
+`canonical_pixel_format: "yuv420p"`, `canonical_pixel_sha256`, and
+`canonical_plane_sha256` in Y/U/V order. No timing fields are synthesized.
+Crop-only mode does not interpret optional layout fields and emits no canonical
+fingerprints. Colour-space/range/transfer calibration and physical display remain
+unverified; these hashes do not claim matching RGB appearance on another player.
+
+`tests/fixtures/app_native_texture_oracle.json` retains two synthetic original-ARM
+upload-selection controls. On the same binary build, the format-1 branch at
+`0x213550` selects offsets `0, 5*N/4, N`; format-3 at `0x21359e` selects
+`0, N, 5*N/4` (`N=W*H`). Tests reject the latter as a format-1 observation. The
+harness executes only these original selection branches, intercepts upload calls
+to record their arguments and hashes, and stops before render-to-target. It is
+not a GPU or full-renderer oracle. Shader sampler semantics come from the live
+renderer trace, not from helper names or grayscale image guesses.

@@ -1,0 +1,64 @@
+[
+  {
+    "renderer_format": 1,
+    "width": 16,
+    "height": 12,
+    "uploads": [
+      {
+        "slot": 0,
+        "width": 16,
+        "height": 12,
+        "format": 5,
+        "offset": 0,
+        "sha256": "3c3600235e8c21518005ab6af104890ff3848d0debadb72f07a3b29823aaa623"
+      },
+      {
+        "slot": 1,
+        "width": 8,
+        "height": 6,
+        "format": 5,
+        "offset": 240,
+        "sha256": "945756bf98c76115aaf3fe3fda1307aba1c9929e7a8b5d43b0639d2e2bfad072"
+      },
+      {
+        "slot": 2,
+        "width": 8,
+        "height": 6,
+        "format": 5,
+        "offset": 192,
+        "sha256": "a59d89522b4471ed7ac13c3f4ad31bf24e6113c4adfa13f80ebe37d4128d10fb"
+      }
+    ]
+  },
+  {
+    "renderer_format": 3,
+    "width": 16,
+    "height": 12,
+    "uploads": [
+      {
+        "slot": 0,
+        "width": 16,
+        "height": 12,
+        "format": 5,
+        "offset": 0,
+        "sha256": "3c3600235e8c21518005ab6af104890ff3848d0debadb72f07a3b29823aaa623"
+      },
+      {
+        "slot": 1,
+        "width": 8,
+        "height": 6,
+        "format": 5,
+        "offset": 192,
+        "sha256": "a59d89522b4471ed7ac13c3f4ad31bf24e6113c4adfa13f80ebe37d4128d10fb"
+      },
+      {
+        "slot": 2,
+        "width": 8,
+        "height": 6,
+        "format": 5,
+        "offset": 240,
+        "sha256": "945756bf98c76115aaf3fe3fda1307aba1c9929e7a8b5d43b0639d2e2bfad072"
+      }
+    ]
+  }
+]

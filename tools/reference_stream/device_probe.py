@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import importlib
 import json
@@ -166,7 +167,44 @@ def read_receipt(path: Path) -> dict[str, Any]:
     return value
 
 
+@contextmanager
+def supervisor_termination() -> Any:
+    # Record rather than raise in the handler: SIGTERM during Popen must not
+    # interrupt child creation before its process handle can be owned/reaped.
+    requested = [False]
+    def request_stop(signum: int, frame: Any) -> None:
+        requested[0] = True
+    previous = signal.signal(signal.SIGTERM, request_stop)
+    try:
+        yield requested
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def wait_worker(process: Any, timeout: float, requested: list[bool]) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        if requested[0]:
+            raise KeyboardInterrupt
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("probe worker", timeout)
+        try:
+            process.wait(timeout=min(0.1, remaining))
+            return
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def supervised_trial(config: dict[str, Any], folder: Path) -> dict[str, Any]:
+    with supervisor_termination() as requested:
+        report = supervise_process(config, folder, requested)
+        if requested[0] and not report["worker_deadline_exceeded"]:
+            report.update(status="cancelled", error="operator cancelled")
+        return report
+
+
+def supervise_process(config: dict[str, Any], folder: Path, requested: list[bool]) -> dict[str, Any]:
     validate(config)
     config_path = folder / "config.json"
     config_path.write_text(json.dumps(config))
@@ -177,7 +215,7 @@ def supervised_trial(config: dict[str, Any], folder: Path) -> dict[str, Any]:
                                     "--worker", str(config_path)], stdout=log,
                                    stderr=log, start_new_session=True)
         try:
-            process.wait(timeout=config["timeout"])
+            wait_worker(process, config["timeout"], requested)
         except subprocess.TimeoutExpired:
             timed_out = True
             failure = "worker deadline exceeded; pending device state unknown without finish summary"

@@ -148,8 +148,9 @@ backend are suitable only for transport/API tests.
 Tests exercise real dummy video/audio jobs acknowledged before producer EOF,
 independent video/audio backpressure, exact causal hashes and formats, source
 clock/queue checks, bounded framing, later-prefix failure and no EOF source drain.
-They do not establish a fresh native capture, visible window, audible speaker,
-physical timing, independent playback implementation or proprietary VQE parity.
+They do not establish a visible window, audible speaker, physical timing,
+independent playback implementation or proprietary VQE parity. Fresh reference
+capture evidence is recorded separately below.
 
 Physical validation requires a fresh same-session pilot and a working real display
 and speaker endpoint, then one external recording of that endpoint's visible and
@@ -160,3 +161,29 @@ intervals and missed events, not interpolated exact times. Keep source, native
 processing, host-call and physical-output observations distinct. An older clap
 trace, host timestamps, dummy output or measured VQE waveform lag cannot substitute
 for that recording. No fixed correction follows until this measurement is done.
+
+
+## Fresh reference-assisted software pilot (2026-10-18)
+
+A bounded fresh Android reference session supplied six audited lens snapshots
+(three paired selections), 573 observed source events and 54 uniquely hash-bound
+native VQE records to the live host pipe. Both lens images were 2880×1620 after
+removing four coded bottom rows; paired host buffers were 5760×1620 YUV420P.
+Full original descriptors bound the samples to the observed source selections.
+Three video acknowledgements and **27 audio pipe writes preceded source EOF**.
+One already-active audio write completed approximately 5.6 ms after EOF, making
+28 writes total. The audio receipt retained 13 queued blocks and reported 13
+rejected newest offers, with no partial write. No queued source drain was added.
+
+The collector was still active when host output was acknowledged. This establishes
+incremental reference-to-host software transport, not an offline-file-only test.
+The private source projector emits completed native prefixes; snapshot transfer,
+audit and instrumentation add substantial delay and burst audio delivery. It is
+**not a sustained real-time cadence or latency result**. The normal terminal status
+was `source-ended-pending-retained`, with no error. SDL video and ffplay audio used
+dummy drivers. No physical presentation, audible output or lip-sync result is
+claimed, and no independent decoder/VQE implementation follows from this pilot.
+The Android preview was closed and hooks/forwarding were removed afterward.
+Private media and device traces are not included in the repository. Physical
+screen/speaker testing is deferred; the software integration can be reviewed
+independently.

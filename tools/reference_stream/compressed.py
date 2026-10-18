@@ -118,6 +118,20 @@ class Writer:
         os.set_blocking(self.fd, self.original_blocking)
 
 
+def selection_keys(rows: list[dict[str, Any]]) -> set[tuple[int, int, int]]:
+    """Only explicit checkpoint/paired selections justify copied host pixels."""
+    needed = {(r['sid'], r['raw'], r['frame']) for r in rows
+              if r.get('event') == 'native_render_pixels'}
+    for selection in (r for r in rows if r.get('event') == 'render_callback'):
+        headers = selection.get('render_headers')
+        require(isinstance(headers, list) and len(headers) == 2
+                and all(isinstance(h, list) and len(h) == 49 for h in headers),
+                'missing explicit reference-selected paired headers')
+        assert isinstance(headers, list)
+        needed.update((h[1], h[7], h[10]) for h in headers)
+    return needed
+
+
 class Emitter:
     """Explicit reference identities/selections; no native clock or per-frame audit invented."""
     def __init__(self, root: Path, send: Any) -> None:
@@ -139,7 +153,15 @@ class Emitter:
         returned = {r['id']: r for r in rows if r.get('event') == 'encoded_video_return'}
         require(len(returned) == sum(r.get('event') == 'encoded_video_return' for r in rows),
                 'duplicate native decoder return')
-        while self.next_attempt in encoded and self.next_attempt in returned:
+        # Keep the full compressed capture, but forward only the accepted prefix
+        # needed for observed selections. Unselected future inputs stay source-side;
+        # if a later selection needs them, every prerequisite is forwarded in order.
+        needed = selection_keys(rows)
+        last_needed = max((call for call, row in encoded.items()
+            if call in returned and returned[call]['result'] == 0
+            and tuple(row['meta_words'][i] for i in (10, 16, 19)) in needed), default=0)
+        while (self.next_attempt <= last_needed
+               and self.next_attempt in encoded and self.next_attempt in returned):
             row = encoded[self.next_attempt]
             result = returned[self.next_attempt]['result']
             require(type(result) is int, 'invalid native decoder status')
@@ -183,15 +205,7 @@ class Emitter:
                    and not r['payload_is_null'] and r['payload_bytes'] > 0]
         # Decoder input can include an unselected single-track startup prefix.
         # Retain/decode it for HEVC dependencies, but never label it paired output.
-        needed = {(r['sid'], r['raw'], r['frame']) for r in rows
-                  if r.get('event') == 'native_render_pixels'}
-        for selection in (r for r in rows if r.get('event') == 'render_callback'):
-            selected_headers = selection.get('render_headers')
-            require(isinstance(selected_headers, list) and len(selected_headers) == 2
-                    and all(isinstance(h, list) and len(h) == 49 for h in selected_headers),
-                    'missing explicit reference-selected paired headers')
-            assert isinstance(selected_headers, list)  # Runtime contract above, plus type narrowing.
-            needed.update((h[1], h[7], h[10]) for h in selected_headers)
+        needed = selection_keys(rows)
         for row in decoded:
             if row['call'] in self.headers:
                 continue

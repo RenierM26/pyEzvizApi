@@ -86,7 +86,7 @@ def test_async_header_waits_for_own_accepted_tuple_not_active_callback(emitter):
 def test_ambiguous_accepted_identity_fails_with_original_prefix_retained(emitter):
     e, out = emitter
     with pytest.raises(ValueError, match="ambiguous accepted"):
-        e.pump(attempt(1) + attempt(2))
+        e.pump(attempt(1) + attempt(2) + [selection(decoded(99))])
     assert len(out) == 1 and e.next_token == 2
 
 
@@ -94,6 +94,7 @@ def test_changed_decoder_owner_fails(emitter):
     e, out = emitter
     rows = attempt(1) + attempt(2, frame=1)
     rows[2]["decoder_owner"] = "0x5678"
+    rows.append(selection(decoded(99, frame=1)))
     with pytest.raises(ValueError, match="instance changed"):
         e.pump(rows)
     assert len(out) == 1
@@ -138,8 +139,8 @@ def test_unselected_single_track_preroll_keeps_encoded_dependency_but_no_paired_
     startup["header_words"][33:36] = [133, 0, 1]
     rows = [*attempt(1), startup]
     e.pump(rows)
-    assert [r["kind"] for r, p in out] == ["encoded"]
-    assert len(e.accepted) == 1 and not e.headers
+    assert not out  # Defer source-side until a native selection needs this prefix.
+    assert not e.accepted and not e.headers
     later = decoded(20, frame=1)
     later["header_words"][33:36] = [133, 3, 2]
     rows += [*attempt(2, frame=1), later, selection(later)]
@@ -196,3 +197,21 @@ def test_batched_inputs_publish_ready_pairs_before_pixel_ownership_accumulates(e
     assert [r["token"] for r, _p in out if r["kind"] == "encoded"] == list(range(1, 41))
     assert [r["kind"] for r, _p in out[:7]] == [
         "encoded", "header", "checkpoint", "encoded", "header", "checkpoint", "pair"]
+
+
+def test_unselected_tail_is_deferred_and_future_selection_keeps_all_prerequisites(emitter):
+    e, out = emitter
+    rows = [*attempt(1), decoded(10), selection(decoded(10))]
+    e.pump(rows)
+    for frame in range(1, 60):
+        rows.extend(attempt(frame + 1, frame=frame))
+        rows.append(decoded(frame + 10, frame=frame))
+    e.pump(rows)
+    assert len([r for r, _p in out if r["kind"] == "encoded"]) == 1
+    assert e.next_attempt == 2  # No unsound host eviction / implicit selected-frame drop.
+    rows.append(selection(decoded(69, frame=59)))
+    e.pump(rows)
+    encoded = [r for r, _p in out if r["kind"] == "encoded"]
+    assert [r["native_call"] for r in encoded] == list(range(1, 61))
+    assert [r["meta_words"][19] for r in encoded] == list(range(60))
+    assert e.next_attempt == 61

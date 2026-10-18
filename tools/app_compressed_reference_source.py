@@ -96,6 +96,14 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit owned observer lifet
             reference_pairs_sent=len(emitter.pairs), checkpoints_sent=len(emitter.samples),
             vqe_outputs_sent=len(emitter.audio), captured_encoded_units=sum(r.get('event') == 'encoded_video' for r in rows),
             native_rejected_attempts=emitter.rejected,
+            deferred_accepted_inputs=sum(r.get('event') == 'encoded_video_return'
+                and r['id'] >= emitter.next_attempt and r['result'] == 0 for r in rows),
+            captured_native_rejected_attempts=[dict(call=r['id'], result=r['result'])
+                for r in rows if r.get('event') == 'encoded_video_return' and r['result'] != 0],
+            last_reference_selection_device_ns=max((r['device_mono_ns'] for r in rows
+                if r.get('event') == 'render_callback'), default=None),
+            last_observed_decoder_input_device_ns=max((r['device_mono_ns'] for r in rows
+                if r.get('event') == 'encoded_video'), default=None),
             captured_reference_callbacks=sum(r.get('event') == 'render_callback' for r in rows),
             captured_vqe_outputs=sum(r.get('event') == 'audio_vqe_output' for r in rows),
             source_closed_host_ns=time.monotonic_ns())

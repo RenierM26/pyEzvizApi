@@ -51,7 +51,7 @@ identity tokens and are **never source media timestamps**.
 
 The first reference-selected paired checkpoint of **each lens** must pass the existing full native input,
 bottom-crop and renderer audit and match canonical host-decoded pixel bytes.
-Neither video nor audio starts before both checkpoints pass. Accepted HEVC input can include an unselected single-track startup prefix. Those packets remain decoder dependencies, but their headers are retained as source observations rather than labelled paired output. Only headers referenced by a paired checkpoint or observed paired selection are forwarded; any selected unsupported header still fails the unchanged audit. This establishes
+Neither video nor audio starts before both checkpoints pass. Accepted HEVC input can include an unselected single-track startup prefix. Those packets remain decoder dependencies when a later selection requires their prefix, but their headers are retained as source observations rather than labelled paired output. Only headers referenced by a paired checkpoint or observed paired selection are forwarded; any selected unsupported header still fails the unchanged audit. This establishes
 **sampled initial native pixel parity**, not native pixel verification for every
 subsequent frame. Later displayed pairs require exact native output/header
 geometry and observed reference render selection; native queue scheduling and
@@ -208,3 +208,50 @@ audio writes, with zero rejected blocks and exact wire SHA/count parity. Two
 final offered audio blocks remained pending under the existing no-tail-drain
 policy. That transport replay used an explicit test end for the retained prefix
 and dummy output drivers; it is not a new live capture or physical audio proof.
+
+## Selection-driven compressed prefix; native paired-output gap
+
+A later real-X11 Windows run displayed **181 video pairs** and wrote **197 audio
+blocks** before the same ownership guard fired. This was a different cause: the
+reference app stopped producing paired render callbacks after pair 181. It kept
+accepting primary-lens input while rejecting secondary-lens attempts with native
+status `-2147483638`. The host eagerly accumulated a primary-only tail that had
+no observed paired selection. Do not attribute this native gap to Windows or
+claim that bounded host storage restores the missing reference selections.
+
+The source now forwards accepted compressed input only through the latest
+explicit checkpoint or paired selection. Any unselected tail remains in the
+original bounded private capture, not in copied host pixel storage. If a later
+selection arrives, the complete intervening accepted prefix is forwarded in
+original order, including unselected codec prerequisites; rejected attempts are
+never decoded. This is explicit source-side deferral, not host eviction, native
+frame-drop inference, selected-frame skipping or a change to HEVC bytes.
+
+The source receipt distinguishes forwarded input/rejections from deferred
+accepted input and all captured native rejections. It also records the last
+reference-selection and decoder-input device times, so source selection gaps
+remain visible. The unchanged wire end counts describe only forwarded records.
+A completed bounded handoff is not proof of continuous native video or physically
+audible/synchronized playback throughout the capture. All original pixel,
+queue, packet, observation and time bounds remain enforced.
+
+Retained-capture validation: original wire again fails with 28 copied lens frames
+(195,955,200 bytes); selection-driven reprojection preserves all **181 observed
+pairs**, verifies both checkpoints and writes all 245 retained native VQE outputs.
+Peak copied lens ownership is **13,996,800 bytes**, with zero copied frames at
+the boundary; 89 accepted tail inputs stay source-side. The original capture
+contains 459 accepted and 92 rejected attempts. The last observed decoder input
+occurs 4.66 device-monotonic seconds after the last paired selection.
+
+The same immutable publisher → PowerShell worker → bundled bridge/decoder replay,
+with a simulated 0.5-second cold output, completes **181 video pairs / 243 audio
+writes**, zero rejects and exact wire SHA/count parity; two final audio offers
+remain pending under the existing no-drain policy. Both validations use dummy
+outputs and an explicit retained-data replay boundary, not another live Windows
+test. They do not show that the reference paired-output gap has been repaired.
+
+The failed real-Windows run acknowledged audio only through `vqe:422`. Strong
+transients in the retained source at `vqe:462`, `vqe:492` and `vqe:513` occur
+after that boundary. Their physical audibility cannot be inferred from the
+failed run. A separate unchanged native-PCM recorded replay can test speaker
+audibility without another live capture or trip to the camera.

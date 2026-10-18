@@ -259,3 +259,71 @@ requested 25-second span was not reached. This is **not real-time playback**, an
 it does not establish improvement over every earlier run (PR335's single final
 observation was 13.087 s). Dummy output only; physical A/V testing stays deferred.
 EOF/shutdown, source ownership and audio correspondence policy are unchanged.
+
+## Identical-payload host replay (offline)
+
+To separate host codec/collector cost from changing live camera content, replay
+an existing private capture without opening the camera or attaching hooks:
+
+```sh
+python tools/reference_stream/replay.py /private/reference-run \
+  /private/new-host-replay --repeats 3
+```
+
+The output directory must not exist. `replay.json` preserves each trial, its
+failure, completed snapshot prefix, byte counts and same-host stage timings.
+Optional system liblz4 is required for successful LZ4 trials; unavailable/failed
+codecs are recorded as failures while the other trials continue. Exit status is
+nonzero if any trial fails. A corrupt source fails before trials begin. Invalid
+arguments or an existing output directory fail before writing a receipt.
+
+All trials use the **same ordered original input and rendered snapshots** from
+`events.jsonl`, not the earlier compressed wire packets. Every original payload
+is size/SHA-256 verified before the experiment and again when read for each
+trial. This verifies payload integrity only; replay does not rerun the native
+crop/renderer/scheduler audit or authenticate the source. The report records a
+corpus fingerprint for local experiment matching; keep it private with the
+capture. Audio and unrelated metadata are not replayed. Bounds are 20,000 events,
+32 MiB event JSON, 64 KiB per line, 32 snapshots, 12 MiB per snapshot, 240 MiB total
+pixels and one to five repetitions. Only one snapshot is processed at a time.
+
+The host applies raw, zlib level one and native system LZ4 compression, retaining
+the same per-payload raw fallback policy as the producer. Every result passes
+through the **real collector**, including bounded decompression, original hash
+verification and buffered persistence. Temporary private blob/event files are
+removed after each trial; only the report remains. The experiment does not
+modify source files. New output directories are mode 0700; the CLI sets umask 077.
+
+Codec order rotates each repetition. This exposes order variation but does not
+eliminate cache, CPU scheduling or filesystem effects. Source read/hash time is
+reported separately from host encoding. Collector callback time includes its
+nested decompress/hash/write stages: **do not sum overlapping stages**. Writes
+use flush, not fsync; this is not cold-cache or durable-storage benchmarking.
+Raw encoding is effectively a no-op and its tiny duration is not a throughput
+measurement. Host liblz4/zlib versions, memory copies and CPU differ from Android.
+
+### Full-resolution same-corpus observation (2026-10-18)
+
+Three trials per codec replayed the same 32 snapshots / 224,225,280 bytes from the
+previous full-resolution LZ4 capture. All nine trials verified all 32 snapshots;
+no raw fallbacks occurred. Times below are medians of per-trial stage totals,
+not per-frame times. Binary bytes exclude metadata/framing and audio.
+
+| Host codec | Binary bytes per trial | Host encode total | Collector callback total |
+| --- | --- | --- | --- |
+| raw | 224,225,280 | 0.068 ms (no-op) | 138.822 ms |
+| zlib level 1 | 115,007,144 | 2,040.548 ms | 760.635 ms |
+| LZ4 | 139,893,441 | 283.024 ms | 220.607 ms |
+
+Collector decompression medians were 606.230 ms for zlib and 78.231 ms for LZ4;
+collector hashing was about 90–92 ms across codecs. LZ4's binary payloads were
+37.6% smaller than raw on this exact corpus, with additional host CPU cost. This
+supports keeping raw as the baseline and using LZ4 for further device/transport
+experiments. It does **not** identify the unmeasured asynchronous Frida/network
+queue as the cause of the live delay or establish an Android optimization.
+
+This tool measures neither Android encode/instrumentation nor Frida/network
+transport, event projection, playback pacing, SDL/ffplay output or physical A/V.
+Do not compare these host-only stage totals directly with the earlier live
+acknowledgement spans. The real-time bottleneck remains unresolved; physical A/V
+testing remains deferred.

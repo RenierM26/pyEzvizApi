@@ -383,8 +383,12 @@ def test_compressed_bytes_do_not_bypass_original_sha256(tmp_path):
 def test_profile_retains_failed_spans_and_explicitly_counts_overflow(monkeypatch):
     profile = M['PROFILE']['Profile']()
     monkeypatch.setitem(profile.measure.__wrapped__.__globals__, 'LIMIT', 1)
-    with pytest.raises(ValueError), profile.measure('failed', bytes=123):
-        raise ValueError('rejected')
+    def failed_span():
+        with profile.measure('failed', bytes=123):
+            raise ValueError('rejected')
+
+    with pytest.raises(ValueError):
+        failed_span()
     with profile.measure('omitted'):
         pass
     result = profile.result()

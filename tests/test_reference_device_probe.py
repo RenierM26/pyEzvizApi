@@ -223,40 +223,42 @@ def test_cancelled_trial_is_filed_and_no_followup_starts(tmp_path, monkeypatch):
     assert json.loads((tmp_path/'result/probe.json').read_text()) == report
 
 
+@pytest.mark.parametrize('signal_name', ['SIGINT', 'SIGTERM'])
 @pytest.mark.parametrize('during_launch', [False, True])
-def test_real_sigterm_cleans_isolated_worker_and_files_cancelled_prefix(tmp_path, during_launch):
-    # SIGTERM only the supervisor, not its child's new session. The regression
+def test_real_supervisor_signals_clean_isolated_worker_and_file_prefix(tmp_path, during_launch, signal_name):
+    # Signal only the supervisor, not its child's new session. The regression
     # must prove child reaping, retained prefix and handler restoration.
     code = r'''
 import json,os,runpy,signal,subprocess,sys,time
 from pathlib import Path
 module=runpy.run_path(sys.argv[1]);root=Path(sys.argv[2]);during=sys.argv[3]=='True'
+signum=getattr(signal,sys.argv[4])
 original=subprocess.Popen;children=[]
 child="import json,time,os;from pathlib import Path;Path('partial.json').write_text(json.dumps(dict(verified_snapshots=1,payload_bytes=9000)));Path('child.pid').write_text(str(os.getpid()));time.sleep(30)"
 def launch(args,**kwargs):
  process=original([sys.executable,'-c',child],cwd=Path(args[-1]).parent,**kwargs);children.append(process)
  until=time.monotonic()+5
  while not (root/'child.pid').exists() and time.monotonic()<until:time.sleep(.01)
- if during:os.kill(os.getpid(),signal.SIGTERM)
+ if during:os.kill(os.getpid(),signum)
  else:
   import threading
-  threading.Timer(.1,lambda:os.kill(os.getpid(),signal.SIGTERM)).start()
+  threading.Timer(.1,lambda:os.kill(os.getpid(),signum)).start()
  return process
 module['subprocess'].Popen=launch
-previous=signal.getsignal(signal.SIGTERM)
+previous={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM)}
 settings=dict(codec='raw',pattern='mixed-v1',size=9000,count=2,timeout=20,endpoint='unused')
 result=module['supervised_trial'](settings,root)
-assert signal.getsignal(signal.SIGTERM)==previous
+assert all(signal.getsignal(sig)==handler for sig,handler in previous.items())
 assert children[0].poll() is not None
 try:os.killpg(children[0].pid,0)
 except ProcessLookupError:pass
-else:raise AssertionError('isolated worker survived SIGTERM')
+else:raise AssertionError('isolated worker survived supervisor signal')
 (root/'result.json').write_text(json.dumps(result))
 '''
     try:
         result = subprocess.run([sys.executable,'-c',code,
                                  str(BASE/'tools/reference_stream/device_probe.py'),str(tmp_path),
-                                 str(during_launch)], capture_output=True, text=True, timeout=10, check=False)
+                                 str(during_launch),signal_name], capture_output=True, text=True, timeout=10, check=False)
         assert result.returncode == 0, result.stderr
         receipt = json.loads((tmp_path/'result.json').read_text())
         assert receipt['status'] == 'cancelled' and receipt['verified_snapshots'] == 1

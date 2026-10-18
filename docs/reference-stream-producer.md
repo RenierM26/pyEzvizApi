@@ -442,10 +442,10 @@ Each trial permits at most 32 messages, 12 MiB per message and 240 MiB uncompres
 total. `--timeout` must be finite 5..60 seconds and includes attach/setup/generation,
 not just the burst. Every trial runs in a separate process group with a parent
 watchdog: interrupt, terminate and kill/reap fallbacks bound cleanup. A scoped
-supervisor SIGTERM handler is installed before child creation and records a stop
+supervisor SIGINT/SIGTERM handler is installed before child creation and records a stop
 request without interrupting process-handle ownership. Finite waits observe the
 request and run the same bounded cleanup/cancel-prefix path; the prior handler is
-restored after the trial. This also covers SIGTERM received while launching the
+restored after the trial. This also covers Ctrl-C or SIGTERM received while launching the
 isolated child, not only during its steady-state wait. A timeout
 aborts the remaining matrix rather than starting another potentially contaminated
 trial. Normal codec failures remain failed results and other codecs can still run.

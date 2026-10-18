@@ -169,16 +169,19 @@ def read_receipt(path: Path) -> dict[str, Any]:
 
 @contextmanager
 def supervisor_termination() -> Any:
-    # Record rather than raise in the handler: SIGTERM during Popen must not
+    # Record rather than raise in the handlers: cancellation during Popen must not
     # interrupt child creation before its process handle can be owned/reaped.
     requested = [False]
     def request_stop(signum: int, frame: Any) -> None:
         requested[0] = True
-    previous = signal.signal(signal.SIGTERM, request_stop)
+    previous = {}
     try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[signum] = signal.signal(signum, request_stop)
         yield requested
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def wait_worker(process: Any, timeout: float, requested: list[bool]) -> None:

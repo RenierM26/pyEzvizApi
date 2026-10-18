@@ -55,6 +55,8 @@ class Spool:
             raise ValueError('temporary decoded-pixel storage limit exceeded')
         if row['decoded_id'] in self.records:
             raise ValueError('duplicate decoded pixel identity')
+        # Reads move the shared cursor; subsequent live captures must append.
+        self.source.seek(0, os.SEEK_END)
         offset = self.source.tell()
         if self.source.write(data) != len(data):
             raise ValueError('short temporary pixel write')

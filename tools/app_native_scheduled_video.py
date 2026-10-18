@@ -35,6 +35,8 @@ class NativeSpool(SpoolBase):
             raise ValueError('native pixel spool limit exceeded')
         if row['id'] in self.records:
             raise ValueError('duplicate native sample identity')
+        # Rendering can read earlier samples between arriving native captures.
+        self.source.seek(0, os.SEEK_END)
         offset = self.source.tell()
         if self.source.write(data) != len(data):
             raise ValueError('short native pixel spool write')

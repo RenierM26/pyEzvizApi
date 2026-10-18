@@ -9,6 +9,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 from typing import Any
 
@@ -80,6 +81,25 @@ def test_spool_read_rejects_changed_or_truncated_data():
         spool.source = io.BytesIO(data)
         with pytest.raises(ValueError, match='truncated or changed'):
             spool.read('video:2:0')
+
+
+@pytest.mark.parametrize('disk', [False, True])
+def test_interleaved_decoded_capture_and_read_preserves_all_copies(monkeypatch, disk):
+    monkeypatch.setitem(MODULE['Spool'].capture.__globals__, 'pack', lambda frame: frame)
+    with tempfile.TemporaryFile() if disk else io.BytesIO() as source:
+        spool = MODULE['Spool'](source)
+        def capture(identity, value):
+            data = bytes([value]) * 6
+            spool.capture(dict(decoded_id=identity, width=2, height=2,
+                               pixel_sha256=hashlib.sha256(data).hexdigest()), data)
+        capture('first', 1)
+        capture('second', 2)
+        assert spool.read('first') == b'\x01' * 6
+        capture('third', 3)
+        assert spool.read('second') == b'\x02' * 6
+        assert spool.read('third') == b'\x03' * 6
+        assert spool.read('first') == b'\x01' * 6
+        assert spool.size == 18
 
 
 def test_only_taken_pairs_selected_and_no_implicit_eof_drain():
@@ -334,7 +354,8 @@ def test_backend_finish_failures_close_input_without_claiming_display(outcome):
 
 
 def test_short_temporary_pixel_write_is_not_a_stored_frame():
-    spool = MODULE['Spool'](SimpleNamespace(tell=lambda: 0, write=lambda data: 0))
+    spool = MODULE['Spool'](SimpleNamespace(seek=lambda offset, whence: 0,
+                                           tell=lambda: 0, write=lambda data: 0))
     picture = DECODE_TEST['frame']()
     row = MODULE['DECODE']['fingerprint'](picture, 0, 0)
     with pytest.raises(ValueError, match='short'):

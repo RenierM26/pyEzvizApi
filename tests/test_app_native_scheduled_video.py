@@ -9,6 +9,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -86,6 +87,24 @@ def test_native_samples_canonical_spool_exact_headers_and_completed_selections()
     public = MODULE['receipt_names'](result)
     assert public['selected'][0]['native_sample_ids'] == ['native:0:0', 'native:1:0']
     assert 'decoded_ids' not in json.dumps(public)
+
+
+@pytest.mark.parametrize('disk', [False, True])
+def test_interleaved_native_capture_and_read_never_overwrites_another_sample(disk):
+    with tempfile.TemporaryFile() if disk else io.BytesIO() as source:
+        spool = MODULE['NativeSpool'](source)
+        def capture(identity, value):
+            data = bytes([value]) * 6
+            spool.capture(dict(id=identity, width=2, visible_height=2,
+                               canonical_pixel_sha256=hashlib.sha256(data).hexdigest()), data)
+        capture('first', 1)
+        capture('second', 2)
+        assert spool.read('first') == b'\x01' * 6
+        capture('third', 3)
+        assert spool.read('second') == b'\x02' * 6
+        assert spool.read('third') == b'\x03' * 6
+        assert spool.read('first') == b'\x01' * 6
+        assert spool.size == 18
 
 
 @pytest.mark.parametrize(('key', 'value'), [('sample_id', 'unknown'), ('sample_id', True),

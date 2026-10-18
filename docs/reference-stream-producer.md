@@ -391,3 +391,107 @@ and is not a causal explanation of every earlier live run. No throughput or
 real-time improvement was implemented. The harness unloaded/detached and removed
 its caller-owned forwarding; the tablet remained on its launcher. Only aggregate
 results are public; private binary logs remain local. Physical A/V remains deferred.
+
+## Controlled synthetic device codec/transport probe
+
+`tools/reference_stream/device_probe.py` is a separate, development-only POSIX
+experiment. It attaches to an **already available** ARMv7 Gadget through a
+caller-owned forward; close the camera preview first. It never launches/unlocks
+apps, installs hooks, reads app-native offsets/media, opens cameras or starts
+output backends. Since it calls only system codec/clock exports and generates its
+own bytes, it does not require or claim the live producer's exact app ELF profile.
+The ARMv7 four-byte `size_t` ABI is still required for the shared codec wrapper.
+Optional host Frida and system liblz4 remain research dependencies only.
+
+```sh
+python tools/reference_stream/device_probe.py \
+  --endpoint 127.0.0.1:27049 --output /private/new-device-probe \
+  --pattern mixed-v1 --size 7007040 --count 32 --repeats 3 --timeout 60
+```
+
+Forwarding and preview state remain caller-owned; remove the forward afterwards.
+The output directory must be new. The CLI uses umask 077 and an exclusive mode-0700
+directory. Per-trial temporary pixel/config/log files are removed after collection;
+`probe.json` retains measurements and failure evidence, not synthetic binary copies.
+
+### What stays identical
+
+The host and device independently generate and SHA-256 check the same deterministic
+buffer: a fixed-seed unsigned 32-bit LCG, with `mixed-v1` replacing every third
+4 KiB block with a striped pattern. `striped-v1` uses only stripes and `noise-v1`
+uses only the LCG's high byte. These are **synthetic compressibility controls, not
+camera frames**. One generated buffer is repeated within each burst; no generation
+or initial hash cost is counted inside the device burst. All codecs and repetitions
+use the same pattern, size, count and host-expected hash. The seed and recurrence
+are versioned in the generator source; host/device byte identity is also tested.
+
+Each trial creates a fresh hook-free script and sends a single synchronous RPC
+burst through the **same `snapshot-codec.js` and `transport-ack.js` helpers used by
+the live producer**. Raw, zlib level one and LZ4 default are tried with rotating
+first-codec order, one to three repetitions (at most nine trials). Compression still
+falls back to raw if it would not shrink the buffer. The real collector verifies
+and flushes original bytes before posting IDs; additionally the probe checks each
+message against the host-generated synthetic identity. These records have no native
+headers and do not enter the projector/crop audit; passing this probe is not native
+audit proof. Both standalone and batched
+acknowledgement metadata are accepted only for a successfully posted, unique ID.
+
+### Bounds, failures and interpretation
+
+Each trial permits at most 32 messages, 12 MiB per message and 240 MiB uncompressed
+total. `--timeout` must be finite 5..60 seconds and includes attach/setup/generation,
+not just the burst. Every trial runs in a separate process group with a parent
+watchdog: interrupt, terminate and kill/reap fallbacks bound cleanup. A timeout
+aborts the remaining matrix rather than starting another potentially contaminated
+trial. Normal codec failures remain failed results and other codecs can still run.
+Cancellation stops the experiment and retains completed results plus the current
+worker's available verified-prefix checkpoint.
+
+The collector atomically checkpoints verified-prefix counts, host post attempts
+and observed device round trips while the worker runs. If it dies without a final
+receipt, those counts survive; absent device finish data means pending state is
+**unknown**, not zero. A final device receipt preserves pending IDs, per-send
+start/return/ack timestamps, burst start/return and per-message compression spans.
+Host collector spans remain on the host clock. A post return is not device receipt.
+Failed/partial results are never relabelled successful to complete the matrix.
+
+The synthetic worker deliberately waits for its finite acknowledgement set (or
+its deadline); this is **not the live producer's EOF policy**, which still freezes
+without draining. Device callbacks can queue behind the synchronous burst and
+compression. Round trips and nested spans cannot be summed into physical latency,
+and RTT must not be halved or combined with host-clock timestamps. Buffered flush
+is not fsync. Rotating order exposes but does not eliminate cache, thermal,
+CPU-load and network variation; it is not randomization. These measurements can
+compare identical-byte configurations, not isolate every network/Frida/scheduling
+cost, prove representative camera compression or establish real-time playback.
+
+### Identical-byte Android comparison (2026-10-18)
+
+On the connected ARMv7 Gadget, three rotated trials per codec each verified and
+acknowledged all 32 messages, with zero pending IDs. Each message repeated the same
+host/device-verified `mixed-v1` buffer of 7,007,040 bytes: 224,225,280 original bytes
+per trial. Median **device burst-start to last acknowledgement**, including device
+compression but excluding generation/initial hash, was:
+
+| Codec | Binary bytes per trial | Median burst-to-ack | Median compression wrapper spans |
+| --- | ---: | ---: | ---: |
+| raw | 224,225,280 | 21.148 s | 0 s |
+| zlib level one | 151,469,216 | 17.590 s | 16.462 s |
+| LZ4 default | 154,705,664 | 14.955 s | 2.952 s |
+
+Compression spans include allocation/input-copy/output-copy, not only the native
+codec call; compression, transport and acknowledgements overlap. Do not sum these
+columns. The raw trial times were 21.148/20.474/21.193 s, zlib
+18.474/17.590/17.554 s and LZ4 15.446/14.955/14.828 s. LZ4 used **31.0% fewer binary
+bytes**, with a **29.3% lower median observed burst-to-ack span** than raw in this
+specific rotated experiment. These are descriptive controlled-synthetic results,
+not representative camera compression, an isolated network speed or a demonstrated
+live playback improvement. Defaults remain unchanged.
+
+A separate two-message, 9,000-byte `noise-v1` control verified raw fallback for both
+compressed codecs; all three control trials passed. The successful small mixed
+control also passed all codecs. An earlier small-control attempt exposed the
+standalone-acknowledgement collector issue and is retained as failed evidence; the
+fix and regression tests preceded the full comparison. No native hooks, camera
+preview or physical output were used. Scripts unloaded/detached, forwarding was
+removed and the tablet remained at its launcher. Physical A/V remains deferred.

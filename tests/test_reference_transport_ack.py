@@ -175,3 +175,32 @@ def test_comparison_exposes_changed_or_unknown_instrumentation(before):
     assert 'transport_acks' in report['settings_mismatches']
     assert ('transport_acks' in report['settings_missing']) == (before is None)
     assert not report['sustained_realtime_verified']
+
+
+@pytest.mark.parametrize('batched', [True, False])
+def test_device_ack_is_metadata_not_a_new_binary_request(tmp_path, batched):
+    capture = M['Capture'](tmp_path, post=lambda message: None)
+    try:
+        capture.message(*payload()[:2])
+        row = dict(event='transport_ack', transport_id=1, device_mono_ns=10,
+                   stage='snapshot_send_to_ack', started_ns=1, completed_ns=10)
+        capture.message(dict(type='send', payload=dict(batch=[row]) if batched else row), None)
+        assert capture.error is None
+        assert capture.snapshot()[-1]['event'] == 'transport_ack'
+        assert len(capture.acknowledgements) == 1 and capture.acknowledged == {1}
+        capture.message(dict(type='send', payload=dict(batch=[row])), None)
+        assert capture.error == 'unknown or duplicate collector transport acknowledgement'
+    finally:
+        capture.close()
+
+
+@pytest.mark.parametrize('identity', [1, True, None])
+def test_unrequested_device_ack_cannot_fabricate_round_trip(tmp_path, identity):
+    capture = M['Capture'](tmp_path)
+    try:
+        capture.message(dict(type='send', payload=dict(event='transport_ack',
+                        transport_id=identity, device_mono_ns=1)), None)
+        assert capture.error == 'unknown or duplicate collector transport acknowledgement'
+        assert not capture.rows and not capture.acknowledged
+    finally:
+        capture.close()

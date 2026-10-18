@@ -34,7 +34,7 @@ def test_actual_js_and_host_generator_produce_identical_known_bytes(pattern):
 
 
 @pytest.mark.parametrize('key,value', [('size',0),('size',True),('count',33),('count',False),
-    ('size',12*1024*1024+1),('timeout',float('nan')),('timeout',61),('pattern','unknown'),('codec','bad')])
+    ('size',12*1024*1024+1),('timeout',float('nan')),('timeout',61),('pattern','unknown'),('codec','bad'),('window',True),('window',-1),('window',33)])
 def test_invalid_config_fails_before_output_or_attach(tmp_path, key, value):
     data = config()
     data[key] = value
@@ -287,3 +287,93 @@ def test_signal_recorded_during_handler_restoration_is_observed(tmp_path, monkey
     result = M['supervised_trial'](config(), tmp_path)
     assert result['status'] == ('failed' if timed_out else 'cancelled')
     assert result['verified_snapshots'] == 1
+
+
+@pytest.mark.parametrize('windows', [(), (0,0), (True,), (-1,), (33,), (0,1,2,3)])
+def test_invalid_windows_fail_before_output_or_attach(tmp_path, windows):
+    with pytest.raises(ValueError, match='windows'):
+        M['probe'](config(), tmp_path/'result', windows=windows)
+    assert not (tmp_path/'result').exists()
+
+
+def test_window_matrix_preserves_every_combination_and_rotates(tmp_path, monkeypatch):
+    calls = []
+    def trial(settings, folder):
+        calls.append((settings['codec'], settings['window'], settings['sha256']))
+        return dict(status='ok', worker_deadline_exceeded=False)
+    monkeypatch.setitem(M['probe'].__globals__, 'supervised_trial', trial)
+    report = M['probe'](config(), tmp_path/'result', 3, (0,1,4))
+    assert report['status'] == 'ok' and len(calls) == 27
+    expected = {(codec,window) for codec in M['CODECS'] for window in (0,1,4)}
+    assert all({item[:2] for item in calls[start:start+9]} == expected for start in (0,9,18))
+    assert [calls[i][:2] for i in (0,9,18)] == [('raw',0),('zlib',1),('lz4',4)]
+    assert len({item[2] for item in calls}) == 1
+    assert {(t['codec'],t['window']) for t in report['trials']} == expected
+
+
+@pytest.mark.parametrize('window', [0,1,4,32])
+@pytest.mark.parametrize('scenario', ['complete','freeze','bad-ack','duplicate-after-credit','send-failure'])
+def test_actual_js_window_is_ack_driven_bounded_and_frozen(window, scenario):
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('optional Node required for JS execution')
+    source = '\n'.join((BASE/'tools/reference_stream'/name).read_text() for name in (
+        'transport-ack.js','snapshot-codec.js','device-probe.js'))
+    harness = r'''
+const assert=require('node:assert/strict');
+const messages=[],receivers=[],tasks=[];let ticks=0,failSend=false;
+const Process={arch:'arm',pointerSize:4,getModuleByName:()=>({getExportByName:()=>0})};
+const Memory={alloc:()=>({readU32:()=>1,add:()=>({readU32:()=>++ticks})})};
+function NativeFunction(){return ()=>0;}
+const Checksum={compute:()=>'expected'};
+function send(row,data){
+ if(data&&failSend)throw Error('injected send failure');
+ messages.push({row,data});
+}
+function recv(type,callback){assert.equal(type,'snapshot-ack');receivers.push(callback);}
+function setImmediate(fn){tasks.push(fn);}
+const binary=()=>messages.filter(m=>m.data);
+const ack=id=>receivers.shift()({payload:{id}});
+const drain=()=>{while(tasks.length)tasks.shift()();};
+const probe=createDeviceProbe({codec:'raw',window:WINDOW,size:9,count:7,
+ pattern:'mixed-v1',sha256:'expected'});
+probe.prepare();probe.burst();
+assert.equal(binary().length,WINDOW===0?7:Math.min(WINDOW,7));
+assert.equal(tasks.length,0); // no polling or refill without a received acknowledgement
+if(SCENARIO==='complete'){
+ for(let id=1;id<=7;id++){assert.ok(binary().some(m=>m.row.transport_id===id));ack(id);drain();}
+ const done=probe.finish();
+ assert.equal(done.flow.emitted,7);assert.equal(done.flow.acknowledged,7);
+ assert.equal(done.flow.inflight,0);assert.deepEqual(done.acknowledgements.pending_ids,[]);
+ assert.equal(done.flow.peak_inflight,WINDOW===0?7:Math.min(WINDOW,7));
+ assert.ok(done.burst_returned_ns>=done.burst_started_ns);
+ if(WINDOW>0&&WINDOW<7)assert.ok(done.burst_rpc_returned_ns<done.burst_returned_ns);
+ else assert.ok(done.burst_rpc_returned_ns>=done.burst_returned_ns);
+}else if(SCENARIO==='freeze'){
+ ack(1);const before=binary().length;
+ const done=probe.finish();drain();ack(2);drain();
+ assert.equal(binary().length,before);assert.equal(done.flow.acknowledged,1);
+ assert.equal(done.flow.emitted,before);
+ assert.equal(done.acknowledgements.pending_ids.length,before-1);
+ if(WINDOW===1)assert.equal(done.burst_returned_ns,null);
+}else if(SCENARIO==='duplicate-after-credit'){
+ const before=binary().length;ack(1);ack(1);drain();
+ assert.equal(binary().length,before);assert.equal(probe.finish().flow.acknowledged,1);
+ assert.ok(messages.some(m=>m.row.event==='error'&&m.row.where==='transport_ack'));
+}else if(SCENARIO==='bad-ack'){
+ const before=binary().length;ack(99);drain();
+ assert.equal(binary().length,before);assert.equal(probe.finish().flow.acknowledged,0);
+ assert.ok(messages.some(m=>m.row.event==='error'&&m.row.where==='transport_ack'));
+}else{
+ failSend=true;ack(1);drain();
+ const done=probe.finish();
+ if(WINDOW>0&&WINDOW<7){
+  assert.ok(messages.some(m=>m.row.event==='error'&&m.row.where==='window_pump'));
+  assert.equal(done.flow.send_attempts,Math.min(WINDOW,7)+1);
+  assert.equal(done.flow.emitted,Math.min(WINDOW,7));
+ }
+ assert.equal(done.flow.acknowledged,1);
+}
+'''
+    subprocess.run([node,'-e',source+'\nconst WINDOW='+str(window)+';const SCENARIO='+json.dumps(scenario)+';\n'+harness],
+                   check=True,capture_output=True,text=True,timeout=10)

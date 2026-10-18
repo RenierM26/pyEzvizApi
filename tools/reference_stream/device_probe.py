@@ -31,6 +31,8 @@ def validate(config: dict[str, Any]) -> None:
     require(type(config.get("size")) is int and 1 <= config["size"] <= 12 * 1024 * 1024
             and type(config.get("count")) is int and 1 <= config["count"] <= 32
             and config["size"] * config["count"] <= 240 * 1024 * 1024, "probe byte/count limit")
+    require(type(config.get("window", 0)) is int and 0 <= config.get("window", 0) <= 32,
+            "acknowledgement window must be 0..32 (zero selects synchronous burst)")
     require(type(config.get("timeout")) in {int, float} and math.isfinite(config["timeout"])
             and 5 <= config["timeout"] <= 60, "probe timeout must be finite 5..60 seconds")
     require(isinstance(config.get("endpoint"), str) and 0 < len(config["endpoint"]) <= 256,
@@ -137,7 +139,12 @@ def worker(config: dict[str, Any], folder: Path) -> int:  # noqa: PLR0912 - one 
         if report["status"] == "ok":
             require(report["device"] is not None, "missing device finish summary")
             if (report["verified_snapshots"] != config["count"]
-                    or report["device"]["acknowledgements"]["pending_ids"]):
+                    or report["device"]["acknowledgements"]["pending_ids"]
+                    or report["device"]["flow"]["emitted"] != config["count"]
+                    or report["device"]["flow"]["acknowledged"] != config["count"]
+                    or report["device"]["flow"]["inflight"] != 0
+                    or (config.get("window", 0) > 0 and
+                        report["device"]["flow"]["peak_inflight"] > config["window"])):
                 report.update(status="failed", error="incomplete verified/acknowledged prefix")
         write_receipt(folder / "trial.json", report)
     return 0 if report["status"] == "ok" else 1
@@ -243,18 +250,22 @@ def supervise_process(config: dict[str, Any], folder: Path, requested: list[bool
     return report
 
 
-def probe(config: dict[str, Any], output: Path, repeats: int = 3) -> dict[str, Any]:
+def probe(config: dict[str, Any], output: Path, repeats: int = 3,
+          windows: tuple[int, ...] = (0,)) -> dict[str, Any]:
     validate(config)
     require(type(repeats) is int and 1 <= repeats <= 3, "probe repeats must be 1..3")
+    require(1 <= len(windows) <= 3 and all(type(w) is int and 0 <= w <= 32 for w in windows)
+            and len(set(windows)) == len(windows), "select 1..3 unique windows in 0..32")
     output.mkdir(mode=0o700)
     report: dict[str, Any] = dict(
-        status="failed", error=None, trials=[], configuration=config,
+        status="failed", error=None, trials=[], configuration=config, windows=list(windows),
         synthetic=True, android_transport_requested=True, android_transport_measured=False,
         codec_configuration=dict(zlib_level=1, lz4="LZ4_compress_default",
                                  raw_fallback_when_not_smaller=True),
         native_app_hooks=False, camera_opened_by_probe=False, playback_measured=False,
         sustained_realtime_verified=False, physical_av_measured=False,
-        note="single synchronous RPC bursts; synthetic bytes are not camera media; "
+        note="zero window: synchronous RPC burst; positive window: acknowledgement-driven pump; "
+             "synthetic bytes are not camera media; "
              "device callback scheduling/Frida queues/network not isolated; "
              "round trips are not one-way delay; buffered flush is not fsync; "
              "trial watchdog includes setup; device burst excludes generation/hash; "
@@ -262,14 +273,16 @@ def probe(config: dict[str, Any], output: Path, repeats: int = 3) -> dict[str, A
     )
     try:
         identity = hashlib.sha256(payload(config["size"], config["pattern"])).hexdigest()
+        combinations = [(codec, window) for codec in CODECS for window in windows]
         for iteration in range(repeats):
-            order = CODECS[iteration:] + CODECS[:iteration]
-            for codec in order:
+            offset = (iteration * len(windows) + iteration % len(windows)) % len(combinations)
+            order = combinations[offset:] + combinations[:offset]
+            for codec, window in order:
                 with tempfile.TemporaryDirectory(dir=output, prefix="trial-") as temporary:
-                    result = supervised_trial(dict(config, codec=codec, sha256=identity), Path(temporary))
-                report["trials"].append(dict(iteration=iteration, codec=codec, **result))
+                    result = supervised_trial(dict(config, codec=codec, window=window, sha256=identity), Path(temporary))
+                report["trials"].append(dict(iteration=iteration, codec=codec, window=window, **result))
                 write_receipt(output / "probe.json", report)
-                print(json.dumps(dict(iteration=iteration, codec=codec, status=result["status"],
+                print(json.dumps(dict(iteration=iteration, codec=codec, window=window, status=result["status"],
                                       verified=result.get("verified_snapshots"))), flush=True)
                 if result["status"] == "cancelled":
                     raise KeyboardInterrupt
@@ -298,6 +311,8 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=32)
     parser.add_argument("--repeats", type=int, choices=range(1, 4), default=3)
     parser.add_argument("--timeout", type=float, default=60)
+    parser.add_argument("--windows", type=int, nargs="+", default=[0],
+                        help="1..3 unique in-flight limits 0..32; zero is the original burst")
     args = parser.parse_args()
     config = dict(codec="raw", endpoint=args.endpoint, pattern=args.pattern,
                   size=args.size, count=args.count, timeout=args.timeout)
@@ -305,7 +320,7 @@ def main() -> int:
         validate(config)
     except ValueError as error:
         parser.error(str(error))
-    return 0 if probe(config, args.output, args.repeats)["status"] == "ok" else 1
+    return 0 if probe(config, args.output, args.repeats, tuple(args.windows))["status"] == "ok" else 1
 
 
 if __name__ == "__main__":

@@ -428,7 +428,7 @@ are versioned in the generator source; host/device byte identity is also tested.
 Each trial creates a fresh hook-free script and sends a single synchronous RPC
 burst through the **same `snapshot-codec.js` and `transport-ack.js` helpers used by
 the live producer**. Raw, zlib level one and LZ4 default are tried with rotating
-first-codec order, one to three repetitions (at most nine trials). Compression still
+first-codec order, one to three repetitions (at most nine trials by default). Compression still
 falls back to raw if it would not shrink the buffer. The real collector verifies
 and flushes original bytes before posting IDs; additionally the probe checks each
 message against the host-generated synthetic identity. These records have no native
@@ -500,3 +500,102 @@ standalone-acknowledgement collector issue and is retained as failed evidence; t
 fix and regression tests preceded the full comparison. No native hooks, camera
 preview or physical output were used. Scripts unloaded/detached, forwarding was
 removed and the tablet remained at its launcher. Physical A/V remains deferred.
+
+
+### Opt-in acknowledgement-window control
+
+The same synthetic probe also accepts `--windows 0 1 4`. Zero preserves the original
+single synchronous RPC burst. A positive value (1..32) limits outstanding messages:
+the first RPC sends at most that many, then returns. Only a validated device-side
+receipt of the collector's acknowledgement schedules another send on the device
+JS event loop. There is no polling, retry, independent timer-based pacing or
+additional payload copy retained by this control. The original shared acknowledgement
+and codec helpers are unchanged. This is a **synthetic experiment only**, not flow
+control for the live producer or a change to live EOF/ownership policy.
+
+```sh
+python tools/reference_stream/device_probe.py \
+  --endpoint 127.0.0.1:27049 --output /private/new-window-probe \
+  --pattern mixed-v1 --size 7007040 --count 32 --repeats 3 \
+  --windows 0 1 4 --timeout 60
+```
+
+Select one to three unique windows from 0..32; the default is only zero. The full
+codec/window Cartesian product runs per repetition, with its starting combination
+rotated each time (at most 27 trials). Identical-byte checks, separate workers,
+per-trial watchdogs, failed-prefix preservation, private temporary cleanup and
+abort-on-watchdog/cancellation are unchanged. Window bounds count messages, not
+bytes or Frida's internal memory: a window of four can have up to four 12 MiB
+original messages awaiting acknowledgement. Compression may use additional memory.
+
+The final `device.flow` receipt records the requested window/mode, send attempts,
+successful send returns (`emitted`), acknowledgements, outstanding attempts and
+peak outstanding count. Failed sends may leave pending attempted IDs; they are not
+successful emits. A missing finish summary still means unknown device pending state.
+`burst_rpc_returned_ns` records return from the initial device RPC body;
+`burst_returned_ns` retains the original burst endpoint but now means **the last
+configured send returned**, possibly during a later acknowledgement callback. It
+is null if the full configured set was never sent. Compare burst-start to the last
+device acknowledgement for completed trials, not initial-RPC duration. Device
+`finish()` freezes the pump before freezing the shared acknowledgement helper;
+queued refills and late acknowledgements cannot send more data after shutdown.
+
+A positive window changes both outstanding work and opportunities for device JS
+callbacks to run. It does **not** independently identify network bandwidth, Frida
+serialization cost or a scheduling-only cause, nor establish representative camera
+compression, real-time playback or physical A/V timing. Preserve failed outcomes
+and report observed window peaks alongside completion times. The live producer's
+transport defaults and acknowledgement-only instrumentation remain unchanged.
+
+
+#### Rotated Android window comparison (2026-10-18)
+
+All 27 full-size trials passed: three repetitions for each codec/window combination,
+32 messages per trial and **864/864 verified and device-acknowledged messages**.
+The original data was the identical 7,007,040-byte `mixed-v1` buffer repeated 32
+times (224,225,280 original bytes per trial), as in the codec-only control. There
+were no raw fallbacks in this full-size matrix. Per-codec binary-byte totals stayed
+identical across windows: raw 224,225,280; zlib 151,469,216; LZ4 154,705,664.
+
+Median **device burst-start to last acknowledgement**, including compression but
+excluding generation/initial hash:
+
+| Codec | Burst (window 0) | Window 1 | Window 4 |
+| --- | ---: | ---: | ---: |
+| raw | 24.152 s | 22.645 s | 17.925 s |
+| zlib level one | 18.097 s | 34.930 s | 17.684 s |
+| LZ4 default | 13.209 s | 22.779 s | 14.975 s |
+
+The three observations per combination, in repetition order (seconds), were:
+
+| Codec | Window | Observations |
+| --- | ---: | --- |
+| raw | 0 | 27.090 / 18.881 / 24.152 |
+| raw | 1 | 22.645 / 21.386 / 24.637 |
+| raw | 4 | 17.925 / 17.853 / 23.456 |
+| zlib | 0 | 18.339 / 17.622 / 18.097 |
+| zlib | 1 | 31.959 / 34.930 / 35.954 |
+| zlib | 4 | 17.256 / 17.684 / 17.733 |
+| LZ4 | 0 | 12.831 / 13.209 / 16.366 |
+| LZ4 | 1 | 23.283 / 19.390 / 22.779 |
+| LZ4 | 4 | 19.094 / 13.330 / 14.975 |
+
+Peak outstanding attempts were exactly 32, 1 and 4 for windows 0, 1 and 4 in every
+trial; all ended with 32 returned sends, 32 acknowledgements and zero outstanding
+IDs. This verifies the configured message bounds in this experiment, **not** a
+bound on Frida's internal memory or native camera ownership. Window-one was slower
+for both compressed codecs. Window-four had a lower raw median but a higher LZ4
+median than the synchronous burst. There is **no uniform speedup** and no live
+default change. Variation and uncontrolled thermal/cache/network conditions remain;
+these are descriptive measurements, not confidence intervals or a causal separation
+of network, scheduling and codec costs. Do not treat this run and the earlier
+codec-only run as a controlled before/after comparison.
+
+The small mixed control passed all nine codec/window combinations with seven
+9,000-byte messages each. A separate equally sized `noise-v1` control also passed
+all nine combinations; both compressed codecs fell back to raw for all seven
+messages at every window. All final device summaries had no pending IDs and clean
+unload/detach. No native hooks, camera preview or physical output were used;
+forwarding was removed and the tablet remained at its launcher. The full-snapshot
+transport problem remains unresolved; this experiment does not establish sustained
+real-time playback. Physical A/V testing remains deferred.

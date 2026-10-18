@@ -162,11 +162,22 @@ class Emitter:
             self.next_attempt += 1
         decoded = [r for r in rows if r.get('event') == 'decoded_picture'
                    and not r['payload_is_null'] and r['payload_bytes'] > 0]
+        # Decoder input can include an unselected single-track startup prefix.
+        # Retain/decode it for HEVC dependencies, but never label it paired output.
+        needed = {(r['sid'], r['raw'], r['frame']) for r in rows
+                  if r.get('event') == 'native_render_pixels'}
+        for selection in (r for r in rows if r.get('event') == 'render_callback'):
+            selected_headers = selection.get('render_headers')
+            require(isinstance(selected_headers, list) and len(selected_headers) == 2
+                    and all(isinstance(h, list) and len(h) == 49 for h in selected_headers),
+                    'missing explicit reference-selected paired headers')
+            assert isinstance(selected_headers, list)  # Runtime contract above, plus type narrowing.
+            needed.update((h[1], h[7], h[10]) for h in selected_headers)
         for row in decoded:
             if row['call'] in self.headers:
                 continue
             identity = row['sid'], row['raw'], row['frame']
-            if identity not in self.accepted:
+            if identity not in self.accepted or identity not in needed:
                 continue
             header = row['header_words']
             require((header[1], header[7], header[10]) == identity,

@@ -42,6 +42,13 @@ def decoded(call, frame=0):
     )
 
 
+def selection(row):
+    primary = list(row["header_words"])
+    secondary = list(primary)
+    secondary[1] = 225
+    return dict(event="render_callback", render_headers=[primary, secondary])
+
+
 @pytest.fixture
 def emitter(tmp_path, monkeypatch):
     rows = []
@@ -52,7 +59,12 @@ def emitter(tmp_path, monkeypatch):
 def test_native_rejected_retry_is_diagnostic_not_a_second_decode(emitter):
     e, out = emitter
     rows = attempt(1, result=-2147483624) + attempt(2) + attempt(3, frame=1)
-    rows += [decoded(99), decoded(100, frame=1)]
+    rows += [
+        decoded(99),
+        decoded(100, frame=1),
+        selection(decoded(99)),
+        selection(decoded(100, frame=1)),
+    ]
     e.pump(rows)
     e.pump(rows)
     encoded = [r for r, p in out if r["kind"] == "encoded"]
@@ -64,7 +76,7 @@ def test_native_rejected_retry_is_diagnostic_not_a_second_decode(emitter):
 def test_async_header_waits_for_own_accepted_tuple_not_active_callback(emitter):
     e, out = emitter
     first = attempt(1)
-    rows = [*first[:1], decoded(98)]
+    rows = [*first[:1], decoded(98), selection(decoded(98))]
     e.pump(rows)
     assert not out
     e.pump(rows + first[1:])
@@ -118,3 +130,35 @@ def test_cancelled_partial_write_mirrors_exact_accepted_wire_prefix(tmp_path, mo
     finally:
         os.close(w)
         os.close(r)
+
+
+def test_unselected_single_track_preroll_keeps_encoded_dependency_but_no_paired_header(emitter):
+    e, out = emitter
+    startup = decoded(10)
+    startup["header_words"][33:36] = [133, 0, 1]
+    rows = [*attempt(1), startup]
+    e.pump(rows)
+    assert [r["kind"] for r, p in out] == ["encoded"]
+    assert len(e.accepted) == 1 and not e.headers
+    later = decoded(20, frame=1)
+    later["header_words"][33:36] = [133, 3, 2]
+    rows += [*attempt(2, frame=1), later, selection(later)]
+    e.pump(rows)
+    assert [r["kind"] for r, p in out] == ["encoded", "encoded", "header"]
+    assert out[-1][0]["native_header"][10] == 1
+    assert e.headers == {20} and len(e.accepted) == 2
+
+
+def test_selected_unsupported_header_is_not_silently_omitted(emitter):
+    e, out = emitter
+    bad = decoded(10)
+    bad["header_words"][33:36] = [133, 0, 1]
+    e.pump([*attempt(1), bad, selection(bad)])
+    header = next(r["native_header"] for r, p in out if r["kind"] == "header")
+    assert header[33:36] == [133, 0, 1]  # Downstream strict geometry audit must reject it.
+
+
+def test_missing_paired_reference_headers_fail_closed(emitter):
+    e, _out = emitter
+    with pytest.raises(ValueError, match="missing explicit"):
+        e.pump([*attempt(1), dict(event="render_callback")])

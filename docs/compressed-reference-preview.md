@@ -49,9 +49,9 @@ resolution switch; they are opaque identities, not clocks. Retirement and
 selection order use accepted ordinals. PyAV packet PTS/DTS transport only these
 identity tokens and are **never source media timestamps**.
 
-The first picture of **each lens** must pass the existing full native input,
+The first reference-selected paired checkpoint of **each lens** must pass the existing full native input,
 bottom-crop and renderer audit and match canonical host-decoded pixel bytes.
-Neither video nor audio starts before both checkpoints pass. This establishes
+Neither video nor audio starts before both checkpoints pass. Accepted HEVC input can include an unselected single-track startup prefix. Those packets remain decoder dependencies, but their headers are retained as source observations rather than labelled paired output. Only headers referenced by a paired checkpoint or observed paired selection are forwarded; any selected unsupported header still fails the unchanged audit. This establishes
 **sampled initial native pixel parity**, not native pixel verification for every
 subsequent frame. Later displayed pairs require exact native output/header
 geometry and observed reference render selection; native queue scheduling and
@@ -136,3 +136,25 @@ The same immutable-chunk/PowerShell/bundled-runtime run with credit completed al
 **92 video pairs and 97 audio blocks**, zero audio rejections, exact original wire
 hash parity, and peaks of one/four unacknowledged offers. Those regression outputs
 used dummy drivers; the corrected physical Windows run remains pending.
+
+### Startup header scope
+
+A later Windows run exposed a native **single-track startup picture** before the
+paired stream: header words 33..35 were `[133, 0, 1]`, not the supported paired
+`[133, 3, 2]`. It was not referenced by a paired selection. The compressed source
+now forwards native decoded headers only when explicitly referenced by a paired
+checkpoint/render observation. It keeps all accepted compressed startup packets
+for HEVC dependency state and retains all native callback evidence privately.
+Selected unsupported headers still reach and fail the unchanged geometry audit;
+missing explicit paired headers fail closed. Nothing is relabelled or made valid
+by inventing a second track.
+
+The retained failing prefix was reprojected with all seven accepted compressed
+inputs preserved, no mislabelled paired header and no output/checkpoint bypass.
+A separate fresh-device run through the same immutable publisher, PowerShell
+worker, bundled decoder and acknowledgement credit completed **135 video pairs /
+137 native VQE writes before source exit**, with no audio rejections. Observed
+paired geometry changed from 1920×1080 to 768×432; two native rejected attempts
+remained diagnostics. Output drivers were **dummy**, and that fresh run did not
+contain the single-track prefix; prefix handling has its separate retained-data
+and regression-test evidence. Physical Windows continuous output is still pending.

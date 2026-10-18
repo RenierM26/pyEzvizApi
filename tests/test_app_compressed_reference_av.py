@@ -470,3 +470,18 @@ def test_audio_mono_argument_allowlist_precedes_process_creation(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", unexpected)
     with pytest.raises(ValueError, match="explicit supported mono"):
         M["LIVE"]["PCM"]["Ffplay"](channel_args=("-channels", "2"))
+
+
+def test_selected_single_track_header_still_fails_strict_audit(preview, monkeypatch):
+    f = Feed(preview)
+    original = f.send
+
+    def unpaired(kind, payload=b"", **fields):
+        if kind == "header":
+            fields["native_header"][34:36] = [0, 1]
+        original(kind, payload, **fields)
+
+    monkeypatch.setattr(f, "send", unpaired)
+    with pytest.raises(ValueError, match="unsupported native planar header"):
+        f.pair(0, checkpoints=True)
+    assert not Video.calls and preview.audio_job is None

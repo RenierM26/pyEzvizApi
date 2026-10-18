@@ -199,7 +199,8 @@ from .media import (
     CaptureLimits,
     MediaDecodeOptions,
     MediaMuxOptions,
-    _native_shared_clock_options,
+    _hevc_parameter_options,
+    _native_timing_options,
     has_positive_finite_capture_bound,
     is_positive_capture_count_bound,
     is_positive_finite_duration_bound,
@@ -3229,6 +3230,7 @@ class EzvizClient:
         local_sdk_ecdh_max_prefix_bytes: int = 4096,
         local_sdk_ecdh_max_frames: int | None = None,
         native_shared_clock: bool = False,
+        app_relative_clock: bool = False,
     ) -> SaveMediaResult:
         """Save a local camera clip to a path or binary file object.
 
@@ -3268,6 +3270,7 @@ class EzvizClient:
             output_format=output_format,
             ffmpeg_path=ffmpeg_path,
             native_shared_clock=native_shared_clock,
+            app_relative_clock=app_relative_clock,
         )
 
         source_options: ClipSourceOptions
@@ -3332,6 +3335,7 @@ class EzvizClient:
                 wait_for_clean_window = bool(
                     hcnetsdk_command_generated_plan is not None
                     and not decrypt_video
+                    and not app_relative_clock
                     and is_positive_finite_duration_bound(duration_seconds)
                     and not hcnetsdk_h264_skip_initial_idr_windows
                     and not trim_to_clean_window
@@ -3352,6 +3356,7 @@ class EzvizClient:
                 h264_wait_for_clean_idr_window=wait_for_clean_window,
                 h264_clean_idr_wait_seconds=clean_window_wait_seconds,
                 native_shared_clock=native_shared_clock,
+                app_relative_clock=app_relative_clock,
             )
             source_options = HcNetSdkCommandPortClipSource(
                 timeout=timeout,
@@ -3417,22 +3422,24 @@ class EzvizClient:
     ) -> SaveMediaResult:
         """Save a camera clip from a grouped, typed configuration.
 
-        Explicit shared-clock captures are staged: unsupported clocks must not
+        Explicit native timing captures are staged: unsupported clocks must not
         truncate an existing output or append partial media to a caller buffer.
         """
         mux = options.resolved_mux()
-        if not mux.native_shared_clock:
+        if not (mux.native_shared_clock or mux.app_relative_clock):
             return self._save_clip_with_options(serial, output, options)
+        timing_name = "app_relative_clock" if mux.app_relative_clock else "native_shared_clock"
         if not isinstance(options.source, LocalSdkClipSource | HcNetSdkCommandPortClipSource):
-            raise PyEzvizError("native_shared_clock requires an explicit local-sdk or hcnetsdk-command-port source")
+            raise PyEzvizError(f"{timing_name} requires an explicit local-sdk or hcnetsdk-command-port source")
         if mux.output_format != "mpegts":
-            raise PyEzvizError("native_shared_clock requires MPEG-TS output")
-        options.capture.require_bounded("Shared native clock capture")
-        if options.decode.decrypt_video and (
+            raise PyEzvizError(f"{timing_name} requires MPEG-TS output")
+        options.capture.require_bounded("Explicit native timing capture")
+        if (mux.app_relative_clock or options.decode.decrypt_video) and (
             mux.h264_wait_for_clean_idr_window or mux.h264_skip_initial_idr_windows
             or mux.h264_trim_to_clean_idr_window or mux.h264_clean_idr_preroll_seconds
         ):
-            raise PyEzvizError("native_shared_clock does not support encrypted startup trimming")
+            trim_name = "startup trimming" if mux.app_relative_clock else "encrypted startup trimming"
+            raise PyEzvizError(f"{timing_name} does not support {trim_name}")
         with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as staged:
             result = self._save_clip_with_options(serial, cast(BinaryIO, staged), options)
             size = staged.tell()
@@ -3455,7 +3462,11 @@ class EzvizClient:
 
         if options.capture.max_bytes is not None:
             raise PyEzvizError("save_clip_with_options does not support CaptureLimits.max_bytes")
-        if options.decode.decrypt_hevc_parameter_sets:
+        if options.decode.decrypt_hevc_parameter_sets and not (
+            isinstance(options.source, LocalSdkClipSource | HcNetSdkCommandPortClipSource)
+            and options.decode.decrypt_video
+            and options.resolved_mux().app_relative_clock
+        ):
             raise PyEzvizError(
                 "save_clip_with_options does not support "
                 "MediaDecodeOptions.decrypt_hevc_parameter_sets"
@@ -3498,7 +3509,8 @@ class EzvizClient:
                 **_credential_options(source.credentials),
                 **_nonempty_packet_options(source.skip_empty_packets),
                 **_receiver_options(source.receiver_port),
-                **_native_shared_clock_options(mux.native_shared_clock),
+                **_hevc_parameter_options(decode.decrypt_hevc_parameter_sets),
+                **_native_timing_options(mux.native_shared_clock, app_relative_clock=mux.app_relative_clock),
             )
         if isinstance(source, LocalSdkEcdhClipSource):
             return self._save_local_sdk_ecdh_clip(
@@ -3560,7 +3572,8 @@ class EzvizClient:
                     )
                 ),
                 h264_clean_idr_wait_seconds=mux.h264_clean_idr_wait_seconds,
-                **_native_shared_clock_options(mux.native_shared_clock),
+                **_hevc_parameter_options(decode.decrypt_hevc_parameter_sets),
+                **_native_timing_options(mux.native_shared_clock, app_relative_clock=mux.app_relative_clock),
             )
         if isinstance(source, CloudClipSource):
             return self._save_cloud_clip(
@@ -3822,6 +3835,8 @@ class EzvizClient:
         receiver_port: int = 10101,
         skip_empty_packets: bool = False,
         native_shared_clock: bool = False,
+        app_relative_clock: bool = False,
+        decrypt_hevc_parameter_sets: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through the direct-local SDK path."""
 
@@ -3847,7 +3862,8 @@ class EzvizClient:
                     duration_seconds=duration_seconds,
                     ffmpeg_path=ffmpeg_path,
                     smscode=smscode,
-                    **_native_shared_clock_options(native_shared_clock),
+                    **_hevc_parameter_options(decrypt_hevc_parameter_sets),
+                    **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
                     **_credential_options(credentials),
                     **_nonempty_packet_options(skip_empty_packets),
                     **_receiver_options(receiver_port, receiver_ex=True),
@@ -3871,7 +3887,8 @@ class EzvizClient:
                 duration_seconds=duration_seconds,
                 ffmpeg_path=ffmpeg_path,
                 smscode=smscode,
-                **_native_shared_clock_options(native_shared_clock),
+                **_hevc_parameter_options(decrypt_hevc_parameter_sets),
+                **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
                 **_credential_options(credentials),
                 **_nonempty_packet_options(skip_empty_packets),
                 **_receiver_options(receiver_port, receiver_ex=True),
@@ -3923,6 +3940,8 @@ class EzvizClient:
         h264_wait_for_clean_idr_window: bool = False,
         h264_clean_idr_wait_seconds: float = 60.0,
         native_shared_clock: bool = False,
+        app_relative_clock: bool = False,
+        decrypt_hevc_parameter_sets: bool = False,
     ) -> SaveMediaResult:
         """Save a clip through caller-supplied port-8000 HCNetSDK frames."""
 
@@ -4013,7 +4032,8 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
-                            **_native_shared_clock_options(native_shared_clock),
+                            **_hevc_parameter_options(decrypt_hevc_parameter_sets),
+                            **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
                         )
                     else:
                         copy_local_stream_to_mpegts(
@@ -4028,7 +4048,7 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
-                            **_native_shared_clock_options(native_shared_clock),
+                            **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
                         )
                 finally:
                     if metadata_callback is not None:
@@ -4068,7 +4088,8 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
-                            **_native_shared_clock_options(native_shared_clock),
+                            **_hevc_parameter_options(decrypt_hevc_parameter_sets),
+                            **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
                         )
                     else:
                         copy_local_stream_to_mpegts(
@@ -4083,7 +4104,7 @@ class EzvizClient:
                             h264_clean_idr_max_windows=h264_clean_idr_max_windows,
                             h264_wait_for_clean_idr_window=(h264_wait_for_clean_idr_window),
                             h264_clean_idr_wait_seconds=h264_clean_idr_wait_seconds,
-                            **_native_shared_clock_options(native_shared_clock),
+                            **_native_timing_options(native_shared_clock, app_relative_clock=app_relative_clock),
                         )
                 finally:
                     if metadata_callback is not None:

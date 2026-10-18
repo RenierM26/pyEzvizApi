@@ -8,6 +8,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Explicit parsed-frame app-compatible HEVC/AAC playback timing and stream-copy remux helpers, with per-session track origins, configured discontinuity repair and paired-picture reuse. Includes an explicit `app_relative_clock` opt-in for bounded single-source native HEVC/16 kHz AAC live capture, with strict provenance checks and staged high-level output. The typed native app-relative profile accepts explicit HEVC parameter-set decryption for encrypted SDK streams. Default timestamp policies are unchanged.
+
 - Camera-negotiated PlayM4 stream-header descriptors, field-specific SDK codec/FPS/bitrate normalization, and bounded caller-owned discovery reuse for automatic live playback.
 - Explicit native LAN discovery login profiles, including verified TLS command-port transport, without credential enumeration or cloud dependencies.
 
@@ -18,6 +20,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 ### Fixed
 
 - Apply daylight saving time to cameras that report a fixed `timeZone` offset (for example `UTC+01:00`) with `daylightSavingTime` enabled, so `Motion_Trigger` no longer fires one hour late during summer time (#314).
+
+- Isolate MPEG-PS clear-header H.264/HEVC decryption state by video stream, preserve timestamped AES continuations across interleaved audio, and recognize new-picture parameter sets without weakening legacy tail-lookalike safeguards.
 
 - Detect repeated legacy RTP/PS on ECDH-requested sessions and report an actionable protocol mismatch instead of generic no-media; add a bounded, sanitized `probe_local_stream` API with explicit source recommendations.
 

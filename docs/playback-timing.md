@@ -122,3 +122,11 @@ Retained native binary SHA256:
 
 - ezstreamclient: 184f8eb8ce29a2f4ce5c6a915dd9f5649907f55e410a92c6a3db8b414f665f6b
 - PlayCtrl: a719ac549516df28345536d7baf1cc22145996949e89f8c7fae2dc73a379cddc
+
+## Development-only policy simulator
+
+The repository also provides an explicit, bounded
+[app-profile playback simulator](app-playback-simulator.md). It replays metadata
+and queue/output events offline; it is not installed as a library API and is not
+used by any capture/remux path. Its optional loss policy must never be applied
+silently to recording exports, and its output is not a physical lip-sync claim.

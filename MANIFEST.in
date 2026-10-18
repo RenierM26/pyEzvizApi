@@ -6,3 +6,6 @@ include docs/channel99.md
 include docs/streaming.md
 include tests/fixtures/longlink_native.json
 recursive-include tests/fixtures/stream *.hex
+include docs/app-timing.md
+include tests/fixtures/app_timing_oracle.json
+include tests/fixtures/app_timing_boundaries.json

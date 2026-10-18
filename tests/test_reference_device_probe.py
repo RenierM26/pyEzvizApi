@@ -1,5 +1,5 @@
 """Synthetic device controls are byte-identical, bounded and honest on failure."""
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 import hashlib
 import json
 import os
@@ -269,3 +269,21 @@ else:raise AssertionError('isolated worker survived supervisor signal')
         if pid_path.exists():
             with suppress(ProcessLookupError):
                 os.killpg(int(pid_path.read_text()), M['signal'].SIGKILL)
+
+
+@pytest.mark.parametrize('timed_out', [False, True])
+def test_signal_recorded_during_handler_restoration_is_observed(tmp_path, monkeypatch, timed_out):
+    @contextmanager
+    def restoring_handlers():
+        requested = [False]
+        try:
+            yield requested
+        finally:
+            requested[0] = True  # signal delivered after worker result, during scoped restoration
+    monkeypatch.setitem(M['supervised_trial'].__globals__, 'supervisor_termination', restoring_handlers)
+    monkeypatch.setitem(M['supervised_trial'].__globals__, 'supervise_process',
+        lambda *args: dict(status='failed' if timed_out else 'ok', verified_snapshots=1,
+                           worker_deadline_exceeded=timed_out))
+    result = M['supervised_trial'](config(), tmp_path)
+    assert result['status'] == ('failed' if timed_out else 'cancelled')
+    assert result['verified_snapshots'] == 1

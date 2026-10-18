@@ -202,9 +202,9 @@ def wait_worker(process: Any, timeout: float, requested: list[bool]) -> None:
 def supervised_trial(config: dict[str, Any], folder: Path) -> dict[str, Any]:
     with supervisor_termination() as requested:
         report = supervise_process(config, folder, requested)
-        if requested[0] and not report["worker_deadline_exceeded"]:
-            report.update(status="cancelled", error="operator cancelled")
-        return report
+    if requested[0] and not report["worker_deadline_exceeded"]:
+        report.update(status="cancelled", error="operator cancelled")
+    return report
 
 
 def supervise_process(config: dict[str, Any], folder: Path, requested: list[bool]) -> dict[str, Any]:

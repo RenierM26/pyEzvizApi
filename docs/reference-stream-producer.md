@@ -327,3 +327,67 @@ transport, event projection, playback pacing, SDL/ffplay output or physical A/V.
 Do not compare these host-only stage totals directly with the earlier live
 acknowledgement spans. The real-time bottleneck remains unresolved; physical A/V
 testing remains deferred.
+
+## Opt-in asynchronous snapshot acknowledgement measurement
+
+Add `--transport-acks` to a normal producer invocation to measure a **round trip**
+for each original/rendered snapshot. This is disabled by default: acknowledgements
+add messages and callback work and can perturb the instrumented run. Compare only
+runs with matching options; do not silently mix enabled and disabled observations.
+
+The device assigns a monotonically increasing snapshot ID and records its clock
+immediately before `send()` (after copy/hash/compression). After bounded inflate,
+original-byte SHA-256 verification, binary write/flush and metadata write/flush,
+the collector posts that ID back to the script. The device records the callback
+on its own monotonic clock. `benchmark.json.transport_acknowledgements` contains:
+
+- `device.sent`: at most 32 small descriptors with device send-start, send-return
+  and acknowledgement timestamps; **no payload buffers** are retained here.
+- `device.pending_ids`: requests with no observed callback when source freezes.
+  A missing device finish summary means pending state is **unknown**, not empty.
+- `device_round_trips`: summaries of observed device-clock round trips; matching
+  `transport_ack` records remain in the private event log.
+- `host_posts`: callback-entry, persistence-completion, post-start and post-return
+  timestamps on the **host** clock. Failed post attempts retain their verified
+  prefix and `successful=false`; post return alone does not prove device receipt.
+
+The round trip includes outbound Frida queueing/transport, collector processing,
+reverse transport and device JavaScript callback scheduling. It excludes earlier
+copy/hash/compression and later producer projection/audit/output. It cannot isolate
+one of those costs, cannot be halved into one-way delay and is not physical latency.
+No host timestamp is subtracted from a device timestamp. Persistence means buffered
+write/flush, **not fsync**. The `send()` return is retained separately from receipt.
+
+There is no wait, retry, throttle, credit protocol, payload dropping or relaxed
+verification. Existing byte/sample/event limits and EOF retention are unchanged.
+At source freeze the helper takes its pending snapshot and ignores later callbacks;
+it does not drain transport or delay EOF to manufacture complete acknowledgement
+coverage. Unknown/duplicate callbacks fail closed. Raw, zlib and LZ4 share the same
+post-verification acknowledgement boundary. This is diagnostic instrumentation,
+not a transport optimization or a real-time playback result.
+
+### Synthetic device-transport observation (2026-10-18)
+
+A private transport-only harness exercised the **same helper and real collector**
+on the connected ARM Android Gadget, with no native hooks, camera preview,
+producer projector or host output backend. It generated deterministic raw bytes
+once, hashed them once before timing, then emitted a single synchronous RPC burst.
+This intentionally permits queued transport and callback scheduling contention;
+it does not reproduce live renderer pacing or compare codecs.
+
+All eight 2,048-byte messages were verified and acknowledged: local send calls
+totalled 3.34 ms; first-send-to-last-ack spanned 33.14 ms. A separate burst of
+32 messages of 7,007,040 bytes (224,225,280 bytes total) was also fully verified and
+acknowledged with zero pending IDs. Local send calls totalled **1.015 seconds**,
+while first-send-to-last-ack spanned **25.303 seconds** on the device clock. Device
+per-snapshot RTT p50/p95/max were 12.338/23.709/24.311 seconds. Host callback work
+(including acknowledgement posts) totalled 176 ms, including 109 ms hashing and
+60 ms buffered payload persistence; those nested costs are not additive.
+
+This exposes substantial queued/asynchronous delay outside the measured local
+send calls and collector work **in this burst experiment**. It does not separate
+network throughput, Frida serialization/queues and device callback scheduling,
+and is not a causal explanation of every earlier live run. No throughput or
+real-time improvement was implemented. The harness unloaded/detached and removed
+its caller-owned forwarding; the tablet remained on its launcher. Only aggregate
+results are public; private binary logs remain local. Physical A/V remains deferred.

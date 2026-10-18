@@ -50,7 +50,9 @@ Samples may arrive before or after their corresponding metadata offers. The host
 binds by equality of the **entire original 49-word input descriptor**, not nearby
 timestamps, just frame counters or manifest adjacency. Duplicate descriptors or
 sample IDs are rejected as ambiguous. Canonical host pixels stay in the inherited
-bounded private spool, not Android-owned buffers. Source metadata and renderer
+bounded private spool, not Android-owned buffers. Captures append independently of
+the file cursor left by prior output reads, preserving already stored samples
+when ingestion and rendering interleave. Source metadata and renderer
 claims remain caller evidence, not authenticated provenance.
 
 ### `event`

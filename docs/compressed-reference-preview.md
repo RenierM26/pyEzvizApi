@@ -102,3 +102,37 @@ association at 1920×1080. Those failed assumptions and failed integrated attemp
 were retained privately. Windows WSLg continuous screen/speaker output remains
 unverified until its own receipt and human observations are collected. Previously
 observed sparse recorded motion and short recorded audio are separate evidence.
+
+## Acknowledgement credit for a bursty handoff
+
+`tools/reference_stream/credit.py` provides optional **transport-side** credit.
+It does not change the consumer queue caps. `WireRecords` preserves each complete
+original header and payload byte-for-byte across arbitrary input chunks, with
+finite header, record, payload and aggregate limits. A relay calls `Credit.offer`
+**before** sending each original record and routes consumer progress into
+`Credit.progress` from an independent reader. Reserve-before-send prevents an
+immediate acknowledgement from racing ahead of its offer.
+
+Default credit permits **one unacknowledged pair and four unacknowledged VQE
+blocks**. Only that exact `video_ack` / `audio_ack` identity returns its credit;
+unknown, duplicate or replayed acknowledgements fail. A missing acknowledgement
+has a bounded deadline; cancellation and failed/closed progress stop further
+offers. Audio and video have separate budgets, but an ordered wire can experience
+head-of-line backpressure. This is not a native playback timer, source FPS target,
+physical presentation acknowledgement, DSP offset or A/V synchronizer.
+
+The end record is not a drain request: it bypasses output credit and does not wait
+for pending offers. The consumer still decides what is active or retained at its
+own explicit end boundary. Pending credit is reported, never counted as completed
+or silently dropped. A relay must still supervise the source, consumer and its
+progress reader and compare forwarded bytes/hash against the original wire.
+
+A Windows attempt verified the synthetic transfer and delivered over 28 MB into
+real X11 / legacy-mono ffplay output, then failed the unchanged six-pair waiting
+limit before the first video acknowledgement (two audio writes completed). This
+is **not** a successful continuous physical-output test. A local regression control
+reproduced that backlog with a burst source and 0.5-second initial display delay.
+The same immutable-chunk/PowerShell/bundled-runtime run with credit completed all
+**92 video pairs and 97 audio blocks**, zero audio rejections, exact original wire
+hash parity, and peaks of one/four unacknowledged offers. Those regression outputs
+used dummy drivers; the corrected physical Windows run remains pending.

@@ -118,3 +118,8 @@ pair remains reserved in the source ledger. The dummy worker exits and is reaped
 Neither that run nor synthetic timing tests prove a visible window, native RGB
 mapping, physical presentation latency or lip-sync. Live input/output integration
 and physical A/V validation remain later work.
+
+For incremental producer-pipe delivery of native selections and actual upstream
+VQE output (rather than a fully loaded snapshot plan), see the experimental
+[reference-assisted live A/V handoff](live-native-av.md). The reference app remains
+required; physical output is a separate validation step.

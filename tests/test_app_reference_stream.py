@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import runpy
 import time
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -295,3 +296,33 @@ def test_cancelling_a_running_host_keeps_receipt_and_reaps_output_group(tmp_path
     assert receipt['status'] == 'cancelled' and receipt['audio']['pipe_written'] == 1
     with pytest.raises(ProcessLookupError):
         M['os'].killpg(host.process.pid, 0)
+
+
+@pytest.mark.parametrize('child_exits', [True, False])
+def test_wire_evidence_contains_only_successfully_written_slices(monkeypatch, child_exits):
+    host = M['Host'].__new__(M['Host'])
+    host.wire = io.BytesIO()
+    host.writes = []
+    host.stdin = SimpleNamespace(fileno=lambda: 123)
+    host.drain = lambda: None
+    accepted = bytearray()
+    host.process = SimpleNamespace(poll=lambda: 2 if child_exits and accepted else None)
+    def write(fd, data):
+        assert fd == 123
+        # The artifact must never run ahead of the actual pipe.
+        assert host.wire.getvalue() == bytes(accepted)
+        count = min(7, len(data))
+        accepted.extend(data[:count])
+        return count
+    monkeypatch.setattr(M['os'], 'write', write)
+    row = dict(kind='event', event=dict(kind='stage_push', at_ms=0))
+    encoded = M['LIVE']['encode'](row)
+    if child_exits:
+        with pytest.raises(ValueError, match='host exited'):
+            host.send(row)
+        assert host.wire.getvalue() == encoded[:7]
+        assert not host.writes  # no completed-record metric was invented
+    else:
+        host.send(row)
+        assert host.wire.getvalue() == encoded
+        assert host.writes[0]['bytes'] == len(encoded)

@@ -261,8 +261,6 @@ class Host:
         self, row: dict[str, Any], payload: bytes = b"", observed_ns: int | None = None
     ) -> None:
         data = LIVE["encode"](row, payload)
-        self.wire.write(data)
-        self.wire.flush()
         started = time.monotonic_ns()
         at = 0
         until = time.monotonic() + 10
@@ -271,9 +269,16 @@ class Host:
             require(self.process.poll() is None, "host exited during source write")
             require(time.monotonic() < until, "source write deadline")
             try:
-                at += os.write(self.stdin.fileno(), memoryview(data)[at:])
+                count = os.write(self.stdin.fileno(), memoryview(data)[at:])
             except BlockingIOError:
                 select.select([], [self.stdin], [], 0.005)
+            else:
+                require(0 < count <= len(data) - at, 'invalid source pipe write progress')
+                # Log only the prefix the pipe actually accepted, including an
+                # incomplete record when a later write/deadline fails.
+                self.wire.write(memoryview(data)[at:at + count])
+                self.wire.flush()
+                at += count
         self.writes.append(
             dict(
                 kind=row["kind"],

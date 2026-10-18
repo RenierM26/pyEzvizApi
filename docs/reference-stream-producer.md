@@ -114,7 +114,9 @@ when an earlier cleanup step fails. The tool does not close the Android preview.
   render cadence, host video/audio acknowledgement intervals, pending-queue peak,
   host rejections/retention/partial bytes and pre-EOF acknowledgement counts.
 - `events.jsonl` and binary blobs: private original observations and verified data.
-- `live-source.bin`: exact framed prefix supplied to the host.
+- `live-source.bin`: only bytes successfully accepted by the host pipe. A failed
+  record may leave this artifact ending mid-header/payload; no unsent tail is
+  written ahead of the pipe.
 - `host-progress.jsonl`, `host-stderr.log`, `live-receipt.json`: host output evidence
   and native model state, including effects retained after later failures.
 

@@ -25,39 +25,9 @@ function capturePixels(id,v,ptr,n){
  if(inputSnapshots.size>=24){const oldest=inputSnapshots.keys().next().value;inputSnapshots.delete(oldest);log('input_sample_evicted',{key:oldest});}
  inputSnapshots.set(k,{call:id,header:h,bytes:timed('input_snapshot_copy',n,()=>ptr.readByteArray(n)),at:mono()});capturedKeys.add(k);
 }
-// Lossless transport only: the host still receives and audits both full snapshots.
-let zipBound=null,zipCompress=null;
-const transport=REFERENCE_CONFIG.transport||'raw';
-if(transport==='zlib'){
- const z=Module.load('libz.so');
- zipBound=new NativeFunction(z.getExportByName('compressBound'),'uint',['uint'],{scheduling:'exclusive'});
- zipCompress=new NativeFunction(z.getExportByName('compress2'),'int',['pointer','pointer','pointer','uint','int'],{scheduling:'exclusive'});
-}else if(transport==='lz4'){
- const z=Module.load('liblz4.so');
- zipBound=new NativeFunction(z.getExportByName('LZ4_compressBound'),'int',['int'],{scheduling:'exclusive'});
- zipCompress=new NativeFunction(z.getExportByName('LZ4_compress_default'),'int',['pointer','pointer','int','int'],{scheduling:'exclusive'});
-}else if(transport!=='raw')throw Error('unsupported snapshot transport');
+// Lossless transport only: original-buffer hashes and full native audits are unchanged.
 const snapshotAcks=snapshotAcknowledgements(!!REFERENCE_CONFIG.transport_acks,mono,send,recv,log,error);
-function snapshotSend(row,bytes){
- if(zipCompress){
-  const compressed=timed('snapshot_compression',bytes.byteLength,()=>{
-   const bound=zipBound(bytes.byteLength);
-   if(bound>12*1024*1024+65536)throw Error('compressed buffer bound');
-   const input=Memory.alloc(bytes.byteLength),out=Memory.alloc(bound),length=Memory.alloc(4);
-   input.writeByteArray(bytes);length.writeU32(bound);
-   let size;
-   if(transport==='zlib'){
-    if(zipCompress(out,length,input,bytes.byteLength,1)!==0)throw Error('compression failed');
-    size=length.readU32();
-   }else size=zipCompress(input,out,bytes.byteLength,bound);
-   if(size<=0)throw Error('compression failed');
-   if(size>bound)throw Error('compressed buffer length');
-   return size<bytes.byteLength?out.readByteArray(size):null;
-  });
-  if(compressed){snapshotAcks.send(Object.assign({},row,{encoding:transport,transport_bytes:compressed.byteLength}),compressed);return;}
- }
- snapshotAcks.send(row,bytes);
-}
+const snapshotSend=snapshotCodec(REFERENCE_CONFIG.transport||'raw',timed,(row,bytes)=>snapshotAcks.send(row,bytes));
 function checkRenderPixels(n){
  if(capturedPairs>=pairLimit||stopped)return;
  const selected=[];

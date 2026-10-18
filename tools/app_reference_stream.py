@@ -147,6 +147,7 @@ class Capture:
     def __init__(self, root: Path, post: Any = None) -> None:
         self.post = post
         self.acknowledgements: list[dict[str, Any]] = []
+        self.acknowledged: set[int] = set()
         self.root = root
         self.log = (root / "events.jsonl").open("x")
         self.files: dict[str, Any] = {}
@@ -157,6 +158,17 @@ class Capture:
         self.transport_bytes = 0
         self.ready = threading.Event()
         self.profile = PROFILE["Profile"]()
+
+    def validate_acknowledgements(self, rows: list[dict[str, Any]], data: bytes | None) -> None:
+        for row in rows:
+            if row.get("event") == "transport_ack":
+                identity = row.get("transport_id", 0)
+                require(data is None and type(identity) is int
+                        and 1 <= identity <= len(self.acknowledgements)
+                        and self.acknowledgements[identity - 1]["successful"]
+                        and identity not in self.acknowledged,
+                        "unknown or duplicate collector transport acknowledgement")
+                self.acknowledged.add(identity)
 
     def message(self, message: dict[str, Any], data: bytes | None) -> None:
         callback_entered_ns = time.monotonic_ns()
@@ -181,7 +193,8 @@ class Capture:
                     ),
                     "invalid collector row",
                 )
-                require("transport_id" not in value or data is not None,
+                require("transport_id" not in value or data is not None
+                        or value.get("event") == "transport_ack",
                         "snapshot acknowledgement requires binary data")
                 if data is not None:
                     require(
@@ -226,6 +239,7 @@ class Capture:
                         output.write(data)
                         output.flush()
                     self.bytes += len(data)
+                self.validate_acknowledgements(rows, data)
                 observed = time.monotonic_ns()
                 for row in rows:
                     require(row.get("event") != "error", "native hook error: " + str(row))
@@ -719,6 +733,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
             "const REFERENCE_CONFIG=" + json.dumps(dict(verified=True, pairs=args.pairs, transport=args.transport, transport_acks=args.transport_acks)) + ";\n"
         )
         source += (BASE / "reference_stream/transport-ack.js").read_text() + "\n"
+        source += (BASE / "reference_stream/snapshot-codec.js").read_text() + "\n"
         source += (BASE / "reference_stream/h9c-armv7.js").read_text()
         script = session.create_script(source)
         if args.transport_acks:

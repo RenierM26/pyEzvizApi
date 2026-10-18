@@ -8,6 +8,7 @@ const p=Process.getModuleByName('libPlayCtrl.so'),mem=Memory.alloc(8),clk=new Na
 function mono(){clk(1,mem);return mem.readU32()*1e9+mem.add(4).readU32();}
 let queue=[],seq=0,stopped=false;let pixelBytes=0;const samples=new Map(),sampleCounts=new Map();const contexts=new Map(),objects=new Map(),dataQueues=new Set();
 function log(event,fields){const record=Object.assign({event,device_mono_ns:mono()},fields);if(!stopped){if(queue.length>=20000){stopped=true;send({event:'error',device_mono_ns:mono(),message:'metadata queue limit'});}else queue.push(record);}}
+function timed(stage,bytes,fn){const start=mono();let ok=false;try{const result=fn();ok=true;return result;}finally{log('stage_timing',{stage,bytes,started_ns:start,completed_ns:mono(),successful:ok});}}
 function flush(){if(queue.length){const batch=queue;queue=[];send({batch});}}
 setInterval(flush,250);
 function sym(pattern){const a=p.enumerateExports().filter(e=>pattern.test(e.name));if(a.length!==1)throw Error('Symbol '+pattern+' count '+a.length);return a[0].address;}
@@ -22,7 +23,39 @@ function capturePixels(id,v,ptr,n){
  if(h[1]!==224&&h[1]!==225)return;
  const k=sourceKey(h[1],h[7],h[10]);
  if(inputSnapshots.size>=24){const oldest=inputSnapshots.keys().next().value;inputSnapshots.delete(oldest);log('input_sample_evicted',{key:oldest});}
- inputSnapshots.set(k,{call:id,header:h,bytes:ptr.readByteArray(n),at:mono()});capturedKeys.add(k);
+ inputSnapshots.set(k,{call:id,header:h,bytes:timed('input_snapshot_copy',n,()=>ptr.readByteArray(n)),at:mono()});capturedKeys.add(k);
+}
+// Lossless transport only: the host still receives and audits both full snapshots.
+let zipBound=null,zipCompress=null;
+const transport=REFERENCE_CONFIG.transport||'raw';
+if(transport==='zlib'){
+ const z=Module.load('libz.so');
+ zipBound=new NativeFunction(z.getExportByName('compressBound'),'uint',['uint'],{scheduling:'exclusive'});
+ zipCompress=new NativeFunction(z.getExportByName('compress2'),'int',['pointer','pointer','pointer','uint','int'],{scheduling:'exclusive'});
+}else if(transport==='lz4'){
+ const z=Module.load('liblz4.so');
+ zipBound=new NativeFunction(z.getExportByName('LZ4_compressBound'),'int',['int'],{scheduling:'exclusive'});
+ zipCompress=new NativeFunction(z.getExportByName('LZ4_compress_default'),'int',['pointer','pointer','int','int'],{scheduling:'exclusive'});
+}else if(transport!=='raw')throw Error('unsupported snapshot transport');
+function snapshotSend(row,bytes){
+ if(zipCompress){
+  const compressed=timed('snapshot_compression',bytes.byteLength,()=>{
+   const bound=zipBound(bytes.byteLength);
+   if(bound>12*1024*1024+65536)throw Error('compressed buffer bound');
+   const input=Memory.alloc(bytes.byteLength),out=Memory.alloc(bound),length=Memory.alloc(4);
+   input.writeByteArray(bytes);length.writeU32(bound);
+   let size;
+   if(transport==='zlib'){
+    if(zipCompress(out,length,input,bytes.byteLength,1)!==0)throw Error('compression failed');
+    size=length.readU32();
+   }else size=zipCompress(input,out,bytes.byteLength,bound);
+   if(size<=0)throw Error('compression failed');
+   if(size>bound)throw Error('compressed buffer length');
+   return size<bytes.byteLength?out.readByteArray(size):null;
+  });
+  if(compressed){send(Object.assign({},row,{encoding:transport,transport_bytes:compressed.byteLength}),compressed);return;}
+ }
+ send(row,bytes);
 }
 function checkRenderPixels(n){
  if(capturedPairs>=pairLimit||stopped)return;
@@ -32,15 +65,16 @@ function checkRenderPixels(n){
   const k=sourceKey(h[1],h[7],h[10]),source=inputSnapshots.get(k);
   const ptr=n.add(base).readPointer(),size=n.add(base+0x10).readU32();
   if(!source||ptr.isNull()||size<=0||size>12582912||!readable(ptr,size))return;
-  selected.push({key:k,source,header:h,bytes:ptr.readByteArray(size)});
+  selected.push({key:k,source,header:h,bytes:timed('render_snapshot_copy',size,()=>ptr.readByteArray(size))});
  }
  const size=selected.reduce((n,s)=>n+s.source.bytes.byteLength+s.bytes.byteLength,0);
  if(pixelBytes+size>pixelLimit)return;
  capturedPairs++;pixelBytes+=size;flush();
  for(const s of selected){
-  const h=s.source.header,hash=Checksum.compute('sha256',s.source.bytes);
-  send({event:'native_pixels',device_mono_ns:s.source.at,call:s.source.call,sid:h[1],raw:h[7],frame:h[10],bytes:s.source.bytes.byteLength,sha256:hash,header_words:h},s.source.bytes);
-  send({event:'native_render_pixels',device_mono_ns:mono(),sid:h[1],raw:h[7],frame:h[10],bytes:s.bytes.byteLength,input_bytes:s.source.bytes.byteLength,sha256:Checksum.compute('sha256',s.bytes),input_sha256:hash,header_words:s.header},s.bytes);
+  const h=s.source.header,hash=timed('input_snapshot_hash',s.source.bytes.byteLength,()=>Checksum.compute('sha256',s.source.bytes));
+  timed('input_snapshot_send',s.source.bytes.byteLength,()=>snapshotSend({event:'native_pixels',device_mono_ns:s.source.at,call:s.source.call,sid:h[1],raw:h[7],frame:h[10],bytes:s.source.bytes.byteLength,sha256:hash,header_words:h},s.source.bytes));
+  const renderHash=timed('render_snapshot_hash',s.bytes.byteLength,()=>Checksum.compute('sha256',s.bytes));
+  timed('render_snapshot_send',s.bytes.byteLength,()=>snapshotSend({event:'native_render_pixels',device_mono_ns:mono(),sid:h[1],raw:h[7],frame:h[10],bytes:s.bytes.byteLength,input_bytes:s.source.bytes.byteLength,sha256:renderHash,input_sha256:hash,header_words:s.header},s.bytes));
   inputSnapshots.delete(s.key);capturedKeys.delete(s.key);
  }
 }

@@ -7,6 +7,7 @@ import runpy
 import time
 from types import SimpleNamespace
 from typing import Any, ClassVar
+import zlib
 
 import pytest
 
@@ -326,3 +327,124 @@ def test_wire_evidence_contains_only_successfully_written_slices(monkeypatch, ch
         host.send(row)
         assert host.wire.getvalue() == encoded
         assert host.writes[0]['bytes'] == len(encoded)
+
+
+def test_compressed_capture_persists_original_bytes_and_preserves_hash_audit(tmp_path):
+    payload = bytes(range(256)) * 128
+    wire = zlib.compress(payload, 1)
+    row = dict(event='native_pixels', device_mono_ns=1, bytes=len(payload),
+               encoding='zlib', transport_bytes=len(wire), sha256=hashlib.sha256(payload).hexdigest())
+    capture = M['Capture'](tmp_path)
+    try:
+        capture.message(dict(type='send', payload=row), wire)
+        stored = capture.snapshot()[0]
+        assert P['blob'](tmp_path, stored) == payload
+        assert capture.bytes == len(payload) and capture.transport_bytes == len(wire)
+        assert capture.profile.result()['stages']['collector_decompression']['count'] == 1
+    finally:
+        capture.close()
+
+
+@pytest.mark.parametrize('damage', ['truncated', 'tail', 'expansion', 'wrong-length', 'encoding', 'oversize'])
+def test_compressed_payload_rejects_corruption_trailing_data_and_expansion(damage):
+    data = zlib.compress(b'x' * 1000)
+    row: dict[str, Any] = dict(bytes=1000, transport_bytes=len(data), encoding='zlib')
+    if damage == 'truncated':
+        data = data[:-1]
+        row['transport_bytes'] = len(data)
+    elif damage == 'tail':
+        data += zlib.compress(b'other frame')
+        row['transport_bytes'] = len(data)
+    elif damage == 'expansion':
+        row['bytes'] = 10
+    elif damage == 'wrong-length':
+        row['transport_bytes'] += 1
+    elif damage == 'encoding':
+        row['encoding'] = 'other'
+    else:
+        row['bytes'] = 12 * 1024 * 1024 + 1
+    with pytest.raises(ValueError):
+        M['unpack_payload'](row, data)
+
+
+def test_compressed_bytes_do_not_bypass_original_sha256(tmp_path):
+    wire = zlib.compress(b'bad pixels')
+    capture = M['Capture'](tmp_path)
+    try:
+        capture.message(dict(type='send', payload=dict(event='native_render_pixels', device_mono_ns=1,
+            bytes=10, transport_bytes=len(wire), encoding='zlib', sha256='0' * 64)), wire)
+        with pytest.raises(ValueError, match='payload mismatch'):
+            capture.snapshot()
+        assert not list(tmp_path.glob('*.bin'))
+    finally:
+        capture.close()
+
+
+def test_profile_retains_failed_spans_and_explicitly_counts_overflow(monkeypatch):
+    profile = M['PROFILE']['Profile']()
+    monkeypatch.setitem(profile.measure.__wrapped__.__globals__, 'LIMIT', 1)
+    with pytest.raises(ValueError), profile.measure('failed', bytes=123):
+        raise ValueError('rejected')
+    with profile.measure('omitted'):
+        pass
+    result = profile.result()
+    assert result['omitted'] == 1
+    assert result['stages']['failed']['failed'] == 1
+    assert result['stages']['failed']['bytes'] == 123
+    assert result['spans'][0]['completed_ns'] >= result['spans'][0]['started_ns']
+
+
+def test_comparison_preserves_failures_settings_differences_and_no_realtime_claim():
+    module = runpy.run_path(str(Path(__file__).parents[1] / 'tools/reference_stream/compare.py'))
+    result = module['compare'](dict(status='failed', error='drain timeout', verified_samples=16,
+        video_before_eof=8, host_video_span_seconds=15), dict(status='ok', verified_samples=8,
+        video_before_eof=4, host_video_span_seconds=5))
+    assert result['outcomes']['before']['error'] == 'drain timeout'
+    assert 'verified_samples' in result['settings_mismatches']
+    assert 'source_video_geometry' in result['settings_missing']
+    assert result['measurements']['video_before_eof']['delta'] == -4
+    assert not result['sustained_realtime_verified'] and not result['physical_av_measured']
+
+
+def lz4_compress(payload):
+    library = M['ctypes'].CDLL(M['ctypes'].util.find_library('lz4'))
+    bound = library.LZ4_compressBound
+    bound.argtypes, bound.restype = [M['ctypes'].c_int], M['ctypes'].c_int
+    compress = library.LZ4_compress_default
+    compress.argtypes = [M['ctypes'].c_char_p, M['ctypes'].c_void_p, M['ctypes'].c_int, M['ctypes'].c_int]
+    compress.restype = M['ctypes'].c_int
+    buffer = M['ctypes'].create_string_buffer(bound(len(payload)))
+    count = compress(payload, buffer, len(payload), len(buffer))
+    assert count > 0
+    return buffer.raw[:count]
+
+
+@pytest.mark.parametrize('damage', [None, 'truncated', 'tail', 'expansion'])
+def test_lz4_safe_decoder_is_exact_and_bounded(damage):
+    if not M['ctypes'].util.find_library('lz4'):
+        pytest.skip('optional system liblz4 unavailable')
+    original = bytes(range(256)) * 128
+    data = lz4_compress(original)
+    row = dict(bytes=len(original), encoding='lz4')
+    if damage == 'truncated':
+        data = data[:-1]
+    elif damage == 'tail':
+        data += b'foreign bytes'
+    elif damage == 'expansion':
+        row['bytes'] = 10
+    row['transport_bytes'] = len(data)
+    if damage is None:
+        assert M['unpack_payload'](row, data) == original
+    else:
+        with pytest.raises(ValueError, match='LZ4'):
+            M['unpack_payload'](row, data)
+
+
+def test_audio_residence_uses_host_receive_clock_not_device_source_clock():
+    host = SimpleNamespace(writes=[])
+    receipt = dict(actions=[dict(kind='native_vqe_received', id='a', admitted=True,
+                                host_received_ns=10**9, source_output_ns=10**13),
+                           dict(kind='host_audio_pipe_written', id='a', host_completed_ns=1010000000)])
+    result = M['metrics']([], host, receipt, 20)
+    assert result['host_audio_received_to_write_complete_ms'] == [10]
+    assert result['cross_device_transport_delay_ms'] is None

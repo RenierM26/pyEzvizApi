@@ -158,3 +158,26 @@ paired geometry changed from 1920×1080 to 768×432; two native rejected attempt
 remained diagnostics. Output drivers were **dummy**, and that fresh run did not
 contain the single-track prefix; prefix handling has its separate retained-data
 and regression-test evidence. Physical Windows continuous output is still pending.
+
+## First completed Windows physical-video check
+
+The corrected fresh session completed on Ubuntu WSLg with real **X11** output:
+**86 paired video calls and 90 native VQE PCM writes**, no errors, rejected audio,
+pending blocks or partial writes. Both initial native checkpoints gated output;
+observed paired geometry was 2880×1620. The controller conservatively observed
+14 video and 16 audio API acknowledgements while the source process was still
+running. The immutable stream was 30,323,526 bytes across 197 chunks. Renier
+reported that the test completed and **video looked good**, but he heard no sound.
+This verifies physical advancing video by human observation, not audible audio
+or measured A/V synchronization. It does not establish low-latency playback.
+
+Analysis of exactly the 90 emitted native VQE records (92,160 s16le samples,
+5.76 seconds of PCM) found input RMS **−48.76 dBFS**, native output RMS
+**−59.74 dBFS**, and output peak **−36.45 dBFS**. Output was not digital silence:
+84,572 samples were nonzero; three blocks were all zero. That is consistent with
+very quiet, native-processed background sound, but does not prove why no sound was
+heard or which physical speaker emitted it. No gain, resampling, PCM substitution
+or camera volume/quality control was applied. A deliberate audible source near
+the camera is needed for a meaningful physical audio check; A/V sync requires a
+separate controlled measurement. Earlier audible short-recording evidence is
+separate from this continuous run.

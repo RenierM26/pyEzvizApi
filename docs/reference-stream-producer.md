@@ -162,3 +162,100 @@ observing startup; its report correctly records zero live output. Final cleanup
 closed the preview, unloaded hooks, detached the session, removed caller-owned
 forwarding and left no host output workers. Private evidence is retained locally,
 not shipped with this repository.
+
+## Stage profiling and lossless transfer comparison
+
+Stage profiling is now collected on every development run. `stage_profile` keeps
+separate **device**, **collector**, **producer** and **host-output** clock owners.
+The device measures input/render snapshot copying, SHA-256 and send-call duration;
+compressed send-call duration **includes** compression. The host separates
+collector decompression/hash/persistence, blob reading/hash/manifest construction,
+event projection, native sample audit, spool read/composition, output startup,
+present calls and backend shutdown. `source_pipe_stages` groups completed source
+pipe writes by record kind. `host_audio_received_to_write_complete_ms` measures
+host-admission-to-pipe-ack residence only; rejected/unforwarded audio is counted
+separately, not assigned a fabricated latency. Startup/shutdown spans are present
+in new receipts; earlier profiling pilots predate those extra spans.
+
+Host profiles retain at most 20,000 spans each, with explicit `omitted` counts.
+Summaries provide count, bytes, failed spans, total/max and nearest-rank p50/p95.
+Nested/overlapping spans must **not** be summed as end-to-end latency. A device
+`send` return measures only the local call, not delivery from Frida's asynchronous
+transport queue. Cross-device one-way delay remains unknown. The historical
+`collector_received_ns` stamp is published after payload verification/persistence;
+collector callback processing has its own measured span.
+
+`--transport raw` remains the default. Optional `--transport zlib` (level one) or
+`--transport lz4` compresses only the original/rendered pixel messages between
+Gadget and the collector. The codecs use Android system `libz.so` or `liblz4.so`
+exports, not offsets in an unverified app library. LZ4 additionally requires host
+system **liblz4** with `LZ4_decompress_safe`; it fails before attach if unavailable.
+No Python/package dependency is added. Both codec modes fall back to raw for an
+individual snapshot if compression would not shrink it. A selected codec failing
+to load/run is an error, not an implicit change of the run's configuration.
+
+Compression is lossless transport, **not** a reduced verification mode. The host
+bounds compressed input and decompressed output, rejects malformed/truncated or
+trailing data, verifies the original full-buffer SHA-256, persists original bytes,
+and performs the unchanged full-header/crop/renderer audits. The byte budgets
+still charge **uncompressed** pixels. No frame skipping, downscaling, timestamp
+retiming, guessed audio association or EOF drain is introduced. The host live
+source protocol and `live-source.bin` remain uncompressed; partial-write evidence
+still contains only the prefix actually accepted by the pipe.
+
+Run otherwise-identical fresh sessions into distinct private directories, changing
+only `--transport`. Then compare the two reports:
+
+```sh
+python tools/reference_stream/compare.py \
+  /private/raw-run/benchmark.json /private/lz4-run/benchmark.json \
+  > /private/comparison.json
+```
+
+The comparison preserves failed outcomes and reports missing/mismatched settings,
+including audited geometry and media times. The app may vary initial resolution
+between fresh previews without the tool changing a setting. Different geometry
+must not be presented as a transport speedup. Even matching settings represent
+**different live media**, not identical-payload trials or a causal latency result.
+`collector_transport_bytes` counts actual binary callback bytes (including audio);
+`collector_payload_bytes` counts verified, persisted decompressed bytes. Neither
+includes Frida framing/metadata or network-level overhead.
+
+### Measured comparison (2026-10-18)
+
+A profiling baseline at 2880×1620 visible resolution acknowledged eight pairs over
+14.967 s. Sixteen host sample audits totalled 376 ms, composition 104 ms and
+present calls 200 ms. Device snapshot hashes totalled 2.877 s; local send calls
+returned much earlier than host delivery. These measurements rule out host audit
+and presentation as the dominant measured cost; they do not directly time the
+asynchronous transfer queue.
+
+| Transport/run | Visible lens size | Video/audio pre-EOF | Host video ack span | Binary callback bytes |
+| --- | --- | --- | --- | --- |
+| raw profiling baseline | 2880×1620 | 8 / 91 | 14.967 s | 225,466,368 |
+| zlib | 2880×1620 | 8 / 15 | 11.390 s | 118,834,590 |
+| LZ4 first attempt | 1920×1080 | 0 / 0 | failed queue-depth validation | 15,511,290 |
+| LZ4 lower-resolution observation | 1920×1080 | 8 / 26 | 5.341 s | 56,743,806 |
+| raw matched-settings observation | 2880×1620 | 8 / 93 | 15.832 s | 225,603,584 |
+| LZ4 matched-settings observation | 2880×1620 | 8 / 122 | 13.696 s | 141,834,606 |
+
+The final two runs have matching profile, sink deadline, requested window, sample
+count, geometry and media times (0/67/134/200/267/334/400/467 ms). LZ4 reduced actual
+binary callback bytes by **37.1%** and observed acknowledgement span by **13.5%**.
+Those are descriptive comparisons of different captures, not general performance
+or audio-quality guarantees. Pixel bytes before compression remain 224,225,280 in
+both. Full-resolution LZ4 compression took 2.340 s total; zlib took 8.638 s in its
+run. Native hashing and compression still block observer callbacks and perturb
+playback. Raw is retained as the baseline; compressed modes are opt-in experiments.
+
+Final LZ4 host audio peak pending was 14, with zero host rejection/retention/partial
+bytes; 132 VQE outputs were observed and **10 were unforwarded**. The matched raw
+run had peak 25, two host rejections and 110 unforwarded VQE outputs. These counts
+have different native source populations and do not prove complete audio coverage.
+The failed queue-depth attempt remains a failure; validation was not relaxed.
+
+467 ms of source video still takes 13.696 s of host acknowledgement span. The
+requested 25-second span was not reached. This is **not real-time playback**, and
+it does not establish improvement over every earlier run (PR335's single final
+observation was 13.087 s). Dummy output only; physical A/V testing stays deferred.
+EOF/shutdown, source ownership and audio correspondence policy are unchanged.

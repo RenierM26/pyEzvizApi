@@ -9,6 +9,9 @@ from __future__ import annotations
 import argparse
 import collections
 from contextlib import suppress
+import ctypes
+import ctypes.util
+from functools import lru_cache
 import hashlib
 import importlib
 import itertools
@@ -27,9 +30,11 @@ import threading
 import time
 from typing import Any
 import zipfile
+import zlib
 
 BASE = Path(__file__).parent
 LIVE = runpy.run_path(str(BASE / "app_live_native_av.py"))
+PROFILE = runpy.run_path(str(BASE / "reference_stream/profile.py"))
 PROJECT = runpy.run_path(str(BASE / "reference_stream/project.py"))
 require = PROJECT["require"]
 HASHES = {
@@ -100,6 +105,42 @@ def device_module(device: str, path: str, cache: dict[str, bytes]) -> bytes:
     return cache[path]
 
 
+@lru_cache(maxsize=1)
+def lz4_decoder() -> Any:
+    path = ctypes.util.find_library("lz4")
+    require(path is not None, "optional system liblz4 required for LZ4 transport")
+    library = ctypes.CDLL(path)
+    decode = library.LZ4_decompress_safe
+    decode.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    decode.restype = ctypes.c_int
+    return decode
+
+
+def unpack_payload(row: dict[str, Any], data: bytes) -> bytes:
+    """Bound inflation before allocating; retain the original-pixel fingerprint."""
+    require(type(row.get("bytes")) is int and 0 < row["bytes"] <= 12 * 1024 * 1024,
+            "invalid collector payload size")
+    encoding = row.get("encoding", "raw")
+    require(encoding in {"raw", "zlib", "lz4"}, "unsupported collector encoding")
+    if encoding == "raw":
+        require(len(data) == row["bytes"], "collector payload length mismatch")
+        return data
+    require(type(row.get("transport_bytes")) is int
+            and len(data) == row["transport_bytes"] <= 12 * 1024 * 1024 + 65536,
+            "compressed payload size mismatch")
+    if encoding == "lz4":
+        output_buffer = ctypes.create_string_buffer(row["bytes"])
+        count = lz4_decoder()(data, output_buffer, len(data), row["bytes"])
+        require(count == row["bytes"], "invalid or excessive LZ4 payload")
+        return output_buffer.raw
+    decoder = zlib.decompressobj()
+    output = decoder.decompress(data, row["bytes"] + 1)
+    require(len(output) == row["bytes"] and decoder.eof
+            and not decoder.unused_data and not decoder.unconsumed_tail,
+            "invalid or excessive compressed payload")
+    return output
+
+
 class Capture:
     """Callback owner: flush blobs before publishing metadata; keep bounded private evidence."""
 
@@ -111,10 +152,12 @@ class Capture:
         self.lock = threading.Lock()
         self.error: str | None = None
         self.bytes = 0
+        self.transport_bytes = 0
         self.ready = threading.Event()
+        self.profile = PROFILE["Profile"]()
 
     def message(self, message: dict[str, Any], data: bytes | None) -> None:
-        with self.lock:
+        with self.profile.measure("collector_callback", bytes=len(data) if data else 0), self.lock:
             if self.error:
                 return
             try:
@@ -148,10 +191,15 @@ class Capture:
                         },
                         "unexpected binary event",
                     )
-                    require(self.bytes + len(data) <= MAX_CAPTURE_BYTES, "capture binary limit")
+                    require(self.bytes + value.get("bytes", len(data)) <= MAX_CAPTURE_BYTES, "capture binary limit")
+                    self.transport_bytes += len(data)
+                    with self.profile.measure("collector_decompression", bytes=len(data)):
+                        data = unpack_payload(value, data)
+                    with self.profile.measure("collector_payload_hash", bytes=len(data)):
+                        digest = hashlib.sha256(data).hexdigest()
                     require(
                         len(data) == value["bytes"]
-                        and hashlib.sha256(data).hexdigest() == value["sha256"],
+                        and digest == value["sha256"],
                         "collector payload mismatch",
                     )
                     name = value["event"] + ".bin"
@@ -159,8 +207,9 @@ class Capture:
                         self.files[name] = (self.root / name).open("xb")
                     output = self.files[name]
                     value.update(file=name, offset=output.tell())
-                    output.write(data)
-                    output.flush()
+                    with self.profile.measure("collector_payload_persist", bytes=len(data)):
+                        output.write(data)
+                        output.flush()
                     self.bytes += len(data)
                 observed = time.monotonic_ns()
                 for row in rows:
@@ -331,6 +380,7 @@ class Producer:
         self.used: set[int] = set()
         self.processed: set[int] = set()
         self.cutoff = 0
+        self.profile = PROFILE["Profile"]()
 
     def audio(self, rows: list[dict[str, Any]]) -> None:
         decoded = [r for r in rows if r.get("event") == "audio_decoded"]
@@ -371,7 +421,8 @@ class Producer:
             self.processed.add(output["call"])
 
     def pump(self, rows: list[dict[str, Any]]) -> None:
-        self.audio(rows)  # ready audio gets a turn before each large paired snapshot
+        with self.profile.measure("audio_projection"):
+            self.audio(rows)  # ready audio gets a turn before each large paired snapshot
         children: dict[int, list[dict[str, Any]]] = collections.defaultdict(list)
         for row in rows:
             if row.get("schedule") is not None:
@@ -395,14 +446,16 @@ class Producer:
             for render in renders:
                 key = (render["sid"], render["raw"], render["frame"])
                 if key not in self.sampled:
-                    manifest, data = PROJECT["manifest"](self.root, rows, render)
+                    with self.profile.measure("manifest_blob_read_hash"):
+                        manifest, data = PROJECT["manifest"](self.root, rows, render)
                     self.host.send(
                         dict(kind="sample", manifest=manifest),
                         data,
                         render.get("collector_received_ns"),
                     )
                     self.sampled.add(key)
-            prefix = PROJECT["project"](rows, cut)
+            with self.profile.measure("event_projection"):
+                prefix = PROJECT["project"](rows, cut)
             require(
                 prefix[: len(self.sent)] == self.sent, "source projection rewrote emitted prefix"
             )
@@ -462,7 +515,14 @@ def metrics(
     for _, delta in sorted(queue_points):
         outstanding += delta
         peak_video = max(peak_video, outstanding)
+    received = {r["id"]: r["host_received_ns"] for r in receipt.get("actions", [])
+                if r["kind"] == "native_vqe_received" and r.get("admitted")}
+    audio_residence = [(r["host_completed_ns"] - received[r["id"]]) / 1e6 for r in acks
+                       if r["kind"] == "host_audio_pipe_written" and r.get("id") in received]
+    pipe_spans = [dict(r, stage="source_pipe_" + r["kind"]) for r in host.writes]
     return dict(
+        source_pipe_stages=PROFILE["summarize"](pipe_spans),
+        host_audio_received_to_write_complete_ms=audio_residence,
         host_video_peak_pending_including_active=peak_video,
         source_scope="contiguous validated prefix; later observed metadata is not forwarded",
         native_render_cadence=intervals(callbacks),
@@ -506,10 +566,19 @@ def observation_report(
     summary: dict[str, Any],
 ) -> dict[str, Any]:
     report = metrics(rows, host, receipt, seconds)
+    report["stage_profile"] = dict(
+        producer=producer.profile.result() if hasattr(producer, "profile") else None,
+        host=receipt.get("stage_profile"),
+        device=dict(clock="device-monotonic", stages=PROFILE["summarize"](
+            [r for r in rows if r.get("event") == "stage_timing"])),
+    )
     report.update(
         source_events=len(producer.sent),
         verified_samples=len(producer.sampled),
         native_vqe_records=len(producer.processed),
+        source_video_geometry=sorted({(sample["width"], sample["coded_height"], sample["visible_height"])
+                                      for sample in receipt.get("native_samples", [])}),
+        source_video_media_ms=sorted({sample["media_ms"] for sample in receipt.get("native_samples", [])}),
         collector_summary=summary,
         observed_audio_decoded=sum(r["event"] == "audio_decoded" for r in rows),
         observed_vqe_outputs=sum(r["event"] == "audio_vqe_output" for r in rows),
@@ -560,6 +629,8 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--pairs", type=int, default=8)
     parser.add_argument("--sink-deadline", type=float, default=5)
+    parser.add_argument("--transport", choices=["raw", "zlib", "lz4"], default="raw",
+                        help="lossless snapshot transfer; original hashes/audit unchanged")
     args = parser.parse_args()
     if (
         os.name != "posix"
@@ -572,6 +643,11 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
         parser.error(
             "requires POSIX, 1..35 seconds, 1..8 pairs and finite sink deadline 0.1..10 seconds"
         )
+    if args.transport == "lz4":
+        try:
+            lz4_decoder()  # fail before attaching if the optional decoder is unavailable
+        except (OSError, ValueError) as failure:
+            parser.error(str(failure))
     # Secure-screen state is observed, never bypassed. UI startup remains manual.
     try:
         result = subprocess.run(
@@ -611,7 +687,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
         host = Host(args.output, args.sink_deadline)
         producer = Producer(args.output, host, args.pairs)
         source = (
-            "const REFERENCE_CONFIG=" + json.dumps(dict(verified=True, pairs=args.pairs)) + ";\n"
+            "const REFERENCE_CONFIG=" + json.dumps(dict(verified=True, pairs=args.pairs, transport=args.transport)) + ";\n"
         )
         source += (BASE / "reference_stream/h9c-armv7.js").read_text()
         script = session.create_script(source)
@@ -680,6 +756,10 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
                 report["host_error"] = receipt["error"]
             except Exception as failure:
                 cleanup.append("measurement receipt: " + str(failure))
+        if capture is not None:
+            report.setdefault("stage_profile", {})["collector"] = capture.profile.result()
+            report["collector_payload_bytes"] = capture.bytes
+            report["collector_transport_bytes"] = capture.transport_bytes
         if cleanup:
             status = "failed"
             error = f"{error}; cleanup: {cleanup}"
@@ -693,6 +773,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
                     startup_timeout_seconds=15,
                     observation_origin="first decoded-picture callback on host clock",
                     sink_deadline_seconds=args.sink_deadline,
+                    transport=args.transport,
                     dummy_host=True,
                     reference_app_required=True,
                     **report,

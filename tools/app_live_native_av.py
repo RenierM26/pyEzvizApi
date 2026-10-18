@@ -25,6 +25,7 @@ from typing import Any
 
 VIDEO = runpy.run_path(str(Path(__file__).with_name('app_native_video_preview.py')))
 NATIVE = VIDEO['NATIVE']
+PROFILE = runpy.run_path(str(Path(__file__).parent / 'reference_stream/profile.py'))
 PCM = runpy.run_path(str(Path(__file__).with_name('app_pcm_playback.py')))
 MAX_HEADER = 8192
 MAX_PAYLOAD = 32 * 1024 * 1024
@@ -105,6 +106,7 @@ class ProcessedQueue(PcmBase):
 class Live:
     """One owner for source policy, two bounded in-flight host I/O operations."""
     def __init__(self, spool: Any, timeout: float, progress: Any = None) -> None:
+        self.profile = PROFILE["Profile"]()
         self.spool, self.timeout = spool, timeout
         self.progress = progress
         self.model = NATIVE['NativeReplay'](dict(samples=[]), allow_metadata_only=True)
@@ -147,8 +149,9 @@ class Live:
             split = width * height * 3 // 2
             if tuple(before) in self.samples or manifest.get('id') in self.spool.records:
                 raise ValueError('duplicate or ambiguous live native sample')
-            report = NATIVE['AUDIT']['audit'](io.BytesIO(payload[:split]), io.BytesIO(payload[split:]),
-                io.BytesIO((json.dumps(manifest) + '\n').encode()), verify_renderer=True, observer=self.spool.capture)
+            with self.profile.measure('native_sample_audit', bytes=len(payload)):
+                report = NATIVE['AUDIT']['audit'](io.BytesIO(payload[:split]), io.BytesIO(payload[split:]),
+                    io.BytesIO((json.dumps(manifest) + '\n').encode()), verify_renderer=True, observer=self.spool.capture)
             self.samples[tuple(before)] = report['samples'][0]['id']
             self.sample_times[tuple(before)] = time.monotonic()
             self.sample_reports.extend(report['samples'])
@@ -196,14 +199,17 @@ class Live:
 
     def video_write(self, pair: dict[str, Any], pixels: bytes, width: int, height: int) -> dict[str, Any]:
         if self.video_backend is None:
-            self.video_backend = VIDEO['Output'](width * 2, height, self.timeout)
+            with self.profile.measure('video_output_startup'):
+                self.video_backend = VIDEO['Output'](width * 2, height, self.timeout)
         if self.cancel.is_set():
             raise ValueError('live output cancelled')
-        return self.video_backend.present(pair['pair_id'], pixels, self.timeout)
+        with self.profile.measure('video_output', bytes=len(pixels)):
+            return self.video_backend.present(pair['pair_id'], pixels, self.timeout)
 
     def audio_write(self, data: bytes) -> int:
         if self.audio_backend is None:
-            self.audio_backend = PCM['Ffplay']()
+            with self.profile.measure('audio_output_startup'):
+                self.audio_backend = PCM['Ffplay']()
         deadline = time.monotonic() + self.timeout
         self.audio_progress = 0
         while self.audio_progress < len(data):
@@ -278,7 +284,8 @@ class Live:
                     raise ValueError('live selected pixel limit exceeded')
                 self.video_pixels += pixels_this_pair
                 self.geometry = geometry
-                pixels = NATIVE['SCHEDULED']['PREVIEW']['compose'](*[self.spool.read(i) for i in ids], *geometry)
+                with self.profile.measure('spool_read_compose'):
+                    pixels = NATIVE['SCHEDULED']['PREVIEW']['compose'](*[self.spool.read(i) for i in ids], *geometry)
                 self.waiting.popleft()
                 self.video_active = pair
                 self.current_sample_ids = [i for i in ids if i is not None]
@@ -313,7 +320,8 @@ class Live:
                     time.sleep(0.005)
                 for backend in (self.video_backend, self.audio_backend):
                     if backend is not None:
-                        backend.finish(self.timeout)
+                        with self.profile.measure('output_finish', backend=type(backend).__name__):
+                            backend.finish(self.timeout)
         finally:
             self.cancel.set()
             errors = self.abort_outputs()
@@ -325,7 +333,7 @@ class Live:
                 raise ValueError('live output cleanup failed: ' + '; '.join(errors))
 
     def result(self) -> dict[str, Any]:
-        return dict(native_source_replay=self.model.result(), native_samples=self.sample_reports,
+        return dict(stage_profile=self.profile.result(), native_source_replay=self.model.result(), native_samples=self.sample_reports,
             actions=self.actions, source_eof_monotonic_ns=self.source_eof_ns,
             host_video_acknowledged=self.video_completed, video_waiting=list(self.waiting),
             video_active=self.video_active, video_sample_bindings=self.samples_as_list(),

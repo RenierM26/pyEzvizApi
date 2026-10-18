@@ -187,3 +187,6 @@ The Android preview was closed and hooks/forwarding were removed afterward.
 Private media and device traces are not included in the repository. Physical
 screen/speaker testing is deferred; the software integration can be reviewed
 independently.
+
+For the build-gated Android reference producer and bounded cadence/queue/delay
+measurements, see [Reference producer benchmark](reference-stream-producer.md).

@@ -368,6 +368,16 @@ def test_parse_timezone_value_skips_ambiguous_hemisphere_offsets(monkeypatch) ->
     tz = parse_timezone_value("UTC-04:00", dst_enabled=True)
     assert tz == ZoneInfo("America/Santiago")
 
+    # UTC-06:00 is shared by the US Central zone and Easter Island.
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC-06:00", dst_enabled=True)
+    assert tz.utcoffset(dt.datetime(2026, 1, 15)) == -dt.timedelta(hours=6)
+    assert tz.utcoffset(dt.datetime(2026, 7, 15)) == -dt.timedelta(hours=6)
+
+    monkeypatch.setenv("TZ", "America/Chicago")
+    tz = parse_timezone_value("UTC-06:00", dst_enabled=True)
+    assert tz == ZoneInfo("America/Chicago")
+
 
 def test_parse_timezone_value_detects_short_host_dst_periods(monkeypatch) -> None:
     # Morocco is UTC+01:00 most of the year and UTC+00:00 around Ramadan.

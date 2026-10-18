@@ -432,14 +432,14 @@ def compute_motion_from_alarm(
 
 # Representative IANA zones used when a camera reports a fixed standard offset
 # with daylight saving time enabled, keyed by standard offset in minutes.
-# Offsets where major regions observe DST in opposite seasons (e.g. UTC-04:00:
-# America/Halifax vs America/Santiago) are left out on purpose.
+# Offsets shared by zones that observe DST in opposite seasons (UTC-04:00:
+# America/Halifax vs America/Santiago, UTC-06:00: America/Chicago vs
+# Pacific/Easter) are left out on purpose.
 _DST_ZONES_BY_STANDARD_OFFSET: dict[int, str] = {
     -600: "America/Adak",
     -540: "America/Anchorage",
     -480: "America/Los_Angeles",
     -420: "America/Denver",
-    -360: "America/Chicago",
     -300: "America/New_York",
     -210: "America/St_Johns",
     0: "Europe/London",

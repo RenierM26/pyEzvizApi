@@ -132,7 +132,7 @@ class Emitter:
         self.pairs: set[tuple[int, int, int]] = set()
         self.audio: set[int] = set()
 
-    def pump(self, rows: list[dict[str, Any]]) -> None:  # noqa: PLR0912, PLR0915 - preserve stage readiness/order
+    def pump(self, rows: list[dict[str, Any]]) -> None:
         require(not any(r.get('event') in {'error', 'vqe_unverified_format', 'vqe_failure'} for r in rows),
                 'unsupported native compressed/VQE source')
         encoded = {r['id']: r for r in rows if r.get('event') == 'encoded_video'}
@@ -155,11 +155,30 @@ class Emitter:
                     REFERENCE['PROJECT']['blob'](self.root, row))
                 self.accepted[identity] = self.next_token
                 self.next_token += 1
+                self.emit_video(rows)
             else:
                 # The app may retry the same bytes. We never decode a rejected attempt.
                 self.rejected.append(dict(call=self.next_attempt, result=result, identity=identity,
                                           sha256=row['sha256']))
             self.next_attempt += 1
+        self.emit_video(rows)
+        if len(self.samples) != 2:
+            return
+        audio_inputs = {r['call']: r for r in rows if r.get('event') == 'audio_vqe_input'}
+        for output in [r for r in rows if r.get('event') == 'audio_vqe_output']:
+            call = output['call']
+            if call in self.audio or call not in audio_inputs:
+                continue
+            before = audio_inputs[call]
+            self.send(dict(kind='vqe', id=call, source_input_ns=before['device_mono_ns'],
+                source_output_ns=output['device_mono_ns'], input_sha256=before['sha256'],
+                output_sha256=output['sha256'], sample_rate=16000, channels=1, samples=1024,
+                status=output['status']), REFERENCE['PROJECT']['blob'](self.root, before)
+                + REFERENCE['PROJECT']['blob'](self.root, output))
+            self.audio.add(call)
+
+    def emit_video(self, rows: list[dict[str, Any]]) -> None:
+        """Publish ready selections before decoding the rest of a collector batch."""
         decoded = [r for r in rows if r.get('event') == 'decoded_picture'
                    and not r['payload_is_null'] and r['payload_bytes'] > 0]
         # Decoder input can include an unselected single-track startup prefix.
@@ -214,15 +233,3 @@ class Emitter:
             self.send(dict(kind='pair', render_headers=row['render_headers'],
                            source_device_ns=row['device_mono_ns']))
             self.pairs.add(identity)
-        audio_inputs = {r['call']: r for r in rows if r.get('event') == 'audio_vqe_input'}
-        for output in [r for r in rows if r.get('event') == 'audio_vqe_output']:
-            call = output['call']
-            if call in self.audio or call not in audio_inputs:
-                continue
-            before = audio_inputs[call]
-            self.send(dict(kind='vqe', id=call, source_input_ns=before['device_mono_ns'],
-                source_output_ns=output['device_mono_ns'], input_sha256=before['sha256'],
-                output_sha256=output['sha256'], sample_rate=16000, channels=1, samples=1024,
-                status=output['status']), REFERENCE['PROJECT']['blob'](self.root, before)
-                + REFERENCE['PROJECT']['blob'](self.root, output))
-            self.audio.add(call)

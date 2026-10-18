@@ -162,3 +162,37 @@ def test_missing_paired_reference_headers_fail_closed(emitter):
     e, _out = emitter
     with pytest.raises(ValueError, match="missing explicit"):
         e.pump([*attempt(1), dict(event="render_callback")])
+
+
+def test_batched_inputs_publish_ready_pairs_before_pixel_ownership_accumulates(emitter, monkeypatch):
+    e, out = emitter
+    monkeypatch.setitem(M["REFERENCE"]["PROJECT"], "manifest", lambda *args: ({}, b"checkpoint"))
+    rows: list[dict] = []
+    for frame in range(20):
+        headers = []
+        for lens, sid in enumerate((224, 225)):
+            call = frame * 2 + lens + 1
+            encoded, returned = attempt(call, frame=frame)
+            encoded["meta_words"][10] = sid
+            picture = decoded(call, frame=frame)
+            picture["sid"] = picture["header_words"][1] = sid
+            headers.append(picture["header_words"])
+            rows.extend((encoded, returned, picture))
+            if frame == 0:
+                rows.append(dict(event="native_render_pixels", sid=sid, raw=100, frame=0))
+        rows.append(dict(event="render_callback", render_headers=headers, schedule=frame,
+            device_mono_ns=frame, node=dict(sid=224, raw=100 + frame, frame=frame,
+                secondary_sid=225, secondary_raw=100 + frame, secondary_frame=frame)))
+    e.pump(rows)
+    e.pump(rows)  # Re-reading a collector snapshot must not duplicate any record.
+    encoded = pairs = lead = 0
+    for row, _payload in out:
+        if row["kind"] == "encoded":
+            encoded += 1
+        elif row["kind"] == "pair":
+            pairs += 1
+        lead = max(lead, encoded - 2 * pairs)
+    assert (encoded, pairs, lead) == (40, 20, 2)
+    assert [r["token"] for r, _p in out if r["kind"] == "encoded"] == list(range(1, 41))
+    assert [r["kind"] for r, _p in out[:7]] == [
+        "encoded", "header", "checkpoint", "encoded", "header", "checkpoint", "pair"]

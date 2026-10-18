@@ -181,3 +181,30 @@ or camera volume/quality control was applied. A deliberate audible source near
 the camera is needed for a meaningful physical audio check; A/V sync requires a
 separate controlled measurement. Earlier audible short-recording evidence is
 separate from this continuous run.
+
+## Batched collector ownership regression
+
+A later Windows clap attempt failed before its first video output with
+`owned decoded pixel budget`. The source had emitted a batch of 30 accepted
+full-resolution lens inputs ahead of their already-available reference selections.
+The unchanged consumer limit failed on input 29, after retaining 28 frames
+(195,955,200 pixel bytes). This was a source projection ordering bug, not
+evidence of a microphone or Windows speaker failure.
+
+The source now emits ready native headers, parity checkpoints and reference
+selections after each accepted input, before advancing through the rest of a
+collector batch. Accepted HEVC input order/bytes, native selection order, audio
+bytes, rejection diagnostics, checkpoint requirements and all memory/queue caps
+are unchanged. Unselected codec prerequisites are still decoded; no selected
+pair is discarded to create room. Missing or excessively delayed selection
+evidence still fails closed at the existing bounds.
+
+Reprojection of the retained failing capture completed 119 video pairs and
+126 audio writes with both native checkpoints verified; copied lens ownership
+peaked at three frames / 20,995,200 bytes. A burst replay through the immutable
+publisher, PowerShell worker, bundled decoder and acknowledgement credit, with
+a simulated 0.5-second cold output startup, completed 119 video pairs and 124
+audio writes, with zero rejected blocks and exact wire SHA/count parity. Two
+final offered audio blocks remained pending under the existing no-tail-drain
+policy. That transport replay used an explicit test end for the retained prefix
+and dummy output drivers; it is not a new live capture or physical audio proof.

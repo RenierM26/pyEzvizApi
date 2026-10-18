@@ -37,6 +37,7 @@ if(transport==='zlib'){
  zipBound=new NativeFunction(z.getExportByName('LZ4_compressBound'),'int',['int'],{scheduling:'exclusive'});
  zipCompress=new NativeFunction(z.getExportByName('LZ4_compress_default'),'int',['pointer','pointer','int','int'],{scheduling:'exclusive'});
 }else if(transport!=='raw')throw Error('unsupported snapshot transport');
+const snapshotAcks=snapshotAcknowledgements(!!REFERENCE_CONFIG.transport_acks,mono,send,recv,log,error);
 function snapshotSend(row,bytes){
  if(zipCompress){
   const compressed=timed('snapshot_compression',bytes.byteLength,()=>{
@@ -53,9 +54,9 @@ function snapshotSend(row,bytes){
    if(size>bound)throw Error('compressed buffer length');
    return size<bytes.byteLength?out.readByteArray(size):null;
   });
-  if(compressed){send(Object.assign({},row,{encoding:transport,transport_bytes:compressed.byteLength}),compressed);return;}
+  if(compressed){snapshotAcks.send(Object.assign({},row,{encoding:transport,transport_bytes:compressed.byteLength}),compressed);return;}
  }
- send(row,bytes);
+ snapshotAcks.send(row,bytes);
 }
 function checkRenderPixels(n){
  if(capturedPairs>=pairLimit||stopped)return;
@@ -118,4 +119,4 @@ const audioFormats=new Map();
 Interceptor.attach(ez.getExportByName('ezviz_vqe_create_handle'),{onEnter(a){this.format={rate:a[0].toInt32(),samples:a[1].toInt32(),channels:a[2].toInt32()};},onLeave(r){audioFormats.set(r.toString(),this.format);log('vqe_format',this.format);}});
 Interceptor.attach(ez.getExportByName('ezviz_vqe_process'),{onEnter(a){this.id=++audioSeq;this.out=a[2];const f=audioFormats.get(a[0].toString());this.valid=!!f&&f.rate===16000&&f.samples===1024&&f.channels===1;if(!this.valid){log('vqe_unverified_format',{call:this.id});return;}try{audioBlob('audio_vqe_input',a[1],2048,{call:this.id});}catch(e){error('vqe_input',e);}},onLeave(r){if(!this.valid)return;try{if(r.toInt32()===0&&!this.out.readPointer().isNull())audioBlob('audio_vqe_output',this.out.readPointer(),2048,{call:this.id,status:r.toInt32()});else log('vqe_failure',{call:this.id,status:r.toInt32()});}catch(e){error('vqe_output',e);}}});
 
-rpc.exports={finish(){stopped=true;flush();return {bytes:pixelBytes,capturedPairs};}};log('ready',{});flush();
+rpc.exports={finish(){stopped=true;flush();return {bytes:pixelBytes,capturedPairs,transport_acknowledgements:snapshotAcks.finish()};}};log('ready',{});flush();

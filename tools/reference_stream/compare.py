@@ -25,6 +25,7 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     settings = (
         "profile",
         "dummy_host",
+        "transport_acks",
         "sink_deadline_seconds",
         "requested_observation_seconds",
         "verified_samples",

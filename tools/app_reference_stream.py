@@ -144,7 +144,9 @@ def unpack_payload(row: dict[str, Any], data: bytes) -> bytes:
 class Capture:
     """Callback owner: flush blobs before publishing metadata; keep bounded private evidence."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, post: Any = None) -> None:
+        self.post = post
+        self.acknowledgements: list[dict[str, Any]] = []
         self.root = root
         self.log = (root / "events.jsonl").open("x")
         self.files: dict[str, Any] = {}
@@ -157,6 +159,7 @@ class Capture:
         self.profile = PROFILE["Profile"]()
 
     def message(self, message: dict[str, Any], data: bytes | None) -> None:
+        callback_entered_ns = time.monotonic_ns()
         with self.profile.measure("collector_callback", bytes=len(data) if data else 0), self.lock:
             if self.error:
                 return
@@ -178,6 +181,8 @@ class Capture:
                     ),
                     "invalid collector row",
                 )
+                require("transport_id" not in value or data is not None,
+                        "snapshot acknowledgement requires binary data")
                 if data is not None:
                     require(
                         len(rows) == 1
@@ -192,6 +197,16 @@ class Capture:
                         "unexpected binary event",
                     )
                     require(self.bytes + value.get("bytes", len(data)) <= MAX_CAPTURE_BYTES, "capture binary limit")
+                    if value["event"] in {"native_pixels", "native_render_pixels"}:
+                        if self.post is not None:
+                            require(type(value.get("transport_id")) is int
+                                    and value["transport_id"] == len(self.acknowledgements) + 1
+                                    and len(self.acknowledgements) < 32,
+                                    "invalid snapshot transport sequence")
+                        else:
+                            require("transport_id" not in value, "unexpected snapshot acknowledgement request")
+                    require("transport_id" not in value or value["event"] in {
+                        "native_pixels", "native_render_pixels"}, "unexpected acknowledgement event")
                     self.transport_bytes += len(data)
                     with self.profile.measure("collector_decompression", bytes=len(data)):
                         data = unpack_payload(value, data)
@@ -220,6 +235,18 @@ class Capture:
                         self.ready.set()
                 self.log.flush()
                 self.rows.extend(rows)
+                if data is not None and "transport_id" in value:
+                    acknowledgement = dict(
+                        transport_id=value["transport_id"],
+                        callback_entered_ns=callback_entered_ns,
+                        persisted_ns=time.monotonic_ns(),
+                        post_started_ns=time.monotonic_ns(),
+                        post_returned_ns=None,
+                        successful=False,
+                    )
+                    self.acknowledgements.append(acknowledgement)
+                    self.post(dict(type="snapshot-ack", payload=dict(id=value["transport_id"])))
+                    acknowledgement.update(post_returned_ns=time.monotonic_ns(), successful=True)
             except Exception as error:
                 self.error = str(error)
 
@@ -629,6 +656,8 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--pairs", type=int, default=8)
     parser.add_argument("--sink-deadline", type=float, default=5)
+    parser.add_argument("--transport-acks", action="store_true",
+                        help="opt-in per-snapshot device-clock send/verified-host-ack round trips")
     parser.add_argument("--transport", choices=["raw", "zlib", "lz4"], default="raw",
                         help="lossless snapshot transfer; original hashes/audit unchanged")
     args = parser.parse_args()
@@ -687,10 +716,13 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
         host = Host(args.output, args.sink_deadline)
         producer = Producer(args.output, host, args.pairs)
         source = (
-            "const REFERENCE_CONFIG=" + json.dumps(dict(verified=True, pairs=args.pairs, transport=args.transport)) + ";\n"
+            "const REFERENCE_CONFIG=" + json.dumps(dict(verified=True, pairs=args.pairs, transport=args.transport, transport_acks=args.transport_acks)) + ";\n"
         )
+        source += (BASE / "reference_stream/transport-ack.js").read_text() + "\n"
         source += (BASE / "reference_stream/h9c-armv7.js").read_text()
         script = session.create_script(source)
+        if args.transport_acks:
+            capture.post = script.post
         script.on("message", capture.message)
         script.load()
         require(capture.ready.wait(3), "collector did not become ready")
@@ -758,6 +790,17 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
                 cleanup.append("measurement receipt: " + str(failure))
         if capture is not None:
             report.setdefault("stage_profile", {})["collector"] = capture.profile.result()
+            report["transport_acknowledgements"] = dict(
+                enabled=args.transport_acks,
+                host_clock="host-monotonic",
+                host_posts=capture.acknowledgements,
+                device=summary.get("transport_acknowledgements"),
+                device_round_trips=PROFILE["summarize"](
+                    [r for r in capture.rows if r.get("event") == "transport_ack"]),
+                note="round trip includes outbound queue/transport, host verification/persistence, "
+                     "return transport and device callback scheduling; not one-way or physical latency; "
+                     "no wait/drain at EOF; missing finish summary means pending state unknown",
+            )
             report["collector_payload_bytes"] = capture.bytes
             report["collector_transport_bytes"] = capture.transport_bytes
         if cleanup:
@@ -774,6 +817,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit bounded resource lif
                     observation_origin="first decoded-picture callback on host clock",
                     sink_deadline_seconds=args.sink_deadline,
                     transport=args.transport,
+                    transport_acks=args.transport_acks,
                     dummy_host=True,
                     reference_app_required=True,
                     **report,

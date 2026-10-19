@@ -255,3 +255,46 @@ transients in the retained source at `vqe:462`, `vqe:492` and `vqe:513` occur
 after that boundary. Their physical audibility cannot be inferred from the
 failed run. A separate unchanged native-PCM recorded replay can test speaker
 audibility without another live capture or trip to the camera.
+
+## Offline per-lens native health diagnostics
+
+Use the metadata-only report without starting a camera, loading media or opening
+an output device:
+
+```sh
+python tools/app_compressed_reference_health.py /path/to/private/capture/events.jsonl
+```
+
+Input is bounded to 20,000 JSON objects and 8,192 bytes per line. Native input and
+return records join by exact attempt ID, never by row index or frame-counter
+order. Duplicate inputs/returns, orphan returns and malformed native metadata
+fail closed. A call without a captured return remains **pending**, not a failure.
+The report includes each lens's accepted/rejected/pending counts, consecutive
+geometry epochs, native result histogram, last acceptance and trailing completed
+rejection streak. The selection-to-latest-input interval uses only native
+device-monotonic timestamps; it is neither media lag nor physical output latency.
+Future source receipts include this report as `native_decoder_health`, alongside
+the existing forwarded/deferred counts. The wire protocol is unchanged.
+
+Nine retained Windows-attempt captures were analyzed. In the failing transition,
+primary lens 224 had 274 accepted attempts and two rejections, ending in recovery.
+Secondary lens 225 had 185 accepted, 90 rejected and one pending attempt; its
+return to 2880×1624 coded geometry produced zero accepted attempts, 89 completed
+rejections and one pending boundary call. Eighty-eight returns were
+`-2147483638`; the initial transition rejection had a different native status.
+The last paired selection precedes the latest input by 4.66 device seconds.
+
+An earlier retained run recovered through the same 2880×1624 → 1920×1080 →
+2880×1624 sequence: the final epoch accepted 31 primary and 30 secondary inputs,
+with one transition rejection per lens and one pending secondary boundary call.
+Thus the observed failure is not evidence of a universal resolution limitation.
+Static inspection of the exact-build native library locates the recurring error
+in an internal failed/no-output result path with multiple possible causes; the
+return value alone does not identify a backend error or prove a reset defect.
+
+The next discriminating experiment is a bounded, read-only observation of the
+secondary child decoder's return and error-state flags during reinitialization.
+It requires an unlocked reference tablet, not a person at the garage or Windows
+physical playback. No decoder resets, native return overrides, rejected-input
+retries, forced camera quality changes or host substitution are justified by the
+current evidence. Physical continuous-audio audibility and A/V sync remain open.

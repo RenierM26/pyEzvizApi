@@ -96,6 +96,7 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit owned observer lifet
             reference_pairs_sent=len(emitter.pairs), checkpoints_sent=len(emitter.samples),
             vqe_outputs_sent=len(emitter.audio), captured_encoded_units=sum(r.get('event') == 'encoded_video' for r in rows),
             native_rejected_attempts=emitter.rejected,
+            native_decoder_health=C['HEALTH']['summarize'](rows),
             deferred_accepted_inputs=sum(r.get('event') == 'encoded_video_return'
                 and r['id'] >= emitter.next_attempt and r['result'] == 0 for r in rows),
             captured_native_rejected_attempts=[dict(call=r['id'], result=r['result'])

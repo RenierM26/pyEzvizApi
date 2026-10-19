@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 BASE = Path(__file__).parent
+HEALTH = runpy.run_path(str(BASE / 'health.py'))
 REFERENCE = runpy.run_path(str(BASE.parent / 'app_reference_stream.py'))
 require = REFERENCE['require']
 

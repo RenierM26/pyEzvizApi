@@ -298,3 +298,48 @@ It requires an unlocked reference tablet, not a person at the garage or Windows
 physical playback. No decoder resets, native return overrides, rejected-input
 retries, forced camera quality changes or host substitution are justified by the
 current evidence. Physical continuous-audio audibility and A/V sync remain open.
+
+## Fresh software-only state probes (2026-10-19)
+
+The unlocked reference tablet was exercised without garage activity or physical
+Windows playback. A first private inline diagnostic stalled on the initial
+decoded frame and is **inconclusive**, not a reproduction of the original late
+secondary-lens failure. The extra hooks were removed; an app-only restart was
+needed to restore normal attachment. An unmodified baseline then completed
+**78 paired video / 82 audio API calls** through the real immutable publisher,
+PowerShell worker, bundled decoder and credit relay, with dummy output.
+
+A safer private observer read child-decoder fields from the existing input hook,
+without inline interception. It verified the child object's exact-build vtable
+before interpreting any fields and made no state or return-value writes. This
+20-second pipeline run completed **122 video / 132 audio API calls**, both initial
+native checkpoints verified, dummy output and no output errors. It covered the
+downshift to 1920×1080, not the later full-resolution return. All 252 completed
+native attempts had the observed error-state flag at offset `0x38` clear; two
+transition rejections recovered on the reference app's own retries.
+
+A smaller **metadata-only** 20-second probe copied no compressed buffers, pixels
+or audio and started no host output. Its 992 events included 398 native attempts;
+it did not exhaust its event limit. This run recovered through a 1920×1080 →
+2880×1624 coded-geometry upshift: the final epoch accepted 92 primary and 91
+secondary inputs, with one transition rejection per lens and one pending
+secondary boundary call. Observed child-state flags `0x34` and `0x38` stayed
+clear. The original persistent secondary rejection was **not reproduced**.
+
+The final private probe observed exported `SWD_DecodeFrame` returns instead of
+intercepting an instruction inside the decoder. It reached its **2,000-event
+limit**: 309 native inputs, 308 completed accepts, one pending boundary call and
+1,229 raw backend returns, all zero. These are repeated backend calls, **not
+1,229 decoded frames**. Only full-resolution geometry was observed before the
+limit. The controller finished its bounded run, but the saturated observation is
+explicitly partial and does not establish a complete transition or recovery.
+Future backend tracing should aggregate results per native attempt rather than
+logging every successful inner call; pixel/output caps must not be increased.
+
+All probes used the original exact-build checks. No camera quality/PTZ/audio
+settings, native decoder resets, return overrides or tool-driven rejected-input
+retries were used. Hooks, owned forwarding and preview were cleaned up, leaving
+the tablet at its launcher. These private diagnostic variants are not enabled in
+the public source by default. Source-code tests remain the previously verified
+3,465 passing checks; this increment records experimental evidence only. The
+underlying intermittent failure and physical A/V properties remain unproven.

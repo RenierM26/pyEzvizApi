@@ -27,7 +27,7 @@ def test_video_credit_blocks_burst_until_exact_acknowledgement():
         try:
             offer(c, "pair")
             completed.set()
-        except BaseException as e:
+        except Exception as e:
             errors.append(e)
 
     t = threading.Thread(target=second)

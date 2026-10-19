@@ -1,5 +1,6 @@
 """Compressed preview has explicit identities, bounded ownership and no invented native clock."""
 
+import ctypes.util
 import hashlib
 import json
 import os
@@ -451,6 +452,8 @@ def test_transport_eof_without_completion_is_not_success(preview, tmp_path):
 
 
 def test_real_sdl_worker_explicit_continuous_limit_leaves_snapshot_default_unchanged(monkeypatch):
+    if not ctypes.util.find_library("SDL2-2.0"):
+        pytest.skip("optional system SDL2 unavailable")
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     output = M["VIDEO"]["Output"](16, 6, 2, frame_limit=33)
     try:

@@ -192,3 +192,11 @@ independently.
 
 For the build-gated Android reference producer and bounded cadence/queue/delay
 measurements, see [Reference producer benchmark](reference-stream-producer.md).
+
+## Separate compressed-input experiment
+
+[Compressed reference preview](compressed-reference-preview.md) is an opt-in
+incremental alternative that transfers accepted HEVC input and samples initial
+native pixel parity. It does **not** relax this path's full-snapshot audits or
+replay its native scheduler contract. Continuous physical Windows output and
+measured A/V synchronization require separate evidence.

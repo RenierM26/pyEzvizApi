@@ -258,6 +258,9 @@ audibility without another live capture or trip to the camera.
 
 ## Offline per-lens native health diagnostics
 
+For per-attempt software backend return counts and the lower-event-volume
+accumulator, see [decoder backend diagnostics](decoder-backend-diagnostics.md).
+
 Use the metadata-only report without starting a camera, loading media or opening
 an output device:
 

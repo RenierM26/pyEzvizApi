@@ -346,3 +346,30 @@ the tablet at its launcher. These private diagnostic variants are not enabled in
 the public source by default. Source-code tests remain the previously verified
 3,465 passing checks; this increment records experimental evidence only. The
 underlying intermittent failure and physical A/V properties remain unproven.
+
+## Bounded snapshot ownership and resource comparison (2026-10-23)
+
+After the final permitted pair is fully emitted, the capture source now clears
+unused input snapshots and their duplicate-suppression keys. It reports discarded
+sample count and bytes as `input_samples_retired` metadata. This changes no selected
+input/render bytes, headers, hashes, pair limits or native decoder state. Pending
+pairs, budget-rejected pairs and incompletely emitted pairs retain their samples.
+Dropping JavaScript references does not guarantee immediate garbage collection or
+an immediate reduction in resident memory.
+
+Both an earlier failing capture and an earlier recovered capture retained one
+unused 7,015,680-byte input snapshot after their sole permitted pair. Their five
+startup pixel copies totaled 35,043,840 bytes; copying did not continue up to the
+late decoder failure. Retained-byte replay verifies all four selected snapshots
+(28,028,160 bytes per capture) and their headers/hashes are unchanged by retirement.
+This is an observer ownership fix, not a fix for the intermittent native failure.
+
+Two bounded, sequential trials used the same read-only initialization observer
+and process-status sampling. The metadata-only trial recovered both lenses through
+1920×1080 → 2880×1624, with 44 accepted inputs per lens after the upshift. The
+original media-copying source trial instead went 1920×1080 → 768×432. Neither
+reproduced the persistent native error or an initialization/allocation failure.
+Different geometry makes their memory peaks unsuitable for measuring incremental
+capture overhead. Process virtual size is not resident memory; status sampling
+does not establish address-space fragmentation. The second trial exercised the
+source collector, not a complete Windows relay or physical playback.

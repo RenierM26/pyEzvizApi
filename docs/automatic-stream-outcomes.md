@@ -58,14 +58,31 @@ remains `upstream_ended` rather than an inferred count/timeout cause.
 
 `owner_closed` records that close was requested; `transport_owned` records only
 the currently attached transport. `transport_closure_verified` additionally
-requires successful close returns for every acquired transport; a failed close
+requires successful final release for every acquired transport and no startup in
+progress; a failed close
 must not be read as verified cleanup just because the handle was detached. This
 is a local method-return acknowledgement, not proof of peer-side state or OS
-behavior after a broken/custom closer. There is no implicit close retry.
+behavior after a broken/custom closer. `transports_released` counts final releases,
+while `transport_close_successes` also counts successful interrupt-close calls.
+There is no implicit retry of a failed final close.
+
+During startup, `close()` first interrupts the attached transport but retains its
+ownership lease: a blocked socket factory may still attach a new socket after
+that close returns. `startup_in_progress` remains true, release is unverified,
+and the reader performs a serialized final close after startup returns or raises.
+Consequently a cancelled-startup transport can have two close attempts: interrupt
+then final release. Both are serialized outside the state lock, and only the final
+successful close releases ownership. Normal established transports close once.
+
+Cleanup receives an explicit primary-stream-error flag from generator scopes or
+the context manager's exception arguments. Public `close()` has no primary stream
+error merely because it is called inside the caller's unrelated `except` block;
+a cleanup-only failure there must still raise.
 
 The caller's `EzvizClient` is **borrowed**, not closed by this stream owner
 (`caller_client_owned=False`). The acquired transport owns its underlying SDK,
-command or cloud socket/client resources and is closed exactly once per attempt.
+command or cloud socket/client resources and receives one final close per attempt
+(plus a possible in-startup cancellation interrupt).
 The normalized packet iterator is explicitly closed, when supported, before
 transport closure; finalizers run on completion, local limits, failure and early
 consumer close. A transport factory that raises before returning remains

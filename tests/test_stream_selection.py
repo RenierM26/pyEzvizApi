@@ -18,6 +18,7 @@ from pyezvizapi import (
     local_stream_transport,
     stream_selection,
 )
+from pyezvizapi._stream import VtmStreamClient
 from pyezvizapi.clip import CloudClipSource, LocalSdkClipSource, LocalSdkEcdhClipSource
 from pyezvizapi.exceptions import (
     DeviceException,
@@ -1104,3 +1105,81 @@ def test_concurrent_close_detaches_transport_once(outcome_owner):
     assert not errors and transport.closes == packets.closes == 1
     assert owner.capture_result['transport_close_attempts'] == 1
     assert owner.capture_result['transport_closure_verified']
+
+
+def test_public_close_inside_unrelated_except_still_raises_cleanup_only_failure(outcome_owner):
+    owner, _packets, _transport, clock, _ = outcome_owner(transport_close_error=OSError('close'))
+    iterator = owner.iter_media_packets(monotonic=lambda: clock[0])
+    next(iterator)
+    try:
+        try:
+            raise LookupError('unrelated caller exception')
+        except LookupError:
+            with pytest.raises(PyEzvizError, match='cleanup failed'):
+                owner.close()
+    finally:
+        iterator.close()
+    assert owner.capture_result['status'] == 'failed'
+
+
+@pytest.mark.parametrize("startup_error", [False, True])
+def test_cancel_during_vtm_socket_factory_closes_late_socket(outcome_owner, monkeypatch, startup_error):
+    owner, packets, transport, clock, _ = outcome_owner()
+    entered, resume = threading.Event(), threading.Event()
+    class Socket:
+        closed = False
+        def settimeout(self, _timeout):
+            pass
+        def close(self):
+            self.closed = True
+    sock = Socket()
+    def factory(_endpoint, _timeout):
+        entered.set()
+        assert resume.wait(3)
+        return sock
+    client = VtmStreamClient('ysproto://127.0.0.1:8554/live', socket_factory=factory)
+    startup_failure = BrokenPipeError('startup after late connect')
+    def start(**kwargs):
+        client.connect(**kwargs)
+        if startup_error:
+            raise startup_failure
+    def close():
+        transport.closes += 1
+        client.close()
+    monkeypatch.setattr(transport, 'start', start)
+    monkeypatch.setattr(transport, 'close', close)
+    errors: list[Exception] = []
+    def read():
+        try:
+            assert list(owner.iter_media_packets(monotonic=lambda: clock[0])) == []
+        except Exception as error:
+            errors.append(error)
+    reader = threading.Thread(target=read)
+    reader.start()
+    try:
+        assert entered.wait(3)
+        owner.close()
+        pending = owner.capture_result
+        assert pending['startup_in_progress'] and pending['transport_owned']
+        assert not pending['transport_closure_verified'] and not pending['transports_released']
+    finally:
+        resume.set()
+        reader.join(3)
+    assert not reader.is_alive()
+    assert errors == ([startup_failure] if startup_error else [])
+    assert sock.closed and not client.connected
+    assert not packets.pulls
+    assert transport.closes == 2
+    assert owner.capture_result['transports_released'] == 1
+    assert owner.capture_result['transport_closure_verified']
+
+
+def test_normal_generator_completion_inside_caller_except_does_not_hide_cleanup_error(outcome_owner):
+    owner, _packets, _transport, clock, _ = outcome_owner(transport_close_error=OSError('close'))
+    try:
+        raise LookupError('ambient caller exception')
+    except LookupError:
+        with pytest.raises(PyEzvizError, match='cleanup failed'):
+            list(owner.iter_media_packets(limits=CaptureLimits(max_packets=1), monotonic=lambda: clock[0]))
+    assert owner.capture_result['status'] == 'failed'
+    assert not owner.capture_result['transport_closure_verified']

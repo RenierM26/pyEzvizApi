@@ -262,11 +262,35 @@ def snapshot_source(path: Path) -> bytes:
     return snapshot
 
 
+def prepared_events(container: Any, selected: list[Any], adapter: Any, session: Session,
+                    audio_stream: int, started: float) -> Any:
+    """Yield one event at a time from persistent codecs, retaining their EOF flush."""
+    events: Any = deque()
+    session.consume = lambda event, payload: events.append((event, payload))
+    session.pairs.consume = session.consume
+    for stream, frame in decoded_frames(container, selected, session, audio_stream, started):
+        if stream == audio_stream:
+            session.audio(frame, adapter)
+        else:
+            session.video(frame, stream)
+        while events:
+            event, payload = events.popleft()
+            yield event, payload
+            # Do not retain emitted pixels across the next native decode.
+            del event, payload
+    if adapter.resampler.resample(None):
+        raise ValueError('unexpected delayed format-conversion tail')
+    session.pairs.finish()
+    if not session.audio_count:
+        raise ValueError('source produced no supported audio frames')
+    if time.monotonic() - started > VIDEO['MAX_SECONDS']:
+        raise ValueError('incremental session limit exceeded')
+
+
 def iter_snapshot(snapshot: bytes, container_format: str, streams: tuple[int, int],
                   audio_stream: int, report: dict[str, Any]) -> Any:
     """Yield prepared media, NOT output acknowledgements; close to release the decoder."""
-    events: Any = deque()
-    session = Session(streams, audio_stream, lambda event, payload: events.append((event, payload)))
+    session = Session(streams, audio_stream, discard)
     report.update(profile='standalone-incremental-preparation-v1', status='failed', error=None,
                   output_devices_opened=False, physical_av_sync_measured=False)
     try:
@@ -283,23 +307,7 @@ def iter_snapshot(snapshot: bytes, container_format: str, streams: tuple[int, in
                      options={'protocol_whitelist': 'file,pipe'}) as container:
             selected = selected_tracks(container, streams, audio_stream)
             adapter = AUDIO['FrameAdapter'](audio_stream, AUDIO['FormatConverter'](av))
-            for stream, frame in decoded_frames(container, selected, session, audio_stream, started):
-                if stream == audio_stream:
-                    session.audio(frame, adapter)
-                else:
-                    session.video(frame, stream)
-                while events:
-                    event, payload = events.popleft()
-                    yield event, payload
-                    # Do not retain the last emitted pair across the next decode.
-                    del event, payload
-            if adapter.resampler.resample(None):
-                raise ValueError('unexpected delayed format-conversion tail')
-            session.pairs.finish()
-            if not session.audio_count:
-                raise ValueError('source produced no supported audio frames')
-            if time.monotonic() - started > VIDEO['MAX_SECONDS']:
-                raise ValueError('incremental session limit exceeded')
+            yield from prepared_events(container, selected, adapter, session, audio_stream, started)
         report['status'] = 'completed'
     except BaseException as error:
         report.update(status='closed-before-eof' if isinstance(error, GeneratorExit) else 'failed',

@@ -179,10 +179,9 @@ def selected_tracks(container: Any, streams: tuple[int, int], audio_stream: int)
     return selected
 
 
-
-def consume_packets(container: Any, selected: list[Any], adapter: Any, session: Session,
-                    audio_stream: int, started: float) -> None:
-    """Preserve persistent codec contexts and demux flushes with cooperative bounds."""
+def decoded_frames(container: Any, selected: list[Any], session: Session,
+                   audio_stream: int, started: float) -> Any:
+    """Cooperatively bounded persistent demux/decode, including flush packets."""
     for packet in container.demux(*selected):
         if session.packets >= VIDEO['MAX_PACKETS'] or time.monotonic() - started > VIDEO['MAX_SECONDS']:
             raise ValueError('incremental packet/session limit exceeded')
@@ -195,10 +194,17 @@ def consume_packets(container: Any, selected: list[Any], adapter: Any, session: 
         for frame in packet.decode():
             if time.monotonic() - started > VIDEO['MAX_SECONDS']:
                 raise ValueError('incremental session limit exceeded')
-            if packet.stream.index == audio_stream:
-                session.audio(frame, adapter)
-            else:
-                session.video(frame, packet.stream.index)
+            yield packet.stream.index, frame
+
+
+def consume_packets(container: Any, selected: list[Any], adapter: Any, session: Session,
+                    audio_stream: int, started: float) -> None:
+    """Preserve persistent codec contexts and demux flushes with cooperative bounds."""
+    for stream, frame in decoded_frames(container, selected, session, audio_stream, started):
+        if stream == audio_stream:
+            session.audio(frame, adapter)
+        else:
+            session.video(frame, stream)
     if adapter.resampler.resample(None):
         raise ValueError('unexpected delayed format-conversion tail')
     if time.monotonic() - started > VIDEO['MAX_SECONDS']:
@@ -245,6 +251,62 @@ def inspect(path: Path, container_format: str, streams: tuple[int, int], audio_s
     finally:
         report.update(session.result())
     return report
+
+
+def snapshot_source(path: Path) -> bytes:
+    """Own one bounded immutable compressed snapshot for both preparation passes."""
+    with AUDIO['open_source'](path) as source:
+        snapshot = source.read()
+        if len(snapshot) != source.size:
+            raise ValueError('source truncated during snapshot')
+    return snapshot
+
+
+def iter_snapshot(snapshot: bytes, container_format: str, streams: tuple[int, int],
+                  audio_stream: int, report: dict[str, Any]) -> Any:
+    """Yield prepared media, NOT output acknowledgements; close to release the decoder."""
+    events: Any = deque()
+    session = Session(streams, audio_stream, lambda event, payload: events.append((event, payload)))
+    report.update(profile='standalone-incremental-preparation-v1', status='failed', error=None,
+                  output_devices_opened=False, physical_av_sync_measured=False)
+    try:
+        if (type(snapshot) is not bytes or not 0 < len(snapshot) <= AUDIO['MAX_FILE_BYTES']
+                or len(streams) != 2 or len(set((*streams, audio_stream))) != 3
+                or any(type(i) is not int or i < 0 for i in (*streams, audio_stream))
+                or container_format not in AUDIO['FORMATS']):
+            raise ValueError('requires bounded immutable bytes and three distinct supported tracks')
+        report.update(source_sha256=hashlib.sha256(snapshot).hexdigest(), source_bytes=len(snapshot))
+        av = AUDIO['load_av']()
+        report.update(pyav_version=av.__version__, library_versions=av.library_versions)
+        started = time.monotonic()
+        with av.open(io.BytesIO(snapshot), format=container_format,
+                     options={'protocol_whitelist': 'file,pipe'}) as container:
+            selected = selected_tracks(container, streams, audio_stream)
+            adapter = AUDIO['FrameAdapter'](audio_stream, AUDIO['FormatConverter'](av))
+            for stream, frame in decoded_frames(container, selected, session, audio_stream, started):
+                if stream == audio_stream:
+                    session.audio(frame, adapter)
+                else:
+                    session.video(frame, stream)
+                while events:
+                    event, payload = events.popleft()
+                    yield event, payload
+                    # Do not retain the last emitted pair across the next decode.
+                    del event, payload
+            if adapter.resampler.resample(None):
+                raise ValueError('unexpected delayed format-conversion tail')
+            session.pairs.finish()
+            if not session.audio_count:
+                raise ValueError('source produced no supported audio frames')
+            if time.monotonic() - started > VIDEO['MAX_SECONDS']:
+                raise ValueError('incremental session limit exceeded')
+        report['status'] = 'completed'
+    except BaseException as error:
+        report.update(status='closed-before-eof' if isinstance(error, GeneratorExit) else 'failed',
+                      error=f'{type(error).__name__}: {error}')
+        raise
+    finally:
+        report['preparation'] = session.result()  # Preparation counts are not downstream output acks.
 
 
 def main() -> int:

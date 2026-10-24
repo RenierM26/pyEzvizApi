@@ -108,3 +108,12 @@ Next is a bounded presentation-order lookahead/output owner sharing one persiste
 clock and applying the explicit serial-PCM phase contract across the entire
 session, followed by acquisition integration. No sustained/live playback or
 physical A/V synchronization is claimed by this decode stage.
+
+## Recorded output consumer
+
+The opt-in [rolling playback tool](local-av-bounded-playback.md) now consumes this
+stage through `iter_snapshot`. It preflights all metadata, then prepares bounded
+lookahead from a second decode of the same immutable bytes. Iterator receipts
+count preparation acceptance, not downstream SDL/PCM acknowledgements; closing
+before verified EOF reports `closed-before-eof`. Original synchronous `inspect`
+callback semantics and the existing recorded playback defaults are unchanged.

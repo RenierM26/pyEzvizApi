@@ -8,7 +8,8 @@ Production dependencies and APIs are unchanged.
 
 ## Explicit use
 
-POSIX, optional PyAV, SDL2 and ffplay must already be installed:
+Linux/WSL (default sealed transport), optional PyAV, SDL2 and ffplay must already
+be installed. Other POSIX hosts can explicitly select `--video-transport socket`:
 
 ```sh
 python tools/local_av_playback.py clear.ts --container mpegts \
@@ -44,8 +45,9 @@ audible sound or physical A/V synchronization.
    nanosecond; source PTS/time bases are not modified.
 5. At each target, submit a verified composed pair or unchanged 2,048-byte PCM
    block. There are at most two active jobs: one per track, no executor backlog.
-   A stalled video backend does not prevent audio submissions. Pixel preparation
-   still runs on the owner thread and contributes to measured submission lateness.
+   A stalled video backend does not prevent audio submissions. The sealed path
+   prepares pixels before the anchor; the socket comparison path prepares them
+   on the owner thread at dispatch, contributing to submission lateness.
 6. Bound submission lateness (`--max-late-ms`, default 250, allowed 0–5000) at both
    dispatch and actual worker start. A busy track retains its next source target;
    it does not rebase the clock, silently drop work or create catch-up timestamps.
@@ -113,3 +115,23 @@ through real SDL/ffplay dummy outputs, preserving source-derived host targets an
 unchanged selected pixels/PCM. No new camera capture, actual human audibility or
 physical synchronization claim follows. Source provenance includes the earlier
 private recovery/remux audit; this is not fresh independent network capture.
+
+### Bounded sealed-frame transport (Linux/WSL)
+
+The default `--video-transport sealed-store` composes every selected pair before
+starting the common host clock. It reorders and composes the existing pixel spool
+in place, then seals a Linux memfd against writes, growth and shrinkage. No second
+full pixel spool is allocated and the existing storage limit is unchanged.
+Unlike a disk-backed temporary file, the sealed memfd is memory-backed (subject
+to Linux memory/swap accounting); the full bounded pixel store must fit there.
+The isolated SDL worker inherits that descriptor and receives only bounded
+identity/offset/length/hash messages. It validates each extent and fingerprint,
+then submits the mapped pixels synchronously without copying a full frame through
+the socket or into a ctypes buffer. Each acknowledgement still records the exact
+pair identity, pixel hash and SDL-call timestamps.
+
+Preparation has a 60-second deadline. The 300-pair limit, source timestamps,
+250-ms default lateness bound, no-drop/no-rebase policy and scoped process cleanup
+are unchanged. `--video-transport socket` retains the previous bulk-copy path for
+comparison. Neither transport establishes a physical display/audio clock or
+measures lip sync; successful dummy-driver checks do not validate WSLg playback.

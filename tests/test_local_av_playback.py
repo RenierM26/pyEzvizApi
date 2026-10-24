@@ -269,7 +269,7 @@ def test_startup_failure_cleans_video_and_preserves_primary_error(monkeypatch, t
         raise OSError('audio startup failure')
     monkeypatch.setitem(M['PCM'], 'Ffplay', fail)
     args = SimpleNamespace(source=tmp_path / 'source', container='mpegts', primary_stream=0,
-        secondary_stream=1, audio_stream=2, deadline=1, max_late_ms=50, mono_option='ch-layout')
+        secondary_stream=1, audio_stream=2, video_transport='socket', deadline=1, max_late_ms=50, mono_option='ch-layout')
     receipt: dict[str, Any] = {}
     with pytest.raises(OSError, match='audio startup failure'):
         M['playback'](args, receipt)
@@ -360,7 +360,7 @@ def test_validation_failure_never_opens_output(monkeypatch, tmp_path):
         pytest.fail('output opened before plan rejection')
     monkeypatch.setitem(M['OUTPUT'], 'Output', forbidden)
     args = SimpleNamespace(source=tmp_path / 'source', container='mpegts', primary_stream=0,
-        secondary_stream=1, audio_stream=2, deadline=1, max_late_ms=50)
+        secondary_stream=1, audio_stream=2, video_transport='socket', deadline=1, max_late_ms=50)
     receipt: dict[str, Any] = {}
     with pytest.raises(ValueError, match='unmatched'):
         M['playback'](args, receipt)

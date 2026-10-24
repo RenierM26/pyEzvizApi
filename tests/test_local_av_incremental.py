@@ -215,7 +215,8 @@ def test_real_one_pass_matches_original_two_pass_timeline_hashes_and_source_time
     for expected in baseline['events']:
         row = json.loads(json.dumps(expected))
         event = by_id[row.get('id', row.get('block', {}).get('id'))]
-        assert Fraction(**event['source_time']) == Fraction(**baseline['origin']) + Fraction(**row.pop('at'))
+        relative = row.pop('at')
+        assert Fraction(**event['source_time']) == Fraction(**baseline['origin']) + Fraction(**relative)
         actual = dict(event)
         actual.pop('source_time')
         if row['kind'] == 'audio_block':

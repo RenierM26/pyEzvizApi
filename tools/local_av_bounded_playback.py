@@ -119,7 +119,10 @@ class Lookahead:
         self.peak_counts[kind] = max(self.peak_counts[kind], self.counts[kind])
         self.peak_bytes[kind] = max(self.peak_bytes[kind], self.bytes[kind])
         try:
-            actual, payload = next(self.iterator)
+            try:
+                actual, payload = next(self.iterator)
+            except StopIteration as error:
+                raise ValueError(f'second decode ended before planned event {name}') from error
             if actual != expected:
                 raise ValueError('second decode disagrees with preflight source metadata')
             rows = verify_payload(expected, payload)

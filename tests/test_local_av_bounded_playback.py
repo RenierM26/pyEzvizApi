@@ -99,7 +99,7 @@ def test_second_decode_never_substitutes_changed_media_or_silent_tails(change):
         if change == 'tail':
             pumped = assets.pump()
             assert pumped
-        with pytest.raises((ValueError, StopIteration)):
+        with pytest.raises(ValueError):
             assets.pump()
     finally:
         assets.close()

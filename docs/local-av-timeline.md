@@ -107,8 +107,9 @@ remain separate milestones. The app-reference relay remains available unchanged.
 
 The [bounded host-submission output tool](local-av-playback.md) now consumes this
 contract for explicitly opted-in local-file output. Its stricter first profile
-rejects pending pictures, audio overlaps and geometry changes before opening
-devices. Submission timing is not device-clock synchronization.
+rejects pending pictures and geometry changes before opening devices. Its default
+audio policy also rejects overlaps. Submission timing is not device-clock
+synchronization.
 
 
 ## Fresh standalone MPEG-PS source boundary
@@ -126,8 +127,11 @@ PTS pairs, 36 AAC blocks and no unmatched pictures. The original common source
 origin and audio offset remain intact. Its AAC clock has occasional +/-1 ms
 spacing deviations from consecutive 1,024-sample blocks. The planner reports
 these as signed gaps/overlaps without repairing them; the current output profile
-still rejects overlaps before opening devices. Clean decode and exact lens
-pairing do not establish acoustic synchronization or continuous live playback.
+still rejects overlaps by default before opening devices. An explicitly selected
+[bounded serial-PCM policy](local-av-playback.md#explicit-bounded-serial-pcm-policy)
+can admit small spacing deviations without changing source targets or samples;
+it audits a nominal content-clock difference, not an observed device clock.
+Clean decode and exact lens pairing do not establish acoustic synchronization or continuous live playback.
 
 Use the original clear PS rather than the default single-video MPEG-TS export
 when auditing all source tracks and their exact clock. The direct decoder is

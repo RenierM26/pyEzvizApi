@@ -25,6 +25,7 @@ BASE = Path(__file__).parent
 TIMELINE = runpy.run_path(str(BASE / 'local_av_timeline.py'))
 PREVIEW = runpy.run_path(str(BASE / 'app_video_preview.py'))
 OUTPUT = runpy.run_path(str(BASE / 'app_native_video_preview.py'))
+SHARED = runpy.run_path(str(BASE / 'local_av_shared_frames.py'))
 PCM = TIMELINE['PCM']
 MAX_PAIRS = 300
 MAX_SPAN = 60
@@ -72,6 +73,7 @@ class Assets:
         self.audio = audio_file
         self.records: dict[str, dict[str, Any]] = {}
         self.audio_bytes = 0
+        self.frames: dict[str, Any] = {}
 
     def capture_audio(self, metadata: dict[str, Any], pcm: bytes) -> None:
         if (len(pcm) != PCM['PCM_BYTES'] or metadata['id'] in self.records
@@ -85,8 +87,50 @@ class Assets:
         self.records[metadata['id']] = dict(metadata, offset=offset)
         self.audio_bytes += len(pcm)
 
-    def load(self, event: dict[str, Any]) -> bytes:
+    def prepare_shared(self, timeline: dict[str, Any]) -> None:
+        """Reorder/compose in place before the clock, without a second pixel spool."""
+        started = time.monotonic()
+        events = [e for e in timeline['events'] if e['kind'] == 'video_pair']
+        order = [row['decoded_id'] for event in events for row in event['lenses']]
+        records = self.video.records
+        if len(order) != len(set(order)) or set(order) != set(records):
+            raise ValueError('shared preparation must account for every lens exactly once')
+        size = records[order[0]]['size']
+        current = sorted(records, key=lambda name: records[name]['offset'])
+        if any(records[name]['size'] != size or records[name]['offset'] != i * size
+               for i, name in enumerate(current)):
+            raise ValueError('shared preparation requires contiguous constant-size lens storage')
+        positions = {name: i for i, name in enumerate(current)}
+        for i, name in enumerate(order):
+            if time.monotonic() - started > 60:
+                raise ValueError('shared frame preparation deadline exceeded')
+            j = positions[name]
+            if i == j:
+                continue
+            other = current[i]
+            desired, displaced = self.video.read(name), self.video.read(other)
+            for index, data in ((i, desired), (j, displaced)):
+                self.video.source.seek(index * size)
+                if self.video.source.write(data) != size:
+                    raise ValueError('short in-place lens reorder write')
+            records[name]['offset'], records[other]['offset'] = i * size, j * size
+            current[i], current[j] = name, other
+            positions[name], positions[other] = i, j
+        for i, event in enumerate(events):
+            if time.monotonic() - started > 60:
+                raise ValueError('shared frame preparation deadline exceeded')
+            data = self.load(event)
+            offset = i * size * 2
+            self.video.source.seek(offset)
+            if self.video.source.write(data) != len(data):
+                raise ValueError('short in-place pair write')
+            self.frames[event['id']] = SHARED['Frame'](offset, len(data), hashlib.sha256(data).hexdigest())
+        SHARED['seal'](self.video.source)
+
+    def load(self, event: dict[str, Any]) -> Any:
         if event['kind'] == 'video_pair':
+            if event['id'] in self.frames:
+                return self.frames[event['id']]
             left, right = event['lenses']
             return PREVIEW['compose'](self.video.read(left['decoded_id']),
                                       self.video.read(right['decoded_id']), left['width'], left['height'])
@@ -131,7 +175,7 @@ class Scheduler:
             raise ValueError('host submission lateness limit exceeded; no implicit drop or rebase')
         return now
 
-    def call(self, event: dict[str, Any], data: bytes, backend: Any,
+    def call(self, event: dict[str, Any], data: Any, backend: Any,
              action: dict[str, Any]) -> Any:
         if self.cancel.is_set():
             raise ValueError('output cancelled')
@@ -229,7 +273,8 @@ class Scheduler:
 def playback(args: Any, receipt: dict[str, Any]) -> None:
     video = audio = scheduler = executor = None
     receipt['cleanup_errors'] = []
-    with tempfile.TemporaryFile() as video_file, tempfile.TemporaryFile() as audio_file:
+    shared = args.video_transport == 'sealed-store'
+    with (SHARED['sealed_file']() if shared else tempfile.TemporaryFile()) as video_file, tempfile.TemporaryFile() as audio_file:
         try:
             assets = Assets(video_file, audio_file)
             timeline = TIMELINE['inspect'](args.source, args.container,
@@ -237,10 +282,14 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
                 assets.video.capture, assets.capture_audio)
             receipt['timeline'] = timeline
             width, height = validate(timeline)
+            if shared:
+                assets.prepare_shared(timeline)
+            receipt['video_transport'] = args.video_transport
             scheduler = Scheduler(timeline, args.deadline, args.max_late_ms)
             receipt['temporary_storage'] = dict(video_bytes=assets.video.size, audio_bytes=assets.audio_bytes)
-            video = OUTPUT['Output'](width * 2, height, args.deadline, frame_limit=MAX_PAIRS,
-                                     title='Standalone local A/V (host submissions; not live)')
+            video = (SHARED['Output'](width * 2, height, args.deadline, video_file, MAX_PAIRS) if shared
+                     else OUTPUT['Output'](width * 2, height, args.deadline, frame_limit=MAX_PAIRS,
+                                          title='Standalone local A/V (host submissions; not live)'))
             receipt['video_driver'] = video.driver
             audio = PCM['Ffplay'](channel_args=('-ch_layout', 'mono') if args.mono_option == 'ch-layout'
                                   else ('-channels', '1'))
@@ -284,6 +333,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument('--layout', required=True, choices=['side-by-side'])
     parser.add_argument('--processor', required=True, choices=['passthrough'])
     parser.add_argument('--mono-option', choices=['ch-layout', 'channels'], default='ch-layout')
+    parser.add_argument('--video-transport', choices=['sealed-store', 'socket'], default='sealed-store')
     parser.add_argument('--receipt', required=True, type=Path)
     parser.add_argument('--deadline', type=float, default=5)
     parser.add_argument('--max-late-ms', type=int, default=250)

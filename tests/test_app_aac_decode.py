@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import struct
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -27,6 +28,18 @@ def frame(pts=0, time_base=Fraction(1, 16000), **overrides):
                   planes=[b'\x01\x00' * 1024 + b'padding'], is_corrupt=False)
     fields.update(overrides)
     return SimpleNamespace(**fields)
+
+
+class Plane(bytearray):
+    def update(self, data):
+        self[:] = data
+
+
+def untimed_frame(format, layout, samples):
+    width = 4 if format == 'fltp' else 2
+    return frame(pts=None, time_base=None, samples=samples,
+                 format=SimpleNamespace(name=format), layout=SimpleNamespace(name=layout),
+                 planes=[Plane(samples * width)])
 
 
 class Convert:
@@ -155,7 +168,7 @@ def test_decode_records_prefix_before_later_bad_frame(monkeypatch):
             yield packet
     module = SimpleNamespace(__version__='test', library_versions={},
                              open=lambda *args, **kwargs: Container(),
-                             AudioResampler=lambda **kwargs: Convert())
+                             AudioResampler=lambda **kwargs: Convert(), AudioFrame=untimed_frame)
     monkeypatch.setitem(MODULE['decode'].__globals__, 'load_av', lambda: module)
     emitted: list[dict[str, object]] = []
     writer = SimpleNamespace(write=emitted.append)
@@ -220,23 +233,27 @@ def test_decoder_rejects_unsupported_track_and_packet_contract(monkeypatch, chan
             yield packet
     av = SimpleNamespace(__version__='test', library_versions={},
                          open=lambda *args, **kwargs: Container(),
-                         AudioResampler=lambda **kwargs: Convert())
+                         AudioResampler=lambda **kwargs: Convert(), AudioFrame=untimed_frame)
     monkeypatch.setitem(MODULE['decode'].__globals__, 'load_av', lambda: av)
     with pytest.raises(ValueError):
         MODULE['decode'](io.BytesIO(), 'mpegts', 0, SimpleNamespace(write=lambda row: None),
                          io.StringIO())
 
 
-def test_optional_real_aac_container_to_sink_contract(tmp_path):
+@pytest.mark.parametrize('container_format', ['matroska', 'mpegts'])
+def test_optional_real_aac_container_to_sink_contract(tmp_path, container_format):
     pytest.importorskip('av')
     if not shutil.which('ffmpeg'):
         pytest.skip('optional FFmpeg synthetic fixture generator is unavailable')
-    source = tmp_path / 'synthetic.mkv'
+    source = tmp_path / ('synthetic.mkv' if container_format == 'matroska' else 'synthetic.ts')
+    options = (['-output_ts_offset', '70007.643733', '-pes_payload_size', '0']
+               if container_format == 'mpegts' else [])
     subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
                     'sine=frequency=440:sample_rate=16000:duration=1', '-ac', '1',
-                    '-c:a', 'aac', str(source)], check=True, capture_output=True, timeout=10)
+                    '-c:a', 'aac', *options, str(source)],
+                   check=True, capture_output=True, timeout=10)
     manifest = tmp_path / 'manifest'
-    p = subprocess.run([sys.executable, str(SCRIPT), str(source), '--container', 'matroska',
+    p = subprocess.run([sys.executable, str(SCRIPT), str(source), '--container', container_format,
                         '--audio-stream', '0', '--manifest', str(manifest)],
                        check=False, capture_output=True, timeout=10)
     assert p.returncode == 0, p.stderr.decode()
@@ -245,6 +262,10 @@ def test_optional_real_aac_container_to_sink_contract(tmp_path):
     assert records[-1]['status'] == 'completed'
     assert len(rows) == records[-1]['emitted_blocks'] > 0
     decoded = [r for r in records if r['kind'] == 'decoded']
+    if container_format == 'mpegts':
+        assert any((r['source_pts'] * Fraction(r['time_base_num'],
+                                               r['time_base_den']) * 16000).denominator != 1
+                   for r in decoded)
     assert [r['id'] for r in rows] == [r['id'] for r in decoded]
     for row, metadata in zip(rows, decoded, strict=True):
         parsed = SINK['parse_block'](row)
@@ -275,3 +296,51 @@ def test_open_time_size_caps_reads_and_seeks_after_file_growth(tmp_path):
         source.seek(100)
         assert not source.read(100)
     assert source.closed
+
+
+@pytest.mark.parametrize('pts', [1, 6300687936])
+def test_format_copy_preserves_non_sample_aligned_pts_without_mutating_source(pts):
+    source = frame(pts, Fraction(1, 90000))
+    converter = MODULE['FormatConverter'](SimpleNamespace(
+        AudioResampler=lambda **kwargs: Convert(), AudioFrame=untimed_frame))
+    adapter = Adapter(2, converter)
+    for stamp in (pts, pts, pts + 11520):  # Equal times and a real forward gap survive.
+        source.pts = stamp
+        row, meta = adapter.convert(source)
+        assert meta['source_pts'] == stamp and meta['time_base_den'] == 90000
+        assert row['media_ms'] == stamp * 1000 // 90000
+        assert source.pts == stamp and source.time_base == Fraction(1, 90000)
+        assert bytes(source.planes[0]).endswith(b'padding')
+    assert converter.resample(None) == []
+
+
+def test_untimed_converter_rejects_invented_timing_and_truncated_samples():
+    av = SimpleNamespace(AudioResampler=lambda **kwargs: SimpleNamespace(
+        resample=lambda source: [frame()]), AudioFrame=untimed_frame)
+    converter = MODULE['FormatConverter'](av)
+    with pytest.raises(ValueError, match='invented output timing'):
+        Adapter(0, converter).convert(frame())
+    with pytest.raises(ValueError, match='truncated'):
+        Adapter(0, converter).convert(frame(planes=[b'short']))
+
+
+@pytest.mark.parametrize('sample_format', ['fltp', 's16'])
+def test_optional_real_conversion_preserves_exact_pts_and_identical_pcm(sample_format):
+    av = pytest.importorskip('av')
+    converter = MODULE['FormatConverter'](av)
+    adapter = Adapter(2, converter)
+    for pts in (6300687936, 6300687936, 6300699456):
+        source = av.AudioFrame(format=sample_format, layout='mono', samples=1024)
+        source.sample_rate = 16000
+        source.time_base = Fraction(1, 90000)
+        source.pts = pts
+        raw = (struct.pack('<f', 0.125) if sample_format == 'fltp' else b'\x00\x10') * 1024
+        source.planes[0].update(raw)
+        # The unmodified converter's samples are the independent oracle; only its
+        # output clock quantization is excluded, not its sample conversion.
+        expected = av.AudioResampler(format='s16', layout='mono', rate=16000).resample(source)
+        row, metadata = adapter.convert(source)
+        assert SINK['parse_block'](row).pcm == bytes(expected[0].planes[0])[:2048]
+        assert metadata['source_pts'] == source.pts == pts
+        assert source.time_base == Fraction(1, 90000)
+    assert converter.resample(None) == []

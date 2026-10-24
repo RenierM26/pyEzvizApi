@@ -48,6 +48,10 @@ summary and the sink result. Missing summary means incomplete decoder provenance
 - PyAV converts the sample **format only** to packed signed16 PCM at the same
   rate/layout. One source frame must produce one output frame, identical sample
   count and exact source time; unexpected conversion delay/tail is rejected.
+- Format conversion uses an untimed, bounded sample copy, then reattaches the
+  original exact PTS/time base. This avoids rounding a 90-kHz source clock to the
+  16-kHz sample clock. The borrowed decoded frame is unchanged; conversion must
+  still return exactly one 1,024-sample output with no delayed tail.
 - No resampling, time stretching, gain, VQE, fixed offset, gap filling, padding
   synthesis, frame-count-derived clock or automatic clock repair is applied.
 - Each output is exactly 2,048 little-endian PCM bytes. AVFrame allocation padding
@@ -114,3 +118,21 @@ partial decoder prefixes and AAC priming metadata. One optional real AAC-contain
 test runs only when PyAV and FFmpeg are installed; remaining tests need neither.
 Physical output, proprietary voice processing, paired-lens video lifecycle and
 real live-source arrival integration remain separate work.
+
+
+### Exact non-sample-aligned source clocks
+
+A retained H9c local-media control exposed an otherwise-valid AAC frame at a
+90-kHz source PTS not representable in 16-kHz sample ticks. Passing that clock
+through sample-format conversion rounded it by 4/15 sample, triggering the exact
+timing guard before any PCM output. The untimed conversion copy preserves the
+source metadata without changing converted sample bytes. A bounded control now
+decodes five camera AAC blocks with their original exact packet/frame times and
+writes all five to dummy output. Both HEVC tracks separately decode eight frames
+without app-selected pairs. These are local recorded-data controls, not a camera
+connector, combined standalone player, native VQE parity or measured A/V sync.
+
+Synthetic regressions cover large 90-kHz PTS, equal times, forward gaps, both
+supported sample formats, unchanged input frames and PCM identity with the
+unmodified converter. A generated MPEG-TS CLI fixture uses a non-sample-aligned
+clock; the existing Matroska fixture remains covered.

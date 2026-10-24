@@ -34,6 +34,35 @@ WRITE_SECONDS = 5
 FORMATS = ('mpegts', 'matroska')
 
 
+class FormatConverter:
+    """Convert samples on an untimed copy; retain the caller's exact source clock."""
+
+    def __init__(self, av: Any) -> None:
+        self.av = av
+        self.converter = av.AudioResampler(format='s16', layout='mono', rate=SAMPLE_RATE)
+
+    def resample(self, frame: Any) -> list[Any]:
+        if frame is None:
+            return self.converter.resample(None)
+        # AudioResampler otherwise quantizes arbitrary source PTS to 1/sample_rate.
+        # Only sample format is changing: its sample clock must not replace the
+        # source clock. Do not mutate the borrowed decoder frame or invent PTS.
+        untimed = self.av.AudioFrame(format=frame.format.name, layout='mono', samples=SAMPLES)
+        untimed.sample_rate = SAMPLE_RATE
+        sample_bytes = 4 if frame.format.name == 'fltp' else 2
+        raw = bytes(frame.planes[0])[:SAMPLES * sample_bytes]
+        if len(raw) != SAMPLES * sample_bytes:
+            raise ValueError('decoded PCM plane is truncated')
+        untimed.planes[0].update(raw)
+        outputs = self.converter.resample(untimed)
+        for output in outputs:
+            if output.pts is not None:
+                raise ValueError('untimed format conversion invented output timing')
+            output.time_base = frame.time_base
+            output.pts = frame.pts
+        return outputs
+
+
 class FrameAdapter:
     """One verified 1024-sample decoder frame becomes one identified PCM block."""
 
@@ -218,8 +247,7 @@ def decode(source: BinaryIO | BoundedSource, container_format: str, stream_index
         if (codec.name != 'aac' or codec.profile != 'LC' or codec.sample_rate != SAMPLE_RATE
                 or codec.layout.name != 'mono'):
             raise ValueError('only AAC-LC, 16-kHz mono is supported')
-        adapter = FrameAdapter(stream_index, av.AudioResampler(format='s16', layout='mono',
-                                                              rate=SAMPLE_RATE))
+        adapter = FrameAdapter(stream_index, FormatConverter(av))
         for packets, packet in enumerate(container.demux(stream)):
             if packets >= MAX_PACKETS or time.monotonic() - started > MAX_SECONDS:
                 raise ValueError('decoder packet/session limit exceeded')

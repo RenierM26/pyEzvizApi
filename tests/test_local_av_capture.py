@@ -255,3 +255,16 @@ def test_final_crypto_cleanup_failure_never_publishes_prefix_success(monkeypatch
     assert report['status'] == 'failed' and report['error_type'] == 'OSError'
     assert report['accepted_prefix_clear_sha256'] is None
     assert report['cleanup_error_types'] == ['OSError']
+
+
+@pytest.mark.parametrize('changes', [
+    {'max_packets': 100001}, {'max_bytes': 16777217}, {'duration_seconds': 61},
+    {'max_packets': True}, {'max_bytes': 1.5}, {'duration_seconds': True},
+])
+def test_bounds_are_not_silently_clamped_or_claimed(changes):
+    owner, _limits, _ = setup()
+    values: dict[str, Any] = dict(max_packets=1, max_bytes=1024, duration_seconds=8)
+    values.update(changes)
+    with pytest.raises(ValueError, match='explicit finite'):
+        next(M['iter_capture_chunks'](owner, 'camera-key', {}, limits=CaptureLimits(**values)))
+    assert not owner.started and not owner.closed and owner.close_calls == 0

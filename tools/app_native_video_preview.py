@@ -80,7 +80,8 @@ class SdlSurface:
             self.check(self.lib.SDL_InitSubSystem(0x20))  # SDL_INIT_VIDEO only
             shown_width = min(width, 1280)
             shown_height = max(1, height * shown_width // width)
-            self.window = self.lib.SDL_CreateWindow(b'Native snapshot replay (not live)',
+            title = os.environ.get('EZVIZ_SDL_WINDOW_TITLE', 'Native snapshot replay (not live)')[:128].encode()
+            self.window = self.lib.SDL_CreateWindow(title,
                 0x1fff0000, 0x1fff0000, shown_width, shown_height, 0)
             if not self.window:
                 raise ValueError(self.error())
@@ -131,9 +132,10 @@ class SdlSurface:
         self.lib.SDL_QuitSubSystem(0x20)
 
 
-def worker(fd: int, width: int, height: int) -> int:
+def worker(fd: int, width: int, height: int, frame_limit: int = 32) -> int:
     """Inherited private socket only; errors/termination never escape the parent deadline."""
-    if (fd < 3 or width % 2 or height % 2 or not 0 < width <= 8192
+    if (type(frame_limit) is not int or not 1 <= frame_limit <= 300
+            or fd < 3 or width % 2 or height % 2 or not 0 < width <= 8192
             or not 0 < height <= 4096 or width * height > NATIVE['MAX_PAIR_PIXELS']):
         raise ValueError('invalid SDL worker geometry or descriptor')
     surface = None
@@ -158,14 +160,14 @@ def worker(fd: int, width: int, height: int) -> int:
         try:
             surface = SdlSurface(width, height)
             channel.sendall(packet(dict(kind='ready', driver=surface.driver, width=width, height=height)))
-            for index in range(33):  # explicit preview cap: 32 requests plus finish, including retries
+            for index in range(frame_limit + 1):  # Default snapshot cap remains 32, including retries.
                 row = message(read)
                 if row == dict(kind='finish'):
                     surface.close()
                     surface = None
                     channel.sendall(packet(dict(kind='finished')))
                     return 0
-                if index == 32:
+                if index == frame_limit:
                     raise ValueError('output frame count limit exceeded')
                 size = width * height * 3 // 2
                 if (set(row) != {'kind', 'pair_id', 'bytes', 'pixel_sha256'} or row['kind'] != 'frame'
@@ -193,14 +195,19 @@ def worker(fd: int, width: int, height: int) -> int:
 class Output:
     """Nonblocking IPC, per-operation deadlines and terminate/kill/reap for SDL hangs."""
 
-    def __init__(self, width: int, height: int, timeout: float) -> None:
+    def __init__(self, width: int, height: int, timeout: float, *, frame_limit: int = 32) -> None:
+        if type(frame_limit) is not int or not 1 <= frame_limit <= 300:
+            raise ValueError('SDL frame limit must be 1..300')
         self.channel, child = socket.socketpair()
         self.process: Any = None
         self.timeout = timeout
         try:
             self.channel.setblocking(False)
-            self.process = subprocess.Popen([sys.executable, str(Path(__file__)), '--sdl-worker',
-                str(child.fileno()), str(width), str(height)], pass_fds=(child.fileno(),),
+            command = [sys.executable, str(Path(__file__)), '--sdl-worker',
+                       str(child.fileno()), str(width), str(height)]
+            if frame_limit != 32:
+                command.append(str(frame_limit))
+            self.process = subprocess.Popen(command, pass_fds=(child.fileno(),),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ready = self.receive(time.monotonic() + timeout)
             if (set(ready) != {'kind', 'driver', 'width', 'height'} or ready['kind'] != 'ready'
@@ -424,6 +431,6 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 5 and sys.argv[1] == '--sdl-worker':
+    if len(sys.argv) in (5, 6) and sys.argv[1] == '--sdl-worker':
         raise SystemExit(worker(*map(int, sys.argv[2:])))
     raise SystemExit(main())

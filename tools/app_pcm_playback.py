@@ -136,10 +136,12 @@ class PcmQueue:
 class Ffplay:
     """Nonblocking pipe transport with bounded, kill-and-reap cleanup."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, channel_args: tuple[str, str] = ('-ch_layout', 'mono')) -> None:
+        if type(channel_args) is not tuple or channel_args not in {('-ch_layout', 'mono'), ('-channels', '1')}:
+            raise ValueError('requires an explicit supported mono channel option')
         self.process = subprocess.Popen(
             ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'error',
-             '-f', 's16le', '-ar', '16000', '-ch_layout', 'mono', '-i', 'pipe:0'],
+             '-f', 's16le', '-ar', '16000', *channel_args, '-i', 'pipe:0'],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=None,
         )
         assert self.process.stdin is not None

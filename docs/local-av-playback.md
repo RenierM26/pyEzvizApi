@@ -193,3 +193,11 @@ nominal content/source difference; it does **not** preserve overlapping acoustic
 intervals or measure latency, audible gap reproduction, device-clock alignment,
 lip sync or sustained live playback. No new physical measurement follows from
 software-output success.
+
+## Next preparation stage
+
+The opt-in [incremental decoder](local-av-incremental.md) releases copied pixels
+after each synchronous consumer acknowledgement instead of spooling the full
+decoded recording. It preserves exact source timing and has bounded unmatched
+lens storage. It is a decode/ownership stage, not a replacement playback scheduler
+or sustained camera output; this tool and its defaults remain unchanged.

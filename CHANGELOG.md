@@ -6,6 +6,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ## Unreleased
 
+### Fixed
+
+- Preserve exact source PTS during development-only AAC sample-format conversion, including 90-kHz timestamps not representable on the 16-kHz sample clock.
+
 ### Added
 
 - Developer-only bounded per-attempt decoder backend summaries and an offline raw-event audit, with explicit pending-attempt and completeness diagnostics.

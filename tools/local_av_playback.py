@@ -41,7 +41,64 @@ def identity(event: dict[str, Any]) -> str:
     return event['id'] if event['kind'] == 'video_pair' else event['block']['id']
 
 
-def validate(timeline: dict[str, Any]) -> tuple[int, int]:
+def audio_options(policy: str, overlap_ms: int | None, phase_ms: int | None) -> None:
+    if policy not in ('reject', 'bounded-serial-pcm'):
+        raise ValueError('unknown audio overlap policy')
+    limits = (overlap_ms, phase_ms)
+    if policy == 'reject':
+        if any(value is not None for value in limits):
+            raise ValueError('audio bounds require bounded-serial-pcm opt-in')
+    elif any(type(value) is not int or not 0 <= value <= 64 for value in limits):
+        raise ValueError('bounded-serial-pcm requires both explicit integer audio bounds, 0..64 ms')
+
+
+def audio_contract(timeline: dict[str, Any], policy: str = 'reject',
+                   overlap_ms: int | None = None, phase_ms: int | None = None) -> dict[str, Any]:
+    """Audit nominal serial samples versus original targets; never an observed device clock."""
+    audio_options(policy, overlap_ms, phase_ms)
+    duration = Fraction(TIMELINE['AUDIO']['SAMPLES'], TIMELINE['AUDIO']['SAMPLE_RATE'])
+    rows: list[dict[str, Any]] = []
+    first: Fraction | None = None
+    previous: Fraction | None = None
+    worst_overlap = worst_phase = Fraction(0)
+    for event in timeline['events']:
+        if event['kind'] != 'audio_block':
+            continue
+        at = fraction(event['at'])
+        if previous is not None and at <= previous:
+            raise ValueError('audio output requires strictly increasing source starts')
+        gap: Fraction | None = None if previous is None else at - previous - duration
+        declared = event['gap_before']
+        if (declared is None) != (gap is None) or (declared is not None and fraction(declared) != gap):
+            raise ValueError('audio gap metadata disagrees with original targets')
+        first = at if first is None else first
+        serial_at = first + len(rows) * duration
+        phase = serial_at - at
+        overlap = max(Fraction(0), -gap) if gap is not None else Fraction(0)
+        worst_overlap = max(worst_overlap, overlap)
+        worst_phase = max(worst_phase, abs(phase))
+        if policy == 'reject' and overlap:
+            raise ValueError('overlapping audio is unsupported; no implicit drop or repair')
+        if policy == 'bounded-serial-pcm':
+            assert overlap_ms is not None and phase_ms is not None
+            if overlap > Fraction(overlap_ms, 1000):
+                raise ValueError('audio overlap exceeds explicit bound')
+            if abs(phase) > Fraction(phase_ms, 1000):
+                raise ValueError('nominal serial PCM/source phase exceeds explicit bound')
+        rows.append(dict(id=event['block']['id'], source_at=event['at'],
+            source_gap_before=declared, nominal_serial_pcm_at=TIMELINE['rational'](serial_at),
+            nominal_serial_minus_source=TIMELINE['rational'](phase)))
+        previous = at
+    return dict(policy=policy, max_overlap_ms=overlap_ms, max_nominal_phase_ms=phase_ms,
+        observed_max_source_overlap=TIMELINE['rational'](worst_overlap),
+        calculated_max_abs_nominal_phase=TIMELINE['rational'](worst_phase),
+        sample_clock_measured=False, source_targets_changed=False, pcm_samples_changed=False,
+        nominal_sample_rate=TIMELINE['AUDIO']['SAMPLE_RATE'], blocks=rows)
+
+
+def validate(timeline: dict[str, Any], policy: str = 'reject',
+             overlap_ms: int | None = None, phase_ms: int | None = None,
+             report: dict[str, Any] | None = None) -> tuple[int, int]:
     """Reject unsupported output policies before opening either backend."""
     if timeline['pending_unpaired']:
         raise ValueError('playback requires no unmatched pictures; no implicit discard')
@@ -58,10 +115,11 @@ def validate(timeline: dict[str, Any]) -> tuple[int, int]:
                 raise ValueError('first standalone output profile requires constant equal geometry')
             geometry = current
             pairs += 1
-        elif event['gap_before'] is not None and fraction(event['gap_before']) < 0:
-            raise ValueError('overlapping audio is unsupported; no implicit drop or repair')
     if geometry is None or not 1 <= pairs <= MAX_PAIRS:
         raise ValueError('output requires 1..300 paired pictures')
+    contract = audio_contract(timeline, policy, overlap_ms, phase_ms)
+    if report is not None:
+        report['audio_clock_contract'] = contract
     return geometry
 
 
@@ -281,7 +339,11 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
                 (args.primary_stream, args.secondary_stream), args.audio_stream,
                 assets.video.capture, assets.capture_audio)
             receipt['timeline'] = timeline
-            width, height = validate(timeline)
+            receipt.update(audio_overlap_policy=args.audio_overlap_policy,
+                max_audio_overlap_ms=args.max_audio_overlap_ms,
+                max_audio_phase_ms=args.max_audio_phase_ms)
+            width, height = validate(timeline, args.audio_overlap_policy,
+                args.max_audio_overlap_ms, args.max_audio_phase_ms, receipt)
             if shared:
                 assets.prepare_shared(timeline)
             receipt['video_transport'] = args.video_transport
@@ -334,10 +396,17 @@ def arguments() -> argparse.Namespace:
     parser.add_argument('--processor', required=True, choices=['passthrough'])
     parser.add_argument('--mono-option', choices=['ch-layout', 'channels'], default='ch-layout')
     parser.add_argument('--video-transport', choices=['sealed-store', 'socket'], default='sealed-store')
+    parser.add_argument('--audio-overlap-policy', choices=['reject', 'bounded-serial-pcm'], default='reject')
+    parser.add_argument('--max-audio-overlap-ms', type=int)
+    parser.add_argument('--max-audio-phase-ms', type=int)
     parser.add_argument('--receipt', required=True, type=Path)
     parser.add_argument('--deadline', type=float, default=5)
     parser.add_argument('--max-late-ms', type=int, default=250)
     args = parser.parse_args()
+    try:
+        audio_options(args.audio_overlap_policy, args.max_audio_overlap_ms, args.max_audio_phase_ms)
+    except ValueError as error:
+        parser.error(str(error))
     if not math.isfinite(args.deadline) or not MIN_DEADLINE <= args.deadline <= 30:
         parser.error('deadline must be 0.1..30 seconds')
     if not 0 <= args.max_late_ms <= 5000:

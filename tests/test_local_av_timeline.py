@@ -248,7 +248,7 @@ def test_bounded_metadata_observer(monkeypatch):
         manifest.write(json.dumps(dict(kind='decoded')))
 
 
-def encode_three_track_ps(tmp_path):
+def encode_three_track_ps(tmp_path, audio_jitter=False):
     """Synthetic PS with original TS packet clocks and non-video-first indices."""
     av = pytest.importorskip('av')
     source = encode_three_track(tmp_path)
@@ -264,9 +264,15 @@ def encode_three_track_ps(tmp_path):
     mapping = header + _mpeg_crc32(header)
     output = bytearray()
     scr = 0
+    audio_count = 0
     for index, pts, dts, base, payload in ordered:
         clock = Fraction(pts) * base * 90000
         decode = Fraction(dts if dts is not None else pts) * base * 90000
+        if index == 2:
+            if audio_jitter and audio_count == 1:
+                clock -= 90
+                decode -= 90
+            audio_count += 1
         assert clock.denominator == decode.denominator == 1
         scr = max(scr, int(decode))
         sid = (0xE0, 0xE1, 0xC0)[index]

@@ -21,8 +21,9 @@ python tools/local_av_playback.py clear.ts --container mpegts \
 The source must be a clear local MPEG-TS, Matroska or MPEG-PS file with two supported HEVC
 tracks and one AAC-LC 16-kHz mono track. Select `--container mpeg` for clear
 MPEG-PS. Indices are absolute container indices; inspect them rather than assuming
-the audio track is last. Direct PS support does not relax the overlap policy: a
-source with even a small negative AAC gap is rejected before devices open.
+the audio track is last. By default, a source with even a small negative AAC gap
+is rejected before devices open. The explicit bounded policy below is separate
+from container selection.
 `--mono-option ch-layout` is the default ffplay channel syntax. For an older ffplay
 that supports `-channels 1` instead, use `--mono-option channels`. No executable
 fallback, package installation, sandbox change or hidden network access occurs.
@@ -35,7 +36,7 @@ audible sound or physical A/V synchronization.
 
 1. Read one bounded immutable source snapshot. Fully decode and validate the
    timeline while retaining verified pixels and PCM in private temporary storage.
-2. Reject unmatched pictures, overlapping/equal-start audio, unequal/changing
+2. Reject unmatched pictures, audio outside the selected explicit policy, unequal/changing
    paired geometry, more than 300 pairs or source event starts spanning over
    60 seconds **before opening outputs**. These are explicit first-profile limits,
    not silent discards or a change to the more general planner's accepted input.
@@ -64,8 +65,9 @@ samples: the exact acoustic gap/start offset is therefore not guaranteed. SDL an
 ffplay also have independent internal startup, buffering and device latencies.
 No fixed correction, gain, resampling, gap filling or timing repair is applied.
 The receipt must not be described as measured lip sync or proof that source gaps
-were reproduced at the speaker. Overlapping audio is rejected rather than secretly
-serialized into a different content clock.
+were reproduced at the speaker. Overlapping audio is rejected by default. The
+explicit bounded serial-PCM policy below records the nominal sample-clock
+difference rather than silently treating the pipe as a timestamped audio device.
 
 The source need not begin at zero, and audio can precede video. Neither track is
 independently zeroed. The last picture remains until the explicit PCM pipe drain
@@ -138,3 +140,56 @@ Preparation has a 60-second deadline. The 300-pair limit, source timestamps,
 are unchanged. `--video-transport socket` retains the previous bulk-copy path for
 comparison. Neither transport establishes a physical display/audio clock or
 measures lip sync; successful dummy-driver checks do not validate WSLg playback.
+
+
+## Explicit bounded serial-PCM policy
+
+The default `--audio-overlap-policy reject` is unchanged. For a source with small
+spacing deviations, opt in explicitly and provide **both** limits, in integer
+milliseconds (0..64, at most one 1,024-sample block):
+
+```sh
+python tools/local_av_playback.py clear.ps --container mpeg \
+  --primary-stream 0 --secondary-stream 1 --audio-stream 2 \
+  --play --pairing exact-pts --timing host-submission \
+  --layout side-by-side --processor passthrough \
+  --audio-overlap-policy bounded-serial-pcm \
+  --max-audio-overlap-ms 1 --max-audio-phase-ms 1 --receipt new-output.json
+```
+
+This policy writes every unchanged PCM block, in source order, to the existing
+serial pipe. Host submissions still target the original source timestamps. It
+never moves a target to the nominal PCM clock, drops/mixes/resamples samples,
+inserts silence, rebases either track or increases the lateness/storage limits.
+
+For block `i`, define `nominal_serial_pcm_at = first_audio_at + i*1024/16000`.
+This is only a **calculated content timeline**, not the observed position of the
+ffplay device. The policy validates the whole decoded plan before devices open:
+
+- Source starts must strictly increase; equal/backward starts remain unsupported.
+- Every declared gap must agree exactly with adjacent original source targets.
+- Each negative source gap must fit `--max-audio-overlap-ms`.
+- The absolute difference between the nominal serial position and each source
+  target must fit `--max-audio-phase-ms`. This catches accumulated small overlaps
+  and positive gaps as well as either sign of drift.
+
+Both limits are mandatory for this policy and rejected with the default policy;
+there is no inferred tolerance or automatic retry with a different policy. The
+receipt preserves every original source target/gap, nominal serial position and
+signed difference, configured limits and calculated maxima. Source timeline and
+PCM fingerprints remain unchanged. Invalid plans fail before any backend opens.
+
+A retained fresh channel-0 control completes 36 video pairs and 36 audio blocks
+through actual SDL/ffplay dummy outputs under explicit 1-ms overlap and phase
+limits. Its four negative 1-ms gaps and three positive 1-ms gaps remain visible;
+the default mode still rejects it. Tests include accumulation beyond the bound,
+positive/negative phase, ambiguous starts, forged gap metadata, partial writes,
+original host targets and an actually decoded synthetic MPEG-PS overlap case.
+
+The acoustic sequence is still a serial sample stream: overlapping source
+intervals cannot both be rendered at their original times on one PCM device
+without a separate mixing/time policy. This opt-in permits a bounded, disclosed
+nominal content/source difference; it does **not** preserve overlapping acoustic
+intervals or measure latency, audible gap reproduction, device-clock alignment,
+lip sync or sustained live playback. No new physical measurement follows from
+software-output success.

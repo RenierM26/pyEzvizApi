@@ -269,7 +269,8 @@ def test_startup_failure_cleans_video_and_preserves_primary_error(monkeypatch, t
         raise OSError('audio startup failure')
     monkeypatch.setitem(M['PCM'], 'Ffplay', fail)
     args = SimpleNamespace(source=tmp_path / 'source', container='mpegts', primary_stream=0,
-        secondary_stream=1, audio_stream=2, video_transport='socket', deadline=1, max_late_ms=50, mono_option='ch-layout')
+        secondary_stream=1, audio_stream=2, video_transport='socket', audio_overlap_policy='reject',
+        max_audio_overlap_ms=None, max_audio_phase_ms=None, deadline=1, max_late_ms=50, mono_option='ch-layout')
     receipt: dict[str, Any] = {}
     with pytest.raises(OSError, match='audio startup failure'):
         M['playback'](args, receipt)
@@ -362,7 +363,8 @@ def test_validation_failure_never_opens_output(monkeypatch, tmp_path):
         pytest.fail('output opened before plan rejection')
     monkeypatch.setitem(M['OUTPUT'], 'Output', forbidden)
     args = SimpleNamespace(source=tmp_path / 'source', container='mpegts', primary_stream=0,
-        secondary_stream=1, audio_stream=2, video_transport='socket', deadline=1, max_late_ms=50)
+        secondary_stream=1, audio_stream=2, video_transport='socket', audio_overlap_policy='reject',
+        max_audio_overlap_ms=None, max_audio_phase_ms=None, deadline=1, max_late_ms=50)
     receipt: dict[str, Any] = {}
     with pytest.raises(ValueError, match='unmatched'):
         M['playback'](args, receipt)
@@ -381,3 +383,113 @@ def test_one_failed_track_does_not_hide_other_completed_acknowledgement():
     assert s.failed == dict(video_pair='p:0')
     assert s.completed == dict(video_pair=0, audio_block=1)
     assert s.result()['active'] == {} and s.audio_partial == 0
+
+
+def jitter_timeline(starts=(50, 113, 178)):
+    t = timeline()
+    audio = [e for e in t['events'] if e['kind'] == 'audio_block']
+    previous = None
+    for e, start in zip(audio, starts, strict=True):
+        e['at'] = rational(Fraction(start, 1000))
+        e['gap_before'] = None if previous is None else rational(Fraction(start - previous - 64, 1000))
+        previous = start
+    return t
+
+
+def test_bounded_serial_policy_reports_exact_source_and_nominal_clock_without_mutation():
+    t = jitter_timeline()
+    original = json.dumps(t, sort_keys=True)
+    with pytest.raises(ValueError, match='overlapping'):
+        M['validate'](t)
+    receipt: dict[str, Any] = {}
+    assert M['validate'](t, 'bounded-serial-pcm', 1, 1, receipt) == (2, 2)
+    report = receipt['audio_clock_contract']
+    assert report['observed_max_source_overlap'] == rational(Fraction(1, 1000))
+    assert report['calculated_max_abs_nominal_phase'] == rational(Fraction(1, 1000))
+    assert [r['nominal_serial_minus_source'] for r in report['blocks']] == [rational(0), rational(Fraction(1, 1000)), rational(0)]
+    assert not report['sample_clock_measured'] and not report['source_targets_changed'] and not report['pcm_samples_changed']
+    assert json.dumps(t, sort_keys=True) == original
+    s, clock, video, audio, executor = setup()
+    s = M['Scheduler'](t, 0.1, 100, clock.read, clock.sleep)
+    s.run(Assets(), video, audio, executor)
+    assert s.completed == dict(video_pair=3, audio_block=3)
+    assert b''.join(chunk for _, chunk in audio.chunks) == b'a' * (2048 * 3)
+    for action in s.result()['actions']:
+        if action['kind'] == 'output_call_submitted':
+            assert action['started_monotonic_ns'] == action['target_monotonic_ns']
+            assert action['target_monotonic_ns'] == s.anchor + int(M['fraction'](action['source_at']) * 1_000_000_000)
+
+
+@pytest.mark.parametrize('starts,overlap,phase,message', [
+    ((50, 112, 178), 1, 2, 'overlap exceeds'),
+    ((50, 113, 176), 1, 1, 'phase exceeds'),
+    ((50, 115, 180), 0, 1, 'phase exceeds'),
+    ((50, 50, 114), 64, 64, 'strictly increasing'),
+    ((50, 49, 114), 64, 64, 'strictly increasing'),
+])
+def test_individual_overlap_cumulative_signed_phase_and_ambiguous_starts_fail(starts, overlap, phase, message):
+    with pytest.raises(ValueError, match=message):
+        M['validate'](jitter_timeline(starts), 'bounded-serial-pcm', overlap, phase)
+
+
+def test_forged_gap_metadata_rejected_under_opt_in():
+    t = jitter_timeline()
+    t['events'][-1]['gap_before'] = rational(0)
+    with pytest.raises(ValueError, match='metadata disagrees'):
+        M['validate'](t, 'bounded-serial-pcm', 1, 1)
+
+
+@pytest.mark.parametrize('policy,overlap,phase', [
+    ('unknown', 1, 1), ('reject', 1, None), ('reject', None, 1),
+    ('bounded-serial-pcm', None, 1), ('bounded-serial-pcm', 1, None),
+    ('bounded-serial-pcm', -1, 1), ('bounded-serial-pcm', 65, 1),
+    ('bounded-serial-pcm', 1, 65), ('bounded-serial-pcm', True, 1),
+    ('bounded-serial-pcm', 1, 1.0),
+])
+def test_audio_policy_requires_explicit_bounded_integer_limits(policy, overlap, phase):
+    with pytest.raises(ValueError):
+        M['audio_options'](policy, overlap, phase)
+
+
+@pytest.mark.parametrize('flags', [
+    ['--audio-overlap-policy', 'bounded-serial-pcm'],
+    ['--max-audio-overlap-ms', '1'],
+    ['--audio-overlap-policy', 'bounded-serial-pcm', '--max-audio-overlap-ms', '1', '--max-audio-phase-ms', '65'],
+])
+def test_invalid_audio_cli_policy_rejected_before_read_or_receipt_creation(tmp_path, flags):
+    receipt = tmp_path / 'not-created.json'
+    p = subprocess.run([*command(tmp_path / 'absent', receipt), *flags], capture_output=True, timeout=5, check=False)
+    message = b'audio'
+    assert p.returncode == 2 and not receipt.exists() and message in p.stderr
+
+
+def test_optional_actual_mpegps_overlap_default_rejection_and_explicit_unchanged_output(tmp_path):
+    if not shutil.which('ffplay') or not ctypes.util.find_library('SDL2-2.0'):
+        pytest.skip('optional SDL/ffplay output unavailable')
+    source = SOURCE['encode_three_track_ps'](tmp_path, audio_jitter=True)
+    env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy')
+    rejected, accepted = tmp_path / 'rejected.json', tmp_path / 'accepted.json'
+    p = subprocess.run(command(source, rejected, 'mpeg', 2, 1), env=env, capture_output=True, timeout=15, check=False)
+    baseline = json.loads(rejected.read_text())
+    assert p.returncode == 2 and 'overlapping' in baseline['error']
+    assert 'video_driver' not in baseline and 'scheduler' not in baseline
+    p = subprocess.run([*command(source, accepted, 'mpeg', 2, 1),
+        '--audio-overlap-policy', 'bounded-serial-pcm', '--max-audio-overlap-ms', '1',
+        '--max-audio-phase-ms', '1'], env=env, capture_output=True, timeout=20, check=False)
+    result = json.loads(accepted.read_text())
+    assert p.returncode == 0, result.get('error') or p.stderr.decode()
+    assert result['status'] == 'completed' and result['cleanup_errors'] == []
+    assert result['timeline']['source_sha256'] == baseline['timeline']['source_sha256']
+    s = result['scheduler']
+    assert s['outputs_finished'] and not s['active'] and not s['failed'] and s['partial_audio_bytes'] == 0
+    audio = {e['block']['id']: e for e in baseline['timeline']['events'] if e['kind'] == 'audio_block'}
+    assert s['completed']['audio_block'] == len(audio)
+    for action in s['actions']:
+        if action['kind'] == 'output_call_submitted' and action['track'] == 'audio_block':
+            assert action['source_at'] == audio[action['id']]['at']
+        if action['kind'] == 'output_call_completed' and action['track'] == 'audio_block':
+            assert action['acknowledgement']['pcm_sha256'] == audio[action['id']]['block']['pcm_sha256']
+            assert action['acknowledgement']['bytes'] == 2048
+    audit = result['audio_clock_contract']
+    assert audit['observed_max_source_overlap'] == rational(Fraction(1, 1000))
+    assert not audit['sample_clock_measured'] and not result['physical_av_sync_measured']

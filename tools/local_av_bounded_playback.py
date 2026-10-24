@@ -204,6 +204,7 @@ class Scheduler(Parent):
                  assets: Lookahead, **kwargs: Any) -> None:
         super().__init__(timeline, timeout, max_late_ms, **kwargs)
         self.assets = assets
+        self.lease_cleanup_errors: list[str] = []
 
     def harvest(self) -> None:
         before = {kind: event_id(event) for kind, event in self.active.items()}
@@ -213,11 +214,21 @@ class Scheduler(Parent):
             self.cancel.set()
             raise
         finally:
+            primary_failure = sys.exc_info()[0] is not None
+            errors = []
             for kind, name in before.items():
                 if kind not in self.active and self.failed.get(kind) != name:
-                    self.assets.release(name)
+                    try:
+                        self.assets.release(name)
+                    except Exception as error:
+                        errors.append(str(error))
                 # Failed jobs retain credit until playback aborts/reaps the backend.
                 # A timeout return is not proof that its worker released the mapping.
+            self.lease_cleanup_errors.extend(errors)
+            if errors:
+                self.cancel.set()
+                if not primary_failure:
+                    raise ValueError('lease cleanup failed: ' + '; '.join(errors))
 
     def dispatch(self, assets: Lookahead, backends: dict[str, Any], executor: Any) -> None:
         for kind, events in self.tracks.items():
@@ -306,6 +317,7 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
                 if not primary_failure:
                     errors.append(str(error))
             receipt['scheduler'] = scheduler.result()
+            errors.extend(scheduler.lease_cleanup_errors)
         if assets is not None:
             receipt['lookahead_before_cleanup'] = assets.result()
             try:

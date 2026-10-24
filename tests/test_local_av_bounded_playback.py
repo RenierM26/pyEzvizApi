@@ -480,3 +480,34 @@ def test_real_whole_session_overlap_rejection_precedes_devices_and_exclusive_rec
     assert output['output_decode'] == {} and not output['cleanup_errors']
     result = subprocess.run(command, capture_output=True, timeout=5, check=False)
     assert result.returncode == 2 and receipt.read_bytes() == original
+
+
+def test_lease_cleanup_diagnostic_does_not_replace_primary_other_track_failure(monkeypatch):
+    events = [pair(), block()]
+    timeline = dict(events=[dict(event, at=event['source_time']) for event, _ in events])
+    assets = lookahead(events)
+    assets.prefill(timeline, 1)
+    lease = assets.owned['p:0']['data']
+    close = lease.close
+    def failed_close():
+        close()
+        raise OSError('lease close diagnostic')
+    monkeypatch.setattr(lease, 'close', failed_close)
+    clock = OLD['Clock']()
+    scheduler = M['Scheduler'](timeline, .5, 250, assets, clock=clock.read, pause=clock.sleep)
+    scheduler.anchor = clock.read()
+    video, audio = OLD['Backend'](clock), OLD['Backend'](clock)
+    def failed_audio(_data):
+        raise BrokenPipeError('primary audio failure')
+    audio.write = failed_audio
+    try:
+        scheduler.dispatch(assets, dict(video_pair=video, audio_block=audio), OLD['Executor'](clock))
+        with pytest.raises(BrokenPipeError, match='primary audio failure'):
+            scheduler.harvest()
+        assert scheduler.completed['video_pair'] == 1
+        assert scheduler.lease_cleanup_errors == ['lease close diagnostic']
+        assert lease.store.closed
+        assert list(assets.owned) == ['a:0']
+    finally:
+        audio.abort()
+        assets.close()

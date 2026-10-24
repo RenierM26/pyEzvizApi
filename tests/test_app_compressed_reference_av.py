@@ -463,7 +463,7 @@ def test_real_sdl_worker_explicit_continuous_limit_leaves_snapshot_default_uncha
         output.finish(2)
     finally:
         output.abort()
-    assert M["VIDEO"]["Output"].__init__.__kwdefaults__ == {"frame_limit": 32}
+    assert M["VIDEO"]["Output"].__init__.__kwdefaults__ == {"frame_limit": 32, "title": None}
 
 
 def test_audio_mono_argument_allowlist_precedes_process_creation(monkeypatch):

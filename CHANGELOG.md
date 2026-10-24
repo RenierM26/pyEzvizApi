@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Opt-in standalone local A/V host-submission scheduler with one shared source-derived host anchor, bounded independent video/PCM jobs and explicit output/cleanup receipts; not physical synchronization or a camera connector.
+
 - Development-only standalone local HEVC/AAC timeline planner with exact-rational lens pairing, one shared source origin, explicit unmatched pictures and preserved audio gaps/overlaps.
 
 - Developer-only bounded per-attempt decoder backend summaries and an offline raw-event audit, with explicit pending-attempt and completeness diagnostics.

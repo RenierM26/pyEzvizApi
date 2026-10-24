@@ -145,8 +145,9 @@ class AudioMetadata:
 class AudioInspector:
     """Verify each emitted block against its immediately preceding decoded record."""
 
-    def __init__(self, metadata: AudioMetadata) -> None:
+    def __init__(self, metadata: AudioMetadata, observer: Any = None) -> None:
         self.metadata = metadata
+        self.observer = observer
         self.count = 0
 
     def write(self, row: dict[str, Any]) -> None:
@@ -157,10 +158,13 @@ class AudioInspector:
         if (block.identity != record['id'] or block.media_ms != record['media_ms']
                 or hashlib.sha256(block.pcm).hexdigest() != record['pcm_sha256']):
             raise ValueError('decoded PCM does not match its source metadata')
+        if self.observer is not None:
+            self.observer(dict(record), block.pcm)
         self.count += 1
 
 
-def inspect(path: Path, container: str, streams: tuple[int, int], audio_stream: int) -> dict[str, Any]:
+def inspect(path: Path, container: str, streams: tuple[int, int], audio_stream: int,
+            video_observer: Any = None, audio_observer: Any = None) -> dict[str, Any]:
     """Decode one immutable bounded local snapshot twice; all tracks share provenance."""
     if (type(audio_stream) is not int or audio_stream < 0 or audio_stream in streams):
         raise ValueError('select three distinct absolute stream indices')
@@ -168,9 +172,10 @@ def inspect(path: Path, container: str, streams: tuple[int, int], audio_stream: 
         snapshot = source.read()
         if len(snapshot) != source.size:
             raise ValueError('source truncated during snapshot')
-    video = VIDEO['decode'](io.BytesIO(snapshot), container, streams)
+    video = (VIDEO['decode'](io.BytesIO(snapshot), container, streams) if video_observer is None
+             else VIDEO['decode'](io.BytesIO(snapshot), container, streams, video_observer))
     metadata = AudioMetadata()
-    writer = AudioInspector(metadata)
+    writer = AudioInspector(metadata, audio_observer)
     count = AUDIO['decode'](io.BytesIO(snapshot), container, audio_stream, writer, metadata)
     if count != writer.count or count != len(metadata.frames):
         raise ValueError('incomplete audio inspection')

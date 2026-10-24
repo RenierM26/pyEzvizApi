@@ -154,7 +154,7 @@ def test_cli_requires_explicit_policy_and_rejects_missing_input_without_success(
     assert message in p.stderr
 
 
-def test_optional_real_three_track_container_cli(tmp_path):
+def encode_three_track(tmp_path):
     pytest.importorskip('av')
     if not shutil.which('ffmpeg'):
         pytest.skip('optional synthetic fixture generator unavailable')
@@ -167,6 +167,11 @@ def test_optional_real_three_track_container_cli(tmp_path):
                '-x265-params', 'pools=none:frame-threads=1:log-level=error',
                '-c:a', 'aac', '-ac', '1', '-pes_payload_size', '0', str(source)]
     subprocess.run(command, check=True, capture_output=True, timeout=15)
+    return source
+
+
+def test_optional_real_three_track_container_cli(tmp_path):
+    source = encode_three_track(tmp_path)
     p = subprocess.run([sys.executable, str(SCRIPT), str(source), '--container', 'mpegts',
                         '--primary-stream', '0', '--secondary-stream', '1', '--audio-stream', '2',
                         '--pairing', 'exact-pts', '--clock', 'container-pts'],

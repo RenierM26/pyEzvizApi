@@ -101,3 +101,9 @@ Next: a bounded output scheduler that consumes this standalone clock contract,
 handles device backpressure and validates output separately from the plan. Fresh
 standalone session/transport/decryption validation and physical A/V measurement
 remain separate milestones. The app-reference relay remains available unchanged.
+
+
+The [bounded host-submission output tool](local-av-playback.md) now consumes this
+contract for explicitly opted-in local-file output. Its stricter first profile
+rejects pending pictures, audio overlaps and geometry changes before opening
+devices. Submission timing is not device-clock synchronization.

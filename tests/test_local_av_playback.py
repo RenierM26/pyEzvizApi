@@ -284,9 +284,9 @@ def test_scoped_video_title_rejects_invalid_values_without_launch(title):
         M['OUTPUT']['Output'](2, 2, 1, title=title)
 
 
-def command(source, receipt):
-    return [sys.executable, str(SCRIPT), str(source), '--container', 'mpegts',
-        '--primary-stream', '0', '--secondary-stream', '1', '--audio-stream', '2',
+def command(source, receipt, container='mpegts', secondary=1, audio=2):
+    return [sys.executable, str(SCRIPT), str(source), '--container', container,
+        '--primary-stream', '0', '--secondary-stream', str(secondary), '--audio-stream', str(audio),
         '--play', '--pairing', 'exact-pts', '--timing', 'host-submission',
         '--layout', 'side-by-side', '--processor', 'passthrough', '--receipt', str(receipt)]
 
@@ -304,13 +304,15 @@ def test_cli_failure_receipt_and_existing_receipt_preserved(tmp_path):
     assert p.returncode == 2 and not (tmp_path / 'invalid').exists()
 
 
-def test_optional_actual_sdl_ffplay_dummy_output(tmp_path):
+@pytest.mark.parametrize('container', ['mpegts', 'mpeg'])
+def test_optional_actual_sdl_ffplay_dummy_output(tmp_path, container):
     if not shutil.which('ffplay') or not ctypes.util.find_library('SDL2-2.0'):
         pytest.skip('optional SDL/ffplay output unavailable')
-    source = SOURCE['encode_three_track'](tmp_path)
+    source = SOURCE['encode_three_track_ps' if container == 'mpeg' else 'encode_three_track'](tmp_path)
     receipt = tmp_path / 'output.json'
     env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy')
-    p = subprocess.run([*command(source, receipt), '--max-late-ms', '1000'],
+    p = subprocess.run([*command(source, receipt, container, 2 if container == 'mpeg' else 1,
+                                   1 if container == 'mpeg' else 2), '--max-late-ms', '1000'],
                        env=env, capture_output=True, timeout=20, check=False)
     result = json.loads(receipt.read_text())
     assert p.returncode == 0, result.get('error') or p.stderr.decode()

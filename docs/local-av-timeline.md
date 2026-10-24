@@ -24,7 +24,9 @@ Choose absolute stream indices, not video/audio ordinals. The explicit clock
 option asserts that these selected tracks share the container's presentation
 clock. The tool cannot establish their physical synchronization or repair a
 container assembled from independently zeroed tracks. Input must already be clear;
-network/URL/encrypted PS input is unsupported. Media and timing reports stay
+network/URL/encrypted PS input is unsupported. Select `--container mpeg` to read
+clear MPEG-PS directly, without an intermediate remux. Inspect absolute indices
+first: PS stream discovery order can interleave audio between the two videos. Media and timing reports stay
 private; tests generate synthetic data.
 
 The bounded regular input is read once into a snapshot. Both decoders use that
@@ -107,3 +109,28 @@ The [bounded host-submission output tool](local-av-playback.md) now consumes thi
 contract for explicitly opted-in local-file output. Its stricter first profile
 rejects pending pictures, audio overlaps and geometry changes before opening
 devices. Submission timing is not device-clock synchronization.
+
+
+## Fresh standalone MPEG-PS source boundary
+
+A bounded private H9c control using the existing offline local SDK path with an
+explicit channel 0 supplied both HEVC PES streams (E0/E1) and AAC in one PS
+session, without the Android app. The app's retained Java source selects channel
+0 for union play; its ordinary lens channels remain separate sessions. This is
+a verified route for that control, not a model-name-based automatic selector or
+a promise that channel 0 is dual-lens on every device. Credential provisioning
+is separate from cloud-free media acquisition. No camera setting is changed.
+
+After the existing bounded decryption step, a short fresh source yields 36 exact
+PTS pairs, 36 AAC blocks and no unmatched pictures. The original common source
+origin and audio offset remain intact. Its AAC clock has occasional +/-1 ms
+spacing deviations from consecutive 1,024-sample blocks. The planner reports
+these as signed gaps/overlaps without repairing them; the current output profile
+still rejects overlaps before opening devices. Clean decode and exact lens
+pairing do not establish acoustic synchronization or continuous live playback.
+
+Use the original clear PS rather than the default single-video MPEG-TS export
+when auditing all source tracks and their exact clock. The direct decoder is
+local-file-only, with the same snapshot, packet, pixel and PCM bounds. No
+network acquisition, credential discovery or silent stream selection is added
+to these development tools.

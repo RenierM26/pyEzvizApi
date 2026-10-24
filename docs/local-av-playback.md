@@ -18,8 +18,11 @@ python tools/local_av_playback.py clear.ts --container mpegts \
   --layout side-by-side --processor passthrough --receipt new-output.json
 ```
 
-The source must be a clear local MPEG-TS or Matroska file with two supported HEVC
-tracks and one AAC-LC 16-kHz mono track. Indices are absolute container indices.
+The source must be a clear local MPEG-TS, Matroska or MPEG-PS file with two supported HEVC
+tracks and one AAC-LC 16-kHz mono track. Select `--container mpeg` for clear
+MPEG-PS. Indices are absolute container indices; inspect them rather than assuming
+the audio track is last. Direct PS support does not relax the overlap policy: a
+source with even a small negative AAC gap is rejected before devices open.
 `--mono-option ch-layout` is the default ffplay channel syntax. For an older ffplay
 that supports `-channels 1` instead, use `--mono-option channels`. No executable
 fallback, package installation, sandbox change or hidden network access occurs.

@@ -110,3 +110,10 @@ For a standalone exact-container-PTS policy without native headers or app-select
 pairs, see the [local A/V timeline planner](local-av-timeline.md). It preserves
 one shared source origin and explicitly reports unpaired pictures/audio gaps;
 it does not open output devices or reproduce native scheduling.
+
+
+Clear MPEG-PS is also supported with `--container mpeg`; input must already be
+decrypted. Select both absolute video stream indices after inspecting the file,
+because the audio stream may be discovered between them. The decoder keeps the
+same local-file, format, timestamp, packet and cumulative pixel limits; it neither
+opens a camera session nor supplies a decryption/remux fallback.

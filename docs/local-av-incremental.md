@@ -117,3 +117,8 @@ lookahead from a second decode of the same immutable bytes. Iterator receipts
 count preparation acceptance, not downstream SDL/PCM acknowledgements; closing
 before verified EOF reports `closed-before-eof`. Original synchronous `inspect`
 callback semantics and the existing recorded playback defaults are unchanged.
+
+The opt-in [chunk-fed preparation boundary](local-av-chunked.md) now supports a
+single non-seekable pass without a whole compressed snapshot. It shares this
+module's persistent codec/event loop but is not yet connected to rolling output
+or network acquisition; the existing snapshot and playback defaults are unchanged.

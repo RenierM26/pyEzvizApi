@@ -1061,11 +1061,11 @@ def test_external_transport_close_releases_active_reader_and_prevents_late_yield
     packets.before_pull = wait_for_close
     monkeypatch.setattr(transport, 'close', cancel_read)
     output: list[MediaPacket] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     def read():
         try:
             output.extend(owner.iter_media_packets(monotonic=lambda: clock[0]))
-        except BaseException as error:
+        except Exception as error:
             errors.append(error)
     reader = threading.Thread(target=read)
     reader.start()
@@ -1086,12 +1086,12 @@ def test_concurrent_close_detaches_transport_once(outcome_owner):
     iterator = owner.iter_media_packets(monotonic=lambda: clock[0])
     next(iterator)
     barrier = threading.Barrier(3)
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     def close():
         try:
             barrier.wait(timeout=3)
             owner.close()
-        except BaseException as error:
+        except Exception as error:
             errors.append(error)
     closers = [threading.Thread(target=close) for _ in range(2)]
     for thread in closers:

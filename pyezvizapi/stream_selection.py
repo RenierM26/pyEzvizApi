@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 import errno
+from functools import partial
 import hashlib
 import json
+from threading import Lock
 import time
 from typing import Any
 
@@ -209,34 +212,146 @@ class AutoMediaStream:
         self._options = options
         self._channel = channel
         self._stream: Any = None
+        self._transport_lock = Lock()
+        self._transport_close_lock = Lock()
+        self._starting = self._startup_cancel_close = False
+        self._transports_released = 0
         self._closed = False
         self._started = False
         self.source_kind: str | None = None
         self.discovery: LocalStreamDiscovery | None = None
         self._discovery_keys: list[str] = []
+        self._stop_reason: str | None = None
+        self._error_type: str | None = None
+        self._cleanup_error_types: list[str] = []
+        self._packets_yielded = self._bytes_yielded = self._transport_attempts = 0
+        self._transports_opened = self._transport_close_attempts = self._transport_close_successes = 0
+
+    @property
+    def capture_result(self) -> dict[str, Any]:
+        """Return a sanitized snapshot; source exhaustion is never protocol EOF."""
+        status = ("failed" if self._error_type or self._cleanup_error_types else
+                  "stopped" if self._stop_reason is not None else
+                  "running" if self._started else "not_started")
+        return dict(profile="automatic-media-capture-v1", status=status,
+            stop_reason=self._stop_reason, source_kind=self.source_kind,
+            packets_yielded=self._packets_yielded, bytes_yielded=self._bytes_yielded,
+            transport_attempts=self._transport_attempts, transports_opened=self._transports_opened,
+            transport_close_attempts=self._transport_close_attempts,
+            transport_close_successes=self._transport_close_successes,
+            transports_released=self._transports_released, startup_in_progress=self._starting,
+            transport_closure_verified=(self._stream is None and not self._starting
+                and self._transports_released == self._transports_opened),
+            owner_closed=self._closed,
+            transport_owned=self._stream is not None, error_type=self._error_type,
+            cleanup_error_types=list(self._cleanup_error_types),
+            network_eof_verified=False, caller_client_owned=False)
+
+    def _stop(self, reason: str) -> None:
+        if self._stop_reason is None:
+            self._stop_reason = reason
+
+    @contextmanager
+    def _cleanup_scope(self, cleanup: Callable[[bool], Any]) -> Iterator[None]:
+        try:
+            yield
+        except BaseException:
+            cleanup(True)
+            raise
+        else:
+            cleanup(False)
+
+    def _cleanup(self, close: Callable[[], Any], primary: bool) -> bool:
+        try:
+            close()
+            return True
+        except Exception as error:
+            self._cleanup_error_types.append(type(error).__name__)
+            if not primary:
+                raise PyEzvizError("Automatic stream cleanup failed") from error
+            return False
+
+    def _close_packets(self, packets: Iterator[MediaPacket], primary: bool) -> None:
+        close = getattr(packets, "close", None)
+        if callable(close):
+            self._cleanup(close, primary)
+
+    def _close_transport(self, primary: bool = False) -> None:
+        # Serialize physical closes without holding the state lock over IO.
+        # During startup an interrupt close cannot release ownership: connect()
+        # may acquire/attach a socket after that close has already returned.
+        with self._transport_close_lock:
+            with self._transport_lock:
+                stream = self._stream
+                if stream is None or (self._starting and self._startup_cancel_close):
+                    return
+                interrupt = self._starting
+                if interrupt:
+                    self._startup_cancel_close = True
+                else:
+                    self._stream = None
+                self._transport_close_attempts += 1
+            if self._cleanup(stream.close, primary):
+                with self._transport_lock:
+                    self._transport_close_successes += 1
+                    if not interrupt:
+                        self._transports_released += 1
+
+    def _start_transport(self, **kwargs: Any) -> bool:
+        with self._transport_lock:
+            stream = self._stream
+            if self._closed or stream is None:
+                return False
+            self._starting = True
+            self._startup_cancel_close = False
+        try:
+            stream.start(**kwargs)
+        finally:
+            with self._transport_lock:
+                self._starting = False
+        return not self._closed
 
     def __enter__(self) -> AutoMediaStream:
         return self
 
     def __exit__(self, *args: object) -> None:
-        self.close()
+        self._close_owner(bool(args and args[0] is not None))
 
     def close(self) -> None:
         """Cancel the active transport; close is idempotent."""
-        self._closed = True
-        if self._stream is not None:
-            self._stream.close()
+        self._close_owner(False)
 
-    def iter_media_packets(  # noqa: PLR0912, PLR0915
+    def _close_owner(self, primary: bool) -> None:
+        self._closed = True
+        self._stop("consumer_closed" if self._started else "closed_before_start")
+        self._close_transport(primary)
+
+    def iter_media_packets(
+        self, *, limits: CaptureLimits | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> Iterator[MediaPacket]:
+        """Select once, report a local stop reason, and own iterator/transport cleanup."""
+        if self._closed or self._started:
+            raise PyEzvizError("Automatic stream is closed or already consumed")
+        self._started = True
+        with self._cleanup_scope(self._close_owner):
+            try:
+                yield from self._iter_selected_packets(limits=limits, monotonic=monotonic)
+            except GeneratorExit:
+                self._stop("consumer_closed")
+                raise
+            except BaseException as error:
+                self._error_type = type(error).__name__
+                self._stop("timeout" if isinstance(error, TimeoutError | EzvizLocalSdkDeadlineExpired) else "error")
+                raise
+
+    def _iter_selected_packets(  # noqa: PLR0911, PLR0912, PLR0915
         self,
         *,
         limits: CaptureLimits | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> Iterator[MediaPacket]:
         """Select once and stream within one duration budget, including fallback."""
-        if self._closed or self._started:
-            raise PyEzvizError("Automatic stream is closed or already consumed")
-        self._started = True
         selected_limits = limits or CaptureLimits()
         source = select_stream_source(self._client, self._serial, self._options,
                                       channel=1 if self._channel is None else self._channel,
@@ -250,14 +365,16 @@ class AutoMediaStream:
         )
         emitted = False
         ecdh_rate = 1
-        try:
-            while not self._closed:
-                remaining = None if deadline is None else deadline - monotonic()
-                if remaining is not None and remaining <= 0:
-                    return
-                self.source_kind = source.kind
+        while not self._closed:
+            remaining = None if deadline is None else deadline - monotonic()
+            if remaining is not None and remaining <= 0:
+                self._stop("duration_limit")
+                return
+            self.source_kind = source.kind
+            with self._cleanup_scope(self._close_transport):
                 try:
                     adapter: MediaPacketSource
+                    self._transport_attempts += 1
                     if isinstance(source, LocalSdkEcdhClipSource):
                         self._stream = open_local_sdk_ecdh_stream_from_client(
                             self._client,
@@ -268,6 +385,7 @@ class AutoMediaStream:
                             stream_rate=ecdh_rate,
                             timeout=source.timeout,
                         )
+                        self._transports_opened += 1
                         adapter = local_ecdh_media_packet_source(_BoundedEcdhMediaStream(
                             self._stream,
                             _live_input_frame_limit(selected_limits),
@@ -283,6 +401,7 @@ class AutoMediaStream:
                             receiver_ex_port=source.receiver_port,
                             timeout=source.timeout,
                         )
+                        self._transports_opened += 1
                         adapter = local_media_packet_source(_NonemptyLocalMediaStream(
                             self._stream,
                             _live_input_frame_limit(selected_limits),
@@ -299,15 +418,20 @@ class AutoMediaStream:
                             capture_deadline=cloud_deadline,
                             monotonic=monotonic,
                         )
-                        self._stream.start(deadline=cloud_deadline, monotonic=monotonic)
+                        self._transports_opened += 1
+                        if self._closed:
+                            return
+                        if not self._start_transport(deadline=cloud_deadline, monotonic=monotonic):
+                            return
                         adapter = vtm_media_packet_source(self._stream)
+                    if self._closed:
+                        return
                     startup_deadline = monotonic() + self._options.timeout
                     if deadline is not None:
                         startup_deadline = min(startup_deadline, deadline)
-                    if not isinstance(source, CloudClipSource):
-                        self._stream.start(
-                            read_first_media=False, deadline=startup_deadline, monotonic=monotonic
-                        )
+                    if (not isinstance(source, CloudClipSource) and not self._start_transport(
+                            read_first_media=False, deadline=startup_deadline, monotonic=monotonic)):
+                        return
                     remaining = None if deadline is None else deadline - monotonic()
                     if remaining is not None and remaining <= 0:
                         raise EzvizLocalSdkDeadlineExpired(
@@ -327,20 +451,42 @@ class AutoMediaStream:
                                 if self._options.discovery_cache is not None:
                                     self._options.discovery_cache.invalidate(self._discovery_keys[-1])
                         self.discovery = LocalStreamDiscovery(source.kind, negotiated_header)
-                    for packet in adapter.iter_media_packets(
-                        limits=replace(selected_limits, duration_seconds=remaining),
+                    packets = adapter.iter_media_packets(
+                        # Enforce normalized bytes here so the crossing packet
+                        # has an explicit stop reason rather than hidden EOF.
+                        limits=replace(selected_limits, duration_seconds=remaining, max_bytes=None),
                         monotonic=monotonic,
-                    ):
-                        if self._closed or (deadline is not None and monotonic() >= deadline):
-                            return
-                        if not packet.body:
-                            continue
-                        if not emitted and header_valid and self.discovery is not None and self._options.discovery_cache is not None and not isinstance(source, CloudClipSource):
-                            self._options.discovery_cache.remember(self._discovery_keys[-1], self.discovery)
-                        emitted = True
-                        yield packet
+                    )
+                    with self._cleanup_scope(partial(self._close_packets, packets)):
+                        for packet in packets:
+                            if self._closed:
+                                self._stop("consumer_closed")
+                                return
+                            if deadline is not None and monotonic() >= deadline:
+                                self._stop("duration_limit")
+                                return
+                            if not packet.body:
+                                continue
+                            if (selected_limits.max_bytes is not None
+                                    and self._bytes_yielded + packet.length > selected_limits.max_bytes):
+                                self._stop("byte_limit")
+                                return
+                            if not emitted and header_valid and self.discovery is not None and self._options.discovery_cache is not None and not isinstance(source, CloudClipSource):
+                                self._options.discovery_cache.remember(self._discovery_keys[-1], self.discovery)
+                            emitted = True
+                            self._packets_yielded += 1
+                            self._bytes_yielded += packet.length
+                            yield packet
+                            if (selected_limits.max_packets is not None
+                                    and self._packets_yielded >= selected_limits.max_packets):
+                                self._stop("packet_limit")
+                                return
+                    if deadline is not None and monotonic() >= deadline:
+                        self._stop("duration_limit")
+                        return
                     if not emitted and selected_limits.max_bytes is None:
                         raise EzvizNoMediaError("Automatic stream did not contain media")
+                    self._stop("upstream_ended")
                     return
                 except Exception as error:
                     self.discovery = None
@@ -362,9 +508,3 @@ class AutoMediaStream:
                     if fallback is None:
                         raise
                     source = fallback
-                finally:
-                    if self._stream is not None:
-                        self._stream.close()
-                        self._stream = None
-        finally:
-            self.close()

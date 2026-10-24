@@ -209,3 +209,18 @@ def test_constructor_error_is_not_replaced_by_owned_close_failure():
     with pytest.raises(ValueError, match='auto or hevc'):
         M['Chunks'](source, 'camera-key', codec='h264')
     assert source.closed
+
+
+def test_decryption_cleanup_inside_ambient_except_does_not_hide_failure():
+    class BrokenClose(Source):
+        def close(self):
+            super().close()
+            raise OSError('close failure')
+    encrypted, _ = fixture()
+    report: dict[str, Any] = {}
+    try:
+        raise LookupError('ambient caller')
+    except LookupError:
+        with pytest.raises(ValueError, match='cleanup'):
+            list(M['iter_decrypted'](BrokenClose([encrypted]), 'camera-key', report, codec='hevc'))
+    assert report['status'] == 'failed'

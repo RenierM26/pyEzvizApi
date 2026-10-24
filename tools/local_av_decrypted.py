@@ -7,7 +7,6 @@ interruptible deadline-aware reads; this cooperative wrapper cannot do that.
 from __future__ import annotations
 
 import hashlib
-import sys
 import time
 from typing import Any
 
@@ -188,10 +187,13 @@ def iter_decrypted(packets: Any, key: str | bytes, report: dict[str, Any], *,
         codec: str = 'auto') -> Any:
     """Own the source iterator through downstream completion, close or failure."""
     chunks = Chunks(packets, key, codec=codec)
+    primary = False
     try:
         yield from chunks
+    except BaseException:
+        primary = True
+        raise
     finally:
-        primary = sys.exc_info()[0] is not None
         try:
             chunks.close()
         except Exception:

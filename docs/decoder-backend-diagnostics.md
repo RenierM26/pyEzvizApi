@@ -61,9 +61,11 @@ extends its coverage nor establishes how the lighter observer behaves on a live
 device. Synthetic callback controls also cover nested attempts, overlapping
 threads, unowned backend calls and an attempt with no backend return.
 
-The intermittent second-lens recovery fault remains unexplained. The next native
-experiment needs a freshly verified, unlocked reference device and a bounded
-controller using the normal exported API hooks, not the discarded inline probe.
-No new native execution, physical audibility or A/V synchronization result is
-claimed here. Captures, exact-build instrumentation and proprietary binaries stay
+The intermittent second-lens recovery fault remains unexplained. Later bounded
+normal-export observations and a completed attended Windows relay are documented
+in [the compressed-reference preview findings](compressed-reference-preview.md#completed-attended-windows-relay-2026-10-24).
+Those successful runs do not identify the original failing branch or prove
+physical audibility or A/V synchronization. Future native experiments still need
+a freshly verified, unlocked reference device and bounded normal-export hooks,
+not the discarded inline probe. Captures, exact-build instrumentation and proprietary binaries stay
 private; no instrumentation is enabled in the production/default source.

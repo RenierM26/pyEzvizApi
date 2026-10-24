@@ -202,3 +202,35 @@ def test_output_completed_during_preparation_is_harvested_before_next_poll_cycle
         assert scheduler.completed == dict(video_pair=2, audio_block=1)
     finally:
         assets.close()
+
+
+def test_productive_preparation_does_not_add_a_poll_per_video_and_audio_event():
+    """59 ms pair preparation fits 15 Hz; adding two 5 ms polls does not."""
+    clock = OLD['OLD']['Clock']()
+    events = []
+    for index in range(118):
+        for event in (OLD['pair'](index), OLD['block'](index)):
+            event[0]['at'] = dict(numerator=index, denominator=15)
+            events.append(event)
+    timeline = dict(events=[event for event, _ in events])
+    assets = OLD['lookahead'](events)
+    assets.prefill(timeline, 1)
+    original = assets.pump
+    def prepare_with_measured_cost():
+        index = assets.index
+        prepared = original()
+        if prepared and index < len(events):
+            clock.sleep(.059 if events[index][0]['kind'] == 'video_pair' else .0004)
+        return prepared
+    assets.pump = prepare_with_measured_cost
+    scheduler = M['Scheduler'](timeline, .5, 250, assets, clock=clock.read, pause=clock.sleep)
+    video, audio = OLD['OLD']['Backend'](clock), OLD['OLD']['Backend'](clock)
+    try:
+        scheduler.run(assets, video, audio, OLD['OLD']['Executor'](clock))
+        assert scheduler.completed == dict(video_pair=118, audio_block=118)
+        assert assets.source_end and video.finished and audio.finished
+        starts = [a for a in scheduler.actions if a['kind'] == 'output_call_submitted']
+        assert max(a['submission_late_ns'] for a in starts) < 70_000_000
+        assert not assets.owned
+    finally:
+        assets.close()

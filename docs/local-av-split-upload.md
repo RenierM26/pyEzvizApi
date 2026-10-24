@@ -91,3 +91,10 @@ immediate harvesting of calls completed during preparation. Both recorded modes
 also run the real synthetic PS/AAC/SDL/ffplay drain integration when available.
 Private retained source runs additionally compare every composed-pair/PCM output
 hash and original target against independently audited source controls.
+
+The rolling scheduler polls only when preparation cannot advance (waiting for
+credit, a source target or an output acknowledgement). Productive preparation
+returns immediately to harvesting and dispatch, rather than adding a fixed poll
+sleep per video or audio event. This removes avoidable owner delay without
+changing source targets, preparation credit, hashes or lateness limits. It does
+not guarantee that a host can sustain the source rate.

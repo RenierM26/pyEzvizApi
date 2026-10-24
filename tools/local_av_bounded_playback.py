@@ -292,10 +292,13 @@ class Scheduler(Parent):
             for backend in backends.values():
                 backend.alive()
             self.dispatch(assets, backends, executor)
-            assets.pump()  # One prepared event at a time; native decode stays cooperatively bounded.
+            prepared = assets.pump()  # One event; credit still bounds cooperative native decode.
             self.harvest()  # A call may finish during preparation; release it before redispatch.
             self.dispatch(assets, backends, executor)
-            self.pause(PLAY['POLL'])
+            # Preparation already advances wall time. Poll only while waiting for
+            # credit, a target or output completion, not after productive work.
+            if not prepared:
+                self.pause(PLAY['POLL'])
         if self.clock() > end:
             raise ValueError('output session deadline exceeded')
         audio.finish(self.timeout)

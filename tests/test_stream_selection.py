@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 from io import BytesIO
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -408,6 +409,9 @@ def test_live_connection_fallback_shares_deadline_and_is_sanitized(monkeypatch) 
         assert stream.source_kind == "cloud"
     assert durations == [7.0]
     assert closed == ["local", "cloud"]
+    assert stream.capture_result["transport_attempts"] == 2
+    assert stream.capture_result["transport_close_successes"] == 2
+    assert stream.capture_result["transport_closure_verified"]
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -831,3 +835,272 @@ def test_auto_cloud_live_metadata_and_start_share_capture_deadline(monkeypatch) 
     with EzvizClient().open_stream(CAMERA) as stream:
         packets = list(stream.iter_media_packets(limits=CaptureLimits(duration_seconds=2), monotonic=lambda: clock[0]))
     assert len(opened) == len(packets) == 1
+
+
+class OutcomePackets:
+    def __init__(self, rows, *, error=None, close_error=None, before_pull=None):
+        self.rows = iter(rows)
+        self.error, self.close_error, self.before_pull = error, close_error, before_pull
+        self.pulls = self.closes = 0
+    def __iter__(self):
+        return self
+    def __next__(self):
+        self.pulls += 1
+        if self.before_pull:
+            self.before_pull()
+        try:
+            return next(self.rows)
+        except StopIteration:
+            if self.error:
+                raise self.error from None
+            raise
+    def close(self):
+        self.closes += 1
+        if self.close_error:
+            raise self.close_error
+
+
+@pytest.fixture
+def outcome_owner(monkeypatch):
+    def create(rows=(b'a', b'bb', b'ccc'), *, error=None, close_error=None,
+            transport_close_error=None, start_error=None, before_pull=None):
+        clock = [10.0]
+        packets = OutcomePackets(
+            [MediaPacket(body, MediaPacketMetadata(source='cloud_vtm')) for body in rows],
+            error=error, close_error=close_error, before_pull=before_pull)
+        class Transport:
+            closes = 0
+            def start(self, **_kwargs):
+                if start_error:
+                    raise start_error
+            def close(self):
+                self.closes += 1
+                if transport_close_error:
+                    raise transport_close_error
+        transport = Transport()
+        selected = []
+        class Adapter:
+            def iter_media_packets(self, **kwargs):
+                selected.append(kwargs['limits'])
+                return packets
+        monkeypatch.setattr(stream_selection, 'select_stream_source', lambda *_a, **_kw: CloudClipSource())
+        monkeypatch.setattr(stream_selection, 'open_cloud_stream', lambda *_a, **_kw: transport)
+        monkeypatch.setattr(stream_selection, 'vtm_media_packet_source', lambda _s: Adapter())
+        owner = stream_selection.AutoMediaStream(NoCloudClient(), CAMERA, AutoClipSource())
+        return owner, packets, transport, clock, selected
+    return create
+
+
+@pytest.mark.parametrize(('limits', 'reason', 'count', 'pulls'), [
+    (CaptureLimits(max_packets=2), 'packet_limit', 2, 2),
+    (CaptureLimits(max_bytes=3), 'byte_limit', 2, 3),
+    (CaptureLimits(max_bytes=1), 'byte_limit', 1, 2),
+    (CaptureLimits(max_bytes=1_000), 'upstream_ended', 3, 4),
+])
+def test_capture_result_distinguishes_owner_limits_from_unknown_upstream_end(outcome_owner, limits, reason, count, pulls):
+    owner, packets, transport, clock, selected = outcome_owner()
+    assert owner.capture_result['status'] == 'not_started'
+    actual = list(owner.iter_media_packets(limits=limits, monotonic=lambda: clock[0]))
+    receipt = owner.capture_result
+    assert receipt['status'] == 'stopped' and receipt['stop_reason'] == reason
+    assert receipt['packets_yielded'] == len(actual) == count
+    assert receipt['bytes_yielded'] == sum(p.length for p in actual)
+    assert packets.pulls == pulls and packets.closes == transport.closes == 1
+    assert selected[0].max_bytes is None  # Crossing byte limit remains visible to owner.
+    assert receipt['owner_closed'] and not receipt['transport_owned']
+    assert receipt['transport_closure_verified'] and receipt['transport_close_successes']==1
+    assert not receipt['network_eof_verified'] and not receipt['caller_client_owned']
+    assert receipt['transport_attempts'] == 1 and not receipt['cleanup_error_types']
+    receipt['cleanup_error_types'].append('tamper')
+    assert not owner.capture_result['cleanup_error_types']
+    owner.close()
+    assert transport.closes == 1 and owner.capture_result['stop_reason'] == reason
+
+
+def test_capture_result_counts_before_yield_and_explicit_consumer_close(outcome_owner):
+    owner, packets, transport, clock, _ = outcome_owner()
+    iterator = owner.iter_media_packets(monotonic=lambda: clock[0])
+    next(iterator)
+    assert packets.pulls == 1 and owner.capture_result['status'] == 'running'
+    assert owner.capture_result['packets_yielded'] == 1
+    iterator.close()
+    assert owner.capture_result['stop_reason'] == 'consumer_closed'
+    assert packets.closes == transport.closes == 1
+
+
+def test_capture_result_external_close_interrupts_owned_transport_without_second_yield(outcome_owner):
+    owner, packets, transport, clock, _ = outcome_owner()
+    iterator = owner.iter_media_packets(monotonic=lambda: clock[0])
+    next(iterator)
+    owner.close()
+    assert transport.closes == 1 and not owner.capture_result['transport_owned']
+    iterator.close()
+    assert packets.closes == transport.closes == 1
+    assert owner.capture_result['stop_reason'] == 'consumer_closed'
+
+
+def test_capture_result_deadline_crossing_packet_is_not_yielded(outcome_owner):
+    owner, packets, transport, clock, _ = outcome_owner()
+    packets.before_pull = lambda: clock.__setitem__(0, 13.0)
+    assert list(owner.iter_media_packets(limits=CaptureLimits(duration_seconds=2), monotonic=lambda: clock[0])) == []
+    assert owner.capture_result['stop_reason'] == 'duration_limit'
+    assert packets.closes == transport.closes == 1
+    assert owner.capture_result['packets_yielded'] == 0
+
+
+@pytest.mark.parametrize('error', [BrokenPipeError('secret socket details'), TimeoutError('secret timeout')])
+def test_capture_result_error_and_two_cleanup_failures_preserve_primary(outcome_owner, error):
+    owner, packets, transport, clock, _ = outcome_owner(
+        rows=(), error=error, close_error=OSError('secret iterator cleanup'),
+        transport_close_error=RuntimeError('secret transport cleanup'))
+    with pytest.raises(type(error)) as caught:
+        list(owner.iter_media_packets(monotonic=lambda: clock[0]))
+    assert caught.value is error
+    result = owner.capture_result
+    expected_reason = 'timeout' if isinstance(error, TimeoutError) else 'error'
+    assert result['status'] == 'failed' and result['stop_reason'] == expected_reason
+    assert result['error_type'] == type(error).__name__
+    assert result['cleanup_error_types'] == ['OSError', 'RuntimeError']
+    assert 'secret' not in repr(result)
+    assert packets.closes == transport.closes == 1
+    assert not result['transport_owned'] and not result['transport_closure_verified']
+
+
+@pytest.mark.parametrize('where', ['iterator', 'transport'])
+def test_cleanup_only_failure_cannot_report_clean_capture(outcome_owner, where):
+    kwargs = {'close_error': OSError('close')} if where == 'iterator' else {'transport_close_error': OSError('close')}
+    owner, packets, transport, clock, _ = outcome_owner(**kwargs)
+    with pytest.raises(PyEzvizError, match='cleanup failed'):
+        list(owner.iter_media_packets(limits=CaptureLimits(max_packets=1), monotonic=lambda: clock[0]))
+    assert owner.capture_result['status'] == 'failed'
+    assert owner.capture_result['cleanup_error_types'] == ['OSError']
+    assert packets.closes == transport.closes == 1
+
+
+def test_selection_failure_is_reported_without_owning_caller_client(monkeypatch):
+    def reject(*_args, **_kwargs):
+        raise PyEzvizError('private discovery detail')
+    monkeypatch.setattr(stream_selection, 'select_stream_source', reject)
+    owner = stream_selection.AutoMediaStream(NoCloudClient(), CAMERA, AutoClipSource())
+    with pytest.raises(PyEzvizError, match='discovery'):
+        list(owner.iter_media_packets())
+    assert owner.capture_result['error_type'] == 'PyEzvizError'
+    assert owner.capture_result['stop_reason'] == 'error'
+    assert owner.capture_result['owner_closed'] and owner.capture_result['transport_attempts'] == 0
+    assert 'private' not in repr(owner.capture_result)
+
+
+def test_startup_failure_closes_partial_transport_without_consuming_iterator(outcome_owner):
+    error = EzvizLocalSdkDeadlineExpired('startup deadline')
+    owner, packets, transport, clock, _ = outcome_owner(start_error=error)
+    with pytest.raises(EzvizLocalSdkDeadlineExpired):
+        list(owner.iter_media_packets(monotonic=lambda: clock[0]))
+    assert transport.closes == 1 and packets.pulls == packets.closes == 0
+    assert owner.capture_result['stop_reason'] == 'timeout'
+    assert owner.capture_result['error_type'] == 'EzvizLocalSdkDeadlineExpired'
+
+
+def test_close_before_start_has_no_transport_or_discovery(outcome_owner):
+    owner, packets, transport, _clock, _ = outcome_owner()
+    owner.close()
+    with pytest.raises(PyEzvizError, match='closed'):
+        next(owner.iter_media_packets())
+    assert owner.capture_result['stop_reason'] == 'closed_before_start'
+    assert not owner.capture_result['transport_attempts']
+    assert packets.pulls == transport.closes == 0
+
+
+def test_iterator_protocol_does_not_require_close_method(outcome_owner, monkeypatch):
+    owner, _packets, transport, clock, _ = outcome_owner()
+    class Adapter:
+        def iter_media_packets(self, **_kwargs):
+            return iter([MediaPacket(PAYLOAD, MediaPacketMetadata(source='cloud_vtm'))])
+    monkeypatch.setattr(stream_selection, 'vtm_media_packet_source', lambda _s: Adapter())
+    assert len(list(owner.iter_media_packets(monotonic=lambda: clock[0]))) == 1
+    assert owner.capture_result['stop_reason'] == 'upstream_ended'
+    assert transport.closes == 1 and owner.capture_result['transport_closure_verified']
+
+
+def test_consumer_generator_exit_survives_both_cleanup_failures(outcome_owner):
+    owner, packets, transport, clock, _ = outcome_owner(
+        close_error=OSError('iterator close'), transport_close_error=OSError('transport close'))
+    iterator = owner.iter_media_packets(monotonic=lambda: clock[0])
+    next(iterator)
+    iterator.close()  # GeneratorExit remains the primary exit, not a close error.
+    result = owner.capture_result
+    assert result['stop_reason'] == 'consumer_closed' and result['status'] == 'failed'
+    assert result['cleanup_error_types'] == ['OSError', 'OSError']
+    assert packets.closes == transport.closes == 1
+    assert not result['transport_closure_verified']
+
+
+def test_close_during_factory_return_does_not_start_late_transport(outcome_owner, monkeypatch):
+    owner, packets, transport, clock, _ = outcome_owner()
+    def opener(*_args, **_kwargs):
+        owner.close()
+        return transport
+    monkeypatch.setattr(stream_selection, 'open_cloud_stream', opener)
+    monkeypatch.setattr(transport, 'start', fail)
+    assert list(owner.iter_media_packets(monotonic=lambda: clock[0])) == []
+    result = owner.capture_result
+    assert result['stop_reason'] == 'consumer_closed'
+    assert result['transports_opened'] == result['transport_close_successes'] == 1
+    assert result['transport_closure_verified'] and not packets.pulls
+
+
+def test_external_transport_close_releases_active_reader_and_prevents_late_yield(outcome_owner, monkeypatch):
+    owner, packets, transport, clock, _ = outcome_owner()
+    entered, resume = threading.Event(), threading.Event()
+    def wait_for_close():
+        entered.set()
+        assert resume.wait(3)
+    original_close = transport.close
+    def cancel_read():
+        original_close()
+        resume.set()
+    packets.before_pull = wait_for_close
+    monkeypatch.setattr(transport, 'close', cancel_read)
+    output: list[MediaPacket] = []
+    errors: list[BaseException] = []
+    def read():
+        try:
+            output.extend(owner.iter_media_packets(monotonic=lambda: clock[0]))
+        except BaseException as error:
+            errors.append(error)
+    reader = threading.Thread(target=read)
+    reader.start()
+    try:
+        assert entered.wait(3)
+        owner.close()
+    finally:
+        resume.set()
+        reader.join(3)
+    assert not reader.is_alive() and not output and not errors
+    assert packets.closes == transport.closes == 1
+    assert owner.capture_result['stop_reason'] == 'consumer_closed'
+    assert owner.capture_result['transport_closure_verified']
+
+
+def test_concurrent_close_detaches_transport_once(outcome_owner):
+    owner, packets, transport, clock, _ = outcome_owner()
+    iterator = owner.iter_media_packets(monotonic=lambda: clock[0])
+    next(iterator)
+    barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+    def close():
+        try:
+            barrier.wait(timeout=3)
+            owner.close()
+        except BaseException as error:
+            errors.append(error)
+    closers = [threading.Thread(target=close) for _ in range(2)]
+    for thread in closers:
+        thread.start()
+    barrier.wait(timeout=3)
+    for thread in closers:
+        thread.join(3)
+        assert not thread.is_alive()
+    iterator.close()
+    assert not errors and transport.closes == packets.closes == 1
+    assert owner.capture_result['transport_close_attempts'] == 1
+    assert owner.capture_result['transport_closure_verified']

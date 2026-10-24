@@ -89,3 +89,47 @@ Next integration must explicitly handle online startup/stream discovery, increme
 whole-session audio policy, common-clock origin/lookahead, decryption ownership,
 source/end/error signaling and cancellation before claiming live output.
 No measured physical A/V synchronization is established here.
+
+## Opt-in bounded MPEG-PS startup
+
+Add `--startup bounded-mpeg` (or `startup='bounded-mpeg'` to `iter_chunks`) to
+use an explicit startup profile for clear MPEG-PS. The default remains `default`,
+with the previous native probing behavior. Other containers are rejected before
+producer iteration in this profile; there is no automatic fallback/retry.
+
+FFmpeg receives `probesize=262144` bytes and `analyzeduration=100000`
+microseconds. These are discovery hints, **not hard wall-time or reader-memory
+limits**. A smaller 32-KiB probe did not discover the retained sources' HEVC
+dimensions and was rejected rather than guessed or retried. Selected tracks still
+must declare supported HEVC geometry and AAC-LC/16-kHz/mono parameters.
+
+The reader independently enforces **256 KiB of accepted input and five monotonic
+seconds** from reader construction until **both** a first exact video pair and
+an audio block are prepared. Neither codec discovery nor an audio event alone
+ends this phase. The same budget spans discovery and decoding, without resetting
+between tracks or packets. Native CPU work is checked when discovery returns and
+when prepared events become available. Producer pulls are checked before and
+after, including exhaustion; these checks cannot forcibly interrupt a blocked
+producer or native call. Acquisition still needs its own socket cancellation.
+
+A whole immutable chunk that would cross the startup input budget is rejected
+before acceptance, hashing or delivery; it is not sliced, silently retried or
+accepted against a larger budget. Producers must therefore offer appropriately
+bounded chunks (the CLI defaults to 32 KiB). Producer/decryption allocations
+remain external, and this does not cap native probing/codec allocations.
+
+After both heads are prepared within budget, only the startup restrictions end;
+existing total bytes, chunk count, packet/frame, pending pixels and 60-second
+session limits remain. No source targets, pixels, PCM, codec prerequisites or
+EOF flushes are dropped or changed. `discovery_input`, `first_event_input` and
+`startup_ready_input` distinguish stream discovery, first event and both-track
+readiness; the last records elapsed startup seconds. Readiness does not mean
+output acknowledgement, physical display/audibility or device-clock sync.
+
+Both retained dual-lens recordings and all eight fragmentation/decryption
+controls preserve the snapshot events, original PTS/time bases and pixel/PCM/full
+source hashes. The bounded profile makes both heads available before producer
+EOF in these controls, with 202,340–229,376 bytes accepted at readiness. This is measured
+read-ahead on these recordings, not a universal startup-latency guarantee.
+Online source-origin/audio/lookahead policy and network/decryption lifecycle are
+still required before connecting live output. The recorded player is unchanged.

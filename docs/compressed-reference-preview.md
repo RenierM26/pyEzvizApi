@@ -415,3 +415,58 @@ a 46-second delayed BEGIN and a failed controller after successful canary.
 All owned observers and forwarding were cleaned up. The Windows launcher,
 exact-build initialization instrumentation, credentials, media and detailed
 private receipts are not included in the public repository.
+
+
+## Unselected prerequisites across a later recovery
+
+A selection-driven prefix can still contain a long **internal** gap: a later
+native-selected pair needs every intervening accepted HEVC packet even when the
+app did not select those intermediate pictures. Retiring copied pictures only
+when the later pair arrives is too late to enforce the existing ownership cap.
+
+The source now declares `copy_output` on each accepted encoded record. It is
+false only for an input not referenced by an observed checkpoint/paired selection
+and strictly earlier than the latest observed selected input **of that lens**.
+All accepted compressed prerequisites are still forwarded and decoded in original
+order. Only the unpacked pixel copy of that input's output is omitted; codec
+state, packet bytes, native input/header identities, observed pair order and PCM
+are unchanged. An unknown candidate after its lens's selection frontier remains
+retained, even if the other lens has advanced further. Native frame counters are
+opaque identities; this policy uses accepted/native call order, not frame-number
+comparison.
+
+The declaration follows the decoded output's identity token, including delayed
+codec returns, rather than the currently submitted packet. All normal corruption,
+identity, pixel-format, geometry, codec and input-budget checks still run. A later
+header/pair selecting explicitly uncopied output fails closed, and the source also
+rejects a late selection of an identity it declared uncopied. Both initial native
+pixel checkpoints remain mandatory. Old encoded records without this field keep
+the previous copy behavior; new sources need the matching updated consumer because
+older consumers reject the extra field. `uncopied_prerequisites` in the source
+receipt counts declarations; `uncopied_unselected` in the output receipt counts
+actual decoder outputs not copied. Neither is a native frame-drop count.
+
+Repeated native decoded-header observations for one accepted tuple are forwarded
+once only when **all 49 header words match**. Every callback remains in the private
+capture; a conflicting duplicate fails rather than replacing the first header.
+The source separately reports wire header count and duplicate observations, while
+the consumer continues to reject duplicate wire headers.
+
+A completion-marked retained capture provided 206 native-selected pairs through
+2880×1620 → 1920×1080 → 2880×1620. Between pairs 187 and 188, it needs 108 accepted
+inputs; the intermediate outputs were not selected. The legacy copy path fails
+at 28 owned lens pictures / 195,955,200 bytes before pair 188. The corrected
+projection preserves all 524 accepted inputs, both parity checkpoints, all 206
+selected pairs and all 277 VQE blocks; one exact duplicate native header is
+collapsed. Replaying the actual publisher/PowerShell feeder/bridge/decoder path
+with dummy output completes **206 video outputs and 276 audio writes**, zero
+rejections, exact wire byte/hash parity and a copied-pixel peak of **two lens
+pictures / 13,996,800 bytes**. One final audio offer remains explicitly pending
+under the unchanged retain/no-drain policy. All 187 common completed pair pixel
+hashes match the failing legacy replay.
+
+This is retained-data software evidence, not a new live camera or physical
+Windows transition result. The receiver's memory/queue caps and decoder deadlines
+are unchanged. This fixes host copied-pixel ownership across an observed selection
+gap; it does not restore missing native selections, explain the original native
+failure, or establish physical audibility/A/V synchronization.

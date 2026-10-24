@@ -215,3 +215,72 @@ def test_unselected_tail_is_deferred_and_future_selection_keeps_all_prerequisite
     assert [r["native_call"] for r in encoded] == list(range(1, 61))
     assert [r["meta_words"][19] for r in encoded] == list(range(60))
     assert e.next_attempt == 61
+
+
+def test_only_unselected_prerequisites_before_observed_selection_omit_copies(emitter):
+    e, out = emitter
+    rows = []
+    for frame in range(60):
+        rows.extend(attempt(frame + 1, frame=frame))
+        rows.append(decoded(frame + 10, frame=frame))
+    rows.append(selection(decoded(69, frame=59)))
+    e.pump(rows)
+    packets = [r for r, _p in out if r['kind'] == 'encoded']
+    assert [r['native_call'] for r in packets] == list(range(1, 61))
+    assert [r['copy_output'] for r in packets] == [False] * 59 + [True]
+    assert len(e.uncopied) == 59
+    assert [r['native_header'][10] for r, _p in out if r['kind'] == 'header'] == [59]
+
+
+def test_late_selection_of_declared_uncopied_picture_fails_with_prefix_retained(emitter):
+    e, out = emitter
+    rows = attempt(1) + attempt(2, frame=1) + [decoded(10), decoded(11, frame=1)]
+    rows.append(selection(decoded(11, frame=1)))
+    e.pump(rows)
+    before = list(out)
+    rows.append(selection(decoded(10)))
+    with pytest.raises(ValueError, match='late selection of explicitly uncopied'):
+        e.pump(rows)
+    assert out == before
+
+
+def test_identical_native_callback_headers_are_observed_but_sent_once(emitter):
+    e, out = emitter
+    rows = [*attempt(1), decoded(10), decoded(11), selection(decoded(10))]
+    e.pump(rows)
+    e.pump(rows)
+    assert [r['kind'] for r, _p in out] == ['encoded', 'header']
+    assert e.headers == {10, 11}
+    assert len(e.header_words) == e.duplicate_header_observations == 1
+
+
+def test_conflicting_callback_header_for_one_identity_fails_with_prefix_retained(emitter):
+    e, out = emitter
+    conflicting = decoded(11)
+    conflicting['header_words'][3] = 2
+    rows = [*attempt(1), decoded(10), conflicting, selection(decoded(10))]
+    with pytest.raises(ValueError, match='conflicting duplicate native decoded header'):
+        e.pump(rows)
+    assert [r['kind'] for r, _p in out] == ['encoded', 'header']
+    assert e.headers == {10} and e.duplicate_header_observations == 0
+
+
+def test_unknown_picture_after_latest_selection_of_its_own_lens_is_retained(emitter):
+    e, out = emitter
+    rows: list[dict] = []
+    for call, sid, raw, frame in ((1, 224, 100, 0), (2, 225, 99, 0),
+                                  (3, 224, 101, 1), (4, 225, 100, 1)):
+        encoded, returned = attempt(call, frame=frame)
+        encoded['meta_words'][10], encoded['meta_words'][16] = sid, raw
+        rows.extend((encoded, returned))
+    primary = decoded(10)
+    secondary = decoded(11, frame=1)
+    secondary['sid'] = secondary['header_words'][1] = 225
+    secondary['raw'] = secondary['header_words'][7] = 100
+    rows.extend((primary, secondary,
+                 dict(event='render_callback', render_headers=[primary['header_words'],
+                                                              secondary['header_words']])))
+    e.pump(rows)
+    packets = [r for r, _p in out if r['kind'] == 'encoded']
+    assert [r['copy_output'] for r in packets] == [True, False, True, True]
+    assert e.uncopied == {(225, 99, 0)}

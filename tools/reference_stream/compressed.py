@@ -143,9 +143,12 @@ class Emitter:
         self.rejected: list[dict[str, Any]] = []
         self.decoder_owner: str | None = None
         self.headers: set[int] = set()
+        self.header_words: dict[tuple[int, int, int], tuple[int, ...]] = {}
+        self.duplicate_header_observations = 0
         self.samples: set[tuple[int, int, int]] = set()
         self.pairs: set[tuple[int, int, int]] = set()
         self.audio: set[int] = set()
+        self.uncopied: set[tuple[int, int, int]] = set()
 
     def pump(self, rows: list[dict[str, Any]]) -> None:
         require(not any(r.get('event') in {'error', 'vqe_unverified_format', 'vqe_failure'} for r in rows),
@@ -158,6 +161,12 @@ class Emitter:
         # needed for observed selections. Unselected future inputs stay source-side;
         # if a later selection needs them, every prerequisite is forwarded in order.
         needed = selection_keys(rows)
+        require(not needed.intersection(self.uncopied), 'late selection of explicitly uncopied output')
+        selected_through: dict[int, int] = {}
+        for call, row in encoded.items():
+            identity = tuple(row['meta_words'][i] for i in (10, 16, 19))
+            if call in returned and returned[call]['result'] == 0 and identity in needed:
+                selected_through[identity[0]] = max(call, selected_through.get(identity[0], 0))
         last_needed = max((call for call, row in encoded.items()
             if call in returned and returned[call]['result'] == 0
             and tuple(row['meta_words'][i] for i in (10, 16, 19)) in needed), default=0)
@@ -173,8 +182,14 @@ class Emitter:
                         'reference decoder instance changed; separate source session required')
                 self.decoder_owner = row['decoder_owner']
                 require(identity not in self.accepted, 'ambiguous accepted native picture identity')
+                # Only earlier unselected prerequisites of an observed lens selection may
+                # omit their output copy. Later unknown selection candidates stay retained.
+                copy_output = identity in needed or self.next_attempt >= selected_through.get(identity[0], 0)
+                if not copy_output:
+                    self.uncopied.add(identity)
                 self.send(dict(kind='encoded', token=self.next_token, native_call=self.next_attempt,
-                    decoder_owner=self.decoder_owner, meta_words=meta, sha256=row['sha256'], decoder_result=0),
+                    decoder_owner=self.decoder_owner, meta_words=meta, sha256=row['sha256'], decoder_result=0,
+                    copy_output=copy_output),
                     REFERENCE['PROJECT']['blob'](self.root, row))
                 self.accepted[identity] = self.next_token
                 self.next_token += 1
@@ -200,6 +215,16 @@ class Emitter:
                 + REFERENCE['PROJECT']['blob'](self.root, output))
             self.audio.add(call)
 
+    def emit_header(self, identity: tuple[int, int, int], row: dict[str, Any]) -> None:
+        header = tuple(row['header_words'])
+        if identity in self.header_words:
+            require(header == self.header_words[identity], 'conflicting duplicate native decoded header')
+            self.duplicate_header_observations += 1
+        else:
+            self.send(dict(kind='header', native_header=row['header_words']))
+            self.header_words[identity] = header
+        self.headers.add(row['call'])
+
     def emit_video(self, rows: list[dict[str, Any]]) -> None:
         """Publish ready selections before decoding the rest of a collector batch."""
         decoded = [r for r in rows if r.get('event') == 'decoded_picture'
@@ -216,8 +241,7 @@ class Emitter:
             header = row['header_words']
             require((header[1], header[7], header[10]) == identity,
                     'native input/output stream/raw/frame identity mismatch')
-            self.send(dict(kind='header', native_header=row['header_words']))
-            self.headers.add(row['call'])
+            self.emit_header(identity, row)
         for render in [r for r in rows if r.get('event') == 'native_render_pixels']:
             identity = render['sid'], render['raw'], render['frame']
             if identity in self.samples:

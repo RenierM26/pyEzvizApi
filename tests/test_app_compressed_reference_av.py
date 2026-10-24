@@ -488,3 +488,84 @@ def test_selected_single_track_header_still_fails_strict_audit(preview, monkeypa
     with pytest.raises(ValueError, match="unsupported native planar header"):
         f.pair(0, checkpoints=True)
     assert not Video.calls and preview.audio_job is None
+
+
+def test_long_declared_unselected_gap_decodes_all_dependencies_without_copying(preview, monkeypatch):
+    f = Feed(preview)
+    f.pair(0, checkpoints=True)
+    until(preview, lambda: preview.video_completed == 1)
+    monkeypatch.setitem(M['Decoder'].add.__globals__, 'MAX_PIXELS', 144)
+    calls = []
+    original = Context.decode
+
+    def counted(context, packet):
+        calls.append(packet.pts)
+        return original(context, packet)
+
+    monkeypatch.setattr(Context, 'decode', counted)
+    payload = bytes(72)
+    for index in range(1, 50):
+        for sid in (224, 225):
+            meta = [0] * 58
+            meta[10], meta[16], meta[19] = sid, 100 + index, index
+            meta[12:14] = [8, 6]
+            f.token += 1
+            f.send('encoded', payload, token=f.token, native_call=f.token,
+                   decoder_owner='0x1234', meta_words=meta,
+                   sha256=hashlib.sha256(payload).hexdigest(), decoder_result=0,
+                   copy_output=False)
+    assert len(calls) == preview.decoder.uncopied_unselected == 98
+    assert not preview.decoder.frames and preview.decoder.bytes == 0
+    assert preview.decoder.count == 100 and len(preview.decoder.contexts) == 2
+    f.pair(50)
+    until(preview, lambda: preview.video_completed == 2)
+    assert preview.decoder.peak_bytes == 144 and not preview.decoder.frames
+
+
+def test_delayed_decoded_output_uses_its_own_copy_declaration(preview, monkeypatch):
+    def delayed(context, packet):
+        if not hasattr(context, 'first'):
+            context.first = packet
+            return []
+        return [SimpleNamespace(pts=p.pts, width=8, height=6, pixels=p.data,
+                                format=SimpleNamespace(name='yuv420p'), is_corrupt=False)
+                for p in (context.first, packet)]
+
+    monkeypatch.setattr(Context, 'decode', delayed)
+    for token, keep in ((1, False), (2, True)):
+        meta = [0] * 58
+        meta[10], meta[16], meta[19] = 224, token + 99, token - 1
+        meta[12:14] = [8, 6]
+        preview.decoder.add(token, meta, bytes(72), copy_output=keep)
+    assert preview.decoder.uncopied_unselected == 1
+    assert list(preview.decoder.frames) == [(224, 101, 1)]
+    assert preview.decoder.bytes == 72 and not preview.decoder.tokens
+
+
+@pytest.mark.parametrize('flag', [0, 1, None, 'false'])
+def test_copy_declaration_requires_boolean_before_decode(preview, flag):
+    f = Feed(preview)
+    meta = [0] * 58
+    meta[10], meta[12], meta[13] = 224, 8, 6
+    with pytest.raises(ValueError, match='invalid accepted'):
+        f.send('encoded', bytes(72), token=1, native_call=1,
+               decoder_owner='0x1234', meta_words=meta,
+               sha256=hashlib.sha256(bytes(72)).hexdigest(), decoder_result=0,
+               copy_output=flag)
+    assert preview.decoder.count == 0
+
+
+def test_later_header_cannot_promote_an_explicitly_uncopied_output(preview):
+    f = Feed(preview)
+    meta = [0] * 58
+    meta[10], meta[16], meta[19] = 224, 100, 0
+    meta[12:14] = [8, 6]
+    payload = bytes(72)
+    f.send('encoded', payload, token=1, native_call=1, decoder_owner='0x1234',
+           meta_words=meta, sha256=hashlib.sha256(payload).hexdigest(),
+           decoder_result=0, copy_output=False)
+    header = [0] * 49
+    header[1], header[7], header[10] = 224, 100, 0
+    with pytest.raises(ValueError, match='explicitly uncopied'):
+        f.send('header', native_header=header)
+    assert not preview.decoder.frames and preview.video_completed == 0

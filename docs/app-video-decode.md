@@ -104,3 +104,9 @@ frame observer to copy validated pixels into bounded temporary storage, then
 prevalidates an explicit header map before ffplay output. Inspection and mapping
 still retain no pixels by default. Preview cadence/layout must be supplied;
 queue takes and pipe completions are not native display measurements.
+
+
+For a standalone exact-container-PTS policy without native headers or app-selected
+pairs, see the [local A/V timeline planner](local-av-timeline.md). It preserves
+one shared source origin and explicitly reports unpaired pictures/audio gaps;
+it does not open output devices or reproduce native scheduling.

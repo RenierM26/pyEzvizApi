@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from hashlib import md5
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from Crypto.Cipher import AES
 import pytest
@@ -219,3 +220,193 @@ def test_convert_to_dict_decodes_json_string_values_in_place() -> None:
     assert convert_to_dict(payload) is payload
     assert payload == {"nested": {"enabled": True}, "invalid": "not-json", "plain": 1}
     assert convert_to_dict(["not", "a", "dict"]) == ["not", "a", "dict"]
+
+
+def test_parse_timezone_value_applies_dst_for_fixed_offset(monkeypatch) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+    summer = dt.datetime(2026, 10, 13, 7, 6, 50)
+    winter = dt.datetime(2026, 12, 1, 7, 6, 50)
+
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+    assert tz.utcoffset(summer) == dt.timedelta(hours=2)
+    assert tz.utcoffset(winter) == dt.timedelta(hours=1)
+
+    # Without the DST flag the fixed offset is kept (previous behaviour).
+    tz = parse_timezone_value("UTC+01:00")
+    assert tz.utcoffset(summer) == dt.timedelta(hours=1)
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=False)
+    assert tz.utcoffset(summer) == dt.timedelta(hours=1)
+
+    # Southern hemisphere: DST in January.
+    tz = parse_timezone_value("UTC+10:00", dst_enabled=True)
+    assert tz.utcoffset(dt.datetime(2026, 1, 15)) == dt.timedelta(hours=11)
+    assert tz.utcoffset(dt.datetime(2026, 7, 15)) == dt.timedelta(hours=10)
+
+    # Unknown DST rules for this offset: keep the fixed offset.
+    tz = parse_timezone_value("UTC+05:30", dst_enabled=True)
+    assert tz.utcoffset(summer) == dt.timedelta(hours=5, minutes=30)
+
+    # IANA names already carry their own rules.
+    tz = parse_timezone_value("Africa/Johannesburg", dst_enabled=True)
+    assert tz.utcoffset(summer) == dt.timedelta(hours=2)
+
+
+def test_parse_timezone_value_prefers_matching_host_dst_zone(monkeypatch) -> None:
+    # Host zone with the same standard offset and DST wins over the default.
+    monkeypatch.setenv("TZ", "Asia/Jerusalem")
+    tz = parse_timezone_value("UTC+02:00", dst_enabled=True)
+    assert tz == ZoneInfo("Asia/Jerusalem")
+
+    # Host zone with another standard offset is ignored.
+    monkeypatch.setenv("TZ", "America/New_York")
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+    assert tz == ZoneInfo("Europe/Paris")
+
+    # Host zone without DST is ignored.
+    monkeypatch.setenv("TZ", "Africa/Lagos")
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+    assert tz == ZoneInfo("Europe/Paris")
+
+    # Invalid host values are ignored.
+    monkeypatch.setenv("TZ", "Not/AZone")
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+    assert tz == ZoneInfo("Europe/Paris")
+
+
+@pytest.mark.parametrize(
+    ("alarm", "expected_utc"),
+    [
+        # Summer (CEST, UTC+2): string only, UTC epoch, local-clock epoch.
+        (
+            {"alarmStartTimeStr": "2026-10-13 07:06:50"},
+            dt.datetime(2026, 10, 13, 5, 6, 50, tzinfo=dt.UTC),
+        ),
+        (
+            {
+                "alarmStartTime": 1791868010000,
+                "alarmStartTimeStr": "2026-10-13 07:06:50",
+            },
+            dt.datetime(2026, 10, 13, 5, 6, 50, tzinfo=dt.UTC),
+        ),
+        (
+            {
+                "alarmStartTime": 1791875210000,
+                "alarmStartTimeStr": "2026-10-13 07:06:50",
+            },
+            dt.datetime(2026, 10, 13, 5, 6, 50, tzinfo=dt.UTC),
+        ),
+        # Winter (CET, UTC+1): string only, UTC epoch, local-clock epoch.
+        (
+            {"alarmStartTimeStr": "2026-12-01 07:06:50"},
+            dt.datetime(2026, 12, 1, 6, 6, 50, tzinfo=dt.UTC),
+        ),
+        (
+            {
+                "alarmStartTime": 1796105210000,
+                "alarmStartTimeStr": "2026-12-01 07:06:50",
+            },
+            dt.datetime(2026, 12, 1, 6, 6, 50, tzinfo=dt.UTC),
+        ),
+        (
+            {
+                "alarmStartTime": 1796108810000,
+                "alarmStartTimeStr": "2026-12-01 07:06:50",
+            },
+            dt.datetime(2026, 12, 1, 6, 6, 50, tzinfo=dt.UTC),
+        ),
+    ],
+)
+def test_normalize_alarm_time_with_dst_enabled_fixed_offset(
+    monkeypatch, alarm: dict[str, Any], expected_utc: dt.datetime
+) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+
+    local_dt, utc_dt, alarm_str = normalize_alarm_time(alarm, tz)
+
+    assert utc_dt == expected_utc
+    assert local_dt is not None
+    assert local_dt.utcoffset() == expected_utc.astimezone(tz).utcoffset()
+    assert alarm_str == alarm["alarmStartTimeStr"]
+
+
+def test_compute_motion_from_alarm_is_active_on_time_during_dst(monkeypatch) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+
+    class FixedDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz: dt.tzinfo | None = None) -> Any:
+            base = dt.datetime(2026, 10, 13, 5, 7, 0, tzinfo=dt.UTC)
+            return base.astimezone(tz) if tz is not None else base.replace(tzinfo=None)
+
+    alarm = {"alarmStartTimeStr": "2026-10-13 07:06:50"}
+    dst_tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+    fixed_tz = parse_timezone_value("UTC+01:00")
+    monkeypatch.setattr(utils.datetime, "datetime", FixedDateTime)
+
+    assert compute_motion_from_alarm(alarm, dst_tz) == (
+        True,
+        10.0,
+        "2026-10-13 07:06:50",
+    )
+    # A fixed +01:00 offset places the event one hour in the future.
+    assert compute_motion_from_alarm(alarm, fixed_tz) == (
+        False,
+        0.0,
+        "2026-10-13 07:06:50",
+    )
+
+
+def test_parse_timezone_value_skips_ambiguous_hemisphere_offsets(monkeypatch) -> None:
+    # UTC-04:00 is shared by Atlantic Canada and Chile with opposite seasons.
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC-04:00", dst_enabled=True)
+    assert tz.utcoffset(dt.datetime(2026, 1, 15)) == -dt.timedelta(hours=4)
+    assert tz.utcoffset(dt.datetime(2026, 7, 15)) == -dt.timedelta(hours=4)
+
+    monkeypatch.setenv("TZ", "America/Santiago")
+    tz = parse_timezone_value("UTC-04:00", dst_enabled=True)
+    assert tz == ZoneInfo("America/Santiago")
+
+    # UTC-06:00 is shared by the US Central zone and Easter Island.
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC-06:00", dst_enabled=True)
+    assert tz.utcoffset(dt.datetime(2026, 1, 15)) == -dt.timedelta(hours=6)
+    assert tz.utcoffset(dt.datetime(2026, 7, 15)) == -dt.timedelta(hours=6)
+
+    monkeypatch.setenv("TZ", "America/Chicago")
+    tz = parse_timezone_value("UTC-06:00", dst_enabled=True)
+    assert tz == ZoneInfo("America/Chicago")
+
+
+def test_parse_timezone_value_detects_short_host_dst_periods(monkeypatch) -> None:
+    # Morocco is UTC+01:00 most of the year and UTC+00:00 around Ramadan.
+    monkeypatch.setenv("TZ", "Africa/Casablanca")
+    tz = parse_timezone_value("UTC+00:00", dst_enabled=True)
+    assert tz == ZoneInfo("Africa/Casablanca")
+
+
+@pytest.mark.parametrize(
+    "expected_utc",
+    [
+        # First 02:30 (CEST) and repeated 02:30 (CET) on the fall-back day.
+        dt.datetime(2026, 10, 25, 0, 30, tzinfo=dt.UTC),
+        dt.datetime(2026, 10, 25, 1, 30, tzinfo=dt.UTC),
+    ],
+)
+def test_normalize_alarm_time_handles_repeated_dst_hour(
+    monkeypatch, expected_utc: dt.datetime
+) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+    tz = parse_timezone_value("UTC+01:00", dst_enabled=True)
+
+    _, utc_dt, alarm_str = normalize_alarm_time(
+        {
+            "alarmStartTime": int(expected_utc.timestamp() * 1000),
+            "alarmStartTimeStr": "2026-10-25 02:30:00",
+        },
+        tz,
+    )
+
+    assert utc_dt == expected_utc
+    assert alarm_str == "2026-10-25 02:30:00"

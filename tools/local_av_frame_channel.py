@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import array
 from contextlib import suppress
+import ctypes
 import hashlib
 import mmap
 import os
 from pathlib import Path
+import re
 import runpy
 import select
 import socket
@@ -23,15 +25,33 @@ FD_TOKEN = b'F'
 class Lease:
     """Owner closes its immutable memfd only after output completion or abort."""
 
-    def __init__(self, pixels: bytes) -> None:
+    def __init__(self, pixels: bytes | tuple[bytes, bytes], pair_sha256: str | None = None) -> None:
+        chunks: tuple[bytes, ...]
+        if isinstance(pixels, tuple):
+            split, chunks = True, pixels
+        else:
+            split, chunks = False, (pixels,)
+        if (any(type(chunk) is not bytes for chunk in chunks)
+                or (split and (len(chunks) != 2 or len(chunks[0]) != len(chunks[1])
+                               or not isinstance(pair_sha256, str)
+                               or re.fullmatch('[0-9a-f]{64}', pair_sha256) is None))
+                or (not split and pair_sha256 is not None)):
+            raise ValueError('invalid immutable paired lens layout or fingerprint')
+        self.layout = 'lens-planar' if split else 'composed'
+        self.pair_sha256 = pair_sha256
         self.store = SHARED['sealed_file']()
         try:
-            if self.store.write(pixels) != len(pixels):
-                raise ValueError('short sealed-pair write')
+            digest = hashlib.sha256()
+            size = 0
+            for chunk in chunks:
+                if self.store.write(chunk) != len(chunk):
+                    raise ValueError('short sealed-pair write')
+                digest.update(chunk)
+                size += len(chunk)
             SHARED['seal'](self.store)
-            if SHARED['validate_store'](self.store.fileno()) != len(pixels):
+            if SHARED['validate_store'](self.store.fileno()) != size:
                 raise ValueError('invalid sealed-pair extent')
-            self.frame = SHARED['Frame'](0, len(pixels), hashlib.sha256(pixels).hexdigest())
+            self.frame = SHARED['Frame'](0, size, digest.hexdigest())
         except BaseException:
             self.store.close()
             raise
@@ -73,16 +93,82 @@ def receive_fd(channel: Any, pump: Any, deadline: float) -> int:
             os.close(fd)
 
 
-def present_fd(fd: int, size: int, digest: str, surface: Any) -> tuple[int, int]:
-    """Validate and map one sealed extent; close received ownership on every path."""
+class Rect(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_int) for name in ('x', 'y', 'w', 'h')]
+
+
+SurfaceBase: Any = SHARED['Surface']
+
+
+class Surface(SurfaceBase):
+    def present_lenses(self, pixels: Any) -> None:
+        if self.width % 4 or len(pixels) != self.width * self.height * 3 // 2:
+            raise ValueError('invalid split lens texture geometry or bytes')
+        self.pump()
+        data = (ctypes.c_ubyte * len(pixels)).from_buffer(pixels)
+        base, width = ctypes.addressof(data), self.width // 2
+        y = width * self.height
+        for x, offset in ((0, 0), (width, y * 3 // 2)):
+            rect = Rect(x, 0, width, self.height)
+            self.check(self.lib.SDL_UpdateYUVTexture(self.texture, ctypes.byref(rect),
+                base + offset, width, base + offset + y, width // 2,
+                base + offset + y * 5 // 4, width // 2))
+        self.check(self.lib.SDL_RenderClear(self.renderer))
+        self.check(self.lib.SDL_RenderCopy(self.renderer, self.texture, None, None))
+        self.lib.SDL_RenderPresent(self.renderer)
+
+
+def paired_digest(pixels: Any, width: int, height: int) -> str:
+    """Hash the canonical side-by-side rows without allocating a composed pair."""
+    if width % 4 or len(pixels) != width * height * 3 // 2:
+        raise ValueError('invalid split lens extent')
+    lens_width = width // 2
+    lens_size = lens_width * height * 3 // 2
+    digest = hashlib.sha256()
+    offset = 0
+    for w, h in ((lens_width, height), (lens_width // 2, height // 2),
+                 (lens_width // 2, height // 2)):
+        for row in range(h):
+            start = offset + row * w
+            digest.update(pixels[start:start + w])
+            digest.update(pixels[lens_size + start:lens_size + start + w])
+        offset += w * h
+    return digest.hexdigest()
+
+
+def frame_layout(row: dict[str, Any], size: int) -> tuple[str, str, str]:
+    layout = row.get('layout', 'composed')
+    normalized = dict(row)
+    storage = row.get('storage_sha256', row.get('pixel_sha256'))
+    if not isinstance(storage, str) or re.fullmatch('[0-9a-f]{64}', storage) is None:
+        raise ValueError('invalid storage fingerprint')
+    if layout == 'lens-planar':
+        if (set(row) != {'kind', 'pair_id', 'offset', 'bytes', 'pixel_sha256', 'layout', 'storage_sha256'}):
+            raise ValueError('invalid split frame metadata')
+        normalized.pop('layout')
+        normalized.pop('storage_sha256')
+    elif layout != 'composed':
+        raise ValueError('unsupported frame layout')
+    _, digest = SHARED['frame_extent'](normalized, size, size)
+    return layout, digest, storage
+
+
+def present_fd(fd: int, size: int, digest: str, surface: Any,
+               storage_digest: str | None = None, layout: str = 'composed') -> tuple[int, int]:
+    """Validate/map one sealed extent; close received ownership on every path."""
     try:
         if SHARED['validate_store'](fd) != size:
             raise ValueError('sealed-pair file size mismatch')
         with mmap.mmap(fd, 0, access=mmap.ACCESS_COPY) as mapping, memoryview(mapping) as pixels:
-            if hashlib.sha256(pixels).hexdigest() != digest:
+            if hashlib.sha256(pixels).hexdigest() != (storage_digest or digest):
                 raise ValueError('sealed-pair fingerprint mismatch')
+            if layout == 'lens-planar' and paired_digest(pixels, surface.width, surface.height) != digest:
+                raise ValueError('canonical paired pixel fingerprint mismatch')
             before = time.monotonic_ns()
-            surface.present(pixels)
+            if layout == 'lens-planar':
+                surface.present_lenses(pixels)
+            else:
+                surface.present(pixels)
             after = time.monotonic_ns()
     finally:
         os.close(fd)
@@ -115,7 +201,7 @@ def worker(channel_fd: int, width: int, height: int, limit: int) -> int:
                     pump()
             return bytes(data)
         try:
-            surface = SHARED['Surface'](width, height)
+            surface = Surface(width, height)
             channel.sendall(OUTPUT['packet'](dict(kind='ready', driver=surface.driver,
                                                   width=width, height=height)))
             seen = set()
@@ -129,11 +215,11 @@ def worker(channel_fd: int, width: int, height: int, limit: int) -> int:
                 if index == limit:
                     raise ValueError('rolling output frame limit exceeded')
                 size = width * height * 3 // 2
-                _, digest = SHARED['frame_extent'](row, size, size)
+                layout, digest, storage = frame_layout(row, size)
                 if row['pair_id'] in seen:
                     raise ValueError('duplicate rolling frame identity')
                 fd = receive_fd(channel, pump, time.monotonic() + 5)
-                before, after = present_fd(fd, size, digest, surface)
+                before, after = present_fd(fd, size, digest, surface, storage, layout)
                 seen.add(row['pair_id'])
                 channel.sendall(OUTPUT['packet'](dict(kind='presented', pair_id=row['pair_id'],
                     bytes=size, pixel_sha256=digest, present_started_ns=before, present_returned_ns=after)))
@@ -178,8 +264,11 @@ class Output(Parent):
     def present(self, pair_id: str, lease: Lease, timeout: float) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         frame = lease.frame
-        self.transfer(OUTPUT['packet'](dict(kind='shared_frame', pair_id=pair_id, offset=0,
-            bytes=frame.size, pixel_sha256=frame.sha256)), deadline)
+        digest = frame.sha256 if lease.layout == 'composed' else lease.pair_sha256
+        metadata = dict(kind='shared_frame', pair_id=pair_id, offset=0, bytes=frame.size, pixel_sha256=digest)
+        if lease.layout == 'lens-planar':
+            metadata.update(layout=lease.layout, storage_sha256=frame.sha256)
+        self.transfer(OUTPUT['packet'](metadata), deadline)
         while True:
             if time.monotonic() >= deadline:
                 raise ValueError('sealed-pair descriptor send deadline exceeded')
@@ -194,7 +283,7 @@ class Output(Parent):
                 select.select([], [self.channel], [], min(0.02, max(0, deadline - time.monotonic())))
         row = self.receive(deadline)
         if (row.get('kind') != 'presented' or row.get('pair_id') != pair_id
-                or row.get('bytes') != frame.size or row.get('pixel_sha256') != frame.sha256
+                or row.get('bytes') != frame.size or row.get('pixel_sha256') != digest
                 or any(type(row.get(k)) is not int for k in ('present_started_ns', 'present_returned_ns'))
                 or not 0 <= row['present_started_ns'] <= row['present_returned_ns']):
             raise ValueError('rolling output acknowledgement mismatch')

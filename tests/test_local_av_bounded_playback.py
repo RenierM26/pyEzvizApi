@@ -280,7 +280,8 @@ def test_real_incremental_snapshot_iterator_closes_native_container_without_fals
     assert report['source_sha256'] == hashlib.sha256(snapshot).hexdigest()
 
 
-def test_real_rolling_cli_completes_original_plan_and_drains_owned_workers(tmp_path):
+@pytest.mark.parametrize('composition', ['python', 'split-upload'])
+def test_real_rolling_cli_completes_original_plan_and_drains_owned_workers(tmp_path, composition):
     if not ctypes.util.find_library('SDL2-2.0') or not shutil.which('ffplay'):
         pytest.skip('optional SDL/ffplay unavailable')
     source = OLD['SOURCE']['encode_three_track_ps'](tmp_path, audio_jitter=True)
@@ -289,7 +290,7 @@ def test_real_rolling_cli_completes_original_plan_and_drains_owned_workers(tmp_p
         '--primary-stream', '0', '--secondary-stream', '2', '--audio-stream', '1',
         '--play', '--pairing', 'exact-pts', '--timing', 'host-submission', '--layout', 'side-by-side',
         '--processor', 'passthrough', '--receipt', str(receipt),
-        '--audio-overlap-policy', 'bounded-serial-pcm', '--max-audio-overlap-ms', '1', '--max-audio-phase-ms', '1']
+        '--audio-overlap-policy', 'bounded-serial-pcm', '--max-audio-overlap-ms', '1', '--max-audio-phase-ms', '1', '--composition', composition]
     result = subprocess.run(command, env=dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy'),
                             capture_output=True, timeout=20, check=False)
     output = json.loads(receipt.read_text())

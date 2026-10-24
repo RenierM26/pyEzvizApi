@@ -92,11 +92,13 @@ def main() -> int:  # noqa: PLR0912, PLR0915 - one explicit owned observer lifet
         writer.send(dict(kind='end', encoded_units=emitter.next_token - 1, pairs=len(emitter.pairs),
                          vqe_outputs=len(emitter.audio), rejected_native_attempts=len(emitter.rejected)))
         report.update(status='bounded-compressed-source-completed', records=writer.sequence,
-            encoded_units_sent=emitter.next_token - 1, header_records_sent=len(emitter.headers),
+            encoded_units_sent=emitter.next_token - 1, header_records_sent=len(emitter.header_words),
+            duplicate_header_observations=emitter.duplicate_header_observations,
             reference_pairs_sent=len(emitter.pairs), checkpoints_sent=len(emitter.samples),
             vqe_outputs_sent=len(emitter.audio), captured_encoded_units=sum(r.get('event') == 'encoded_video' for r in rows),
             native_rejected_attempts=emitter.rejected,
             native_decoder_health=C['HEALTH']['summarize'](rows),
+            uncopied_prerequisites=len(emitter.uncopied),
             deferred_accepted_inputs=sum(r.get('event') == 'encoded_video_return'
                 and r['id'] >= emitter.next_attempt and r['result'] == 0 for r in rows),
             captured_native_rejected_attempts=[dict(call=r['id'], result=r['result'])

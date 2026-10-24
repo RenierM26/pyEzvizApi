@@ -89,8 +89,11 @@ class Decoder:
         self.bytes = self.compressed = self.count = 0
         self.peak_bytes = self.peak_frames = 0
         self.retired_unselected = 0
+        self.unretained: set[tuple[int, int, int]] = set()
+        self.uncopied_unselected = 0
 
-    def add(self, token: int, meta: list[int], payload: bytes) -> None:
+    def add(self, token: int, meta: list[int], payload: bytes, copy_output: bool = True) -> None:
+        require(type(copy_output) is bool, 'invalid decoded-copy declaration')
         sid, raw, index = meta[10], meta[16], meta[19]
         identity = sid, raw, index
         require(sid in (224, 225) and identity not in self.keys and token == self.count + 1,
@@ -106,6 +109,8 @@ class Decoder:
         self.keys.add(identity)
         self.ordinals[identity] = token
         self.tokens[token] = identity
+        if not copy_output:
+            self.unretained.add(identity)
         self.count += 1
         self.compressed += len(payload)
         av = LIVE['VIDEO']['NATIVE']['AUDIT']['SOURCE']['load_av']()
@@ -128,6 +133,9 @@ class Decoder:
             require(frame.format.name == 'yuv420p' and 0 < frame.width <= 4096
                     and 0 < frame.height <= 4096 and frame.width % 2 == frame.height % 2 == 0
                     and frame.width * frame.height <= 8_388_608, 'unsupported decoded geometry')
+            if target in self.unretained:
+                self.uncopied_unselected += 1
+                continue  # Decode every prerequisite; never copy explicitly unselected output.
             require(len(self.frames) < 32 and self.bytes + frame.width * frame.height * 3 // 2 <= MAX_PIXELS,
                     'owned decoded pixel budget')
             pixels = NATIVE['SCHEDULED']['PREVIEW']['pack'](frame)
@@ -199,7 +207,9 @@ class Preview(Parent):
             return
         require(self.session is not None, 'missing reference begin record')
         if kind == 'encoded':
-            require(fields == {'token', 'native_call', 'decoder_owner', 'meta_words', 'sha256', 'decoder_result'}
+            encoded_fields = {'token', 'native_call', 'decoder_owner', 'meta_words', 'sha256', 'decoder_result'}
+            require(fields in (encoded_fields, encoded_fields | {'copy_output'})
+                    and type(row.get('copy_output', True)) is bool
                     and type(row['token']) is int and 0 < row['token'] <= MAX_UNITS
                     and type(row['native_call']) is int and self.last_native_call < row['native_call'] <= MAX_UNITS
                     and isinstance(row['decoder_owner'], str)
@@ -208,7 +218,7 @@ class Preview(Parent):
                     and type(row['decoder_result']) is int and row['decoder_result'] == 0
                     and 0 < len(payload) <= 2 * 1024 * 1024 and digest(payload) == row['sha256'],
                     'invalid accepted compressed input')
-            self.decoder.add(row['token'], words(row['meta_words'], 58), payload)
+            self.decoder.add(row['token'], words(row['meta_words'], 58), payload, row.get('copy_output', True))
             self.last_native_call = row['native_call']
             self.decoder_owner = row['decoder_owner']
         elif kind == 'header':
@@ -217,6 +227,7 @@ class Preview(Parent):
             identity = key(header)
             require(identity in self.decoder.keys and identity not in self.headers,
                     'unknown or duplicate native decoded header')
+            require(identity not in self.decoder.unretained, 'header selects explicitly uncopied output')
             after = list(header)
             after[4] = header[38] - header[39]
             NATIVE['AUDIT']['geometry'](header, after)
@@ -247,6 +258,8 @@ class Preview(Parent):
             require([h[1] for h in headers] == [224, 225]
                     and headers[0][7] == headers[1][7], 'mismatched reference lenses')
             identities = [key(h) for h in headers]
+            require(not any(k in self.decoder.unretained for k in identities),
+                    'pair selects explicitly uncopied output')
             require(all(k in self.decoder.ordinals and
                         self.decoder.ordinals[k] > self.selected_ordinals.get(k[0], 0) for k in identities),
                     'repeated or backwards accepted-picture selection')
@@ -371,7 +384,8 @@ class Preview(Parent):
             native_scheduler_replayed=False, decoder_eof_flushed=False,
             owned_pixels=dict(bytes=self.decoder.bytes, peak_bytes=self.decoder.peak_bytes,
                 frames=len(self.decoder.frames), peak_frames=self.decoder.peak_frames,
-                delayed_tokens=len(self.decoder.tokens), retired_unselected=self.decoder.retired_unselected),
+                delayed_tokens=len(self.decoder.tokens), retired_unselected=self.decoder.retired_unselected,
+                uncopied_unselected=self.decoder.uncopied_unselected),
             video_waiting=[p['pair_id'] for p in self.waiting],
             audio=dict(offered=self.audio.offered, written=self.audio.written, rejected=self.audio.rejected,
                 queued=len(self.audio.ring), active=self.audio.writing is not None,

@@ -8,6 +8,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Developer-only bounded per-attempt decoder backend summaries and an offline raw-event audit, with explicit pending-attempt and completeness diagnostics.
+
 - Explicit parsed-frame app-compatible HEVC/AAC playback timing and stream-copy remux helpers, with per-session track origins, configured discontinuity repair and paired-picture reuse. Includes an explicit `app_relative_clock` opt-in for bounded single-source native HEVC/16 kHz AAC live capture, with strict provenance checks and staged high-level output. The typed native app-relative profile accepts explicit HEVC parameter-set decryption for encrypted SDK streams. Default timestamp policies are unchanged.
 
 - Camera-negotiated PlayM4 stream-header descriptors, field-specific SDK codec/FPS/bitrate normalization, and bounded caller-owned discovery reuse for automatic live playback.
@@ -20,6 +22,10 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 ### Fixed
 
 - Apply daylight saving time to cameras that report a fixed `timeZone` offset (for example `UTC+01:00`) with `daylightSavingTime` enabled, so `Motion_Trigger` no longer fires one hour late during summer time (#314).
+
+- Keep compressed-reference codec prerequisites across long native selection gaps without copying explicitly unselected outputs; preserve delayed-output identity and strict selection/checkpoint guards. Collapse identical native header observations while rejecting conflicts.
+
+- Release unused reference-capture snapshot copies after the final permitted pair is fully emitted, preserving pending and partially emitted selections. This does not claim to fix the intermittent native decoder failure.
 
 - Isolate MPEG-PS clear-header H.264/HEVC decryption state by video stream, preserve timestamped AES continuations across interleaved audio, and recognize new-picture parameter sets without weakening legacy tail-lookalike safeguards.
 

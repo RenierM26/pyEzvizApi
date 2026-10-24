@@ -99,9 +99,9 @@ causal incremental-delivery results, **not physical output or latency proof**.
 
 Earlier prototypes exposed rejected native retries and asynchronous callback
 association at 1920×1080. Those failed assumptions and failed integrated attempts
-were retained privately. Windows WSLg continuous screen/speaker output remains
-unverified until its own receipt and human observations are collected. Previously
-observed sparse recorded motion and short recorded audio are separate evidence.
+were retained privately. At this stage, Windows WSLg continuous screen/speaker output was unverified.
+See the later attended-relay result below; previously observed sparse recorded
+motion and short recorded audio remain separate evidence.
 
 ## Acknowledgement credit for a bursty handoff
 
@@ -135,7 +135,7 @@ reproduced that backlog with a burst source and 0.5-second initial display delay
 The same immutable-chunk/PowerShell/bundled-runtime run with credit completed all
 **92 video pairs and 97 audio blocks**, zero audio rejections, exact original wire
 hash parity, and peaks of one/four unacknowledged offers. Those regression outputs
-used dummy drivers; the corrected physical Windows run remains pending.
+used dummy drivers; the later attended Windows result is recorded below.
 
 ### Startup header scope
 
@@ -157,7 +157,7 @@ worker, bundled decoder and acknowledgement credit completed **135 video pairs /
 paired geometry changed from 1920×1080 to 768×432; two native rejected attempts
 remained diagnostics. Output drivers were **dummy**, and that fresh run did not
 contain the single-track prefix; prefix handling has its separate retained-data
-and regression-test evidence. Physical Windows continuous output is still pending.
+and regression-test evidence. The later attended Windows result is recorded below.
 
 ## First completed Windows physical-video check
 
@@ -258,6 +258,9 @@ audibility without another live capture or trip to the camera.
 
 ## Offline per-lens native health diagnostics
 
+For per-attempt software backend return counts and the lower-event-volume
+accumulator, see [decoder backend diagnostics](decoder-backend-diagnostics.md).
+
 Use the metadata-only report without starting a camera, loading media or opening
 an output device:
 
@@ -343,3 +346,127 @@ the tablet at its launcher. These private diagnostic variants are not enabled in
 the public source by default. Source-code tests remain the previously verified
 3,465 passing checks; this increment records experimental evidence only. The
 underlying intermittent failure and physical A/V properties remain unproven.
+
+## Bounded snapshot ownership and resource comparison (2026-10-23)
+
+After the final permitted pair is fully emitted, the capture source now clears
+unused input snapshots and their duplicate-suppression keys. It reports discarded
+sample count and bytes as `input_samples_retired` metadata. This changes no selected
+input/render bytes, headers, hashes, pair limits or native decoder state. Pending
+pairs, budget-rejected pairs and incompletely emitted pairs retain their samples.
+Dropping JavaScript references does not guarantee immediate garbage collection or
+an immediate reduction in resident memory.
+
+Both an earlier failing capture and an earlier recovered capture retained one
+unused 7,015,680-byte input snapshot after their sole permitted pair. Their five
+startup pixel copies totaled 35,043,840 bytes; copying did not continue up to the
+late decoder failure. Retained-byte replay verifies all four selected snapshots
+(28,028,160 bytes per capture) and their headers/hashes are unchanged by retirement.
+This is an observer ownership fix, not a fix for the intermittent native failure.
+
+Two bounded, sequential trials used the same read-only initialization observer
+and process-status sampling. The metadata-only trial recovered both lenses through
+1920×1080 → 2880×1624, with 44 accepted inputs per lens after the upshift. The
+original media-copying source trial instead went 1920×1080 → 768×432. Neither
+reproduced the persistent native error or an initialization/allocation failure.
+Different geometry makes their memory peaks unsuitable for measuring incremental
+capture overhead. Process virtual size is not resident memory; status sampling
+does not establish address-space fragmentation. The second trial exercised the
+source collector, not a complete Windows relay or physical playback.
+
+
+## Completed attended Windows relay (2026-10-24)
+
+A fresh bounded reference-app session completed the actual immutable-chunk NAS →
+Windows PowerShell → Ubuntu WSLg → host decoder/output path: **102 paired video
+outputs at 1920×1080 and 108 native VQE mono audio writes**, with no consumer
+error or audio rejection. All 102 pair and 108 audio credit offers were
+acknowledged; peaks remained one/four, with no outstanding offers. The controller
+observed 93 video and 101 audio acknowledgements before source-process exit;
+the remainder completed afterward under the unchanged retain/no-drain EOF policy.
+
+All **13,696,450 original wire bytes across 227 chunks** matched from the private
+retained source through the NAS publication manifest to Windows/WSL forwarding.
+Real X11 output was selected, and the operator reported that the result looked
+good. That is not an explicit report of audible sound or measured physical A/V
+synchronization. This remains a reference-app-assisted development tool, not an
+independent camera client or a low-latency playback guarantee.
+
+The parallel bounded metadata observer recorded 260 native input attempts:
+259 completed and one pending at stop. All 32 observed initialization/lifecycle
+phase calls completed, including four successful initialization cycles, with no
+observer fault or saturation. The media source retained 213 inputs but forwarded
+only 208 prerequisites for its 102 selected pairs. A late native downshift to
+768×432 had one known transition deferral followed by acceptance per lens; no
+selected pair at that geometry was forwarded. Do not infer that the Windows
+output validated a resolution change or that zero forwarded rejected attempts
+means every captured native attempt succeeded. The original intermittent decoder
+failure was not reproduced, and its root cause remains unresolved.
+
+The private supervisor separates UI/profile preparation from the consumer's
+media-session clock. It retries UI readiness under a finite deadline, starts the
+consumer only after a committed real-stream BEGIN chunk exists, and opens preview
+only after consumer readiness and verified BEGIN delivery. A separate finite
+120-second preparation wait covers observed cold-start cost; decoder, credit and
+20-second active-capture bounds are unchanged. Source-controller failures propagate
+through the feeder instead of leaving the consumer waiting. Local controls cover
+a 46-second delayed BEGIN and a failed controller after successful canary.
+
+All owned observers and forwarding were cleaned up. The Windows launcher,
+exact-build initialization instrumentation, credentials, media and detailed
+private receipts are not included in the public repository.
+
+
+## Unselected prerequisites across a later recovery
+
+A selection-driven prefix can still contain a long **internal** gap: a later
+native-selected pair needs every intervening accepted HEVC packet even when the
+app did not select those intermediate pictures. Retiring copied pictures only
+when the later pair arrives is too late to enforce the existing ownership cap.
+
+The source now declares `copy_output` on each accepted encoded record. It is
+false only for an input not referenced by an observed checkpoint/paired selection
+and strictly earlier than the latest observed selected input **of that lens**.
+All accepted compressed prerequisites are still forwarded and decoded in original
+order. Only the unpacked pixel copy of that input's output is omitted; codec
+state, packet bytes, native input/header identities, observed pair order and PCM
+are unchanged. An unknown candidate after its lens's selection frontier remains
+retained, even if the other lens has advanced further. Native frame counters are
+opaque identities; this policy uses accepted/native call order, not frame-number
+comparison.
+
+The declaration follows the decoded output's identity token, including delayed
+codec returns, rather than the currently submitted packet. All normal corruption,
+identity, pixel-format, geometry, codec and input-budget checks still run. A later
+header/pair selecting explicitly uncopied output fails closed, and the source also
+rejects a late selection of an identity it declared uncopied. Both initial native
+pixel checkpoints remain mandatory. Old encoded records without this field keep
+the previous copy behavior; new sources need the matching updated consumer because
+older consumers reject the extra field. `uncopied_prerequisites` in the source
+receipt counts declarations; `uncopied_unselected` in the output receipt counts
+actual decoder outputs not copied. Neither is a native frame-drop count.
+
+Repeated native decoded-header observations for one accepted tuple are forwarded
+once only when **all 49 header words match**. Every callback remains in the private
+capture; a conflicting duplicate fails rather than replacing the first header.
+The source separately reports wire header count and duplicate observations, while
+the consumer continues to reject duplicate wire headers.
+
+A completion-marked retained capture provided 206 native-selected pairs through
+2880×1620 → 1920×1080 → 2880×1620. Between pairs 187 and 188, it needs 108 accepted
+inputs; the intermediate outputs were not selected. The legacy copy path fails
+at 28 owned lens pictures / 195,955,200 bytes before pair 188. The corrected
+projection preserves all 524 accepted inputs, both parity checkpoints, all 206
+selected pairs and all 277 VQE blocks; one exact duplicate native header is
+collapsed. Replaying the actual publisher/PowerShell feeder/bridge/decoder path
+with dummy output completes **206 video outputs and 276 audio writes**, zero
+rejections, exact wire byte/hash parity and a copied-pixel peak of **two lens
+pictures / 13,996,800 bytes**. One final audio offer remains explicitly pending
+under the unchanged retain/no-drain policy. All 187 common completed pair pixel
+hashes match the failing legacy replay.
+
+This is retained-data software evidence, not a new live camera or physical
+Windows transition result. The receiver's memory/queue caps and decoder deadlines
+are unchanged. This fixes host copied-pixel ownership across an observed selection
+gap; it does not restore missing native selections, explain the original native
+failure, or establish physical audibility/A/V synchronization.

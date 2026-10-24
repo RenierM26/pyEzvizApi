@@ -84,3 +84,7 @@ physical A/V synchronization claim. Source/crypto/decode cooperative deadlines
 still include downstream waits. This is not a live-output or Windows-runtime
 handoff; those need their own dependency checks, output/drain receipts and
 attended validation.
+
+For the separate development output adapter, see
+[guarded capture-prefix output](local-av-capture-playback.md). It retains this
+prefix-only scope and requires independent output acknowledgements/drains.

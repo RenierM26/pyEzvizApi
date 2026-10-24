@@ -406,3 +406,57 @@ def test_newly_prepared_head_is_returned_to_dispatch_before_another_decode_pull(
         assert source.pulls == 2
     finally:
         assets.close()
+
+
+def test_prepared_input_construction_failure_still_closes_source(monkeypatch):
+    source = Source(events(1))
+    primary = BrokenPipeError('asset construction failed')
+    def fail(_events):
+        raise primary
+    monkeypatch.setitem(M['play_prepared'].__globals__, 'Assets', fail)
+    report: dict[str, Any] = {}
+    with pytest.raises(BrokenPipeError) as caught:
+        M['play_prepared'](source, SimpleNamespace(), report)
+    assert caught.value is primary and source.closed and report['cleanup_errors'] == []
+
+
+@pytest.mark.parametrize('worker', [False, True])
+def test_successful_preparation_timing_ignores_ambient_caller_exception(worker):
+    assets = M['Assets'](Source(events(1)))
+    executor = PreparationExecutor()
+    try:
+        if worker:
+            assets.start_preparation(executor)
+            assets.pump()
+            executor.complete()
+        try:
+            raise LookupError('ambient')
+        except LookupError:
+            assert assets.pump()
+        assert assets.timings[-1]['status'] == 'prepared'
+    finally:
+        assets.close()
+
+
+def test_lease_cleanup_failure_is_not_hidden_by_ambient_caller_exception(monkeypatch):
+    clock = OLD['Clock']()
+    assets = M['Assets'](Source(events(1)))
+    assets.prefill(5)
+    scheduler = M['Scheduler'](assets, .5, 250, clock=clock.read, pause=clock.sleep)
+    scheduler.anchor = clock.read()
+    release = assets.release
+    def fail(name):
+        release(name)
+        raise OSError('lease cleanup failed')
+    monkeypatch.setattr(assets, 'release', fail)
+    try:
+        scheduler.dispatch(assets, dict(video_pair=OLD['Backend'](clock), audio_block=OLD['Backend'](clock)), OLD['Executor'](clock))
+        try:
+            raise LookupError('ambient')
+        except LookupError:
+            with pytest.raises(ValueError, match='lease cleanup failed'):
+                scheduler.harvest()
+        assert scheduler.cancel.is_set()
+    finally:
+        monkeypatch.setattr(assets, 'release', release)
+        assets.close()

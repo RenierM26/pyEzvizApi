@@ -99,13 +99,14 @@ class Assets:
         for name, (future, timing) in list(self.pending.items()):
             if not future.done():
                 break  # Single worker preserves video source order.
+            timing['status'] = 'failed'
             try:
                 self.owned[name]['data'] = future.result()
                 self.queues['video_pair'].append(name)
                 self.offered['video_pair'] += 1
                 progressed = True
+                timing['status'] = 'prepared'
             finally:
-                timing['status'] = 'failed' if sys.exc_info()[0] is not None else 'prepared'
                 self.timings.append(timing)
                 del self.pending[name]
         return progressed
@@ -142,6 +143,7 @@ class Assets:
         self.peak_bytes[kind] = max(self.peak_bytes[kind], self.bytes[kind])
         timing = dict(id=name, kind=kind, pull_ns=pulled - started,
             pull_started_ns=started, pull_returned_ns=pulled)
+        timing['status'] = 'failed'
         try:
             if kind == 'video_pair':
                 self.geometry = (event['lenses'][0]['width'], event['lenses'][0]['height'])
@@ -155,9 +157,9 @@ class Assets:
                 self.owned[name]['data'] = payload[0]
             self.queues[kind].append(name)
             self.offered[kind] += 1
+            timing['status'] = 'prepared'
         finally:
             if name not in self.pending:
-                timing.update(status='failed' if sys.exc_info()[0] is not None else 'prepared')
                 self.timings.append(timing)
             self.preparing = None
         return True
@@ -321,35 +323,62 @@ def cleanup(assets: Any, scheduler: Any, executor: Any, backends: tuple[Any, Any
         raise ValueError('online output cleanup failed: ' + '; '.join(errors))
 
 
-def playback(args: Any, receipt: dict[str, Any]) -> None:
+def validate_output(args: Any) -> None:
+    B['validate_transport'](args)
+    if args.container != 'mpeg':
+        raise ValueError('online output profile requires MPEG-PS')
+
+
+def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None) -> None:
+    """Own prepared input and output resources; caller validates transport first."""
     assets = scheduler = executor = video = audio = None
-    decode: dict[str, Any] = {}
-    policy: dict[str, Any] = {}
+    primary = False
+    receipt.update(output_devices_opened=False, backend_initialization_started=False)
     try:
-        B['validate_transport'](args)
-        if args.container != 'mpeg':
-            raise ValueError('online output profile requires clear MPEG-PS')
-        source = ONLINE['CHUNKED']['iter_chunks'](ONLINE['CHUNKED']['file_chunks'](args.source, 32768),
-            'mpeg', (args.primary_stream, args.secondary_stream), args.audio_stream, decode, startup='bounded-mpeg')
-        events = ONLINE['iter_online'](source, (args.primary_stream, args.secondary_stream), args.audio_stream,
-            policy, policy=args.audio_overlap_policy, overlap_ms=args.max_audio_overlap_ms, phase_ms=args.max_audio_phase_ms)
         assets = Assets(events)
         assets.prefill(args.deadline)
         assert assets.geometry is not None
         width, height = assets.geometry
-        video = CHANNEL['Output'](width * 2, height, args.deadline, PLAY['MAX_PAIRS'])
-        receipt['video_driver'] = video.driver
+        receipt['backend_initialization_started'] = True
+        options = {} if title is None else {'title': title}
+        video = CHANNEL['Output'](width * 2, height, args.deadline, PLAY['MAX_PAIRS'], **options)
+        receipt.update(video_driver=video.driver, output_devices_opened=True)
         audio = PLAY['PCM']['Ffplay'](channel_args=('-ch_layout', 'mono') if args.mono_option == 'ch-layout'
             else ('-channels', '1'), immediate_raw_probe=True)
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='online-av-output')
         assets.start_preparation()
         scheduler = Scheduler(assets, args.deadline, args.max_late_ms)
         scheduler.run(assets, video, audio, executor)
+    except BaseException:
+        primary = True
+        raise
     finally:
         try:
-            cleanup(assets, scheduler, executor, (video, audio), receipt, sys.exc_info()[0] is not None)
+            cleanup(assets, scheduler, executor, (video, audio), receipt, primary)
         finally:
-            receipt.update(input_decode=decode, online_policy=policy)
+            if assets is None:
+                try:
+                    close = getattr(events, 'close', None)
+                    if close is not None:
+                        close()
+                except Exception as error:
+                    receipt.setdefault('cleanup_errors', []).append(str(error))
+                    if not primary:
+                        raise
+
+
+def playback(args: Any, receipt: dict[str, Any]) -> None:
+    validate_output(args)
+    decode: dict[str, Any] = {}
+    policy: dict[str, Any] = {}
+    source = ONLINE['CHUNKED']['iter_chunks'](ONLINE['CHUNKED']['file_chunks'](args.source, 32768),
+        'mpeg', (args.primary_stream, args.secondary_stream), args.audio_stream, decode, startup='bounded-mpeg')
+    events = ONLINE['iter_online'](source, (args.primary_stream, args.secondary_stream), args.audio_stream,
+        policy, policy=args.audio_overlap_policy, overlap_ms=args.max_audio_overlap_ms, phase_ms=args.max_audio_phase_ms)
+    try:
+        play_prepared(events, args, receipt)
+    finally:
+        receipt.update(input_decode=decode, online_policy=policy)
 
 
 def main() -> int:

@@ -49,8 +49,11 @@ def fingerprint(frame: Any, stream_index: int, index: int) -> dict[str, Any]:
         data = bytes(plane)
         if plane.line_size < width or len(data) < plane.line_size * height:
             raise ValueError('decoded plane has unsupported stride or truncated rows')
-        for row in range(height):
-            digest.update(data[row * plane.line_size:row * plane.line_size + width])
+        if plane.line_size == width:
+            digest.update(data[:width * height])
+        else:
+            for row in range(height):
+                digest.update(data[row * plane.line_size:row * plane.line_size + width])
     return dict(decoded_id=f'video:{stream_index}:{index}', stream_index=stream_index,
                 frame_index=index, source_pts=frame.pts,
                 time_base_num=frame.time_base.numerator, time_base_den=frame.time_base.denominator,

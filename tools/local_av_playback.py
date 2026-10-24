@@ -383,7 +383,7 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
                 raise ValueError('output cleanup failed: ' + '; '.join(errors))
 
 
-def arguments() -> argparse.Namespace:
+def arguments(configure: Any = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
     parser.add_argument('--container', required=True, choices=TIMELINE['AUDIO']['FORMATS'])
@@ -402,6 +402,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument('--receipt', required=True, type=Path)
     parser.add_argument('--deadline', type=float, default=5)
     parser.add_argument('--max-late-ms', type=int, default=250)
+    if configure is not None:
+        configure(parser)
     args = parser.parse_args()
     try:
         audio_options(args.audio_overlap_policy, args.max_audio_overlap_ms, args.max_audio_phase_ms)

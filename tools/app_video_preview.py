@@ -34,7 +34,10 @@ def pack(frame: Any) -> bytes:
             (frame.width, frame.width // 2, frame.width // 2),
             (frame.height, frame.height // 2, frame.height // 2), strict=True):
         data = bytes(plane)
-        rows.extend(data[i * plane.line_size:i * plane.line_size + width] for i in range(height))
+        if plane.line_size == width:
+            rows.append(data[:width * height])
+        else:
+            rows.extend(data[i * plane.line_size:i * plane.line_size + width] for i in range(height))
     return b''.join(rows)
 
 

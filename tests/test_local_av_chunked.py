@@ -237,3 +237,49 @@ def test_native_demux_end_requires_producer_eof_and_cleanup_failure_changes_succ
     assert source.closed == 1 and report['status'] == 'failed'
     assert not report['input']['owned_chunk_bytes']
     assert bool(report['cleanup_errors']) == close_failure
+
+
+@pytest.mark.parametrize('finish', ['read', 'verify_end'])
+def test_slow_producer_eof_is_not_accepted_after_deadline(monkeypatch, finish):
+    clock = [0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: clock[0])
+    def slow_eof():
+        yield b'x'
+        clock[0] = D['VIDEO']['MAX_SECONDS'] + 1
+    reader = M['ChunkReader'](slow_eof(), 1)
+    reader.read(1)
+    try:
+        with pytest.raises(ValueError, match='deadline'):
+            reader.read(1) if finish == 'read' else reader.verify_end()
+        assert not reader.eof and reader.failure is not None
+        with pytest.raises(ValueError, match='previously failed'):
+            reader.verify_end()
+    finally:
+        reader.close()
+
+
+def test_final_slow_eof_cannot_publish_completed_source_receipt(monkeypatch):
+    clock = [0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: clock[0])
+    def slow_eof():
+        clock[0] = D['VIDEO']['MAX_SECONDS'] + 1
+        yield from ()
+    source = Producer(slow_eof())
+    class Container:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            pass
+    monkeypatch.setitem(D['AUDIO'], 'load_av', lambda: type('AV', (), dict(
+        __version__='test', library_versions={}, open=staticmethod(lambda *_a, **_k: Container()))))
+    monkeypatch.setitem(D, 'selected_tracks', lambda *_: [])
+    monkeypatch.setitem(D['AUDIO'], 'FormatConverter', lambda _: None)
+    monkeypatch.setitem(D['AUDIO'], 'FrameAdapter', lambda *_: None)
+    monkeypatch.setitem(D, 'prepared_events', lambda *_: iter(()))
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='deadline'):
+        list(M['iter_chunks'](source, 'mpeg', (0, 2), 1, report))
+    assert report['status'] == 'failed' and not report['cleanup_errors']
+    assert not report['input']['verified_source_end']
+    assert 'source_sha256' not in report and 'source_bytes' not in report
+    assert source.closed == 1 and not report['input']['owned_chunk_bytes']

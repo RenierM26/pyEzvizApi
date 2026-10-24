@@ -63,6 +63,7 @@ class ChunkReader(io.RawIOBase):
         try:
             chunk = next(self.iterator)
         except StopIteration:
+            self.check()  # Exhaustion may arrive after a blocking producer pull.
             self.eof = True
             return False
         if type(chunk) is not bytes or not 0 < len(chunk) <= MAX_CHUNK_BYTES:

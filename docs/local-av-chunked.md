@@ -36,6 +36,10 @@ Configuration is checked before pulling input or opening the decoder.
   EOF. Only iterator exhaustion establishes producer EOF. Errors are sticky and
   cannot be retried as clean EOF.
 
+The post-pull deadline check applies to iterator exhaustion as well as yielded
+chunks: a producer that returns EOF after the session deadline fails before
+verified-source completion or a complete-source receipt can be accepted.
+
 Bounds cover this reader's accepted/owned compressed chunks. The producer's
 own allocations, decryption buffers, native PyAV probing/demux/codec buffers,
 current borrowed frames, temporary copies and downstream references are

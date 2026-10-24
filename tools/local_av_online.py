@@ -142,6 +142,7 @@ def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report
                 policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None) -> Any:
     """Own input iterator; hold credit through each yield, not an output acknowledgement."""
     state = iterator = None
+    primary = False
     report.update(profile='standalone-online-av-policy-v1', status='failed', error=None,
         output_devices_opened=False, whole_source_preflight=False, physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
@@ -164,11 +165,11 @@ def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report
             raise ValueError('online source ended before both track heads; no inferred origin')
         report['status'] = 'completed'
     except BaseException as error:
+        primary = True
         report.update(status='closed-before-eof' if isinstance(error, GeneratorExit) else 'failed',
                       error=f'{type(error).__name__}: {error}')
         raise
     finally:
-        primary = sys.exc_info()[0] is not None
         if state is not None:
             report['policy_before_cleanup'] = state.result()
         try:

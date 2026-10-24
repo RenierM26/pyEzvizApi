@@ -195,6 +195,7 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
                 max_bytes: int = 16 * 1024 * 1024, startup: str = 'default') -> Any:
     """Own/close the producer iterator; preparation yields are not output acks."""
     reader = None
+    primary = False
     session = DECODE['Session'](streams, audio_stream, DECODE['discard'])
     report.update(profile='standalone-chunked-preparation-v1', status='failed', error=None,
         output_devices_opened=False, source_kind='caller-supplied-clear-chunks', physical_av_sync_measured=False,
@@ -214,11 +215,11 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
         report.update(status='completed', source_sha256=reader.digest.hexdigest(),
                       source_bytes=reader.received)
     except BaseException as error:
+        primary = True
         report.update(status='closed-before-eof' if isinstance(error, GeneratorExit) else 'failed',
                       error=f'{type(error).__name__}: {error}')
         raise
     finally:
-        primary = sys.exc_info()[0] is not None
         report['preparation'] = session.result()
         if reader is not None:
             report['input_before_cleanup'] = reader.result()

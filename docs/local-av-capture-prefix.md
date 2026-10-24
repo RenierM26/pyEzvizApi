@@ -86,3 +86,7 @@ counting toward their existing budgets. Actual interruptible IO belongs to the
 automatic transport. This PR does not integrate live playback or publish a Windows
 bundle; that runtime's library dependencies still need exact-interpreter checks
 before an integrated attended test.
+
+For one combined capture/decrypt/decode/online-policy terminal verdict, see
+[guarded capture preparation](local-av-capture-preparation.md). Its success is
+still accepted-prefix preparation only, never whole-source or playback completion.

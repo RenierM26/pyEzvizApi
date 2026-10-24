@@ -31,7 +31,7 @@ MAX_PACKET_BYTES = 8192
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_SECONDS = 3600
 WRITE_SECONDS = 5
-FORMATS = ('mpegts', 'matroska')
+FORMATS = ('mpegts', 'matroska', 'mpeg')
 
 
 class FormatConverter:

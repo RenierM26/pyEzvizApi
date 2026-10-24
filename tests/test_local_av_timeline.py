@@ -12,6 +12,8 @@ import sys
 
 import pytest
 
+from pyezvizapi.rtp_timing import _mpeg_crc32, _pack_header, _pes
+
 SCRIPT = Path(__file__).parents[1] / 'tools/local_av_timeline.py'
 M = runpy.run_path(str(SCRIPT))
 
@@ -244,3 +246,63 @@ def test_bounded_metadata_observer(monkeypatch):
     monkeypatch.setitem(M['AUDIO'], 'MAX_BLOCKS', 0)
     with pytest.raises(ValueError, match='limit'):
         manifest.write(json.dumps(dict(kind='decoded')))
+
+
+def encode_three_track_ps(tmp_path):
+    """Synthetic PS with original TS packet clocks and non-video-first indices."""
+    av = pytest.importorskip('av')
+    source = encode_three_track(tmp_path)
+    with av.open(str(source)) as container:
+        packets = [(p.stream.index, p.pts, p.dts, p.time_base, bytes(p))
+                   for p in container.demux() if p.size and p.pts is not None]
+    # Discover streams in E0, C0, E1 order: absolute indices are not lens ordinals.
+    first = [next(i for i, p in enumerate(packets) if p[0] == stream) for stream in (0, 2, 1)]
+    ordered = [packets[i] for i in first] + [p for i, p in enumerate(packets) if i not in first]
+    entries = bytes.fromhex('24e000000fc0000024e10000')
+    body = b'\xe0\xff\x00\x00' + len(entries).to_bytes(2, 'big') + entries
+    header = b'\x00\x00\x01\xbc' + (len(body) + 4).to_bytes(2, 'big') + body
+    mapping = header + _mpeg_crc32(header)
+    output = bytearray()
+    scr = 0
+    for index, pts, dts, base, payload in ordered:
+        clock = Fraction(pts) * base * 90000
+        decode = Fraction(dts if dts is not None else pts) * base * 90000
+        assert clock.denominator == decode.denominator == 1
+        scr = max(scr, int(decode))
+        sid = (0xE0, 0xE1, 0xC0)[index]
+        row = _pes(int(clock), sid, payload)
+        if decode != clock:
+            pts_bytes = bytes([row[9] | 0x10]) + row[10:14]
+            dts_row = _pes(int(decode), sid, b'')
+            dts_bytes = bytes([dts_row[9] & ~0x20]) + dts_row[10:14]
+            row = (row[:4] + (len(payload) + 13).to_bytes(2, 'big')
+                   + b'\x80\xc0\x0a' + pts_bytes + dts_bytes + payload)
+        output.extend(_pack_header(scr) + mapping + row)
+    result = tmp_path / 'three.ps'
+    result.write_bytes(output)
+    return result
+
+
+def test_clear_mpegps_preserves_both_lenses_audio_and_exact_source_clock(tmp_path):
+    source = encode_three_track_ps(tmp_path)
+    baseline = M['inspect'](tmp_path / 'three.ts', 'mpegts', (0, 1), 2)
+    result = M['inspect'](source, 'mpeg', (0, 2), 1)
+    assert result['summary'] == baseline['summary']
+    assert result['origin'] == baseline['origin']
+    assert result['source_sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    for actual, expected in zip(result['events'], baseline['events'], strict=True):
+        assert actual['kind'] == expected['kind'] and actual['at'] == expected['at']
+        if actual['kind'] == 'video_pair':
+            assert [p['pixel_sha256'] for p in actual['lenses']] == [p['pixel_sha256'] for p in expected['lenses']]
+            assert [p['stream_index'] for p in actual['lenses']] == [0, 2]
+        else:
+            assert actual['block']['stream_index'] == 1
+            for field in ('source_pts', 'time_base_num', 'time_base_den', 'samples', 'pcm_sha256'):
+                assert actual['block'][field] == expected['block'][field]
+            assert actual['gap_before'] == expected['gap_before']
+    p = subprocess.run([sys.executable, str(SCRIPT), str(source), '--container', 'mpeg',
+                        '--primary-stream', '0', '--secondary-stream', '2', '--audio-stream', '1',
+                        '--pairing', 'exact-pts', '--clock', 'container-pts'],
+                       capture_output=True, timeout=15, check=False)
+    assert p.returncode == 0, p.stderr.decode()
+    assert json.loads(p.stdout)['summary'] == result['summary']

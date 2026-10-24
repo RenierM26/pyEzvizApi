@@ -15,9 +15,11 @@ Requires a POSIX, little-endian host and optional PyAV (verified with 19.0.1):
 python -m pip install 'av>=19,<20'
 ```
 
-Only explicit `mpegts` and `matroska` demuxers are enabled, using a bounded regular
-local file object rather than a URL. Use clear MPEG-TS capture/remux output; raw or
-encrypted MPEG-PS is not accepted by this adapter. Inspect the local container to
+Only explicit `mpegts`, `matroska` and `mpeg` (MPEG-PS) demuxers are enabled,
+using a bounded regular local file object rather than a URL. Input must already
+be clear: encrypted MPEG-PS is not decrypted by this adapter. A clear PS capture
+can be read directly, avoiding a default FFmpeg remux that selects only one video
+track or changes source clock origins. Inspect the local container to
 choose the **absolute stream index**, not the audio-only ordinal, for example:
 
 ```sh

@@ -83,9 +83,10 @@ The caller's `EzvizClient` is **borrowed**, not closed by this stream owner
 (`caller_client_owned=False`). The acquired transport owns its underlying SDK,
 command or cloud socket/client resources and receives one final close per attempt
 (plus a possible in-startup cancellation interrupt).
-The normalized packet iterator is explicitly closed, when supported, before
-transport closure; finalizers run on completion, local limits, failure and early
-consumer close. A transport factory that raises before returning remains
+On reader finalization the normalized packet iterator is explicitly closed,
+when supported, before final transport release; active cancellation may interrupt
+the transport earlier. Finalizers run on completion, local limits, failure and
+early consumer close. A transport factory that raises before returning remains
 responsible for cleaning its own partial construction, as before.
 
 `network_eof_verified` is always false. In particular, do not feed an ordinary

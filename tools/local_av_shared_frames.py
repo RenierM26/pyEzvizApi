@@ -20,8 +20,11 @@ from typing import Any
 
 OUTPUT = runpy.run_path(str(Path(__file__).with_name('app_native_video_preview.py')))
 CAP = OUTPUT['NATIVE']['SCHEDULED']['PREVIEW']['MAX_SPOOL_BYTES']
-SEALS = sum(getattr(fcntl, name, 0) for name in
-            ('F_SEAL_WRITE', 'F_SEAL_GROW', 'F_SEAL_SHRINK', 'F_SEAL_SEAL'))
+# Linux UAPI values: portable Python builds may omit constants when compiled
+# against older headers, even though their running kernel supports memfd seals.
+ADD_SEALS = getattr(fcntl, 'F_ADD_SEALS', 1033)
+GET_SEALS = getattr(fcntl, 'F_GET_SEALS', 1034)
+SEALS = 0x01 | 0x02 | 0x04 | 0x08  # SEAL, SHRINK, GROW, WRITE
 
 
 @dataclass(frozen=True)
@@ -35,20 +38,20 @@ class Frame:
 
 
 def sealed_file() -> Any:
-    if not hasattr(os, 'memfd_create'):
+    if not sys.platform.startswith('linux') or not hasattr(os, 'memfd_create'):
         raise ValueError('sealed shared frames require Linux/WSL memfd support')
     return os.fdopen(os.memfd_create('standalone-paired-pixels', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING), 'w+b')
 
 
 def seal(store: Any) -> None:
     store.flush()
-    fcntl.fcntl(store.fileno(), fcntl.F_ADD_SEALS, SEALS)
+    fcntl.fcntl(store.fileno(), ADD_SEALS, SEALS)
 
 
 def validate_store(fd: int) -> int:
     info = os.fstat(fd)
     if (not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= CAP
-            or fcntl.fcntl(fd, fcntl.F_GET_SEALS) & SEALS != SEALS):
+            or fcntl.fcntl(fd, GET_SEALS) & SEALS != SEALS):
         raise ValueError('requires a bounded fully sealed frame store')
     return info.st_size
 

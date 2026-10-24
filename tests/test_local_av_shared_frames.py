@@ -1,6 +1,7 @@
 """Shared storage retains exact paired bytes and rejects mutable/invalid inputs."""
 
 import ctypes.util
+import fcntl
 import hashlib
 import io
 import os
@@ -92,3 +93,16 @@ def test_real_worker_metadata_only_ack_and_hash_rejection(monkeypatch, bad):
         finally:
             output.abort()
         assert output.process.poll() is not None
+
+
+def test_portable_python_without_header_constants_still_enforces_kernel_seals(monkeypatch):
+    for name in ('F_ADD_SEALS', 'F_GET_SEALS', 'F_SEAL_SEAL', 'F_SEAL_WRITE',
+                 'F_SEAL_GROW', 'F_SEAL_SHRINK'):
+        monkeypatch.delattr(fcntl, name, raising=False)
+    portable = runpy.run_path(str(Path(__file__).parents[1] / 'tools/local_av_shared_frames.py'))
+    with portable['sealed_file']() as store:
+        store.write(bytes(12))
+        portable['seal'](store)
+        assert portable['validate_store'](store.fileno()) == 12
+        with pytest.raises(PermissionError):
+            os.ftruncate(store.fileno(), 13)

@@ -136,3 +136,9 @@ Synthetic regressions cover large 90-kHz PTS, equal times, forward gaps, both
 supported sample formats, unchanged input frames and PCM identity with the
 unmodified converter. A generated MPEG-TS CLI fixture uses a non-sample-aligned
 clock; the existing Matroska fixture remains covered.
+
+
+For a standalone exact-container-PTS policy without native headers or app-selected
+pairs, see the [local A/V timeline planner](local-av-timeline.md). It preserves
+one shared source origin and explicitly reports unpaired pictures/audio gaps;
+it does not open output devices or reproduce native scheduling.

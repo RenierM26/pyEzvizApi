@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Development-only standalone local HEVC/AAC timeline planner with exact-rational lens pairing, one shared source origin, explicit unmatched pictures and preserved audio gaps/overlaps.
+
 - Developer-only bounded per-attempt decoder backend summaries and an offline raw-event audit, with explicit pending-attempt and completeness diagnostics.
 
 - Explicit parsed-frame app-compatible HEVC/AAC playback timing and stream-copy remux helpers, with per-session track origins, configured discontinuity repair and paired-picture reuse. Includes an explicit `app_relative_clock` opt-in for bounded single-source native HEVC/16 kHz AAC live capture, with strict provenance checks and staged high-level output. The typed native app-relative profile accepts explicit HEVC parameter-set decryption for encrypted SDK streams. Default timestamp policies are unchanged.

@@ -214,8 +214,10 @@ class Scheduler(Parent):
             raise
         finally:
             for kind, name in before.items():
-                if kind not in self.active:
+                if kind not in self.active and self.failed.get(kind) != name:
                     self.assets.release(name)
+                # Failed jobs retain credit until playback aborts/reaps the backend.
+                # A timeout return is not proof that its worker released the mapping.
 
     def dispatch(self, assets: Lookahead, backends: dict[str, Any], executor: Any) -> None:
         for kind, events in self.tracks.items():

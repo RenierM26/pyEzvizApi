@@ -43,7 +43,8 @@ The socket/bulk-copy transport is deliberately unsupported in this profile.
 6. Submit independent single-job video and audio tracks. Decode/prepare at most
    one next event between dispatch opportunities. Missing data, full queues and
    slow outputs never cause hidden drops, segment clock resets or rebases.
-7. Return lookahead credit only after the corresponding output job completes.
+7. Return lookahead credit only after successful output acknowledgement; a failed
+   job retains its credit until explicit backend abort and lease cleanup.
    Verify actual source EOF, all planned jobs and the explicit audio/video drain
    before declaring success. Keep the last image through audio drain.
 
@@ -79,8 +80,8 @@ cooperatively bounded, not forcibly interruptible or sandboxed. A slow native ca
 can delay owner dispatch and trigger lateness failure; audio/video calls already
 submitted run independently in at most two executor jobs. Preparation and startup
 have finite deadlines; all backend operations and final drain retain `--deadline`
-(default five seconds). Owned output children are aborted/reaped and worker jobs
-joined before leases close; the decoder iterator is explicitly closed on failure.
+(default five seconds). On failure, owned output children are aborted/reaped and worker jobs
+joined before remaining leases close; the decoder iterator is explicitly closed on failure.
 Cleanup attempts all owned leases and preserves the primary error. The existing
 60-second cooperative decoder-session budget includes time spent waiting during
 playback, so a recording near the source-span limit can exceed that separate

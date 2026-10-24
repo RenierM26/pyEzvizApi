@@ -423,7 +423,7 @@ def test_real_worker_rejects_invalid_frame_and_is_reaped(monkeypatch, bad):
     assert output.process.poll() is not None
 
 
-def test_cross_track_ack_survives_video_failure_and_both_credits_are_released():
+def test_cross_track_ack_survives_video_failure_and_failed_credit_waits_for_abort():
     events = [pair(), block()]
     timeline = dict(events=[dict(event, at=event['source_time']) for event, _ in events])
     assets = lookahead(events)
@@ -441,8 +441,10 @@ def test_cross_track_ack_survives_video_failure_and_both_credits_are_released():
             scheduler.harvest()
         assert scheduler.completed['audio_block'] == 1
         assert scheduler.failed == dict(video_pair='p:0')
-        assert not assets.owned and scheduler.cancel.is_set()
+        assert list(assets.owned) == ['p:0'] and scheduler.cancel.is_set()
+        assert assets.counts == dict(video_pair=1, audio_block=0)
     finally:
+        video.abort()
         assets.close()
 
 

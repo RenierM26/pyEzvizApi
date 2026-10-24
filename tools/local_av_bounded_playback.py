@@ -28,6 +28,7 @@ VIDEO_BYTES = 64 * 1024 * 1024
 def preflight(snapshot: bytes, args: Any, receipt: dict[str, Any]) -> tuple[list[Any], dict[str, Any], tuple[int, int]]:
     """Retain bounded metadata only; validate the entire clock/policy before devices."""
     delivery, pictures, audio = [], [], []
+    pair_digests: dict[str, str] = {}
     report: dict[str, Any] = {}
     iterator = DECODE['iter_snapshot'](snapshot, args.container,
         (args.primary_stream, args.secondary_stream), args.audio_stream, report)
@@ -36,6 +37,11 @@ def preflight(snapshot: bytes, args: Any, receipt: dict[str, Any]) -> tuple[list
             delivery.append(event)
             if event['kind'] == 'video_pair':
                 pictures.extend(event['lenses'])
+                if getattr(args, 'composition', 'python') == 'split-upload':
+                    lens = event['lenses'][0]
+                    pixels = PLAY['PREVIEW']['compose'](*payload, lens['width'], lens['height'])
+                    pair_digests[event['id']] = hashlib.sha256(pixels).hexdigest()
+                    del pixels
             else:
                 audio.append(event['block'])
             del payload
@@ -48,6 +54,7 @@ def preflight(snapshot: bytes, args: Any, receipt: dict[str, Any]) -> tuple[list
         container=args.container, primary_stream=args.primary_stream,
         secondary_stream=args.secondary_stream, audio_stream=args.audio_stream)
     receipt['timeline'] = timeline
+    receipt['pair_pixel_sha256'] = pair_digests
     geometry = PLAY['validate'](timeline, args.audio_overlap_policy,
         args.max_audio_overlap_ms, args.max_audio_phase_ms, receipt)
     return delivery, timeline, geometry
@@ -73,7 +80,12 @@ def verify_payload(expected: dict[str, Any], payload: tuple[bytes, ...]) -> list
 class Lookahead:
     """Slot/byte credit includes preparation, queued and in-flight output ownership."""
 
-    def __init__(self, iterator: Any, delivery: list[dict[str, Any]]) -> None:
+    def __init__(self, iterator: Any, delivery: list[dict[str, Any]],
+                 composition: str = 'python', pair_digests: dict[str, str] | None = None) -> None:
+        if composition not in ('python', 'split-upload'):
+            raise ValueError('unsupported bounded composition mode')
+        self.composition, self.pair_digests = composition, pair_digests or {}
+        self.timings: list[dict[str, Any]] = []
         self.iterator, self.delivery = iterator, delivery
         self.index = 0
         self.source_end = False
@@ -118,20 +130,23 @@ class Lookahead:
         self.bytes[kind] += size
         self.peak_counts[kind] = max(self.peak_counts[kind], self.counts[kind])
         self.peak_bytes[kind] = max(self.peak_bytes[kind], self.bytes[kind])
+        started = time.monotonic_ns()
+        timing = dict(id=name, kind=kind, started_monotonic_ns=started, phase='decode')
         try:
             try:
                 actual, payload = next(self.iterator)
             except StopIteration as error:
                 raise ValueError(f'second decode ended before planned event {name}') from error
+            decoded = time.monotonic_ns()
+            timing.update(decode_ns=decoded - started, phase='verify')
             if actual != expected:
                 raise ValueError('second decode disagrees with preflight source metadata')
             rows = verify_payload(expected, payload)
-            if kind == 'video_pair':
-                left = rows[0]
-                pixels = PLAY['PREVIEW']['compose'](*payload, left['width'], left['height'])
-                prepared = CHANNEL['Lease'](pixels)
-            else:
-                prepared = payload[0]
+            verified = time.monotonic_ns()
+            timing.update(verify_ns=verified - decoded, phase='prepare')
+            prepared = self.prepare(expected, payload, rows)
+            prepared_at = time.monotonic_ns()
+            timing.update(prepare_ns=prepared_at - verified, phase='queued')
             self.owned[name]['data'] = prepared
             if len(prepared) != size:
                 raise ValueError('prepared output size mismatch')
@@ -139,7 +154,22 @@ class Lookahead:
             self.index += 1
             return True
         finally:
+            timing.update(completed_monotonic_ns=time.monotonic_ns(),
+                          status='failed' if sys.exc_info()[0] is not None else 'prepared')
+            self.timings.append(timing)
             self.preparing = None
+
+    def prepare(self, expected: dict[str, Any], payload: tuple[bytes, ...], rows: list[Any]) -> Any:
+        if expected['kind'] != 'video_pair':
+            return payload[0]
+        if self.composition == 'split-upload':
+            digest = self.pair_digests.get(expected['id'])
+            if digest is None:
+                raise ValueError('split upload requires a preflight canonical pair fingerprint')
+            return CHANNEL['Lease']((payload[0], payload[1]), digest)
+        left = rows[0]
+        pixels = PLAY['PREVIEW']['compose'](*payload, left['width'], left['height'])
+        return CHANNEL['Lease'](pixels)
 
     def ready(self, event: dict[str, Any]) -> bool:
         queue = self.queues[event['kind']]
@@ -191,7 +221,8 @@ class Lookahead:
             owned_counts=dict(self.counts), owned_bytes=dict(self.bytes),
             peak_owned_counts=dict(self.peak_counts), peak_owned_bytes=dict(self.peak_bytes),
             queued={kind: list(queue) for kind, queue in self.queues.items()},
-            owned_ids=list(self.owned), preparing=self.preparing, abandoned=self.abandoned)
+            owned_ids=list(self.owned), preparing=self.preparing, abandoned=self.abandoned,
+            composition=self.composition, preparation_timings=list(self.timings))
 
 
 Parent: Any = PLAY['Scheduler']
@@ -261,9 +292,13 @@ class Scheduler(Parent):
             for backend in backends.values():
                 backend.alive()
             self.dispatch(assets, backends, executor)
-            assets.pump()  # One prepared event at a time; native decode stays cooperatively bounded.
+            prepared = assets.pump()  # One event; credit still bounds cooperative native decode.
+            self.harvest()  # A call may finish during preparation; release it before redispatch.
             self.dispatch(assets, backends, executor)
-            self.pause(PLAY['POLL'])
+            # Preparation already advances wall time. Poll only while waiting for
+            # credit, a target or output completion, not after productive work.
+            if not prepared:
+                self.pause(PLAY['POLL'])
         if self.clock() > end:
             raise ValueError('output session deadline exceeded')
         audio.finish(self.timeout)
@@ -281,13 +316,14 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
     receipt['cleanup_errors'] = []
     try:
         validate_transport(args)
-        receipt['audio_input_probe'] = dict(probesize_bytes=32, analyzeduration_us=1,
-                                             sample_format='s16le', sample_rate=16000, channels=1)
+        receipt.update(composition=getattr(args, 'composition', 'python'),
+            audio_input_probe=dict(probesize_bytes=32, analyzeduration_us=1,
+                                  sample_format='s16le', sample_rate=16000, channels=1))
         snapshot = DECODE['snapshot_source'](args.source)
         delivery, timeline, (width, height) = preflight(snapshot, args, receipt)
         iterator = DECODE['iter_snapshot'](snapshot, args.container,
             (args.primary_stream, args.secondary_stream), args.audio_stream, decode_report)
-        assets = Lookahead(iterator, delivery)
+        assets = Lookahead(iterator, delivery, receipt['composition'], receipt.get('pair_pixel_sha256'))
         assets.prefill(timeline, args.deadline)
         scheduler = Scheduler(timeline, args.deadline, args.max_late_ms, assets)
         video = CHANNEL['Output'](width * 2, height, args.deadline, PLAY['MAX_PAIRS'])
@@ -332,7 +368,8 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    args = PLAY['arguments']()
+    args = PLAY['arguments'](lambda parser: parser.add_argument('--composition',
+        choices=['python', 'split-upload'], default='python'))
     receipt: dict[str, Any] = dict(profile='standalone-bounded-local-av-host-submissions-v1',
         status='failed', error=None, timing='common-host-submissions-not-device-clock-sync',
         audio_gap_policy='submit-at-source-target-no-silence-insertion',

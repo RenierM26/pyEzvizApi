@@ -122,3 +122,12 @@ slow-track lateness, drain failure, descriptor/hash/seal validation and actual
 SDL descriptor delivery. Optional synthetic HEVC/AAC MPEG-PS tests exercise the
 real two-pass path and SDL/ffplay dummy drain. No camera credentials or fixtures
 are required. Real driver/human observations remain a separate validation step.
+
+## Opt-in split upload
+
+`--composition split-upload` removes timed owner-side wide-frame composition and
+keeps the same canonical paired-pixel acknowledgement using direct per-lens SDL
+texture rectangle uploads. The default remains `python`. See
+[split uploads and stage timings](local-av-split-upload.md) for layout/storage
+hash separation, byte-exact verification and the Windows failure that motivated
+this mode. Neither mode raises storage or lateness limits.

@@ -283,3 +283,15 @@ def test_final_slow_eof_cannot_publish_completed_source_receipt(monkeypatch):
     assert not report['input']['verified_source_end']
     assert 'source_sha256' not in report and 'source_bytes' not in report
     assert source.closed == 1 and not report['input']['owned_chunk_bytes']
+
+
+def test_cleanup_only_failure_raises_inside_unrelated_caller_except(tmp_path):
+    path = OLD['TIMELINE_TESTS']['encode_three_track_ps'](tmp_path)
+    source = Producer([path.read_bytes()], close_failure=True)
+    report: dict[str, Any] = {}
+    try:
+        raise LookupError('ambient caller error')
+    except LookupError:
+        with pytest.raises(RuntimeError, match='cleanup failed'):
+            list(M['iter_chunks'](source, 'mpeg', (0, 2), 1, report, startup='bounded-mpeg'))
+    assert report['status'] == 'failed' and report['cleanup_errors']

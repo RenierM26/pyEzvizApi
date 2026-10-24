@@ -202,3 +202,14 @@ def test_session_identity_limits_remain_after_startup_credit_is_released(monkeyp
         list(adapt(source, report))
     assert report['status'] == 'failed' and source.closed
     assert report['policy']['released_prepared_events'] == 3
+
+
+def test_cleanup_only_failure_raises_inside_unrelated_caller_except():
+    source = Source([video(), audio()], close_error=True)
+    report: dict[str, Any] = {}
+    try:
+        raise LookupError('ambient caller error')
+    except LookupError:
+        with pytest.raises(RuntimeError, match='cleanup failed'):
+            list(adapt(source, report))
+    assert report['status'] == 'failed' and report['cleanup_errors']

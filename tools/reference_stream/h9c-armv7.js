@@ -48,6 +48,13 @@ function checkRenderPixels(n){
   timed('render_snapshot_send',s.bytes.byteLength,()=>snapshotSend({event:'native_render_pixels',device_mono_ns:mono(),sid:h[1],raw:h[7],frame:h[10],bytes:s.bytes.byteLength,input_bytes:s.source.bytes.byteLength,sha256:renderHash,input_sha256:hash,header_words:s.header},s.bytes));
   inputSnapshots.delete(s.key);capturedKeys.delete(s.key);
  }
+ // Once the final permitted pair is fully emitted, no future selection can use
+ // these remaining input samples. Do not hold their copied pixels until unload.
+ if(capturedPairs>=pairLimit){
+  const count=inputSnapshots.size,bytes=Array.from(inputSnapshots.values()).reduce((n,s)=>n+s.bytes.byteLength,0);
+  inputSnapshots.clear();capturedKeys.clear();
+  if(count)log('input_samples_retired',{count,bytes,reason:'pair_limit_reached'});
+ }
 }
 function register(o){objects.set(o.toString(),o);for(const off of[0x1a0,0x1a4]){const q=o.add(off).readPointer();if(!q.isNull())dataQueues.add(q.toString());}}
 function error(where,e){log('error',{where,message:String(e)});}

@@ -195,9 +195,12 @@ def worker(fd: int, width: int, height: int, frame_limit: int = 32) -> int:
 class Output:
     """Nonblocking IPC, per-operation deadlines and terminate/kill/reap for SDL hangs."""
 
-    def __init__(self, width: int, height: int, timeout: float, *, frame_limit: int = 32) -> None:
+    def __init__(self, width: int, height: int, timeout: float, *, frame_limit: int = 32,
+                 title: str | None = None) -> None:
         if type(frame_limit) is not int or not 1 <= frame_limit <= 300:
             raise ValueError('SDL frame limit must be 1..300')
+        if title is not None and (not isinstance(title, str) or not 1 <= len(title) <= 128):
+            raise ValueError('SDL title must contain 1..128 characters')
         self.channel, child = socket.socketpair()
         self.process: Any = None
         self.timeout = timeout
@@ -208,7 +211,8 @@ class Output:
             if frame_limit != 32:
                 command.append(str(frame_limit))
             self.process = subprocess.Popen(command, pass_fds=(child.fileno(),),
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=None if title is None else dict(os.environ, EZVIZ_SDL_WINDOW_TITLE=title))
             ready = self.receive(time.monotonic() + timeout)
             if (set(ready) != {'kind', 'driver', 'width', 'height'} or ready['kind'] != 'ready'
                     or not isinstance(ready['driver'], str) or ready['width'] != width or ready['height'] != height):

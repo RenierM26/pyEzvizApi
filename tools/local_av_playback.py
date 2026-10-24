@@ -52,48 +52,62 @@ def audio_options(policy: str, overlap_ms: int | None, phase_ms: int | None) -> 
         raise ValueError('bounded-serial-pcm requires both explicit integer audio bounds, 0..64 ms')
 
 
-def audio_contract(timeline: dict[str, Any], policy: str = 'reject',
-                   overlap_ms: int | None = None, phase_ms: int | None = None) -> dict[str, Any]:
-    """Audit nominal serial samples versus original targets; never an observed device clock."""
-    audio_options(policy, overlap_ms, phase_ms)
-    duration = Fraction(TIMELINE['AUDIO']['SAMPLES'], TIMELINE['AUDIO']['SAMPLE_RATE'])
-    rows: list[dict[str, Any]] = []
-    first: Fraction | None = None
-    previous: Fraction | None = None
-    worst_overlap = worst_phase = Fraction(0)
-    for event in timeline['events']:
-        if event['kind'] != 'audio_block':
-            continue
+class AudioClock:
+    """Incremental serial PCM/source audit; no clock repair or device-clock claim."""
+
+    def __init__(self, policy: str = 'reject', overlap_ms: int | None = None,
+                 phase_ms: int | None = None) -> None:
+        audio_options(policy, overlap_ms, phase_ms)
+        self.policy, self.overlap_ms, self.phase_ms = policy, overlap_ms, phase_ms
+        self.duration = Fraction(TIMELINE['AUDIO']['SAMPLES'], TIMELINE['AUDIO']['SAMPLE_RATE'])
+        self.first: Fraction | None = None
+        self.previous: Fraction | None = None
+        self.count = 0
+        self.worst_overlap = self.worst_phase = Fraction(0)
+
+    def offer(self, event: dict[str, Any]) -> dict[str, Any]:
         at = fraction(event['at'])
-        if previous is not None and at <= previous:
+        if self.previous is not None and at <= self.previous:
             raise ValueError('audio output requires strictly increasing source starts')
-        gap: Fraction | None = None if previous is None else at - previous - duration
+        gap = None if self.previous is None else at - self.previous - self.duration
         declared = event['gap_before']
         if (declared is None) != (gap is None) or (declared is not None and fraction(declared) != gap):
             raise ValueError('audio gap metadata disagrees with original targets')
-        first = at if first is None else first
-        serial_at = first + len(rows) * duration
+        first = at if self.first is None else self.first
+        serial_at = first + self.count * self.duration
         phase = serial_at - at
         overlap = max(Fraction(0), -gap) if gap is not None else Fraction(0)
-        worst_overlap = max(worst_overlap, overlap)
-        worst_phase = max(worst_phase, abs(phase))
-        if policy == 'reject' and overlap:
+        if self.policy == 'reject' and overlap:
             raise ValueError('overlapping audio is unsupported; no implicit drop or repair')
-        if policy == 'bounded-serial-pcm':
-            assert overlap_ms is not None and phase_ms is not None
-            if overlap > Fraction(overlap_ms, 1000):
+        if self.policy == 'bounded-serial-pcm':
+            assert self.overlap_ms is not None and self.phase_ms is not None
+            if overlap > Fraction(self.overlap_ms, 1000):
                 raise ValueError('audio overlap exceeds explicit bound')
-            if abs(phase) > Fraction(phase_ms, 1000):
+            if abs(phase) > Fraction(self.phase_ms, 1000):
                 raise ValueError('nominal serial PCM/source phase exceeds explicit bound')
-        rows.append(dict(id=event['block']['id'], source_at=event['at'],
+        row = dict(id=event['block']['id'], source_at=event['at'],
             source_gap_before=declared, nominal_serial_pcm_at=TIMELINE['rational'](serial_at),
-            nominal_serial_minus_source=TIMELINE['rational'](phase)))
-        previous = at
-    return dict(policy=policy, max_overlap_ms=overlap_ms, max_nominal_phase_ms=phase_ms,
-        observed_max_source_overlap=TIMELINE['rational'](worst_overlap),
-        calculated_max_abs_nominal_phase=TIMELINE['rational'](worst_phase),
-        sample_clock_measured=False, source_targets_changed=False, pcm_samples_changed=False,
-        nominal_sample_rate=TIMELINE['AUDIO']['SAMPLE_RATE'], blocks=rows)
+            nominal_serial_minus_source=TIMELINE['rational'](phase))
+        self.first, self.previous = first, at
+        self.count += 1
+        self.worst_overlap = max(self.worst_overlap, overlap)
+        self.worst_phase = max(self.worst_phase, abs(phase))
+        return row
+
+    def result(self) -> dict[str, Any]:
+        return dict(policy=self.policy, max_overlap_ms=self.overlap_ms, max_nominal_phase_ms=self.phase_ms,
+            observed_max_source_overlap=TIMELINE['rational'](self.worst_overlap),
+            calculated_max_abs_nominal_phase=TIMELINE['rational'](self.worst_phase),
+            sample_clock_measured=False, source_targets_changed=False, pcm_samples_changed=False,
+            nominal_sample_rate=TIMELINE['AUDIO']['SAMPLE_RATE'])
+
+
+def audio_contract(timeline: dict[str, Any], policy: str = 'reject',
+                   overlap_ms: int | None = None, phase_ms: int | None = None) -> dict[str, Any]:
+    """Whole-recording receipt using the same per-block checks as online policy."""
+    clock = AudioClock(policy, overlap_ms, phase_ms)
+    rows = [clock.offer(event) for event in timeline['events'] if event['kind'] == 'audio_block']
+    return dict(clock.result(), blocks=rows)
 
 
 def validate(timeline: dict[str, Any], policy: str = 'reject',

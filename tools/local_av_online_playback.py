@@ -20,6 +20,7 @@ ONLINE = runpy.run_path(str(Path(__file__).with_name('local_av_online.py')))
 B = ONLINE['BOUNDED']
 PLAY = B['PLAY']
 CHANNEL = B['CHANNEL']
+HASH_SCRATCH_BYTES = 65536
 
 
 def pair_digest(left: bytes, right: bytes, width: int, height: int) -> str:
@@ -28,14 +29,29 @@ def pair_digest(left: bytes, right: bytes, width: int, height: int) -> str:
             or any(type(p) is not bytes or len(p) != width * height * 3 // 2 for p in (left, right))):
         raise ValueError('invalid immutable canonical pair extent')
     digest = hashlib.sha256()
-    with memoryview(left) as a, memoryview(right) as b:
+    # Bound scratch independently of frame size; larger hashlib updates release
+    # the GIL so the decode owner can progress while a preparation worker hashes.
+    scratch = bytearray(HASH_SCRATCH_BYTES)
+    used = 0
+    with memoryview(left) as a, memoryview(right) as b, memoryview(scratch) as out:
         offset = 0
         for w, h in ((width, height), (width // 2, height // 2), (width // 2, height // 2)):
             for row in range(h):
                 start = offset + row * w
-                digest.update(a[start:start + w])
-                digest.update(b[start:start + w])
+                for lens in (a, b):
+                    part = lens[start:start + w]
+                    position = 0
+                    while position < len(part):
+                        size = min(len(part) - position, len(out) - used)
+                        out[used:used + size] = part[position:position + size]
+                        used += size
+                        position += size
+                        if used == len(out):
+                            digest.update(out)
+                            used = 0
             offset += w * h
+        if used:
+            digest.update(out[:used])
     return digest.hexdigest()
 
 
@@ -56,6 +72,43 @@ class Assets:
         self.abandoned: list[str] = []
         self.offered = dict(self.counts)
         self.timings: list[dict[str, Any]] = []
+        self.preparation_executor: Any = None
+        self.pending: dict[str, Any] = {}
+
+    def start_preparation(self, executor: Any = None) -> None:
+        """One preparation worker; its backlog is charged to existing lease credit."""
+        if self.preparation_executor is not None:
+            raise ValueError('preparation worker already started')
+        self.preparation_executor = executor if executor is not None else ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix='online-av-prepare')
+
+    @staticmethod
+    def prepare(payload: tuple[bytes, ...], geometry: tuple[int, int], timing: dict[str, Any]) -> Any:
+        started = time.monotonic_ns()
+        timing['preparation_started_ns'] = started
+        digest = pair_digest(payload[0], payload[1], *geometry)
+        hashed = time.monotonic_ns()
+        lease = CHANNEL['Lease'](payload, digest)
+        finished = time.monotonic_ns()
+        timing.update(canonical_ns=hashed - started, store_ns=finished - hashed,
+            preparation_finished_ns=finished)
+        return lease
+
+    def harvest_preparation(self) -> bool:
+        progressed = False
+        for name, (future, timing) in list(self.pending.items()):
+            if not future.done():
+                break  # Single worker preserves video source order.
+            try:
+                self.owned[name]['data'] = future.result()
+                self.queues['video_pair'].append(name)
+                self.offered['video_pair'] += 1
+                progressed = True
+            finally:
+                timing['status'] = 'failed' if sys.exc_info()[0] is not None else 'prepared'
+                self.timings.append(timing)
+                del self.pending[name]
+        return progressed
 
     def can_pull(self) -> bool:
         size = 0 if self.geometry is None else self.geometry[0] * self.geometry[1] * 3
@@ -64,6 +117,8 @@ class Assets:
             and self.counts['audio_block'] < B['AUDIO_SLOTS'])
 
     def pump(self, *, startup: bool = False) -> bool:
+        if self.harvest_preparation():
+            return True  # Dispatch newly ready heads before another decode pull.
         if self.source_end or (not startup and not self.can_pull()):
             return False
         started = time.monotonic_ns()
@@ -85,21 +140,25 @@ class Assets:
         self.bytes[kind] += size
         self.peak_counts[kind] = max(self.peak_counts[kind], self.counts[kind])
         self.peak_bytes[kind] = max(self.peak_bytes[kind], self.bytes[kind])
-        timing = dict(id=name, kind=kind, pull_ns=pulled - started)
+        timing = dict(id=name, kind=kind, pull_ns=pulled - started,
+            pull_started_ns=started, pull_returned_ns=pulled)
         try:
             if kind == 'video_pair':
                 self.geometry = (event['lenses'][0]['width'], event['lenses'][0]['height'])
-                digest = pair_digest(payload[0], payload[1], self.geometry[0], self.geometry[1])
-                hashed = time.monotonic_ns()
-                self.owned[name]['data'] = CHANNEL['Lease'](payload, digest)
-                timing.update(canonical_ns=hashed - pulled, store_ns=time.monotonic_ns() - hashed)
+                if self.preparation_executor is not None:
+                    timing['preparation_submitted_ns'] = time.monotonic_ns()
+                    future = self.preparation_executor.submit(self.prepare, payload, self.geometry, timing)
+                    self.pending[name] = (future, timing)
+                    return True
+                self.owned[name]['data'] = self.prepare(payload, self.geometry, timing)
             else:
                 self.owned[name]['data'] = payload[0]
             self.queues[kind].append(name)
             self.offered[kind] += 1
         finally:
-            timing.update(status='failed' if sys.exc_info()[0] is not None else 'prepared')
-            self.timings.append(timing)
+            if name not in self.pending:
+                timing.update(status='failed' if sys.exc_info()[0] is not None else 'prepared')
+                self.timings.append(timing)
             self.preparing = None
         return True
 
@@ -127,7 +186,33 @@ class Assets:
         return self.owned[name]['data']
 
     release = B['Lookahead'].release
-    close = B['Lookahead'].close
+    def close(self) -> None:
+        errors = []
+        # Never close an in-progress store. Join preparation before claiming or
+        # releasing its result, even when source/output already failed.
+        if self.preparation_executor is not None:
+            try:
+                self.preparation_executor.shutdown(wait=True)
+            except Exception as error:
+                errors.append(str(error))
+                # result() below still waits for every outstanding store before
+                # releasing it if executor shutdown itself failed.
+        for name, (future, timing) in list(self.pending.items()):
+            try:
+                self.owned[name]['data'] = future.result()
+                timing['status'] = 'prepared'
+            except Exception as error:
+                timing['status'] = 'failed'
+                errors.append(str(error))
+            finally:
+                self.timings.append(timing)
+                del self.pending[name]
+        try:
+            B['Lookahead'].close(self)
+        except Exception as error:
+            errors.append(str(error))
+        if errors:
+            raise ValueError('online preparation cleanup failed: ' + '; '.join(errors))
 
     def result(self) -> dict[str, Any]:
         return dict(verified_prepared_source_end=self.source_end, offered=dict(self.offered),
@@ -135,7 +220,9 @@ class Assets:
             peak_owned_counts=dict(self.peak_counts), peak_owned_bytes=dict(self.peak_bytes),
             queued={kind: list(q) for kind, q in self.queues.items()},
             owned_ids=list(self.owned), abandoned=list(self.abandoned), preparing=self.preparing,
-            preparation_timings=list(self.timings))
+            preparation_timings=list(self.timings), pending_preparation=list(self.pending),
+            preparation_workers=1 if self.preparation_executor is not None else 0,
+            canonical_scratch_byte_limit=HASH_SCRATCH_BYTES)
 
 
 Parent: Any = B['Scheduler']
@@ -171,7 +258,7 @@ class Scheduler(Parent):
         self.anchor = self.clock()
         backends = dict(video_pair=video, audio_block=audio)
         end = self.anchor + int((PLAY['MAX_SPAN'] + self.timeout) * 1e9)
-        while not assets.source_end or self.jobs or any(assets.queues.values()):
+        while not assets.source_end or assets.pending or self.jobs or any(assets.queues.values()):
             self.harvest()
             if self.cancel.is_set() or self.clock() > end:
                 raise ValueError('online output cancelled or session deadline exceeded')
@@ -181,7 +268,7 @@ class Scheduler(Parent):
             prepared = assets.pump()
             self.harvest()
             self.dispatch(assets, backends, executor)
-            if assets.source_end and not any(assets.queues.values()) and self.latest is not None:
+            if assets.source_end and not assets.pending and not any(assets.queues.values()) and self.latest is not None:
                 end = min(end, self.latest + int(self.timeout * 1e9))
             if not prepared:
                 self.pause(PLAY['POLL'])
@@ -255,6 +342,7 @@ def playback(args: Any, receipt: dict[str, Any]) -> None:
         audio = PLAY['PCM']['Ffplay'](channel_args=('-ch_layout', 'mono') if args.mono_option == 'ch-layout'
             else ('-channels', '1'), immediate_raw_probe=True)
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='online-av-output')
+        assets.start_preparation()
         scheduler = Scheduler(assets, args.deadline, args.max_late_ms)
         scheduler.run(assets, video, audio, executor)
     finally:

@@ -1,4 +1,5 @@
 """Native protocol independently enforces opt-in sequence IDs before receiving FDs."""
+import ctypes.util
 import hashlib
 import os
 from pathlib import Path
@@ -9,8 +10,10 @@ import pytest
 
 C = runpy.run_path(str(Path(__file__).parents[1] / 'tools/local_av_frame_channel.py'))
 pytestmark = pytest.mark.skipif(not hasattr(os, 'memfd_create'), reason='Linux sealed output')
+native = pytest.mark.skipif(not ctypes.util.find_library('SDL2-2.0'), reason='SDL2 unavailable')
 
 
+@native
 def test_sequence_worker_keeps_constant_state_through_existing_frame_limit(monkeypatch):
     monkeypatch.setenv('SDL_VIDEODRIVER', 'dummy')
     output = C['Output'](4, 2, 5, 300, identity_mode='source-sequence')
@@ -33,6 +36,7 @@ def test_sequence_worker_keeps_constant_state_through_existing_frame_limit(monke
 @pytest.mark.parametrize('identity,accepted', [('local-pair:0', 0), ('local-pair:2', 0),
     ('local-pair:01', 0), ('local-pair:+1', 0), ('local-pair:\uff11', 0), ('other:1', 0),
     ('local-pair:1', 1), ('local-pair:3', 1)])
+@native
 def test_raw_worker_rejects_noncanonical_sequence_before_requesting_descriptor(monkeypatch, identity, accepted):
     monkeypatch.setenv('SDL_VIDEODRIVER', 'dummy')
     output = C['Output'](4, 2, 5, 3, identity_mode='source-sequence')
@@ -74,6 +78,7 @@ def test_invalid_mode_cannot_create_native_resources(monkeypatch):
 
 
 @pytest.mark.parametrize('phase', ['ready', 'presented', 'finished'])
+@native
 def test_host_rejects_worker_audit_downgrade_and_reaps_worker(monkeypatch, phase):
     monkeypatch.setenv('SDL_VIDEODRIVER', 'dummy')
     cls = C['Output']
@@ -102,6 +107,7 @@ def test_host_rejects_worker_audit_downgrade_and_reaps_worker(monkeypatch, phase
     assert processes and all(process.poll() is not None for process in processes)
 
 
+@native
 def test_sequence_worker_cannot_exceed_requested_frame_cap(monkeypatch):
     monkeypatch.setenv('SDL_VIDEODRIVER', 'dummy')
     output = C['Output'](4, 2, 5, 1, identity_mode='source-sequence')
@@ -119,6 +125,7 @@ def test_sequence_worker_cannot_exceed_requested_frame_cap(monkeypatch):
         lease.close()
 
 
+@native
 def test_empty_sequence_worker_can_finish_without_claiming_presented_pixels(monkeypatch):
     monkeypatch.setenv('SDL_VIDEODRIVER', 'dummy')
     output = C['Output'](4, 2, 5, 1, identity_mode='source-sequence')

@@ -15,6 +15,10 @@ import logging
 import os
 from pathlib import Path
 import runpy
+import signal
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 import pyezvizapi
@@ -25,6 +29,8 @@ EVIDENCE = LAN["EVIDENCE"]
 ONLINE = LAN["CAPTURE"]["PREPARE"]["ONLINE"]
 DECRYPT = LAN["CAPTURE"]["PREPARE"]["CAPTURE"]["DECRYPT"]
 TRACKS = ("video_pair", "audio_block")
+WORKER_SECONDS = 70
+MAX_RESULT = 65536
 
 
 def require(condition: bool, message: str) -> None:
@@ -402,21 +408,122 @@ def verify(args: Any) -> dict[str, Any]:
     )
 
 
+def worker_result(report: Any) -> dict[str, Any]:
+    """Return only the fixed successful hash/count projection, not diagnostics."""
+    hashes = ("receipt_sha256", "encrypted_sha256", "clear_sha256")
+    flags = (
+        "camera_opened",
+        "output_devices_opened",
+        "physical_av_sync_measured",
+        "network_eof_established",
+    )
+    require(
+        type(report) is dict
+        and set(report) == {"status", "media_receipt", *hashes, *flags}
+        and report["status"] == "source-media-verified"
+        and all(report[k] is False for k in flags),
+        "invalid worker result",
+    )
+    media = report["media_receipt"]
+    require(
+        type(media) is dict
+        and set(media) == {"profile", "host_anchor_monotonic_ns", "order", "tracks"}
+        and media["profile"] == "bounded-output-media-v1"
+        and media["order"] == "strict-source-order-per-track"
+        and type(media["tracks"]) is dict
+        and set(media["tracks"]) == set(TRACKS),
+        "invalid worker media summary",
+    )
+    SourceChain(media["host_anchor_monotonic_ns"])
+    fingerprints = [report[k] for k in hashes]
+    for track in TRACKS:
+        row = media["tracks"][track]
+        require(
+            type(row) is dict
+            and set(row) == {"completed", "bytes", "sha256"}
+            and type(row["completed"]) is int
+            and 0 < row["completed"] <= (900 if track == "video_pair" else 10000)
+            and type(row["bytes"]) is int
+            and 0 < row["bytes"] <= row["completed"] * 67108864
+            and (track != "audio_block" or row["bytes"] == row["completed"] * 2048),
+            "invalid worker media extent",
+        )
+        fingerprints.append(row["sha256"])
+    require(
+        all(
+            type(v) is str and len(v) == 64 and all(c in "0123456789abcdef" for c in v)
+            for v in fingerprints
+        ),
+        "invalid worker fingerprint",
+    )
+    return report
+
+
+def supervise(args: Any) -> dict[str, Any]:
+    """Bound native verification separately from playback/source deadlines."""
+    with tempfile.TemporaryDirectory(prefix="local-av-verify-") as temporary:
+        result = Path(temporary) / "worker.json"
+        command = [
+            sys.executable,
+            "-I",
+            str(Path(__file__).resolve()),
+            "--worker",
+            "--result",
+            str(result),
+        ]
+        for name in ("private_config", "receipt", "packet_evidence"):
+            command.extend(["--" + name.replace("_", "-"), str(getattr(args, name).absolute())])
+        child = None
+        primary = False
+        try:
+            child = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            code = child.wait(timeout=WORKER_SECONDS)
+            if code == 130:
+                raise KeyboardInterrupt
+            require(code == 0, "verification worker failed")
+            report = json.loads(LAN["read_regular"](result, MAX_RESULT))
+            return worker_result(report)
+        except BaseException:
+            primary = True
+            raise
+        finally:
+            if child is not None:
+                try:
+                    # Always kills surviving group members, even after leader exit.
+                    LAN["reap"](child)
+                except Exception:
+                    if not primary:
+                        raise
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("private-config", "receipt", "packet-evidence", "result"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
         fd = os.open(args.result, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError:
         print("Result must be a new writable file.")
         return 2
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def stop(_signal: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
     disabled = logging.root.manager.disable
     logging.disable(logging.CRITICAL)
     with os.fdopen(fd, "wb") as output:
         try:
-            report = verify(args)
+            report = verify(args) if args.worker else supervise(args)
             code = 0
         except (KeyboardInterrupt, EOFError):
             report, code = dict(status="cancelled"), 130
@@ -424,6 +531,7 @@ def main() -> int:
             # Never serialize decoder exception text, source metadata or private configuration.
             report, code = dict(status="verification-failed"), 2
         finally:
+            signal.signal(signal.SIGTERM, previous)
             logging.disable(disabled)
         output.write(canonical(report) + b"\n")
     print(json.dumps(dict(status=report["status"])))

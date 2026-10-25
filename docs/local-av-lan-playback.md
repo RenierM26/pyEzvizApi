@@ -182,7 +182,14 @@ raw decoder exceptions or private configuration. A zero exit and
 The verifier streams bounded decryption/decode from a snapshot of at most 32 MiB
 of ciphertext; it does not write plaintext or build an unbounded media history.
 It retains existing native decode/startup/ownership and 900-pair/10,000-audio-block
-work guards. Those native/cooperative guards are not a hard process watchdog.
+work guards. The public CLI runs verification in one isolated worker under a
+separate 70-second wall limit, followed by bounded TERM (10 seconds) / KILL
+(3 seconds) escalation. It reaps the worker and kills surviving group members
+even after normal leader exit. This orchestration limit does not enlarge native
+media/startup guards or any playback deadline. Ctrl-C/SIGTERM cancel the worker;
+failed, timed-out, unreaped or malformed worker results cannot publish success.
+The internal `verify()` function still has cooperative native guards, not its
+own process watchdog; hidden worker switches are not a public bypass API.
 Failed/cancelled or unsupported receipts are rejected, not upgraded by a later
 replay. Their stable packet evidence can still be checked with the integrity-only
 checker and used separately for diagnosis.

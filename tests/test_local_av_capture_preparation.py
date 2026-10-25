@@ -1,6 +1,7 @@
 """A unified prefix verdict requires every stage and cleanup, never just EOF."""
 import copy
 import hashlib
+import io
 from pathlib import Path
 import runpy
 from typing import Any
@@ -390,3 +391,85 @@ def test_reused_preparation_report_clears_nondefault_compressed_byte_binding(sou
     assert 'byte_limit' not in report and 'byte_limit' not in report['capture']
     assert report['capture']['decryption']['profile'] == 'bounded-decrypted-packet-chunks-v1'
     assert report['decode']['input']['total_byte_limit'] == 16 * 1024 * 1024
+
+
+def test_common_keyframe_on_aligned_source_preserves_all_events_and_origin(source):
+    original: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+    _, strict = prepare(source, original)
+    baseline = fingerprints(strict)
+    owner, iterator = prepare(source, report, startup_pairing='common-keyframe')
+    assert fingerprints(iterator) == baseline
+    assert owner.closed and report['status'] == 'prepared-prefix-ended'
+    assert report['startup_pairing'] == report['decode']['startup_pairing'] == 'common-keyframe'
+    audit = report['decode']['preparation']['startup_alignment']
+    assert audit['excluded_frames'] == audit['excluded_pixel_bytes'] == 0
+    assert audit['gate_opened'] and all(row['key_frame'] for row in audit['selected_keyframes'])
+    assert report['online']['policy'] == original['online']['policy']
+    with pytest.raises(ValueError, match='pairing policy'):
+        M['verify_completion'](report['capture'], report['decode'], report['online'])
+
+
+@pytest.mark.parametrize('field,value', [('profile', 'guess'), ('gate_opened', False),
+    ('strict_after_gate', False), ('native_selection_used', True), ('excluded_frames', True),
+    ('excluded_frames', 17), ('excluded_counts', {'0': 0, '2': 1}), ('excluded_pixel_bytes', 1),
+    ('excluded_metadata_sha256', '0' * 64), ('max_excluded_frames', True),
+    ('max_source_span', {'numerator': 2, 'denominator': 1}),
+    ('observed_minimum', {'numerator': 1000000, 'denominator': 1}),
+    ('selected_source_time', {'numerator': 1, 'denominator': 1}), ('selected_keyframes', [])])
+def test_startup_receipt_mutations_cannot_claim_completion(source, field, value):
+    report: dict[str, Any] = {}
+    _, iterator = prepare(source, report, startup_pairing='common-keyframe')
+    list(iterator)
+    report['decode']['preparation']['startup_alignment'][field] = value
+    with pytest.raises(ValueError):
+        M['verify_completion'](report['capture'], report['decode'], report['online'], startup_pairing='common-keyframe')
+
+
+@pytest.mark.parametrize('mode', [None, True, 'nearest'])
+def test_invalid_startup_mode_leaves_capture_unclaimed(source, mode):
+    report: dict[str, Any] = {}
+    owner, iterator = prepare(source, report, startup_pairing=mode)
+    with pytest.raises(ValueError, match='startup pairing'):
+        next(iterator)
+    assert not owner.started and not owner.closed and report['capture'] == {}
+
+
+def leading_keyframe_ps(raw):
+    """Public synthetic lead-in: repeat one prerequisite keyframe at earlier PTS."""
+    av = pytest.importorskip('av')
+    with av.open(io.BytesIO(raw), format='mpeg') as container:
+        packet = next(p for p in container.demux(container.streams[0]) if p.size)
+        pts = int(packet.pts * packet.time_base * 90000) - 9000
+        payload = bytes(packet)
+    start = raw.index(b'\x00\x00\x01\xe0')
+    return OLD['TIMELINE_TESTS']['_pack_header'](pts) + raw[14:start] + OLD['TIMELINE_TESTS']['_pes'](pts, 0xE0, payload) + raw
+
+
+def test_real_common_keyframe_excludes_only_lead_in_preserving_complete_selected_source(source):
+    altered = leading_keyframe_ps(source)
+    failed: dict[str, Any] = {}
+    baseline: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+    _, strict = prepare(altered, failed)
+    with pytest.raises(ValueError, match='unmatched lens PTS'):
+        list(strict)
+    assert failed['status'] == 'failed'
+    _, original = prepare(source, baseline)
+    expected = fingerprints(original)
+    owner, iterator = prepare(altered, report, startup_pairing='common-keyframe',
+        pes_ids=(0xE0, 0xE1, 0xC0), identity_mode='source-sequence')
+    actual = fingerprints(iterator)
+    assert report['status'] == 'prepared-prefix-ended' and owner.closed
+    assert len(actual) == len(expected)
+    for (event, hashes), (original, original_hashes) in zip(actual, expected, strict=True):
+        assert hashes == original_hashes
+        if event['kind'] == 'video_pair':
+            original['lenses'][0]['frame_index'] += 1
+            row = original['lenses'][0]
+            row['decoded_id'] = f"video:{row['stream_index']}:{row['frame_index']}"
+        assert event == original
+    audit = report['decode']['preparation']['startup_alignment']
+    assert audit['excluded_frames'] == 1 and audit['excluded_counts'] == {'0': 1, '2': 0}
+    assert report['online']['policy']['origin'] == baseline['online']['policy']['origin']
+    assert report['decode']['preparation']['common_origin'] == baseline['decode']['preparation']['common_origin']

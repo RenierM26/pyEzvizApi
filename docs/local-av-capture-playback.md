@@ -456,3 +456,12 @@ quotas, 60-second capture/decryption/processing/source-span guards, lateness and
 all EOF/drain/join/cleanup rules are unchanged. No read-all or producer queue is
 introduced. Default CLIs, attended launcher and capture duration stay unchanged;
 this is not longer live acquisition or sustained/unbounded playback.
+
+### Explicit startup subset
+
+`CapturePlayback(..., startup_pairing='common-keyframe')` forwards the separately
+[bounded common-keyframe startup policy](local-av-capture-preparation.md#explicit-common-keyframe-startup-opt-in)
+through pending input and terminal output validation. It is opt-in; the default
+remains strict. Invalid mode values leave acquisition unclaimed. No launcher,
+account API, retry, quota, source/output deadline or default is changed. Review
+the explicit excluded lead-in audit, not just output completion counts.

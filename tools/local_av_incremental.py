@@ -1,7 +1,8 @@
 """Bounded incremental local HEVC/AAC decode, NOT a live playback scheduler.
 
 One demux pass, synchronous borrowed-byte callbacks, exact PTS lens pairing.
-No devices, network access, native selections, VQE, dropping or clock repair.
+No devices, network access, native selections, VQE or clock repair. Strict by
+default; an explicit startup gate may record bounded excluded video lead-in.
 """
 
 from __future__ import annotations
@@ -31,10 +32,76 @@ def discard(_event: dict[str, Any], _payload: tuple[bytes, ...]) -> None:
     """Default sink inspects only; no pixel/PCM references retained."""
 
 
-class PairBuffer:
-    """Account before copying; keep unmatched pixels until acknowledged or failed."""
+MAX_STARTUP_EXCLUDED = 16
+MAX_STARTUP_SPAN = Fraction(1)
 
-    def __init__(self, streams: tuple[int, int], consume: Any = discard) -> None:
+
+def validate_startup_pairing(mode: str) -> None:
+    if type(mode) is not str or mode not in ('strict', 'common-keyframe'):
+        raise ValueError('unknown startup pairing policy')
+
+
+class StartupAlignment:
+    """Explicit leading-video exclusion, never nearest-time or active repair."""
+
+    def __init__(self, streams: tuple[int, int]) -> None:
+        self.keys: dict[int, Any] = {stream: deque() for stream in streams}
+        self.counts = dict.fromkeys(streams, 0)
+        self.bytes = 0
+        self.minimum: Fraction | None = None
+        self.maximum: Fraction | None = None
+        self.selected: list[dict[str, Any]] = []
+        self.digest = hashlib.sha256(b'bounded-common-keyframe-startup-v1\n')
+
+    def observe(self, row: dict[str, Any], key: Any) -> None:
+        if self.selected:
+            return
+        if type(key) is not bool:
+            raise ValueError('startup pairing requires an explicit decoder keyframe flag')
+        stamp = TIMELINE['exact'](row)
+        self.minimum = stamp if self.minimum is None else min(self.minimum, stamp)
+        self.maximum = stamp if self.maximum is None else max(self.maximum, stamp)
+        if self.maximum - self.minimum > MAX_STARTUP_SPAN:
+            raise ValueError('common-keyframe startup source span exceeded')
+        self.keys[row['stream_index']].append(key)
+
+    def choose(self, rows: list[dict[str, Any]]) -> int | None:
+        stamps = [TIMELINE['exact'](row) for row in rows]
+        if stamps[0] == stamps[1]:
+            if not all(self.keys[row['stream_index']][0] for row in rows):
+                raise ValueError('first common startup pair must contain two keyframes')
+            self.selected = [dict(row, key_frame=True) for row in rows]
+            self.keys.clear()
+            return None
+        earlier = rows[0 if stamps[0] < stamps[1] else 1]
+        if sum(self.counts.values()) >= MAX_STARTUP_EXCLUDED:
+            raise ValueError('common-keyframe startup exclusion count exceeded')
+        record = dict(reason='before-first-common-keyframe', frame=earlier)
+        self.digest.update(json.dumps(record, sort_keys=True, separators=(',', ':')).encode() + b'\n')
+        stream = earlier['stream_index']
+        self.counts[stream] += 1
+        self.bytes += earlier['width'] * earlier['height'] * 3 // 2
+        self.keys[stream].popleft()
+        return stream
+
+    def result(self) -> dict[str, Any]:
+        return dict(profile='bounded-common-keyframe-startup-v1', gate_opened=bool(self.selected),
+            excluded_frames=sum(self.counts.values()), excluded_counts={str(k): v for k, v in self.counts.items()},
+            excluded_pixel_bytes=self.bytes, excluded_metadata_sha256=self.digest.hexdigest(),
+            selected_keyframes=[dict(row) for row in self.selected],
+            selected_source_time=TIMELINE['rational'](TIMELINE['exact'](self.selected[0])) if self.selected else None,
+            observed_minimum=None if self.minimum is None else TIMELINE['rational'](self.minimum),
+            observed_maximum=None if self.maximum is None else TIMELINE['rational'](self.maximum),
+            max_excluded_frames=MAX_STARTUP_EXCLUDED, max_source_span=TIMELINE['rational'](MAX_STARTUP_SPAN),
+            native_selection_used=False, strict_after_gate=True)
+
+
+class PairBuffer:
+    """Account before copying; only explicitly audited startup lead-in may be excluded."""
+
+    def __init__(self, streams: tuple[int, int], consume: Any = discard, *, startup_pairing: str = 'strict') -> None:
+        validate_startup_pairing(startup_pairing)
+        self.alignment = StartupAlignment(streams) if startup_pairing == 'common-keyframe' else None
         self.streams, self.consume = streams, consume
         self.pending: dict[int, Any] = {stream: deque() for stream in streams}
         self.previous: dict[int, Fraction] = {}
@@ -55,6 +122,8 @@ class PairBuffer:
         pixels = PREVIEW['pack'](frame)
         if len(pixels) != size or hashlib.sha256(pixels).hexdigest() != row['pixel_sha256']:
             raise ValueError('copied pixels disagree with decoded fingerprint')
+        if self.alignment is not None:
+            self.alignment.observe(row, getattr(frame, 'key_frame', None))
         self.pending[stream].append((dict(row), pixels))
         self.previous[stream] = stamp
         self.bytes += size
@@ -64,6 +133,11 @@ class PairBuffer:
 
     def take(self) -> None:
         left, right = (self.pending[stream] for stream in self.streams)
+        while left and right and self.alignment is not None and not self.alignment.selected:
+            stream = self.alignment.choose([left[0][0], right[0][0]])
+            if stream is None:
+                break
+            self.bytes -= len(self.pending[stream].popleft()[1])
         if not left or not right:
             return
         rows = [left[0][0], right[0][0]]
@@ -90,7 +164,8 @@ class PairBuffer:
             raise ValueError('both selected lenses must produce an exact pair')
 
     def result(self) -> dict[str, Any]:
-        return dict(video_pairs_consumed=self.pairs, pending_pixel_bytes=self.bytes,
+        audit = {} if self.alignment is None else dict(startup_alignment=self.alignment.result())
+        return dict(**audit, video_pairs_consumed=self.pairs, pending_pixel_bytes=self.bytes,
                     peak_pending_pixel_bytes=self.peak_bytes, peak_pending_frames=self.peak_frames,
                     pending_unpaired=[dict(row) for queue in self.pending.values() for row, _ in queue],
                     consumed_video_metadata_sha256=self.digest.hexdigest())
@@ -99,8 +174,8 @@ class PairBuffer:
 class Session:
     """Bounded counters and per-track clocks, never a full decoded-media spool."""
 
-    def __init__(self, streams: tuple[int, int], audio_stream: int, consume: Any) -> None:
-        self.pairs = PairBuffer(streams, consume)
+    def __init__(self, streams: tuple[int, int], audio_stream: int, consume: Any, *, startup_pairing: str = 'strict') -> None:
+        self.pairs = PairBuffer(streams, consume, startup_pairing=startup_pairing)
         self.audio_stream, self.consume = audio_stream, consume
         self.counts = dict.fromkeys(streams, 0)
         self.first: dict[int, Fraction] = {}
@@ -154,11 +229,16 @@ class Session:
         self.previous_audio = stamp
 
     def result(self) -> dict[str, Any]:
+        first = list(self.first.values())
+        if self.pairs.alignment is not None:
+            selected = self.pairs.alignment.selected
+            first = ([TIMELINE['exact'](row) for row in selected] + [self.first[self.audio_stream]]
+                if selected and self.audio_stream in self.first else [])
         return dict(self.pairs.result(), packets_decoded=self.packets,
                     video_frames_decoded=self.counts, audio_blocks_consumed=self.audio_count,
                     pending_audio=self.audio_pending, video_offer_in_progress=self.video_pending,
-                    common_origin=(TIMELINE['rational'](min(self.first.values()))
-                                   if len(self.first) == 3 else None),
+                    common_origin=(TIMELINE['rational'](min(first))
+                                   if len(first) == 3 else None),
                     consumed_audio_metadata_sha256=self.audio_digest.hexdigest())
 
 

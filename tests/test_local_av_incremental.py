@@ -330,3 +330,92 @@ def test_many_pairs_keep_constant_pending_ownership_not_a_recording_spool():
     assert buffer.peak_frames == 2 and buffer.peak_bytes == 24
     assert len(buffer.previous) == 2
     assert buffer.result()['pending_unpaired'] == []
+
+
+def startup_buffer(monkeypatch, consume=M['discard']):
+    monkeypatch.setitem(M['PREVIEW'], 'pack', lambda frame: frame.pixels)
+    return M['PairBuffer']((0, 1), consume, startup_pairing='common-keyframe')
+
+
+def offer_start(buffer, stream, index, pts, key=True):
+    row, pixels = lens(stream, index, pts, den=1000)
+    buffer.offer(row, SimpleNamespace(pixels=pixels, key_frame=key))
+    return row
+
+
+def test_explicit_startup_exclusion_is_hashed_and_keeps_original_frame_ids(monkeypatch):
+    events = []
+    buffer = startup_buffer(monkeypatch, lambda event, _data: events.append(event))
+    excluded = offer_start(buffer, 0, 0, 1000)
+    offer_start(buffer, 0, 1, 1200)
+    offer_start(buffer, 1, 0, 1200)
+    offer_start(buffer, 0, 2, 1264, False)
+    offer_start(buffer, 1, 1, 1264, False)
+    buffer.finish()
+    audit = buffer.result()['startup_alignment']
+    record = dict(reason='before-first-common-keyframe', frame=excluded)
+    expected = hashlib.sha256(b'bounded-common-keyframe-startup-v1\n' +
+        json.dumps(record, sort_keys=True, separators=(',', ':')).encode() + b'\n').hexdigest()
+    assert audit['excluded_frames'] == 1 and audit['excluded_pixel_bytes'] == 12
+    assert audit['excluded_counts'] == {'0': 1, '1': 0}
+    assert audit['excluded_metadata_sha256'] == expected
+    assert [row['decoded_id'] for row in events[0]['lenses']] == ['video:0:1', 'video:1:0']
+    assert events[0]['source_time'] == dict(numerator=6, denominator=5)
+    assert [event['id'] for event in events] == ['local-pair:1', 'local-pair:2']
+    assert all(row['key_frame'] is True for row in audit['selected_keyframes'])
+    assert buffer.bytes == 0 and not buffer.alignment.keys
+    assert len(buffer.alignment.selected) == 2  # No excluded history or pixels retained.
+
+
+@pytest.mark.parametrize('bad', ['nonkey', 'span', 'flag', 'later', 'duplicate', 'eof', 'callback'])
+def test_common_keyframe_startup_cannot_repair_other_failures(monkeypatch, bad):
+    def consume(_event, _data):
+        if bad == 'callback':
+            raise ValueError('callback')
+    buffer = startup_buffer(monkeypatch, consume)
+    offer_start(buffer, 0, 0, 1000)
+    with pytest.raises(ValueError):
+        if bad == 'nonkey':
+            offer_start(buffer, 1, 0, 1000, False)
+        elif bad == 'span':
+            offer_start(buffer, 1, 0, 2001)
+        elif bad == 'flag':
+            offer_start(buffer, 1, 0, 1000, 1)
+        elif bad == 'duplicate':
+            offer_start(buffer, 0, 1, 1000)
+        elif bad == 'eof':
+            buffer.finish()
+        elif bad == 'callback':
+            offer_start(buffer, 1, 0, 1000)
+        else:
+            offer_start(buffer, 1, 0, 1000)
+            offer_start(buffer, 0, 1, 1100)
+            offer_start(buffer, 1, 1, 1101)
+    assert buffer.bytes > 0
+    if bad == 'callback':
+        assert buffer.pairs == 0 and buffer.bytes == 24
+
+
+def test_startup_exclusions_have_independent_total_and_pending_caps(monkeypatch):
+    buffer = startup_buffer(monkeypatch)
+    # Alternate strictly earlier heads to exceed the total without filling pending storage.
+    offer_start(buffer, 0, 0, 1000)
+    for index in range(8):
+        offer_start(buffer, 1, index, 1001 + index * 2)
+        offer_start(buffer, 0, index + 1, 1002 + index * 2)
+    assert buffer.alignment.result()['excluded_frames'] == 16
+    with pytest.raises(ValueError, match='exclusion count'):
+        offer_start(buffer, 1, 8, 1017)
+    assert buffer.peak_frames == 2
+    buffer = startup_buffer(monkeypatch)
+    for index in range(16):
+        offer_start(buffer, 0, index, 1000 + index)
+    with pytest.raises(ValueError, match='capacity'):
+        offer_start(buffer, 0, 16, 1016)
+    assert buffer.alignment.result()['excluded_frames'] == 0
+
+
+@pytest.mark.parametrize('mode', [None, True, 'nearest', 'common-keyframes'])
+def test_invalid_startup_policy_cannot_construct_a_pair_buffer(mode):
+    with pytest.raises(ValueError, match='startup pairing'):
+        M['PairBuffer']((0, 1), startup_pairing=mode)

@@ -175,11 +175,37 @@ def present_fd(fd: int, size: int, digest: str, surface: Any,
     return before, after
 
 
-def worker(channel_fd: int, width: int, height: int, limit: int) -> int:
+def validate_identity_mode(mode: str) -> None:
+    if mode not in ('full-history', 'source-sequence'):
+        raise ValueError('invalid rolling output identity mode')
+
+
+def identity_audit(presented: int) -> dict[str, Any]:
+    return dict(profile='strict-video-source-sequence-v1', presented=presented, retained_id_count=0)
+
+
+def verify_identity_audit(audit: Any, presented: int) -> None:
+    if (type(audit) is not dict or audit != identity_audit(presented)
+            or type(audit.get('presented')) is not int or type(audit.get('retained_id_count')) is not int):
+        raise ValueError('rolling output identity audit mismatch')
+
+
+def worker_packet(row: dict[str, Any], mode: str, presented: int) -> bytes:
+    if mode == 'source-sequence':
+        row['identity_audit'] = identity_audit(presented)
+    return OUTPUT['packet'](row)
+
+
+def validate_worker(channel_fd: int, width: int, height: int, limit: int, identity_mode: str) -> None:
+    validate_identity_mode(identity_mode)
     if (channel_fd < 3 or not 1 <= limit <= 300 or not 0 < width <= 8192
             or not 0 < height <= 4096 or width % 2 or height % 2
             or width * height > OUTPUT['NATIVE']['MAX_PAIR_PIXELS']):
         raise ValueError('invalid rolling output geometry or limit')
+
+
+def worker(channel_fd: int, width: int, height: int, limit: int, identity_mode: str = 'full-history') -> int:
+    validate_worker(channel_fd, width, height, limit, identity_mode)
     surface = None
     with socket.socket(fileno=channel_fd) as channel:
         channel.settimeout(0.02)
@@ -202,27 +228,30 @@ def worker(channel_fd: int, width: int, height: int, limit: int) -> int:
             return bytes(data)
         try:
             surface = Surface(width, height)
-            channel.sendall(OUTPUT['packet'](dict(kind='ready', driver=surface.driver,
-                                                  width=width, height=height)))
-            seen = set()
+            channel.sendall(worker_packet(dict(kind='ready', driver=surface.driver, width=width, height=height), identity_mode, 0))
+            seen: set[str] | None = set() if identity_mode == 'full-history' else None
             for index in range(limit + 1):
                 row = OUTPUT['message'](read)
                 if row == dict(kind='finish'):
                     surface.close()
                     surface = None
-                    channel.sendall(OUTPUT['packet'](dict(kind='finished')))
+                    channel.sendall(worker_packet(dict(kind='finished'), identity_mode, index))
                     return 0
                 if index == limit:
                     raise ValueError('rolling output frame limit exceeded')
                 size = width * height * 3 // 2
                 layout, digest, storage = frame_layout(row, size)
-                if row['pair_id'] in seen:
+                if seen is None:
+                    if row['pair_id'] != f'local-pair:{index + 1}':
+                        raise ValueError('noncanonical rolling frame sequence identity')
+                elif row['pair_id'] in seen:
                     raise ValueError('duplicate rolling frame identity')
                 fd = receive_fd(channel, pump, time.monotonic() + 5)
                 before, after = present_fd(fd, size, digest, surface, storage, layout)
-                seen.add(row['pair_id'])
-                channel.sendall(OUTPUT['packet'](dict(kind='presented', pair_id=row['pair_id'],
-                    bytes=size, pixel_sha256=digest, present_started_ns=before, present_returned_ns=after)))
+                if seen is not None:
+                    seen.add(row['pair_id'])
+                channel.sendall(worker_packet(dict(kind='presented', pair_id=row['pair_id'], bytes=size, pixel_sha256=digest,
+                    present_started_ns=before, present_returned_ns=after), identity_mode, index + 1))
         except (Exception, KeyboardInterrupt) as error:
             with suppress(OSError):
                 channel.sendall(OUTPUT['packet'](dict(kind='error', error=f'{type(error).__name__}: {error}'[:1000])))
@@ -240,18 +269,27 @@ class Output(Parent):
     """Persistent isolated SDL worker; at most one pending descriptor/ack exchange."""
 
     def __init__(self, width: int, height: int, timeout: float, limit: int, *,
-                 title: str = 'Bounded standalone recording (not live)') -> None:
+                 title: str = 'Bounded standalone recording (not live)', identity_mode: str = 'full-history') -> None:
+        validate_identity_mode(identity_mode)
+        self.identity_mode = identity_mode
+        self.presented = 0
+        self.identity_receipt: dict[str, Any] | None = None
         self.channel, child = socket.socketpair()
         self.process: Any = None
         self.timeout = timeout
         try:
             self.channel.setblocking(False)
             self.process = subprocess.Popen([sys.executable, str(Path(__file__)), '--worker',
-                str(child.fileno()), str(width), str(height), str(limit)], pass_fds=(child.fileno(),),
+                str(child.fileno()), str(width), str(height), str(limit),
+                *([] if identity_mode == 'full-history' else [identity_mode])], pass_fds=(child.fileno(),),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 env=dict(os.environ, EZVIZ_SDL_WINDOW_TITLE=title))
             ready = self.receive(time.monotonic() + timeout)
-            if (set(ready) != {'kind', 'driver', 'width', 'height'} or ready['kind'] != 'ready'
+            keys = {'kind', 'driver', 'width', 'height'}
+            if identity_mode == 'source-sequence':
+                keys.add('identity_audit')
+                verify_identity_audit(ready.get('identity_audit'), 0)
+            if (set(ready) != keys or ready['kind'] != 'ready'
                     or not isinstance(ready['driver'], str)
                     or (ready['width'], ready['height']) != (width, height)):
                 raise ValueError('invalid rolling output handshake')
@@ -263,6 +301,8 @@ class Output(Parent):
             child.close()
 
     def present(self, pair_id: str, lease: Lease, timeout: float) -> dict[str, Any]:
+        if self.identity_mode == 'source-sequence' and pair_id != f'local-pair:{self.presented + 1}':
+            raise ValueError('noncanonical rolling frame sequence identity')
         deadline = time.monotonic() + timeout
         frame = lease.frame
         digest = frame.sha256 if lease.layout == 'composed' else lease.pair_sha256
@@ -288,10 +328,28 @@ class Output(Parent):
                 or any(type(row.get(k)) is not int for k in ('present_started_ns', 'present_returned_ns'))
                 or not 0 <= row['present_started_ns'] <= row['present_returned_ns']):
             raise ValueError('rolling output acknowledgement mismatch')
+        if self.identity_mode == 'source-sequence':
+            verify_identity_audit(row.get('identity_audit'), self.presented + 1)
+        self.presented += 1
         return row
+
+    def finish(self, timeout: float) -> None:
+        if self.identity_mode == 'full-history':
+            super().finish(timeout)
+            return
+        deadline = time.monotonic() + timeout
+        self.transfer(OUTPUT['packet'](dict(kind='finish')), deadline)
+        row = self.receive(deadline)
+        if set(row) != {'kind', 'identity_audit'} or row.get('kind') != 'finished':
+            raise ValueError('rolling output finish mismatch')
+        verify_identity_audit(row.get('identity_audit'), self.presented)
+        if self.process.wait(timeout=max(.001, deadline - time.monotonic())):
+            raise ValueError('rolling output worker failed')
+        self.identity_receipt = identity_audit(self.presented)
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 6 or sys.argv[1] != '--worker':
+    if len(sys.argv) not in (6, 7) or sys.argv[1] != '--worker':
         raise SystemExit('Private inherited-socket worker only')
-    raise SystemExit(worker(*map(int, sys.argv[2:])))
+    channel_fd, width, height, limit = map(int, sys.argv[2:6])
+    raise SystemExit(worker(channel_fd, width, height, limit, sys.argv[6] if len(sys.argv) == 7 else 'full-history'))

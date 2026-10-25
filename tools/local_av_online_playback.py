@@ -478,14 +478,35 @@ def validate_control(pending_input: bool, stop: Event | None, diagnostic_tail: i
         raise ValueError('stop requires an Event and opt-in pending input')
 
 
+def save_video_identity(receipt: dict[str, Any], video: Any, presented: int, mode: str) -> None:
+    if mode != 'source-sequence':
+        return
+    audit = video.identity_receipt
+    CHANNEL['verify_identity_audit'](audit, presented)
+    receipt['video_identity_audit'] = dict(audit)
+
+
+def video_options(receipt: dict[str, Any], title: str | None, mode: str) -> dict[str, str]:
+    CHANNEL['validate_identity_mode'](mode)
+    receipt.pop('video_identity_audit', None)
+    receipt.pop('video_identity_mode', None)
+    options = {} if title is None else dict(title=title)
+    if mode == 'source-sequence':
+        receipt['video_identity_mode'] = mode
+        options['identity_mode'] = mode
+    return options
+
+
 def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,
-                  pending_input: bool = False, stop: Event | None = None, diagnostic_tail: int | None = None) -> None:
+                  pending_input: bool = False, stop: Event | None = None, diagnostic_tail: int | None = None,
+                  video_identity_mode: str = 'full-history') -> None:
     """Own prepared input/output; opt-in events is a caller-retained pristine pull.
 
     The caller validates transport first. With pending_input, it must retain the
     pull owner and rejoin after a cleanup timeout, never close its nested source.
     """
     validate_control(pending_input, stop, diagnostic_tail)
+    options = video_options(receipt, title, video_identity_mode)
     if pending_input:
         validate_pending_source(events, args.deadline)  # Invalid owners remain unclaimed.
     assets = scheduler = executor = video = audio = None
@@ -499,7 +520,6 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         assert assets.geometry is not None
         check_stop(stop)
         receipt['backend_initialization_started'] = True
-        options = {} if title is None else {'title': title}
         video = CHANNEL['Output'](assets.geometry[0] * 2, assets.geometry[1], args.deadline, PLAY['MAX_PAIRS'], **options)
         receipt.update(video_driver=video.driver, output_devices_opened=True)
         check_stop(stop)
@@ -510,6 +530,7 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         assets.start_preparation()
         scheduler = Scheduler(assets, args.deadline, args.max_late_ms)
         scheduler.run(assets, video, audio, executor)
+        save_video_identity(receipt, video, scheduler.completed['video_pair'], video_identity_mode)
     except BaseException:
         primary = True
         raise

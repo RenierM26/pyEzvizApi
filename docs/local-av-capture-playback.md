@@ -336,3 +336,34 @@ in addition to every existing prefix, media receipt, output and cleanup check.
 No attended launcher or existing caller is silently switched to the new option.
 This composition does not enable sustained/unbounded playback or establish
 physical A/V synchronization.
+
+
+## Opt-in constant-state SDL worker identities
+
+`CapturePlayback(..., identity_mode='source-sequence')` now also selects strict
+sequence validation in the isolated SDL descriptor worker. The lower-level
+`play_prepared` API exposes this independently as
+`video_identity_mode='source-sequence'`; `local_av_frame_channel.Output` accepts
+`identity_mode='source-sequence'`. Defaults, CLI and attended launcher are unchanged.
+
+The worker accepts exactly `local-pair:1`, `local-pair:2`, … using its existing
+bounded loop index, without retaining a set of previous IDs. It checks the ID
+before requesting a descriptor or presenting pixels. Duplicate, reset, skipped,
+noncanonical or wrong-prefix IDs fail; full-history mode retains its original
+arbitrary unique ID contract and wire format.
+
+Opt-in ready, presented and finished responses carry an `identity_audit` with
+profile `strict-video-source-sequence-v1`, integer `presented` count and
+`retained_id_count: 0`. The host checks all three phases. Only a matching final
+response plus worker exit zero publishes `Output.identity_receipt`; successful
+prepared playback copies it to `output.video_identity_audit`, alongside the
+explicit `video_identity_mode` binding. Capture terminal verification requires
+this evidence to match completed video output when using sequence mode. It does
+not replace source EOF, media hashes, timing, cleanup or audio drain verification.
+
+The 300-pair work cap, geometry/memory limits, descriptor leases, canonical pixel
+hashes, original scheduling targets, 250 ms maximum lateness and all IO/processing
+deadlines are unchanged. This removes another growing history, not a playback
+quota: it does not enable sustained/unbounded streaming or establish physical
+A/V synchronization. No new camera acquisition is needed for this protocol-only
+step; retained-source controls use dummy SDL/audio devices.

@@ -96,3 +96,27 @@ remain separate work; no Windows bundle or camera test is supplied here.
 Use the separate [offline runtime preflight](local-av-runtime.md) with the exact
 proposed interpreter and pinned package identity before retained-media/attended
 validation. Readiness alone does not establish playback or live acquisition.
+
+## Explicit same-session PES identities
+
+For MPEG-PS sources whose absolute demux indices can change between acquisitions,
+opt in with `pes_ids=(0xE0, 0xE1, 0xC0)` on `capture_playback` (or
+`iter_capture_preparation`). These are two ordered video PES bytes and one audio
+PES byte, not lens ordinals or absolute indices. The existing namespace's track
+indices remain syntactically validated, but this explicit mode supersedes them.
+Without this keyword, absolute-index selection and all defaults are unchanged.
+
+Resolve only against the active demux container, once, before decoding selected
+tracks or offering events to the online policy. FFmpeg's MPEG-PS stream identifiers
+are matched exactly as `0x100 | pes_id`; there is no low-byte masking, codec-based
+selection, saved-session mapping, second acquisition or inferred fallback. Missing,
+duplicate, wrong-type or unsupported-format tracks fail before output opens.
+Invalid PES arguments leave the owner unclaimed.
+
+The decoder and online-policy receipts both include `track_selection`: requested
+PES IDs, observed demux IDs, types and resolved absolute indices. The original
+indices remain in every decoded/prepared event and metadata digest; no stream
+renumbering, timestamp rewriting, payload changes or larger startup budget is
+introduced. Both selection records must agree for prefix completion. The
+selection itself does not verify a whole source or physical lens identity, nor
+does it promise that a later truncated capture or output failure will succeed.

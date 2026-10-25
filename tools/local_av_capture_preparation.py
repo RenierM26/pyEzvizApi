@@ -42,6 +42,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or reader.get('delivered_bytes') != reader.get('received_bytes')
             or prepared.get('pending_pixel_bytes') != 0 or prepared.get('pending_unpaired')
             or prepared.get('pending_audio') is not None or prepared.get('video_offer_in_progress') is not None
+            or decode.get('track_selection') != online.get('track_selection')
             or online.get('profile') != 'standalone-online-av-policy-v1'
             or online.get('status') != 'completed' or online.get('error') is not None
             or online.get('cleanup_errors') or policy.get('origin') is None
@@ -85,7 +86,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         audio_stream: int, report: dict[str, Any], *, limits: CaptureLimits,
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
-        monotonic: Any = time.monotonic) -> Any:
+        monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None) -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -106,12 +107,16 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         # Validate downstream policy before transferring ownership or opening IO.
         ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms)
         CAPTURE['validate_arguments'](owner, limits, completion, codec)
+        if pes_ids is not None:
+            CHUNKED['TRACKS']['validate_pes_ids'](pes_ids)
         claimed = True
         chunks = CAPTURE['iter_capture_chunks'](owner, key, capture, limits=limits,
             completion=completion, codec=codec, monotonic=monotonic)
-        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg')
+        selection: dict[str, Any] | None = {} if pes_ids is not None else None
+        options = {} if pes_ids is None else dict(pes_ids=pes_ids, selection=selection)
+        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
-            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms)
+            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, **({} if selection is None else dict(selection=selection)))
         report['status'] = 'running'
         yield from mapped
     except GeneratorExit:

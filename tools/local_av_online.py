@@ -138,11 +138,24 @@ class Policy:
             audio_clock_rows_sha256=self.audio_digest.hexdigest())
 
 
+def selected_policy(state: Policy, selection: dict[str, Any] | None, report: dict[str, Any],
+                    policy: str, overlap_ms: int | None, phase_ms: int | None) -> Policy:
+    """Switch to same-container indices before the first offer, never renumber media."""
+    if selection is not None and 'track_selection' not in report:
+        if selection.get('mode') != 'explicit-mpeg-pes-ids':
+            raise ValueError('PES selection must resolve before the first event')
+        state = Policy(tuple(selection['video_indices']), selection['audio_index'], policy, overlap_ms, phase_ms)
+        report['track_selection'] = copy.deepcopy(selection)
+    return state
+
+
 def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report: dict[str, Any], *,
-                policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None) -> Any:
+                policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None,
+                selection: dict[str, Any] | None = None) -> Any:
     """Own input iterator; hold credit through each yield, not an output acknowledgement."""
     state = iterator = None
     primary = False
+    report.pop('track_selection', None)
     report.update(profile='standalone-online-av-policy-v1', status='failed', error=None,
         output_devices_opened=False, whole_source_preflight=False, physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
@@ -150,6 +163,7 @@ def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report
         state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms)
         iterator = iter(events)
         for event, payload in iterator:
+            state = selected_policy(state, selection, report, policy, overlap_ms, phase_ms)
             state.offer(event, payload)
             del event, payload
             if not state.ready():

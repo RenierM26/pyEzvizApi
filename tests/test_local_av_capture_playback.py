@@ -205,3 +205,24 @@ def test_partial_receipts_cannot_claim_output_completion(rig, path, value):
     target[parts[-1]] = value
     with pytest.raises(ValueError, match='terminal checks'):
         M['verify_output'](changed['preparation'], changed['output'])
+
+
+def test_explicit_pes_selection_reaches_output_without_changing_source_indices(rig):
+    report: dict[str, Any] = {}
+    owner, run = play(rig, report, args=arguments(secondary_stream=1, audio_stream=2),
+                      pes_ids=(0xE0, 0xE1, 0xC0))
+    run()
+    assert owner.closed and report['status'] == 'prefix-output-completed'
+    selection = report['preparation']['decode']['track_selection']
+    assert selection['video_indices'] == [0, 2] and selection['audio_index'] == 1
+    assert report['preparation']['online']['track_selection'] == selection
+    assert rig[1].finished and rig[2].finished
+
+
+def test_missing_pes_identity_fails_before_output_opens(rig):
+    report: dict[str, Any] = {}
+    owner, run = play(rig, report, pes_ids=(0xE0, 0xEF, 0xC0))
+    with pytest.raises(ValueError, match='identity'):
+        run()
+    assert owner.closed and not rig[3] and report['output']['output_devices_opened'] is False
+    assert report['accepted_prefix_clear_sha256'] is None

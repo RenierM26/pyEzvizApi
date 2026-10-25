@@ -248,7 +248,7 @@ def test_bounded_metadata_observer(monkeypatch):
         manifest.write(json.dumps(dict(kind='decoded')))
 
 
-def encode_three_track_ps(tmp_path, audio_jitter=False):
+def encode_three_track_ps(tmp_path, audio_jitter=False, discovery_order=(0, 2, 1)):
     """Synthetic PS with original TS packet clocks and non-video-first indices."""
     av = pytest.importorskip('av')
     source = encode_three_track(tmp_path)
@@ -256,7 +256,7 @@ def encode_three_track_ps(tmp_path, audio_jitter=False):
         packets = [(p.stream.index, p.pts, p.dts, p.time_base, bytes(p))
                    for p in container.demux() if p.size and p.pts is not None]
     # Discover streams in E0, C0, E1 order: absolute indices are not lens ordinals.
-    first = [next(i for i, p in enumerate(packets) if p[0] == stream) for stream in (0, 2, 1)]
+    first = [next(i for i, p in enumerate(packets) if p[0] == stream) for stream in discovery_order]
     ordered = [packets[i] for i in first] + [p for i, p in enumerate(packets) if i not in first]
     entries = bytes.fromhex('24e000000fc0000024e10000')
     body = b'\xe0\xff\x00\x00' + len(entries).to_bytes(2, 'big') + entries

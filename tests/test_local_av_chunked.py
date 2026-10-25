@@ -295,3 +295,12 @@ def test_cleanup_only_failure_raises_inside_unrelated_caller_except(tmp_path):
         with pytest.raises(RuntimeError, match='cleanup failed'):
             list(M['iter_chunks'](source, 'mpeg', (0, 2), 1, report, startup='bounded-mpeg'))
     assert report['status'] == 'failed' and report['cleanup_errors']
+
+
+def test_failed_pes_selection_clears_reused_session_diagnostics():
+    report = dict(track_selection={'old': True}, preparation={'video_pairs_consumed': 999})
+    with pytest.raises(ValueError, match='PES'):
+        list(M['iter_chunks'](iter(()), 'mpeg', (0, 2), 1, report,
+                             pes_ids=(0xE0, 0xE0, 0xC0), selection={}))
+    assert report['status'] == 'failed' and report['preparation'] == {}
+    assert 'track_selection' not in report

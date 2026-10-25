@@ -214,3 +214,84 @@ def test_completed_outer_iterator_still_needs_terminal_stage_evidence(source, mo
         list(iterator)
     assert owner.closed and report['status'] == 'failed'
     assert report['accepted_prefix_clear_sha256'] is None
+
+
+def test_pes_selection_resolves_in_same_demuxer_and_keeps_source_indices(source):
+    expected_report: dict[str, Any] = {}
+    _owner, original = prepare(source, expected_report)
+    expected = fingerprints(original)
+    actual_report: dict[str, Any] = {}
+    # Deliberately wrong legacy slots: explicit PES mode resolves before decode
+    # and the online policy receives those actual indices before its first offer.
+    size = 1024
+    owner = OWNER([source[i:i + size] for i in range(0, len(source), size)])
+    actual = M['iter_capture_preparation'](owner, 'camera-key', (0, 1), 2, actual_report,
+        limits=CaptureLimits(max_packets=len(owner.bodies), max_bytes=16777216, duration_seconds=60),
+        completion='bounded-prefix', codec='hevc', policy='bounded-serial-pcm', overlap_ms=1, phase_ms=1,
+        pes_ids=(0xE0, 0xE1, 0xC0))
+    assert fingerprints(actual) == expected
+    selection = actual_report['decode']['track_selection']
+    assert selection['video_indices'] == [0, 2] and selection['audio_index'] == 1
+    assert actual_report['online']['track_selection'] == selection
+    assert actual_report['decode']['preparation'] == expected_report['decode']['preparation']
+    assert actual_report['status'] == 'prepared-prefix-ended' and owner.closed
+
+
+@pytest.mark.parametrize('ids', [(0xE0, 0xE0, 0xC0), (True, 0xE1, 0xC0)])
+def test_invalid_pes_selection_does_not_claim_owner(source, ids):
+    report: dict[str, Any] = {}
+    owner, iterator = prepare(source, report, pes_ids=ids)
+    with pytest.raises(ValueError):
+        list(iterator)
+    assert not owner.started and not owner.closed
+    assert report['accepted_prefix_clear_sha256'] is None
+
+
+def test_missing_selected_pes_closes_capture_without_success(source):
+    report: dict[str, Any] = {}
+    owner, iterator = prepare(source, report, pes_ids=(0xE0, 0xEF, 0xC0))
+    with pytest.raises(ValueError, match='identity'):
+        list(iterator)
+    assert owner.closed and report['status'] == 'failed'
+    assert report['accepted_prefix_clear_sha256'] is None
+
+
+@pytest.mark.parametrize('order,streams,audio', [((0, 2, 1), (0, 2), 1), ((0, 1, 2), (0, 1), 2)])
+def test_actual_ps_discovery_orders_match_independent_absolute_index_control(tmp_path, monkeypatch, order, streams, audio):
+    raw = OLD['TIMELINE_TESTS']['encode_three_track_ps'](tmp_path, audio_jitter=True, discovery_order=order).read_bytes()
+    monkeypatch.setattr(C['DECRYPT']['Decryptor'], 'decode', lambda _self, chunk: chunk)
+    baseline_decode: dict[str, Any] = {}
+    baseline_policy: dict[str, Any] = {}
+    baseline = M['CHUNKED']['DECODE']['iter_snapshot'](raw, 'mpeg', streams, audio, baseline_decode)
+    expected = fingerprints(M['ONLINE']['iter_online'](baseline, streams, audio, baseline_policy,
+        policy='bounded-serial-pcm', overlap_ms=1, phase_ms=1))
+    report: dict[str, Any] = {}
+    owner, events = prepare(raw, report, pes_ids=(0xE0, 0xE1, 0xC0))
+    assert fingerprints(events) == expected
+    assert report['decode']['track_selection']['video_indices'] == list(streams)
+    assert report['decode']['track_selection']['audio_index'] == audio
+    assert report['decode']['preparation'] == baseline_decode['preparation']
+    assert report['online']['policy'] == baseline_policy['policy']
+    assert owner.closed and report['status'] == 'prepared-prefix-ended'
+
+
+def test_pes_mode_early_close_retains_resolved_diagnostics_and_closes_source(source):
+    report: dict[str, Any] = {}
+    owner, events = prepare(source, report, pes_ids=(0xE0, 0xE1, 0xC0))
+    next(events)
+    events.close()
+    assert owner.closed and report['status'] == 'consumer-closed'
+    assert report['accepted_prefix_clear_sha256'] is None
+    assert report['decode']['track_selection'] == report['online']['track_selection']
+    assert report['decode']['preparation']
+    assert report['decode']['input']['owned_chunk_bytes'] == 0
+
+
+def test_changed_selection_receipt_cannot_publish_prefix_completion(source):
+    report: dict[str, Any] = {}
+    _owner, events = prepare(source, report, pes_ids=(0xE0, 0xE1, 0xC0))
+    list(events)
+    changed = copy.deepcopy(report['online'])
+    changed['track_selection']['audio_index'] = 2
+    with pytest.raises(ValueError, match='terminal checks'):
+        M['verify_completion'](report['capture'], report['decode'], changed)

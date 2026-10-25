@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 DECODE = runpy.run_path(str(Path(__file__).with_name('local_av_incremental.py')))
+TRACKS = runpy.run_path(str(Path(__file__).with_name('local_av_tracks.py')))
 MAX_CHUNK_BYTES = 1024 * 1024
 MAX_READ_BYTES = 64 * 1024
 MAX_CHUNKS = 100_000
@@ -155,7 +156,8 @@ class ChunkReader(io.RawIOBase):
 
 def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
                           streams: tuple[int, int], audio_stream: int, session: Any,
-                          report: dict[str, Any]) -> Any:
+                          report: dict[str, Any], *, pes_ids: tuple[int, int, int] | None = None,
+                          selection: dict[str, Any] | None = None) -> Any:
     """One discovery and codec context; startup ends only at both prepared heads."""
     started = time.monotonic()
     options = {'protocol_whitelist': 'file,pipe'}
@@ -164,6 +166,14 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
     with av.open(reader, format=container_format, options=options) as container:
         if reader.bounded_startup:
             reader.check()
+        if pes_ids is not None:
+            resolved = TRACKS['resolve_pes_ids'](container, pes_ids)
+            streams = tuple(resolved['video_indices'])
+            audio_stream = resolved['audio_index']
+            session = DECODE['Session'](streams, audio_stream, DECODE['discard'])
+            report['track_selection'] = resolved
+            assert selection is not None
+            selection.update(resolved)
         selected = DECODE['selected_tracks'](container, streams, audio_stream)
         report['discovery_input'] = reader.result()
         adapter = DECODE['AUDIO']['FrameAdapter'](audio_stream, DECODE['AUDIO']['FormatConverter'](av))
@@ -182,6 +192,8 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
                 yield event, payload
                 del event, payload
         finally:
+            if pes_ids is not None:
+                report['preparation'] = session.result()
             close_events = getattr(events, 'close', None)
             if close_events is not None:
                 close_events()
@@ -192,10 +204,13 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
 
 def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
                 audio_stream: int, report: dict[str, Any], *,
-                max_bytes: int = 16 * 1024 * 1024, startup: str = 'default') -> Any:
+                max_bytes: int = 16 * 1024 * 1024, startup: str = 'default',
+                pes_ids: tuple[int, int, int] | None = None, selection: dict[str, Any] | None = None) -> Any:
     """Own/close the producer iterator; preparation yields are not output acks."""
     reader = None
     primary = False
+    report.pop('track_selection', None)
+    report.update({} if pes_ids is None else dict(preparation={}))
     session = DECODE['Session'](streams, audio_stream, DECODE['discard'])
     report.update(profile='standalone-chunked-preparation-v1', status='failed', error=None,
         output_devices_opened=False, source_kind='caller-supplied-clear-chunks', physical_av_sync_measured=False,
@@ -208,10 +223,15 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
                 or len(set((*streams, audio_stream))) != 3
                 or any(type(i) is not int or i < 0 for i in (*streams, audio_stream))):
             raise ValueError('select three distinct supported tracks and a supported container')
+        if pes_ids is not None:
+            TRACKS['validate_pes_ids'](pes_ids)
+            if container_format != 'mpeg' or type(selection) is not dict or selection:
+                raise ValueError('PES selection requires MPEG-PS and a fresh selection receipt')
         reader = ChunkReader(chunks, max_bytes, bounded_startup=startup == 'bounded-mpeg')
         av = DECODE['AUDIO']['load_av']()
         report.update(pyav_version=av.__version__, library_versions=av.library_versions)
-        yield from prepared_chunk_events(av, reader, container_format, streams, audio_stream, session, report)
+        yield from prepared_chunk_events(av, reader, container_format, streams, audio_stream, session, report,
+                                         pes_ids=pes_ids, selection=selection)
         report.update(status='completed', source_sha256=reader.digest.hexdigest(),
                       source_bytes=reader.received)
     except BaseException as error:
@@ -220,7 +240,10 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
                       error=f'{type(error).__name__}: {error}')
         raise
     finally:
-        report['preparation'] = session.result()
+        if pes_ids is None:
+            report['preparation'] = session.result()
+        else:
+            report.setdefault('preparation', {})
         if reader is not None:
             report['input_before_cleanup'] = reader.result()
             try:

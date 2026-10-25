@@ -7,6 +7,8 @@ Hashes detect corruption; they are not an authenticity signature.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -24,14 +26,14 @@ def directory(path: Path) -> int:
     return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 
 
-def regular(root: int, name: str, limit: int) -> Any:
+@contextmanager
+def regular(root: int, name: str, limit: int) -> Iterator[Any]:
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root)
-    source = os.fdopen(fd, "rb")
-    info = os.fstat(source.fileno())
-    if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
-        source.close()
-        raise ValueError("invalid evidence file")
-    return source
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
+            raise ValueError("invalid evidence file")
+        yield source
 
 
 def write_json(root: int, name: str, value: Any, limit: int) -> str:

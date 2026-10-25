@@ -222,3 +222,37 @@ def test_offline_checker_cli_has_no_package_or_camera_dependency(tmp_path):
     (root / "manifest.json").unlink()
     bad = subprocess.run(command, capture_output=True, timeout=5, check=False)
     assert bad.returncode == 2 and json.loads(bad.stdout) == dict(status="invalid-or-incomplete")
+
+
+def test_metadata_failure_closes_the_newly_opened_evidence_file(tmp_path, monkeypatch):
+    root, _ = saved(tmp_path)
+    opened = []
+    real_open, real_stat = os.open, os.fstat
+    directory = M["directory"](root)
+
+    def open_file(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    def fail_stat(_fd):
+        raise OSError("metadata unavailable")
+
+    monkeypatch.setattr(os, "open", open_file)
+    monkeypatch.setattr(os, "fstat", fail_stat)
+    try:
+        with (
+            pytest.raises(OSError, match="metadata unavailable"),
+            M["regular"](
+                directory,
+                "manifest.json",
+                4096,
+            ),
+        ):
+            pytest.fail("metadata failure was ignored")
+        assert len(opened) == 1
+        with pytest.raises(OSError) as error:
+            real_stat(opened[0])
+        assert error.value.errno == 9  # EBADF: the file was closed on the failure path.
+    finally:
+        os.close(directory)

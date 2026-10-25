@@ -84,7 +84,8 @@ SIGTERM becomes a cancellation exception so the source owner can interrupt IO,
 join its worker, abort/drain outputs and finalize evidence. If joining still fails,
 retain ownership until a failed worker receipt is flushed and the worker process
 exits; do not finalize an executing decoder from the parent. The parent reaps its
-child and retains available partial diagnostics after timeout/cancellation without
+child and kills any surviving members of its inherited output process group, even
+when the worker already exited or exited promptly after TERM. It retains available partial diagnostics after timeout/cancellation without
 replacing the primary failure with a secondary cleanup error.
 
 Nested diagnostics are bounded and checked for known private values before being

@@ -23,7 +23,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pyezvizapi
-from pyezvizapi import AutoClipSource, AutoMediaStream, CaptureLimits
 from pyezvizapi.hcnetsdk import EzvizCasDeviceInfo, HcNetSdkLanEndpoint
 from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials
 
@@ -90,7 +89,8 @@ def private_config(path: Path, expected: str | None = None) -> tuple[Any, dict[s
             media_key=key,
         )
         # Validate control credentials before the prompt, without connecting.
-        _control_key = credentials.device_info.key_bytes
+        if len(credentials.device_info.key_bytes) != 16:
+            raise ValueError("unsupported local control key")
         return credentials, device, digest
     except Exception:
         # Malformed input and downstream validation must not echo a credential.
@@ -131,10 +131,10 @@ def capture(args: Any, report: dict[str, Any]) -> None:
     )
     # An object without account methods and offline/no-fallback selection makes
     # missing local metadata an error, never a reason to log in or discover cloud.
-    owner = AutoMediaStream(
+    owner = pyezvizapi.AutoMediaStream(
         object(),
         credentials.endpoint.serial,
-        AutoClipSource(
+        pyezvizapi.AutoClipSource(
             mode="offline",
             credentials=credentials,
             device=device,
@@ -150,7 +150,7 @@ def capture(args: Any, report: dict[str, Any]) -> None:
             credentials.media_key,
             output_arguments(args, args.mono_option),
             report,
-            limits=CaptureLimits(**LIMITS),
+            limits=pyezvizapi.CaptureLimits(**LIMITS),
             completion="bounded-prefix",
             codec="hevc",
             pes_ids=(0xE0, 0xE1, 0xC0),
@@ -218,16 +218,22 @@ def safe_receipt(report: dict[str, Any], args: Any) -> bytes:
 
 def reap(child: Any) -> None:
     """Finite foreground escalation, not concurrent generator finalization."""
-    if child.poll() is not None:
-        return
-    with suppress(ProcessLookupError):
-        os.killpg(child.pid, signal.SIGTERM)
     try:
-        child.wait(timeout=10)
-    except subprocess.TimeoutExpired:
+        if child.poll() is None:
+            with suppress(ProcessLookupError):
+                os.killpg(child.pid, signal.SIGTERM)
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                with suppress(ProcessLookupError):
+                    os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=3)
+    finally:
+        # A reaped leader does not establish that inherited SDL/ffplay group
+        # members have exited. Always kill any remaining group, even on entry
+        # with an already-exited worker or after successful TERM handling.
         with suppress(ProcessLookupError):
             os.killpg(child.pid, signal.SIGKILL)
-        child.wait(timeout=3)
 
 
 def worker_command(args: Any, digest: str, mono: str, receipt: Path) -> list[str]:

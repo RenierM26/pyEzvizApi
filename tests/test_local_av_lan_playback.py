@@ -7,6 +7,7 @@ from pathlib import Path
 import runpy
 import signal
 import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -227,6 +228,7 @@ def test_attended_parent_binds_child_after_prompt_and_reaps(config, monkeypatch,
             return 0
 
     monkeypatch.setattr(M["subprocess"], "Popen", Child)
+    monkeypatch.setitem(G, "reap", lambda _child: None)
     report: dict[str, Any] = {}
     if case == "good":
         M["attended"](options, report)
@@ -258,6 +260,7 @@ def test_active_parent_interruption_reaps_child_without_success(config, monkeypa
             return 2 if reaped else None
 
     monkeypatch.setattr(M["subprocess"], "Popen", Child)
+    monkeypatch.setitem(G, "reap", lambda _child: None)
     monkeypatch.setitem(G, "reap", reaped.append)
     monkeypatch.setitem(G, "arguments", lambda: args(config))
     assert M["main"]() == (130 if case == "cancel" else 2)
@@ -303,7 +306,11 @@ def test_foreground_reaping_escalates_only_after_grace(monkeypatch, blocked):
     monkeypatch.setattr(M["os"], "killpg", lambda pid, sig: calls.append((pid, sig)))
     M["reap"](Child())
     assert calls[:2] == [(123, signal.SIGTERM), ("wait", 10)]
-    assert calls[2:] == ([(123, signal.SIGKILL), ("wait", 3)] if blocked else [])
+    assert calls[2:] == (
+        [(123, signal.SIGKILL), ("wait", 3), (123, signal.SIGKILL)]
+        if blocked
+        else [(123, signal.SIGKILL)]
+    )
 
 
 @pytest.mark.parametrize("case", ["success", "constructor", "playback", "close", "unjoined"])
@@ -335,7 +342,7 @@ def test_worker_uses_local_only_source_and_preserves_ownership_until_join(
         assert source.credentials.media_key == "public-test-key"
         return owner
 
-    monkeypatch.setitem(G, "AutoMediaStream", make)
+    monkeypatch.setattr(M["pyezvizapi"], "AutoMediaStream", make)
 
     class Session:
         def __init__(self, actual, key, output, report, **kwargs):
@@ -471,8 +478,81 @@ def test_parent_keeps_partial_receipt_after_timeout_and_reap(config, monkeypatch
             return 2
 
     monkeypatch.setattr(M["subprocess"], "Popen", Child)
+    monkeypatch.setitem(G, "reap", lambda _child: None)
     monkeypatch.setitem(G, "arguments", lambda: args(config))
     assert M["main"]() == 2
     report = json.loads(config.with_name("receipt.json").read_text())
     assert report["error_type"] == "TimeoutExpired" and report["worker_reaped"]
     assert report["playback"] == dict(status="cancelled", partial=True)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux process-group lifecycle")
+@pytest.mark.parametrize("mode", ["already-exited", "term-exit"])
+def test_reap_kills_surviving_output_descendants_even_when_leader_exits(tmp_path, mode):
+    child = tmp_path / "output.py"
+    child.write_text("""import signal,sys,time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(sys.argv[1]).write_text('ready')
+time.sleep(60)
+""")
+    worker = tmp_path / "worker.py"
+    worker.write_text("""import os,subprocess,sys,time
+from pathlib import Path
+p=subprocess.Popen([sys.executable,sys.argv[1],sys.argv[2]])
+Path(sys.argv[3]).write_text(str(p.pid))
+while not Path(sys.argv[2]).exists():time.sleep(.01)
+if sys.argv[4]=='already-exited':os._exit(2)
+time.sleep(60)
+""")
+    # A scoped subreaper lets this isolated probe reap its adopted output child;
+    # the test does not leave an orphan zombie or alter pytest's process state.
+    probe = """import ctypes,os,runpy,signal,subprocess,sys,time
+from contextlib import suppress
+from pathlib import Path
+libc=ctypes.CDLL(None,use_errno=True)
+assert libc.prctl(36,1,0,0,0)==0
+module=runpy.run_path(sys.argv[1]);worker=Path(sys.argv[2]);ready=worker.with_name('ready');pidfile=worker.with_name('pid')
+p=subprocess.Popen([sys.executable,str(worker),sys.argv[3],str(ready),str(pidfile),sys.argv[4]],start_new_session=True)
+output_pid=None
+try:
+ deadline=time.monotonic()+5
+ while not ready.exists() or not pidfile.exists():
+  assert time.monotonic()<deadline
+  time.sleep(.01)
+ output_pid=int(pidfile.read_text())
+ if sys.argv[4]=='already-exited':p.wait(timeout=3)
+ module['reap'](p)
+ assert p.poll() is not None
+ deadline=time.monotonic()+3
+ while True:
+  pid,status=os.waitpid(output_pid,os.WNOHANG)
+  if pid:
+   assert os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
+   output_pid=None
+   break
+  assert time.monotonic()<deadline,'output process survived worker reaping'
+  time.sleep(.01)
+finally:
+ with suppress(ProcessLookupError):os.killpg(p.pid,signal.SIGKILL)
+ p.wait(timeout=3)
+ if output_pid is not None:
+  with suppress(ProcessLookupError):os.kill(output_pid,signal.SIGKILL)
+  os.waitpid(output_pid,0)
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            probe,
+            str(Path(__file__).parents[1] / "tools/local_av_lan_playback.py"),
+            str(worker),
+            str(child),
+            mode,
+        ],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode()

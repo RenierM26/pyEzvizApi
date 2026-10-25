@@ -360,7 +360,9 @@ Parent: Any = B['Scheduler']
 class Scheduler(Parent):
     """Reuse acknowledgement/abort lease handling, not the recorded timeline plan."""
 
-    def __init__(self, assets: Assets, timeout: float, max_late_ms: int, **kwargs: Any) -> None:
+    def __init__(self, assets: Assets, timeout: float, max_late_ms: int, *, span_limit: int = 60, **kwargs: Any) -> None:
+        ONLINE['validate_span_limit'](span_limit, 'source-sequence')
+        self.span_limit = span_limit
         super().__init__(dict(events=[]), timeout, max_late_ms, assets, **kwargs)
         if assets.diagnostic_tail is not None:
             self.actions = AUDIT['Actions'](assets.diagnostic_tail)
@@ -392,7 +394,7 @@ class Scheduler(Parent):
         if assets.diagnostic_tail is not None:
             self.actions.set_media_anchor(self.anchor)
         backends = dict(video_pair=video, audio_block=audio)
-        end = self.anchor + int((PLAY['MAX_SPAN'] + self.timeout) * 1e9)
+        end = self.anchor + int((self.span_limit + self.timeout) * 1e9)
         while not assets.source_end or assets.pending or self.jobs or any(assets.queues.values()):
             check_stop(assets.stop)
             self.harvest()
@@ -502,15 +504,24 @@ def video_options(receipt: dict[str, Any], title: str | None, mode: str, pair_li
     return options
 
 
-def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,
+def bind_span(receipt: dict[str, Any], limit: int, mode: str, pending: bool, tail: int | None) -> None:
+    ONLINE['validate_span_limit'](limit, mode)
+    if limit != PLAY['MAX_SPAN']:
+        if tail is None or not pending:
+            raise ValueError('expanded output span requires pending input and bounded diagnostics')
+        receipt['source_span_limit_seconds'] = limit
+
+
+def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,  # noqa: PLR0915
                   pending_input: bool = False, stop: Event | None = None, diagnostic_tail: int | None = None,
-                  video_identity_mode: str = 'full-history', pair_limit: int = 300) -> None:
+                  video_identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60) -> None:
     """Own prepared input/output; opt-in events is a caller-retained pristine pull.
 
     The caller validates transport first. With pending_input, it must retain the
     pull owner and rejoin after a cleanup timeout, never close its nested source.
     """
     validate_control(pending_input, stop, diagnostic_tail)
+    bind_span(receipt, span_limit, video_identity_mode, pending_input, diagnostic_tail)
     options = video_options(receipt, title, video_identity_mode, pair_limit, diagnostic_tail)
     if pending_input:
         validate_pending_source(events, args.deadline)  # Invalid owners remain unclaimed.
@@ -533,7 +544,8 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         check_stop(stop)
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='online-av-output')
         assets.start_preparation()
-        scheduler = Scheduler(assets, args.deadline, args.max_late_ms)
+        scheduler = Scheduler(assets, args.deadline, args.max_late_ms,
+            **({} if span_limit == PLAY['MAX_SPAN'] else dict(span_limit=span_limit)))
         scheduler.run(assets, video, audio, executor)
         save_video_identity(receipt, video, scheduler.completed['video_pair'], video_identity_mode, pair_limit)
     except BaseException:

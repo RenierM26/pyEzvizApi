@@ -54,7 +54,7 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
 
 def capture_playback(owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,
         limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
-        monotonic: Any = time.monotonic) -> None:
+        monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None) -> None:
     """Own a validated pristine capture; output only its explicitly accepted prefix.
 
     May acquire a real supplied owner and open output devices when called. This
@@ -79,10 +79,13 @@ def capture_playback(owner: Any, key: str | bytes, args: Any, report: dict[str, 
         PREPARE['ONLINE']['Policy'](streams, args.audio_stream, args.audio_overlap_policy,
             args.max_audio_overlap_ms, args.max_audio_phase_ms)
         PREPARE['CAPTURE']['validate_arguments'](owner, limits, completion, codec)
+        if pes_ids is not None:
+            PREPARE['CHUNKED']['TRACKS']['validate_pes_ids'](pes_ids)
         claimed = True
         events = PREPARE['iter_capture_preparation'](owner, key, streams, args.audio_stream, preparation,
             limits=limits, completion=completion, codec=codec, policy=args.audio_overlap_policy,
-            overlap_ms=args.max_audio_overlap_ms, phase_ms=args.max_audio_phase_ms, monotonic=monotonic)
+            overlap_ms=args.max_audio_overlap_ms, phase_ms=args.max_audio_phase_ms, monotonic=monotonic,
+            **({} if pes_ids is None else dict(pes_ids=pes_ids)))
         output['profile'] = 'bounded-prepared-host-submissions-v1'
         report['status'] = 'running'
         OUTPUT['play_prepared'](events, args, output, title='Bounded capture prefix (host submissions; not device sync)')

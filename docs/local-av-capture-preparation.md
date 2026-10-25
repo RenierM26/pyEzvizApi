@@ -88,3 +88,9 @@ attended validation.
 For the separate development output adapter, see
 [guarded capture-prefix output](local-av-capture-playback.md). It retains this
 prefix-only scope and requires independent output acknowledgements/drains.
+
+Pass the optional `pes_ids=(0xE0, 0xE1, 0xC0)` keyword to resolve explicit ordered
+MPEG-PS video/video/audio identities in this same acquisition, before decode and
+online-policy offers. See [the capture output selection contract](local-av-capture-playback.md#explicit-same-session-pes-identities).
+Absolute-index mode remains the default; PES mode records the actual unmodified
+indices in both decoder and online-policy selection receipts.

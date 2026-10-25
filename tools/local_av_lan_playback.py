@@ -205,8 +205,8 @@ def safe_receipt(report: dict[str, Any], args: Any) -> bytes:
                 dict(
                     profile="attended-direct-lan-prefix-v1",
                     status="cancelled" if report.get("status") == "cancelled" else "failed",
-                    stage=report.get("stage"),
-                    error_type=report.get("error_type") or "UnsafeOrUnavailableReceipt",
+                    stage="receipt-validation",
+                    error_type="UnsafeOrUnavailableReceipt",
                     diagnostics_omitted=True,
                     physical_av_sync_measured=False,
                 )

@@ -556,3 +556,13 @@ finally:
         check=False,
     )
     assert result.returncode == 0, result.stderr.decode()
+
+
+def test_secret_redaction_does_not_echo_diagnostic_labels_in_its_fallback(config):
+    report = dict(status="failed", stage="public-test-key", error_type="public-test-key")
+    raw = M["safe_receipt"](report, args(config))
+    secret = b"public-test-key"
+    assert secret not in raw
+    result = json.loads(raw)
+    assert result["status"] == "failed" and result["diagnostics_omitted"]
+    assert result["error_type"] == "UnsafeOrUnavailableReceipt"

@@ -15,9 +15,11 @@ Requires a POSIX, little-endian host and optional PyAV (verified with 19.0.1):
 python -m pip install 'av>=19,<20'
 ```
 
-Only explicit `mpegts` and `matroska` demuxers are enabled, using a bounded regular
-local file object rather than a URL. Use clear MPEG-TS capture/remux output; raw or
-encrypted MPEG-PS is not accepted by this adapter. Inspect the local container to
+Only explicit `mpegts`, `matroska` and `mpeg` (MPEG-PS) demuxers are enabled,
+using a bounded regular local file object rather than a URL. Input must already
+be clear: encrypted MPEG-PS is not decrypted by this adapter. A clear PS capture
+can be read directly, avoiding a default FFmpeg remux that selects only one video
+track or changes source clock origins. Inspect the local container to
 choose the **absolute stream index**, not the audio-only ordinal, for example:
 
 ```sh
@@ -48,6 +50,10 @@ summary and the sink result. Missing summary means incomplete decoder provenance
 - PyAV converts the sample **format only** to packed signed16 PCM at the same
   rate/layout. One source frame must produce one output frame, identical sample
   count and exact source time; unexpected conversion delay/tail is rejected.
+- Format conversion uses an untimed, bounded sample copy, then reattaches the
+  original exact PTS/time base. This avoids rounding a 90-kHz source clock to the
+  16-kHz sample clock. The borrowed decoded frame is unchanged; conversion must
+  still return exactly one 1,024-sample output with no delayed tail.
 - No resampling, time stretching, gain, VQE, fixed offset, gap filling, padding
   synthesis, frame-count-derived clock or automatic clock repair is applied.
 - Each output is exactly 2,048 little-endian PCM bytes. AVFrame allocation padding
@@ -114,3 +120,27 @@ partial decoder prefixes and AAC priming metadata. One optional real AAC-contain
 test runs only when PyAV and FFmpeg are installed; remaining tests need neither.
 Physical output, proprietary voice processing, paired-lens video lifecycle and
 real live-source arrival integration remain separate work.
+
+
+### Exact non-sample-aligned source clocks
+
+A retained H9c local-media control exposed an otherwise-valid AAC frame at a
+90-kHz source PTS not representable in 16-kHz sample ticks. Passing that clock
+through sample-format conversion rounded it by 4/15 sample, triggering the exact
+timing guard before any PCM output. The untimed conversion copy preserves the
+source metadata without changing converted sample bytes. A bounded control now
+decodes five camera AAC blocks with their original exact packet/frame times and
+writes all five to dummy output. Both HEVC tracks separately decode eight frames
+without app-selected pairs. These are local recorded-data controls, not a camera
+connector, combined standalone player, native VQE parity or measured A/V sync.
+
+Synthetic regressions cover large 90-kHz PTS, equal times, forward gaps, both
+supported sample formats, unchanged input frames and PCM identity with the
+unmodified converter. A generated MPEG-TS CLI fixture uses a non-sample-aligned
+clock; the existing Matroska fixture remains covered.
+
+
+For a standalone exact-container-PTS policy without native headers or app-selected
+pairs, see the [local A/V timeline planner](local-av-timeline.md). It preserves
+one shared source origin and explicitly reports unpaired pictures/audio gaps;
+it does not open output devices or reproduce native scheduling.

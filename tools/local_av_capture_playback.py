@@ -5,6 +5,7 @@ from copy import copy
 import math
 from pathlib import Path
 import runpy
+from threading import Event
 import time
 from typing import Any
 
@@ -129,10 +130,11 @@ class CapturePlayback:
         self.args = copy(args)
         self.report = report
         self.used = False
+        self._stop = Event()
         preparation: dict[str, Any] = {}
         output: dict[str, Any] = {}
         report.update(profile='guarded-capture-pending-host-submissions-v1', status='failed', error_type=None,
-            preparation=preparation, output=output, cleanup_error_types=[], source_pull=None,
+            preparation=preparation, output=output, cleanup_error_types=[], source_pull=None, stop_requested=False,
             accepted_prefix_clear_sha256=None, completion_policy=completion,
             input_scope='accepted-capture-prefix', whole_source_complete=False, network_eof_verified=False,
             whole_source_preflight=False, physical_av_sync_measured=False,
@@ -160,6 +162,14 @@ class CapturePlayback:
         report['status'] = 'ready'
         report['source_pull'] = self.pull.result()
 
+    def request_stop(self) -> None:
+        """Thread-safe request only; play's owner performs interrupt/join/cleanup.
+
+        This never closes an executing iterator, waits for IO or changes a
+        completed receipt. Stop is cooperative between existing bounded calls.
+        """
+        self._stop.set()
+
     def close(self, timeout: float | None = None) -> None:
         """Cancel/rejoin without ever closing the worker's executing generator."""
         self.used = True
@@ -184,11 +194,11 @@ class CapturePlayback:
         report['status'] = 'running'
         report['output']['profile'] = 'bounded-prepared-host-submissions-v1'
         try:
-            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True,
+            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop,
                 title='Bounded capture prefix (host submissions; not device sync)')
         except BaseException as error:
             primary = True
-            report.update(status='cancelled' if isinstance(error, KeyboardInterrupt) else 'failed',
+            report.update(status='cancelled' if isinstance(error, (KeyboardInterrupt, OUTPUT['PlaybackStopped'])) else 'failed',
                 error_type=type(error).__name__)
             raise
         finally:
@@ -204,6 +214,7 @@ class CapturePlayback:
                         raise
                     report.update(status=primary_status, error_type=primary_type)
             report['source_pull'] = self.pull.result()
+            report['stop_requested'] = self._stop.is_set()
         try:
             state = report['source_pull']
             if (report['cleanup_error_types'] or state['worker_alive'] or not state['iterator_closed'] or not state['consumer_closed']
@@ -211,8 +222,10 @@ class CapturePlayback:
                     or state['source_error_type'] or state['close_error_type'] or state['interrupt_error_type']):
                 raise ValueError('capture pull terminal checks failed')
             verify_output(report['preparation'], report['output'])
+            OUTPUT['check_stop'](self._stop)
         except Exception as error:
-            report.update(status='failed', error_type=type(error).__name__)
+            report.update(status='cancelled' if isinstance(error, OUTPUT['PlaybackStopped']) else 'failed',
+                error_type=type(error).__name__, stop_requested=self._stop.is_set())
             raise
         report.update(status='prefix-output-completed',
             accepted_prefix_clear_sha256=report['preparation']['accepted_prefix_clear_sha256'])

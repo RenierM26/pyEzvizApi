@@ -363,3 +363,43 @@ def test_partial_writes_use_readonly_views_without_hidden_suffix_copies():
     assert all(isinstance(data, memoryview) and data.readonly and data.obj is PCM
                for _, data in backend.writes)
     assert b''.join(data for _, data in backend.writes) == PCM
+
+
+def test_aborted_drain_cannot_finish_successfully_even_when_backend_returns_normally():
+    sink, backend, _clock = output()
+    sink.write(*prepared(0, 10))
+    entered, release = Event(), Event()
+    errors = []
+    def blocked_finish(timeout):
+        entered.set()
+        assert release.wait(2)
+        # An aborting backend may have discarded pending output and still return.
+    backend.finish = blocked_finish
+    def finish():
+        try:
+            sink.finish()
+        except InterruptedError:
+            errors.append('cancelled')
+    thread = Thread(target=finish)
+    thread.start()
+    try:
+        assert entered.wait(2)
+        sink.abort()
+        assert sink.result()['cancelled'] and not sink.result()['outputs_finished']
+    finally:
+        release.set()
+        thread.join(2)
+    r = sink.result()
+    assert not thread.is_alive() and errors == ['cancelled']
+    assert r['cancelled'] and r['failed'] and r['transport_closed']
+    assert not r['outputs_finished'] and r['last_error_type'] == 'InterruptedError'
+    assert backend.aborts == 1
+
+
+def test_same_thread_backend_drain_cancellation_does_not_deadlock_or_claim_success():
+    sink, backend, _clock = output()
+    sink.write(*prepared(0, 10))
+    backend.finish = lambda timeout: sink.abort()
+    with pytest.raises(InterruptedError):
+        sink.finish()
+    assert sink.result()['cancelled'] and not sink.result()['outputs_finished']

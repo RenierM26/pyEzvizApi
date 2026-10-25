@@ -111,17 +111,21 @@ class GapOutput:
         self.partial = 0
         return dict(row, started_monotonic_ns=started, completed_monotonic_ns=self.clock())
 
+    def _abort_transport_locked(self) -> None:
+        """Caller holds abort_gate through transport ownership changes."""
+        if self.transport_closed:
+            return
+        self.aborted = True
+        self.abort_attempts += 1
+        try:
+            self.backend.abort()
+            self.transport_closed = True
+        except Exception as error:
+            self.abort_error_type = type(error).__name__
+
     def abort_transport(self) -> None:
         with self.abort_gate:
-            if self.transport_closed:
-                return
-            self.aborted = True
-            self.abort_attempts += 1
-            try:
-                self.backend.abort()
-                self.transport_closed = True
-            except Exception as error:
-                self.abort_error_type = type(error).__name__
+            self._abort_transport_locked()
 
     def write(self, event: dict[str, Any], payload: tuple[bytes, ...]) -> dict[str, Any]:
         """Call before the earliest target; retain credit until both jobs return.
@@ -181,7 +185,12 @@ class GapOutput:
             raise ValueError('gap output cannot finish')
         try:
             self.backend.finish(self.timeout)
-            self.finished = self.transport_closed = True
+            # Linearize drain completion against abort: a backend can return
+            # normally after abort discarded its pending bytes. Only a finish
+            # that commits before cancellation may claim a completed drain.
+            with self.abort_gate:
+                self.check_stop()
+                self.finished = self.transport_closed = True
         except BaseException as error:
             self.failed = True
             self.last_error_type = type(error).__name__
@@ -191,10 +200,11 @@ class GapOutput:
             self.gate.release()
 
     def abort(self) -> None:
-        if self.finished:
-            return
-        self.stop.set()
-        self.abort_transport()
+        with self.abort_gate:
+            if self.finished:
+                return
+            self.stop.set()
+            self._abort_transport_locked()
         # Only the returning writer can release its source/padding ownership.
 
     def result(self) -> dict[str, Any]:

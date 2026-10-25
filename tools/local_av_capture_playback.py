@@ -54,6 +54,7 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
     if receipt.get('profile') == 'bounded-prepared-tail-host-submissions-v1' or 'action_audit' in scheduler:
         audit = scheduler.get('action_audit') or {}
         timing = lookahead.get('preparation_audit') or {}
+        media = audit.get('media_receipt') or {}
         if (audit.get('profile') != 'bounded-finalized-json-v1'
                 or timing.get('profile') != 'bounded-finalized-json-v1'
                 or audit.get('submitted') != expected or audit.get('completed') != expected
@@ -63,6 +64,16 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
                 or audit.get('finalized_records') != sum(expected.values())
                 or timing.get('finalized_records') != sum(expected.values())):
             raise ValueError('bounded diagnostics terminal counts failed')
+        if (media.get('profile') != 'bounded-output-media-v1'
+                or media.get('host_anchor_monotonic_ns') != scheduler.get('host_anchor_monotonic_ns')
+                or set(media.get('tracks') or {}) != set(expected)
+                or any(type(media['tracks'][track]) is not dict or media['tracks'][track].get('completed') != count
+                    for track, count in expected.items())
+                or any(type(row.get('bytes')) is not int or row['bytes'] <= 0
+                    or type(row.get('sha256')) is not str or len(row['sha256']) != 64
+                    or any(c not in '0123456789abcdef' for c in row['sha256'])
+                    for row in media['tracks'].values())):
+            raise ValueError('compact media receipt terminal checks failed')
     PREPARE['verify_completion'](preparation['capture'], preparation['decode'], preparation['online'])
 
 

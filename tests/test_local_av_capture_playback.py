@@ -54,6 +54,11 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(PREP['CAPTURE']['DECRYPT']['Decryptor'], 'decode', lambda _self, chunk: chunk)
     clock = OLD['OLD']['Clock']()
     video, audio = BackendBase(clock), BackendBase(clock)
+    present = video.present
+    def acknowledged(identity, data, timeout):
+        present(identity, data, timeout)
+        return dict(kind='presented', pair_id=identity, bytes=len(data), pixel_sha256=data.pair_sha256)
+    video.present = acknowledged
     titles = []
     def output(*_args, **kwargs):
         titles.append(kwargs.get('title'))
@@ -803,3 +808,24 @@ def test_oversize_failure_diagnostic_preserves_backend_error_and_cleanup(rig):
     assert audit['error_count'] == 1 and not audit['complete_finalization']
     assert not report['output']['lookahead']['owned_ids']
     assert not report['source_pull']['worker_alive'] and report['accepted_prefix_clear_sha256'] is None
+
+
+def test_compact_media_receipt_is_required_and_matches_all_completed_counts(rig):
+    report: dict[str, Any] = {}
+    _owner, capture = session(rig, report, diagnostic_tail=1)
+    capture.play()
+    media = report['output']['scheduler']['action_audit']['media_receipt']
+    assert media['profile'] == 'bounded-output-media-v1'
+    assert media['host_anchor_monotonic_ns'] == report['output']['scheduler']['host_anchor_monotonic_ns']
+    assert {k:v['completed'] for k,v in media['tracks'].items()} == report['output']['scheduler']['completed']
+    for failure in ('missing', 'anchor', 'count'):
+        changed = copy.deepcopy(report['output'])
+        audit = changed['scheduler']['action_audit']
+        if failure == 'missing':
+            del audit['media_receipt']
+        elif failure == 'anchor':
+            audit['media_receipt']['host_anchor_monotonic_ns'] += 1
+        else:
+            audit['media_receipt']['tracks']['video_pair']['completed'] -= 1
+        with pytest.raises(ValueError, match='media receipt'):
+            M['verify_output'](report['preparation'], changed)

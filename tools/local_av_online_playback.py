@@ -389,6 +389,8 @@ class Scheduler(Parent):
 
     def run(self, assets: Assets, video: Any, audio: Any, executor: Any) -> None:
         self.anchor = self.clock()
+        if assets.diagnostic_tail is not None:
+            self.actions.set_media_anchor(self.anchor)
         backends = dict(video_pair=video, audio_block=audio)
         end = self.anchor + int((PLAY['MAX_SPAN'] + self.timeout) * 1e9)
         while not assets.source_end or assets.pending or self.jobs or any(assets.queues.values()):

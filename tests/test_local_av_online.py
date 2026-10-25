@@ -191,7 +191,6 @@ def test_real_online_policy_matches_snapshot_timeline_and_full_audio_rows(tmp_pa
 @pytest.mark.parametrize('kind', ['video', 'audio'])
 def test_session_identity_limits_remain_after_startup_credit_is_released(monkeypatch, kind):
     if kind == 'video':
-        monkeypatch.setitem(P, 'MAX_PAIRS', 2)
         events = [video(), audio(), video(1, 1066), video(2, 1132)]
     else:
         monkeypatch.setitem(T['AUDIO'], 'MAX_BLOCKS', 2)
@@ -199,7 +198,7 @@ def test_session_identity_limits_remain_after_startup_credit_is_released(monkeyp
     report: dict[str, Any] = {}
     source = Source(events)
     with pytest.raises(ValueError, match='excessive'):
-        list(adapt(source, report))
+        list(adapt(source, report, **({'pair_limit': 2} if kind == 'video' else {})))
     assert report['status'] == 'failed' and source.closed
     assert report['policy']['released_prepared_events'] == 3
 

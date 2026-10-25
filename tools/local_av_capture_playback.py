@@ -30,6 +30,9 @@ def validate_output(args: Any) -> None:
 
 def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
     """Require upstream verdict, every accepted host call and both drains."""
+    pair_limit = preparation.get('pair_limit', 300)
+    if type(receipt.get('pair_limit', 300)) is not int or receipt.get('pair_limit', 300) != pair_limit:
+        raise ValueError('capture output video pair limit mismatch')
     scheduler = receipt.get('scheduler') or {}
     lookahead = receipt.get('lookahead') or {}
     prepared = preparation.get('decode', {}).get('preparation', {})
@@ -77,9 +80,9 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
     if preparation.get('online', {}).get('profile') == 'standalone-online-sequence-av-policy-v1':
         if receipt.get('video_identity_mode') != 'source-sequence':
             raise ValueError('capture output worker identity mode mismatch')
-        OUTPUT['CHANNEL']['verify_identity_audit'](receipt.get('video_identity_audit'), expected['video_pair'])
+        OUTPUT['CHANNEL']['verify_identity_audit'](receipt.get('video_identity_audit'), expected['video_pair'], pair_limit)
     PREPARE['verify_completion'](preparation['capture'], preparation['decode'], preparation['online'],
-        decoder_deadline_mode=preparation.get('decoder_deadline_mode', 'wall'))
+        decoder_deadline_mode=preparation.get('decoder_deadline_mode', 'wall'), pair_limit=pair_limit)
 
 
 def capture_playback(owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,
@@ -156,13 +159,14 @@ class CapturePlayback:
             limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
             monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
             diagnostic_tail: int | None = None, identity_mode: str = 'full-history',
-            decoder_deadline_mode: str = 'wall') -> None:
+            decoder_deadline_mode: str = 'wall', pair_limit: int = 300) -> None:
         self.args = copy(args)
         self.report = report
         self.used = False
         self._stop = Event()
         self.diagnostic_tail = diagnostic_tail
         self.identity_mode = identity_mode
+        self.pair_limit = pair_limit
         preparation: dict[str, Any] = {}
         output: dict[str, Any] = {}
         report.update(profile='guarded-capture-pending-host-submissions-v1' if diagnostic_tail is None
@@ -175,11 +179,12 @@ class CapturePlayback:
             timing='common-host-submissions-not-device-clock-sync')
         try:
             OUTPUT['AUDIT']['validate_tail'](diagnostic_tail)
+            OUTPUT['video_options']({}, None, identity_mode, pair_limit, diagnostic_tail)
             PREPARE['CHUNKED']['validate_deadline_mode'](decoder_deadline_mode)
             validate_output(self.args)
             streams = (self.args.primary_stream, self.args.secondary_stream)
             PREPARE['ONLINE']['Policy'](streams, self.args.audio_stream, self.args.audio_overlap_policy,
-                self.args.max_audio_overlap_ms, self.args.max_audio_phase_ms, identity_mode=identity_mode)
+                self.args.max_audio_overlap_ms, self.args.max_audio_phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
             PREPARE['CAPTURE']['validate_arguments'](owner, limits, completion, codec)
             if pes_ids is not None:
                 PREPARE['CHUNKED']['TRACKS']['validate_pes_ids'](pes_ids)
@@ -188,7 +193,7 @@ class CapturePlayback:
             events = PREPARE['iter_capture_preparation'](owner, key, streams, self.args.audio_stream, preparation,
                 limits=limits, completion=completion, codec=codec, policy=self.args.audio_overlap_policy,
                 overlap_ms=self.args.max_audio_overlap_ms, phase_ms=self.args.max_audio_phase_ms,
-                monotonic=monotonic, identity_mode=identity_mode, decoder_deadline_mode=decoder_deadline_mode, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
+                monotonic=monotonic, identity_mode=identity_mode, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
             source = CaptureEvents(events, owner, preparation, report)
             self.pull = OUTPUT['PULL']['PreparedPull'](source, interrupt=owner.close)
         except BaseException as error:
@@ -229,7 +234,7 @@ class CapturePlayback:
         report['status'] = 'running'
         report['output']['profile'] = 'bounded-prepared-host-submissions-v1'
         try:
-            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop, diagnostic_tail=self.diagnostic_tail, video_identity_mode=self.identity_mode,
+            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop, diagnostic_tail=self.diagnostic_tail, video_identity_mode=self.identity_mode, pair_limit=self.pair_limit,
                 title='Bounded capture prefix (host submissions; not device sync)')
         except BaseException as error:
             primary = True

@@ -67,7 +67,7 @@ def rig(tmp_path, monkeypatch):
             finish = video.finish
             def finished(timeout):
                 finish(timeout)
-                video.identity_receipt = OUT['CHANNEL']['identity_audit'](len(video.calls) - start)
+                video.identity_receipt = OUT['CHANNEL']['identity_audit'](len(video.calls) - start, _args[3])
             video.finish = finished
         return video
     monkeypatch.setitem(OUT['CHANNEL'], 'Output', output)

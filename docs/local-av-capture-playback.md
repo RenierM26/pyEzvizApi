@@ -361,9 +361,58 @@ explicit `video_identity_mode` binding. Capture terminal verification requires
 this evidence to match completed video output when using sequence mode. It does
 not replace source EOF, media hashes, timing, cleanup or audio drain verification.
 
-The 300-pair work cap, geometry/memory limits, descriptor leases, canonical pixel
+The default 300-pair work cap, geometry/memory limits, descriptor leases, canonical pixel
 hashes, original scheduling targets, 250 ms maximum lateness and all IO/processing
 deadlines are unchanged. This removes another growing history, not a playback
 quota: it does not enable sustained/unbounded streaming or establish physical
 A/V synchronization. No new camera acquisition is needed for this protocol-only
 step; retained-source controls use dummy SDL/audio devices.
+
+
+## Explicit finite video pair budget
+
+`CapturePlayback(..., pair_limit=N)` and lower-level
+`play_prepared(..., pair_limit=N)` accept a positive integer video pair quota.
+The default remains 300. Values above 300, up to an absolute maximum of 3,000,
+require explicit source-sequence identity validation and a non-`None`
+`diagnostic_tail`. Invalid quotas, legacy-mode expansion and unbounded diagnostics
+are rejected before claiming the capture or prepared iterator. Existing CLIs and
+attended launchers are not switched to a larger quota.
+
+For example, development callers can use:
+
+```python
+session = CapturePlayback(
+    owner, key, args, report,
+    limits=limits, completion='bounded-prefix',
+    identity_mode='source-sequence', diagnostic_tail=2,
+    decoder_deadline_mode='consumer-excluding', pair_limit=900,
+)
+session.play()
+```
+
+Capture preparation and its online policy receive the same explicit quota. The
+policy checks it before accepting another pair and preserves it through explicit
+same-container PES track resolution. The SDL worker independently enforces the
+requested quota. Nondefault worker quotas use
+`finite-video-source-sequence-v2` audit messages, including integer `pair_limit`,
+at ready/presented/finished; the host rejects downgraded or mismatched evidence.
+The default 300-pair sequence mode retains its v1 audit shape. Full-history
+workers still reject limits above 300.
+
+Nondefault preparation, policy and output receipts bind `pair_limit`; terminal
+verification requires agreement across all stages and a matching clean worker
+receipt with no more completed pairs than the quota. Direct
+`verify_completion(..., pair_limit=N)` callers must supply the expected quota;
+the default verifier cannot silently accept expanded preparation receipts.
+Default preparation/output receipt reuse clears previous quota bindings.
+
+This is a total-work allowance, not additional resident credit. Video remains at
+four pairs/64 MiB and audio at 32 blocks/64 KiB, with no extra queue or retained ID
+history. The 60-second original source span and output session deadline, 250-ms
+maximum lateness, all byte/packet/capture/decryption/decoder/startup limits, audio
+block quota, canonical hashes, original IDs/targets, no-drop/no-rebase rules and
+all joins/EOF/drains remain unchanged. A larger pair quota cannot override an
+earlier limit at another stage. In particular, the existing attended capture
+still acquires only its configured short prefix; this API does not enable longer
+live acquisition or sustained/unbounded playback.

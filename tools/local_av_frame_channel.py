@@ -20,6 +20,8 @@ from typing import Any
 SHARED = runpy.run_path(str(Path(__file__).with_name('local_av_shared_frames.py')))
 OUTPUT = SHARED['OUTPUT']
 FD_TOKEN = b'F'
+DEFAULT_PAIR_LIMIT = 300
+MAX_SEQUENCE_PAIRS = 3000
 
 
 class Lease:
@@ -180,25 +182,37 @@ def validate_identity_mode(mode: str) -> None:
         raise ValueError('invalid rolling output identity mode')
 
 
-def identity_audit(presented: int) -> dict[str, Any]:
-    return dict(profile='strict-video-source-sequence-v1', presented=presented, retained_id_count=0)
+def validate_pair_limit(limit: int, mode: str) -> None:
+    validate_identity_mode(mode)
+    maximum = MAX_SEQUENCE_PAIRS if mode == 'source-sequence' else DEFAULT_PAIR_LIMIT
+    if type(limit) is not int or not 1 <= limit <= maximum:
+        raise ValueError('invalid finite video pair limit; larger budgets require source-sequence mode')
 
 
-def verify_identity_audit(audit: Any, presented: int) -> None:
-    if (type(audit) is not dict or audit != identity_audit(presented)
-            or type(audit.get('presented')) is not int or type(audit.get('retained_id_count')) is not int):
+def identity_audit(presented: int, limit: int = DEFAULT_PAIR_LIMIT) -> dict[str, Any]:
+    audit = dict(profile='strict-video-source-sequence-v1', presented=presented, retained_id_count=0)
+    if limit != DEFAULT_PAIR_LIMIT:
+        audit.update(profile='finite-video-source-sequence-v2', pair_limit=limit)
+    return audit
+
+
+def verify_identity_audit(audit: Any, presented: int, limit: int = DEFAULT_PAIR_LIMIT) -> None:
+    if (type(presented) is not int or not 0 <= presented <= limit
+            or type(audit) is not dict or audit != identity_audit(presented, limit)
+            or type(audit.get('presented')) is not int or type(audit.get('retained_id_count')) is not int
+            or (limit != DEFAULT_PAIR_LIMIT and type(audit.get('pair_limit')) is not int)):
         raise ValueError('rolling output identity audit mismatch')
 
 
-def worker_packet(row: dict[str, Any], mode: str, presented: int) -> bytes:
+def worker_packet(row: dict[str, Any], mode: str, presented: int, limit: int) -> bytes:
     if mode == 'source-sequence':
-        row['identity_audit'] = identity_audit(presented)
+        row['identity_audit'] = identity_audit(presented, limit)
     return OUTPUT['packet'](row)
 
 
 def validate_worker(channel_fd: int, width: int, height: int, limit: int, identity_mode: str) -> None:
-    validate_identity_mode(identity_mode)
-    if (channel_fd < 3 or not 1 <= limit <= 300 or not 0 < width <= 8192
+    validate_pair_limit(limit, identity_mode)
+    if (channel_fd < 3 or not 0 < width <= 8192
             or not 0 < height <= 4096 or width % 2 or height % 2
             or width * height > OUTPUT['NATIVE']['MAX_PAIR_PIXELS']):
         raise ValueError('invalid rolling output geometry or limit')
@@ -228,14 +242,14 @@ def worker(channel_fd: int, width: int, height: int, limit: int, identity_mode: 
             return bytes(data)
         try:
             surface = Surface(width, height)
-            channel.sendall(worker_packet(dict(kind='ready', driver=surface.driver, width=width, height=height), identity_mode, 0))
+            channel.sendall(worker_packet(dict(kind='ready', driver=surface.driver, width=width, height=height), identity_mode, 0, limit))
             seen: set[str] | None = set() if identity_mode == 'full-history' else None
             for index in range(limit + 1):
                 row = OUTPUT['message'](read)
                 if row == dict(kind='finish'):
                     surface.close()
                     surface = None
-                    channel.sendall(worker_packet(dict(kind='finished'), identity_mode, index))
+                    channel.sendall(worker_packet(dict(kind='finished'), identity_mode, index, limit))
                     return 0
                 if index == limit:
                     raise ValueError('rolling output frame limit exceeded')
@@ -251,7 +265,7 @@ def worker(channel_fd: int, width: int, height: int, limit: int, identity_mode: 
                 if seen is not None:
                     seen.add(row['pair_id'])
                 channel.sendall(worker_packet(dict(kind='presented', pair_id=row['pair_id'], bytes=size, pixel_sha256=digest,
-                    present_started_ns=before, present_returned_ns=after), identity_mode, index + 1))
+                    present_started_ns=before, present_returned_ns=after), identity_mode, index + 1, limit))
         except (Exception, KeyboardInterrupt) as error:
             with suppress(OSError):
                 channel.sendall(OUTPUT['packet'](dict(kind='error', error=f'{type(error).__name__}: {error}'[:1000])))
@@ -270,7 +284,8 @@ class Output(Parent):
 
     def __init__(self, width: int, height: int, timeout: float, limit: int, *,
                  title: str = 'Bounded standalone recording (not live)', identity_mode: str = 'full-history') -> None:
-        validate_identity_mode(identity_mode)
+        validate_pair_limit(limit, identity_mode)
+        self.limit = limit
         self.identity_mode = identity_mode
         self.presented = 0
         self.identity_receipt: dict[str, Any] | None = None
@@ -288,7 +303,7 @@ class Output(Parent):
             keys = {'kind', 'driver', 'width', 'height'}
             if identity_mode == 'source-sequence':
                 keys.add('identity_audit')
-                verify_identity_audit(ready.get('identity_audit'), 0)
+                verify_identity_audit(ready.get('identity_audit'), 0, self.limit)
             if (set(ready) != keys or ready['kind'] != 'ready'
                     or not isinstance(ready['driver'], str)
                     or (ready['width'], ready['height']) != (width, height)):
@@ -329,7 +344,7 @@ class Output(Parent):
                 or not 0 <= row['present_started_ns'] <= row['present_returned_ns']):
             raise ValueError('rolling output acknowledgement mismatch')
         if self.identity_mode == 'source-sequence':
-            verify_identity_audit(row.get('identity_audit'), self.presented + 1)
+            verify_identity_audit(row.get('identity_audit'), self.presented + 1, self.limit)
         self.presented += 1
         return row
 
@@ -342,10 +357,10 @@ class Output(Parent):
         row = self.receive(deadline)
         if set(row) != {'kind', 'identity_audit'} or row.get('kind') != 'finished':
             raise ValueError('rolling output finish mismatch')
-        verify_identity_audit(row.get('identity_audit'), self.presented)
+        verify_identity_audit(row.get('identity_audit'), self.presented, self.limit)
         if self.process.wait(timeout=max(.001, deadline - time.monotonic())):
             raise ValueError('rolling output worker failed')
-        self.identity_receipt = identity_audit(self.presented)
+        self.identity_receipt = identity_audit(self.presented, self.limit)
 
 
 if __name__ == '__main__':

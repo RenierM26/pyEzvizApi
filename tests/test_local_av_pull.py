@@ -293,3 +293,21 @@ def test_eof_waits_for_blocked_source_finalizer_and_join_timeout_retains_ownersh
         source.close_release.set()
         pull.close(1)
     assert pull.result()['iterator_closed'] and not pull.result()['worker_alive']
+
+
+@pytest.mark.parametrize('bound_interrupt', [False, True])
+def test_successful_close_releases_owned_iterator_and_cancellation_hook_references(bound_interrupt):
+    class Payload:
+        pass
+    payload = Payload()
+    payload_reference = weakref.ref(payload)
+    source = Source([payload])
+    source_reference = weakref.ref(source)
+    pull = M['PreparedPull'](source, interrupt=source.interrupt if bound_interrupt else lambda: None)
+    del source, payload
+    pull.request()
+    try:
+        assert ready(pull) is payload_reference()
+    finally:
+        pull.close(1)
+    assert source_reference() is None and payload_reference() is None

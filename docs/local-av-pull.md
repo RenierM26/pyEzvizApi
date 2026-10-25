@@ -45,7 +45,9 @@ start a replacement. The worker is a daemon only to avoid an uninterruptible
 third-party iterator preventing interpreter exit; daemon status is not cleanup.
 The caller must retain the owner and join it later after its underlying IO is
 interrupted, or use a separately bounded process controller. Repeated close does
-not repeat the interrupt hook or double-release a completed result.
+not repeat the interrupt hook or double-release a completed result. Successful
+shutdown also releases the owned iterator and cancellation-hook references, so a
+bound method cannot keep the closed source and its buffers alive.
 
 `result()` reports requested/yielded/consumed counts, unconsumed results abandoned
 by explicit shutdown, outstanding/read/result state, source/error/close state

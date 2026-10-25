@@ -36,7 +36,7 @@ class PreparedPull:
         if not callable(interrupt):
             raise ValueError('explicit interrupt callback required')
         self.iterator = iter(iterator)
-        self.interrupt = interrupt
+        self.interrupt: Callable[[], None] | None = interrupt
         self.condition = Condition()
         self.pending = self.demand = self.reading = self.closing = False
         self.ended = self.iterator_closed = False
@@ -125,6 +125,7 @@ class PreparedPull:
                 close()
             with self.condition:
                 self.iterator_closed = True
+                self.iterator = None
         except BaseException as error:
             with self.condition:
                 self.close_error_type = type(error).__name__
@@ -135,10 +136,12 @@ class PreparedPull:
             interrupt = self.reading and not self.interrupt_called
             if interrupt:
                 self.interrupt_called = True
+            hook = self.interrupt
             self.condition.notify()
         if interrupt:
             try:
-                self.interrupt()
+                assert hook is not None
+                hook()
             except BaseException as error:
                 with self.condition:
                     self.interrupt_error_type = type(error).__name__
@@ -156,6 +159,8 @@ class PreparedPull:
             self.outcome = None
             self.pending = self.demand = False
             failed = self.close_error_type is not None or self.interrupt_error_type is not None
+            if not failed:
+                self.interrupt = None  # A bound hook can otherwise retain the closed source.
         if failed:
             raise PullCleanupError('prepared source cleanup failed; inspect cleanup error types')
 

@@ -2,8 +2,9 @@
 
 `tools/local_av_audio_gap_output.py` adds an **explicit, audio-only development
 adapter** around the [whole-block gap planner](local-av-audio-gaps.md). It is not
-connected to live A/V playback, a new CLI policy, or the installed library.
-Existing source-phase rejection stays enabled. There is no new camera command.
+enabled by default or exposed as a CLI policy or installed-library feature.
+The capture development API has a separate explicit integration described below.
+Existing CLI source-phase rejection stays enabled. There is no new camera command.
 
 Unlike the planner alone, this adapter can write separately declared zero PCM to
 a caller-supplied nonblocking backend. It preserves every original source block
@@ -27,8 +28,8 @@ The caller explicitly supplies:
 
 One owner calls `write(event, payload)` **before the earliest target of that
 block's padding/source operations**. Concurrent writes and finish are rejected;
-there is no executor backlog. The future A/V integration must give this audio
-owner its own worker and account for all credits before forwarding input.
+there is no executor backlog. The capture API gives this audio owner one of the
+existing two output workers and accounts for all credits before forwarding input.
 
 For source starts at 0 and 128 ms, with one 64 ms hole, the operations are:
 
@@ -100,3 +101,55 @@ lookahead and unknown-input reservations, preserve original media and target
 chains, verify separate padding bytes, and test cancellation, partial writes,
 late preparation, EOF and drain behaviour through the complete saved-source
 workflow. No fresh acquisition is required for those offline checks.
+
+
+## Explicit pending-capture API integration
+
+`local_av_capture_playback.CapturePlayback(..., gap_limits=limits)` opts into
+`local_av_audio_gap_av.py`. Importing or constructing the API starts no camera
+acquisition. The caller still supplies and owns the pristine transport handle.
+Calling `play()` acquires the explicitly supplied finite source. This is not a
+new command, automatic camera test, broader camera support claim, or app policy.
+The attended Bash/PowerShell launcher and its defaults remain unchanged.
+
+All six planner limits are mandatory. For example, with the existing explicit
+120-second source-span profile:
+
+```python
+limits = dict(max_gap_blocks=1, max_total_gap_blocks=4,
+              max_overlap_ms=1, max_phase_ms=1, max_blocks=3000,
+              max_source_span_seconds=120)
+```
+
+The caller must also choose `identity_mode='source-sequence'`, bounded diagnostic
+history (for example `diagnostic_tail=2`), `span_limit=120`, matching
+`bounded-serial-pcm` overlap/phase tolerances, and a 0.1–5 second output deadline.
+All other capture/decode/output limits and explicit completion policy still
+apply. Invalid combinations are rejected before source ownership transfer.
+Omitting `gap_limits` keeps the existing strict path.
+
+Before every unknown source read, lookahead reserves one possible original audio
+block plus the maximum explicitly allowed padding. Admission recomputes the plan
+from immutable source PCM/PTS; the combined event is charged for actual original
+plus planned padding bytes. Credit remains held until both jobs complete or the
+writer is aborted and joined. Audio limits stay **32 source-event slots and
+65,536 charged bytes**, including pending-read reservations, not 32 source blocks
+plus an unbounded padding allowance. Receipts report padding-credit and complete
+credit peaks separately. Decoder/pipe allocations and bounded hashing scratch
+are not included in lookahead payload credit.
+
+The same two output workers handle independent video and audio. Each audio job
+submits any padding at its earlier source-derived target, then the untouched
+original at its original target. One shared source origin and host anchor remain
+fixed. No whole-session retained event list, extra job queue, source rebase,
+sample dropping, interpolation, or source PCM replacement is introduced.
+
+The normal compact A/V media receipt hashes **only original** video/PCM and their
+original targets. `gap_audio` separately records padding/source API byte counts,
+canonical media chains, shared origin/anchor, drain and cleanup state. Successful
+capture verification binds this receipt to preparation's complete planner result
+and requires complete original and padding acknowledgements, clean source end,
+worker join, output drain and zero retained credit. Partial or cancelled sessions
+cannot become successful captures merely because an earlier padding job finished.
+The standalone adapter's `acquisition_owned` and `av_schedule_owned` flags remain
+false: source acquisition and A/V scheduling belong to its enclosing API owner.

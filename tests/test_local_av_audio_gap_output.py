@@ -403,3 +403,16 @@ def test_same_thread_backend_drain_cancellation_does_not_deadlock_or_claim_succe
     with pytest.raises(InterruptedError):
         sink.finish()
     assert sink.result()['cancelled'] and not sink.result()['outputs_finished']
+
+
+@pytest.mark.parametrize('field,value', [('source.bytes', True), ('source.bytes', 2048.0), ('source.id', 'aac:2:9')])
+def test_expected_prepared_plan_is_bound_before_any_output(field, value):
+    sink, backend, _clock = output()
+    event, payload = prepared(0, 10)
+    decision = M['GAPS']['GapPlanner'](**LIMITS).offer(event, payload)
+    parts = field.split('.')
+    decision[parts[0]][parts[1]] = value
+    with pytest.raises(ValueError, match='decision binding'):
+        sink.write(event, payload, expected_plan=decision)
+    assert not backend.writes and sink.result()['completed'] == dict(source=0, padding=0)
+    assert sink.result()['failed'] and sink.result()['transport_closed']

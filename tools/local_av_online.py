@@ -21,6 +21,7 @@ CHUNKED = runpy.run_path(str(BASE / 'local_av_chunked.py'))
 BOUNDED = runpy.run_path(str(BASE / 'local_av_bounded_playback.py'))
 PLAY = BOUNDED['PLAY']
 TIMELINE = PLAY['TIMELINE']
+GAP = runpy.run_path(str(BASE / 'local_av_audio_gap_av.py'))
 
 
 def validate_span_limit(limit: int, identity_mode: str) -> None:
@@ -33,7 +34,7 @@ class Policy:
     """Bound startup payload ownership and session metadata; never change media."""
 
     def __init__(self, streams: tuple[int, int], audio_stream: int, policy: str,
-                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60) -> None:
+                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60, gap_limits: dict[str, int] | None = None) -> None:
         if (len(streams) != 2 or len(set((*streams, audio_stream))) != 3
                 or any(type(i) is not int or i < 0 for i in (*streams, audio_stream))):
             raise ValueError('requires three distinct absolute stream indices')
@@ -46,6 +47,10 @@ class Policy:
         self.identity_mode = identity_mode
         self.accepted = dict(video_pair=0, audio_block=0)
         self.audio = PLAY['AudioClock'](policy, overlap_ms, phase_ms)
+        self.gap_limits = GAP['validate'](gap_limits, policy, overlap_ms, phase_ms, span_limit)
+        if gap_limits is not None and identity_mode != 'source-sequence':
+            raise ValueError('gap output requires source-sequence identities')
+        self.gap_planner = None if gap_limits is None else GAP['GAPS']['GapPlanner'](**self.gap_limits)
         self.streams, self.audio_stream = streams, audio_stream
         self.queue: Any = deque()
         self.counts = dict(video_pair=0, audio_block=0)
@@ -142,7 +147,11 @@ class Policy:
             del row['source_time']
             row['at'] = TIMELINE['rational'](at)
             if row['kind'] == 'audio_block':
-                audit = self.audio.offer(row)
+                if self.gap_planner is None:
+                    audit = self.audio.offer(row)
+                else:
+                    audit = self.gap_planner.offer(event, payload)
+                    row[GAP['PLAN']] = audit
                 self.audio_digest.update(json.dumps(audit, sort_keys=True, separators=(',', ':')).encode() + b'\n')
             self.digest.update(json.dumps(row, sort_keys=True, separators=(',', ':')).encode() + b'\n')
             self.validated += 1
@@ -166,7 +175,8 @@ class Policy:
             geometry=self.geometry, owned_counts=dict(self.counts), owned_bytes=dict(self.bytes),
             peak_owned_bytes=dict(self.peak), validated_events=self.validated,
             yielded_prepared_events=self.yielded, released_prepared_events=self.released, mapped_metadata_sha256=self.digest.hexdigest(),
-            audio_clock_contract=self.audio.result(), audio_blocks=self.audio.count,
+            audio_clock_contract=self.audio.result() if self.gap_planner is None else self.gap_planner.result(),
+            audio_blocks=self.audio.count if self.gap_planner is None else self.gap_planner.count,
             audio_clock_rows_sha256=self.audio_digest.hexdigest())
 
 
@@ -177,14 +187,15 @@ def selected_policy(state: Policy, selection: dict[str, Any] | None, report: dic
         if selection.get('mode') != 'explicit-mpeg-pes-ids':
             raise ValueError('PES selection must resolve before the first event')
         state = Policy(tuple(selection['video_indices']), selection['audio_index'], policy, overlap_ms, phase_ms,
-            identity_mode=state.identity_mode, pair_limit=state.pair_limit, span_limit=state.span_limit)
+            identity_mode=state.identity_mode, pair_limit=state.pair_limit, span_limit=state.span_limit,
+            **({} if state.gap_limits is None else dict(gap_limits=state.gap_limits)))
         report['track_selection'] = copy.deepcopy(selection)
     return state
 
 
 def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report: dict[str, Any], *,  # noqa: PLR0913
                 policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None,
-                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60) -> Any:
+                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60, gap_limits: dict[str, int] | None = None) -> Any:
     """Own input iterator; hold credit through each yield, not an output acknowledgement."""
     state = iterator = None
     primary = False
@@ -194,7 +205,8 @@ def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report
         output_devices_opened=False, whole_source_preflight=False, physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
-        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, span_limit=span_limit)
+        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, span_limit=span_limit,
+            **({} if gap_limits is None else dict(gap_limits=gap_limits)))
         iterator = iter(events)
         for event, payload in iterator:
             state = selected_policy(state, selection, report, policy, overlap_ms, phase_ms)

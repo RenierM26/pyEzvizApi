@@ -1,7 +1,7 @@
 """Offline whole-block PCM gap planning, NOT an enabled playback policy.
 
-A returned decision authorizes no IO. A future output adapter must schedule and
-acknowledge separately declared padding before any live policy can use it.
+A returned decision authorizes no IO. The separate output adapter schedules and
+acknowledges declared padding only under an explicit caller-owned policy.
 Original source identities, timestamps and PCM fingerprints are never repaired.
 """
 from __future__ import annotations

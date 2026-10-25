@@ -306,3 +306,37 @@ def test_source_close_failure_blocks_clean_eof_and_remains_visible_after_output_
         # A failed finalizer is intentionally not reported as recovered by close.
         with pytest.raises(ValueError, match='cleanup failed'):
             assets.close()
+
+
+def test_playback_cleanup_timeout_reports_live_owner_for_caller_rejoin():
+    source = GatedSource(BASE['events'](1))
+    pull = M['PULL']['PreparedPull'](source, interrupt=lambda: None)
+    report: dict[str, Any] = {}
+    try:
+        with pytest.raises(ValueError, match='prefill deadline'):
+            M['play_prepared'](pull, SimpleNamespace(deadline=.01), report, pending_input=True)
+        assert report['cleanup_errors'] and 'ownership retained' in report['cleanup_errors'][0]
+        assert report['lookahead']['source_pull']['worker_alive']
+        assert report['lookahead']['input_reservation'] and not source.closed
+        assert not report['output_devices_opened']
+    finally:
+        source.resume.set()
+        pull.close(.5)  # Caller still owns the handle after playback has unwound.
+    assert source.closed and not pull.result()['worker_alive']
+
+
+def test_abort_accounts_for_ready_but_unaccepted_borrow_before_returning_credit():
+    source = GatedSource(BASE['events'](1))
+    source.resume.set()
+    assets, pull = setup(source)
+    try:
+        assets.pump()
+        deadline = time.monotonic() + 1
+        while not pull.result()['result_ready']:
+            assert time.monotonic() < deadline
+            time.sleep(.001)
+        assert assets.reservation and not assets.owned and pull.result()['consumed'] == 0
+    finally:
+        assets.close()
+    assert pull.result()['abandoned'] == 1 and not assets.reservation
+    assert not assets.source_end and source.closed

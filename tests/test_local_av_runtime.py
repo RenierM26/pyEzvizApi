@@ -222,5 +222,9 @@ def test_real_worker_timeout_kills_owned_helper_group(tmp_path, monkeypatch):
     # The killed helper can briefly await the host init's reap as a zombie;
     # it must not remain running or own open process resources.
     stat = Path('/proc') / str(pids['helper']) / 'stat'
-    if stat.exists():
-        assert stat.read_text().split()[2] == 'Z'
+    try:
+        state = stat.read_text()
+    except FileNotFoundError:
+        state = None  # Host init can reap between observation and read.
+    if state is not None:
+        assert state.split()[2] == 'Z'

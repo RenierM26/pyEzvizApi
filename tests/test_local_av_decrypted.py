@@ -76,8 +76,10 @@ def test_pending_bound_precedes_buffer_append_in_both_modes(codec):
 
 @pytest.mark.parametrize('bound', ['MAX_TOTAL', 'MAX_PACKETS'])
 def test_input_total_and_packet_limits_remain_failures(monkeypatch, bound):
-    monkeypatch.setitem(M['Chunks'].__next__.__globals__, bound, 1)
-    chunks = M['Chunks'](Source([b'x', b'y']), 'camera-key', codec='hevc')
+    if bound == 'MAX_PACKETS':
+        monkeypatch.setitem(M['Chunks'].__next__.__globals__, bound, 1)
+    chunks = M['Chunks'](Source([b'x', b'y']), 'camera-key', codec='hevc',
+        **({'byte_limit': 1} if bound == 'MAX_TOTAL' else {}))
     with pytest.raises(ValueError, match='packet/count/byte'):
         next(chunks)
     assert chunks.received == 1 and chunks.packets == 1
@@ -164,8 +166,7 @@ def test_bad_constructor_codec_still_closes_owned_iterator():
 
 
 def test_clear_output_limit_rejected_before_counting_or_hashing(monkeypatch):
-    monkeypatch.setitem(M['Chunks'].__next__.__globals__, 'MAX_TOTAL', 3)
-    chunks = M['Chunks'](Source([b'x', b'y']), 'camera-key', codec='hevc')
+    chunks = M['Chunks'](Source([b'x', b'y']), 'camera-key', codec='hevc', byte_limit=3)
     expected = b'yy'
     chunks.transform.feed = lambda _data: expected
     assert next(chunks) == expected

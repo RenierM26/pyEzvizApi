@@ -82,7 +82,8 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
             raise ValueError('capture output worker identity mode mismatch')
         OUTPUT['CHANNEL']['verify_identity_audit'](receipt.get('video_identity_audit'), expected['video_pair'], pair_limit)
     PREPARE['verify_completion'](preparation['capture'], preparation['decode'], preparation['online'],
-        decoder_deadline_mode=preparation.get('decoder_deadline_mode', 'wall'), pair_limit=pair_limit)
+        decoder_deadline_mode=preparation.get('decoder_deadline_mode', 'wall'), pair_limit=pair_limit,
+        byte_limit=preparation.get('byte_limit', 16 * 1024 * 1024))
 
 
 def capture_playback(owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,
@@ -143,6 +144,13 @@ def capture_playback(owner: Any, key: str | bytes, args: Any, report: dict[str, 
         accepted_prefix_clear_sha256=preparation['accepted_prefix_clear_sha256'])
 
 
+def validate_input_budget(byte_limit: int, identity_mode: str, diagnostic_tail: int | None) -> None:
+    decrypt = PREPARE['CAPTURE']['DECRYPT']
+    decrypt['validate_byte_limit'](byte_limit)
+    if byte_limit > decrypt['MAX_TOTAL'] and (identity_mode != 'source-sequence' or diagnostic_tail is None):
+        raise ValueError('larger compressed byte budgets require sequence identities and bounded diagnostics')
+
+
 class CapturePlayback:
     """Explicit single-use capture session retaining its pull after join failure.
 
@@ -159,7 +167,7 @@ class CapturePlayback:
             limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
             monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
             diagnostic_tail: int | None = None, identity_mode: str = 'full-history',
-            decoder_deadline_mode: str = 'wall', pair_limit: int = 300) -> None:
+            decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024) -> None:
         self.args = copy(args)
         self.report = report
         self.used = False
@@ -180,12 +188,13 @@ class CapturePlayback:
         try:
             OUTPUT['AUDIT']['validate_tail'](diagnostic_tail)
             OUTPUT['video_options']({}, None, identity_mode, pair_limit, diagnostic_tail)
+            validate_input_budget(byte_limit, identity_mode, diagnostic_tail)
             PREPARE['CHUNKED']['validate_deadline_mode'](decoder_deadline_mode)
             validate_output(self.args)
             streams = (self.args.primary_stream, self.args.secondary_stream)
             PREPARE['ONLINE']['Policy'](streams, self.args.audio_stream, self.args.audio_overlap_policy,
                 self.args.max_audio_overlap_ms, self.args.max_audio_phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
-            PREPARE['CAPTURE']['validate_arguments'](owner, limits, completion, codec)
+            PREPARE['CAPTURE']['validate_arguments'](owner, limits, completion, codec, byte_limit=byte_limit)
             if pes_ids is not None:
                 PREPARE['CHUNKED']['TRACKS']['validate_pes_ids'](pes_ids)
             if not callable(getattr(owner, 'close', None)):
@@ -193,7 +202,7 @@ class CapturePlayback:
             events = PREPARE['iter_capture_preparation'](owner, key, streams, self.args.audio_stream, preparation,
                 limits=limits, completion=completion, codec=codec, policy=self.args.audio_overlap_policy,
                 overlap_ms=self.args.max_audio_overlap_ms, phase_ms=self.args.max_audio_phase_ms,
-                monotonic=monotonic, identity_mode=identity_mode, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
+                monotonic=monotonic, identity_mode=identity_mode, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
             source = CaptureEvents(events, owner, preparation, report)
             self.pull = OUTPUT['PULL']['PreparedPull'](source, interrupt=owner.close)
         except BaseException as error:

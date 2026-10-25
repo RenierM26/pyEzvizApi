@@ -703,3 +703,103 @@ def test_late_stop_cannot_upgrade_to_completed_prefix(rig, monkeypatch, stage):
     assert report['output']['scheduler']['outputs_finished']
     if stage == 'cleanup':
         assert report['output']['stop_requested']
+
+
+def test_compact_capture_preserves_full_counts_and_limits_only_diagnostic_tail(rig):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2)
+    capture.play()
+    assert owner.closed and report['status'] == 'prefix-output-completed'
+    assert report['profile'] == 'guarded-capture-pending-tail-host-submissions-v1'
+    s, look = report['output']['scheduler'], report['output']['lookahead']
+    audit = s['action_audit']
+    assert audit['submitted'] == audit['completed'] == s['completed']
+    assert audit['finalized_records'] == sum(s['completed'].values()) > 2
+    assert audit['retained_records'] == 2 and len(s['actions']) == 4
+    assert not audit['complete_history_retained'] and audit['complete_finalization']
+    assert look['preparation_audit']['finalized_records'] == audit['finalized_records']
+    assert len(look['preparation_timings']) == 2 and not look['owned_ids']
+    assert not report['source_pull']['worker_alive']
+    changed = copy.deepcopy(report)
+    changed['output']['scheduler']['action_audit']['completed']['video_pair'] = 0
+    with pytest.raises(ValueError, match='terminal counts'):
+        M['verify_output'](changed['preparation'], changed['output'])
+
+
+@pytest.mark.parametrize('limit', [True, 0, 129, -1, '2'])
+def test_invalid_diagnostic_limit_leaves_capture_unclaimed(rig, limit):
+    owner, _ = play(rig, {})
+    with pytest.raises(ValueError, match='diagnostic tail'):
+        M['CapturePlayback'](owner, 'key', arguments(), {},
+            limits=CaptureLimits(max_packets=len(owner.bodies), max_bytes=16777216, duration_seconds=60),
+            diagnostic_tail=limit)
+    assert not owner.started and not owner.closed
+
+
+def test_compact_stop_preserves_partial_counters_without_completion_claim(rig):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=1)
+    original = rig[1].present
+    def stop(*args):
+        result = original(*args)
+        capture.request_stop()
+        return result
+    rig[1].present = stop
+    with pytest.raises(OUT['PlaybackStopped']):
+        capture.play()
+    assert owner.closed and report['status'] == 'cancelled'
+    assert report['accepted_prefix_clear_sha256'] is None
+    assert not report['output']['lookahead']['owned_ids']
+    audit = report['output']['scheduler']['action_audit']
+    assert audit['submitted'] == report['output']['scheduler']['submitted']
+    assert audit['completed'] == report['output']['scheduler']['completed']
+
+
+def test_missing_compact_audit_cannot_claim_terminal_completion(rig):
+    report: dict[str, Any] = {}
+    _owner, capture = session(rig, report, diagnostic_tail=1)
+    capture.play()
+    for section, field in [('scheduler', 'action_audit'), ('lookahead', 'preparation_audit')]:
+        changed = copy.deepcopy(report['output'])
+        del changed[section][field]
+        with pytest.raises(ValueError, match='terminal counts'):
+            M['verify_output'](report['preparation'], changed)
+
+
+def test_compact_diagnostic_failure_does_not_replace_primary_preparation_error(rig, monkeypatch):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2)
+    primary = OSError('original preparation error')
+    def fail(*_args):
+        raise primary
+    monkeypatch.setattr(OUT['Assets'], 'prepare', staticmethod(fail))
+    records = OUT['AUDIT']['Records']
+    append = records.append
+    def record(self, row):
+        if row.get('status') == 'failed':
+            raise ValueError('diagnostic admission failed')
+        append(self, row)
+    monkeypatch.setattr(records, 'append', record)
+    with pytest.raises(OSError) as caught:
+        capture.play()
+    assert caught.value is primary and owner.closed
+    assert not report['output']['lookahead']['owned_ids']
+    assert not report['source_pull']['worker_alive']
+    assert report['output']['lookahead']['preparation_audit']['error_count'] > 0
+    assert report['accepted_prefix_clear_sha256'] is None
+
+
+def test_oversize_failure_diagnostic_preserves_backend_error_and_cleanup(rig):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2)
+    primary = OSError('x' * 5000)
+    def fail(*_args):
+        raise primary
+    rig[1].present = fail
+    with pytest.raises(OSError) as caught:
+        capture.play()
+    assert caught.value is primary and owner.closed
+    audit = report['output']['scheduler']['action_audit']
+    assert audit['error_count'] == 1 and not audit['complete_finalization']
+    assert not report['output']['lookahead']['owned_ids']
+    assert not report['source_pull']['worker_alive'] and report['accepted_prefix_clear_sha256'] is None

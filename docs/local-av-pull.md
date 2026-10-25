@@ -2,9 +2,9 @@
 
 `tools/local_av_pull.py` isolates `next` and `close` for a supplied iterator on
 one worker. It is an independently tested building block for moving cooperative
-network/decode pulls off the output scheduler's owner thread. **It is not wired
-into the recorded CLI or capture-output adapter.** Existing output defaults,
-limits, scheduling and single-threaded source preparation are unchanged.
+network/decode pulls off the output scheduler's owner thread. **Recorded CLI and capture-output adapter defaults remain synchronous.** The
+output helper now exposes an explicit opt-in pending-input integration below.
+Existing limits, targets and default source preparation are unchanged.
 
 The caller supplies the iterator and its thread-safe, promptly returning
 `interrupt` hook. Creating the worker does not request data. No credentials,
@@ -63,11 +63,63 @@ and join, timeout with retained ownership, repeated cleanup, source exceptions,
 failed close, invalid bounds and failed thread construction. These tests do not
 establish network continuity, playback throughput, audibility or physical sync.
 
-Before enabling this in output, reserve the unknown pull within the existing
-video/audio credit; distinguish pending input from EOF; keep one host anchor,
-original targets, existing lateness/deadline limits and independent output
-harvesting. Abort the actual source before joining the pull worker, and do not
-close its nested generators concurrently. Validate delayed source reads during
-queued/in-flight output, failure and cancellation with retained media before any
-attended live test. No automatic reconnect or new streaming-success claim is
-introduced by this boundary.
+## Opt-in pending-input output
+
+The development output helper `tools/local_av_online_playback.py` accepts a
+caller-retained, pristine `PreparedPull` instead of an ordinary iterator only
+when `pending_input=True` is explicit. Use the helper's exported `PULL` module
+(the tools load their dependencies with `runpy`):
+
+```python
+output = runpy.run_path("tools/local_av_online_playback.py")
+# Validate transport/output arguments and source policy before claiming input.
+pull = output["PULL"]["PreparedPull"](prepared_events, interrupt=interrupt_source)
+try:
+    output["play_prepared"](pull, args, receipt, pending_input=True)
+finally:
+    pull.close(args.deadline)
+```
+
+The caller supplies the actual thread-safe, promptly returning source interrupt,
+not `prepared_events.close`. It must retain `pull` if either cleanup attempt times
+out, interrupt the underlying IO and rejoin later. Never close nested generators
+on the consumer thread, start replacement acquisition or claim clean termination
+while `worker_alive` remains true. An already requested/closed owner or invalid
+join timeout is rejected before playback claims ownership. Do not pass this owner
+through the capture adapter: its existing outer generator-cleanup contract is
+synchronous and unchanged. This API alone enables neither a live launcher nor
+sustained network streaming.
+
+Before every unknown request, output reserves **one possible event in each
+track** within existing four-video/32-audio slots and byte budgets, including
+preparing, queued and in-flight output. Before geometry is known it reserves the
+full video byte budget conservatively; afterwards it reserves one unchanged
+pair extent. Audio reserves the existing maximum block extent. These are
+alternative capacity reservations, not two additional copied events. Exactly
+one request/result can be outstanding; successful acceptance converts reservation
+to actual ownership without another source pull. EOF releases the reservation
+only after source finalization; failed acceptance/cleanup retains it until abort.
+
+`pump()` returns promptly for pending input so the scheduler continues independent
+backend liveness checks, queued dispatch, acknowledgement harvest and deadlines.
+It preserves the single host anchor, exact original media targets, lateness and
+session deadlines. No retries, drops, rebases or hidden queues are added. A source
+that resumes too late still fails the original lateness limit. Prefill runs before
+the host anchor with a finite deadline. If the other initial head would require
+pulling past a full unknown-track reservation, opt-in prefill fails before opening
+output devices; it deliberately does not use legacy startup's inspection bypass.
+
+The receipt adds `pending_input`, `source_pull`, `input_reservation` and
+`peak_credit_counts`/`peak_credit_bytes`. Credit peaks include unknown reservations;
+`peak_owned_*` still measures actual accepted output ownership. `pull_ns` in this
+mode measures request-to-owner-poll elapsed time, **not isolated worker decode or
+network service time**. Successful source EOF does not establish completed output;
+all output calls, drains and cleanup must still finish. Timed-out source cleanup
+is a failure with retained ownership, never a successful output receipt.
+
+Offline regression cases cover stalled reads with queued/in-flight output,
+acknowledgement release, held credit, prefill timeout/capacity, original-target
+lateness, source/backend failure and cancellation, failed finalizers and retained
+ownership/rejoin. Retained-source dummy-output checks compare exact pixels, PCM,
+metadata, origin and absolute-target offsets. None establishes physical playback,
+network continuity, audibility or measured A/V synchronization.

@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Development-only constant-state whole-block audio-gap planner with explicit single/cumulative padding budgets, exact source/PCM verification and transactional decisions; no padding is written and playback defaults remain unchanged.
+
 - Opt-in standalone local A/V host-submission scheduler with one shared source-derived host anchor, bounded independent video/PCM jobs and explicit output/cleanup receipts; not physical synchronization or a camera connector.
 
 - Development-only standalone local HEVC/AAC timeline planner with exact-rational lens pairing, one shared source origin, explicit unmatched pictures and preserved audio gaps/overlaps.

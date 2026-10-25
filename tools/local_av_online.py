@@ -27,12 +27,14 @@ class Policy:
     """Bound startup payload ownership and session metadata; never change media."""
 
     def __init__(self, streams: tuple[int, int], audio_stream: int, policy: str,
-                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history') -> None:
+                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history', pair_limit: int = 300) -> None:
         if (len(streams) != 2 or len(set((*streams, audio_stream))) != 3
                 or any(type(i) is not int or i < 0 for i in (*streams, audio_stream))):
             raise ValueError('requires three distinct absolute stream indices')
         if type(identity_mode) is not str or identity_mode not in ('full-history', 'source-sequence'):
             raise ValueError('unknown online identity mode')
+        BOUNDED['CHANNEL']['validate_pair_limit'](pair_limit, identity_mode)
+        self.pair_limit = pair_limit
         self.identity_mode = identity_mode
         self.accepted = dict(video_pair=0, audio_block=0)
         self.audio = PLAY['AudioClock'](policy, overlap_ms, phase_ms)
@@ -85,7 +87,7 @@ class Policy:
 
     def validate_identity(self, kind: str, name: Any) -> None:
         """Check without admission; sequence mode stores no previous names."""
-        limit = PLAY['MAX_PAIRS'] if kind == 'video_pair' else TIMELINE['AUDIO']['MAX_BLOCKS']
+        limit = self.pair_limit if kind == 'video_pair' else TIMELINE['AUDIO']['MAX_BLOCKS']
         if not isinstance(name, str) or not name or self.accepted[kind] >= limit:
             raise ValueError('duplicate or excessive online event identities')
         if self.ids is None:
@@ -149,7 +151,8 @@ class Policy:
         identity = {} if self.ids is not None else dict(identity_audit=dict(
             profile='strict-source-sequence-v1', accepted=dict(self.accepted),
             retained_id_count=0, audio_stream_index=self.audio_stream))
-        return dict(**identity, origin=None if self.origin is None else TIMELINE['rational'](self.origin),
+        budget = {} if self.pair_limit == PLAY['MAX_PAIRS'] else dict(pair_limit=self.pair_limit)
+        return dict(**identity, **budget, origin=None if self.origin is None else TIMELINE['rational'](self.origin),
             first_source_times={k: TIMELINE['rational'](v) for k, v in self.first.items()},
             geometry=self.geometry, owned_counts=dict(self.counts), owned_bytes=dict(self.bytes),
             peak_owned_bytes=dict(self.peak), validated_events=self.validated,
@@ -165,14 +168,14 @@ def selected_policy(state: Policy, selection: dict[str, Any] | None, report: dic
         if selection.get('mode') != 'explicit-mpeg-pes-ids':
             raise ValueError('PES selection must resolve before the first event')
         state = Policy(tuple(selection['video_indices']), selection['audio_index'], policy, overlap_ms, phase_ms,
-            identity_mode=state.identity_mode)
+            identity_mode=state.identity_mode, pair_limit=state.pair_limit)
         report['track_selection'] = copy.deepcopy(selection)
     return state
 
 
 def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report: dict[str, Any], *,
                 policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None,
-                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history') -> Any:
+                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history', pair_limit: int = 300) -> Any:
     """Own input iterator; hold credit through each yield, not an output acknowledgement."""
     state = iterator = None
     primary = False
@@ -182,7 +185,7 @@ def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report
         output_devices_opened=False, whole_source_preflight=False, physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
-        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode)
+        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
         iterator = iter(events)
         for event, payload in iterator:
             state = selected_policy(state, selection, report, policy, overlap_ms, phase_ms)

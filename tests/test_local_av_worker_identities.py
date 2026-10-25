@@ -131,6 +131,6 @@ def test_empty_sequence_worker_can_finish_without_claiming_presented_pixels(monk
     output = C['Output'](4, 2, 5, 1, identity_mode='source-sequence')
     try:
         output.finish(5)
-        assert output.identity_receipt == C['identity_audit'](0) and output.process.returncode == 0
+        assert output.identity_receipt == C['identity_audit'](0, 1) and output.process.returncode == 0
     finally:
         output.abort()

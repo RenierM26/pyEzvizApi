@@ -56,7 +56,7 @@ def verify_decoder_clock(decode: dict[str, Any], count: int, mode: str) -> None:
 
 
 def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: dict[str, Any], *,
-                      decoder_deadline_mode: str = 'wall') -> str:
+                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300) -> str:
     """Require independent terminal checks, not merely exhaustion of the wrapper."""
     crypto = capture.get('decryption') or {}
     reader = decode.get('input') or {}
@@ -91,6 +91,12 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or policy.get('owned_counts') != {'video_pair': 0, 'audio_block': 0}
             or policy.get('owned_bytes') != {'video_pair': 0, 'audio_block': 0}):
         raise ValueError('capture preparation terminal checks failed')
+    mode = 'source-sequence' if online.get('profile') == 'standalone-online-sequence-av-policy-v1' else 'full-history'
+    ONLINE['BOUNDED']['CHANNEL']['validate_pair_limit'](pair_limit, mode)
+    if (type(policy.get('pair_limit', 300)) is not int or policy.get('pair_limit', 300) != pair_limit
+            or type(prepared.get('video_pairs_consumed')) is not int
+            or not 0 < prepared['video_pairs_consumed'] <= pair_limit):
+        raise ValueError('capture preparation video pair limit mismatch')
     count = policy.get('validated_events')
     if (type(count) is not int or count <= 0
             or count != policy.get('yielded_prepared_events') or count != policy.get('released_prepared_events')
@@ -133,12 +139,19 @@ def close_pipeline(iterators: tuple[Any, ...], owner: Any, report: dict[str, Any
     return cleanup_error
 
 
+def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int) -> None:
+    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300)]:
+        report.pop(field, None)
+        if value != default:
+            report[field] = value
+
+
 def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, int],  # noqa: PLR0913
         audio_stream: int, report: dict[str, Any], *, limits: CaptureLimits,
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
         monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
-        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall') -> Any:
+        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300) -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -148,7 +161,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
     capture: dict[str, Any] = {}
     decode: dict[str, Any] = {}
     online: dict[str, Any] = {}
-    report.pop('decoder_deadline_mode', None)
+    bind_options(report, 'wall', 300)
     report.update(profile='guarded-capture-online-preparation-v1', status='failed', error_type=None,
         input_scope='accepted-capture-prefix', completion_policy=completion,
         capture=capture, decode=decode, online=online, cleanup_error_types=[],
@@ -159,12 +172,11 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
     try:
         # Validate downstream policy before transferring ownership or opening IO.
         CHUNKED['validate_deadline_mode'](decoder_deadline_mode)
-        if decoder_deadline_mode != 'wall':
-            report['decoder_deadline_mode'] = decoder_deadline_mode
-        ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode)
+        ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
         CAPTURE['validate_arguments'](owner, limits, completion, codec)
         if pes_ids is not None:
             CHUNKED['TRACKS']['validate_pes_ids'](pes_ids)
+        bind_options(report, decoder_deadline_mode, pair_limit)
         claimed = True
         chunks = CAPTURE['iter_capture_chunks'](owner, key, capture, limits=limits,
             completion=completion, codec=codec, monotonic=monotonic)
@@ -173,7 +185,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg',
             **({} if decoder_deadline_mode == 'wall' else dict(deadline_mode=decoder_deadline_mode)), **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
-            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, **({} if selection is None else dict(selection=selection)))
+            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, **({} if selection is None else dict(selection=selection)))
         report['status'] = 'running'
         yield from mapped
     except GeneratorExit:
@@ -194,7 +206,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
                 raise cleanup_error
     if not primary:
         try:
-            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode)
+            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit)
         except Exception as error:
             report.update(status='failed', error_type=type(error).__name__)
             raise

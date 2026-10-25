@@ -132,3 +132,15 @@ work caps, fixed-origin 60-second output span, chunk byte/count limits, decoder
 processing limits, geometry/PCM checks, original source/host timing, lateness,
 leases and backend drains are NOT relaxed. Payload queues/native buffers still
 have their own bounds; no whole-process RSS or sustained-streaming claim follows.
+
+
+### Explicit finite pair quota
+
+`Policy(..., pair_limit=N)` and `iter_online(..., pair_limit=N)` retain the default
+300-pair ceiling. Explicit source-sequence mode permits a finite integer quota
+up to 3,000; legacy full-history mode remains capped at 300. This quota follows
+same-container track resolution and appears as `policy.pair_limit` only when
+nondefault. It is checked before admission, independently of released resident
+credit. Source span, audio block limits and all startup payload credit are
+unchanged. See the [composed output budget](local-av-capture-playback.md#explicit-finite-video-pair-budget)
+for the additional bounded-diagnostics and native worker requirements.

@@ -145,3 +145,53 @@ acknowledgements and clean drains are not physical display timing or audibility.
 Human video/audio observations and measured physical A/V synchronization remain
 separate evidence. Imports, help, failed readiness and cancellation before Enter
 must not acquire a camera. Internal worker switches are not a separate public API.
+
+## Offline decoded-media comparison
+
+After a successful attended run with packet evidence, use the **same installed
+package/runtime and private configuration** to compare its complete saved source
+with the receipt. This command makes no camera/account calls and opens no SDL,
+audio or other output devices:
+
+```sh
+python -I tools/local_av_lan_verify.py \
+  --private-config /local/path/camera.json \
+  --receipt new-lan-result.json \
+  --packet-evidence new-private-evidence-directory \
+  --result new-media-verification.json
+```
+
+The result must be a new file (exclusive mode 0600). The configuration is only
+read, never copied or removed. Failure/cancellation emits a constant status, not
+raw decoder exceptions or private configuration. A zero exit and
+`source-media-verified` mean all these checks passed:
+
+- Bounded encrypted evidence integrity and parent/worker/source counter bindings;
+  current installed-package fingerprint and configuration hash match the receipt.
+- The original attempt is already successful, with joined source ownership,
+  accepted-prefix preparation, every recorded output call and clean drains.
+- An immutable replay snapshot still matches the verified encrypted digest.
+  Decryption finishes and matches the accepted clear-prefix digest.
+- Same-container E0/E1/C0 track resolution, original decoded metadata, declared
+  startup subset (when enabled), common origin and audio clock policy match.
+- Independently reconstructed full per-track media chains match every selected
+  pair/PCM block's identity, canonical payload hash, extent, source target and
+  original anchor-derived host target. Canonical paired Y/U/V rows are hashed,
+  not concatenated raw lens buffers. Retained acknowledgement rows also match.
+
+The verifier streams bounded decryption/decode from a snapshot of at most 32 MiB
+of ciphertext; it does not write plaintext or build an unbounded media history.
+It retains existing native decode/startup/ownership and 900-pair/10,000-audio-block
+work guards. Those native/cooperative guards are not a hard process watchdog.
+Failed/cancelled or unsupported receipts are rejected, not upgraded by a later
+replay. Their stable packet evidence can still be checked with the integrity-only
+checker and used separately for diagnosis.
+
+Media-chain construction and paired-pixel hashing are independent of the output
+receipt builder. The existing decoder and policy implementation are shared with
+playback: this is **not a separate decoder implementation** or proof that an
+unsigned receipt is authentic. It reconstructs full source/media chains even when
+only two diagnostic records remain, but does not reconstruct evicted service,
+harvest or lateness observations. Matching host targets does not measure physical
+display/audio clocks, audible sound, sustained live transport, or network EOF.
+No new acquisition is needed to run this check.

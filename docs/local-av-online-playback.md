@@ -110,3 +110,8 @@ drain/cancel, preparation failure, failed executor cleanup and SIGTERM restorati
 No live acquisition, audible playback or measured physical A/V synchronization is
 established by this profile's local dummy results. The next validation is attended
 recorded Windows output, followed by bounded network/decryption integration.
+
+The shared `play_prepared` output lifecycle also supports the separate
+[guarded capture-prefix adapter](local-av-capture-playback.md). The recorded CLI
+still reads recorded clear MPEG-PS only. Its default window title is unchanged;
+the capture adapter labels its window explicitly and owns its upstream verdict.

@@ -239,13 +239,14 @@ class Scheduler(Parent):
 
     def harvest(self) -> None:
         before = {kind: event_id(event) for kind, event in self.active.items()}
+        primary_failure = False
         try:
             super().harvest()
         except BaseException:
+            primary_failure = True
             self.cancel.set()
             raise
         finally:
-            primary_failure = sys.exc_info()[0] is not None
             errors = []
             for kind, name in before.items():
                 if kind not in self.active and self.failed.get(kind) != name:

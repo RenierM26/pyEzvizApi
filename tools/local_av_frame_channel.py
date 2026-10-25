@@ -239,7 +239,8 @@ Parent: Any = OUTPUT['Output']
 class Output(Parent):
     """Persistent isolated SDL worker; at most one pending descriptor/ack exchange."""
 
-    def __init__(self, width: int, height: int, timeout: float, limit: int) -> None:
+    def __init__(self, width: int, height: int, timeout: float, limit: int, *,
+                 title: str = 'Bounded standalone recording (not live)') -> None:
         self.channel, child = socket.socketpair()
         self.process: Any = None
         self.timeout = timeout
@@ -248,7 +249,7 @@ class Output(Parent):
             self.process = subprocess.Popen([sys.executable, str(Path(__file__)), '--worker',
                 str(child.fileno()), str(width), str(height), str(limit)], pass_fds=(child.fileno(),),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env=dict(os.environ, EZVIZ_SDL_WINDOW_TITLE='Bounded standalone recording (not live)'))
+                env=dict(os.environ, EZVIZ_SDL_WINDOW_TITLE=title))
             ready = self.receive(time.monotonic() + timeout)
             if (set(ready) != {'kind', 'driver', 'width', 'height'} or ready['kind'] != 'ready'
                     or not isinstance(ready['driver'], str)

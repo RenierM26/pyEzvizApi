@@ -7,7 +7,10 @@ import json
 import os
 from pathlib import Path
 import runpy
+import signal
+import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -419,6 +422,7 @@ def test_cli_never_echoes_private_exception_text_and_preserves_existing_result(
         "argv",
         [
             "verify",
+            "--worker",
             "--receipt",
             str(tmp_path / "r"),
             "--packet-evidence",
@@ -490,3 +494,195 @@ def test_synthetic_native_source_replay_against_real_playback_receipt(tmp_path, 
     else:
         with pytest.raises(ValueError):
             M["reconstruct"](pb, rig[0], "public-test-key")
+
+
+def successful_report(replay):
+    return dict(
+        status="source-media-verified",
+        receipt_sha256="a" * 64,
+        encrypted_sha256="b" * 64,
+        clear_sha256="c" * 64,
+        media_receipt=replay[0]["output"]["scheduler"]["action_audit"]["media_receipt"],
+        camera_opened=False,
+        output_devices_opened=False,
+        physical_av_sync_measured=False,
+        network_eof_established=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "good",
+        "exit",
+        "timeout",
+        "cancel",
+        "invalid-json",
+        "extra-field",
+        "oversize",
+        "cleanup",
+        "cleanup-cancel",
+    ],
+)
+def test_parent_isolates_bounds_and_reaps_worker_before_accepting_result(
+    tmp_path, monkeypatch, replay, case
+):
+
+    args = SimpleNamespace(
+        private_config=tmp_path / "private.json",
+        receipt=tmp_path / "receipt.json",
+        packet_evidence=tmp_path / "packets",
+    )
+    reaped = []
+
+    class Child:
+        def __init__(self, command, **kwargs):
+            assert command[:2] == [sys.executable, "-I"] and "--worker" in command
+            assert kwargs == dict(
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            assert all(str(path.absolute()) in command for path in vars(args).values())
+            report = successful_report(replay)
+            if case == "extra-field":
+                report["private"] = "MUST-NOT-ECHO"
+            raw = json.dumps(report).encode()
+            if case == "invalid-json":
+                raw = b"not JSON"
+            if case == "oversize":
+                raw = b"x" * (M["MAX_RESULT"] + 1)
+            Path(command[command.index("--result") + 1]).write_bytes(raw)
+
+        def wait(self, timeout):
+            assert timeout == 70
+            if case == "timeout":
+                raise subprocess.TimeoutExpired("worker", timeout)
+            if case in ("cancel", "cleanup-cancel"):
+                raise KeyboardInterrupt
+            return 2 if case == "exit" else 0
+
+    monkeypatch.setattr(M["subprocess"], "Popen", Child)
+
+    def reap(child):
+        reaped.append(child)
+        if case in ("cleanup", "cleanup-cancel"):
+            raise OSError("reap failure")
+
+    monkeypatch.setitem(M["LAN"], "reap", reap)
+    if case == "good":
+        assert M["supervise"](args) == successful_report(replay)
+    else:
+        error = KeyboardInterrupt if case in ("cancel", "cleanup-cancel") else Exception
+        with pytest.raises(error):
+            M["supervise"](args)
+    assert len(reaped) == 1
+
+
+@pytest.mark.parametrize(
+    "case", ["count", "bytes", "sha", "flag", "status", "anchor", "track", "extra-media"]
+)
+def test_parent_rejects_malformed_success_projection_before_publication(replay, case):
+    report = successful_report(replay)
+    media = report["media_receipt"]
+    if case == "count":
+        media["tracks"]["video_pair"]["completed"] = True
+    elif case == "bytes":
+        media["tracks"]["audio_block"]["bytes"] += 1
+    elif case == "sha":
+        report["clear_sha256"] = "not a hash"
+    elif case == "flag":
+        report["camera_opened"] = True
+    elif case == "status":
+        report["status"] = "verification-failed"
+    elif case == "anchor":
+        media["host_anchor_monotonic_ns"] = -1
+    elif case == "track":
+        media["tracks"]["unexpected"] = {}
+    else:
+        media["private"] = "MUST-NOT-ECHO"
+    with pytest.raises(ValueError):
+        M["worker_result"](report)
+
+
+def test_parent_sigterm_cancels_with_constant_result_and_restores_handler(
+    tmp_path, monkeypatch, capsys
+):
+
+    result = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify",
+            "--receipt",
+            "receipt",
+            "--packet-evidence",
+            "evidence",
+            "--private-config",
+            "private",
+            "--result",
+            str(result),
+        ],
+    )
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def stopped(_args):
+        signal.raise_signal(signal.SIGTERM)
+        pytest.fail("SIGTERM cancellation was ignored")
+
+    monkeypatch.setitem(G, "supervise", stopped)
+    assert M["main"]() == 130
+    assert signal.getsignal(signal.SIGTERM) == previous
+    assert json.loads(result.read_text()) == dict(status="cancelled")
+    assert json.loads(capsys.readouterr().out) == dict(status="cancelled")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux process groups")
+def test_real_noncooperative_worker_is_killed_and_reaped_after_timeout(tmp_path, monkeypatch):
+
+    ready = tmp_path / "ready"
+    real_popen = subprocess.Popen
+    calls = []
+    children = []
+
+    class Child:
+        def __init__(self, _command, **kwargs):
+            code = (
+                "import signal,time;from pathlib import Path;"
+                "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+                "Path(__import__('sys').argv[1]).write_text('ready');time.sleep(60)"
+            )
+            self.process = real_popen([sys.executable, "-I", "-c", code, str(ready)], **kwargs)
+            self.pid = self.process.pid
+            children.append(self.process)
+            deadline = time.monotonic() + 5
+            while not ready.exists():
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+
+        def wait(self, timeout):
+            calls.append(timeout)
+            # Compress waiting only in this test; production still requests70/10/3.
+            return self.process.wait(timeout=min(timeout, 0.1))
+
+        def poll(self):
+            return self.process.poll()
+
+    monkeypatch.setattr(M["subprocess"], "Popen", Child)
+    args = SimpleNamespace(
+        private_config=tmp_path / "p", receipt=tmp_path / "r", packet_evidence=tmp_path / "e"
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            M["supervise"](args)
+        assert calls == [70, 10, 3]
+        assert children[0].returncode == -signal.SIGKILL
+        with pytest.raises(ProcessLookupError):
+            os.kill(children[0].pid, 0)
+    finally:
+        for process in children:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=3)

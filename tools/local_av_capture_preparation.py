@@ -16,7 +16,7 @@ ONLINE = runpy.run_path(str(BASE / 'local_av_online.py'))
 CHUNKED = ONLINE['CHUNKED']
 
 
-def verify_clock_snapshot(reader: dict[str, Any], count: int) -> dict[str, Any]:
+def verify_clock_snapshot(reader: dict[str, Any], count: int, seconds_limit: int = 60) -> dict[str, Any]:
     """Require completed scalar accounting, not a substitute for source EOF."""
     clock = reader.get('processing_clock') or {}
     numbers: list[Any] = [clock.get(field) for field in ('wall_seconds', 'processing_seconds', 'excluded_consumer_seconds')]
@@ -28,7 +28,7 @@ def verify_clock_snapshot(reader: dict[str, Any], count: int) -> dict[str, Any]:
                 or not math.isfinite(value) or value < 0 for value in numbers)
             or not math.isclose(numbers[0], numbers[1] + numbers[2], rel_tol=1e-9, abs_tol=1e-6)
             or type(reader.get('processing_seconds_limit')) is not int
-            or reader['processing_seconds_limit'] != CHUNKED['DECODE']['VIDEO']['MAX_SECONDS']
+            or reader['processing_seconds_limit'] != seconds_limit
             or numbers[1] > reader['processing_seconds_limit']
             or reader.get('startup_active') is not False
             or reader.get('startup_seconds_limit') != CHUNKED['STARTUP_SECONDS']
@@ -39,7 +39,7 @@ def verify_clock_snapshot(reader: dict[str, Any], count: int) -> dict[str, Any]:
     return clock
 
 
-def verify_decoder_clock(decode: dict[str, Any], count: int, mode: str) -> None:
+def verify_decoder_clock(decode: dict[str, Any], count: int, mode: str, seconds_limit: int = 60) -> None:
     CHUNKED['validate_deadline_mode'](mode)
     if mode == 'wall':
         if (decode.get('profile') != 'standalone-chunked-preparation-v1'
@@ -49,8 +49,8 @@ def verify_decoder_clock(decode: dict[str, Any], count: int, mode: str) -> None:
     if (decode.get('profile') != 'standalone-chunked-consumer-excluding-v1'
             or (decode.get('startup') or {}).get('mode') != 'bounded-mpeg'):
         raise ValueError('capture decoder deadline mode/profile mismatch')
-    before = verify_clock_snapshot(decode.get('input_before_cleanup') or {}, count)
-    after = verify_clock_snapshot(decode.get('input') or {}, count)
+    before = verify_clock_snapshot(decode.get('input_before_cleanup') or {}, count, seconds_limit)
+    after = verify_clock_snapshot(decode.get('input') or {}, count, seconds_limit)
     if (after['wall_seconds'] < before['wall_seconds'] or after['processing_seconds'] < before['processing_seconds']
             or after['excluded_consumer_seconds'] != before['excluded_consumer_seconds']):
         raise ValueError('capture decoder cleanup clock accounting failed')
@@ -159,8 +159,9 @@ def verify_startup_pairing(decode: dict[str, Any], online: dict[str, Any], mode:
 
 
 def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: dict[str, Any], *,
-                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> str:
+                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict', seconds_limit: int = 60, span_limit: int = 60) -> str:
     """Require independent terminal checks, not merely exhaustion of the wrapper."""
+    CAPTURE['DECRYPT']['validate_seconds_limit'](seconds_limit)
     crypto = capture.get('decryption') or {}
     reader = decode.get('input') or {}
     prepared = decode.get('preparation') or {}
@@ -200,6 +201,12 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or type(prepared.get('video_pairs_consumed')) is not int
             or not 0 < prepared['video_pairs_consumed'] <= pair_limit):
         raise ValueError('capture preparation video pair limit mismatch')
+    ONLINE['validate_span_limit'](span_limit, mode)
+    if (type(capture.get('seconds_limit', 60)) is not int or capture.get('seconds_limit', 60) != seconds_limit
+            or type(crypto.get('wall_seconds_limit', 60)) is not int or crypto.get('wall_seconds_limit', 60) != seconds_limit
+            or any((decode.get(name) or {}).get('processing_seconds_limit', 60) != seconds_limit for name in ('input', 'input_before_cleanup'))
+            or type(policy.get('source_span_limit_seconds', 60)) is not int or policy.get('source_span_limit_seconds', 60) != span_limit):
+        raise ValueError('capture preparation time/span budget mismatch')
     count = policy.get('validated_events')
     if (type(count) is not int or count <= 0
             or count != policy.get('yielded_prepared_events') or count != policy.get('released_prepared_events')
@@ -218,7 +225,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             raise ValueError('capture preparation source identity accounting failed')
     verify_startup_pairing(decode, online, startup_pairing)
     verify_byte_budget(capture, decode, byte_limit)
-    verify_decoder_clock(decode, count, decoder_deadline_mode)
+    verify_decoder_clock(decode, count, decoder_deadline_mode, seconds_limit)
     return digest
 
 
@@ -244,8 +251,8 @@ def close_pipeline(iterators: tuple[Any, ...], owner: Any, report: dict[str, Any
     return cleanup_error
 
 
-def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> None:
-    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300), ('byte_limit', byte_limit, 16 * 1024 * 1024), ('startup_pairing', startup_pairing, 'strict')]:
+def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict', seconds_limit: int = 60, span_limit: int = 60) -> None:
+    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300), ('byte_limit', byte_limit, 16 * 1024 * 1024), ('startup_pairing', startup_pairing, 'strict'), ('seconds_limit', seconds_limit, 60), ('span_limit', span_limit, 60)]:
         report.pop(field, None)
         if value != default:
             report[field] = value
@@ -256,7 +263,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
         monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
-        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> Any:
+        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict', seconds_limit: int = 60, span_limit: int = 60) -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -278,20 +285,20 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         # Validate downstream policy before transferring ownership or opening IO.
         CHUNKED['validate_deadline_mode'](decoder_deadline_mode)
         CHUNKED['DECODE']['validate_startup_pairing'](startup_pairing)
-        ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
-        CAPTURE['validate_arguments'](owner, limits, completion, codec, byte_limit=byte_limit)
+        ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, span_limit=span_limit)
+        CAPTURE['validate_arguments'](owner, limits, completion, codec, byte_limit=byte_limit, seconds_limit=seconds_limit)
         if pes_ids is not None:
             CHUNKED['TRACKS']['validate_pes_ids'](pes_ids)
-        bind_options(report, decoder_deadline_mode, pair_limit, byte_limit, startup_pairing)
+        bind_options(report, decoder_deadline_mode, pair_limit, byte_limit, startup_pairing, seconds_limit, span_limit)
         claimed = True
         chunks = CAPTURE['iter_capture_chunks'](owner, key, capture, limits=limits,
-            completion=completion, codec=codec, monotonic=monotonic, byte_limit=byte_limit)
+            completion=completion, codec=codec, monotonic=monotonic, byte_limit=byte_limit, seconds_limit=seconds_limit)
         selection: dict[str, Any] | None = {} if pes_ids is not None else None
         options = {} if pes_ids is None else dict(pes_ids=pes_ids, selection=selection)
-        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', max_bytes=byte_limit, startup_pairing=startup_pairing,
+        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', max_bytes=byte_limit, startup_pairing=startup_pairing, seconds_limit=seconds_limit,
             **({} if decoder_deadline_mode == 'wall' else dict(deadline_mode=decoder_deadline_mode)), **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
-            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, **({} if selection is None else dict(selection=selection)))
+            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, span_limit=span_limit, **({} if selection is None else dict(selection=selection)))
         report['status'] = 'running'
         yield from mapped
     except GeneratorExit:
@@ -312,7 +319,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
                 raise cleanup_error
     if not primary:
         try:
-            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit, startup_pairing=startup_pairing)
+            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit, startup_pairing=startup_pairing, seconds_limit=seconds_limit, span_limit=span_limit)
         except Exception as error:
             report.update(status='failed', error_type=type(error).__name__)
             raise

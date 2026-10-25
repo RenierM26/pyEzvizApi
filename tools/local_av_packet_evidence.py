@@ -13,13 +13,22 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import stat
 from typing import Any
 
+PROFILES = runpy.run_path(str(Path(__file__).with_name('local_av_lan_profiles.py')))
 MAX_PACKETS = 15000
 MAX_BYTES = 32 * 1024 * 1024
 MAX_INDEX = 3 * 1024 * 1024
 PROFILE = "encrypted-lan-packets-v1"
+
+
+def evidence_limits(name: str) -> dict[str, Any]:
+    result = PROFILES['get'](name)['evidence']
+    if name == PROFILES['DEFAULT']:
+        result.update(max_packets=MAX_PACKETS, max_bytes=MAX_BYTES, max_index=MAX_INDEX)
+    return result
 
 
 def directory(path: Path) -> int:
@@ -55,7 +64,9 @@ class PacketEvidence:
     A missing manifest means incomplete evidence, including an unjoined worker.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, capture_profile: str = 'prefix-30s'):
+        PROFILES['get'](capture_profile)
+        self.capture_profile = capture_profile
         self.root = directory(path)
         try:
             fd = os.open(
@@ -73,6 +84,10 @@ class PacketEvidence:
         self.digest = hashlib.sha256()
         self.failed = False
 
+    @property
+    def limits(self) -> dict[str, Any]:
+        return evidence_limits(self.capture_profile)
+
     def retain(self, iterator: Any) -> Any:
         try:
             for packet in iterator:
@@ -80,8 +95,8 @@ class PacketEvidence:
                 if (
                     type(body) is not bytes
                     or not body
-                    or len(self.rows) >= MAX_PACKETS
-                    or self.extent + len(body) > MAX_BYTES
+                    or len(self.rows) >= self.limits['max_packets']
+                    or self.extent + len(body) > self.limits['max_bytes']
                 ):
                     self.failed = True
                     raise ValueError("encrypted packet evidence bound")
@@ -108,9 +123,9 @@ class PacketEvidence:
             self.output.close()
             if self.failed:
                 raise ValueError("packet writer did not finish cleanly")
-            index_hash = write_json(self.root, "packet-index.json", self.rows, MAX_INDEX)
+            index_hash = write_json(self.root, "packet-index.json", self.rows, self.limits['max_index'])
             summary = dict(
-                profile=PROFILE,
+                profile=self.limits['profile'],
                 packets=len(self.rows),
                 bytes=self.extent,
                 sha256=self.digest.hexdigest(),
@@ -126,21 +141,22 @@ class PacketEvidence:
             os.close(self.root)
 
 
-def verify(path: Path) -> dict[str, Any]:
+def verify(path: Path, *, capture_profile: str = 'prefix-30s') -> dict[str, Any]:
     """Read fixed regular files under a pinned directory, with bounded work."""
+    limits = evidence_limits(capture_profile)
     root = directory(path)
     try:
         with regular(root, "manifest.json", 4096) as source:
             manifest = json.loads(source.read(4097))
-        with regular(root, "packet-index.json", MAX_INDEX) as source:
-            raw = source.read(MAX_INDEX + 1)
+        with regular(root, "packet-index.json", limits['max_index']) as source:
+            raw = source.read(limits['max_index'] + 1)
         rows = json.loads(raw)
         if (
             type(manifest) is not dict
             or set(manifest) != {"profile", "packets", "bytes", "sha256", "index_sha256", "binding"}
-            or manifest.get("profile") != PROFILE
+            or manifest.get("profile") != limits['profile']
             or type(rows) is not list
-            or len(rows) > MAX_PACKETS
+            or len(rows) > limits['max_packets']
             or hashlib.sha256(raw).hexdigest() != manifest.get("index_sha256")
         ):
             raise ValueError("invalid packet evidence index")
@@ -155,7 +171,7 @@ def verify(path: Path) -> dict[str, Any]:
         ):
             raise ValueError("invalid packet evidence binding")
         extent, digest = 0, hashlib.sha256()
-        with regular(root, "packet-bodies.bin", MAX_BYTES) as source:
+        with regular(root, "packet-bodies.bin", limits['max_bytes']) as source:
             for row in rows:
                 if (
                     type(row) is not dict
@@ -163,7 +179,7 @@ def verify(path: Path) -> dict[str, Any]:
                     or type(row["offset"]) is not int
                     or row["offset"] != extent
                     or type(row["bytes"]) is not int
-                    or not 0 < row["bytes"] <= MAX_BYTES - extent
+                    or not 0 < row["bytes"] <= limits['max_bytes'] - extent
                 ):
                     raise ValueError("invalid packet evidence extent")
                 body = source.read(row["bytes"])
@@ -189,9 +205,10 @@ def verify(path: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify", type=Path, required=True)
+    parser.add_argument('--capture-profile', choices=PROFILES['NAMES'], default=PROFILES['DEFAULT'])
     args = parser.parse_args()
     try:
-        result = verify(args.verify)
+        result = verify(args.verify, capture_profile=args.capture_profile)
     except Exception:
         print(json.dumps(dict(status="invalid-or-incomplete")))
         return 2

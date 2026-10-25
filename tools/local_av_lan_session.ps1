@@ -11,6 +11,7 @@ param(
     [string]$WslPrivateConfig,
     [string]$WslResults,
     [string]$ExpectedPackageSha256,
+    [ValidateSet('prefix-30s', 'two-minute')][string]$CaptureProfile = 'prefix-30s',
     [ValidateSet('strict', 'common-keyframe')][string]$StartupPairing = 'strict',
     [ValidateSet('reject', 'bounded-serial-pcm')][string]$AudioOverlapPolicy = 'reject',
     [object]$MaxAudioOverlapMs,
@@ -57,6 +58,15 @@ function Get-LanWslArguments {
         '--expected-package-sha256', $Options.ExpectedPackageSha256,
         '--startup-pairing', $startup,
         '--audio-overlap-policy', $audio, '--play')
+    if ($Options.ContainsKey('CaptureProfile')) {
+        if (($Options.CaptureProfile -isnot [string]) -or
+            ($Options.CaptureProfile.ToLowerInvariant() -cnotin @('prefix-30s', 'two-minute'))) {
+            throw 'Unsupported finite capture profile.'
+        }
+        if ($Options.CaptureProfile.ToLowerInvariant() -cne 'prefix-30s') {
+            $native += @('--capture-profile', $Options.CaptureProfile.ToLowerInvariant())
+        }
+    }
     foreach ($pair in @(@('MaxAudioOverlapMs', '--max-audio-overlap-ms'),
                         @('MaxAudioPhaseMs', '--max-audio-phase-ms'))) {
         if ($Options.ContainsKey($pair[0]) -and ($null -ne $Options[$pair[0]])) {
@@ -105,7 +115,8 @@ Usage: .\tools\local_av_lan_session.ps1 -Distribution Ubuntu `
   -WslPrivateConfig /private/camera.json -WslResults /private/new-session `
   -ExpectedPackageSha256 APPROVED_SOURCE_SHA256 -Play
 
-Optional: -StartupPairing common-keyframe -AudioOverlapPolicy bounded-serial-pcm
+Optional: -CaptureProfile prefix-30s|two-minute
+          -StartupPairing common-keyframe -AudioOverlapPolicy bounded-serial-pcm
           -MaxAudioOverlapMs 1 -MaxAudioPhaseMs 1
 Requires an existing configured WSL runtime/checkout. All paths are WSL paths.
 One existing Enter gate; results stay in WSL. No installer or Windows bundle.
@@ -117,7 +128,7 @@ try {
     $options = @{
         Distribution = $Distribution; WslCheckout = $WslCheckout; WslPython = $WslPython
         WslPrivateConfig = $WslPrivateConfig; WslResults = $WslResults
-        ExpectedPackageSha256 = $ExpectedPackageSha256; Play = [bool]$Play
+        ExpectedPackageSha256 = $ExpectedPackageSha256; Play = [bool]$Play; CaptureProfile = $CaptureProfile
         StartupPairing = $StartupPairing; AudioOverlapPolicy = $AudioOverlapPolicy
         MaxAudioOverlapMs = $MaxAudioOverlapMs; MaxAudioPhaseMs = $MaxAudioPhaseMs
     }

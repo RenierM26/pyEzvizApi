@@ -891,6 +891,8 @@ Use the [one-command session](docs/local-av-lan-playback.md#one-command-session-
 to retain packet evidence and verify the saved media automatically after capture.
 A [Windows PowerShell bridge](docs/local-av-lan-playback.md#start-from-windows-powershell)
 invokes that workflow in an existing configured WSL distribution.
+An [explicit two-minute live profile](docs/local-av-lan-playback.md#explicit-two-minute-live-profile)
+extends finite acquisition/evidence budgets; the default remains 30 seconds.
 The separate [two-minute recorded control](docs/local-av-sustained-playback.md)
 checks longer scheduling and sampled resources without extending live capture.
 

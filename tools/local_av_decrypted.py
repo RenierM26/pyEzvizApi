@@ -28,6 +28,11 @@ def validate_byte_limit(limit: int) -> None:
         raise ValueError('invalid finite compressed byte limit')
 
 
+def validate_seconds_limit(limit: int) -> None:
+    if type(limit) is not int or not 1 <= limit <= 150:
+        raise ValueError('invalid finite decryption seconds limit')
+
+
 class Decryptor:
     """Bound before append, preserve original bytes, never silently select at EOF."""
 
@@ -78,8 +83,10 @@ class Chunks:
     """No prefetch or queue; caller owns each yielded immutable clear chunk."""
 
     def __init__(self, packets: Any, key: str | bytes, *, codec: str = 'auto',
-            clock: Any = time.monotonic, byte_limit: int = MAX_TOTAL) -> None:
+            clock: Any = time.monotonic, byte_limit: int = MAX_TOTAL, seconds_limit: int = MAX_SECONDS) -> None:
         validate_byte_limit(byte_limit)
+        validate_seconds_limit(seconds_limit)
+        self.seconds_limit = seconds_limit
         self.byte_limit = byte_limit
         self.iterator: Any = iter(())
         self.transform: Any = None
@@ -107,7 +114,7 @@ class Chunks:
             raise ValueError('decrypted source is closed')
         if self.failure is not None:
             raise ValueError('decrypted source previously failed') from self.failure
-        if self.clock() - self.started > MAX_SECONDS:
+        if self.clock() - self.started > self.seconds_limit:
             raise ValueError('decrypted source cooperative deadline exceeded')
 
     def pull(self) -> bytes:
@@ -176,7 +183,8 @@ class Chunks:
             raise ValueError('decrypted source cleanup failed')
 
     def result(self) -> dict[str, Any]:
-        return dict(profile='bounded-decrypted-packet-chunks-v1' if self.byte_limit == MAX_TOTAL
+        extra = {} if self.seconds_limit == MAX_SECONDS else dict(wall_seconds_limit=self.seconds_limit)
+        return dict(**extra, profile='bounded-decrypted-packet-chunks-v1' if self.byte_limit == MAX_TOTAL
             else 'bounded-decrypted-packet-chunks-v2',
             status='failed' if self.failure is not None or self.cleanup_errors else 'completed' if self.completed else 'closed' if self.closed else 'open',
             error_type=type(self.failure).__name__ if self.failure is not None else None,
@@ -193,10 +201,10 @@ class Chunks:
 
 
 def iter_decrypted(packets: Any, key: str | bytes, report: dict[str, Any], *,
-        codec: str = 'auto', byte_limit: int = MAX_TOTAL) -> Any:
+        codec: str = 'auto', byte_limit: int = MAX_TOTAL, seconds_limit: int = MAX_SECONDS) -> Any:
     """Own the source iterator through downstream completion, close or failure."""
     report.update(status='failed', complete_clear_sha256=None, verified_decryption_end=False)
-    chunks = Chunks(packets, key, codec=codec, byte_limit=byte_limit)
+    chunks = Chunks(packets, key, codec=codec, byte_limit=byte_limit, seconds_limit=seconds_limit)
     primary = False
     try:
         yield from chunks

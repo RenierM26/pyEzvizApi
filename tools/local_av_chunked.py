@@ -81,8 +81,9 @@ class ChunkReader(io.RawIOBase):
     """One immutable chunk owned at a time; no seek, replay, queue or read-all."""
 
     def __init__(self, chunks: Any, max_bytes: int, *, bounded_startup: bool = False,
-                 work_clock: ConsumerClock | None = None) -> None:
+                 work_clock: ConsumerClock | None = None, seconds_limit: int = 60) -> None:
         super().__init__()
+        self.seconds_limit = 60
         self.iterator: Any = iter(())
         self.pending = b''
         self.offset = 0
@@ -90,6 +91,9 @@ class ChunkReader(io.RawIOBase):
             raise ValueError('invalid startup mode')
         if type(max_bytes) is not int or not 0 < max_bytes <= DECODE['AUDIO']['MAX_FILE_BYTES']:
             raise ValueError('invalid compressed byte limit')
+        if type(seconds_limit) is not int or not 1 <= seconds_limit <= 150:
+            raise ValueError('invalid finite chunk processing seconds limit')
+        self.seconds_limit = seconds_limit
         self.iterator = iter(chunks)
         self.limit = max_bytes
         self.pending = b''
@@ -127,7 +131,7 @@ class ChunkReader(io.RawIOBase):
         return wall_elapsed
 
     def check_processing(self) -> None:
-        if self.now() - self.started > DECODE['VIDEO']['MAX_SECONDS']:
+        if self.now() - self.started > self.seconds_limit:
             raise ValueError('chunk source session deadline exceeded')
 
     def borrow(self, event: Any, payload: Any) -> Any:
@@ -219,8 +223,8 @@ class ChunkReader(io.RawIOBase):
             raise
 
     def result(self) -> dict[str, Any]:
-        timing = {} if self.work_clock is None else dict(processing_clock=self.work_clock.result(),
-            processing_seconds_limit=DECODE['VIDEO']['MAX_SECONDS'])
+        timing = ({} if self.seconds_limit == 60 else dict(processing_seconds_limit=self.seconds_limit)) if self.work_clock is None else dict(processing_clock=self.work_clock.result(),
+            processing_seconds_limit=self.seconds_limit)
         return dict(**timing, received_bytes=self.received, delivered_bytes=self.delivered,
             received_chunks=self.chunks, prefix_sha256=self.digest.hexdigest(),
             verified_source_end=self.eof, pending_bytes=len(self.pending) - self.offset,
@@ -268,7 +272,8 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
         report['discovery_input'] = reader.result()
         adapter = DECODE['AUDIO']['FrameAdapter'](audio_stream, DECODE['AUDIO']['FormatConverter'](av))
         events = DECODE['prepared_events'](container, selected, adapter, session, audio_stream, started,
-            **({} if reader.work_clock is None else dict(clock=reader.work_clock)))
+            **({} if reader.work_clock is None else dict(clock=reader.work_clock)),
+            **({} if reader.seconds_limit == 60 else dict(seconds_limit=reader.seconds_limit)))
         ready_kinds: set[str] = set()
         try:
             for event, payload in events:
@@ -297,7 +302,7 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],  #
                 audio_stream: int, report: dict[str, Any], *,
                 max_bytes: int = 16 * 1024 * 1024, startup: str = 'default',
                 pes_ids: tuple[int, int, int] | None = None, selection: dict[str, Any] | None = None,
-                deadline_mode: str = 'wall', startup_pairing: str = 'strict') -> Any:
+                deadline_mode: str = 'wall', startup_pairing: str = 'strict', seconds_limit: int = 60) -> Any:
     """Own/close the producer iterator; preparation yields are not output acks."""
     reader = None
     primary = False
@@ -324,7 +329,7 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],  #
             TRACKS['validate_pes_ids'](pes_ids)
             if container_format != 'mpeg' or type(selection) is not dict or selection:
                 raise ValueError('PES selection requires MPEG-PS and a fresh selection receipt')
-        reader = ChunkReader(chunks, max_bytes, bounded_startup=startup == 'bounded-mpeg', work_clock=work_clock)
+        reader = ChunkReader(chunks, max_bytes, bounded_startup=startup == 'bounded-mpeg', work_clock=work_clock, seconds_limit=seconds_limit)
         av = DECODE['AUDIO']['load_av']()
         report.update(pyav_version=av.__version__, library_versions=av.library_versions)
         yield from prepared_chunk_events(av, reader, container_format, streams, audio_stream, session, report,

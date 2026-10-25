@@ -59,7 +59,8 @@ def rational(row: Any) -> Fraction:
 class SourceChain:
     """Independent canonical projection; do not import the media receipt builder."""
 
-    def __init__(self, anchor: int):
+    def __init__(self, anchor: int, *, capture_profile: str = 'prefix-30s'):
+        self.budget = LAN['PROFILES']['get'](capture_profile)
         require(type(anchor) is int and 0 < anchor < 2**128, "invalid host anchor")
         self.anchor = anchor
         self.count = dict.fromkeys(TRACKS, 0)
@@ -73,10 +74,10 @@ class SourceChain:
         require(track in TRACKS, "unknown track")
         stamp = rational(at)
         require(
-            stamp <= 60 and stamp > self.previous.get(track, Fraction(-1)),
+            stamp <= self.budget['options'].get('span_limit', 60) and stamp > self.previous.get(track, Fraction(-1)),
             "nonincreasing or excessive source target",
         )
-        limit = 900 if track == "video_pair" else 10000
+        limit = self.budget['options']['pair_limit'] if track == "video_pair" else 10000
         require(
             self.count[track] < limit
             and type(identity) is str
@@ -144,7 +145,7 @@ def fingerprint(event: dict[str, Any], payload: tuple[bytes, ...]) -> tuple[int,
 
 
 def receipt_binding(
-    parent: dict[str, Any], summary: dict[str, Any], digest: str, package: str
+    parent: dict[str, Any], summary: dict[str, Any], digest: str, package: str, *, capture_profile: str = 'prefix-30s'
 ) -> dict[str, Any]:
     require(
         parent.get("profile") == "attended-direct-lan-prefix-v1"
@@ -153,7 +154,10 @@ def receipt_binding(
         and parent.get("stage") == "finished",
         "requires successful attended receipt",
     )
+    budget = LAN['PROFILES']['get'](capture_profile)
     pb = parent["playback"]
+    require(parent.get('capture_profile', LAN['PROFILES']['DEFAULT']) == capture_profile
+        and pb.get('capture_profile', LAN['PROFILES']['DEFAULT']) == capture_profile, 'capture profile binding failed')
     require(
         summary["binding"] == dict(config_sha256=digest, package_sha256=package)
         and parent.get("config_sha256") == digest
@@ -169,8 +173,8 @@ def receipt_binding(
     startup = pb["requested_options"]["startup_pairing"]
     require(
         startup in ("strict", "common-keyframe")
-        and pb["requested_options"] == dict(LAN["OPTIONS"], startup_pairing=startup)
-        and pb.get("capture_limits") == LAN["LIMITS"],
+        and pb["requested_options"] == dict(budget['options'], startup_pairing=startup)
+        and pb.get("capture_limits") == budget['limits'],
         "unsupported receipt profile",
     )
     require(
@@ -206,10 +210,13 @@ def receipt_binding(
         "unfinished source pull",
     )
     prepared = pb["preparation"]
+    require((capture_profile == LAN['PROFILES']['DEFAULT']) or all(prepared.get(field, default) == budget['options'].get(field, default)
+        for field, default in [('seconds_limit', 60), ('span_limit', 60), ('pair_limit', 300), ('byte_limit', 16777216)]),
+        'pipeline profile budget binding failed')
     capture = prepared["capture"]
     crypto = capture["decryption"]
     require(
-        capture["limits"] == LAN["LIMITS"]
+        capture["limits"] == budget['limits']
         and capture["capture"]["packets_yielded"] == summary["packets"]
         and crypto["encrypted_bytes"] == summary["bytes"]
         and crypto["encrypted_prefix_sha256"] == summary["sha256"]
@@ -252,7 +259,7 @@ def compare_events(
 ) -> dict[str, Any]:
     scheduler = pb["output"]["scheduler"]
     try:
-        chain = SourceChain(scheduler["host_anchor_monotonic_ns"])
+        chain = SourceChain(scheduler["host_anchor_monotonic_ns"], capture_profile=pb.get('capture_profile', LAN['PROFILES']['DEFAULT']))
         pending = tails(scheduler)
         for event, payload in events:
             track = event["kind"]
@@ -318,6 +325,7 @@ def compare_events(
 
 
 def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
+    budget = LAN['PROFILES']['get'](pb.get('capture_profile', LAN['PROFILES']['DEFAULT']))
     crypto: dict[str, Any] = {}
     decode: dict[str, Any] = {}
     policy: dict[str, Any] = {}
@@ -331,14 +339,16 @@ def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
         contract["max_overlap_ms"],
         contract["max_nominal_phase_ms"],
         identity_mode="source-sequence",
-        pair_limit=900,
+        pair_limit=budget['options']['pair_limit'],
+        span_limit=budget['options'].get('span_limit', 60),
     )
     clear = DECRYPT["iter_decrypted"](
         (raw[i : i + 32768] for i in range(0, len(raw), 32768)),
         key,
         crypto,
         codec="hevc",
-        byte_limit=EVIDENCE["MAX_BYTES"],
+        byte_limit=budget['options']['byte_limit'],
+        seconds_limit=budget['options'].get('seconds_limit', 60),
     )
     chunks = ONLINE["CHUNKED"]["iter_chunks"](
         clear,
@@ -350,7 +360,8 @@ def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
         pes_ids=(224, 225, 192),
         selection=selection,
         startup_pairing=pb["requested_options"]["startup_pairing"],
-        max_bytes=EVIDENCE["MAX_BYTES"],
+        max_bytes=budget['options']['byte_limit'],
+        seconds_limit=budget['options'].get('seconds_limit', 60),
     )
     events = ONLINE["iter_online"](
         chunks,
@@ -362,7 +373,8 @@ def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
         overlap_ms=contract["max_overlap_ms"],
         phase_ms=contract["max_nominal_phase_ms"],
         identity_mode="source-sequence",
-        pair_limit=900,
+        pair_limit=budget['options']['pair_limit'],
+        span_limit=budget['options'].get('span_limit', 60),
     )
     media = compare_events(pb, events, decode, policy)
     require(
@@ -377,16 +389,18 @@ def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
 
 
 def verify(args: Any) -> dict[str, Any]:
-    summary = EVIDENCE["verify"](args.packet_evidence)
+    budget = LAN['selected_profile'](args)
+    extra = {} if budget['name'] == LAN['PROFILES']['DEFAULT'] else dict(capture_profile=budget['name'])
+    summary = EVIDENCE["verify"](args.packet_evidence, **extra)
     raw_receipt = LAN["read_regular"](args.receipt, LAN["MAX_RECEIPT"])
     parent = json.loads(raw_receipt)
     credentials, _device, config_hash = LAN["private_config"](args.private_config)
     package = LAN["RUNTIME"]["package_fingerprint"](Path(pyezvizapi.__file__).parent)
-    pb = receipt_binding(parent, summary, config_hash, package)
+    pb = receipt_binding(parent, summary, config_hash, package, **extra)
     root = EVIDENCE["directory"](args.packet_evidence)
     try:
-        with EVIDENCE["regular"](root, "packet-bodies.bin", EVIDENCE["MAX_BYTES"]) as source:
-            raw = source.read(EVIDENCE["MAX_BYTES"] + 1)
+        with EVIDENCE["regular"](root, "packet-bodies.bin", budget['evidence']['max_bytes']) as source:
+            raw = source.read(budget['evidence']['max_bytes'] + 1)
     finally:
         os.close(root)
     # Bind the immutable replay snapshot too, not only an earlier file read.
@@ -408,8 +422,9 @@ def verify(args: Any) -> dict[str, Any]:
     )
 
 
-def worker_result(report: Any) -> dict[str, Any]:
+def worker_result(report: Any, *, capture_profile: str = 'prefix-30s') -> dict[str, Any]:
     """Return only the fixed successful hash/count projection, not diagnostics."""
+    budget = LAN['PROFILES']['get'](capture_profile)
     hashes = ("receipt_sha256", "encrypted_sha256", "clear_sha256")
     flags = (
         "camera_opened",
@@ -442,7 +457,7 @@ def worker_result(report: Any) -> dict[str, Any]:
             type(row) is dict
             and set(row) == {"completed", "bytes", "sha256"}
             and type(row["completed"]) is int
-            and 0 < row["completed"] <= (900 if track == "video_pair" else 10000)
+            and 0 < row["completed"] <= (budget['options']['pair_limit'] if track == "video_pair" else 10000)
             and type(row["bytes"]) is int
             and 0 < row["bytes"] <= row["completed"] * 67108864
             and (track != "audio_block" or row["bytes"] == row["completed"] * 2048),
@@ -461,6 +476,7 @@ def worker_result(report: Any) -> dict[str, Any]:
 
 def supervise(args: Any) -> dict[str, Any]:
     """Bound native verification separately from playback/source deadlines."""
+    budget = LAN['selected_profile'](args)
     with tempfile.TemporaryDirectory(prefix="local-av-verify-") as temporary:
         result = Path(temporary) / "worker.json"
         command = [
@@ -473,6 +489,8 @@ def supervise(args: Any) -> dict[str, Any]:
         ]
         for name in ("private_config", "receipt", "packet_evidence"):
             command.extend(["--" + name.replace("_", "-"), str(getattr(args, name).absolute())])
+        if budget['name'] != LAN['PROFILES']['DEFAULT']:
+            command.extend(['--capture-profile', budget['name']])
         child = None
         primary = False
         try:
@@ -483,12 +501,12 @@ def supervise(args: Any) -> dict[str, Any]:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            code = child.wait(timeout=WORKER_SECONDS)
+            code = child.wait(timeout=WORKER_SECONDS if budget['name'] == LAN['PROFILES']['DEFAULT'] else budget['verify_seconds'])
             if code == 130:
                 raise KeyboardInterrupt
             require(code == 0, "verification worker failed")
             report = json.loads(LAN["read_regular"](result, MAX_RESULT))
-            return worker_result(report)
+            return worker_result(report, **({} if budget['name'] == LAN['PROFILES']['DEFAULT'] else dict(capture_profile=budget['name'])))
         except BaseException:
             primary = True
             raise
@@ -507,6 +525,7 @@ def main() -> int:
     for name in ("private-config", "receipt", "packet-evidence", "result"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument('--capture-profile', choices=LAN['PROFILES']['NAMES'], default=LAN['PROFILES']['DEFAULT'])
     args = parser.parse_args()
     try:
         fd = os.open(args.result, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

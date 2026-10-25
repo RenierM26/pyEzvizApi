@@ -77,7 +77,7 @@ def rig(tmp_path, monkeypatch):
     def pause(seconds):
         clock.sleep(seconds)
         time.sleep(.001)  # Allow the actual source worker to run under the fake clock.
-    monkeypatch.setitem(namespace, 'Scheduler', lambda *args: scheduler(*args, clock=clock.read, pause=pause))
+    monkeypatch.setitem(namespace, 'Scheduler', lambda *args, **kwargs: scheduler(*args, clock=clock.read, pause=pause, **kwargs))
     monkeypatch.setitem(namespace, 'ThreadPoolExecutor', Executor)
     return raw, video, audio, titles
 

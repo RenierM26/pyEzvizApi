@@ -301,3 +301,16 @@ output/drain/cleanup check. Older compact receipts lacking the new field cannot
 establish this stronger media claim. Failed/cancelled sessions retain only partial
 completed-media evidence;the hash itself never asserts successful EOF or cleanup.
 No existing attended launcher or collector is silently switched to compact mode.
+
+### Opt-in source identity counters
+
+Pass `identity_mode='source-sequence'` to `CapturePlayback` to replace the online
+policy's whole-prefix ID sets with strict original source-sequence counters.
+See [canonical source IDs, receipts and limits](local-av-online-policy.md#opt-in-constant-state-source-identity-checks).
+This composes with the existing `diagnostic_tail` option and explicit same-session
+PES selection. No event IDs, media bytes, origin, host targets or scheduling rules
+are changed. Invalid options fail before source ownership is transferred.
+The sequence policy has its own nested receipt profile and terminal accounting;
+legacy/default outer output profiles remain unchanged. Finite capture/decode/work
+limits and all source join/cleanup rules remain in force. No attended launcher is
+automatically switched, and this does not enable sustained/unbounded streaming.

@@ -147,10 +147,10 @@ class CapturePlayback:
     or concurrent generator close is safe.
     """
 
-    def __init__(self, owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,
+    def __init__(self, owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,  # noqa: PLR0913
             limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
             monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
-            diagnostic_tail: int | None = None) -> None:
+            diagnostic_tail: int | None = None, identity_mode: str = 'full-history') -> None:
         self.args = copy(args)
         self.report = report
         self.used = False
@@ -171,7 +171,7 @@ class CapturePlayback:
             validate_output(self.args)
             streams = (self.args.primary_stream, self.args.secondary_stream)
             PREPARE['ONLINE']['Policy'](streams, self.args.audio_stream, self.args.audio_overlap_policy,
-                self.args.max_audio_overlap_ms, self.args.max_audio_phase_ms)
+                self.args.max_audio_overlap_ms, self.args.max_audio_phase_ms, identity_mode=identity_mode)
             PREPARE['CAPTURE']['validate_arguments'](owner, limits, completion, codec)
             if pes_ids is not None:
                 PREPARE['CHUNKED']['TRACKS']['validate_pes_ids'](pes_ids)
@@ -180,7 +180,7 @@ class CapturePlayback:
             events = PREPARE['iter_capture_preparation'](owner, key, streams, self.args.audio_stream, preparation,
                 limits=limits, completion=completion, codec=codec, policy=self.args.audio_overlap_policy,
                 overlap_ms=self.args.max_audio_overlap_ms, phase_ms=self.args.max_audio_phase_ms,
-                monotonic=monotonic, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
+                monotonic=monotonic, identity_mode=identity_mode, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
             source = CaptureEvents(events, owner, preparation, report)
             self.pull = OUTPUT['PULL']['PreparedPull'](source, interrupt=owner.close)
         except BaseException as error:

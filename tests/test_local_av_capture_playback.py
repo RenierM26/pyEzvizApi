@@ -525,9 +525,10 @@ def test_pending_real_capture_owner_quiesces_transport_after_interrupt(rig, monk
         capture.close(2)
 
 
-def test_stop_before_play_is_idempotent_without_acquisition(rig):
+@pytest.mark.parametrize('identity_mode', ['full-history', 'source-sequence'])
+def test_stop_before_play_is_idempotent_without_acquisition(rig, identity_mode):
     report: dict[str, Any] = {}
-    owner, capture = session(rig, report)
+    owner, capture = session(rig, report, identity_mode=identity_mode)
     capture.request_stop()
     capture.request_stop()
     with pytest.raises(OUT['PlaybackStopped']):
@@ -633,9 +634,10 @@ def test_stop_after_success_does_not_mutate_completed_receipt(rig):
     assert report == before and report['status'] == 'prefix-output-completed'
 
 
-def test_stop_does_not_replace_primary_source_failure(rig, monkeypatch):
+@pytest.mark.parametrize('identity_mode', ['full-history', 'source-sequence'])
+def test_stop_does_not_replace_primary_source_failure(rig, monkeypatch, identity_mode):
     report: dict[str, Any] = {}
-    owner, capture = session(rig, report)
+    owner, capture = session(rig, report, identity_mode=identity_mode)
     primary = BrokenPipeError('primary source failure')
     def fail(*_args, **_kwargs):
         capture.request_stop()
@@ -829,3 +831,45 @@ def test_compact_media_receipt_is_required_and_matches_all_completed_counts(rig)
             audit['media_receipt']['tracks']['video_pair']['completed'] -= 1
         with pytest.raises(ValueError, match='media receipt'):
             M['verify_output'](report['preparation'], changed)
+
+
+def test_pending_sequence_identities_preserve_compact_media_and_all_cleanup(rig):
+    legacy: dict[str, Any] = {}
+    _owner, baseline = session(rig, legacy, pes_ids=(0xE0, 0xE1, 0xC0), diagnostic_tail=2)
+    baseline.play()
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, pes_ids=(0xE0, 0xE1, 0xC0), diagnostic_tail=2,
+        identity_mode='source-sequence')
+    assert not owner.started and not owner.closed
+    capture.play()
+    assert report['status'] == 'prefix-output-completed' and owner.closed
+    preparation = report['preparation']
+    audit = preparation['online']['policy']['identity_audit']
+    counts = report['output']['scheduler']['completed']
+    assert audit['accepted'] == counts and audit['retained_id_count'] == 0
+    assert audit['audio_stream_index'] == preparation['decode']['track_selection']['audio_index'] == 1
+    for field in ('mapped_metadata_sha256', 'audio_clock_rows_sha256', 'origin', 'audio_clock_contract'):
+        assert preparation['online']['policy'][field] == legacy['preparation']['online']['policy'][field]
+    # Frozen anchors differ between runs; relative targets and media summaries remain identical.
+    for track in ('video_pair', 'audio_block'):
+        actual = report['output']['scheduler']['action_audit']['media_receipt']['tracks'][track]
+        expected = legacy['output']['scheduler']['action_audit']['media_receipt']['tracks'][track]
+        assert actual['completed'] == expected['completed'] and actual['bytes'] == expected['bytes']
+    assert not report['source_pull']['worker_alive'] and report['source_pull']['iterator_closed']
+    assert not report['output']['lookahead']['owned_ids'] and not report['output']['lookahead']['input_reservation']
+    M['verify_output'](preparation, report['output'])
+    for path, value in [('accepted', {}), ('retained_id_count', 1), ('profile', 'old'), ('audio_stream_index', 99)]:
+        changed = copy.deepcopy(preparation)
+        changed['online']['policy']['identity_audit'][path] = value
+        with pytest.raises(ValueError, match='identity accounting'):
+            M['verify_output'](changed, report['output'])
+
+
+def test_pending_invalid_identity_mode_is_rejected_before_claiming_capture(rig):
+    owner, _run = play(rig, {})
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='identity mode'):
+        M['CapturePlayback'](owner, 'key', arguments(), report,
+            limits=CaptureLimits(duration_seconds=8), codec='hevc', completion='bounded-prefix',
+            identity_mode='not-a-profile')
+    assert not owner.started and not owner.closed and report['source_pull'] is None

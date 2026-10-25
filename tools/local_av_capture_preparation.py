@@ -43,7 +43,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or prepared.get('pending_pixel_bytes') != 0 or prepared.get('pending_unpaired')
             or prepared.get('pending_audio') is not None or prepared.get('video_offer_in_progress') is not None
             or decode.get('track_selection') != online.get('track_selection')
-            or online.get('profile') != 'standalone-online-av-policy-v1'
+            or online.get('profile') not in ('standalone-online-av-policy-v1', 'standalone-online-sequence-av-policy-v1')
             or online.get('status') != 'completed' or online.get('error') is not None
             or online.get('cleanup_errors') or policy.get('origin') is None
             or policy.get('origin') != prepared.get('common_origin')
@@ -57,6 +57,15 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or count != prepared['video_pairs_consumed'] + prepared['audio_blocks_consumed']
             or policy.get('audio_blocks') != prepared['audio_blocks_consumed']):
         raise ValueError('capture preparation event accounting failed')
+    if online['profile'] == 'standalone-online-sequence-av-policy-v1':
+        audit = policy.get('identity_audit') or {}
+        expected = dict(video_pair=prepared['video_pairs_consumed'], audio_block=prepared['audio_blocks_consumed'])
+        selection = online.get('track_selection') or {}
+        if (audit.get('profile') != 'strict-source-sequence-v1' or audit.get('accepted') != expected
+                or type(audit.get('retained_id_count')) is not int or audit['retained_id_count'] != 0
+                or type(audit.get('audio_stream_index')) is not int or audit['audio_stream_index'] < 0
+                or (selection and audit['audio_stream_index'] != selection.get('audio_index'))):
+            raise ValueError('capture preparation source identity accounting failed')
     return digest
 
 
@@ -86,7 +95,8 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         audio_stream: int, report: dict[str, Any], *, limits: CaptureLimits,
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
-        monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None) -> Any:
+        monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
+        identity_mode: str = 'full-history') -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -105,7 +115,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
     claimed = primary = False
     try:
         # Validate downstream policy before transferring ownership or opening IO.
-        ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms)
+        ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode)
         CAPTURE['validate_arguments'](owner, limits, completion, codec)
         if pes_ids is not None:
             CHUNKED['TRACKS']['validate_pes_ids'](pes_ids)
@@ -116,7 +126,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         options = {} if pes_ids is None else dict(pes_ids=pes_ids, selection=selection)
         events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
-            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, **({} if selection is None else dict(selection=selection)))
+            policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, **({} if selection is None else dict(selection=selection)))
         report['status'] = 'running'
         yield from mapped
     except GeneratorExit:

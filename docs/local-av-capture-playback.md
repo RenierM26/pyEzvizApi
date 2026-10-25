@@ -252,3 +252,52 @@ Diagnostic admission failures have separate bounded counters/type diagnostics an
 invalidate compact completion. They cannot replace an already propagating
 preparation/backend error or skip pending-future, iterator or lease cleanup. A
 later valid append cannot erase an earlier diagnostic failure.
+
+### Whole-prefix media and target fingerprints
+
+Compact `action_audit.media_receipt` now contains `bounded-output-media-v1`:
+recorded host anchor and,for each track,completed count,total acknowledged payload
+bytes and SHA256. This is separate from the observation-dependent diagnostic hash.
+It keeps only two hash states,counters and previous exact source targets; it does
+not retain another event history. Legacy full-receipt/default paths are unchanged.
+
+Each admitted completed acknowledgement projects exactly these fields:
+
+```json
+{"track":"video_pair","id":"local-pair:1","source_at":{"numerator":0,"denominator":1},"target_monotonic_ns":123,"bytes":6220800,"payload_sha256":"<canonical pixel hash>"}
+```
+
+The corresponding audio track is `audio_block`,with the original block ID and
+PCM hash. Source fractions are reduced exactly;targets must equal the frozen
+anchor plus floor(source_at×1000000000). Starts must strictly increase per track.
+Acknowledged bytes must equal submitted bytes;audio blocks remain2048bytes. Video
+requires the existing `presented` acknowledgement and matching pair ID. Fingerprints
+are exactly64 lowercase hexadecimal characters. Raw,mutable or malformed metadata
+cannot advance the receipt. Global ID uniqueness remains the upstream policy's
+responsibility;this constant-state receipt independently checks per-track order.
+
+Each track starts SHA256 with ASCII `bounded-output-media-v1`,LF,the track name,LF.
+Append each projected canonical JSON row followed by LF,using sorted keys,compact
+`,`/`:` separators,ASCII Unicode escapes and no nonfinite numbers. Per-track
+completion/source order is used;cross-track harvest interleaving has no effect.
+Worker start/return times,harvest times,lateness observations and other backend
+fields are excluded. Submitted,pending,failed and partially written output is not
+counted as completed media. Prepare/validate the projection before diagnostic
+admission and commit only after it succeeds,so a rejected diagnostic row cannot
+partially commit a media acknowledgement.
+
+An independent verifier decodes the same accepted source prefix,applies the same
+explicit track/origin/audio policy,and computes each original ID,relative target,
+canonical paired-pixel/PCM hash and payload extent. Using the receipt's recorded
+anchor,it reconstructs both complete track chains without needing evicted actions
+or host service timestamps. Counts,byte totals and digests must all match. A
+changed hash/target/order/extent or omitted event changes this receipt even if the
+retained diagnostic tail appears valid. This is a fingerprint comparison,not
+cryptographic authentication or a physical display/speaker measurement.
+
+Compact completion requires this media receipt,matching anchor/track counts and
+well-formed positive byte totals/hashes,alongside every existing source/prefix/
+output/drain/cleanup check. Older compact receipts lacking the new field cannot
+establish this stronger media claim. Failed/cancelled sessions retain only partial
+completed-media evidence;the hash itself never asserts successful EOF or cleanup.
+No existing attended launcher or collector is silently switched to compact mode.

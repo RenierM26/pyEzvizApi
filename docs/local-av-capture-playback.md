@@ -175,3 +175,30 @@ receipts remain diagnostic, not independent permission to claim success. The
 same accepted-prefix-only and physical-clock limitations above apply. No new
 attended Windows run or sustained live-stream claim is supplied by this opt-in
 composition alone.
+
+### Application-driven stop
+
+A different thread may call `session.request_stop()` while the playback owner is
+inside `play()`. It is idempotent and only sets a thread-safe flag: it neither
+closes resources nor waits for IO. Do not call `close()` concurrently with play.
+The playback owner observes stop during pending-input prefill, between backend
+constructors, before further submissions, after preparation and between drains.
+It then aborts output, interrupts active source IO and joins through the same
+bounded cleanup path. Existing constructor/native calls and backend drains remain
+cooperative; stop is not guaranteed to interrupt those calls immediately.
+
+`play()` raises the helper output dependency's `PlaybackStopped` (a `ValueError`)
+and records `status='cancelled'`, `stop_requested=True`, no successful prefix hash.
+A previously set flag prevents acquisition and backend construction, while still
+releasing the session's claimed unstarted capture on its source worker. An
+unrelated failure that is already being propagated retains its original exception.
+A cleanup timeout still leaves the pull/session owned for explicit later rejoin;
+requesting stop does not mean cleanup has completed. Calls after play has completed
+do not rewrite its receipt or reopen it. Requests observed during final cleanup
+or verdict verification prevent successful prefix publication.
+
+This remains the same finite opt-in profile, not sustained playback or automatic
+reconnect. Synchronous capture/recorded defaults, payloads, timing and limits are
+unchanged. The lower-level `play_prepared` also accepts `stop=threading.Event()`
+only with explicit `pending_input=True`; invalid stop contracts leave the source
+unclaimed. The flag is caller-owned and never set or cleared by output cleanup.

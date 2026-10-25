@@ -340,3 +340,17 @@ def test_abort_accounts_for_ready_but_unaccepted_borrow_before_returning_credit(
         assets.close()
     assert pull.result()['abandoned'] == 1 and not assets.reservation
     assert not assets.source_end and source.closed
+
+
+@pytest.mark.parametrize('stop,pending', [(True, True), (lambda: True, True), (threading.Event(), False)])
+def test_invalid_stop_contract_leaves_source_unclaimed(stop, pending):
+    source = GatedSource(BASE['events'](1))
+    source.resume.set()
+    pull = M['PULL']['PreparedPull'](source, interrupt=source.interrupt)
+    try:
+        with pytest.raises(ValueError, match='stop requires'):
+            M['play_prepared'](pull, SimpleNamespace(deadline=1), {}, pending_input=pending, stop=stop)
+        assert pull.result()['requested'] == 0 and not pull.result()['consumer_closed']
+        assert not source.closed
+    finally:
+        pull.close(1)

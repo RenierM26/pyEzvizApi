@@ -4,7 +4,7 @@ import copy
 import os
 from pathlib import Path
 import runpy
-from threading import Event, get_ident
+from threading import Event, Thread, get_ident
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -518,3 +518,188 @@ def test_pending_real_capture_owner_quiesces_transport_after_interrupt(rig, monk
     finally:
         release.set()
         capture.close(2)
+
+
+def test_stop_before_play_is_idempotent_without_acquisition(rig):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report)
+    capture.request_stop()
+    capture.request_stop()
+    with pytest.raises(OUT['PlaybackStopped']):
+        capture.play()
+    assert owner.closed and not owner.started and not rig[3]
+    assert report['status'] == 'cancelled' and report['stop_requested']
+    assert not report['output']['output_devices_opened']
+    assert report['source_pull']['iterator_closed'] and not report['source_pull']['worker_alive']
+    assert report['accepted_prefix_clear_sha256'] is None
+
+
+def test_external_stop_interrupts_stalled_prefill_on_playback_owner(rig):
+    entered, release = Event(), Event()
+    owner, _ = play(rig, {})
+    close_threads, request_threads = [], []
+    original_close = owner.close
+    def close():
+        close_threads.append(get_ident())
+        original_close()
+        release.set()
+    owner.close = close
+    original_packets = owner.iter_media_packets
+    def packets(**kwargs):
+        entered.set()
+        if not release.wait(3):
+            raise TimeoutError('test transport not interrupted')
+        yield from original_packets(**kwargs)
+    owner.iter_media_packets = packets
+    report: dict[str, Any] = {}
+    capture = M['CapturePlayback'](owner, 'key', arguments(), report,
+        limits=CaptureLimits(max_packets=len(owner.bodies), max_bytes=16777216, duration_seconds=60),
+        codec='hevc', completion='bounded-prefix')
+    def request():
+        if entered.wait(2):
+            request_threads.append(get_ident())
+            capture.request_stop()
+    requester = Thread(target=request)
+    requester.start()
+    try:
+        with pytest.raises(OUT['PlaybackStopped']):
+            capture.play()
+    finally:
+        release.set()
+        requester.join(2)
+        capture.close(2)
+    assert request_threads and not requester.is_alive()
+    assert close_threads[0] == get_ident() and close_threads[-1] == capture.pull.worker.ident
+    assert request_threads[0] not in close_threads
+    assert report['source_pull']['interrupt_called'] and report['source_pull']['iterator_closed']
+    assert not report['source_pull']['worker_alive'] and report['status'] == 'cancelled'
+    assert not report['output']['lookahead']['owned_ids']
+    assert not report['output']['lookahead']['input_reservation']
+    assert report['accepted_prefix_clear_sha256'] is None
+
+
+def test_stop_during_video_constructor_skips_audio_and_aborts_owned_video(rig, monkeypatch):
+    report: dict[str, Any] = {}
+    _owner, capture = session(rig, report)
+    def video(*_args, **_kwargs):
+        capture.request_stop()
+        return rig[1]
+    def audio(**_kwargs):
+        pytest.fail('audio must not open after stop')
+    monkeypatch.setitem(OUT['CHANNEL'], 'Output', video)
+    monkeypatch.setitem(OUT['PLAY']['PCM'], 'Ffplay', audio)
+    with pytest.raises(OUT['PlaybackStopped']):
+        capture.play()
+    assert rig[1].aborted and report['status'] == 'cancelled'
+    assert not report['source_pull']['worker_alive']
+    assert not report['output']['lookahead']['owned_ids']
+
+
+@pytest.mark.parametrize('stage', ['present', 'audio-drain', 'video-drain'])
+def test_stop_during_output_prevents_success_and_releases_every_lease(rig, stage):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report)
+    backend, method = (rig[1], 'present') if stage == 'present' else (rig[2] if stage == 'audio-drain' else rig[1], 'finish')
+    original = getattr(backend, method)
+    def stop(*args):
+        value = original(*args)
+        capture.request_stop()
+        return value
+    setattr(backend, method, stop)
+    with pytest.raises(OUT['PlaybackStopped']):
+        capture.play()
+    assert owner.closed and report['status'] == 'cancelled' and report['stop_requested']
+    assert report['accepted_prefix_clear_sha256'] is None
+    assert not report['source_pull']['worker_alive']
+    assert not report['output']['lookahead']['owned_ids']
+    assert not report['output']['scheduler']['outputs_finished']
+    if stage == 'present':
+        assert report['output']['scheduler']['submitted']['audio_block'] == 0
+    if stage == 'audio-drain':
+        assert not rig[1].finished
+
+
+def test_stop_after_success_does_not_mutate_completed_receipt(rig):
+    report: dict[str, Any] = {}
+    _owner, capture = session(rig, report)
+    capture.play()
+    before = copy.deepcopy(report)
+    capture.request_stop()
+    assert report == before and report['status'] == 'prefix-output-completed'
+
+
+def test_stop_does_not_replace_primary_source_failure(rig, monkeypatch):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report)
+    primary = BrokenPipeError('primary source failure')
+    def fail(*_args, **_kwargs):
+        capture.request_stop()
+        raise primary
+    monkeypatch.setitem(OUT, 'play_prepared', fail)
+    with pytest.raises(BrokenPipeError) as caught:
+        capture.play()
+    assert caught.value is primary and owner.closed
+    assert report['status'] == 'failed' and report['error_type'] == 'BrokenPipeError'
+    assert report['accepted_prefix_clear_sha256'] is None and report['stop_requested']
+
+
+def test_stop_with_ineffective_interrupt_retains_live_owner_for_rejoin(rig):
+    entered, release = Event(), Event()
+    owner, _ = play(rig, {})
+    owner.close = lambda: None
+    report: dict[str, Any] = {}
+    capture = M['CapturePlayback'](owner, 'key', arguments(deadline=.1), report,
+        limits=CaptureLimits(max_packets=len(owner.bodies), max_bytes=16777216, duration_seconds=60),
+        codec='hevc', completion='bounded-prefix')
+    source = capture.pull.iterator
+    original = source.events
+    def stall():
+        entered.set()
+        if not release.wait(3):
+            raise TimeoutError('test source not released')
+        yield from original
+    source.events = stall()
+    def request():
+        if entered.wait(2):
+            capture.request_stop()
+    requester = Thread(target=request)
+    requester.start()
+    try:
+        with pytest.raises(OUT['PlaybackStopped']):
+            capture.play()
+        assert report['status'] == 'cancelled' and report['source_pull']['worker_alive']
+        assert capture.pull.iterator is source and not owner.closed
+        assert report['output']['cleanup_errors'] and report['output']['lookahead']['input_reservation']
+        assert report['accepted_prefix_clear_sha256'] is None
+    finally:
+        release.set()
+        requester.join(2)
+        capture.close(2)
+    assert not report['source_pull']['worker_alive'] and report['status'] == 'cancelled'
+
+
+@pytest.mark.parametrize('stage', ['cleanup', 'verification'])
+def test_late_stop_cannot_upgrade_to_completed_prefix(rig, monkeypatch, stage):
+    report: dict[str, Any] = {}
+    _owner, capture = session(rig, report)
+    if stage == 'cleanup':
+        original = rig[1].abort
+        def abort():
+            original()
+            capture.request_stop()
+        rig[1].abort = abort
+    else:
+        namespace = capture.play.__globals__
+        verify = namespace['verify_output']
+        def checked(*args):
+            verify(*args)
+            capture.request_stop()
+        monkeypatch.setitem(namespace, 'verify_output', checked)
+    with pytest.raises(OUT['PlaybackStopped']):
+        capture.play()
+    assert report['status'] == 'cancelled' and report['stop_requested']
+    assert report['accepted_prefix_clear_sha256'] is None
+    assert not report['source_pull']['worker_alive']
+    assert report['output']['scheduler']['outputs_finished']
+    if stage == 'cleanup':
+        assert report['output']['stop_requested']

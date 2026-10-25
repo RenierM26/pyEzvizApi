@@ -13,6 +13,7 @@ from pathlib import Path
 import runpy
 import signal
 import sys
+from threading import Event
 import time
 from typing import Any
 
@@ -22,6 +23,15 @@ PLAY = B['PLAY']
 CHANNEL = B['CHANNEL']
 PULL = runpy.run_path(str(Path(__file__).with_name('local_av_pull.py')))
 HASH_SCRATCH_BYTES = 65536
+
+
+class PlaybackStopped(ValueError):
+    """Caller requested cooperative stop; this is not successful source EOF."""
+
+
+def check_stop(stop: Event | None) -> None:
+    if stop is not None and stop.is_set():
+        raise PlaybackStopped('online playback stop requested')
 
 
 def pair_digest(left: bytes, right: bytes, width: int, height: int) -> str:
@@ -68,13 +78,15 @@ def validate_pending_source(source: Any, timeout: float) -> None:
 class Assets:
     """Credit includes preparing, queued and in-flight leases until ack/abort."""
 
-    def __init__(self, iterator: Any, *, pending_input: bool = False, join_timeout: float = 5) -> None:
+    def __init__(self, iterator: Any, *, pending_input: bool = False, join_timeout: float = 5,
+                 stop: Event | None = None) -> None:
         # Opt-in callers retain the supplied pull owner, including after a failed
         # join. Never wrap/close its executing iterator on the consumer thread.
         if pending_input:
             validate_pending_source(iterator, join_timeout)
         self.pull: Any = iterator if pending_input else None
         self.iterator: Any = None if pending_input else iter(iterator)
+        self.stop = stop
         self.join_timeout = join_timeout
         self.reservation: dict[str, int] = {}
         self.pull_started_ns: int | None = None
@@ -234,9 +246,11 @@ class Assets:
     def prefill(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while not all(self.queues.values()):
+            check_stop(self.stop)
             # Legacy synchronous startup can inspect the other head at a full
             # first track. Pending unknown input must reserve both possibilities.
             progressed = self.pump(startup=True)
+            check_stop(self.stop)
             if self.source_end:
                 raise ValueError('source ended before both output heads')
             if not progressed:
@@ -245,7 +259,11 @@ class Assets:
                 time.sleep(PLAY['POLL'])
             if time.monotonic() > deadline:
                 raise ValueError('online output prefill deadline exceeded')
-        while self.pump():
+        while True:
+            check_stop(self.stop)
+            if not self.pump():
+                break
+            check_stop(self.stop)
             if time.monotonic() > deadline:
                 raise ValueError('online output prefill deadline exceeded')
 
@@ -327,6 +345,7 @@ class Scheduler(Parent):
 
     def dispatch(self, assets: Assets, backends: dict[str, Any], executor: Any) -> None:
         for kind in assets.queues:
+            check_stop(assets.stop)
             event = assets.head(kind)
             if event is None:
                 continue
@@ -336,6 +355,7 @@ class Scheduler(Parent):
                 continue
             data = assets.load(event)
             self.check_late(target)
+            check_stop(assets.stop)
             action = dict(kind='output_call_submitted', track=kind, id=PLAY['identity'](event),
                 source_at=event['at'], target_monotonic_ns=target, bytes=len(data))
             self.actions.append(action)
@@ -349,6 +369,7 @@ class Scheduler(Parent):
         backends = dict(video_pair=video, audio_block=audio)
         end = self.anchor + int((PLAY['MAX_SPAN'] + self.timeout) * 1e9)
         while not assets.source_end or assets.pending or self.jobs or any(assets.queues.values()):
+            check_stop(assets.stop)
             self.harvest()
             if self.cancel.is_set() or self.clock() > end:
                 raise ValueError('online output cancelled or session deadline exceeded')
@@ -356,6 +377,7 @@ class Scheduler(Parent):
                 backend.alive()
             self.dispatch(assets, backends, executor)
             prepared = assets.pump()
+            check_stop(assets.stop)
             self.harvest()
             self.dispatch(assets, backends, executor)
             if assets.source_end and not assets.pending and not any(assets.queues.values()) and self.latest is not None:
@@ -364,8 +386,11 @@ class Scheduler(Parent):
                 self.pause(PLAY['POLL'])
         if self.clock() > end:
             raise ValueError('online output session deadline exceeded')
+        check_stop(assets.stop)
         audio.finish(self.timeout)
+        check_stop(assets.stop)
         video.finish(self.timeout)
+        check_stop(assets.stop)
         self.finished = True
 
     def result(self) -> dict[str, Any]:
@@ -418,28 +443,33 @@ def validate_output(args: Any) -> None:
 
 
 def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,
-                  pending_input: bool = False) -> None:
+                  pending_input: bool = False, stop: Event | None = None) -> None:
     """Own prepared input/output; opt-in events is a caller-retained pristine pull.
 
     The caller validates transport first. With pending_input, it must retain the
     pull owner and rejoin after a cleanup timeout, never close its nested source.
     """
+    if stop is not None and (not pending_input or not isinstance(stop, Event)):
+        raise ValueError('stop requires an Event and opt-in pending input')
     if pending_input:
         validate_pending_source(events, args.deadline)  # Invalid owners remain unclaimed.
     assets = scheduler = executor = video = audio = None
     primary = False
     receipt.update(output_devices_opened=False, backend_initialization_started=False)
     try:
-        assets = Assets(events, pending_input=True, join_timeout=args.deadline) if pending_input else Assets(events)
+        check_stop(stop)
+        assets = Assets(events, pending_input=True, join_timeout=args.deadline, stop=stop) if pending_input else Assets(events)
         assets.prefill(args.deadline)
         assert assets.geometry is not None
-        width, height = assets.geometry
+        check_stop(stop)
         receipt['backend_initialization_started'] = True
         options = {} if title is None else {'title': title}
-        video = CHANNEL['Output'](width * 2, height, args.deadline, PLAY['MAX_PAIRS'], **options)
+        video = CHANNEL['Output'](assets.geometry[0] * 2, assets.geometry[1], args.deadline, PLAY['MAX_PAIRS'], **options)
         receipt.update(video_driver=video.driver, output_devices_opened=True)
+        check_stop(stop)
         audio = PLAY['PCM']['Ffplay'](channel_args=('-ch_layout', 'mono') if args.mono_option == 'ch-layout'
             else ('-channels', '1'), immediate_raw_probe=True)
+        check_stop(stop)
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='online-av-output')
         assets.start_preparation()
         scheduler = Scheduler(assets, args.deadline, args.max_late_ms)
@@ -449,20 +479,23 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         raise
     finally:
         try:
-            cleanup(assets, scheduler, executor, (video, audio), receipt, primary)
+            try:
+                cleanup(assets, scheduler, executor, (video, audio), receipt, primary)
+            finally:
+                if assets is None:
+                    try:
+                        if pending_input:
+                            events.close(args.deadline)
+                        else:
+                            close = getattr(events, 'close', None)
+                            if close is not None:
+                                close()
+                    except Exception as error:
+                        receipt.setdefault('cleanup_errors', []).append(str(error))
+                        if not primary:
+                            raise
         finally:
-            if assets is None:
-                try:
-                    if pending_input:
-                        events.close(args.deadline)
-                    else:
-                        close = getattr(events, 'close', None)
-                        if close is not None:
-                            close()
-                except Exception as error:
-                    receipt.setdefault('cleanup_errors', []).append(str(error))
-                    if not primary:
-                        raise
+            receipt['stop_requested'] = stop is not None and stop.is_set()
 
 
 def playback(args: Any, receipt: dict[str, Any]) -> None:

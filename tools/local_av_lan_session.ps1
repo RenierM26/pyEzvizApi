@@ -11,7 +11,7 @@ param(
     [string]$WslPrivateConfig,
     [string]$WslResults,
     [string]$ExpectedPackageSha256,
-    [ValidateSet('prefix-30s', 'two-minute')][string]$CaptureProfile = 'prefix-30s',
+    [ValidateSet('prefix-30s', 'two-minute', 'two-minute-gaps')][string]$CaptureProfile = 'prefix-30s',
     [ValidateSet('strict', 'common-keyframe')][string]$StartupPairing = 'strict',
     [ValidateSet('reject', 'bounded-serial-pcm')][string]$AudioOverlapPolicy = 'reject',
     [object]$MaxAudioOverlapMs,
@@ -60,7 +60,7 @@ function Get-LanWslArguments {
         '--audio-overlap-policy', $audio, '--play')
     if ($Options.ContainsKey('CaptureProfile')) {
         if (($Options.CaptureProfile -isnot [string]) -or
-            ($Options.CaptureProfile.ToLowerInvariant() -cnotin @('prefix-30s', 'two-minute'))) {
+            ($Options.CaptureProfile.ToLowerInvariant() -cnotin @('prefix-30s', 'two-minute', 'two-minute-gaps'))) {
             throw 'Unsupported finite capture profile.'
         }
         if ($Options.CaptureProfile.ToLowerInvariant() -cne 'prefix-30s') {
@@ -115,7 +115,7 @@ Usage: .\tools\local_av_lan_session.ps1 -Distribution Ubuntu `
   -WslPrivateConfig /private/camera.json -WslResults /private/new-session `
   -ExpectedPackageSha256 APPROVED_SOURCE_SHA256 -Play
 
-Optional: -CaptureProfile prefix-30s|two-minute
+Optional: -CaptureProfile prefix-30s|two-minute|two-minute-gaps
           -StartupPairing common-keyframe -AudioOverlapPolicy bounded-serial-pcm
           -MaxAudioOverlapMs 1 -MaxAudioPhaseMs 1
 Requires an existing configured WSL runtime/checkout. All paths are WSL paths.

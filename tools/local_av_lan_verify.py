@@ -28,6 +28,7 @@ LAN = runpy.run_path(str(BASE / "local_av_lan_playback.py"))
 EVIDENCE = LAN["EVIDENCE"]
 ONLINE = LAN["CAPTURE"]["PREPARE"]["ONLINE"]
 DECRYPT = LAN["CAPTURE"]["PREPARE"]["CAPTURE"]["DECRYPT"]
+GAP_VERIFY = runpy.run_path(str(Path(__file__).with_name('local_av_lan_gap_verify.py')))
 TRACKS = ("video_pair", "audio_block")
 WORKER_SECONDS = 70
 MAX_RESULT = 65536
@@ -173,7 +174,7 @@ def receipt_binding(
     startup = pb["requested_options"]["startup_pairing"]
     require(
         startup in ("strict", "common-keyframe")
-        and pb["requested_options"] == dict(budget['options'], startup_pairing=startup)
+        and GAP_VERIFY['canonical'](pb["requested_options"]) == GAP_VERIFY['canonical'](dict(budget['options'], startup_pairing=startup))
         and pb.get("capture_limits") == budget['limits'],
         "unsupported receipt profile",
     )
@@ -226,6 +227,9 @@ def receipt_binding(
         == crypto["complete_clear_sha256"],
         "nested source evidence mismatch",
     )
+    gap_limits = budget['options'].get('gap_limits')
+    require(GAP_VERIFY['canonical'](prepared.get('audio_gap_limits')) == GAP_VERIFY['canonical'](gap_limits),
+        'explicit gap profile binding failed')
     LAN["CAPTURE"]["verify_output"](prepared, pb["output"])
     return pb
 
@@ -258,6 +262,9 @@ def compare_events(
     pb: dict[str, Any], events: Any, decode: dict[str, Any], policy: dict[str, Any]
 ) -> dict[str, Any]:
     scheduler = pb["output"]["scheduler"]
+    budget = LAN['PROFILES']['get'](pb.get('capture_profile', LAN['PROFILES']['DEFAULT']))
+    gaps = None if 'gap_limits' not in budget['options'] else GAP_VERIFY['GapChain'](
+        scheduler['host_anchor_monotonic_ns'], pb['preparation']['online']['policy']['origin'])
     try:
         chain = SourceChain(scheduler["host_anchor_monotonic_ns"], capture_profile=pb.get('capture_profile', LAN['PROFILES']['DEFAULT']))
         pending = tails(scheduler)
@@ -265,6 +272,8 @@ def compare_events(
             track = event["kind"]
             identity = event["id"] if track == "video_pair" else event["block"]["id"]
             size, digest = fingerprint(event, payload)
+            if track == 'audio_block' and gaps is not None:
+                gaps.offer(event, payload)
             row = chain.add(track, identity, event["at"], size, digest)
             if identity in pending:
                 a, ack = pending.pop(identity)
@@ -293,6 +302,8 @@ def compare_events(
         and chain.count == scheduler["completed"],
         "full media/target chain mismatch",
     )
+    if gaps is not None:
+        gaps.verify(pb['output']['gap_audio'])
     original = pb["preparation"]["decode"]
     require(
         decode["track_selection"] == original["track_selection"],
@@ -331,13 +342,20 @@ def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
     policy: dict[str, Any] = {}
     selection: dict[str, Any] = {}
     contract = pb["preparation"]["online"]["policy"]["audio_clock_contract"]
+    gap_limits = budget['options'].get('gap_limits')
+    require(GAP_VERIFY['canonical'](pb['preparation'].get('audio_gap_limits')) == GAP_VERIFY['canonical'](gap_limits),
+        'explicit gap profile binding failed')
+    audio_policy = (dict(policy='bounded-serial-pcm', overlap_ms=1, phase_ms=1, gap_limits=gap_limits)
+        if gap_limits is not None else dict(policy=contract['policy'], overlap_ms=contract['max_overlap_ms'],
+            phase_ms=contract['max_nominal_phase_ms']))
     # Validate declared audio policy before any native decode work.
     ONLINE["Policy"](
         (0, 1),
         2,
-        contract["policy"],
-        contract["max_overlap_ms"],
-        contract["max_nominal_phase_ms"],
+        audio_policy['policy'],
+        audio_policy['overlap_ms'],
+        audio_policy['phase_ms'],
+        **({} if gap_limits is None else dict(gap_limits=gap_limits)),
         identity_mode="source-sequence",
         pair_limit=budget['options']['pair_limit'],
         span_limit=budget['options'].get('span_limit', 60),
@@ -369,9 +387,7 @@ def reconstruct(pb: dict[str, Any], raw: bytes, key: str) -> dict[str, Any]:
         2,
         policy,
         selection=selection,
-        policy=contract["policy"],
-        overlap_ms=contract["max_overlap_ms"],
-        phase_ms=contract["max_nominal_phase_ms"],
+        **audio_policy,
         identity_mode="source-sequence",
         pair_limit=budget['options']['pair_limit'],
         span_limit=budget['options'].get('span_limit', 60),
@@ -419,6 +435,7 @@ def verify(args: Any) -> dict[str, Any]:
         output_devices_opened=False,
         physical_av_sync_measured=False,
         network_eof_established=False,
+        **({} if 'gap_limits' not in budget['options'] else dict(gap_media_verified=True)),
     )
 
 
@@ -434,7 +451,9 @@ def worker_result(report: Any, *, capture_profile: str = 'prefix-30s') -> dict[s
     )
     require(
         type(report) is dict
-        and set(report) == {"status", "media_receipt", *hashes, *flags}
+        and set(report) == {"status", "media_receipt", *hashes, *flags,
+            *(['gap_media_verified'] if 'gap_limits' in budget['options'] else [])}
+        and ('gap_limits' not in budget['options'] or report.get('gap_media_verified') is True)
         and report["status"] == "source-media-verified"
         and all(report[k] is False for k in flags),
         "invalid worker result",

@@ -82,16 +82,17 @@ def calls(log):
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-def test_explicit_long_profile_is_forwarded_to_capture_and_verification(rig):
+@pytest.mark.parametrize('profile', ['two-minute', 'two-minute-gaps'])
+def test_explicit_long_profile_is_forwarded_to_capture_and_verification(rig, profile):
     command, env, _results, _config, log, _ready, _stopped = rig
-    p = subprocess.run([*command, '--capture-profile', 'two-minute'], input='\n', text=True,
+    p = subprocess.run([*command, '--capture-profile', profile], input='\n', text=True,
         capture_output=True, env=env, timeout=5, check=False)
     assert p.returncode == 0, p.stderr
     invocations = calls(log)
     assert len(invocations) == 2
     for invocation in invocations:
         args = invocation['args']
-        assert args[args.index('--capture-profile') + 1] == 'two-minute'
+        assert args[args.index('--capture-profile') + 1] == profile
 
 
 def test_unknown_profile_is_rejected_before_any_step_or_results_creation(rig):

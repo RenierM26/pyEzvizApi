@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Explicit attended `two-minute-gaps` LAN profile with fixed single/cumulative padding bounds, shared A/V credits, distinct evidence binding and isolated full source/padding verification; existing default and strict two-minute profiles are unchanged.
+
 - Explicit development pending-capture API audio-gap integration with earlier padding targets, unchanged original media targets, shared bounded lookahead credits and separate verified padding receipts; attended launcher defaults remain strict.
 
 - Development-only scheduled audio-gap output adapter with separate padding/source targets, byte acknowledgements and retained cancellation ownership; not enabled by default in live A/V playback.

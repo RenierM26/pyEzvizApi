@@ -23,17 +23,25 @@ PLAY = BOUNDED['PLAY']
 TIMELINE = PLAY['TIMELINE']
 
 
+def validate_span_limit(limit: int, identity_mode: str) -> None:
+    if (type(limit) is not int or not 1 <= limit <= 120
+            or (limit != PLAY['MAX_SPAN'] and identity_mode != 'source-sequence')):
+        raise ValueError('expanded source span requires bounded source-sequence identity mode')
+
+
 class Policy:
     """Bound startup payload ownership and session metadata; never change media."""
 
     def __init__(self, streams: tuple[int, int], audio_stream: int, policy: str,
-                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history', pair_limit: int = 300) -> None:
+                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60) -> None:
         if (len(streams) != 2 or len(set((*streams, audio_stream))) != 3
                 or any(type(i) is not int or i < 0 for i in (*streams, audio_stream))):
             raise ValueError('requires three distinct absolute stream indices')
         if type(identity_mode) is not str or identity_mode not in ('full-history', 'source-sequence'):
             raise ValueError('unknown online identity mode')
         BOUNDED['CHANNEL']['validate_pair_limit'](pair_limit, identity_mode)
+        validate_span_limit(span_limit, identity_mode)
+        self.span_limit = span_limit
         self.pair_limit = pair_limit
         self.identity_mode = identity_mode
         self.accepted = dict(video_pair=0, audio_block=0)
@@ -128,8 +136,8 @@ class Policy:
         mapped = []
         for event, payload, size in self.queue:
             at = PLAY['fraction'](event['source_time']) - self.origin
-            if not 0 <= at <= PLAY['MAX_SPAN']:
-                raise ValueError('online source span exceeds fixed-origin 60 seconds')
+            if not 0 <= at <= self.span_limit:
+                raise ValueError(f'online source span exceeds fixed-origin {self.span_limit} seconds')
             row = dict(event)
             del row['source_time']
             row['at'] = TIMELINE['rational'](at)
@@ -152,7 +160,8 @@ class Policy:
             profile='strict-source-sequence-v1', accepted=dict(self.accepted),
             retained_id_count=0, audio_stream_index=self.audio_stream))
         budget = {} if self.pair_limit == PLAY['MAX_PAIRS'] else dict(pair_limit=self.pair_limit)
-        return dict(**identity, **budget, origin=None if self.origin is None else TIMELINE['rational'](self.origin),
+        span = {} if self.span_limit == PLAY['MAX_SPAN'] else dict(source_span_limit_seconds=self.span_limit)
+        return dict(**identity, **budget, **span, origin=None if self.origin is None else TIMELINE['rational'](self.origin),
             first_source_times={k: TIMELINE['rational'](v) for k, v in self.first.items()},
             geometry=self.geometry, owned_counts=dict(self.counts), owned_bytes=dict(self.bytes),
             peak_owned_bytes=dict(self.peak), validated_events=self.validated,
@@ -168,14 +177,14 @@ def selected_policy(state: Policy, selection: dict[str, Any] | None, report: dic
         if selection.get('mode') != 'explicit-mpeg-pes-ids':
             raise ValueError('PES selection must resolve before the first event')
         state = Policy(tuple(selection['video_indices']), selection['audio_index'], policy, overlap_ms, phase_ms,
-            identity_mode=state.identity_mode, pair_limit=state.pair_limit)
+            identity_mode=state.identity_mode, pair_limit=state.pair_limit, span_limit=state.span_limit)
         report['track_selection'] = copy.deepcopy(selection)
     return state
 
 
-def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report: dict[str, Any], *,
+def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report: dict[str, Any], *,  # noqa: PLR0913
                 policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None,
-                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history', pair_limit: int = 300) -> Any:
+                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60) -> Any:
     """Own input iterator; hold credit through each yield, not an output acknowledgement."""
     state = iterator = None
     primary = False
@@ -185,7 +194,7 @@ def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report
         output_devices_opened=False, whole_source_preflight=False, physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
-        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
+        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, span_limit=span_limit)
         iterator = iter(events)
         for event, payload in iterator:
             state = selected_policy(state, selection, report, policy, overlap_ms, phase_ms)

@@ -29,6 +29,10 @@ audio and optional native dependencies are required. This entrypoint installs
 nothing, configures no display/firewall, fetches no credentials and is not a
 standalone Windows bundle. Run `--help` for its finite option list.
 
+This remains a 30-second live profile. The separate
+[two-minute recorded playback control](local-av-sustained-playback.md) exercises
+longer source scheduling without changing these live limits or acquiring media.
+
 The results directory must be new; it is created with mode 0700. The workflow
 runs the existing attended command, preserving its offline checks and **one Enter
 prompt before acquisition**. After successful capture it runs the existing

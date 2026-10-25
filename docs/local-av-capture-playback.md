@@ -465,3 +465,11 @@ through pending input and terminal output validation. It is opt-in; the default
 remains strict. Invalid mode values leave acquisition unclaimed. No launcher,
 account API, retry, quota, source/output deadline or default is changed. Review
 the explicit excluded lead-in audit, not just output completion counts.
+
+## Reusable attended direct-LAN command
+
+For a private local credential file, offline runtime checks and an Enter-gated
+fixed 30-second development attempt, see
+[the attended LAN command](local-av-lan-playback.md). It reuses the pending capture
+adapter without adding production dependencies, account discovery, cloud fallback
+or a new default startup/audio policy.

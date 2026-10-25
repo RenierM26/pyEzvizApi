@@ -880,6 +880,14 @@ real cameras, cloud calls, or live network access. Prefer small fixtures and fak
 request builders, status parsing, MQTT payload handling, and Home Assistant integration
 contracts.
 
+## Attended local playback (development)
+
+The [direct-LAN playback command](docs/local-av-lan-playback.md) runs one explicit
+bounded dual-lens HEVC/AAC attempt after offline checks and an Enter prompt. It
+uses an existing private local credential file, without account login or cloud
+fallback. Optional Linux/WSL playback dependencies are required; this is not an
+installed production player or an unbounded stream.
+
 ## Side Notes
 
 There is no official API documentation. Much of this is inferred from Ezviz mobile app behavior (Android/iOS). Some regions operate on separate endpoints; US example: `apiius.ezvizlife.com`.

@@ -213,3 +213,165 @@ def test_cleanup_only_failure_raises_inside_unrelated_caller_except():
         with pytest.raises(RuntimeError, match='cleanup failed'):
             list(adapt(source, report))
     assert report['status'] == 'failed' and report['cleanup_errors']
+
+
+def sequence_audio(index=0, pts=1000, gap=None, stream=2):
+    event, payload = audio(index, pts, gap)
+    event['block'].update(id=f'aac:{stream}:{index}', stream_index=stream)
+    return event, payload
+
+
+def test_sequence_mode_keeps_two_counters_not_identity_history_at_session_limit():
+    state = M['Policy']((0, 1), 2, 'reject', None, None, identity_mode='source-sequence')
+    def accept(pair):
+        state.offer(*pair)
+        if state.ready():
+            state.map_pending()
+            while state.queue:
+                state.yielded += 1
+                state.release()
+        assert state.ids is None
+        assert len(state.accepted) == 2
+    accept(video())
+    accept(sequence_audio())
+    for index in range(1, P['MAX_PAIRS']):
+        accept(sequence_audio(index, 1000 + index * 64, 0))
+        accept(video(index, 1000 + index * 66))
+    result = state.result()
+    assert result['identity_audit'] == dict(profile='strict-source-sequence-v1',
+        accepted=dict(video_pair=300, audio_block=300), retained_id_count=0, audio_stream_index=2)
+    assert not state.queue and len(json.dumps(result)) < 3000
+    assert result['validated_events'] == result['released_prepared_events'] == 600
+    with pytest.raises(ValueError, match='excessive'):
+        state.offer(*video(300, 20800))
+    assert state.result() == result  # Rejection does not advance identity/accounting.
+
+
+@pytest.mark.parametrize('kind', ['video_pair', 'audio_block'])
+@pytest.mark.parametrize('name', ['', 'arbitrary', 'local-pair:0', 'local-pair:01', 'local-pair:+1',
+    'local-pair:2', 'aac:2:1', 'aac:1:0', 'aac:2:00', 'aac:2:-1', 'aac:2:\u0660', 'x' * 10000])
+def test_sequence_rejects_noncanonical_skipped_and_wrong_stream_names_before_reserving(kind, name):
+    state = M['Policy']((0, 1), 2, 'reject', None, None, identity_mode='source-sequence')
+    event, payload = video() if kind == 'video_pair' else sequence_audio()
+    if kind == 'video_pair':
+        event['id'] = name
+    else:
+        event['block']['id'] = name
+    before = state.result()
+    with pytest.raises(ValueError, match=r'identity|identities'):
+        state.offer(event, payload)
+    assert state.result() == before and not state.queue and state.ids is None
+
+
+@pytest.mark.parametrize('kind', ['video_pair', 'audio_block'])
+def test_sequence_reuse_after_release_and_later_pts_still_fails(kind):
+    state = M['Policy']((0, 1), 2, 'reject', None, None, identity_mode='source-sequence')
+    for event in (video(), sequence_audio()):
+        state.offer(*event)
+    state.map_pending()
+    while state.queue:
+        state.release()
+    event, payload = video(1, 1066) if kind == 'video_pair' else sequence_audio(1, 1064, 0)
+    if kind == 'video_pair':
+        event['id'] = 'local-pair:1'
+    else:
+        event['block']['id'] = 'aac:2:0'
+    before = state.result()
+    with pytest.raises(ValueError, match='canonical source sequence'):
+        state.offer(event, payload)
+    assert state.result() == before
+
+
+def test_sequence_legacy_metadata_and_policy_are_identical_for_canonical_source():
+    events = [sequence_audio(), video(0, 1100), video(1, 1166), sequence_audio(1, 1064, 0)]
+    legacy: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+    expected = list(adapt(Source(events), legacy))
+    assert list(adapt(Source(events), report, identity_mode='source-sequence')) == expected
+    assert report['profile'] == 'standalone-online-sequence-av-policy-v1'
+    audit = report['policy'].pop('identity_audit')
+    report['policy_before_cleanup'].pop('identity_audit')
+    report['profile'] = legacy['profile']
+    assert report == legacy and audit['accepted'] == dict(video_pair=2, audio_block=2)
+
+
+@pytest.mark.parametrize('mode', [None, False, 1, [], 'window', ''])
+def test_unknown_identity_mode_does_not_claim_input(mode):
+    source = Source([video(), sequence_audio()])
+    with pytest.raises(ValueError, match='identity mode'):
+        list(adapt(source, {}, identity_mode=mode))
+    assert source.pulls == 0 and not source.closed
+
+
+def test_sequence_selection_uses_resolved_audio_index_not_requested_placeholder():
+    state = M['Policy']((0, 1), 2, 'reject', None, None, identity_mode='source-sequence')
+    selection = dict(mode='explicit-mpeg-pes-ids', video_indices=[0, 1], audio_index=7)
+    report: dict[str, Any] = {}
+    actual = M['selected_policy'](state, selection, report, 'reject', None, None)
+    actual.offer(*sequence_audio(stream=7))
+    assert actual.identity_mode == 'source-sequence' and actual.ids is None
+    assert actual.result()['identity_audit']['audio_stream_index'] == 7
+    with pytest.raises(ValueError, match='canonical source sequence'):
+        event, payload = sequence_audio(1, 1064, 0, stream=7)
+        event['block']['id'] = 'aac:2:1'
+        actual.offer(event, payload)
+
+
+@pytest.mark.parametrize('fault', ['hash', 'extent', 'pts', 'track'])
+def test_sequence_payload_validation_failure_does_not_consume_the_next_name(fault):
+    state = M['Policy']((0, 1), 2, 'reject', None, None, identity_mode='source-sequence')
+    bad = sequence_audio()
+    if fault == 'hash':
+        bad[0]['block']['pcm_sha256'] = '0' * 64
+    elif fault == 'extent':
+        bad = (bad[0], (bytes(1),))
+    elif fault == 'pts':
+        bad[0]['source_time'] = T['rational'](Fraction(2))
+    else:
+        bad[0]['block']['stream_index'] = 99
+    before = state.result()
+    with pytest.raises(ValueError):
+        state.offer(*bad)
+    assert state.result() == before
+    state.offer(*sequence_audio())
+    assert state.accepted == dict(video_pair=0, audio_block=1)
+
+
+def test_sequence_capacity_failure_keeps_next_id_available_without_reserving_extra_credit():
+    state = M['Policy']((0, 1), 2, 'reject', None, None, identity_mode='source-sequence')
+    slots = M['BOUNDED']['AUDIO_SLOTS']
+    for index in range(slots):
+        state.offer(*sequence_audio(index, 1000 + index * 64, None if index == 0 else 0))
+    before = state.result()
+    with pytest.raises(ValueError, match='capacity'):
+        state.offer(*sequence_audio(slots, 1000 + slots * 64, 0))
+    assert state.result() == before
+    state.offer(*video())
+    state.map_pending()
+    while state.queue:
+        state.release()
+    state.offer(*sequence_audio(slots, 1000 + slots * 64, 0))
+    assert state.accepted['audio_block'] == slots + 1
+
+
+def test_sequence_audio_work_limit_is_not_removed(monkeypatch):
+    monkeypatch.setitem(T['AUDIO'], 'MAX_BLOCKS', 2)
+    source = Source([video(), sequence_audio(), sequence_audio(1, 1064, 0), sequence_audio(2, 1128, 0)])
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='excessive'):
+        list(adapt(source, report, identity_mode='source-sequence'))
+    assert source.closed and report['status'] == 'failed'
+    assert report['policy']['identity_audit']['accepted'] == dict(video_pair=1, audio_block=2)
+
+
+def test_sequence_primary_error_survives_source_cleanup_failure():
+    bad = sequence_audio(1, 1064, 0)
+    bad[0]['block']['id'] = 'aac:2:0'
+    source = Source([video(), sequence_audio(), bad], close_error=True)
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='canonical source sequence'):
+        list(adapt(source, report, identity_mode='source-sequence'))
+    assert source.closed and report['status'] == 'failed'
+    assert report['cleanup_errors'] == ['source cleanup failed']
+    assert report['policy']['released_prepared_events'] == 2
+    assert report['policy']['owned_counts'] == dict(video_pair=0, audio_block=0)

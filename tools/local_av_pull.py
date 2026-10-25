@@ -84,7 +84,9 @@ class PreparedPull:
             return 'value', next(self.iterator)
         except StopIteration:
             return 'end', None
-        except BaseException as error:
+        # Cross-thread exception bridge: poll reraises this exact exception on
+        # the consumer after source finalization, including cancellation/exits.
+        except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
             return 'error', error
 
     def _run(self) -> None:
@@ -126,7 +128,9 @@ class PreparedPull:
             with self.condition:
                 self.iterator_closed = True
                 self.iterator = None
-        except BaseException as error:
+        # A worker finalizer must not vanish before publishing its failure.
+        # Failed close blocks clean EOF and is also reported by consumer close.
+        except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
             with self.condition:
                 self.close_error_type = type(error).__name__
 
@@ -142,7 +146,9 @@ class PreparedPull:
             try:
                 assert hook is not None
                 hook()
-            except BaseException as error:
+            # Keep joining even if the cancellation hook fails; close raises
+            # a cleanup failure rather than discarding this diagnostic.
+            except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
                 with self.condition:
                     self.interrupt_error_type = type(error).__name__
 

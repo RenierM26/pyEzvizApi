@@ -53,7 +53,7 @@ def ready(pull):
         if available:
             return value
         time.sleep(.001)
-    pytest.fail('fake pull did not complete')
+    raise AssertionError('fake pull did not complete')
 
 
 def test_no_implicit_pull_and_close_before_request_uses_only_owner_thread():

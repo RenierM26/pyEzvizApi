@@ -57,6 +57,63 @@ wrapper rejects unknown, duplicate, abbreviated and workflow-managed/internal
 options before starting; output paths are owned by the workflow. Individual
 commands remain available for separate capture or offline diagnosis.
 
+## Start from Windows PowerShell
+
+From a Windows checkout, the PowerShell bridge calls the same one-command
+workflow inside an **existing configured WSL distribution**:
+
+```powershell
+.\tools\local_av_lan_session.ps1 `
+  -Distribution Ubuntu `
+  -WslCheckout /path/to/checkout `
+  -WslPython /path/to/installed/runtime/bin/python3.12 `
+  -WslPrivateConfig /private/camera.json `
+  -WslResults /private/new-session `
+  -ExpectedPackageSha256 EXPECTED_SOURCE_SHA256 `
+  -StartupPairing common-keyframe `
+  -AudioOverlapPolicy bounded-serial-pcm `
+  -MaxAudioOverlapMs 1 -MaxAudioPhaseMs 1 `
+  -Play
+```
+
+All four path arguments are **absolute Linux paths inside the named WSL
+installation**, not Windows paths. The WSL checkout must already contain the
+complete tools, including `local_av_lan_session.sh`; this bridge does not copy
+the Windows checkout into WSL. The interpreter, installed package and display/audio
+configuration must already be usable there. Use the approved checkout fingerprint,
+not a digest inferred from an unknown installation.
+
+Requires Windows PowerShell 5.1 or PowerShell 7 and the standard Windows
+`System32\wsl.exe`. Distribution names use letters/digits, dot, underscore or
+hyphen. Paths may contain spaces, single quotes and literal shell punctuation;
+double quotes, backslashes and control characters are rejected before invocation
+to avoid legacy PowerShell native-argument corruption. Pass existing Linux paths
+using ordinary PowerShell quoting. No shell command string is evaluated.
+
+The bridge directly invokes `wsl.exe --distribution ... --exec bash ...`, without
+capturing/piping stdin or stdout, so the existing Enter prompt and console Ctrl-C
+path remain available. It propagates the native exit code, including failure or
+cancellation. Policy names accepted case-insensitively by PowerShell are
+normalized to the lowercase Linux spelling. Audio bounds must be integer values
+or canonical integer text within Int32 range; fractions, floating/decimal values,
+booleans and overflow are rejected before WSL starts, never rounded by parameter
+binding. Startup/audio defaults remain strict/reject; the example explicitly
+opts in to the bounded policies. `-Play` is required; `-Help` starts no WSL process.
+Add `-CheckArguments` to the same complete invocation (including `-Play`) to
+validate only these arguments without starting WSL. This is not runtime,
+configuration or display/audio readiness and does not claim capture success.
+
+Receipts/evidence remain in `-WslResults`; no Windows/NAS export is performed.
+No credentials are read by PowerShell, copied, renewed or deleted. No execution
+policy, WSL/network/display settings, runtime or package installation is changed.
+This is a bridge, not a standalone bundle or an additional acquisition attempt.
+Follow your existing script policy; do not disable it just to run this tool.
+
+Native Windows CI checks PowerShell 5/7 argument and exit forwarding with a
+synthetic executable, never WSL/camera acquisition. That is not validation of a
+particular host's WSL, GUI/audio routing, physical playback or console cancellation
+through its installed WSL version; those still depend on the configured host.
+
 ## Run
 
 Use the installed-package fingerprint approved for your checkout/runtime, as

@@ -12,6 +12,7 @@ on:
       - "pytest.ini"
       - "tests/**"
       - "tools/apk-re/**"
+      - "tools/local_av_lan_session.ps1"
       - "discovery/apk/**"
       - ".github/workflows/**"
       - "!**/*.md"
@@ -131,3 +132,33 @@ jobs:
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pip check
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pyezvizapi --help
           /tmp/pyezvizapi-wheel-smoke/bin/pyezvizapi --help
+
+  windows-wsl-entrypoint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: windows-latest
+    name: Windows WSL entrypoint (PS5 + PS7)
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build synthetic native argument probe (no WSL)
+        shell: powershell
+        run: |
+          $source = @'
+          using System;
+          using System.IO;
+          using System.Text;
+          public class LanWslArgvProbe {
+            public static int Main(string[] args) {
+              File.WriteAllLines(Environment.GetEnvironmentVariable("LAN_WSL_PROBE_LOG"),
+                Array.ConvertAll(args, value => Convert.ToBase64String(Encoding.UTF8.GetBytes(value))));
+              Console.Error.WriteLine(Environment.GetEnvironmentVariable("LAN_WSL_PROBE_STDERR"));
+              return Int32.Parse(Environment.GetEnvironmentVariable("LAN_WSL_PROBE_EXIT"));
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $source -OutputAssembly "$env:RUNNER_TEMP\lan-wsl-probe.exe" -OutputType ConsoleApplication
+      - name: Windows PowerShell 5 native argv and exit controls
+        shell: powershell
+        run: .\tests\powershell\test_local_av_lan_session.ps1 -ProbeExecutable "$env:RUNNER_TEMP\lan-wsl-probe.exe"
+      - name: PowerShell 7 native argv and exit controls
+        shell: pwsh
+        run: .\tests\powershell\test_local_av_lan_session.ps1 -ProbeExecutable "$env:RUNNER_TEMP\lan-wsl-probe.exe"

@@ -22,6 +22,7 @@ B = ONLINE['BOUNDED']
 PLAY = B['PLAY']
 CHANNEL = B['CHANNEL']
 PULL = runpy.run_path(str(Path(__file__).with_name('local_av_pull.py')))
+AUDIT = runpy.run_path(str(Path(__file__).with_name('local_av_audit.py')))
 HASH_SCRATCH_BYTES = 65536
 
 
@@ -79,13 +80,15 @@ class Assets:
     """Credit includes preparing, queued and in-flight leases until ack/abort."""
 
     def __init__(self, iterator: Any, *, pending_input: bool = False, join_timeout: float = 5,
-                 stop: Event | None = None) -> None:
+                 stop: Event | None = None, diagnostic_tail: int | None = None) -> None:
         # Opt-in callers retain the supplied pull owner, including after a failed
         # join. Never wrap/close its executing iterator on the consumer thread.
         if pending_input:
             validate_pending_source(iterator, join_timeout)
         self.pull: Any = iterator if pending_input else None
         self.iterator: Any = None if pending_input else iter(iterator)
+        AUDIT['validate_tail'](diagnostic_tail)
+        self.diagnostic_tail = diagnostic_tail
         self.stop = stop
         self.join_timeout = join_timeout
         self.reservation: dict[str, int] = {}
@@ -103,9 +106,20 @@ class Assets:
         self.preparing: str | None = None
         self.abandoned: list[str] = []
         self.offered = dict(self.counts)
-        self.timings: list[dict[str, Any]] = []
+        self.timings: Any = [] if diagnostic_tail is None else AUDIT['Records'](diagnostic_tail)
+        self.diagnostic_errors = 0
+        self.diagnostic_error_type: str | None = None
         self.preparation_executor: Any = None
         self.pending: dict[str, Any] = {}
+
+    def record_timing(self, timing: dict[str, Any], *, primary: bool) -> None:
+        try:
+            self.timings.append(timing)
+        except Exception as error:
+            self.diagnostic_errors += 1
+            self.diagnostic_error_type = type(error).__name__
+            if not primary:
+                raise
 
     def start_preparation(self, executor: Any = None) -> None:
         """One preparation worker; its backlog is charged to existing lease credit."""
@@ -139,8 +153,10 @@ class Assets:
                 progressed = True
                 timing['status'] = 'prepared'
             finally:
-                self.timings.append(timing)
-                del self.pending[name]
+                try:
+                    self.record_timing(timing, primary=timing['status'] == 'failed')
+                finally:
+                    del self.pending[name]
         return progressed
 
     def unknown_size(self) -> int:
@@ -238,9 +254,9 @@ class Assets:
             self.offered[kind] += 1
             timing['status'] = 'prepared'
         finally:
-            if name not in self.pending:
-                self.timings.append(timing)
             self.preparing = None
+            if name not in self.pending:
+                self.record_timing(timing, primary=timing['status'] == 'failed')
         return True
 
     def prefill(self, timeout: float) -> None:
@@ -297,7 +313,7 @@ class Assets:
                 timing['status'] = 'failed'
                 errors.append(str(error))
             finally:
-                self.timings.append(timing)
+                self.record_timing(timing, primary=True)  # Finish cleanup even if diagnostic admission fails.
                 del self.pending[name]
         try:
             if self.pull is not None:
@@ -315,11 +331,12 @@ class Assets:
                 errors.append(str(error))
         for queue in self.queues.values():
             queue.clear()
-        if errors:
-            raise ValueError('online preparation cleanup failed: ' + '; '.join(errors))
+        if errors or self.diagnostic_errors:
+            raise ValueError('online preparation cleanup failed: ' + '; '.join(errors)
+                + f' (diagnostic failures: {self.diagnostic_errors})')
 
     def result(self) -> dict[str, Any]:
-        return dict(verified_prepared_source_end=self.source_end, offered=dict(self.offered),
+        report = dict(verified_prepared_source_end=self.source_end, offered=dict(self.offered),
             owned_counts=dict(self.counts), owned_bytes=dict(self.bytes),
             peak_owned_counts=dict(self.peak_counts), peak_owned_bytes=dict(self.peak_bytes),
             queued={kind: list(q) for kind, q in self.queues.items()},
@@ -331,6 +348,10 @@ class Assets:
             input_reservation=dict(self.reservation),
             peak_credit_counts=dict(self.peak_credit_counts), peak_credit_bytes=dict(self.peak_credit_bytes),
             source_pull=None if self.pull is None else self.pull.result())
+        if self.diagnostic_tail is not None:
+            report['preparation_audit'] = dict(**self.timings.result(),
+                error_count=self.diagnostic_errors, last_error_type=self.diagnostic_error_type)
+        return report
 
 
 Parent: Any = B['Scheduler']
@@ -341,6 +362,8 @@ class Scheduler(Parent):
 
     def __init__(self, assets: Assets, timeout: float, max_late_ms: int, **kwargs: Any) -> None:
         super().__init__(dict(events=[]), timeout, max_late_ms, assets, **kwargs)
+        if assets.diagnostic_tail is not None:
+            self.actions = AUDIT['Actions'](assets.diagnostic_tail)
         self.latest: int | None = None
 
     def dispatch(self, assets: Assets, backends: dict[str, Any], executor: Any) -> None:
@@ -395,6 +418,9 @@ class Scheduler(Parent):
 
     def result(self) -> dict[str, Any]:
         report = super().result()
+        if self.assets.diagnostic_tail is not None:
+            report['action_audit'] = self.actions.result()
+            report['actions'] = self.actions.tail()
         report['not_submitted'] = {kind: list(q) for kind, q in self.assets.queues.items()}
         return report
 
@@ -442,23 +468,31 @@ def validate_output(args: Any) -> None:
         raise ValueError('online output profile requires MPEG-PS')
 
 
+def validate_control(pending_input: bool, stop: Event | None, diagnostic_tail: int | None) -> None:
+    AUDIT['validate_tail'](diagnostic_tail)
+    if diagnostic_tail is not None and not pending_input:
+        raise ValueError('bounded diagnostics requires opt-in pending input')
+    if stop is not None and (not pending_input or not isinstance(stop, Event)):
+        raise ValueError('stop requires an Event and opt-in pending input')
+
+
 def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,
-                  pending_input: bool = False, stop: Event | None = None) -> None:
+                  pending_input: bool = False, stop: Event | None = None, diagnostic_tail: int | None = None) -> None:
     """Own prepared input/output; opt-in events is a caller-retained pristine pull.
 
     The caller validates transport first. With pending_input, it must retain the
     pull owner and rejoin after a cleanup timeout, never close its nested source.
     """
-    if stop is not None and (not pending_input or not isinstance(stop, Event)):
-        raise ValueError('stop requires an Event and opt-in pending input')
+    validate_control(pending_input, stop, diagnostic_tail)
     if pending_input:
         validate_pending_source(events, args.deadline)  # Invalid owners remain unclaimed.
     assets = scheduler = executor = video = audio = None
     primary = False
-    receipt.update(output_devices_opened=False, backend_initialization_started=False)
+    receipt.update(output_devices_opened=False, backend_initialization_started=False,
+        **({} if diagnostic_tail is None else dict(profile='bounded-prepared-tail-host-submissions-v1')))
     try:
         check_stop(stop)
-        assets = Assets(events, pending_input=True, join_timeout=args.deadline, stop=stop) if pending_input else Assets(events)
+        assets = Assets(events, pending_input=True, join_timeout=args.deadline, stop=stop, diagnostic_tail=diagnostic_tail) if pending_input else Assets(events)
         assets.prefill(args.deadline)
         assert assets.geometry is not None
         check_stop(stop)

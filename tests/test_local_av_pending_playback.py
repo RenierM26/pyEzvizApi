@@ -1,4 +1,5 @@
 """Opt-in source stalls must not hold output ownership/acknowledgement progress."""
+from concurrent.futures import Future
 from pathlib import Path
 import runpy
 import threading
@@ -354,3 +355,22 @@ def test_invalid_stop_contract_leaves_source_unclaimed(stop, pending):
         assert not source.closed
     finally:
         pull.close(1)
+
+
+def test_diagnostic_admission_failure_cannot_skip_pending_cleanup(monkeypatch):
+    source = SourceBase([])
+    assets = M['Assets'](source, diagnostic_tail=2)
+    future: Future = Future()
+    future.set_exception(OSError('preparation failed'))
+    assets.pending['v'] = (future, dict(id='v', status='failed'))
+    assets.owned['v'] = dict(kind='video_pair', size=6, data=None, event={})
+    assets.counts['video_pair'] = 1
+    assets.bytes['video_pair'] = 6
+    def fail(_self, _row):
+        raise ValueError('audit admission failed')
+    monkeypatch.setattr(M['AUDIT']['Records'], 'append', fail)
+    with pytest.raises(ValueError, match='cleanup failed'):
+        assets.close()
+    assert source.closed and not assets.pending and not assets.owned
+    assert not any(assets.counts.values()) and not any(assets.bytes.values())
+    assert assets.result()['preparation_audit']['error_count'] == 1

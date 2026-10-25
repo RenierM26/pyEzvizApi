@@ -202,3 +202,53 @@ reconnect. Synchronous capture/recorded defaults, payloads, timing and limits ar
 unchanged. The lower-level `play_prepared` also accepts `stop=threading.Event()`
 only with explicit `pending_input=True`; invalid stop contracts leave the source
 unclaimed. The flag is caller-owned and never set or cleared by output cleanup.
+
+### Bounded finalized diagnostic history
+
+`CapturePlayback(..., diagnostic_tail=16)` opts into bounded diagnostic retention;
+`None` preserves all existing receipts and defaults. The explicit limit is1–128
+finalized rows/pairs. Compact capture uses
+`guarded-capture-pending-tail-host-submissions-v1`; its nested output uses
+`bounded-prepared-tail-host-submissions-v1`. Consumers that require every action
+must retain the legacy mode rather than interpreting a tail as a full history.
+
+Preparation timings retain at most N finalized rows, and scheduler actions retain
+at most N finalized submission/outcome pairs (at most2N flattened action rows).
+Each journal is also bounded to65536 encoded bytes, each encoded record to16384;
+byte pressure may retain fewer than N rows. Admission bounds JSON depth,nodes,text
+and integer size before canonical encoding, rejects non-JSON/media payloads and
+nonfinite floats, and fails the session on unsupported diagnostic metadata rather
+than silently ignoring it. Bounded encoding scratch is separate from retained
+journal bytes, mutable in-flight rows and serialized receipt snapshots.
+
+The scheduler holds at most one pending submission per track under existing output
+credit. It seals that submission together with the exact outcome only after the
+future is finished, so worker-populated start/lateness fields cannot mutate an
+already hashed record. Finalized pairs are ordered by owner harvest, not original
+submission order. Incomplete submissions are reported separately using their
+immutable original metadata; they are not included in the finalized hash/count.
+
+`action_audit` and `preparation_audit` report full finalized counts, encoded-byte
+counts, evictions, retained/peak sizes and `complete_history_retained`. The digest
+is SHA256 of ASCII `bounded-finalized-json-v1` plus LF, followed by each finalized
+canonical JSON record plus LF. JSON keys are sorted, separators are`,` and`:`,
+Unicode is ASCII-escaped and nonfinite numbers rejected. Action records have
+`submission` and `outcome` fields. Hashing includes every finalized record even
+when its diagnostic tail is later evicted. A prefix digest is not an independent
+proof of source EOF, a missing output acknowledgement or physical playback.
+
+Successful compact completion still requires every prepared event to be offered,
+submitted and acknowledged, all upstream prefix checks, clean drains, joined source
+and zero leases. Full action/preparation counters must agree with those totals;
+missing compact audit records fail terminal validation. Stop/failure retain partial
+counter/hash evidence without upgrading the verdict.
+
+Only these two diagnostic histories are bounded by this option. Source/policy
+identity sets, decoder/session work and transport remain under their existing
+finite limits. This does not enable unlimited streaming, raise caps, drop/rebase
+media or alter scheduling. Legacy CLI/capture modes are unchanged.
+
+Diagnostic admission failures have separate bounded counters/type diagnostics and
+invalidate compact completion. They cannot replace an already propagating
+preparation/backend error or skip pending-future, iterator or lease cleanup. A
+later valid append cannot erase an earlier diagnostic failure.

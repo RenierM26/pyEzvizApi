@@ -37,7 +37,7 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
     if (preparation.get('profile') != 'guarded-capture-online-preparation-v1'
             or preparation.get('status') != 'prepared-prefix-ended'
             or preparation.get('accepted_prefix_clear_sha256') is None
-            or receipt.get('profile') != 'bounded-prepared-host-submissions-v1'
+            or receipt.get('profile') not in ('bounded-prepared-host-submissions-v1', 'bounded-prepared-tail-host-submissions-v1')
             or receipt.get('cleanup_errors') != [] or receipt.get('shutdown_output_error')
             or scheduler.get('outputs_finished') is not True
             or scheduler.get('submitted') != expected or scheduler.get('completed') != expected
@@ -51,6 +51,18 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
             or lookahead.get('owned_counts') != dict(video_pair=0, audio_block=0)
             or lookahead.get('owned_bytes') != dict(video_pair=0, audio_block=0)):
         raise ValueError('capture prefix output terminal checks failed')
+    if receipt.get('profile') == 'bounded-prepared-tail-host-submissions-v1' or 'action_audit' in scheduler:
+        audit = scheduler.get('action_audit') or {}
+        timing = lookahead.get('preparation_audit') or {}
+        if (audit.get('profile') != 'bounded-finalized-json-v1'
+                or timing.get('profile') != 'bounded-finalized-json-v1'
+                or audit.get('submitted') != expected or audit.get('completed') != expected
+                or audit.get('failed') != dict(video_pair=0, audio_block=0)
+                or audit.get('error_count') != 0 or timing.get('error_count') != 0
+                or audit.get('complete_finalization') is not True or audit.get('pending_count') != 0
+                or audit.get('finalized_records') != sum(expected.values())
+                or timing.get('finalized_records') != sum(expected.values())):
+            raise ValueError('bounded diagnostics terminal counts failed')
     PREPARE['verify_completion'](preparation['capture'], preparation['decode'], preparation['online'])
 
 
@@ -126,14 +138,17 @@ class CapturePlayback:
 
     def __init__(self, owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,
             limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
-            monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None) -> None:
+            monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
+            diagnostic_tail: int | None = None) -> None:
         self.args = copy(args)
         self.report = report
         self.used = False
         self._stop = Event()
+        self.diagnostic_tail = diagnostic_tail
         preparation: dict[str, Any] = {}
         output: dict[str, Any] = {}
-        report.update(profile='guarded-capture-pending-host-submissions-v1', status='failed', error_type=None,
+        report.update(profile='guarded-capture-pending-host-submissions-v1' if diagnostic_tail is None
+            else 'guarded-capture-pending-tail-host-submissions-v1', status='failed', error_type=None,
             preparation=preparation, output=output, cleanup_error_types=[], source_pull=None, stop_requested=False,
             accepted_prefix_clear_sha256=None, completion_policy=completion,
             input_scope='accepted-capture-prefix', whole_source_complete=False, network_eof_verified=False,
@@ -141,6 +156,7 @@ class CapturePlayback:
             pipe_completion_is_audible=False, present_return_is_physical_display=False,
             timing='common-host-submissions-not-device-clock-sync')
         try:
+            OUTPUT['AUDIT']['validate_tail'](diagnostic_tail)
             validate_output(self.args)
             streams = (self.args.primary_stream, self.args.secondary_stream)
             PREPARE['ONLINE']['Policy'](streams, self.args.audio_stream, self.args.audio_overlap_policy,
@@ -194,7 +210,7 @@ class CapturePlayback:
         report['status'] = 'running'
         report['output']['profile'] = 'bounded-prepared-host-submissions-v1'
         try:
-            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop,
+            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop, diagnostic_tail=self.diagnostic_tail,
                 title='Bounded capture prefix (host submissions; not device sync)')
         except BaseException as error:
             primary = True

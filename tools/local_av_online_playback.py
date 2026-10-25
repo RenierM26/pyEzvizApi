@@ -20,6 +20,7 @@ ONLINE = runpy.run_path(str(Path(__file__).with_name('local_av_online.py')))
 B = ONLINE['BOUNDED']
 PLAY = B['PLAY']
 CHANNEL = B['CHANNEL']
+PULL = runpy.run_path(str(Path(__file__).with_name('local_av_pull.py')))
 HASH_SCRATCH_BYTES = 65536
 
 
@@ -55,11 +56,30 @@ def pair_digest(left: bytes, right: bytes, width: int, height: int) -> str:
     return digest.hexdigest()
 
 
+def validate_pending_source(source: Any, timeout: float) -> None:
+    PULL['validate_timeout'](timeout)
+    if not isinstance(source, PULL['PreparedPull']):
+        raise ValueError('pending input requires an explicitly owned PreparedPull')
+    state = source.result()
+    if state['requested'] or state['consumer_closed'] or not state['worker_alive']:
+        raise ValueError('pending input requires a pristine, unrequested pull owner')
+
+
 class Assets:
     """Credit includes preparing, queued and in-flight leases until ack/abort."""
 
-    def __init__(self, iterator: Any) -> None:
-        self.iterator = iter(iterator)
+    def __init__(self, iterator: Any, *, pending_input: bool = False, join_timeout: float = 5) -> None:
+        # Opt-in callers retain the supplied pull owner, including after a failed
+        # join. Never wrap/close its executing iterator on the consumer thread.
+        if pending_input:
+            validate_pending_source(iterator, join_timeout)
+        self.pull: Any = iterator if pending_input else None
+        self.iterator: Any = None if pending_input else iter(iterator)
+        self.join_timeout = join_timeout
+        self.reservation: dict[str, int] = {}
+        self.pull_started_ns: int | None = None
+        self.peak_credit_counts = dict(video_pair=0, audio_block=0)
+        self.peak_credit_bytes = dict(self.peak_credit_counts)
         self.queues: dict[str, Any] = {k: deque() for k in ('video_pair', 'audio_block')}
         self.owned: dict[str, Any] = {}
         self.counts = dict.fromkeys(self.queues, 0)
@@ -111,23 +131,68 @@ class Assets:
                 del self.pending[name]
         return progressed
 
+    def unknown_size(self) -> int:
+        # Before geometry is known, conservatively reserve the entire video
+        # budget. Policy already rejects geometry changes after the first pair.
+        return B['VIDEO_BYTES'] if self.geometry is None else self.geometry[0] * self.geometry[1] * 3
+
     def can_pull(self) -> bool:
-        size = 0 if self.geometry is None else self.geometry[0] * self.geometry[1] * 3
+        size = self.unknown_size() if self.pull is not None else (
+            0 if self.geometry is None else self.geometry[0] * self.geometry[1] * 3)
         return (self.counts['video_pair'] < B['VIDEO_SLOTS']
             and self.bytes['video_pair'] + size <= B['VIDEO_BYTES']
-            and self.counts['audio_block'] < B['AUDIO_SLOTS'])
+            and self.counts['audio_block'] < B['AUDIO_SLOTS']
+            and self.bytes['audio_block'] + PLAY['PCM']['PCM_BYTES'] <= B['AUDIO_SLOTS'] * PLAY['PCM']['PCM_BYTES'])
+
+    def record_credit(self) -> None:
+        for kind in self.counts:
+            self.peak_credit_counts[kind] = max(self.peak_credit_counts[kind],
+                self.counts[kind] + int(kind in self.reservation))
+            self.peak_credit_bytes[kind] = max(self.peak_credit_bytes[kind],
+                self.bytes[kind] + self.reservation.get(kind, 0))
+
+    def poll_input(self) -> tuple[bool, Any, int]:
+        if not self.reservation:
+            if not self.can_pull():
+                return False, None, 0
+            self.reservation = dict(video_pair=self.unknown_size(), audio_block=PLAY['PCM']['PCM_BYTES'])
+            self.record_credit()
+            self.pull_started_ns = time.monotonic_ns()
+            self.pull.request()
+            return True, None, 0
+        started = self.pull_started_ns
+        assert started is not None
+        try:
+            ready, value = self.pull.poll()
+        except StopIteration:
+            self.reservation.clear()
+            self.source_end = True
+            return True, None, 0
+        if not ready:
+            return False, None, 0  # Pending input is neither source EOF nor credit.
+        event, payload = value
+        size = sum(len(part) for part in payload)
+        if event['kind'] not in self.reservation or size > self.reservation[event['kind']]:
+            raise ValueError('prepared event exceeds reserved unknown-input credit')
+        return True, value, started
 
     def pump(self, *, startup: bool = False) -> bool:
         if self.harvest_preparation():
             return True  # Dispatch newly ready heads before another decode pull.
-        if self.source_end or (not startup and not self.can_pull()):
+        if self.source_end or (self.pull is None and not startup and not self.can_pull()):
             return False
-        started = time.monotonic_ns()
-        try:
-            event, payload = next(self.iterator)
-        except StopIteration:
-            self.source_end = True
-            return True
+        if self.pull is not None:
+            progressed, value, started = self.poll_input()
+            if value is None:
+                return progressed
+            event, payload = value
+        else:
+            started = time.monotonic_ns()
+            try:
+                event, payload = next(self.iterator)
+            except StopIteration:
+                self.source_end = True
+                return True
         pulled = time.monotonic_ns()
         kind, name = event['kind'], PLAY['identity'](event)
         size = sum(len(part) for part in payload)
@@ -141,6 +206,8 @@ class Assets:
         self.bytes[kind] += size
         self.peak_counts[kind] = max(self.peak_counts[kind], self.counts[kind])
         self.peak_bytes[kind] = max(self.peak_bytes[kind], self.bytes[kind])
+        self.reservation.clear()  # Conversion completed; failed acceptance retains the reservation.
+        self.record_credit()
         timing = dict(id=name, kind=kind, pull_ns=pulled - started,
             pull_started_ns=started, pull_returned_ns=pulled)
         timing['status'] = 'failed'
@@ -167,10 +234,15 @@ class Assets:
     def prefill(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while not all(self.queues.values()):
-            # Startup policy already bounds its entire prefix; accepting the
-            # other head is allowed even when the first track's slots are full.
-            if not self.pump(startup=True) or self.source_end:
+            # Legacy synchronous startup can inspect the other head at a full
+            # first track. Pending unknown input must reserve both possibilities.
+            progressed = self.pump(startup=True)
+            if self.source_end:
                 raise ValueError('source ended before both output heads')
+            if not progressed:
+                if self.pull is None or (not self.reservation and not self.can_pull()):
+                    raise ValueError('initial track interleave exceeds bounded lookahead; no output started')
+                time.sleep(PLAY['POLL'])
             if time.monotonic() > deadline:
                 raise ValueError('online output prefill deadline exceeded')
         while self.pump():
@@ -210,9 +282,21 @@ class Assets:
                 self.timings.append(timing)
                 del self.pending[name]
         try:
-            B['Lookahead'].close(self)
+            if self.pull is not None:
+                self.pull.close(self.join_timeout)
+                self.reservation.clear()
+            else:
+                self.iterator.close()
         except Exception as error:
             errors.append(str(error))
+        self.abandoned = list(self.owned)
+        for name in list(self.owned):
+            try:
+                self.release(name)
+            except Exception as error:
+                errors.append(str(error))
+        for queue in self.queues.values():
+            queue.clear()
         if errors:
             raise ValueError('online preparation cleanup failed: ' + '; '.join(errors))
 
@@ -224,7 +308,11 @@ class Assets:
             owned_ids=list(self.owned), abandoned=list(self.abandoned), preparing=self.preparing,
             preparation_timings=list(self.timings), pending_preparation=list(self.pending),
             preparation_workers=1 if self.preparation_executor is not None else 0,
-            canonical_scratch_byte_limit=HASH_SCRATCH_BYTES)
+            canonical_scratch_byte_limit=HASH_SCRATCH_BYTES,
+            pending_input=self.pull is not None,
+            input_reservation=dict(self.reservation),
+            peak_credit_counts=dict(self.peak_credit_counts), peak_credit_bytes=dict(self.peak_credit_bytes),
+            source_pull=None if self.pull is None else self.pull.result())
 
 
 Parent: Any = B['Scheduler']
@@ -329,13 +417,20 @@ def validate_output(args: Any) -> None:
         raise ValueError('online output profile requires MPEG-PS')
 
 
-def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None) -> None:
-    """Own prepared input and output resources; caller validates transport first."""
+def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,
+                  pending_input: bool = False) -> None:
+    """Own prepared input/output; opt-in events is a caller-retained pristine pull.
+
+    The caller validates transport first. With pending_input, it must retain the
+    pull owner and rejoin after a cleanup timeout, never close its nested source.
+    """
+    if pending_input:
+        validate_pending_source(events, args.deadline)  # Invalid owners remain unclaimed.
     assets = scheduler = executor = video = audio = None
     primary = False
     receipt.update(output_devices_opened=False, backend_initialization_started=False)
     try:
-        assets = Assets(events)
+        assets = Assets(events, pending_input=True, join_timeout=args.deadline) if pending_input else Assets(events)
         assets.prefill(args.deadline)
         assert assets.geometry is not None
         width, height = assets.geometry
@@ -358,9 +453,12 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         finally:
             if assets is None:
                 try:
-                    close = getattr(events, 'close', None)
-                    if close is not None:
-                        close()
+                    if pending_input:
+                        events.close(args.deadline)
+                    else:
+                        close = getattr(events, 'close', None)
+                        if close is not None:
+                            close()
                 except Exception as error:
                     receipt.setdefault('cleanup_errors', []).append(str(error))
                     if not primary:

@@ -120,3 +120,11 @@ The separate [single-demand prepared-source pull boundary](local-av-pull.md)
 provides a cancellable polling primitive for a future nonblocking-source
 integration. It is not enabled here: decoder/network advancement in this
 scheduler remains cooperative, and existing limits/defaults are unchanged.
+
+
+### Explicit pending-input composition
+
+The development `play_prepared` helper can accept a caller-retained single-demand
+pull owner with `pending_input=True`; see [source-pull ownership and credit](local-av-pull.md#opt-in-pending-input-output).
+It reserves unknown input within existing credit so source stalls do not block
+output polling. Recorded CLI and guarded capture adapter defaults remain unchanged.

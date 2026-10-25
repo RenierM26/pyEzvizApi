@@ -566,3 +566,184 @@ def test_secret_redaction_does_not_echo_diagnostic_labels_in_its_fallback(config
     result = json.loads(raw)
     assert result["status"] == "failed" and result["diagnostics_omitted"]
     assert result["error_type"] == "UnsafeOrUnavailableReceipt"
+
+
+@pytest.mark.parametrize(
+    "case", ["success", "source-error", "unjoined", "finalize-error", "source-and-finalize-error"]
+)
+def test_optional_packet_evidence_follows_source_worker_ownership(config, monkeypatch, case):
+    root = config.with_name("evidence")
+    root.mkdir(mode=0o700)
+    options = args(
+        config,
+        packet_evidence=root,
+        config_sha256=hashlib.sha256(config.read_bytes()).hexdigest(),
+        mono_option="channels",
+    )
+    closed = []
+    writers = []
+    evidence_type = M["EVIDENCE"]["PacketEvidence"]
+
+    def make_evidence(path):
+        writer = evidence_type(path)
+        writers.append(writer)
+        if case in ("finalize-error", "source-and-finalize-error"):
+
+            def fail(_binding):
+                writer.output.close()
+                os.close(writer.root)
+                raise OSError("storage failure")
+
+            writer.finish = fail
+        return writer
+
+    monkeypatch.setitem(M["EVIDENCE"], "PacketEvidence", make_evidence)
+
+    class Owner:
+        def __init__(self):
+            self.capture_result = dict(packets_yielded=0, bytes_yielded=0)
+
+        def iter_media_packets(self, **_kwargs):
+            try:
+                for body in (b"first", b"second"):
+                    self.capture_result["packets_yielded"] += 1
+                    self.capture_result["bytes_yielded"] += len(body)
+                    yield SimpleNamespace(body=body)
+                    if case in ("source-error", "source-and-finalize-error"):
+                        raise ValueError("source-primary")
+            finally:
+                closed.append("iterator")
+
+        def close(self):
+            closed.append("owner")
+
+    owner = Owner()
+    monkeypatch.setattr(M["pyezvizapi"], "AutoMediaStream", lambda *_a, **_kw: owner)
+    held = []
+
+    class Session:
+        def __init__(self, actual, _key, _args, report, **_kwargs):
+            self.iterator = actual.iter_media_packets()
+            held.append(self.iterator)
+            self.report = report
+            self.pull = SimpleNamespace(
+                result=lambda: dict(
+                    worker_alive=case == "unjoined",
+                    consumer_closed=True,
+                )
+            )
+
+        def play(self):
+            if case == "unjoined":
+                next(self.iterator)
+                raise ValueError("source-primary")
+            assert [p.body for p in self.iterator] == [b"first", b"second"]
+            self.report["status"] = "prefix-output-completed"
+
+        def close(self, timeout):
+            raise TimeoutError
+
+    monkeypatch.setitem(M["CAPTURE"], "CapturePlayback", Session)
+    report: dict[str, Any] = {}
+    if case == "success":
+        M["capture"](options, report)
+    else:
+        message = "capture cleanup failed" if case == "finalize-error" else "source-primary"
+        with pytest.raises(ValueError, match=message):
+            M["capture"](options, report)
+    if case == "unjoined":
+        assert not closed and not (root / "manifest.json").exists()
+        assert report["packet_evidence"] == dict(status="incomplete")
+        # Only this fake worker is idle: release its retained generator/file.
+        held[0].close()
+        writers[0].output.close()
+        os.close(writers[0].root)
+    elif case in ("finalize-error", "source-and-finalize-error"):
+        assert report["status"] == "failed" and report["caller_cleanup_error_types"] == ["OSError"]
+        assert report["packet_evidence"] == dict(status="incomplete")
+        assert not (root / "manifest.json").exists()
+        assert closed == ["iterator", "owner"]
+    else:
+        summary = M["EVIDENCE"]["verify"](root)
+        assert report["packet_evidence"] == dict(status="finalized", summary=summary)
+        assert summary["packets"] == (2 if case == "success" else 1)
+        assert closed == ["iterator", "owner"]
+
+
+def test_existing_evidence_directory_rejected_before_enter(config, monkeypatch):
+    root = config.with_name("evidence")
+    root.mkdir()
+    (root / "keep").write_text("unchanged")
+    preflight(monkeypatch)
+    monkeypatch.setattr("builtins.input", lambda *_a: pytest.fail("existing evidence accepted"))
+    with pytest.raises(FileExistsError):
+        M["attended"](args(config, packet_evidence=root), {})
+    assert (root / "keep").read_text() == "unchanged"
+
+
+@pytest.mark.parametrize("case", ["good", "summary", "binding", "count", "bytes"])
+def test_parent_independently_checks_evidence_before_success(config, monkeypatch, case):
+    root = config.with_name("evidence")
+    root.mkdir()
+    writer = M["EVIDENCE"]["PacketEvidence"](root)
+    list(writer.retain(iter_packets()))
+    digest = hashlib.sha256(config.read_bytes()).hexdigest()
+    summary = writer.finish(dict(package_sha256="a" * 64, config_sha256=digest))
+    evidence = dict(status="finalized", summary=summary)
+    owner = dict(packets_yielded=1, bytes_yielded=3)
+    if case == "summary":
+        evidence = dict(status="incomplete")
+    elif case == "binding":
+        # Internally consistent saved files from another configuration still fail.
+        manifest = root / "manifest.json"
+        other = dict(summary, binding=dict(package_sha256="a" * 64, config_sha256="0" * 64))
+        manifest.write_text(json.dumps(other))
+        evidence = dict(status="finalized", summary=other)
+    elif case in ("count", "bytes"):
+        owner["packets_yielded" if case == "count" else "bytes_yielded"] += 1
+
+    class Child:
+        def __init__(self, command, **_kwargs):
+            assert command[command.index("--packet-evidence") + 1] == str(root.resolve())
+            Path(command[command.index("--receipt") + 1]).write_text(
+                json.dumps(
+                    dict(
+                        status="prefix-output-completed",
+                        package_sha256="a" * 64,
+                        config_sha256=digest,
+                        source_worker_retained=False,
+                        caller_cleanup_error_types=[],
+                        capture_limits=M["LIMITS"],
+                        requested_options=dict(M["OPTIONS"], startup_pairing="strict"),
+                        preparation={},
+                        output={},
+                        packet_evidence=evidence,
+                        final_owner=owner,
+                    )
+                )
+            )
+
+        def wait(self, timeout):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(M["subprocess"], "Popen", Child)
+    monkeypatch.setitem(G, "reap", lambda _child: None)
+    monkeypatch.setitem(M["CAPTURE"], "verify_output", lambda *_a: None)
+    report: dict[str, Any] = {}
+    options = args(config, packet_evidence=root)
+    if case == "good":
+        M["supervise"](options, report, digest, "channels")
+        assert report["status"] == "completed"
+        assert report["packet_evidence"]["status"] == "integrity-verified"
+    else:
+        with pytest.raises(ValueError, match="receipt binding"):
+            M["supervise"](options, report, digest, "channels")
+        assert report.get("status") != "completed"
+    assert report["worker_reaped"]
+
+
+def iter_packets():
+    yield SimpleNamespace(body=b"abc")

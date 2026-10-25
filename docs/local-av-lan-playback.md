@@ -17,6 +17,7 @@ python tools/local_av_lan_playback.py \
   --private-config /local/path/camera.json \
   --expected-package-sha256 EXPECTED_SOURCE_SHA256 \
   --receipt new-lan-result.json \
+  --packet-evidence new-private-evidence-directory \
   --startup-pairing common-keyframe \
   --audio-overlap-policy bounded-serial-pcm \
   --max-audio-overlap-ms 1 --max-audio-phase-ms 1 \
@@ -28,6 +29,10 @@ checks the private configuration, then waits for **Enter** before one live attem
 EOF/Ctrl-C before Enter cancels without acquisition. The receipt must be a new
 file; an existing receipt is never overwritten. Failed/cancelled runs also write
 a bounded receipt when possible. No secret value is passed in command arguments.
+
+`--packet-evidence` is optional; omit it to retain only the receipt. Its directory
+must not already exist. It is reserved before Enter, with mode 0700; cancellation
+before acquisition can leave an empty directory. No existing files are overwritten.
 
 This fixed profile requests channel 0 and explicit MPEG-PS E0/E1/C0 identities,
 resolved against each active container. Limits are 30 seconds / 15,000 packets /
@@ -91,9 +96,49 @@ replacing the primary failure with a secondary cleanup error.
 Nested diagnostics are bounded and checked for known private values before being
 written. If the file changes/disappears or diagnostic safety cannot be established,
 the receipt omits diagnostics and cannot claim success. The command emits only
-status/error classes, not raw exception text. It does not collect encrypted packet
-evidence or publish a Windows bundle: a caller needing independent source
-comparison must retain that evidence separately, as in the attended handoff.
+status/error classes, not raw exception text. It does not publish a Windows bundle.
+
+## Optional encrypted packet evidence
+
+The optional evidence directory contains only `packet-bodies.bin`,
+`packet-index.json` and a last-published `manifest.json`. Original media bodies are
+retained before decryption, in source order, with contiguous extents and SHA-256
+for each packet and the concatenated bodies. Transport/login metadata, private
+configuration and decryption keys are not stored. Keep these files private:
+encrypted camera content remains sensitive, and this is not a sanitized public
+fixture or a self-decrypting bundle.
+
+Retention has separate fixed storage bounds: 15,000 packets / 32 MiB of bodies,
+a 3-MiB index, and a 4-KiB manifest. It does not increase source or copied-pixel
+budgets. Files use exclusive creation and mode 0600. A write/storage error fails
+the attempt rather than silently disabling evidence. These synchronous bounded
+writes run on the source worker; a slow filesystem still faces existing deadlines.
+
+After the source joins, closed bodies and the index are flushed before the
+manifest is published. An unjoined worker never publishes a manifest. Abrupt
+termination or writer failure can leave partial files; do not treat them as
+complete evidence without checking integrity. Even verifiable files after a
+late storage/flush error do not turn a failed attempt into successful playback.
+A joined source/playback failure may still retain a stable diagnostic prefix.
+The playback receipt remains failed: a finalized evidence set is not an accepted
+media prefix. Successful attended completion also requires the parent to verify
+the files against the worker summary, configuration/package binding and actual
+source packet/byte counters.
+
+Check a finalized set offline, with no camera, package dependencies or key:
+
+```sh
+python -I tools/local_av_packet_evidence.py --verify new-private-evidence-directory
+```
+
+The checker bounds reads, rejects symlinks/special files and verifies index hash,
+every extent and packet hash, total count/extent, and concatenated digest. It
+reports `integrity-verified` or exits 2 with `invalid-or-incomplete`. Hashes detect
+corruption, not authenticity: an attacker can replace a manifest and its data.
+This checker does **not** decrypt/decode, authenticate a receipt, compare selected
+pixels/PCM, establish clean capture EOF, or prove physical playback/synchronization.
+Those are separate source/media and output checks; retain the receipt alongside
+the evidence for diagnosis.
 
 Completion is an accepted bounded prefix, not network/whole-source EOF. SDL/PCM
 acknowledgements and clean drains are not physical display timing or audibility.

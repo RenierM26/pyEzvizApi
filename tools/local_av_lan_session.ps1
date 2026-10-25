@@ -13,10 +13,11 @@ param(
     [string]$ExpectedPackageSha256,
     [ValidateSet('strict', 'common-keyframe')][string]$StartupPairing = 'strict',
     [ValidateSet('reject', 'bounded-serial-pcm')][string]$AudioOverlapPolicy = 'reject',
-    [Nullable[int]]$MaxAudioOverlapMs,
-    [Nullable[int]]$MaxAudioPhaseMs,
+    [object]$MaxAudioOverlapMs,
+    [object]$MaxAudioPhaseMs,
     [switch]$Play,
-    [switch]$Help
+    [switch]$Help,
+    [switch]$CheckArguments
 )
 
 Set-StrictMode -Version Latest
@@ -40,8 +41,13 @@ function Get-LanWslArguments {
             throw 'Use absolute WSL paths without quotes, controls or backslashes.'
         }
     }
-    if (($Options.StartupPairing -notin @('strict', 'common-keyframe')) -or
-        ($Options.AudioOverlapPolicy -notin @('reject', 'bounded-serial-pcm'))) {
+    if (($Options.StartupPairing -isnot [string]) -or ($Options.AudioOverlapPolicy -isnot [string])) {
+        throw 'Unsupported startup or audio policy.'
+    }
+    $startup = $Options.StartupPairing.ToLowerInvariant()
+    $audio = $Options.AudioOverlapPolicy.ToLowerInvariant()
+    if (($startup -cnotin @('strict', 'common-keyframe')) -or
+        ($audio -cnotin @('reject', 'bounded-serial-pcm'))) {
         throw 'Unsupported startup or audio policy.'
     }
     $scriptPath = $Options.WslCheckout.TrimEnd('/') + '/tools/local_av_lan_session.sh'
@@ -49,13 +55,23 @@ function Get-LanWslArguments {
         '--python', $Options.WslPython, '--results', $Options.WslResults,
         '--private-config', $Options.WslPrivateConfig,
         '--expected-package-sha256', $Options.ExpectedPackageSha256,
-        '--startup-pairing', $Options.StartupPairing,
-        '--audio-overlap-policy', $Options.AudioOverlapPolicy, '--play')
+        '--startup-pairing', $startup,
+        '--audio-overlap-policy', $audio, '--play')
     foreach ($pair in @(@('MaxAudioOverlapMs', '--max-audio-overlap-ms'),
                         @('MaxAudioPhaseMs', '--max-audio-phase-ms'))) {
         if ($Options.ContainsKey($pair[0]) -and ($null -ne $Options[$pair[0]])) {
-            if ($Options[$pair[0]] -isnot [int]) { throw 'Integer audio bounds are required.' }
-            $native += @($pair[1], $Options[$pair[0]].ToString([Globalization.CultureInfo]::InvariantCulture))
+            $raw = $Options[$pair[0]]
+            if (($raw -isnot [int]) -and ($raw -isnot [long]) -and ($raw -isnot [string])) {
+                throw 'Integer audio bounds are required.'
+            }
+            $text = [string]$raw
+            $integer = 0
+            if (($text -cnotmatch '^-?(0|[1-9][0-9]*)$') -or
+                (-not [int]::TryParse($text, [Globalization.NumberStyles]::AllowLeadingSign,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$integer))) {
+                throw 'Integer audio bounds are required.'
+            }
+            $native += @($pair[1], $integer.ToString([Globalization.CultureInfo]::InvariantCulture))
         }
     }
     return $native
@@ -93,6 +109,7 @@ Optional: -StartupPairing common-keyframe -AudioOverlapPolicy bounded-serial-pcm
           -MaxAudioOverlapMs 1 -MaxAudioPhaseMs 1
 Requires an existing configured WSL runtime/checkout. All paths are WSL paths.
 One existing Enter gate; results stay in WSL. No installer or Windows bundle.
+Add -CheckArguments to validate the same invocation without starting WSL.
 '@
     exit 0
 }
@@ -103,6 +120,11 @@ try {
         ExpectedPackageSha256 = $ExpectedPackageSha256; Play = [bool]$Play
         StartupPairing = $StartupPairing; AudioOverlapPolicy = $AudioOverlapPolicy
         MaxAudioOverlapMs = $MaxAudioOverlapMs; MaxAudioPhaseMs = $MaxAudioPhaseMs
+    }
+    if ($CheckArguments) {
+        [void]@(Get-LanWslArguments -Options $options)
+        Write-Output 'Arguments valid. WSL has NOT started.'
+        exit 0
     }
     Invoke-LanWslSession -Options $options
     exit $script:LanSessionExitCode

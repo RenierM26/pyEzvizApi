@@ -50,6 +50,16 @@ try {
         $count++
     }
     $options = Valid-Options
+    $options.StartupPairing = 'StRiCt'
+    $options.AudioOverlapPolicy = 'ReJeCt'
+    $env:LAN_WSL_PROBE_EXIT = '0'
+    Invoke-LanWslSession -Options $options -WslExecutable $ProbeExecutable
+    $actual = @(Read-Probe)
+    Assert-True ($actual -ccontains 'strict') 'Startup spelling was not normalized.'
+    Assert-True ($actual -ccontains 'reject') 'Audio policy spelling was not normalized.'
+    Assert-True (-not ($actual -ccontains 'StRiCt')) 'Noncanonical startup reached native argv.'
+    $count++
+    $options = Valid-Options
     $options.StartupPairing = 'common-keyframe'
     $options.AudioOverlapPolicy = 'bounded-serial-pcm'
     $options.MaxAudioOverlapMs = [int]0
@@ -90,6 +100,49 @@ try {
     catch { $failed = $true }
     Assert-True $failed 'Missing native executable reported success.'
     $count++
+    # Exercise the real script binder, not a preconstructed helper hashtable.
+    # CheckArguments validates before resolving or starting wsl.exe.
+    $hostExecutable = (Get-Process -Id $PID).Path
+    $env:LAN_WSL_ENTRYPOINT = (Resolve-Path -LiteralPath $entry).Path
+    $binderCases = @(
+        @{ Value = '0.6'; Code = 2 }, @{ Value = '([double]1)'; Code = 2 },
+        @{ Value = '([decimal]1)'; Code = 2 }, @{ Value = "'0.6'"; Code = 2 },
+        @{ Value = '$true'; Code = 2 }, @{ Value = "'2147483648'"; Code = 2 },
+        @{ Value = '0'; Code = 0 }, @{ Value = "'1'"; Code = 0 },
+        @{ Value = '([long]1)'; Code = 0 }, @{ Value = '0.6'; Code = 2; Name = 'MaxAudioPhaseMs' }
+    )
+    foreach ($case in $binderCases) {
+        $name = 'MaxAudioOverlapMs'
+        if ($case.ContainsKey('Name')) { $name = $case.Name }
+        $commandText = '& $env:LAN_WSL_ENTRYPOINT -Distribution NativeProbeOnly -WslCheckout /missing-checkout -WslPython /missing-python -WslPrivateConfig /missing-config -WslResults /missing-results -ExpectedPackageSha256 ("a" * 64) -StartupPairing StRiCt -AudioOverlapPolicy ReJeCt -Play -CheckArguments -' + $name + ' ' + $case.Value + '; exit $LASTEXITCODE'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($commandText))
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = $hostExecutable
+        $start.Arguments = '-NoProfile -EncodedCommand ' + $encoded
+        $start.UseShellExecute = $false
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo = $start
+        try {
+            [void]$process.Start()
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(15000)) { $process.Kill(); throw 'Binder control timed out.' }
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+            Assert-True ($process.ExitCode -eq $case.Code) 'Script binder silently coerced an audio bound.'
+            if ($case.Code -eq 0) {
+                Assert-True ($stdout.Trim() -ceq 'Arguments valid. WSL has NOT started.') 'Argument-only mode did not stop before WSL.'
+            }
+            else {
+                Assert-True ($stdout -notmatch 'Arguments valid') 'Invalid bound reported validity.'
+                Assert-True ($stderr -match 'Windows/WSL session could not start') 'Bound rejection was not sanitized.'
+            }
+        }
+        finally { $process.Dispose() }
+        $count++
+    }
     $PSNativeCommandUseErrorActionPreference = $false
     $hostExecutable = (Get-Process -Id $PID).Path
     & $hostExecutable -NoProfile -File $entry -Help

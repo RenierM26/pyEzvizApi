@@ -93,8 +93,15 @@ using ordinary PowerShell quoting. No shell command string is evaluated.
 The bridge directly invokes `wsl.exe --distribution ... --exec bash ...`, without
 capturing/piping stdin or stdout, so the existing Enter prompt and console Ctrl-C
 path remain available. It propagates the native exit code, including failure or
-cancellation. Startup/audio defaults remain strict/reject; the example explicitly
+cancellation. Policy names accepted case-insensitively by PowerShell are
+normalized to the lowercase Linux spelling. Audio bounds must be integer values
+or canonical integer text within Int32 range; fractions, floating/decimal values,
+booleans and overflow are rejected before WSL starts, never rounded by parameter
+binding. Startup/audio defaults remain strict/reject; the example explicitly
 opts in to the bounded policies. `-Play` is required; `-Help` starts no WSL process.
+Add `-CheckArguments` to the same complete invocation (including `-Play`) to
+validate only these arguments without starting WSL. This is not runtime,
+configuration or display/audio readiness and does not claim capture success.
 
 Receipts/evidence remain in `-WslResults`; no Windows/NAS export is performed.
 No credentials are read by PowerShell, copied, renewed or deleted. No execution

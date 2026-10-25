@@ -177,3 +177,8 @@ simulated 61-second downstream hold can pass this processing boundary without
 spending real time; that does not establish long-duration live playback. Capture,
 decryption and output still have independent wall-clock/work limits, so this
 standalone option does **not** enable sustained or unbounded streaming.
+
+For explicit composition with guarded capture preparation and pending output,
+see [decoder clock composition](local-av-capture-preparation.md#explicit-decoder-clock-composition).
+That opt-in binds the new decoder profile while retaining the original source,
+decryption and output wall clocks; default verifiers/callers remain wall-based.

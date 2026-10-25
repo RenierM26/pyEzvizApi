@@ -602,9 +602,10 @@ def test_stop_during_video_constructor_skips_audio_and_aborts_owned_video(rig, m
 
 
 @pytest.mark.parametrize('stage', ['present', 'audio-drain', 'video-drain'])
-def test_stop_during_output_prevents_success_and_releases_every_lease(rig, stage):
+@pytest.mark.parametrize('decoder_deadline_mode', ['wall', 'consumer-excluding'])
+def test_stop_during_output_prevents_success_and_releases_every_lease(rig, stage, decoder_deadline_mode):
     report: dict[str, Any] = {}
-    owner, capture = session(rig, report)
+    owner, capture = session(rig, report, decoder_deadline_mode=decoder_deadline_mode)
     backend, method = (rig[1], 'present') if stage == 'present' else (rig[2] if stage == 'audio-drain' else rig[1], 'finish')
     original = getattr(backend, method)
     def stop(*args):
@@ -623,6 +624,9 @@ def test_stop_during_output_prevents_success_and_releases_every_lease(rig, stage
         assert report['output']['scheduler']['submitted']['audio_block'] == 0
     if stage == 'audio-drain':
         assert not rig[1].finished
+
+    if decoder_deadline_mode != 'wall':
+        assert not report['preparation']['decode']['input']['processing_clock']['borrow_active']
 
 
 def test_stop_after_success_does_not_mutate_completed_receipt(rig):
@@ -872,4 +876,82 @@ def test_pending_invalid_identity_mode_is_rejected_before_claiming_capture(rig):
         M['CapturePlayback'](owner, 'key', arguments(), report,
             limits=CaptureLimits(duration_seconds=8), codec='hevc', completion='bounded-prefix',
             identity_mode='not-a-profile')
+    assert not owner.started and not owner.closed and report['source_pull'] is None
+
+
+def test_pending_opt_in_decoder_clock_composes_with_sequence_ids_and_compact_media(rig):
+    legacy: dict[str, Any] = {}
+    _owner, baseline = session(rig, legacy, pes_ids=(0xE0, 0xE1, 0xC0), diagnostic_tail=2)
+    baseline.play()
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, pes_ids=(0xE0, 0xE1, 0xC0), diagnostic_tail=2,
+        identity_mode='source-sequence', decoder_deadline_mode='consumer-excluding')
+    assert not owner.started and not owner.closed
+    capture.play()
+    assert report['status'] == 'prefix-output-completed' and owner.closed
+    prep = report['preparation']
+    assert prep['decoder_deadline_mode'] == 'consumer-excluding'
+    assert prep['decode']['profile'] == 'standalone-chunked-consumer-excluding-v1'
+    count = sum(report['output']['scheduler']['completed'].values())
+    assert prep['decode']['input']['processing_clock']['completed_borrows'] == count
+    assert prep['online']['policy']['identity_audit']['retained_id_count'] == 0
+    assert report['accepted_prefix_clear_sha256'] == legacy['accepted_prefix_clear_sha256']
+    for field in ('origin', 'mapped_metadata_sha256', 'audio_clock_rows_sha256', 'audio_clock_contract'):
+        assert prep['online']['policy'][field] == legacy['preparation']['online']['policy'][field]
+    assert report['output']['scheduler']['completed'] == legacy['output']['scheduler']['completed']
+    assert report['source_pull']['iterator_closed'] and not report['source_pull']['worker_alive']
+    assert not report['output']['lookahead']['owned_ids'] and not report['output']['lookahead']['input_reservation']
+    M['verify_output'](prep, report['output'])
+    mutations = [('decoder_deadline_mode', 'wall'), ('decoder_deadline_mode', 'old'),
+        ('decode.profile', 'standalone-chunked-preparation-v1'), ('decode.input.processing_clock', {}),
+        ('decode.input.processing_clock.borrow_active', True),
+        ('decode.input.processing_clock.completed_borrows', True),
+        ('decode.input.processing_clock.completed_borrows', count - 1),
+        ('decode.input.processing_clock.processing_seconds', -1),
+        ('decode.input.processing_clock.processing_seconds', float('nan')),
+        ('decode.input.processing_clock.processing_seconds', float('inf')),
+        ('decode.input.processing_clock.processing_seconds', 61),
+        ('decode.input.processing_clock.processing_seconds', True),
+        ('decode.input.processing_clock.wall_seconds', -1),
+        ('decode.input.processing_clock.excluded_consumer_seconds', '0'),
+        ('decode.input.processing_seconds_limit', 60.0), ('decode.input.processing_seconds_limit', 61),
+        ('decode.input.startup_active', True), ('decode.input.startup_ready_elapsed_seconds', 6),
+        ('decode.input.startup_ready_elapsed_seconds', float('nan')),
+        ('decode.input.startup_seconds_limit', 6), ('decode.input.startup_byte_limit', 999),
+        ('decode.startup.mode', 'default'), ('decode.input_before_cleanup', {}),
+        ('decode.input_before_cleanup.processing_clock.borrow_active', True),
+        ('decode.input_before_cleanup.processing_clock.profile', 'old'),
+        ('decode.input_before_cleanup.processing_clock.completed_borrows', -1)]
+    for path, value in mutations:
+        changed = copy.deepcopy(prep)
+        parts = path.split('.')
+        target = changed
+        for part in parts[:-1]:
+            target = target[part]
+        target[parts[-1]] = value
+        with pytest.raises(ValueError):
+            M['verify_output'](changed, report['output'])
+    changed = copy.deepcopy(prep)
+    changed.pop('decoder_deadline_mode')
+    with pytest.raises(ValueError, match='mode/profile'):
+        M['verify_output'](changed, report['output'])
+    # Both snapshots individually valid, but cleanup may not subtract more wait
+    # or move the clock backwards after producer/decoder EOF.
+    for after in (dict(wall_seconds=9, processing_seconds=4, excluded_consumer_seconds=5),
+                  dict(wall_seconds=11, processing_seconds=5, excluded_consumer_seconds=6)):
+        changed = copy.deepcopy(prep)
+        changed['decode']['input_before_cleanup']['processing_clock'].update(
+            wall_seconds=10, processing_seconds=5, excluded_consumer_seconds=5)
+        changed['decode']['input']['processing_clock'].update(after)
+        with pytest.raises(ValueError, match='cleanup clock'):
+            M['verify_output'](changed, report['output'])
+
+
+@pytest.mark.parametrize('mode', [None, False, [], 'active'])
+def test_pending_invalid_decoder_clock_mode_does_not_claim_capture(rig, mode):
+    owner, _run = play(rig, {})
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='deadline mode'):
+        M['CapturePlayback'](owner, 'key', arguments(), report, limits=CaptureLimits(duration_seconds=8),
+            codec='hevc', completion='bounded-prefix', decoder_deadline_mode=mode)
     assert not owner.started and not owner.closed and report['source_pull'] is None

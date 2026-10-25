@@ -1,6 +1,7 @@
 """One accepted-prefix capture/decrypt/decode/policy verdict; no output devices."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import runpy
 import time
@@ -14,7 +15,48 @@ ONLINE = runpy.run_path(str(BASE / 'local_av_online.py'))
 CHUNKED = ONLINE['CHUNKED']
 
 
-def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: dict[str, Any]) -> str:
+def verify_clock_snapshot(reader: dict[str, Any], count: int) -> dict[str, Any]:
+    """Require completed scalar accounting, not a substitute for source EOF."""
+    clock = reader.get('processing_clock') or {}
+    numbers: list[Any] = [clock.get(field) for field in ('wall_seconds', 'processing_seconds', 'excluded_consumer_seconds')]
+    ready = reader.get('startup_ready_elapsed_seconds')
+    if (clock.get('profile') != 'consumer-excluding-monotonic-v1'
+            or clock.get('borrow_active') is not False
+            or type(clock.get('completed_borrows')) is not int or clock['completed_borrows'] != count
+            or any(isinstance(value, bool) or not isinstance(value, int | float)
+                or not math.isfinite(value) or value < 0 for value in numbers)
+            or not math.isclose(numbers[0], numbers[1] + numbers[2], rel_tol=1e-9, abs_tol=1e-6)
+            or type(reader.get('processing_seconds_limit')) is not int
+            or reader['processing_seconds_limit'] != CHUNKED['DECODE']['VIDEO']['MAX_SECONDS']
+            or numbers[1] > reader['processing_seconds_limit']
+            or reader.get('startup_active') is not False
+            or reader.get('startup_seconds_limit') != CHUNKED['STARTUP_SECONDS']
+            or reader.get('startup_byte_limit') != CHUNKED['STARTUP_BYTES']
+            or isinstance(ready, bool) or not isinstance(ready, int | float)
+            or not math.isfinite(ready) or not 0 <= ready <= CHUNKED['STARTUP_SECONDS']):
+        raise ValueError('capture decoder processing clock accounting failed')
+    return clock
+
+
+def verify_decoder_clock(decode: dict[str, Any], count: int, mode: str) -> None:
+    CHUNKED['validate_deadline_mode'](mode)
+    if mode == 'wall':
+        if (decode.get('profile') != 'standalone-chunked-preparation-v1'
+                or any('processing_clock' in (decode.get(name) or {}) for name in ('input', 'input_before_cleanup'))):
+            raise ValueError('capture decoder deadline mode/profile mismatch')
+        return
+    if (decode.get('profile') != 'standalone-chunked-consumer-excluding-v1'
+            or (decode.get('startup') or {}).get('mode') != 'bounded-mpeg'):
+        raise ValueError('capture decoder deadline mode/profile mismatch')
+    before = verify_clock_snapshot(decode.get('input_before_cleanup') or {}, count)
+    after = verify_clock_snapshot(decode.get('input') or {}, count)
+    if (after['wall_seconds'] < before['wall_seconds'] or after['processing_seconds'] < before['processing_seconds']
+            or after['excluded_consumer_seconds'] != before['excluded_consumer_seconds']):
+        raise ValueError('capture decoder cleanup clock accounting failed')
+
+
+def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: dict[str, Any], *,
+                      decoder_deadline_mode: str = 'wall') -> str:
     """Require independent terminal checks, not merely exhaustion of the wrapper."""
     crypto = capture.get('decryption') or {}
     reader = decode.get('input') or {}
@@ -33,7 +75,6 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or crypto.get('pending_bytes') != 0 or crypto.get('cleanup_errors')
             or not isinstance(digest, str) or len(digest) != 64
             or digest != crypto.get('complete_clear_sha256')
-            or decode.get('profile') != 'standalone-chunked-preparation-v1'
             or decode.get('status') != 'completed' or decode.get('error') is not None
             or decode.get('cleanup_errors') or digest != decode.get('source_sha256')
             or reader.get('verified_source_end') is not True or reader.get('pending_bytes') != 0
@@ -66,6 +107,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
                 or type(audit.get('audio_stream_index')) is not int or audit['audio_stream_index'] < 0
                 or (selection and audit['audio_stream_index'] != selection.get('audio_index'))):
             raise ValueError('capture preparation source identity accounting failed')
+    verify_decoder_clock(decode, count, decoder_deadline_mode)
     return digest
 
 
@@ -96,7 +138,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
         monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
-        identity_mode: str = 'full-history') -> Any:
+        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall') -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -106,6 +148,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
     capture: dict[str, Any] = {}
     decode: dict[str, Any] = {}
     online: dict[str, Any] = {}
+    report.pop('decoder_deadline_mode', None)
     report.update(profile='guarded-capture-online-preparation-v1', status='failed', error_type=None,
         input_scope='accepted-capture-prefix', completion_policy=completion,
         capture=capture, decode=decode, online=online, cleanup_error_types=[],
@@ -115,6 +158,9 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
     claimed = primary = False
     try:
         # Validate downstream policy before transferring ownership or opening IO.
+        CHUNKED['validate_deadline_mode'](decoder_deadline_mode)
+        if decoder_deadline_mode != 'wall':
+            report['decoder_deadline_mode'] = decoder_deadline_mode
         ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode)
         CAPTURE['validate_arguments'](owner, limits, completion, codec)
         if pes_ids is not None:
@@ -124,7 +170,8 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
             completion=completion, codec=codec, monotonic=monotonic)
         selection: dict[str, Any] | None = {} if pes_ids is not None else None
         options = {} if pes_ids is None else dict(pes_ids=pes_ids, selection=selection)
-        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', **options)
+        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg',
+            **({} if decoder_deadline_mode == 'wall' else dict(deadline_mode=decoder_deadline_mode)), **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
             policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, **({} if selection is None else dict(selection=selection)))
         report['status'] = 'running'
@@ -147,7 +194,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
                 raise cleanup_error
     if not primary:
         try:
-            digest = verify_completion(capture, decode, online)
+            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode)
         except Exception as error:
             report.update(status='failed', error_type=type(error).__name__)
             raise

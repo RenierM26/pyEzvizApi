@@ -314,3 +314,25 @@ The sequence policy has its own nested receipt profile and terminal accounting;
 legacy/default outer output profiles remain unchanged. Finite capture/decode/work
 limits and all source join/cleanup rules remain in force. No attended launcher is
 automatically switched, and this does not enable sustained/unbounded streaming.
+
+### Decoder-only consumer wait exclusion
+
+The pending `CapturePlayback` constructor accepts
+`decoder_deadline_mode='consumer-excluding'`. It forwards the explicit binding
+through capture preparation; see [composition and terminal clock checks](local-av-capture-preparation.md#explicit-decoder-clock-composition).
+It can be combined with explicit PES selection, `identity_mode='source-sequence'`
+and a compact diagnostic tail. Default wall-clock behavior and outer receipt
+profiles remain unchanged; the preparation binding and nested decoder profile
+identify the opted-in clock.
+
+This changes only which time is charged to the decoder's processing allowance.
+It does not pause capture/decryption wall clocks, change the host anchor or
+source targets, relax source/byte/frame limits, alter output lateness or backend
+join/drain deadlines, or bypass caller stop. Source interruption and worker join
+still precede lease/resource release, including cancellation during output or
+drains. Terminal output validation requires the bound decoder clock snapshots
+in addition to every existing prefix, media receipt, output and cleanup check.
+
+No attended launcher or existing caller is silently switched to the new option.
+This composition does not enable sustained/unbounded playback or establish
+physical A/V synchronization.

@@ -12,7 +12,9 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
-- Development-only scheduled audio-gap output adapter with separate padding/source targets, byte acknowledgements and retained cancellation ownership; not enabled in live A/V playback.
+- Explicit development pending-capture API audio-gap integration with earlier padding targets, unchanged original media targets, shared bounded lookahead credits and separate verified padding receipts; attended launcher defaults remain strict.
+
+- Development-only scheduled audio-gap output adapter with separate padding/source targets, byte acknowledgements and retained cancellation ownership; not enabled by default in live A/V playback.
 
 - Development-only constant-state whole-block audio-gap planner with explicit single/cumulative padding budgets, exact source/PCM verification and transactional decisions; no padding is written and playback defaults remain unchanged.
 

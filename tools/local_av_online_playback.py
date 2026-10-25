@@ -23,6 +23,7 @@ PLAY = B['PLAY']
 CHANNEL = B['CHANNEL']
 PULL = runpy.run_path(str(Path(__file__).with_name('local_av_pull.py')))
 AUDIT = runpy.run_path(str(Path(__file__).with_name('local_av_audit.py')))
+GAP = ONLINE['GAP']
 HASH_SCRATCH_BYTES = 65536
 
 
@@ -80,11 +81,17 @@ class Assets:
     """Credit includes preparing, queued and in-flight leases until ack/abort."""
 
     def __init__(self, iterator: Any, *, pending_input: bool = False, join_timeout: float = 5,
-                 stop: Event | None = None, diagnostic_tail: int | None = None) -> None:
+                 stop: Event | None = None, diagnostic_tail: int | None = None, gap_limits: dict[str, int] | None = None) -> None:
         # Opt-in callers retain the supplied pull owner, including after a failed
         # join. Never wrap/close its executing iterator on the consumer thread.
         if pending_input:
             validate_pending_source(iterator, join_timeout)
+        if gap_limits is not None and not pending_input:
+            raise ValueError('gap credits require an explicitly owned pending-input source')
+        self.gap_limits = None if gap_limits is None else dict(gap_limits)
+        self.gap_planner = None if gap_limits is None else GAP['GAPS']['GapPlanner'](**gap_limits)
+        self.audio_reserve = PLAY['PCM']['PCM_BYTES'] * (1 + (0 if gap_limits is None else gap_limits['max_gap_blocks']))
+        self.padding_credit = self.peak_padding_credit = 0
         self.pull: Any = iterator if pending_input else None
         self.iterator: Any = None if pending_input else iter(iterator)
         AUDIT['validate_tail'](diagnostic_tail)
@@ -170,9 +177,11 @@ class Assets:
         return (self.counts['video_pair'] < B['VIDEO_SLOTS']
             and self.bytes['video_pair'] + size <= B['VIDEO_BYTES']
             and self.counts['audio_block'] < B['AUDIO_SLOTS']
-            and self.bytes['audio_block'] + PLAY['PCM']['PCM_BYTES'] <= B['AUDIO_SLOTS'] * PLAY['PCM']['PCM_BYTES'])
+            and self.bytes['audio_block'] + self.audio_reserve <= B['AUDIO_SLOTS'] * PLAY['PCM']['PCM_BYTES'])
 
     def record_credit(self) -> None:
+        self.peak_padding_credit = max(self.peak_padding_credit, self.padding_credit
+            + (self.audio_reserve - PLAY['PCM']['PCM_BYTES'] if 'audio_block' in self.reservation else 0))
         for kind in self.counts:
             self.peak_credit_counts[kind] = max(self.peak_credit_counts[kind],
                 self.counts[kind] + int(kind in self.reservation))
@@ -183,7 +192,7 @@ class Assets:
         if not self.reservation:
             if not self.can_pull():
                 return False, None, 0
-            self.reservation = dict(video_pair=self.unknown_size(), audio_block=PLAY['PCM']['PCM_BYTES'])
+            self.reservation = dict(video_pair=self.unknown_size(), audio_block=self.audio_reserve)
             self.record_credit()
             self.pull_started_ns = time.monotonic_ns()
             self.pull.request()
@@ -204,7 +213,7 @@ class Assets:
             raise ValueError('prepared event exceeds reserved unknown-input credit')
         return True, value, started
 
-    def pump(self, *, startup: bool = False) -> bool:
+    def pump(self, *, startup: bool = False) -> bool:  # noqa: PLR0912, PLR0915
         if self.harvest_preparation():
             return True  # Dispatch newly ready heads before another decode pull.
         if self.source_end or (self.pull is None and not startup and not self.can_pull()):
@@ -224,12 +233,21 @@ class Assets:
         pulled = time.monotonic_ns()
         kind, name = event['kind'], PLAY['identity'](event)
         size = sum(len(part) for part in payload)
+        padding_credit = 0
+        if kind == 'audio_block' and self.gap_planner is not None:
+            charged = GAP['charge'](self.gap_planner, event, payload)
+            padding_credit, size = charged - size, charged
+            if self.reservation and size > self.reservation[kind]:
+                raise ValueError('gap source/padding exceeds reserved unknown-input credit')
         slots = B['VIDEO_SLOTS'] if kind == 'video_pair' else B['AUDIO_SLOTS']
         limit = B['VIDEO_BYTES'] if kind == 'video_pair' else slots * PLAY['PCM']['PCM_BYTES']
         if name in self.owned or self.counts[kind] >= slots or self.bytes[kind] + size > limit:
             raise ValueError('online output ownership capacity exceeded; no discard')
         self.preparing = name
         self.owned[name] = dict(kind=kind, size=size, data=None, event=event)
+        if self.gap_limits is not None:
+            self.owned[name]['padding_credit'] = padding_credit
+            self.padding_credit += padding_credit
         self.counts[kind] += 1
         self.bytes[kind] += size
         self.peak_counts[kind] = max(self.peak_counts[kind], self.counts[kind])
@@ -293,7 +311,13 @@ class Assets:
             raise ValueError('online output queue identity mismatch')
         return self.owned[name]['data']
 
-    release = B['Lookahead'].release
+    def release(self, name: str) -> None:
+        extra = self.owned[name].get('padding_credit', 0)
+        try:
+            B['Lookahead'].release(self, name)
+        finally:
+            self.padding_credit -= extra
+
     def close(self) -> None:
         errors = []
         # Never close an in-progress store. Join preparation before claiming or
@@ -351,6 +375,9 @@ class Assets:
         if self.diagnostic_tail is not None:
             report['preparation_audit'] = dict(**self.timings.result(),
                 error_count=self.diagnostic_errors, last_error_type=self.diagnostic_error_type)
+        if self.gap_limits is not None:
+            report.update(audio_gap_limits=dict(self.gap_limits), audio_unknown_reservation_bytes=self.audio_reserve,
+                owned_padding_credit_bytes=self.padding_credit, peak_padding_credit_bytes=self.peak_padding_credit)
         return report
 
 
@@ -368,6 +395,17 @@ class Scheduler(Parent):
             self.actions = AUDIT['Actions'](assets.diagnostic_tail)
         self.latest: int | None = None
 
+    def call(self, event: dict[str, Any], data: Any, backend: Any, action: dict[str, Any]) -> Any:
+        if isinstance(backend, GAP['Audio']):
+            if self.cancel.is_set():
+                raise ValueError('output cancelled')
+            try:
+                return backend.call(event, data, action)
+            finally:
+                failure = backend.result().get('failed_job') or {}
+                self.audio_partial = failure.get('partial_bytes', 0) if failure.get('kind') == 'source' else 0
+        return super().call(event, data, backend, action)
+
     def dispatch(self, assets: Assets, backends: dict[str, Any], executor: Any) -> None:
         for kind in assets.queues:
             check_stop(assets.stop)
@@ -375,14 +413,21 @@ class Scheduler(Parent):
             if event is None:
                 continue
             target = self.target(event)
-            now = self.check_late(target)
-            if kind in self.jobs or now < target:
+            dispatch = target
+            if kind == 'audio_block' and assets.gap_limits is not None:
+                assert self.anchor is not None
+                offset = GAP['relative_dispatch'](event) * 1000000000
+                dispatch = self.anchor + offset.numerator // offset.denominator
+            now = self.check_late(dispatch)
+            if kind in self.jobs or now < dispatch:
                 continue
             data = assets.load(event)
-            self.check_late(target)
+            self.check_late(dispatch)
             check_stop(assets.stop)
             action = dict(kind='output_call_submitted', track=kind, id=PLAY['identity'](event),
                 source_at=event['at'], target_monotonic_ns=target, bytes=len(data))
+            if kind == 'audio_block' and assets.gap_limits is not None:
+                action['audio_job_dispatch_target_monotonic_ns'] = dispatch
             self.actions.append(action)
             self.active[kind] = event
             self.jobs[kind] = executor.submit(self.call, event, data, backends[kind], action)
@@ -391,6 +436,13 @@ class Scheduler(Parent):
 
     def run(self, assets: Assets, video: Any, audio: Any, executor: Any) -> None:
         self.anchor = self.clock()
+        if isinstance(audio, GAP['Audio']):
+            video_head, audio_head = assets.head('video_pair'), assets.head('audio_block')
+            assert video_head is not None and audio_head is not None
+            source_origin = GAP['origin'](audio_head)
+            if source_origin != GAP['origin'](video_head):
+                raise ValueError('gap output requires the existing shared A/V origin')
+            audio.bind(self.anchor, source_origin, self.clock, self.pause)
         if assets.diagnostic_tail is not None:
             self.actions.set_media_anchor(self.anchor)
         backends = dict(video_pair=video, audio_block=audio)
@@ -512,15 +564,20 @@ def bind_span(receipt: dict[str, Any], limit: int, mode: str, pending: bool, tai
         receipt['source_span_limit_seconds'] = limit
 
 
-def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,  # noqa: PLR0915
+def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str | None = None,  # noqa: PLR0912, PLR0913, PLR0915
                   pending_input: bool = False, stop: Event | None = None, diagnostic_tail: int | None = None,
-                  video_identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60) -> None:
+                  video_identity_mode: str = 'full-history', pair_limit: int = 300, span_limit: int = 60, gap_limits: dict[str, int] | None = None) -> None:
     """Own prepared input/output; opt-in events is a caller-retained pristine pull.
 
     The caller validates transport first. With pending_input, it must retain the
     pull owner and rejoin after a cleanup timeout, never close its nested source.
     """
     validate_control(pending_input, stop, diagnostic_tail)
+    if gap_limits is not None:
+        gap_limits = GAP['validate'](gap_limits, args.audio_overlap_policy, args.max_audio_overlap_ms,
+            args.max_audio_phase_ms, span_limit, args.deadline)
+        if not pending_input or diagnostic_tail is None or video_identity_mode != 'source-sequence':
+            raise ValueError('gap output requires pending input, sequence identities and bounded diagnostics')
     bind_span(receipt, span_limit, video_identity_mode, pending_input, diagnostic_tail)
     options = video_options(receipt, title, video_identity_mode, pair_limit, diagnostic_tail)
     if pending_input:
@@ -531,7 +588,8 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         **({} if diagnostic_tail is None else dict(profile='bounded-prepared-tail-host-submissions-v1')))
     try:
         check_stop(stop)
-        assets = Assets(events, pending_input=True, join_timeout=args.deadline, stop=stop, diagnostic_tail=diagnostic_tail) if pending_input else Assets(events)
+        assets = Assets(events, pending_input=True, join_timeout=args.deadline, stop=stop, diagnostic_tail=diagnostic_tail,
+            **({} if gap_limits is None else dict(gap_limits=gap_limits))) if pending_input else Assets(events)
         assets.prefill(args.deadline)
         assert assets.geometry is not None
         check_stop(stop)
@@ -541,6 +599,8 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
         check_stop(stop)
         audio = PLAY['PCM']['Ffplay'](channel_args=('-ch_layout', 'mono') if args.mono_option == 'ch-layout'
             else ('-channels', '1'), immediate_raw_probe=True)
+        if gap_limits is not None:
+            audio = GAP['Audio'](audio, gap_limits, args.deadline, args.max_late_ms)
         check_stop(stop)
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='online-av-output')
         assets.start_preparation()
@@ -569,6 +629,8 @@ def play_prepared(events: Any, args: Any, receipt: dict[str, Any], *, title: str
                         if not primary:
                             raise
         finally:
+            if isinstance(audio, GAP['Audio']):
+                receipt['gap_audio'] = audio.result()
             receipt['stop_requested'] = stop is not None and stop.is_set()
 
 

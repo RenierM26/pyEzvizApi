@@ -1,6 +1,7 @@
 """Guarded prefix output requires acquisition policy, output acks and clean drain."""
 from concurrent.futures import Future
 import copy
+from fractions import Fraction
 import os
 from pathlib import Path
 import runpy
@@ -1016,3 +1017,145 @@ def test_pending_common_keyframe_lead_in_is_explicit_and_not_a_new_clock(rig):
     assert report['output']['scheduler']['completed']['video_pair'] == preparation['decode']['preparation']['video_pairs_consumed']
     assert report['output']['scheduler']['outputs_finished']
     assert not report['source_pull']['worker_alive'] and report['source_pull']['iterator_closed']
+
+
+GAP_LIMITS = dict(max_gap_blocks=1, max_total_gap_blocks=4, max_overlap_ms=1,
+    max_phase_ms=1, max_blocks=3000, max_source_span_seconds=60)
+
+
+def insert_gap(monkeypatch, blocks=1):
+    """Synthetic decoded source has one hole; original PCM stays unchanged."""
+    original = PREP['CHUNKED']['iter_chunks']
+    def chunks(*args, **kwargs):
+        index = 0
+        for original_event, payload in original(*args, **kwargs):
+            event = original_event
+            if event['kind'] == 'audio_block':
+                if index >= 2:
+                    event = copy.deepcopy(event)
+                    step = Fraction(blocks * 64, 1000) * event['block']['time_base_den'] / event['block']['time_base_num']
+                    assert step.denominator == 1
+                    event['block']['source_pts'] += step.numerator
+                    stamp = Fraction(event['block']['source_pts'] * event['block']['time_base_num'],
+                        event['block']['time_base_den'])
+                    event['source_time'] = dict(numerator=stamp.numerator, denominator=stamp.denominator)
+                    if index == 2:
+                        gap = OUT['PLAY']['fraction'](event['gap_before']) + Fraction(blocks * 64, 1000)
+                        event['gap_before'] = dict(numerator=gap.numerator, denominator=gap.denominator)
+                index += 1
+            yield event, payload
+    monkeypatch.setitem(PREP['CHUNKED'], 'iter_chunks', chunks)
+
+
+def test_explicit_gap_capture_composes_original_media_with_separate_padding(rig, monkeypatch):
+    insert_gap(monkeypatch)
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2, identity_mode='source-sequence', gap_limits=GAP_LIMITS)
+    capture.play()
+    out = report['output']
+    assert owner.closed and report['status'] == 'prefix-output-completed'
+    gap = out['gap_audio']
+    source_count = report['preparation']['decode']['preparation']['audio_blocks_consumed']
+    assert gap['completed'] == dict(source=source_count, padding=1)
+    assert gap['api_bytes'] == dict(source=source_count * 2048, padding=2048)
+    assert gap['peak_owned_bytes'] == 4096 and gap['owned_source_bytes'] == gap['owned_padding_bytes'] == 0
+    assert out['lookahead']['audio_unknown_reservation_bytes'] == 4096
+    assert out['lookahead']['owned_padding_credit_bytes'] == 0
+    assert out['lookahead']['peak_credit_bytes']['audio_block'] <= 65536
+    assert gap['source_gap_plan'] == report['preparation']['online']['policy']['audio_clock_contract']
+    assert gap['host_anchor_monotonic_ns'] == out['scheduler']['host_anchor_monotonic_ns']
+    assert out['scheduler']['action_audit']['media_receipt']['tracks']['audio_block']['bytes'] == source_count * 2048
+    M['verify_output'](report['preparation'], out)
+    for path, value in [('completed.source', True), ('owned_source_bytes', False), ('source_gap_plan.limits.max_gap_blocks', True),
+            ('shared_source_origin.numerator', 0), ('api_bytes.padding', 0), ('outputs_finished', False)]:
+        bad = copy.deepcopy(out)
+        node = bad['gap_audio']
+        parts = path.split('.')
+        for part in parts[:-1]:
+            node = node[part]
+        node[parts[-1]] = value
+        with pytest.raises(ValueError):
+            M['verify_output'](report['preparation'], bad)
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_gap_beyond_policy_is_rejected_and_workers_are_joined(rig, monkeypatch, explicit):
+    insert_gap(monkeypatch, blocks=2)
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2, identity_mode='source-sequence',
+        **(dict(gap_limits=GAP_LIMITS) if explicit else {}))
+    with pytest.raises(ValueError):
+        capture.play()
+    assert owner.closed and report['status'] == 'failed'
+    assert report['source_pull']['worker_alive'] is False
+    assert report['accepted_prefix_clear_sha256'] is None
+
+
+@pytest.mark.parametrize('options', [dict(identity_mode='full-history'), dict(diagnostic_tail=None),
+    dict(gap_limits=dict(GAP_LIMITS, max_gap_blocks=True)), dict(gap_limits=dict(GAP_LIMITS, max_source_span_seconds=120))])
+def test_gap_options_rejected_before_capture_ownership(rig, options):
+    changes = dict(identity_mode='source-sequence', diagnostic_tail=2, gap_limits=GAP_LIMITS)
+    changes.update(options)
+    with pytest.raises(ValueError):
+        session(rig, {}, **changes)
+    assert not rig[3] and not rig[1].calls and not rig[2].calls
+
+
+@pytest.mark.parametrize('failed_kind', ['padding', 'source'])
+def test_gap_partial_failure_never_acknowledges_source_or_releases_inflight_credit(rig, monkeypatch, failed_kind):
+    insert_gap(monkeypatch)
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2, identity_mode='source-sequence', gap_limits=GAP_LIMITS)
+    original = rig[2].write
+    seen_padding = False
+    partial = False
+    observed = []
+    assets_class = OUT['Assets']
+    def assets(*args, **kwargs):
+        value = assets_class(*args, **kwargs)
+        observed.append(value)
+        return value
+    monkeypatch.setitem(OUT['play_prepared'].__globals__, 'Assets', assets)
+    def write(data):
+        nonlocal seen_padding, partial
+        padding = not any(data)
+        seen_padding = seen_padding or padding
+        if (padding if failed_kind == 'padding' else seen_padding and not padding):
+            owned = observed[0]
+            assert owned.padding_credit == 2048
+            assert any(row['size'] == 4096 for row in owned.owned.values())
+            if not partial:
+                partial = True
+                return 7
+            raise BrokenPipeError('synthetic partial output failure')
+        return original(data)
+    rig[2].write = write
+    with pytest.raises(BrokenPipeError):
+        capture.play()
+    out = report['output']
+    assert owner.closed and report['status'] == 'failed'
+    assert out['gap_audio']['failed_job']['kind'] == failed_kind
+    assert out['gap_audio']['failed_job']['partial_bytes'] == 7
+    assert out['gap_audio']['completed']['source'] == 2
+    assert out['scheduler']['completed']['audio_block'] == 2
+    assert out['scheduler']['partial_audio_bytes'] == (7 if failed_kind == 'source' else 0)
+    assert out['lookahead']['owned_bytes'] == dict(video_pair=0, audio_block=0)
+    assert out['lookahead']['owned_padding_credit_bytes'] == 0
+    assert not report['source_pull']['worker_alive']
+
+
+def test_cancellation_during_gap_drain_cannot_become_capture_success(rig, monkeypatch):
+    insert_gap(monkeypatch)
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, diagnostic_tail=2, identity_mode='source-sequence', gap_limits=GAP_LIMITS)
+    finish = rig[2].finish
+    def cancel_on_finish(timeout):
+        capture.request_stop()
+        finish(timeout)
+    rig[2].finish = cancel_on_finish
+    with pytest.raises(OUT['PlaybackStopped']):
+        capture.play()
+    assert owner.closed and report['status'] == 'cancelled'
+    assert not report['output']['scheduler']['outputs_finished']
+    assert report['accepted_prefix_clear_sha256'] is None
+    assert not report['source_pull']['worker_alive']

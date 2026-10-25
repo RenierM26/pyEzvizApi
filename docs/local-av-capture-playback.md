@@ -473,3 +473,14 @@ fixed 30-second development attempt, see
 [the attended LAN command](local-av-lan-playback.md). It reuses the pending capture
 adapter without adding production dependencies, account discovery, cloud fallback
 or a new default startup/audio policy.
+
+
+## Explicit bounded source-audio gaps
+
+`CapturePlayback(..., gap_limits=limits)` is a development API opt-in for
+separately scheduled whole-block padding. It requires pending input,
+source-sequence identities, bounded diagnostics and matching finite source and
+jitter limits. See the [complete policy and credit contract](local-av-audio-gap-output.md#explicit-pending-capture-api-integration).
+Original source PCM, video and targets remain unchanged; padding has separate
+acknowledgements. Omitting this argument preserves the strict source-phase guard.
+The attended CLI does not expose this opt-in yet.

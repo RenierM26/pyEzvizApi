@@ -13,8 +13,9 @@ and backpressure, and retain existing cancellation and drain limits. A plan does
 not establish EOF, completed playback, physical audibility or A/V synchronization.
 
 The separate [scheduled audio-only output adapter](local-av-audio-gap-output.md)
-implements the next ownership/acknowledgement boundary, but is still not connected
-to live A/V playback.
+implements the ownership/acknowledgement boundary. Its explicit pending-capture
+API integration reserves padding credit and preserves original A/V targets;
+attended CLI defaults remain unchanged. Planning alone still authorizes no IO.
 
 ## Input and explicit limits
 

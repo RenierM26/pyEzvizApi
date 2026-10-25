@@ -889,6 +889,8 @@ fallback. Optional Linux/WSL playback dependencies are required; this is not an
 installed production player or an unbounded stream.
 Use the [one-command session](docs/local-av-lan-playback.md#one-command-session-linuxwsl)
 to retain packet evidence and verify the saved media automatically after capture.
+A [Windows PowerShell bridge](docs/local-av-lan-playback.md#start-from-windows-powershell)
+invokes that workflow in an existing configured WSL distribution.
 
 ## Side Notes
 

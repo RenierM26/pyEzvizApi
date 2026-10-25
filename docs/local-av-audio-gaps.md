@@ -12,6 +12,10 @@ host targets, independently audit padding bytes, account for padding ownership
 and backpressure, and retain existing cancellation and drain limits. A plan does
 not establish EOF, completed playback, physical audibility or A/V synchronization.
 
+The separate [scheduled audio-only output adapter](local-av-audio-gap-output.md)
+implements the next ownership/acknowledgement boundary, but is still not connected
+to live A/V playback.
+
 ## Input and explicit limits
 
 `GapPlanner.offer(event, payload)` accepts one original prepared `audio_block`

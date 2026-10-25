@@ -887,6 +887,8 @@ bounded dual-lens HEVC/AAC attempt after offline checks and an Enter prompt. It
 uses an existing private local credential file, without account login or cloud
 fallback. Optional Linux/WSL playback dependencies are required; this is not an
 installed production player or an unbounded stream.
+Use the [one-command session](docs/local-av-lan-playback.md#one-command-session-linuxwsl)
+to retain packet evidence and verify the saved media automatically after capture.
 
 ## Side Notes
 

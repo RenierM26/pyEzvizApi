@@ -6,6 +6,57 @@ It remains a development tool, not a production API or unbounded player. It need
 the existing installed package and optional PyAV/SDL2/ffplay dependencies on
 Linux/WSL. It installs nothing and changes no firewall or sandbox settings.
 
+## One-command session (Linux/WSL)
+
+To capture, retain encrypted evidence and verify saved media in one invocation,
+run this entrypoint from a complete repository checkout in a Linux/WSL terminal:
+
+```sh
+bash tools/local_av_lan_session.sh \
+  --python /path/to/installed/runtime/bin/python3.12 \
+  --results new-session-directory \
+  --private-config /local/path/camera.json \
+  --expected-package-sha256 EXPECTED_SOURCE_SHA256 \
+  --startup-pairing common-keyframe \
+  --audio-overlap-policy bounded-serial-pcm \
+  --max-audio-overlap-ms 1 --max-audio-phase-ms 1 \
+  --play
+```
+
+Use an absolute executable interpreter path whose installed package matches the
+approved source fingerprint. Bash and the already configured Linux/WSL display,
+audio and optional native dependencies are required. This entrypoint installs
+nothing, configures no display/firewall, fetches no credentials and is not a
+standalone Windows bundle. Run `--help` for its finite option list.
+
+The results directory must be new; it is created with mode 0700. The workflow
+runs the existing attended command, preserving its offline checks and **one Enter
+prompt before acquisition**. After successful capture it runs the existing
+isolated offline verifier against those saved files, without starting the camera
+again. The directory contains:
+
+- `capture.json`: the unchanged attended parent/worker receipt.
+- `packets/`: bounded encrypted bodies, index and manifest.
+- `verification.json`: the independent media-chain comparison result.
+
+Only zero exits from both commands produce the final session-completed message.
+A failed/cancelled capture never starts verification. A verification failure
+preserves the successful capture receipt and source evidence; it does not retry
+or upgrade either verdict. All partial results are kept for diagnosis. The
+configuration is read in place, never copied or removed.
+
+Ctrl-C/SIGTERM is forwarded to the active Python command and the workflow waits
+for its owned step to finish cleanup before returning cancellation. Each Python
+command retains its own existing worker timeout and process-group escalation;
+the wrapper changes no media, startup, wall-time or ownership budget. No phase
+runs concurrently and no extra camera attempt is armed. Keep results private.
+
+Startup/audio policies still default to strict/reject. The example opts into the
+same bounded common-keyframe and 1-ms serial-PCM policies described below. The
+wrapper rejects unknown, duplicate, abbreviated and workflow-managed/internal
+options before starting; output paths are owned by the workflow. Individual
+commands remain available for separate capture or offline diagnosis.
+
 ## Run
 
 Use the installed-package fingerprint approved for your checkout/runtime, as

@@ -483,4 +483,5 @@ source-sequence identities, bounded diagnostics and matching finite source and
 jitter limits. See the [complete policy and credit contract](local-av-audio-gap-output.md#explicit-pending-capture-api-integration).
 Original source PCM, video and targets remain unchanged; padding has separate
 acknowledgements. Omitting this argument preserves the strict source-phase guard.
-The attended CLI does not expose this opt-in yet.
+The attended CLI exposes this only through its separate
+[`two-minute-gaps` profile](local-av-lan-playback.md#explicit-two-minute-bounded-gap-profile).

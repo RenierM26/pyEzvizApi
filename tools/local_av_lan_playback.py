@@ -347,8 +347,8 @@ def supervise(args: Any, report: dict[str, Any], digest: str, mono: str) -> None
                 or playback.get("source_worker_retained") is not False
                 or playback.get("caller_cleanup_error_types")
                 or playback.get("capture_limits") != profile['limits']
-                or playback.get("requested_options")
-                != dict(profile['options'], startup_pairing=args.startup_pairing)
+                or CAPTURE['OUTPUT']['GAP']['GAPS']['canonical'](playback.get("requested_options"))
+                != CAPTURE['OUTPUT']['GAP']['GAPS']['canonical'](dict(profile['options'], startup_pairing=args.startup_pairing))
             ):
                 raise ValueError("worker receipt binding failed")
             CAPTURE["verify_output"](playback["preparation"], playback["output"])
@@ -390,6 +390,7 @@ def attended(args: Any, report: dict[str, Any]) -> None:
         identity_mode="source-sequence",
         pair_limit=profile['options']['pair_limit'],
         span_limit=profile['options'].get('span_limit', 60),
+        **({} if 'gap_limits' not in profile['options'] else dict(gap_limits=profile['options']['gap_limits'])),
     )
     CAPTURE["PREPARE"]["CHUNKED"]["DECODE"]["validate_startup_pairing"](args.startup_pairing)
     if not args.play:
@@ -413,6 +414,8 @@ def attended(args: Any, report: dict[str, Any]) -> None:
         + args.startup_pairing,
         flush=True,
     )
+    if 'gap_limits' in profile['options']:
+        print('Explicit padding: at most 1 x 64 ms block per gap / 4 total; original media targets unchanged.', flush=True)
     input("Press Enter when ready to start LIVE acquisition: ")
     report["stage"] = "live-acquisition"
     supervise(args, report, digest, preflight["pcm"]["mono_option"])

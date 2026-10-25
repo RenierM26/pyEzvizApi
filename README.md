@@ -900,7 +900,9 @@ The separate [offline whole-block audio-gap planner](docs/local-av-audio-gaps.md
 prepares explicit bounded padding decisions without changing live playback or PCM.
 Its [scheduled audio-only output adapter](docs/local-av-audio-gap-output.md) audits
 padding separately. The development pending-capture API can explicitly opt in
-with finite gap limits and shared A/V credits; attended CLI defaults remain strict.
+with finite gap limits and shared A/V credits. The separate
+[`two-minute-gaps` attended profile](docs/local-av-lan-playback.md#explicit-two-minute-bounded-gap-profile)
+adds bounded padding with independent saved-source verification; defaults remain strict.
 
 ## Side Notes
 

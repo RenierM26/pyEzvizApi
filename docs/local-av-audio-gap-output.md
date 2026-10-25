@@ -2,7 +2,8 @@
 
 `tools/local_av_audio_gap_output.py` adds an **explicit, audio-only development
 adapter** around the [whole-block gap planner](local-av-audio-gaps.md). It is not
-enabled by default or exposed as a CLI policy or installed-library feature.
+enabled by default or provided as an installed-library feature. The attended CLI
+exposes the enclosing capture API only through a separate named opt-in.
 The capture development API has a separate explicit integration described below.
 Existing CLI source-phase rejection stays enabled. There is no new camera command.
 
@@ -116,7 +117,8 @@ workflow. No fresh acquisition is required for those offline checks.
 acquisition. The caller still supplies and owns the pristine transport handle.
 Calling `play()` acquires the explicitly supplied finite source. This is not a
 new command, automatic camera test, broader camera support claim, or app policy.
-The attended Bash/PowerShell launcher and its defaults remain unchanged.
+The attended Bash/PowerShell launcher exposes a separate explicit
+[`two-minute-gaps` profile](local-av-lan-playback.md#explicit-two-minute-bounded-gap-profile); defaults remain unchanged.
 
 All six planner limits are mandatory. For example, with the existing explicit
 120-second source-span profile:

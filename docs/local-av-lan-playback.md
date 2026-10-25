@@ -225,6 +225,44 @@ Offline synthetic encrypted-source controls exercise the full two-minute command
 graph and independent media verification without camera access. An attended
 two-minute camera run is still required before claiming sustained live validation.
 
+## Explicit two-minute bounded-gap profile
+
+`--capture-profile two-minute-gaps` (`-CaptureProfile two-minute-gaps` in
+PowerShell) is a separate, explicit policy. It retains the same finite duration,
+packet/byte/pair/span and supervision budgets as `two-minute`. It permits at most
+**one 64 ms / 1,024-sample padding block per gap, four blocks total**. Original
+video/PCM bytes and host targets remain unchanged. Padding has its own earlier
+submission target, API byte acknowledgements and complete hash chains; it does
+not recover missing sound or establish acoustic/physical synchronization.
+
+The existing default and strict `two-minute` profile do not enable padding.
+The gap profile also requires the explicit matching audio options below; invalid
+combinations fail before runtime checks, the Enter gate or acquisition:
+
+```bash
+bash tools/local_av_lan_session.sh \
+  --python /approved/runtime/bin/python3.12 \
+  --results /private/new-results --private-config /private/local.json \
+  --expected-package-sha256 APPROVED_SOURCE_SHA256 \
+  --capture-profile two-minute-gaps --startup-pairing common-keyframe \
+  --audio-overlap-policy bounded-serial-pcm \
+  --max-audio-overlap-ms 1 --max-audio-phase-ms 1 --play
+```
+
+The prompt explicitly states the padding limits. The new evidence format
+`encrypted-lan-packets-120s-gaps-v1` requires this same explicit profile at export
+and replay: it is not accepted under default or strict two-minute limits.
+The isolated verifier reconstructs all original media/targets **and** separate
+padding/source API-media counts, byte extents and chains from the saved encrypted
+source. A gap-profile success adds `gap_media_verified: true` to its fixed
+verification result; a missing or false flag is rejected by the supervising
+process. This verifies acknowledged API media, not loudspeaker presentation.
+
+For manual replay use the same existing verifier command with
+`--capture-profile two-minute-gaps`. Never rerun a consumed live session merely
+to collect evidence. The public workflow has offline retained-ciphertext coverage;
+a fresh attended target-host run is still required for human video/audio results.
+
 ## Private configuration
 
 Supply the existing `EzvizLocalSdkCredentials.as_dict(include_media_key=True)`

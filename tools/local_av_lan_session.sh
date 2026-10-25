@@ -6,7 +6,7 @@ usage() {
     cat <<'EOF'
 Usage: local_av_lan_session.sh --python /installed/python --results NEW_DIRECTORY \
   --private-config LOCAL_JSON --expected-package-sha256 APPROVED_DIGEST --play \
-  [--capture-profile prefix-30s|two-minute] \
+  [--capture-profile prefix-30s|two-minute|two-minute-gaps] \
   [--startup-pairing strict|common-keyframe] \
   [--audio-overlap-policy reject|bounded-serial-pcm] \
   [--max-audio-overlap-ms N] [--max-audio-phase-ms N]
@@ -50,7 +50,7 @@ while (($#)); do
     esac
 done
 [[ $play == true && -n $private_config && -n $results && ${seen[--expected-package-sha256]+present} ]] || fail 'Python, results, private config, expected package hash and --play are required.'
-[[ $capture_profile == prefix-30s || $capture_profile == two-minute ]] || fail 'Unknown capture profile.'
+[[ $capture_profile == prefix-30s || $capture_profile == two-minute || $capture_profile == two-minute-gaps ]] || fail 'Unknown capture profile.'
 if [[ $capture_profile != prefix-30s ]]; then verify_options=(--capture-profile "$capture_profile"); fi
 [[ $python_path == /* && -f $python_path && -x $python_path ]] || fail 'Python must be an absolute executable file path.'
 base=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)

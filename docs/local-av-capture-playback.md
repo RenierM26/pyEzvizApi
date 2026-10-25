@@ -120,3 +120,197 @@ renumbering, timestamp rewriting, payload changes or larger startup budget is
 introduced. Both selection records must agree for prefix completion. The
 selection itself does not verify a whole source or physical lens identity, nor
 does it promise that a later truncated capture or output failure will succeed.
+
+## Opt-in pending-input capture session
+
+`CapturePlayback` from the same development helper composes guarded capture with
+single-demand source pulling. Existing `capture_playback`, recorded CLI and
+launcher defaults remain synchronous and unchanged.
+
+```python
+session = helper['CapturePlayback'](
+    owner, private_key, args, report, limits=limits,
+    completion='bounded-prefix', pes_ids=(0xE0, 0xE1, 0xC0),
+)
+# Retain this object until its source worker is joined, including on failure.
+session.play()
+```
+
+Construction validates all options before claiming the pristine supplied owner.
+It copies the option namespace and starts one idle source worker, without
+acquisition or output. Call `play()` once, or `close()` to release an unstarted
+session. The caller supplies its own owner and borrowed client; this helper does
+not discover credentials or change transport selection. The owner's `close`
+must be a thread-safe, promptly returning IO interrupt, as on `AutoMediaStream`.
+
+Only the source worker calls `next` or `close` on the preparation pipeline.
+During active reads, shutdown interrupts the transport first, then joins the
+worker within the unchanged `args.deadline`. Arbitrary interrupt-hook duration
+is not bounded by the join timeout. The worker also releases a claimed but
+never-started capture; closing a lazy generator alone cannot do that. Capture
+startup that returns a connection after interruption still requires final
+transport release before the source worker can finish.
+
+A timed-out join raises and leaves `session.pull` and its executing source owned.
+Do **not** close nested generators, discard the session, start a replacement or
+reuse the owner. After the blocked operation can finish, call
+`session.close(timeout=...)` again (finite timeout in `(0, 30]` seconds). Recovery
+updates `report['source_pull']` but never upgrades a failed playback verdict.
+Call close/inspection only after play returns; session control is single-consumer,
+not an additional concurrent cancellation API. Caller signal handling is unchanged.
+
+The scheduler reserves one unknown event in both existing track budgets before
+each explicit request. Pending reads permit queued dispatch, acknowledgement
+harvest and deadline/liveness checks. Original targets, lateness, count/byte caps,
+payloads, PES selection, EOF policy and drains are unchanged. No unbounded producer
+queue, retry, drop or clock rebase is added. Native/GIL/interrupt stalls can still
+prevent timely playback; this is not a hard-real-time guarantee.
+
+The separate profile is `guarded-capture-pending-host-submissions-v1`.
+`prefix-output-completed` additionally requires a joined source worker, closed
+iterator, verified source end and no outstanding/abandoned result or source,
+interrupt or finalizer error. `source_pull` is refreshed on close/rejoin;
+`output.lookahead.source_pull` is the output cleanup-time snapshot. Nested partial
+receipts remain diagnostic, not independent permission to claim success. The
+same accepted-prefix-only and physical-clock limitations above apply. No new
+attended Windows run or sustained live-stream claim is supplied by this opt-in
+composition alone.
+
+### Application-driven stop
+
+A different thread may call `session.request_stop()` while the playback owner is
+inside `play()`. It is idempotent and only sets a thread-safe flag: it neither
+closes resources nor waits for IO. Do not call `close()` concurrently with play.
+The playback owner observes stop during pending-input prefill, between backend
+constructors, before further submissions, after preparation and between drains.
+It then aborts output, interrupts active source IO and joins through the same
+bounded cleanup path. Existing constructor/native calls and backend drains remain
+cooperative; stop is not guaranteed to interrupt those calls immediately.
+
+`play()` raises the helper output dependency's `PlaybackStopped` (a `ValueError`)
+and records `status='cancelled'`, `stop_requested=True`, no successful prefix hash.
+A previously set flag prevents acquisition and backend construction, while still
+releasing the session's claimed unstarted capture on its source worker. An
+unrelated failure that is already being propagated retains its original exception.
+A cleanup timeout still leaves the pull/session owned for explicit later rejoin;
+requesting stop does not mean cleanup has completed. Calls after play has completed
+do not rewrite its receipt or reopen it. Requests observed during final cleanup
+or verdict verification prevent successful prefix publication.
+
+This remains the same finite opt-in profile, not sustained playback or automatic
+reconnect. Synchronous capture/recorded defaults, payloads, timing and limits are
+unchanged. The lower-level `play_prepared` also accepts `stop=threading.Event()`
+only with explicit `pending_input=True`; invalid stop contracts leave the source
+unclaimed. The flag is caller-owned and never set or cleared by output cleanup.
+
+### Bounded finalized diagnostic history
+
+`CapturePlayback(..., diagnostic_tail=16)` opts into bounded diagnostic retention;
+`None` preserves all existing receipts and defaults. The explicit limit is1–128
+finalized rows/pairs. Compact capture uses
+`guarded-capture-pending-tail-host-submissions-v1`; its nested output uses
+`bounded-prepared-tail-host-submissions-v1`. Consumers that require every action
+must retain the legacy mode rather than interpreting a tail as a full history.
+
+Preparation timings retain at most N finalized rows, and scheduler actions retain
+at most N finalized submission/outcome pairs (at most2N flattened action rows).
+Each journal is also bounded to65536 encoded bytes, each encoded record to16384;
+byte pressure may retain fewer than N rows. Admission bounds JSON depth,nodes,text
+and integer size before canonical encoding, rejects non-JSON/media payloads and
+nonfinite floats, and fails the session on unsupported diagnostic metadata rather
+than silently ignoring it. Bounded encoding scratch is separate from retained
+journal bytes, mutable in-flight rows and serialized receipt snapshots.
+
+The scheduler holds at most one pending submission per track under existing output
+credit. It seals that submission together with the exact outcome only after the
+future is finished, so worker-populated start/lateness fields cannot mutate an
+already hashed record. Finalized pairs are ordered by owner harvest, not original
+submission order. Incomplete submissions are reported separately using their
+immutable original metadata; they are not included in the finalized hash/count.
+
+`action_audit` and `preparation_audit` report full finalized counts, encoded-byte
+counts, evictions, retained/peak sizes and `complete_history_retained`. The digest
+is SHA256 of ASCII `bounded-finalized-json-v1` plus LF, followed by each finalized
+canonical JSON record plus LF. JSON keys are sorted, separators are`,` and`:`,
+Unicode is ASCII-escaped and nonfinite numbers rejected. Action records have
+`submission` and `outcome` fields. Hashing includes every finalized record even
+when its diagnostic tail is later evicted. A prefix digest is not an independent
+proof of source EOF, a missing output acknowledgement or physical playback.
+
+Successful compact completion still requires every prepared event to be offered,
+submitted and acknowledged, all upstream prefix checks, clean drains, joined source
+and zero leases. Full action/preparation counters must agree with those totals;
+missing compact audit records fail terminal validation. Stop/failure retain partial
+counter/hash evidence without upgrading the verdict.
+
+Only these two diagnostic histories are bounded by this option. Source/policy
+identity sets, decoder/session work and transport remain under their existing
+finite limits. This does not enable unlimited streaming, raise caps, drop/rebase
+media or alter scheduling. Legacy CLI/capture modes are unchanged.
+
+Diagnostic admission failures have separate bounded counters/type diagnostics and
+invalidate compact completion. They cannot replace an already propagating
+preparation/backend error or skip pending-future, iterator or lease cleanup. A
+later valid append cannot erase an earlier diagnostic failure.
+
+### Whole-prefix media and target fingerprints
+
+Compact `action_audit.media_receipt` now contains `bounded-output-media-v1`:
+recorded host anchor and,for each track,completed count,total acknowledged payload
+bytes and SHA256. This is separate from the observation-dependent diagnostic hash.
+It keeps only two hash states,counters and previous exact source targets; it does
+not retain another event history. Legacy full-receipt/default paths are unchanged.
+
+Each admitted completed acknowledgement projects exactly these fields:
+
+```json
+{"track":"video_pair","id":"local-pair:1","source_at":{"numerator":0,"denominator":1},"target_monotonic_ns":123,"bytes":6220800,"payload_sha256":"<canonical pixel hash>"}
+```
+
+The corresponding audio track is `audio_block`,with the original block ID and
+PCM hash. Source fractions are reduced exactly;targets must equal the frozen
+anchor plus floor(source_at×1000000000). Starts must strictly increase per track.
+Acknowledged bytes must equal submitted bytes;audio blocks remain2048bytes. Video
+requires the existing `presented` acknowledgement and matching pair ID. Fingerprints
+are exactly64 lowercase hexadecimal characters. Raw,mutable or malformed metadata
+cannot advance the receipt. Global ID uniqueness remains the upstream policy's
+responsibility;this constant-state receipt independently checks per-track order.
+
+Each track starts SHA256 with ASCII `bounded-output-media-v1`,LF,the track name,LF.
+Append each projected canonical JSON row followed by LF,using sorted keys,compact
+`,`/`:` separators,ASCII Unicode escapes and no nonfinite numbers. Per-track
+completion/source order is used;cross-track harvest interleaving has no effect.
+Worker start/return times,harvest times,lateness observations and other backend
+fields are excluded. Submitted,pending,failed and partially written output is not
+counted as completed media. Prepare/validate the projection before diagnostic
+admission and commit only after it succeeds,so a rejected diagnostic row cannot
+partially commit a media acknowledgement.
+
+An independent verifier decodes the same accepted source prefix,applies the same
+explicit track/origin/audio policy,and computes each original ID,relative target,
+canonical paired-pixel/PCM hash and payload extent. Using the receipt's recorded
+anchor,it reconstructs both complete track chains without needing evicted actions
+or host service timestamps. Counts,byte totals and digests must all match. A
+changed hash/target/order/extent or omitted event changes this receipt even if the
+retained diagnostic tail appears valid. This is a fingerprint comparison,not
+cryptographic authentication or a physical display/speaker measurement.
+
+Compact completion requires this media receipt,matching anchor/track counts and
+well-formed positive byte totals/hashes,alongside every existing source/prefix/
+output/drain/cleanup check. Older compact receipts lacking the new field cannot
+establish this stronger media claim. Failed/cancelled sessions retain only partial
+completed-media evidence;the hash itself never asserts successful EOF or cleanup.
+No existing attended launcher or collector is silently switched to compact mode.
+
+### Opt-in source identity counters
+
+Pass `identity_mode='source-sequence'` to `CapturePlayback` to replace the online
+policy's whole-prefix ID sets with strict original source-sequence counters.
+See [canonical source IDs, receipts and limits](local-av-online-policy.md#opt-in-constant-state-source-identity-checks).
+This composes with the existing `diagnostic_tail` option and explicit same-session
+PES selection. No event IDs, media bytes, origin, host targets or scheduling rules
+are changed. Invalid options fail before source ownership is transferred.
+The sequence policy has its own nested receipt profile and terminal accounting;
+legacy/default outer output profiles remain unchanged. Finite capture/decode/work
+limits and all source join/cleanup rules remain in force. No attended launcher is
+automatically switched, and this does not enable sustained/unbounded streaming.

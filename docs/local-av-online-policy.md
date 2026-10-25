@@ -91,3 +91,44 @@ Next is a bounded online output owner with a single host anchor, independent
 track queues, explicit backpressure and abort/drain behavior, followed by bounded
 network/decryption lifecycle integration. The existing recorded player must not
 be switched to this adapter without implementing those contracts.
+
+## Opt-in constant-state source identity checks
+
+`iter_online(..., identity_mode='source-sequence')` replaces the policy's two
+whole-prefix ID sets with two accepted-event counters. The default remains
+`full-history`, which accepts arbitrary nonempty unique event names under the
+existing work limits. This option does not evict old IDs from a deduplication
+window: it imposes a stricter source contract so old names cannot recur at all.
+
+Video IDs must be exactly `local-pair:1`, `local-pair:2`, ... in per-video
+admission order. Audio IDs must be exactly `aac:<selected absolute audio index>:0`,
+`aac:<index>:1`, ... in per-audio admission order. These are the chunk decoder's
+existing original IDs, not a renumbering performed by the policy. Counters start
+at the beginning of this iterator; mid-stream fragments with nonzero initial
+indices require the legacy mode or an upstream session starting at its real
+beginning. A duplicate, reset, skip, wrong stream, leading zero, sign, alternate
+digit spelling or arbitrary ID fails before credit or identity admission. Never
+repair or rewrite source names. Different track interleavings do not affect the
+independent counters. Explicit PES selection uses the newly resolved absolute
+audio index, not the caller's placeholder index.
+
+The opt-in online profile is `standalone-online-sequence-av-policy-v1`. Its
+`policy.identity_audit` has profile `strict-source-sequence-v1`, accepted counts
+for both tracks, `retained_id_count=0` and the actual `audio_stream_index`.
+Counters advance only after the existing payload/PTS/geometry and startup credit
+checks have admitted the event. A later timing-policy failure invalidates the
+session even if some IDs were admitted; this is not a success/EOF receipt alone.
+Source cleanup and borrowed-yield ownership remain unchanged.
+
+The mode is also available through `iter_capture_preparation` and the pending
+`CapturePlayback` constructor; it can be combined with `diagnostic_tail=2` for
+constant identity metadata plus bounded finalized diagnostics. Capture completion
+requires the sequence profile's identity counts to match decoded video/audio
+counts, zero retained IDs and (for explicit PES selection) the same audio index.
+The recorded CLI, synchronous capture helper and all defaults stay unchanged.
+
+This removes only policy ID-history growth. The existing 300-pair/audio-block
+work caps, fixed-origin 60-second output span, chunk byte/count limits, decoder
+processing limits, geometry/PCM checks, original source/host timing, lateness,
+leases and backend drains are NOT relaxed. Payload queues/native buffers still
+have their own bounds; no whole-process RSS or sustained-streaming claim follows.

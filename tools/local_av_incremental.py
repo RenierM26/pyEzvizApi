@@ -180,10 +180,11 @@ def selected_tracks(container: Any, streams: tuple[int, int], audio_stream: int)
 
 
 def decoded_frames(container: Any, selected: list[Any], session: Session,
-                   audio_stream: int, started: float) -> Any:
+                   audio_stream: int, started: float, *, clock: Any = None) -> Any:
     """Cooperatively bounded persistent demux/decode, including flush packets."""
+    clock = time.monotonic if clock is None else clock
     for packet in container.demux(*selected):
-        if session.packets >= VIDEO['MAX_PACKETS'] or time.monotonic() - started > VIDEO['MAX_SECONDS']:
+        if session.packets >= VIDEO['MAX_PACKETS'] or clock() - started > VIDEO['MAX_SECONDS']:
             raise ValueError('incremental packet/session limit exceeded')
         limit = AUDIO['MAX_PACKET_BYTES'] if packet.stream.index == audio_stream else VIDEO['MAX_PACKET_BYTES']
         if packet.is_corrupt or not 0 <= packet.size <= limit:
@@ -192,7 +193,7 @@ def decoded_frames(container: Any, selected: list[Any], session: Session,
         # Decode every selected packet, including codec prerequisite pictures
         # and the demuxer's EOF flush packets. Never recreate a codec per pair.
         for frame in packet.decode():
-            if time.monotonic() - started > VIDEO['MAX_SECONDS']:
+            if clock() - started > VIDEO['MAX_SECONDS']:
                 raise ValueError('incremental session limit exceeded')
             yield packet.stream.index, frame
 
@@ -263,12 +264,13 @@ def snapshot_source(path: Path) -> bytes:
 
 
 def prepared_events(container: Any, selected: list[Any], adapter: Any, session: Session,
-                    audio_stream: int, started: float) -> Any:
+                    audio_stream: int, started: float, *, clock: Any = None) -> Any:
     """Yield one event at a time from persistent codecs, retaining their EOF flush."""
+    clock = time.monotonic if clock is None else clock
     events: Any = deque()
     session.consume = lambda event, payload: events.append((event, payload))
     session.pairs.consume = session.consume
-    for stream, frame in decoded_frames(container, selected, session, audio_stream, started):
+    for stream, frame in decoded_frames(container, selected, session, audio_stream, started, clock=clock):
         if stream == audio_stream:
             session.audio(frame, adapter)
         else:
@@ -283,7 +285,7 @@ def prepared_events(container: Any, selected: list[Any], adapter: Any, session: 
     session.pairs.finish()
     if not session.audio_count:
         raise ValueError('source produced no supported audio frames')
-    if time.monotonic() - started > VIDEO['MAX_SECONDS']:
+    if clock() - started > VIDEO['MAX_SECONDS']:
         raise ValueError('incremental session limit exceeded')
 
 

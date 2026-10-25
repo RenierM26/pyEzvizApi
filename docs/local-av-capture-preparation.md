@@ -94,3 +94,10 @@ MPEG-PS video/video/audio identities in this same acquisition, before decode and
 online-policy offers. See [the capture output selection contract](local-av-capture-playback.md#explicit-same-session-pes-identities).
 Absolute-index mode remains the default; PES mode records the actual unmodified
 indices in both decoder and online-policy selection receipts.
+
+The development iterator also accepts `identity_mode='source-sequence'` to check
+the chunk decoder's original contiguous pair/audio IDs with counters instead of
+session ID sets. See [identity contract and retained limits](local-av-online-policy.md#opt-in-constant-state-source-identity-checks).
+Invalid modes are rejected before claiming the supplied capture owner. Sequence
+completion additionally requires identity counts and resolved audio index to
+agree with upstream decode; this does not replace the other prefix/EOF checks.

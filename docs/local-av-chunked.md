@@ -133,3 +133,47 @@ EOF in these controls, with 202,340–229,376 bytes accepted at readiness. This 
 read-ahead on these recordings, not a universal startup-latency guarantee.
 Online source-origin/audio/lookahead policy and network/decryption lifecycle are
 still required before connecting live output. The recorded player is unchanged.
+
+## Opt-in consumer-excluding processing deadline
+
+The development `iter_chunks` helper accepts
+`deadline_mode='consumer-excluding'`. The default is still `wall`; the CLI,
+recorded/snapshot decoders and guarded capture/output adapters are not switched.
+The opt-in receipt profile is `standalone-chunked-consumer-excluding-v1`, distinct
+from the default chunked profile. Existing capture completion validators do not
+automatically accept it; downstream integration must be explicit and separately
+validated.
+
+The same 60-second cooperative processing allowance applies to the reader and
+persistent demux/decode path. This mode subtracts only the time between yielding
+a borrowed prepared event and the consumer resuming, closing or throwing into
+that yield. It does not reset the allowance on each event. Source iterator
+construction/reads/EOF, native container open/demux/decode/flush/close, preparation
+and producer cleanup remain charged. A late producer return, late EOF, native
+finalization or cleanup overrun cannot become completed success. Reads while an
+explicit borrow is open fail rather than hiding source work in excluded time.
+
+The bounded-MPEG startup byte cap and five-second **wall-clock** startup deadline
+remain unchanged, including time a consumer holds the first head before the
+other head is ready. Do not use consumer exclusion to defer missing-track startup
+indefinitely. All compressed byte/chunk, packet/frame/audio work, pairing, geometry
+and resident ownership limits remain unchanged. This is elapsed cooperative
+processing time, not CPU time, a watchdog or a way to interrupt blocked native IO.
+A caller still owns an independently finite session/cancellation lifecycle.
+
+Opt-in `input.processing_clock` records profile
+`consumer-excluding-monotonic-v1`, wall seconds, processing seconds, excluded
+consumer seconds, completed borrows and whether a borrow remains active.
+`processing_seconds_limit` records the unchanged allowance. The clock stores only
+scalar timestamps/counters, not a timing history. Completed borrows count resumed
+or closed yields; they are **not** output acknowledgements, successful playback
+or independent source EOF. Terminal producer EOF, zero owned input, decoder
+completion and cleanup remain separate checks. A failed opt-in receipt has no
+successful source hash/byte total, even if a later cleanup timeout invalidates an
+otherwise exhausted prefix.
+
+No source PTS, relative/host targets, media bytes or audio policy change. A
+simulated 61-second downstream hold can pass this processing boundary without
+spending real time; that does not establish long-duration live playback. Capture,
+decryption and output still have independent wall-clock/work limits, so this
+standalone option does **not** enable sustained or unbounded streaming.

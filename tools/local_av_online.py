@@ -27,10 +27,14 @@ class Policy:
     """Bound startup payload ownership and session metadata; never change media."""
 
     def __init__(self, streams: tuple[int, int], audio_stream: int, policy: str,
-                 overlap_ms: int | None, phase_ms: int | None) -> None:
+                 overlap_ms: int | None, phase_ms: int | None, *, identity_mode: str = 'full-history') -> None:
         if (len(streams) != 2 or len(set((*streams, audio_stream))) != 3
                 or any(type(i) is not int or i < 0 for i in (*streams, audio_stream))):
             raise ValueError('requires three distinct absolute stream indices')
+        if type(identity_mode) is not str or identity_mode not in ('full-history', 'source-sequence'):
+            raise ValueError('unknown online identity mode')
+        self.identity_mode = identity_mode
+        self.accepted = dict(video_pair=0, audio_block=0)
         self.audio = PLAY['AudioClock'](policy, overlap_ms, phase_ms)
         self.streams, self.audio_stream = streams, audio_stream
         self.queue: Any = deque()
@@ -39,7 +43,8 @@ class Policy:
         self.peak = dict(self.bytes)
         self.previous: dict[str, Fraction] = {}
         self.first: dict[str, Fraction] = {}
-        self.ids: dict[str, set[str]] = {kind: set() for kind in self.counts}
+        self.ids: dict[str, set[str]] | None = (None if identity_mode == 'source-sequence'
+            else {kind: set() for kind in self.counts})
         self.origin: Fraction | None = None
         self.geometry: tuple[int, int] | None = None
         self.validated = self.yielded = self.released = 0
@@ -59,10 +64,7 @@ class Policy:
             raise ValueError('prepared event disagrees with original source PTS')
         if kind in self.previous and stamp <= self.previous[kind]:
             raise ValueError('online source starts must strictly increase per track')
-        name = PLAY['identity'](event)
-        limit = PLAY['MAX_PAIRS'] if kind == 'video_pair' else TIMELINE['AUDIO']['MAX_BLOCKS']
-        if not isinstance(name, str) or not name or name in self.ids[kind] or len(self.ids[kind]) >= limit:
-            raise ValueError('duplicate or excessive online event identities')
+        self.validate_identity(kind, PLAY['identity'](event))
         if kind == 'video_pair':
             geometry = (rows[0]['width'], rows[0]['height'])
             if (any(type(n) is not int or not 0 < n <= 4096 or n % 2 for n in geometry)
@@ -81,6 +83,19 @@ class Policy:
         BOUNDED['verify_payload'](event, payload)
         return kind, stamp, sum(sizes)
 
+    def validate_identity(self, kind: str, name: Any) -> None:
+        """Check without admission; sequence mode stores no previous names."""
+        limit = PLAY['MAX_PAIRS'] if kind == 'video_pair' else TIMELINE['AUDIO']['MAX_BLOCKS']
+        if not isinstance(name, str) or not name or self.accepted[kind] >= limit:
+            raise ValueError('duplicate or excessive online event identities')
+        if self.ids is None:
+            expected_name = (f'local-pair:{self.accepted[kind] + 1}' if kind == 'video_pair'
+                else f'aac:{self.audio_stream}:{self.accepted[kind]}')
+            if name != expected_name:
+                raise ValueError('online identity must be the next canonical source sequence')
+        elif name in self.ids[kind]:
+            raise ValueError('duplicate or excessive online event identities')
+
     def offer(self, event: dict[str, Any], payload: tuple[bytes, ...]) -> None:
         kind, stamp, size = self.validate(event, payload)
         slots = BOUNDED['VIDEO_SLOTS'] if kind == 'video_pair' else BOUNDED['AUDIO_SLOTS']
@@ -95,7 +110,9 @@ class Policy:
         self.queue.append((copy.deepcopy(event), payload, size))
         self.previous[kind] = stamp
         self.first.setdefault(kind, stamp)
-        self.ids[kind].add(PLAY['identity'](event))
+        self.accepted[kind] += 1
+        if self.ids is not None:
+            self.ids[kind].add(PLAY['identity'](event))
         if kind == 'video_pair':
             self.geometry = (event['lenses'][0]['width'], event['lenses'][0]['height'])
         if len(self.first) == 2 and self.origin is None:
@@ -129,7 +146,10 @@ class Policy:
         self.released += 1
 
     def result(self) -> dict[str, Any]:
-        return dict(origin=None if self.origin is None else TIMELINE['rational'](self.origin),
+        identity = {} if self.ids is not None else dict(identity_audit=dict(
+            profile='strict-source-sequence-v1', accepted=dict(self.accepted),
+            retained_id_count=0, audio_stream_index=self.audio_stream))
+        return dict(**identity, origin=None if self.origin is None else TIMELINE['rational'](self.origin),
             first_source_times={k: TIMELINE['rational'](v) for k, v in self.first.items()},
             geometry=self.geometry, owned_counts=dict(self.counts), owned_bytes=dict(self.bytes),
             peak_owned_bytes=dict(self.peak), validated_events=self.validated,
@@ -144,23 +164,25 @@ def selected_policy(state: Policy, selection: dict[str, Any] | None, report: dic
     if selection is not None and 'track_selection' not in report:
         if selection.get('mode') != 'explicit-mpeg-pes-ids':
             raise ValueError('PES selection must resolve before the first event')
-        state = Policy(tuple(selection['video_indices']), selection['audio_index'], policy, overlap_ms, phase_ms)
+        state = Policy(tuple(selection['video_indices']), selection['audio_index'], policy, overlap_ms, phase_ms,
+            identity_mode=state.identity_mode)
         report['track_selection'] = copy.deepcopy(selection)
     return state
 
 
 def iter_online(events: Any, streams: tuple[int, int], audio_stream: int, report: dict[str, Any], *,
                 policy: str = 'reject', overlap_ms: int | None = None, phase_ms: int | None = None,
-                selection: dict[str, Any] | None = None) -> Any:
+                selection: dict[str, Any] | None = None, identity_mode: str = 'full-history') -> Any:
     """Own input iterator; hold credit through each yield, not an output acknowledgement."""
     state = iterator = None
     primary = False
     report.pop('track_selection', None)
-    report.update(profile='standalone-online-av-policy-v1', status='failed', error=None,
+    report.update(profile='standalone-online-sequence-av-policy-v1' if identity_mode == 'source-sequence'
+        else 'standalone-online-av-policy-v1', status='failed', error=None,
         output_devices_opened=False, whole_source_preflight=False, physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
-        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms)
+        state = Policy(streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode)
         iterator = iter(events)
         for event, payload in iterator:
             state = selected_policy(state, selection, report, policy, overlap_ms, phase_ms)

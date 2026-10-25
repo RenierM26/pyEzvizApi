@@ -62,9 +62,13 @@ class ConsumerClock:
             completed_borrows=self.borrows, borrow_active=self.borrowed_at is not None)
 
 
-def processing_clock(mode: str, report: dict[str, Any]) -> ConsumerClock | None:
+def validate_deadline_mode(mode: str) -> None:
     if type(mode) is not str or mode not in ('wall', 'consumer-excluding'):
         raise ValueError('unknown chunk processing deadline mode')
+
+
+def processing_clock(mode: str, report: dict[str, Any]) -> ConsumerClock | None:
+    validate_deadline_mode(mode)
     if mode == 'consumer-excluding':
         for field in ('source_sha256', 'source_bytes', 'input', 'input_before_cleanup',
                 'first_event_input', 'discovery_input', 'startup_ready_input', 'pyav_version', 'library_versions'):

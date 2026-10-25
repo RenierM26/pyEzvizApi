@@ -295,3 +295,84 @@ def test_changed_selection_receipt_cannot_publish_prefix_completion(source):
     changed['track_selection']['audio_index'] = 2
     with pytest.raises(ValueError, match='terminal checks'):
         M['verify_completion'](report['capture'], report['decode'], changed)
+
+
+def test_opt_in_decoder_clock_keeps_source_clock_and_snapshot_media_unchanged(source):
+    def wall():
+        return 0.0
+    report: dict[str, Any] = {}
+    owner, iterator = prepare(source, report, monotonic=wall, decoder_deadline_mode='consumer-excluding',
+        identity_mode='source-sequence', pes_ids=(0xE0, 0xE1, 0xC0))
+    calls = []
+    original = owner.iter_media_packets
+    def packets(**kwargs):
+        calls.append(kwargs)
+        yield from original(**kwargs)
+    owner.iter_media_packets = packets
+    actual = fingerprints(iterator)
+    control: dict[str, Any] = {}
+    snapshot = M['CHUNKED']['DECODE']['iter_snapshot'](source, 'mpeg', (0, 2), 1, {})
+    expected = fingerprints(M['ONLINE']['iter_online'](snapshot, (0, 2), 1, control,
+        policy='bounded-serial-pcm', overlap_ms=1, phase_ms=1, identity_mode='source-sequence'))
+    assert actual == expected
+    assert calls[0]['monotonic'] is wall and calls[0]['limits'].duration_seconds == 60
+    assert owner.closed and report['status'] == 'prepared-prefix-ended'
+    assert report['decoder_deadline_mode'] == 'consumer-excluding'
+    decode = report['decode']
+    assert decode['profile'] == 'standalone-chunked-consumer-excluding-v1'
+    assert decode['input']['processing_clock']['completed_borrows'] == len(actual)
+    assert decode['input']['processing_clock']['borrow_active'] is False
+    assert M['verify_completion'](report['capture'], decode, report['online'],
+        decoder_deadline_mode='consumer-excluding') == hashlib.sha256(source).hexdigest()
+    with pytest.raises(ValueError, match='mode/profile'):
+        M['verify_completion'](report['capture'], decode, report['online'])
+
+
+@pytest.mark.parametrize('mode', [None, False, [], 'active'])
+def test_invalid_decoder_clock_mode_does_not_claim_capture(source, mode):
+    report: dict[str, Any] = {'decoder_deadline_mode': 'old'}
+    owner, iterator = prepare(source, report, decoder_deadline_mode=mode)
+    with pytest.raises(ValueError, match='deadline mode'):
+        next(iterator)
+    assert not owner.started and not owner.closed
+    assert report['status'] == 'failed' and report['accepted_prefix_clear_sha256'] is None
+    assert 'decoder_deadline_mode' not in report
+
+
+def test_default_preparation_clears_reused_opt_in_binding(source):
+    report: dict[str, Any] = {'decoder_deadline_mode': 'consumer-excluding'}
+    _owner, iterator = prepare(source, report)
+    list(iterator)
+    assert 'decoder_deadline_mode' not in report
+    assert report['decode']['profile'] == 'standalone-chunked-preparation-v1'
+    assert 'processing_clock' not in report['decode']['input']
+
+
+def test_decoder_exclusion_does_not_pause_the_active_decryptor_wall_clock(source, monkeypatch):
+    now = [0.0]
+    def wall():
+        return now[0]
+    monkeypatch.setattr(M['CHUNKED']['time'], 'monotonic', wall)
+    live = []
+    original = C['DECRYPT']['Chunks']
+    def recorded(*args, **kwargs):
+        chunks = original(*args, **kwargs)
+        live.append(chunks)
+        return chunks
+    monkeypatch.setitem(C['DECRYPT'], 'Chunks', recorded)
+    # Keep input beyond startup without decoding a repeated source segment.
+    raw = source * (1048576 // len(source) + 1)
+    report: dict[str, Any] = {}
+    owner, iterator = prepare(raw, report, monotonic=wall, decoder_deadline_mode='consumer-excluding')
+    next(iterator)
+    try:
+        assert live and not live[0].completed and owner.pulls < len(owner.bodies)
+        assert live[0].clock is wall  # Never substitute the paused decoder clock.
+        now[0] = 61
+        with pytest.raises(ValueError, match='decrypted source cooperative deadline'):
+            live[0].check()
+    finally:
+        iterator.close()
+    assert owner.closed and report['status'] == 'consumer-closed'
+    assert report['accepted_prefix_clear_sha256'] is None
+    assert not report['decode']['input']['processing_clock']['borrow_active']

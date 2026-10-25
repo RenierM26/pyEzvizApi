@@ -101,3 +101,35 @@ session ID sets. See [identity contract and retained limits](local-av-online-pol
 Invalid modes are rejected before claiming the supplied capture owner. Sequence
 completion additionally requires identity counts and resolved audio index to
 agree with upstream decode; this does not replace the other prefix/EOF checks.
+
+## Explicit decoder clock composition
+
+`iter_capture_preparation(..., decoder_deadline_mode='consumer-excluding')`
+composes the [consumer-excluding decoder deadline](local-av-chunked.md#opt-in-consumer-excluding-processing-deadline)
+without changing the source's clock. The default is still `wall`; recorded CLI
+and synchronous output defaults remain unchanged. The option is validated before
+claiming the supplied capture owner, and the opt-in preparation receipt binds
+`decoder_deadline_mode` to the distinct nested decoder profile.
+
+Only the chunk reader and persistent decoder use the consumer-excluding clock.
+The exact original `monotonic` callable and `CaptureLimits` still go to the
+capture owner and decryptor. Capture duration and the decryptor's existing
+60-second **wall** guard are not paused, replaced or extended. Active decryption
+can therefore still expire while the downstream decoder excludes that same
+consumer wait. Source EOF, crypto flush and final cleanup must independently
+succeed before the prefix verdict. This is not a whole-pipeline relaxed deadline.
+
+Successful opt-in completion requires both pre-cleanup and final reader clock
+snapshots: the correct profile, finite nonnegative wall/processing/excluded
+seconds with consistent totals, processing time within the unchanged allowance,
+zero active borrow and exactly the decoded video-plus-audio borrow count.
+Cleanup cannot move the clock backwards or exclude additional consumer time.
+The bounded-MPEG startup mode, five-second wall startup and startup byte cap must
+also agree. Clock counters do not replace producer/decode/prepared EOF, source
+identity, metadata, origin, ownership or cleanup checks. A new decoder profile
+without the explicit mode binding is rejected by the default verifier.
+
+`verify_completion(..., decoder_deadline_mode='consumer-excluding')` is required
+when independently validating these opt-in stage receipts. Preparation and
+pending output forward that binding themselves. The source is still a finite,
+explicitly accepted capture prefix, not network EOF or sustained streaming.

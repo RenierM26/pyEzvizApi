@@ -218,6 +218,30 @@ def test_explicit_login_preflight(changes):
         replace(target(), login=replace(target().login, **changes))
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("alias", 123),
+        ("host", 123),
+        ("host", " "),
+        ("serial", 123),
+        ("username", 123),
+        ("password", 123),
+        ("tls_context", object()),
+    ],
+)
+def test_malformed_inventory_fields_fail_at_target_construction(field, value):
+    current = target()
+    if field in {"host", "serial"}:
+        changes = {"endpoint": replace(current.endpoint, **{field: value})}
+    elif field in {"username", "password"}:
+        changes = {"login": replace(current.login, **{field: value})}
+    else:
+        changes = {field: value}
+    with pytest.raises(ValueError):
+        replace(current, **changes)
+
+
 def test_keyboard_interrupt_propagates(monkeypatch):
     def interrupted(*_a, **_kw):
         raise KeyboardInterrupt

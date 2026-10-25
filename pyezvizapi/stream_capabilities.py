@@ -105,7 +105,8 @@ class StreamCapabilityTarget:
 
     def __post_init__(self) -> None:
         if (
-            not self.alias
+            not isinstance(self.alias, str)
+            or not self.alias
             or len(self.alias) > 64
             or not all(char.isalnum() or char in "_-" for char in self.alias)
         ):
@@ -116,7 +117,10 @@ class StreamCapabilityTarget:
             or not 1 <= self.channel <= 255
         ):
             raise ValueError("Configuration channel must be an integer between 1 and 255")
-        if not self.endpoint.host or not self.endpoint.serial:
+        if any(
+            not isinstance(value, str) or not value.strip()
+            for value in (self.endpoint.host, self.endpoint.serial)
+        ):
             raise ValueError("Supply an explicit camera endpoint and serial")
         if self.login.api not in {"NET_DVR_Login_V30", "NET_DVR_Login_V40"}:
             raise ValueError("Select an explicit native V30 or V40 login profile")
@@ -130,8 +134,13 @@ class StreamCapabilityTarget:
             or not 1 <= self.login.port <= 65535
         ):
             raise ValueError("Supply a valid native login port")
-        if not self.login.username or not self.login.password:
+        if any(
+            not isinstance(value, str) or not value
+            for value in (self.login.username, self.login.password)
+        ):
             raise ValueError("Supply explicit local credentials")
+        if self.tls_context is not None and not isinstance(self.tls_context, ssl.SSLContext):
+            raise ValueError("Supply an SSLContext for TLS verification")
         if self.tls_context is not None and not self.login.https:
             raise ValueError("TLS context requires a TLS login profile")
 

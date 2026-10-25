@@ -29,6 +29,7 @@ from pyezvizapi.local_stream_transport import EzvizLocalSdkCredentials
 BASE = Path(__file__).parent
 CAPTURE = runpy.run_path(str(BASE / "local_av_capture_playback.py"))
 RUNTIME = runpy.run_path(str(BASE / "local_av_runtime.py"))
+EVIDENCE = runpy.run_path(str(BASE / "local_av_packet_evidence.py"))
 MAX_CONFIG = 65536
 MAX_RECEIPT = 2 * 1024 * 1024
 LIMITS = dict(duration_seconds=30, max_packets=15000, max_bytes=32 * 1024 * 1024)
@@ -131,7 +132,7 @@ def capture(args: Any, report: dict[str, Any]) -> None:
     )
     # An object without account methods and offline/no-fallback selection makes
     # missing local metadata an error, never a reason to log in or discover cloud.
-    owner = pyezvizapi.AutoMediaStream(
+    owner: Any = pyezvizapi.AutoMediaStream(
         object(),
         credentials.endpoint.serial,
         pyezvizapi.AutoClipSource(
@@ -143,8 +144,16 @@ def capture(args: Any, report: dict[str, Any]) -> None:
         ),
         channel=0,
     )
-    session = None
+    session = evidence = None
     try:
+        if getattr(args, "packet_evidence", None) is not None:
+            evidence = EVIDENCE["PacketEvidence"](args.packet_evidence)
+            original = owner.iter_media_packets
+
+            def retain(**kwargs: Any) -> Any:
+                return evidence.retain(original(**kwargs))
+
+            owner.iter_media_packets = retain
         session = CAPTURE["CapturePlayback"](
             owner,
             credentials.media_key,
@@ -174,6 +183,19 @@ def capture(args: Any, report: dict[str, Any]) -> None:
             except Exception as error:
                 report["caller_cleanup_error_types"].append(type(error).__name__)
         report["final_owner"] = owner.capture_result
+        if evidence is not None:
+            report["packet_evidence"] = dict(status="incomplete")
+            if not report["source_worker_retained"]:
+                try:
+                    summary = evidence.finish(
+                        dict(
+                            package_sha256=args.expected_package_sha256,
+                            config_sha256=digest,
+                        )
+                    )
+                    report["packet_evidence"] = dict(status="finalized", summary=summary)
+                except Exception as error:
+                    report["caller_cleanup_error_types"].append(type(error).__name__)
         if report["source_worker_retained"] or report["caller_cleanup_error_types"]:
             report.update(status="failed", accepted_prefix_clear_sha256=None)
     if report["status"] != "prefix-output-completed":
@@ -261,6 +283,8 @@ def worker_command(args: Any, digest: str, mono: str, receipt: Path) -> list[str
     for name in ("max_audio_overlap_ms", "max_audio_phase_ms"):
         if getattr(args, name) is not None:
             command.extend(["--" + name.replace("_", "-"), str(getattr(args, name))])
+    if getattr(args, "packet_evidence", None) is not None:
+        command.extend(["--packet-evidence", str(args.packet_evidence.resolve())])
     return command
 
 
@@ -312,6 +336,20 @@ def supervise(args: Any, report: dict[str, Any], digest: str, mono: str) -> None
             ):
                 raise ValueError("worker receipt binding failed")
             CAPTURE["verify_output"](playback["preparation"], playback["output"])
+            if getattr(args, "packet_evidence", None) is not None:
+                summary = EVIDENCE["verify"](args.packet_evidence)
+                if (
+                    playback.get("packet_evidence") != dict(status="finalized", summary=summary)
+                    or summary["packets"] != playback["final_owner"]["packets_yielded"]
+                    or summary["bytes"] != playback["final_owner"]["bytes_yielded"]
+                    or summary["binding"]
+                    != dict(
+                        package_sha256=args.expected_package_sha256,
+                        config_sha256=digest,
+                    )
+                ):
+                    raise ValueError("packet evidence receipt binding failed")
+                report["packet_evidence"] = dict(status="integrity-verified", summary=summary)
         except BaseException:
             primary = True
             raise
@@ -344,6 +382,9 @@ def attended(args: Any, report: dict[str, Any]) -> None:
     report["stage"] = "private-readiness"
     _credentials, _device, digest = private_config(args.private_config)
     report["config_sha256"] = digest
+    if getattr(args, "packet_evidence", None) is not None:
+        # Claim a fresh directory before Enter; never reuse or overwrite data.
+        args.packet_evidence.mkdir(mode=0o700)
     report["stage"] = "operator-readiness"
     print("Offline checks passed. Camera has NOT started.", flush=True)
     print(
@@ -360,6 +401,11 @@ def arguments() -> Any:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--private-config", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument(
+        "--packet-evidence",
+        type=Path,
+        help="new private directory for bounded encrypted media bodies",
+    )
     parser.add_argument("--expected-package-sha256", required=True)
     parser.add_argument("--play", action="store_true")
     parser.add_argument(

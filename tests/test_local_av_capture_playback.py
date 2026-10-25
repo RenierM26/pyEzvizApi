@@ -970,3 +970,49 @@ def test_pending_invalid_decoder_clock_mode_does_not_claim_capture(rig, mode):
         M['CapturePlayback'](owner, 'key', arguments(), report, limits=CaptureLimits(duration_seconds=8),
             codec='hevc', completion='bounded-prefix', decoder_deadline_mode=mode)
     assert not owner.started and not owner.closed and report['source_pull'] is None
+
+
+def test_pending_common_keyframe_startup_preserves_aligned_media_and_drains(rig):
+    report: dict[str, Any] = {}
+    owner, capture = session(rig, report, startup_pairing='common-keyframe', pes_ids=(0xE0, 0xE1, 0xC0),
+        identity_mode='source-sequence', diagnostic_tail=2, decoder_deadline_mode='consumer-excluding')
+    assert not owner.started
+    capture.play()
+    assert owner.closed and report['status'] == 'prefix-output-completed'
+    preparation = report['preparation']
+    assert preparation['startup_pairing'] == 'common-keyframe'
+    assert preparation['decode']['preparation']['startup_alignment']['excluded_frames'] == 0
+    assert report['output']['scheduler']['outputs_finished']
+    assert not report['source_pull']['worker_alive'] and report['source_pull']['iterator_closed']
+    assert not report['output']['lookahead']['owned_ids']
+    changed = copy.deepcopy(preparation)
+    changed.pop('startup_pairing')
+    with pytest.raises(ValueError, match='pairing policy'):
+        M['verify_output'](changed, report['output'])
+
+
+@pytest.mark.parametrize('mode', [None, True, 'nearest'])
+def test_pending_invalid_startup_policy_does_not_claim_source(rig, mode):
+    owner, _run = play(rig, {})
+    with pytest.raises(ValueError, match='startup pairing'):
+        M['CapturePlayback'](owner, 'key', arguments(), {}, limits=CaptureLimits(duration_seconds=8),
+            startup_pairing=mode)
+    assert not owner.started and not owner.closed
+
+
+def test_pending_common_keyframe_lead_in_is_explicit_and_not_a_new_clock(rig):
+    helper = runpy.run_path(str(Path(__file__).with_name('test_local_av_capture_preparation.py')))
+    altered = (helper['leading_keyframe_ps'](rig[0]), *rig[1:])
+    report: dict[str, Any] = {}
+    owner, capture = session(altered, report, startup_pairing='common-keyframe', pes_ids=(0xE0, 0xE1, 0xC0),
+        identity_mode='source-sequence', diagnostic_tail=2, decoder_deadline_mode='consumer-excluding')
+    capture.play()
+    assert owner.closed and report['status'] == 'prefix-output-completed'
+    preparation = report['preparation']
+    audit = preparation['decode']['preparation']['startup_alignment']
+    assert audit['excluded_frames'] == 1 and audit['excluded_counts'] == {'0': 1, '2': 0}
+    assert audit['selected_keyframes'][0]['decoded_id'] == 'video:0:1'
+    assert preparation['online']['policy']['first_source_times']['video_pair'] == audit['selected_source_time']
+    assert report['output']['scheduler']['completed']['video_pair'] == preparation['decode']['preparation']['video_pairs_consumed']
+    assert report['output']['scheduler']['outputs_finished']
+    assert not report['source_pull']['worker_alive'] and report['source_pull']['iterator_closed']

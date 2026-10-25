@@ -1,6 +1,7 @@
 """One accepted-prefix capture/decrypt/decode/policy verdict; no output devices."""
 from __future__ import annotations
 
+import hashlib
 import math
 from pathlib import Path
 import runpy
@@ -85,8 +86,80 @@ def verify_byte_budget(capture: dict[str, Any], decode: dict[str, Any], byte_lim
         raise ValueError('capture compressed byte budget mismatch')
 
 
+def startup_fraction(value: Any) -> Any:
+    """Reject float/bool/uncanonical receipt times before using exact arithmetic."""
+    if (type(value) is not dict or set(value) != {'numerator', 'denominator'}
+            or any(type(number) is not int for number in value.values()) or value['denominator'] <= 0):
+        raise ValueError('capture startup rational timestamp mismatch')
+    result = ONLINE['PLAY']['fraction'](value)
+    if CHUNKED['DECODE']['TIMELINE']['rational'](result) != value:
+        raise ValueError('capture startup rational timestamp mismatch')
+    return result
+
+
+def verify_startup_pairing(decode: dict[str, Any], online: dict[str, Any], mode: str) -> None:
+    """Bind the explicit startup exclusion; never reinterpret a strict receipt."""
+    decoder = CHUNKED['DECODE']
+    decoder['validate_startup_pairing'](mode)
+    prepared = decode.get('preparation') or {}
+    audit = prepared.get('startup_alignment')
+    if mode == 'strict':
+        if 'startup_pairing' in decode or audit is not None:
+            raise ValueError('capture startup pairing policy mismatch')
+        return
+    if (decode.get('startup_pairing') != mode or type(audit) is not dict
+            or audit.get('profile') != 'bounded-common-keyframe-startup-v1'
+            or audit.get('gate_opened') is not True or audit.get('strict_after_gate') is not True
+            or audit.get('native_selection_used') is not False):
+        raise ValueError('capture startup pairing policy mismatch')
+    selected = audit.get('selected_keyframes')
+    excluded = audit.get('excluded_counts')
+    counts = prepared.get('video_frames_decoded')
+    total = audit.get('excluded_frames')
+    size = audit.get('excluded_pixel_bytes')
+    digest = audit.get('excluded_metadata_sha256')
+    if (type(selected) is not list or len(selected) != 2 or any(type(row) is not dict for row in selected)
+            or type(excluded) is not dict or type(counts) is not dict
+            or type(total) is not int or not 0 <= total <= decoder['MAX_STARTUP_EXCLUDED']
+            or type(size) is not int or not 0 <= size <= total * decoder['VIDEO']['MAX_PIXELS'] * 3 // 2
+            or (total == 0) != (size == 0)
+            or type(digest) is not str or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
+            or (total == 0 and digest != hashlib.sha256(b'bounded-common-keyframe-startup-v1\n').hexdigest())
+            or type(audit.get('max_excluded_frames')) is not int
+            or audit['max_excluded_frames'] != decoder['MAX_STARTUP_EXCLUDED']
+            or audit.get('max_source_span') != dict(numerator=1, denominator=1)):
+        raise ValueError('capture startup exclusion accounting failed')
+    streams = [row.get('stream_index') for row in selected]
+    selection = decode.get('track_selection')
+    if (any(type(stream) is not int or stream < 0 for stream in streams) or streams[0] == streams[1]
+            or (selection and streams != selection.get('video_indices'))
+            or set(excluded) != {str(stream) for stream in streams}
+            or {str(stream) for stream in counts} != set(excluded)
+            or any(type(value) is not int or value < 0 for value in excluded.values())
+            or sum(excluded.values()) != total):
+        raise ValueError('capture startup selected tracks mismatch')
+    for row, stream in zip(selected, streams, strict=True):
+        count = counts.get(stream, counts.get(str(stream)))
+        if (row.get('key_frame') is not True
+                or row.get('decoded_id') != f'video:{stream}:{excluded[str(stream)]}'
+                or type(row.get('frame_index')) is not int or row['frame_index'] != excluded[str(stream)]
+                or type(count) is not int or count != prepared['video_pairs_consumed'] + excluded[str(stream)]):
+            raise ValueError('capture startup selected frame accounting failed')
+    timeline = decoder['TIMELINE']
+    stamp = timeline['exact'](selected[0])
+    first = (online.get('policy') or {}).get('first_source_times') or {}
+    minimum = startup_fraction(audit.get('observed_minimum'))
+    maximum = startup_fraction(audit.get('observed_maximum'))
+    startup_fraction(audit.get('max_source_span'))
+    startup_fraction(audit.get('selected_source_time'))
+    if (timeline['exact'](selected[1]) != stamp or audit.get('selected_source_time') != timeline['rational'](stamp)
+            or first.get('video_pair') != audit['selected_source_time']
+            or not 0 <= minimum <= stamp <= maximum or maximum - minimum > decoder['MAX_STARTUP_SPAN']):
+        raise ValueError('capture startup exact timestamp accounting failed')
+
+
 def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: dict[str, Any], *,
-                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024) -> str:
+                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> str:
     """Require independent terminal checks, not merely exhaustion of the wrapper."""
     crypto = capture.get('decryption') or {}
     reader = decode.get('input') or {}
@@ -143,6 +216,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
                 or type(audit.get('audio_stream_index')) is not int or audit['audio_stream_index'] < 0
                 or (selection and audit['audio_stream_index'] != selection.get('audio_index'))):
             raise ValueError('capture preparation source identity accounting failed')
+    verify_startup_pairing(decode, online, startup_pairing)
     verify_byte_budget(capture, decode, byte_limit)
     verify_decoder_clock(decode, count, decoder_deadline_mode)
     return digest
@@ -170,8 +244,8 @@ def close_pipeline(iterators: tuple[Any, ...], owner: Any, report: dict[str, Any
     return cleanup_error
 
 
-def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int, byte_limit: int = 16 * 1024 * 1024) -> None:
-    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300), ('byte_limit', byte_limit, 16 * 1024 * 1024)]:
+def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> None:
+    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300), ('byte_limit', byte_limit, 16 * 1024 * 1024), ('startup_pairing', startup_pairing, 'strict')]:
         report.pop(field, None)
         if value != default:
             report[field] = value
@@ -182,7 +256,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
         monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
-        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024) -> Any:
+        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -203,17 +277,18 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
     try:
         # Validate downstream policy before transferring ownership or opening IO.
         CHUNKED['validate_deadline_mode'](decoder_deadline_mode)
+        CHUNKED['DECODE']['validate_startup_pairing'](startup_pairing)
         ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
         CAPTURE['validate_arguments'](owner, limits, completion, codec, byte_limit=byte_limit)
         if pes_ids is not None:
             CHUNKED['TRACKS']['validate_pes_ids'](pes_ids)
-        bind_options(report, decoder_deadline_mode, pair_limit, byte_limit)
+        bind_options(report, decoder_deadline_mode, pair_limit, byte_limit, startup_pairing)
         claimed = True
         chunks = CAPTURE['iter_capture_chunks'](owner, key, capture, limits=limits,
             completion=completion, codec=codec, monotonic=monotonic, byte_limit=byte_limit)
         selection: dict[str, Any] | None = {} if pes_ids is not None else None
         options = {} if pes_ids is None else dict(pes_ids=pes_ids, selection=selection)
-        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', max_bytes=byte_limit,
+        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', max_bytes=byte_limit, startup_pairing=startup_pairing,
             **({} if decoder_deadline_mode == 'wall' else dict(deadline_mode=decoder_deadline_mode)), **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
             policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, **({} if selection is None else dict(selection=selection)))
@@ -237,7 +312,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
                 raise cleanup_error
     if not primary:
         try:
-            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit)
+            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit, startup_pairing=startup_pairing)
         except Exception as error:
             report.update(status='failed', error_type=type(error).__name__)
             raise

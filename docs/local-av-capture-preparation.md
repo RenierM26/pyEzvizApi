@@ -151,3 +151,36 @@ rejects expanded receipts. Reused default receipts clear previous bindings.
 
 See the [pending output API and unchanged limits](local-av-capture-playback.md#explicit-finite-compressed-byte-quota)
 for the additional bounded-history requirements before actual output.
+
+## Explicit common-keyframe startup (opt-in)
+
+`iter_capture_preparation(..., startup_pairing='common-keyframe')` permits only a
+bounded **video lead-in exclusion** before the first common keyframe. The default
+`startup_pairing='strict'` still rejects unequal lens heads without excluding any
+picture. This option changes the selected startup subset; it is not native/app
+selection parity and does not assert physical synchronization.
+
+The decoder keeps both persistent codec contexts and decodes their prerequisites.
+While searching, it may release only the strictly earlier unmatched lens head,
+recording its original fingerprint in a domain-separated SHA-256 chain. At most
+16 pictures and one second of observed source span are allowed. The existing
+16-frame / 64-MiB copied-pixel cap and bounded MPEG startup byte/time caps remain
+in force independently. No full excluded history or pixel spool is retained.
+
+The **first equal-PTS pair must have both decoder keyframe flags set**. An equal
+non-keyframe pair fails; the gate does not skip an already matching pair to seek
+a later GOP. Once open, the gate never excludes another picture: any unequal,
+duplicate/backward PTS, geometry violation, or unpaired EOF still fails. Pixel
+content, original lens IDs/indices/PTS, audio blocks and audio policy are unchanged.
+No audio lead-in is removed. The common origin is the minimum of the selected
+video start and original audio start, as in the online policy; clocks are not
+rebased independently and video scheduling IDs remain `local-pair:1...`.
+
+Successful receipts bind `startup_pairing='common-keyframe'` at the preparation
+and decoder layers. `decode.preparation.startup_alignment` records the gate,
+excluded counts per absolute lens index, excluded pixel bytes and metadata digest,
+observed source-time bounds, two original selected keyframe rows, selected source
+time and fixed exclusion bounds. Terminal validation checks these against decoded
+per-lens counts, online first video time and the requested mode. A strict verifier
+rejects an opt-in receipt. A failed/cancelled prefix never becomes a successful
+capture simply because an offline replay can align its saved bytes.

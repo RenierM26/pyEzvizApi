@@ -83,7 +83,7 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
         OUTPUT['CHANNEL']['verify_identity_audit'](receipt.get('video_identity_audit'), expected['video_pair'], pair_limit)
     PREPARE['verify_completion'](preparation['capture'], preparation['decode'], preparation['online'],
         decoder_deadline_mode=preparation.get('decoder_deadline_mode', 'wall'), pair_limit=pair_limit,
-        byte_limit=preparation.get('byte_limit', 16 * 1024 * 1024))
+        byte_limit=preparation.get('byte_limit', 16 * 1024 * 1024), startup_pairing=preparation.get('startup_pairing', 'strict'))
 
 
 def capture_playback(owner: Any, key: str | bytes, args: Any, report: dict[str, Any], *,
@@ -167,7 +167,7 @@ class CapturePlayback:
             limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
             monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
             diagnostic_tail: int | None = None, identity_mode: str = 'full-history',
-            decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024) -> None:
+            decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024, startup_pairing: str = 'strict') -> None:
         self.args = copy(args)
         self.report = report
         self.used = False
@@ -189,6 +189,7 @@ class CapturePlayback:
             OUTPUT['AUDIT']['validate_tail'](diagnostic_tail)
             OUTPUT['video_options']({}, None, identity_mode, pair_limit, diagnostic_tail)
             validate_input_budget(byte_limit, identity_mode, diagnostic_tail)
+            PREPARE['CHUNKED']['DECODE']['validate_startup_pairing'](startup_pairing)
             PREPARE['CHUNKED']['validate_deadline_mode'](decoder_deadline_mode)
             validate_output(self.args)
             streams = (self.args.primary_stream, self.args.secondary_stream)
@@ -202,7 +203,7 @@ class CapturePlayback:
             events = PREPARE['iter_capture_preparation'](owner, key, streams, self.args.audio_stream, preparation,
                 limits=limits, completion=completion, codec=codec, policy=self.args.audio_overlap_policy,
                 overlap_ms=self.args.max_audio_overlap_ms, phase_ms=self.args.max_audio_phase_ms,
-                monotonic=monotonic, identity_mode=identity_mode, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
+                monotonic=monotonic, identity_mode=identity_mode, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit, startup_pairing=startup_pairing, **({} if pes_ids is None else dict(pes_ids=pes_ids)))
             source = CaptureEvents(events, owner, preparation, report)
             self.pull = OUTPUT['PULL']['PreparedPull'](source, interrupt=owner.close)
         except BaseException as error:

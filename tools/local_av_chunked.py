@@ -247,7 +247,7 @@ class ChunkReader(io.RawIOBase):
 def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
                           streams: tuple[int, int], audio_stream: int, session: Any,
                           report: dict[str, Any], *, pes_ids: tuple[int, int, int] | None = None,
-                          selection: dict[str, Any] | None = None) -> Any:
+                          selection: dict[str, Any] | None = None, startup_pairing: str = 'strict') -> Any:
     """One discovery and codec context; startup ends only at both prepared heads."""
     started = reader.now()
     options = {'protocol_whitelist': 'file,pipe'}
@@ -260,7 +260,7 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
             resolved = TRACKS['resolve_pes_ids'](container, pes_ids)
             streams = tuple(resolved['video_indices'])
             audio_stream = resolved['audio_index']
-            session = DECODE['Session'](streams, audio_stream, DECODE['discard'])
+            session = DECODE['Session'](streams, audio_stream, DECODE['discard'], startup_pairing=startup_pairing)
             report['track_selection'] = resolved
             assert selection is not None
             selection.update(resolved)
@@ -293,23 +293,26 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
         reader.verify_end()
 
 
-def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
+def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],  # noqa: PLR0913
                 audio_stream: int, report: dict[str, Any], *,
                 max_bytes: int = 16 * 1024 * 1024, startup: str = 'default',
                 pes_ids: tuple[int, int, int] | None = None, selection: dict[str, Any] | None = None,
-                deadline_mode: str = 'wall') -> Any:
+                deadline_mode: str = 'wall', startup_pairing: str = 'strict') -> Any:
     """Own/close the producer iterator; preparation yields are not output acks."""
     reader = None
     primary = False
     report.pop('track_selection', None)
+    report.pop('startup_pairing', None)
     report.update({} if pes_ids is None else dict(preparation={}))
-    session = DECODE['Session'](streams, audio_stream, DECODE['discard'])
+    session = None
     report.update(profile='standalone-chunked-consumer-excluding-v1' if deadline_mode == 'consumer-excluding'
         else 'standalone-chunked-preparation-v1', status='failed', error=None,
         output_devices_opened=False, source_kind='caller-supplied-clear-chunks', physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
+        session = DECODE['Session'](streams, audio_stream, DECODE['discard'], startup_pairing=startup_pairing)
         work_clock = processing_clock(deadline_mode, report)
+        report.update({} if startup_pairing == 'strict' else dict(startup_pairing=startup_pairing))
         if startup not in ('default', 'bounded-mpeg') or (startup == 'bounded-mpeg' and container_format != 'mpeg'):
             raise ValueError('bounded startup requires explicit MPEG-PS input')
         report['startup'] = dict(mode=startup, probe_options=dict(STARTUP_OPTIONS) if startup == 'bounded-mpeg' else {})
@@ -325,7 +328,7 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
         av = DECODE['AUDIO']['load_av']()
         report.update(pyav_version=av.__version__, library_versions=av.library_versions)
         yield from prepared_chunk_events(av, reader, container_format, streams, audio_stream, session, report,
-                                         pes_ids=pes_ids, selection=selection)
+                                         pes_ids=pes_ids, selection=selection, startup_pairing=startup_pairing)
         reader.finish_processing()
         report.update(status='completed', source_sha256=reader.digest.hexdigest(),
                       source_bytes=reader.received)
@@ -335,7 +338,7 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
                       error=f'{type(error).__name__}: {error}')
         raise
     finally:
-        if pes_ids is None:
+        if pes_ids is None and session is not None:
             report['preparation'] = session.result()
         else:
             report.setdefault('preparation', {})

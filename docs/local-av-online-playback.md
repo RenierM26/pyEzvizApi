@@ -115,3 +115,8 @@ The shared `play_prepared` output lifecycle also supports the separate
 [guarded capture-prefix adapter](local-av-capture-playback.md). The recorded CLI
 still reads recorded clear MPEG-PS only. Its default window title is unchanged;
 the capture adapter labels its window explicitly and owns its upstream verdict.
+
+The separate [single-demand prepared-source pull boundary](local-av-pull.md)
+provides a cancellable polling primitive for a future nonblocking-source
+integration. It is not enabled here: decoder/network advancement in this
+scheduler remains cooperative, and existing limits/defaults are unchanged.

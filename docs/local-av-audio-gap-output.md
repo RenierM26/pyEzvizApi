@@ -44,6 +44,12 @@ That would submit the gap operation late and could make the acoustic gap longer.
 The adapter derives both targets directly from the supplied origin/anchor and
 retains the normal lateness guard; it does not move either target to make a late
 caller succeed. Target waiting and each write have separate finite deadlines.
+For a combined job, the verified padding-to-source target interval is intentional
+schedule waiting and does not consume the output-progress timeout. Thus a valid
+128 ms padding interval can precede source PCM with a 100 ms write deadline.
+Only that exact source-derived interval extends the source target-wait allowance;
+first/padding target waits, per-write deadlines, cancellation polling and lateness
+limits remain unchanged. No arbitrary early call gains a session-length wait.
 
 The adapter holds one original 2048-byte block plus at most four padding blocks
 (8192 bytes): at most **10,240 output-owned bytes**, or 4096 bytes for an explicit

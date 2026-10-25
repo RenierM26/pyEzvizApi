@@ -1,4 +1,4 @@
-"""Opt-in single-owner PCM gap output; not connected to live A/V playback.
+"""Opt-in single-owner PCM gap output; caller owns the enclosing A/V scheduler.
 
 A caller supplies the shared source origin/host anchor and an already opened,
 nonblocking PCM backend. Padding has its own target and acknowledgement; it is
@@ -64,8 +64,8 @@ class GapOutput:
         offset = at * 1000000000
         return self.anchor + offset.numerator // offset.denominator
 
-    def wait_target(self, target: int) -> int:
-        end = self.clock() + int(self.timeout * 1000000000)
+    def wait_target(self, target: int, planned_wait_ns: int = 0) -> int:
+        end = self.clock() + planned_wait_ns + int(self.timeout * 1000000000)
         while True:
             self.check_stop()
             now = self.clock()
@@ -77,11 +77,11 @@ class GapOutput:
                 raise TimeoutError('PCM gap output target wait deadline exceeded')
             self.pause(min(POLL, (target - now) / 1000000000))
 
-    def job(self, kind: str, row: dict[str, Any], data: bytes) -> dict[str, Any]:
+    def job(self, kind: str, row: dict[str, Any], data: bytes, *, planned_wait_ns: int = 0) -> dict[str, Any]:
         if len(data) != row['bytes'] or hashlib.sha256(data).hexdigest() != row['payload_sha256']:
             raise ValueError('gap output payload fingerprint mismatch')
         target = row['target_monotonic_ns']
-        started = self.wait_target(target)
+        started = self.wait_target(target, planned_wait_ns)
         self.active = dict(row, kind=kind)
         self.partial = 0
         self.submitted[kind] += 1
@@ -162,7 +162,12 @@ class GapOutput:
             row = dict(id=decision['source']['id'], source_time=decision['source_time'],
                 target_monotonic_ns=self.target(decision['source_time']), bytes=decision['source']['bytes'],
                 payload_sha256=decision['source']['pcm_sha256'], source=decision['source'])
-            source_ack = self.job('source', row, payload[0])
+            # Only the verified intra-job padding interval is intentional wait,
+            # not stalled output. Keep early-entry and write-progress deadlines
+            # unchanged; allow exact source/padding PTS phase at the boundary.
+            planned_wait_ns = (0 if padding_ack is None else max(0,
+                row['target_monotonic_ns'] - padding_ack['target_monotonic_ns']))
+            source_ack = self.job('source', row, payload[0], planned_wait_ns=planned_wait_ns)
             return dict(source=source_ack, padding=padding_ack)
         except BaseException as error:
             # This is the owned output boundary: cancellation/KeyboardInterrupt

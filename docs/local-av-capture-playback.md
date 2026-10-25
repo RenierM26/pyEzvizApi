@@ -92,3 +92,7 @@ SDL present return is not measured physical display time. Successful dummy outpu
 is host-call/drain evidence only, not human picture/audio confirmation. Actual
 network acquisition, target-host dependency checks and attended output validation
 remain separate work; no Windows bundle or camera test is supplied here.
+
+Use the separate [offline runtime preflight](local-av-runtime.md) with the exact
+proposed interpreter and pinned package identity before retained-media/attended
+validation. Readiness alone does not establish playback or live acquisition.

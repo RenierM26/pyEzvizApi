@@ -25,10 +25,54 @@ STARTUP_SECONDS = 5
 STARTUP_OPTIONS = dict(probesize=str(STARTUP_BYTES), analyzeduration='100000')
 
 
+class ConsumerClock:
+    """Monotonic processing clock excluding only explicitly borrowed yields.
+
+    One decoder owner pauses/resumes it; producer reads, native calls and cleanup
+    remain charged. This is cooperative accounting, not a blocking-IO interrupt.
+    """
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.excluded = 0.0
+        self.borrowed_at: float | None = None
+        self.borrows = 0
+
+    def __call__(self) -> float:
+        current = time.monotonic() if self.borrowed_at is None else self.borrowed_at
+        return current - self.excluded
+
+    def pause(self) -> None:
+        if self.borrowed_at is not None:
+            raise ValueError('consumer clock already paused')
+        self.borrowed_at = time.monotonic()
+
+    def resume(self) -> None:
+        if self.borrowed_at is None:
+            raise ValueError('consumer clock is not paused')
+        self.excluded += time.monotonic() - self.borrowed_at
+        self.borrowed_at = None
+        self.borrows += 1
+
+    def result(self) -> dict[str, Any]:
+        now = time.monotonic()
+        excluded = self.excluded + (0 if self.borrowed_at is None else now - self.borrowed_at)
+        return dict(profile='consumer-excluding-monotonic-v1', wall_seconds=now - self.started,
+            processing_seconds=now - self.started - excluded, excluded_consumer_seconds=excluded,
+            completed_borrows=self.borrows, borrow_active=self.borrowed_at is not None)
+
+
+def processing_clock(mode: str) -> ConsumerClock | None:
+    if type(mode) is not str or mode not in ('wall', 'consumer-excluding'):
+        raise ValueError('unknown chunk processing deadline mode')
+    return ConsumerClock() if mode == 'consumer-excluding' else None
+
+
 class ChunkReader(io.RawIOBase):
     """One immutable chunk owned at a time; no seek, replay, queue or read-all."""
 
-    def __init__(self, chunks: Any, max_bytes: int, *, bounded_startup: bool = False) -> None:
+    def __init__(self, chunks: Any, max_bytes: int, *, bounded_startup: bool = False,
+                 work_clock: ConsumerClock | None = None) -> None:
         super().__init__()
         self.iterator: Any = iter(())
         self.pending = b''
@@ -45,7 +89,9 @@ class ChunkReader(io.RawIOBase):
         self.eof = False
         self.digest = hashlib.sha256()
         self.failure: BaseException | None = None
-        self.started = time.monotonic()
+        self.wall_started = time.monotonic()
+        self.work_clock = work_clock
+        self.started = self.now() if work_clock is None else work_clock.started
         self.bounded_startup = self.startup_active = bounded_startup
         self.startup_elapsed: float | None = None
 
@@ -55,17 +101,50 @@ class ChunkReader(io.RawIOBase):
     def seekable(self) -> bool:
         return False
 
+    def now(self) -> float:
+        return time.monotonic() if self.work_clock is None else self.work_clock()
+
     def check(self) -> float:
         if self.closed:
             raise ValueError('chunk source is closed')
         if self.failure is not None:
             raise ValueError('chunk source previously failed') from self.failure
-        elapsed = time.monotonic() - self.started
-        if self.startup_active and elapsed > STARTUP_SECONDS:
+        if self.work_clock is not None and self.work_clock.borrowed_at is not None:
+            raise ValueError('chunk source cannot advance while a consumer borrow is active')
+        wall_elapsed = time.monotonic() - self.wall_started
+        if self.startup_active and wall_elapsed > STARTUP_SECONDS:
             raise ValueError('chunk source startup deadline exceeded')
-        if elapsed > DECODE['VIDEO']['MAX_SECONDS']:
+        self.check_processing()
+        return wall_elapsed
+
+    def check_processing(self) -> None:
+        if self.now() - self.started > DECODE['VIDEO']['MAX_SECONDS']:
             raise ValueError('chunk source session deadline exceeded')
-        return elapsed
+
+    def borrow(self, event: Any, payload: Any) -> Any:
+        if self.work_clock is None:
+            yield event, payload
+        else:
+            self.work_clock.pause()
+            try:
+                yield event, payload
+            finally:
+                self.work_clock.resume()
+
+    def finish_processing(self) -> None:
+        if self.work_clock is not None:
+            self.check()  # Charge native container finalization before success.
+
+    def close_processing(self) -> None:
+        self.close()
+        if self.work_clock is not None:
+            self.check_processing()  # Producer finalization is not a consumer wait.
+
+    def record_final_input(self, report: dict[str, Any]) -> None:
+        report['input'] = self.result()
+        if self.work_clock is not None and report['status'] != 'completed':
+            report.pop('source_sha256', None)
+            report.pop('source_bytes', None)
 
     def pull(self) -> bool:
         """Pull only after the preceding chunk is fully delivered."""
@@ -131,7 +210,9 @@ class ChunkReader(io.RawIOBase):
             raise
 
     def result(self) -> dict[str, Any]:
-        return dict(received_bytes=self.received, delivered_bytes=self.delivered,
+        timing = {} if self.work_clock is None else dict(processing_clock=self.work_clock.result(),
+            processing_seconds_limit=DECODE['VIDEO']['MAX_SECONDS'])
+        return dict(**timing, received_bytes=self.received, delivered_bytes=self.delivered,
             received_chunks=self.chunks, prefix_sha256=self.digest.hexdigest(),
             verified_source_end=self.eof, pending_bytes=len(self.pending) - self.offset,
             owned_chunk_bytes=len(self.pending), peak_owned_chunk_bytes=self.peak,
@@ -159,7 +240,7 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
                           report: dict[str, Any], *, pes_ids: tuple[int, int, int] | None = None,
                           selection: dict[str, Any] | None = None) -> Any:
     """One discovery and codec context; startup ends only at both prepared heads."""
-    started = time.monotonic()
+    started = reader.now()
     options = {'protocol_whitelist': 'file,pipe'}
     if reader.bounded_startup:
         options.update(STARTUP_OPTIONS)
@@ -177,7 +258,8 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
         selected = DECODE['selected_tracks'](container, streams, audio_stream)
         report['discovery_input'] = reader.result()
         adapter = DECODE['AUDIO']['FrameAdapter'](audio_stream, DECODE['AUDIO']['FormatConverter'](av))
-        events = DECODE['prepared_events'](container, selected, adapter, session, audio_stream, started)
+        events = DECODE['prepared_events'](container, selected, adapter, session, audio_stream, started,
+            **({} if reader.work_clock is None else dict(clock=reader.work_clock)))
         ready_kinds: set[str] = set()
         try:
             for event, payload in events:
@@ -189,7 +271,7 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
                         report['startup_ready_input'] = reader.result()
                 if 'first_event_input' not in report:
                     report['first_event_input'] = reader.result()
-                yield event, payload
+                yield from reader.borrow(event, payload)
                 del event, payload
         finally:
             if pes_ids is not None:
@@ -205,17 +287,20 @@ def prepared_chunk_events(av: Any, reader: ChunkReader, container_format: str,
 def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
                 audio_stream: int, report: dict[str, Any], *,
                 max_bytes: int = 16 * 1024 * 1024, startup: str = 'default',
-                pes_ids: tuple[int, int, int] | None = None, selection: dict[str, Any] | None = None) -> Any:
+                pes_ids: tuple[int, int, int] | None = None, selection: dict[str, Any] | None = None,
+                deadline_mode: str = 'wall') -> Any:
     """Own/close the producer iterator; preparation yields are not output acks."""
     reader = None
     primary = False
     report.pop('track_selection', None)
     report.update({} if pes_ids is None else dict(preparation={}))
     session = DECODE['Session'](streams, audio_stream, DECODE['discard'])
-    report.update(profile='standalone-chunked-preparation-v1', status='failed', error=None,
+    report.update(profile='standalone-chunked-consumer-excluding-v1' if deadline_mode == 'consumer-excluding'
+        else 'standalone-chunked-preparation-v1', status='failed', error=None,
         output_devices_opened=False, source_kind='caller-supplied-clear-chunks', physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
+        work_clock = processing_clock(deadline_mode)
         if startup not in ('default', 'bounded-mpeg') or (startup == 'bounded-mpeg' and container_format != 'mpeg'):
             raise ValueError('bounded startup requires explicit MPEG-PS input')
         report['startup'] = dict(mode=startup, probe_options=dict(STARTUP_OPTIONS) if startup == 'bounded-mpeg' else {})
@@ -227,11 +312,12 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
             TRACKS['validate_pes_ids'](pes_ids)
             if container_format != 'mpeg' or type(selection) is not dict or selection:
                 raise ValueError('PES selection requires MPEG-PS and a fresh selection receipt')
-        reader = ChunkReader(chunks, max_bytes, bounded_startup=startup == 'bounded-mpeg')
+        reader = ChunkReader(chunks, max_bytes, bounded_startup=startup == 'bounded-mpeg', work_clock=work_clock)
         av = DECODE['AUDIO']['load_av']()
         report.update(pyav_version=av.__version__, library_versions=av.library_versions)
         yield from prepared_chunk_events(av, reader, container_format, streams, audio_stream, session, report,
                                          pes_ids=pes_ids, selection=selection)
+        reader.finish_processing()
         report.update(status='completed', source_sha256=reader.digest.hexdigest(),
                       source_bytes=reader.received)
     except BaseException as error:
@@ -247,14 +333,14 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
         if reader is not None:
             report['input_before_cleanup'] = reader.result()
             try:
-                reader.close()
+                reader.close_processing()
             except Exception as error:
                 report['cleanup_errors'].append(str(error))
                 if not primary:
                     report.update(status='failed', error=f'{type(error).__name__}: {error}')
                     raise
             finally:
-                report['input'] = reader.result()
+                reader.record_final_input(report)
 
 
 def file_chunks(path: Path, chunk_bytes: int) -> Any:

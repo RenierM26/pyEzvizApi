@@ -5,6 +5,7 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -304,3 +305,251 @@ def test_failed_pes_selection_clears_reused_session_diagnostics():
                              pes_ids=(0xE0, 0xE0, 0xC0), selection={}))
     assert report['status'] == 'failed' and report['preparation'] == {}
     assert 'track_selection' not in report
+
+
+def test_consumer_clock_excludes_only_open_borrows_and_has_no_history(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    clock = M['ConsumerClock']()
+    now[0] = 2
+    clock.pause()
+    now[0] = 102
+    assert clock() == 2
+    assert clock.result() == dict(profile='consumer-excluding-monotonic-v1', wall_seconds=102,
+        processing_seconds=2, excluded_consumer_seconds=100, completed_borrows=0, borrow_active=True)
+    with pytest.raises(ValueError, match='already paused'):
+        clock.pause()
+    clock.resume()
+    now[0] = 105
+    assert clock() == 5
+    assert clock.result()['processing_seconds'] == 5
+    with pytest.raises(ValueError, match='not paused'):
+        clock.resume()
+    for _ in range(1000):
+        clock.pause()
+        now[0] += 1
+        clock.resume()
+    assert clock.result()['completed_borrows'] == 1001
+    assert clock.result()['excluded_consumer_seconds'] == 1100
+    assert not any(isinstance(value, (list, dict, set)) for value in vars(clock).values())
+
+
+@pytest.mark.parametrize('mode', ['wall', 'consumer-excluding'])
+def test_real_consumer_hold_exceeds_wall_limit_only_in_legacy_mode(tmp_path, monkeypatch, mode):
+    raw = OLD['TIMELINE_TESTS']['encode_three_track_ps'](tmp_path).read_bytes()
+    expected: dict[str, Any] = {}
+    baseline = list(M['iter_chunks'](Producer([raw]), 'mpeg', (0, 2), 1, expected))
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    report: dict[str, Any] = {}
+    source = Producer([raw])
+    iterator = M['iter_chunks'](source, 'mpeg', (0, 2), 1, report, deadline_mode=mode)
+    actual = [next(iterator)]
+    now[0] += D['VIDEO']['MAX_SECONDS'] + 1
+    if mode == 'wall':
+        with pytest.raises(ValueError, match=r'limit|deadline'):
+            list(iterator)
+        assert report['status'] == 'failed' and 'source_sha256' not in report
+    else:
+        actual.extend(iterator)
+        assert actual == baseline
+        timing = report['input']['processing_clock']
+        assert timing['processing_seconds'] == 0 and timing['excluded_consumer_seconds'] == 61
+        assert not timing['borrow_active'] and timing['completed_borrows'] == len(actual)
+        assert report['status'] == 'completed' and report['source_sha256'] == hashlib.sha256(raw).hexdigest()
+    assert source.closed == 1 and not report['input']['owned_chunk_bytes']
+
+
+@pytest.mark.parametrize('finish', ['close', 'throw'])
+def test_real_borrow_resume_on_close_or_consumer_exception_preserves_primary(tmp_path, monkeypatch, finish):
+    raw = OLD['TIMELINE_TESTS']['encode_three_track_ps'](tmp_path).read_bytes()
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    source = Producer([raw], close_failure=True)
+    report: dict[str, Any] = {}
+    iterator = M['iter_chunks'](source, 'mpeg', (0, 2), 1, report, deadline_mode='consumer-excluding')
+    next(iterator)
+    now[0] = 100
+    if finish == 'close':
+        iterator.close()
+    else:
+        primary = LookupError('consumer failed')
+        with pytest.raises(LookupError) as caught:
+            iterator.throw(primary)
+        assert caught.value is primary
+    assert source.closed == 1 and report['cleanup_errors'] == ['producer cleanup failed']
+    assert not report['input']['processing_clock']['borrow_active']
+    assert report['input']['processing_clock']['excluded_consumer_seconds'] == 100
+    assert report['status'] != 'completed' and 'source_sha256' not in report
+
+
+@pytest.mark.parametrize('mode', [None, False, 1, [], '', 'active'])
+def test_invalid_deadline_mode_does_not_claim_or_pull_input(monkeypatch, mode):
+    source = Producer([b'x'])
+    monkeypatch.setitem(D['AUDIO'], 'load_av', lambda: pytest.fail('decoder opened'))
+    with pytest.raises(ValueError, match='deadline mode'):
+        next(M['iter_chunks'](source, 'mpeg', (0, 2), 1, {}, deadline_mode=mode))
+    assert source.pulls == source.closed == 0
+
+
+@pytest.mark.parametrize('phase', ['yield', 'eof', 'close'])
+def test_excluding_consumer_does_not_exclude_slow_source_work(monkeypatch, phase):
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    class Slow(Producer):
+        def __next__(self):
+            if phase == 'yield' or (phase == 'eof' and self.pulls):
+                now[0] += 61
+            return super().__next__()
+        def close(self):
+            if phase == 'close':
+                now[0] += 61
+            super().close()
+    clock = M['ConsumerClock']()
+    source = Slow([b'x'])
+    reader = M['ChunkReader'](source, 1, work_clock=clock)
+    if phase == 'close':
+        reader.read(1)
+        reader.close()
+        assert reader.now() - reader.started == 61
+    else:
+        if phase == 'eof':
+            reader.read(1)
+            clock.pause()
+            now[0] += 100
+            clock.resume()
+        with pytest.raises(ValueError, match='deadline'):
+            reader.read(1)
+        assert not reader.eof and reader.failure is not None
+        reader.close()
+    assert source.closed == 1
+
+
+def test_consumer_exclusion_does_not_relax_wall_startup_deadline(tmp_path, monkeypatch):
+    raw = OLD['TIMELINE_TESTS']['encode_three_track_ps'](tmp_path).read_bytes()
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    source = Producer([raw])
+    report: dict[str, Any] = {}
+    iterator = M['iter_chunks'](source, 'mpeg', (0, 2), 1, report,
+        startup='bounded-mpeg', deadline_mode='consumer-excluding')
+    next(iterator)
+    now[0] += M['STARTUP_SECONDS'] + 1
+    with pytest.raises(ValueError, match='startup deadline'):
+        list(iterator)
+    assert source.closed == 1 and report['status'] == 'failed'
+    assert not report['input']['processing_clock']['borrow_active']
+    assert 'source_sha256' not in report
+
+
+def test_real_slow_producer_cleanup_cannot_publish_opt_in_success(tmp_path, monkeypatch):
+    raw = OLD['TIMELINE_TESTS']['encode_three_track_ps'](tmp_path).read_bytes()
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    class SlowClose(Producer):
+        def close(self):
+            now[0] += D['VIDEO']['MAX_SECONDS'] + 1
+            super().close()
+    source = SlowClose([raw])
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='deadline'):
+        list(M['iter_chunks'](source, 'mpeg', (0, 2), 1, report, deadline_mode='consumer-excluding'))
+    assert source.closed == 1 and report['status'] == 'failed' and report['cleanup_errors']
+    assert report['input']['verified_source_end'] and not report['input']['owned_chunk_bytes']
+    assert 'source_sha256' not in report and 'source_bytes' not in report
+
+
+@pytest.mark.parametrize('stage', ['demux', 'decode'])
+def test_native_work_is_charged_after_excluded_borrow(monkeypatch, stage):
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    clock = M['ConsumerClock']()
+    clock.pause()
+    now[0] += 100
+    clock.resume()
+    class Packet:
+        is_corrupt = False
+        size = 1
+        stream = SimpleNamespace(index=0)
+        def decode(self):
+            if stage == 'decode':
+                now[0] += 61
+            return [object()]
+    class Container:
+        def demux(self, *_args):
+            if stage == 'demux':
+                now[0] += 61
+            yield Packet()
+    with pytest.raises(ValueError, match='limit'):
+        list(D['decoded_frames'](Container(), [], SimpleNamespace(packets=0), 1, 0, clock=clock))
+    assert clock.result()['processing_seconds'] == 61
+
+
+def test_opt_in_payload_borrow_does_not_hide_late_final_eof_flush(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    clock = M['ConsumerClock']()
+    clock.pause()
+    now[0] += 100
+    clock.resume()
+    def resample(_frame):
+        now[0] += 61
+        return []
+    monkeypatch.setitem(D['prepared_events'].__globals__, 'decoded_frames', lambda *_a, **_k: iter(()))
+    adapter = SimpleNamespace(resampler=SimpleNamespace(resample=resample))
+    session = SimpleNamespace(pairs=SimpleNamespace(consume=None, finish=lambda: None), audio_count=1)
+    with pytest.raises(ValueError, match='session limit'):
+        list(D['prepared_events'](None, [], adapter, session, 1, 0, clock=clock))
+    assert clock.result()['processing_seconds'] == 61
+
+
+def test_opt_in_read_cannot_hide_source_work_inside_an_open_consumer_borrow(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    clock = M['ConsumerClock']()
+    source = Producer([b'x'])
+    reader = M['ChunkReader'](source, 1, work_clock=clock)
+    clock.pause()
+    now[0] += 100
+    with pytest.raises(ValueError, match='consumer borrow'):
+        reader.read(1)
+    clock.resume()
+    assert source.pulls == 0 and reader.failure is not None
+    reader.close()
+
+
+@pytest.mark.parametrize('bound', ['bytes', 'chunks'])
+def test_opt_in_consumer_clock_keeps_compressed_work_caps(monkeypatch, bound):
+    clock = M['ConsumerClock']()
+    if bound == 'chunks':
+        monkeypatch.setitem(M['ChunkReader'].read.__globals__, 'MAX_CHUNKS', 1)
+    first = b'x'
+    reader = M['ChunkReader'](Producer([first, b'y']), 1 if bound == 'bytes' else 2, work_clock=clock)
+    assert reader.read(1) == first
+    with pytest.raises(ValueError, match='limit'):
+        reader.read(1)
+    assert reader.chunks == 1 and reader.received == reader.delivered == 1
+    reader.close()
+
+
+def test_slow_native_container_close_is_charged_before_success(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(M['time'], 'monotonic', lambda: now[0])
+    class Container:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            now[0] += 61
+    monkeypatch.setitem(D['AUDIO'], 'load_av', lambda: SimpleNamespace(
+        __version__='test', library_versions={}, open=lambda *_a, **_k: Container()))
+    monkeypatch.setitem(D, 'selected_tracks', lambda *_: [])
+    monkeypatch.setitem(D['AUDIO'], 'FormatConverter', lambda _: None)
+    monkeypatch.setitem(D['AUDIO'], 'FrameAdapter', lambda *_: None)
+    monkeypatch.setitem(D, 'prepared_events', lambda *_a, **_k: iter(()))
+    source = Producer([])
+    report: dict[str, Any] = {}
+    with pytest.raises(ValueError, match='deadline'):
+        list(M['iter_chunks'](source, 'mpeg', (0, 2), 1, report, deadline_mode='consumer-excluding'))
+    assert source.closed == 1 and report['status'] == 'failed'
+    assert not report['input']['owned_chunk_bytes'] and 'source_sha256' not in report
+    assert report['input']['processing_clock']['processing_seconds'] == 61

@@ -896,6 +896,9 @@ extends finite acquisition/evidence budgets; the default remains 30 seconds.
 The separate [two-minute recorded control](docs/local-av-sustained-playback.md)
 checks longer scheduling and sampled resources without extending live capture.
 
+The separate [offline whole-block audio-gap planner](docs/local-av-audio-gaps.md)
+prepares explicit bounded padding decisions without changing live playback or PCM.
+
 ## Side Notes
 
 There is no official API documentation. Much of this is inferred from Ezviz mobile app behavior (Android/iOS). Some regions operate on separate endpoints; US example: `apiius.ezvizlife.com`.

@@ -22,12 +22,13 @@ class CaptureEndRejected(ValueError):
     """A capture ended without permission to finish an accepted bounded prefix."""
 
 
-def validate_arguments(owner: Any, limits: CaptureLimits, completion: str, codec: str) -> None:
+def validate_arguments(owner: Any, limits: CaptureLimits, completion: str, codec: str, *, byte_limit: int = 16 * 1024 * 1024) -> None:
+    DECRYPT['validate_byte_limit'](byte_limit)
     if completion not in ('reject', 'bounded-prefix') or codec not in ('auto', 'hevc'):
         raise ValueError('invalid capture completion policy or codec')
     if (not isinstance(limits, CaptureLimits)
             or type(limits.max_packets) is not int or not 0 < limits.max_packets <= DECRYPT['MAX_PACKETS']
-            or type(limits.max_bytes) is not int or not 0 < limits.max_bytes <= DECRYPT['MAX_TOTAL']
+            or type(limits.max_bytes) is not int or not 0 < limits.max_bytes <= byte_limit
             or isinstance(limits.duration_seconds, bool) or not isinstance(limits.duration_seconds, int | float)
             or not math.isfinite(limits.duration_seconds) or not 0 < limits.duration_seconds <= DECRYPT['MAX_SECONDS']):
         raise ValueError('capture requires explicit finite duration, packet and byte bounds within decryption caps')
@@ -130,8 +131,9 @@ class Bodies:
 
 def iter_capture_chunks(owner: Any, key: str | bytes, report: dict[str, Any], *,
         limits: CaptureLimits, completion: str = 'reject', codec: str = 'auto',
-        monotonic: Any = time.monotonic) -> Any:
+        monotonic: Any = time.monotonic, byte_limit: int = 16 * 1024 * 1024) -> Any:
     """Own one pristine capture, never upgrade its local stop to live-source EOF."""
+    report.pop('byte_limit', None)
     report.update(profile='guarded-capture-clear-chunks-v1', status='failed', completion_policy=completion,
         input_scope='accepted-capture-prefix', capture_end_policy_accepted=False,
         whole_source_complete=False, network_eof_verified=False, output_devices_opened=False,
@@ -140,11 +142,12 @@ def iter_capture_chunks(owner: Any, key: str | bytes, report: dict[str, Any], *,
     bodies = chunks = None
     primary = cleanup_failed = False
     try:
-        validate_arguments(owner, limits, completion, codec)
+        validate_arguments(owner, limits, completion, codec, byte_limit=byte_limit)
+        report.update({} if byte_limit == DECRYPT['MAX_TOTAL'] else dict(byte_limit=byte_limit))
         report['limits'] = dict(max_packets=limits.max_packets, max_bytes=limits.max_bytes,
             duration_seconds=limits.duration_seconds)
         bodies = Bodies(owner, limits, completion, report, monotonic)
-        chunks = DECRYPT['Chunks'](bodies, key, codec=codec, clock=monotonic)
+        chunks = DECRYPT['Chunks'](bodies, key, codec=codec, clock=monotonic, byte_limit=byte_limit)
         report['status'] = 'running'
         yield from chunks
     except GeneratorExit:

@@ -55,8 +55,38 @@ def verify_decoder_clock(decode: dict[str, Any], count: int, mode: str) -> None:
         raise ValueError('capture decoder cleanup clock accounting failed')
 
 
+def verify_byte_budget(capture: dict[str, Any], decode: dict[str, Any], byte_limit: int) -> None:
+    """Bind requested byte work independently of time, pending storage and EOF."""
+    decrypt = CAPTURE['DECRYPT']
+    decrypt['validate_byte_limit'](byte_limit)
+    crypto = capture.get('decryption') or {}
+    limits = capture.get('limits') or {}
+    expected_profile = ('bounded-decrypted-packet-chunks-v1' if byte_limit == decrypt['MAX_TOTAL']
+        else 'bounded-decrypted-packet-chunks-v2')
+    readers = [decode.get(field) or {} for field in ('input', 'input_before_cleanup')]
+    counts = [crypto.get('encrypted_bytes'), crypto.get('clear_bytes_yielded'),
+        (capture.get('capture') or {}).get('bytes_yielded'),
+        *[reader.get(field) for reader in readers for field in ('received_bytes', 'delivered_bytes')]]
+    if (crypto.get('profile') != expected_profile
+            or any(type(count) is not int or not 0 < count <= byte_limit for count in counts)
+            or type(capture.get('byte_limit', decrypt['MAX_TOTAL'])) is not int
+            or capture.get('byte_limit', decrypt['MAX_TOTAL']) != byte_limit
+            or type(crypto.get('total_byte_limit')) is not int or crypto['total_byte_limit'] != byte_limit
+            or type(limits.get('max_bytes')) is not int or not 0 < limits['max_bytes'] <= byte_limit
+            or crypto.get('encrypted_bytes') != (capture.get('capture') or {}).get('bytes_yielded')
+            or crypto.get('encrypted_bytes', 0) > limits['max_bytes']
+            or type(crypto.get('pending_byte_limit')) is not int
+            or crypto['pending_byte_limit'] != decrypt['MAX_PENDING']
+            or any(type(row.get('total_byte_limit')) is not int or row['total_byte_limit'] != byte_limit for row in readers)
+            or any(row.get('received_bytes') != crypto.get('clear_bytes_yielded')
+                or row.get('delivered_bytes') != crypto.get('clear_bytes_yielded')
+                or type(row.get('chunk_byte_limit')) is not int or row['chunk_byte_limit'] != CHUNKED['MAX_CHUNK_BYTES']
+                or type(row.get('read_byte_limit')) is not int or row['read_byte_limit'] != CHUNKED['MAX_READ_BYTES'] for row in readers)):
+        raise ValueError('capture compressed byte budget mismatch')
+
+
 def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: dict[str, Any], *,
-                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300) -> str:
+                      decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024) -> str:
     """Require independent terminal checks, not merely exhaustion of the wrapper."""
     crypto = capture.get('decryption') or {}
     reader = decode.get('input') or {}
@@ -69,7 +99,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
             or capture.get('whole_source_complete') is not False
             or capture.get('network_eof_verified') is not False
             or capture.get('cleanup_error_types') or capture.get('error_type') is not None
-            or crypto.get('profile') != 'bounded-decrypted-packet-chunks-v1'
+            or crypto.get('profile') not in ('bounded-decrypted-packet-chunks-v1', 'bounded-decrypted-packet-chunks-v2')
             or crypto.get('status') != 'completed' or crypto.get('verified_decryption_end') is not True
             or crypto.get('producer_iterator_exhausted') is not True
             or crypto.get('pending_bytes') != 0 or crypto.get('cleanup_errors')
@@ -113,6 +143,7 @@ def verify_completion(capture: dict[str, Any], decode: dict[str, Any], online: d
                 or type(audit.get('audio_stream_index')) is not int or audit['audio_stream_index'] < 0
                 or (selection and audit['audio_stream_index'] != selection.get('audio_index'))):
             raise ValueError('capture preparation source identity accounting failed')
+    verify_byte_budget(capture, decode, byte_limit)
     verify_decoder_clock(decode, count, decoder_deadline_mode)
     return digest
 
@@ -139,8 +170,8 @@ def close_pipeline(iterators: tuple[Any, ...], owner: Any, report: dict[str, Any
     return cleanup_error
 
 
-def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int) -> None:
-    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300)]:
+def bind_options(report: dict[str, Any], decoder_deadline_mode: str, pair_limit: int, byte_limit: int = 16 * 1024 * 1024) -> None:
+    for field, value, default in [('decoder_deadline_mode', decoder_deadline_mode, 'wall'), ('pair_limit', pair_limit, 300), ('byte_limit', byte_limit, 16 * 1024 * 1024)]:
         report.pop(field, None)
         if value != default:
             report[field] = value
@@ -151,7 +182,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         completion: str = 'reject', codec: str = 'auto', policy: str = 'reject',
         overlap_ms: int | None = None, phase_ms: int | None = None,
         monotonic: Any = time.monotonic, pes_ids: tuple[int, int, int] | None = None,
-        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300) -> Any:
+        identity_mode: str = 'full-history', decoder_deadline_mode: str = 'wall', pair_limit: int = 300, byte_limit: int = 16 * 1024 * 1024) -> Any:
     """Own a validated pristine owner; borrow each prepared event until resumed.
 
     Exhaust or explicitly close this iterator. A later failure invalidates the
@@ -173,16 +204,16 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
         # Validate downstream policy before transferring ownership or opening IO.
         CHUNKED['validate_deadline_mode'](decoder_deadline_mode)
         ONLINE['Policy'](streams, audio_stream, policy, overlap_ms, phase_ms, identity_mode=identity_mode, pair_limit=pair_limit)
-        CAPTURE['validate_arguments'](owner, limits, completion, codec)
+        CAPTURE['validate_arguments'](owner, limits, completion, codec, byte_limit=byte_limit)
         if pes_ids is not None:
             CHUNKED['TRACKS']['validate_pes_ids'](pes_ids)
-        bind_options(report, decoder_deadline_mode, pair_limit)
+        bind_options(report, decoder_deadline_mode, pair_limit, byte_limit)
         claimed = True
         chunks = CAPTURE['iter_capture_chunks'](owner, key, capture, limits=limits,
-            completion=completion, codec=codec, monotonic=monotonic)
+            completion=completion, codec=codec, monotonic=monotonic, byte_limit=byte_limit)
         selection: dict[str, Any] | None = {} if pes_ids is not None else None
         options = {} if pes_ids is None else dict(pes_ids=pes_ids, selection=selection)
-        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg',
+        events = CHUNKED['iter_chunks'](chunks, 'mpeg', streams, audio_stream, decode, startup='bounded-mpeg', max_bytes=byte_limit,
             **({} if decoder_deadline_mode == 'wall' else dict(deadline_mode=decoder_deadline_mode)), **options)
         mapped = ONLINE['iter_online'](events, streams, audio_stream, online,
             policy=policy, overlap_ms=overlap_ms, phase_ms=phase_ms, identity_mode=identity_mode, pair_limit=pair_limit, **({} if selection is None else dict(selection=selection)))
@@ -206,7 +237,7 @@ def iter_capture_preparation(owner: Any, key: str | bytes, streams: tuple[int, i
                 raise cleanup_error
     if not primary:
         try:
-            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit)
+            digest = verify_completion(capture, decode, online, decoder_deadline_mode=decoder_deadline_mode, pair_limit=pair_limit, byte_limit=byte_limit)
         except Exception as error:
             report.update(status='failed', error_type=type(error).__name__)
             raise

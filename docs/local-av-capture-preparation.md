@@ -133,3 +133,21 @@ without the explicit mode binding is rejected by the default verifier.
 when independently validating these opt-in stage receipts. Preparation and
 pending output forward that binding themselves. The source is still a finite,
 explicitly accepted capture prefix, not network EOF or sustained streaming.
+
+
+## Explicit compressed-byte quota composition
+
+`iter_capture_preparation(..., byte_limit=N)` and the guarded capture/decryption
+iterators accept a positive integer quota up to 256 MiB, default 16 MiB. Capture
+limits must remain within the explicit quota. Preparation passes the same value
+to the decryptor and the chunk reader, without changing source clocks, processing
+clock selection, startup budgets or pending ownership.
+
+Nondefault preparation/capture receipts bind `byte_limit`. Decryption uses a
+separate v2 receipt profile; both decoder cleanup snapshots retain their existing
+`total_byte_limit` field. Direct terminal callers must pass
+`verify_completion(..., byte_limit=N)` for nondefault quotas; the default verifier
+rejects expanded receipts. Reused default receipts clear previous bindings.
+
+See the [pending output API and unchanged limits](local-av-capture-playback.md#explicit-finite-compressed-byte-quota)
+for the additional bounded-history requirements before actual output.

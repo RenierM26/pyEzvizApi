@@ -18,8 +18,14 @@ from pyezvizapi.stream_media import (
 
 MAX_PENDING = 1024 * 1024
 MAX_TOTAL = 16 * 1024 * 1024
+MAX_BYTE_LIMIT = 256 * 1024 * 1024
 MAX_PACKETS = 100_000
 MAX_SECONDS = 60
+
+
+def validate_byte_limit(limit: int) -> None:
+    if type(limit) is not int or not 0 < limit <= MAX_BYTE_LIMIT:
+        raise ValueError('invalid finite compressed byte limit')
 
 
 class Decryptor:
@@ -72,7 +78,9 @@ class Chunks:
     """No prefetch or queue; caller owns each yielded immutable clear chunk."""
 
     def __init__(self, packets: Any, key: str | bytes, *, codec: str = 'auto',
-            clock: Any = time.monotonic) -> None:
+            clock: Any = time.monotonic, byte_limit: int = MAX_TOTAL) -> None:
+        validate_byte_limit(byte_limit)
+        self.byte_limit = byte_limit
         self.iterator: Any = iter(())
         self.transform: Any = None
         self.closed = self.completed = self.producer_end = False
@@ -116,7 +124,7 @@ class Chunks:
             self.check()
             if type(packet) is not bytes or not 0 < len(packet) <= MAX_PENDING:
                 raise ValueError('encrypted source requires immutable bounded nonempty bytes')
-            if self.packets >= MAX_PACKETS or self.received + len(packet) > MAX_TOTAL:
+            if self.packets >= MAX_PACKETS or self.received + len(packet) > self.byte_limit:
                 raise ValueError('encrypted packet/count/byte limit exceeded')
             self.received += len(packet)
             self.packets += 1
@@ -136,7 +144,7 @@ class Chunks:
             while True:
                 clear = self.pull()
                 if clear:
-                    if type(clear) is not bytes or len(clear) > MAX_PENDING or self.yielded + len(clear) > MAX_TOTAL:
+                    if type(clear) is not bytes or len(clear) > MAX_PENDING or self.yielded + len(clear) > self.byte_limit:
                         raise ValueError('decrypted chunk/byte limit exceeded')
                     self.yielded += len(clear)
                     self.chunks += 1
@@ -168,7 +176,8 @@ class Chunks:
             raise ValueError('decrypted source cleanup failed')
 
     def result(self) -> dict[str, Any]:
-        return dict(profile='bounded-decrypted-packet-chunks-v1',
+        return dict(profile='bounded-decrypted-packet-chunks-v1' if self.byte_limit == MAX_TOTAL
+            else 'bounded-decrypted-packet-chunks-v2',
             status='failed' if self.failure is not None or self.cleanup_errors else 'completed' if self.completed else 'closed' if self.closed else 'open',
             error_type=type(self.failure).__name__ if self.failure is not None else None,
             producer_iterator_exhausted=self.producer_end,
@@ -179,14 +188,15 @@ class Chunks:
             complete_clear_sha256=self.clear_hash.hexdigest() if self.completed else None,
             pending_bytes=len(self.transform.buffer) if self.transform else 0,
             peak_pending_bytes=self.transform.peak if self.transform else 0,
-            pending_byte_limit=MAX_PENDING, total_byte_limit=MAX_TOTAL,
+            pending_byte_limit=MAX_PENDING, total_byte_limit=self.byte_limit,
             cleanup_errors=list(self.cleanup_errors), output_devices_opened=False)
 
 
 def iter_decrypted(packets: Any, key: str | bytes, report: dict[str, Any], *,
-        codec: str = 'auto') -> Any:
+        codec: str = 'auto', byte_limit: int = MAX_TOTAL) -> Any:
     """Own the source iterator through downstream completion, close or failure."""
-    chunks = Chunks(packets, key, codec=codec)
+    report.update(status='failed', complete_clear_sha256=None, verified_decryption_end=False)
+    chunks = Chunks(packets, key, codec=codec, byte_limit=byte_limit)
     primary = False
     try:
         yield from chunks

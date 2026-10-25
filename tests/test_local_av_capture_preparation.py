@@ -376,3 +376,17 @@ def test_decoder_exclusion_does_not_pause_the_active_decryptor_wall_clock(source
     assert owner.closed and report['status'] == 'consumer-closed'
     assert report['accepted_prefix_clear_sha256'] is None
     assert not report['decode']['input']['processing_clock']['borrow_active']
+
+
+
+def test_reused_preparation_report_clears_nondefault_compressed_byte_binding(source):
+    report: dict[str, Any] = {}
+    _owner, iterator = prepare(source, report, byte_limit=32 * 1024 * 1024)
+    list(iterator)
+    assert report['byte_limit'] == 32 * 1024 * 1024
+    owner, iterator = prepare(source, report)
+    list(iterator)
+    assert owner.closed and report['status'] == 'prepared-prefix-ended'
+    assert 'byte_limit' not in report and 'byte_limit' not in report['capture']
+    assert report['capture']['decryption']['profile'] == 'bounded-decrypted-packet-chunks-v1'
+    assert report['decode']['input']['total_byte_limit'] == 16 * 1024 * 1024

@@ -60,3 +60,18 @@ every stream/PTS/time-base/media hash, event metadata, decoder EOF and ownership
 Tests cover invalid/mutable bodies, no-prefetch, pre-append limits in both modes,
 input/output totals, slow pull/EOF/flush, early close and primary/cleanup failure.
 No camera or attended Windows test is required for this preparation-only boundary.
+
+## Explicit finite total-byte allowance
+
+`Chunks(..., byte_limit=N)` and `iter_decrypted(..., byte_limit=N)` accept a
+positive integer allowance up to 256 MiB; the default 16 MiB is unchanged.
+Encrypted input and clear output are counted independently against that same
+quota before their respective hashes/output counters advance. This does not
+change 1-MiB pending storage, packet count, 60-second cooperative wall time,
+no-prefetch ownership or final crypto flush. Invalid quotas leave the input
+iterator unclaimed. Nondefault receipts use `bounded-decrypted-packet-chunks-v2`
+with the explicit `total_byte_limit`; default receipts retain v1.
+
+See [guarded composition](local-av-capture-preparation.md#explicit-compressed-byte-quota-composition)
+for capture/decoder binding and terminal verification. A larger quota does not
+implicitly enlarge capture limits or demonstrate longer physical acquisition.

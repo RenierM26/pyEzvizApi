@@ -416,3 +416,43 @@ all joins/EOF/drains remain unchanged. A larger pair quota cannot override an
 earlier limit at another stage. In particular, the existing attended capture
 still acquires only its configured short prefix; this API does not enable longer
 live acquisition or sustained/unbounded playback.
+
+
+## Explicit finite compressed-byte quota
+
+`CapturePlayback(..., byte_limit=N)` forwards one positive integer quota through
+capture argument validation, decryption input/clear output and decoder input.
+The default remains 16 MiB; the maximum is 256 MiB, matching the existing decoder
+file-size ceiling. `CaptureLimits.max_bytes` must also be explicitly configured
+and cannot exceed this quota. A larger compressed-byte allowance does not
+implicitly enlarge a smaller capture byte allowance.
+
+Expanded pending playback requires `identity_mode='source-sequence'` and a bounded
+`diagnostic_tail`, validated before capture claim. For example:
+
+```python
+session = CapturePlayback(
+    owner, key, args, report,
+    limits=CaptureLimits(max_packets=15_000, max_bytes=32 * 1024 * 1024,
+                         duration_seconds=30),
+    completion='bounded-prefix', identity_mode='source-sequence',
+    diagnostic_tail=2, decoder_deadline_mode='consumer-excluding',
+    pair_limit=900, byte_limit=32 * 1024 * 1024,
+)
+session.play()
+```
+
+The nondefault quota is bound in preparation and capture receipts. Decryption
+uses profile `bounded-decrypted-packet-chunks-v2` with the exact
+`total_byte_limit`; default 16-MiB receipts retain v1. Decoder snapshots before and
+after cleanup must carry the same total-byte allowance. Terminal verification
+checks quota agreement, integer bounded counts, encrypted bytes against capture
+yield accounting, and clear output against both decoder snapshots. Missing,
+downgraded or inconsistent evidence cannot publish successful prefix completion.
+
+The fixed 1-MiB crypto pending/chunk bound, decoder 1-MiB chunk/64-KiB read windows,
+256-KiB/5-second startup budget, resident output credit, packet/chunk/frame/audio
+quotas, 60-second capture/decryption/processing/source-span guards, lateness and
+all EOF/drain/join/cleanup rules are unchanged. No read-all or producer queue is
+introduced. Default CLIs, attended launcher and capture duration stay unchanged;
+this is not longer live acquisition or sustained/unbounded playback.

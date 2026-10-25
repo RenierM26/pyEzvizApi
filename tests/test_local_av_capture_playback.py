@@ -62,6 +62,13 @@ def rig(tmp_path, monkeypatch):
     titles = []
     def output(*_args, **kwargs):
         titles.append(kwargs.get('title'))
+        if kwargs.get('identity_mode') == 'source-sequence':
+            start = len(video.calls)
+            finish = video.finish
+            def finished(timeout):
+                finish(timeout)
+                video.identity_receipt = OUT['CHANNEL']['identity_audit'](len(video.calls) - start)
+            video.finish = finished
         return video
     monkeypatch.setitem(OUT['CHANNEL'], 'Output', output)
     monkeypatch.setitem(OUT['PLAY']['PCM'], 'Ffplay', lambda **_kwargs: audio)
@@ -851,6 +858,14 @@ def test_pending_sequence_identities_preserve_compact_media_and_all_cleanup(rig)
     audit = preparation['online']['policy']['identity_audit']
     counts = report['output']['scheduler']['completed']
     assert audit['accepted'] == counts and audit['retained_id_count'] == 0
+    assert report['output']['video_identity_mode'] == 'source-sequence'
+    assert report['output']['video_identity_audit'] == OUT['CHANNEL']['identity_audit'](counts['video_pair'])
+    for field, value in [('video_identity_mode', 'full-history'), ('video_identity_audit', None),
+            ('video_identity_audit', OUT['CHANNEL']['identity_audit'](counts['video_pair'] - 1))]:
+        changed_output = copy.deepcopy(report['output'])
+        changed_output[field] = value
+        with pytest.raises(ValueError, match='identity'):
+            M['verify_output'](preparation, changed_output)
     assert audit['audio_stream_index'] == preparation['decode']['track_selection']['audio_index'] == 1
     for field in ('mapped_metadata_sha256', 'audio_clock_rows_sha256', 'origin', 'audio_clock_contract'):
         assert preparation['online']['policy'][field] == legacy['preparation']['online']['policy'][field]

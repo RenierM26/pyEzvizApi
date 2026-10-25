@@ -74,6 +74,10 @@ def verify_output(preparation: dict[str, Any], receipt: dict[str, Any]) -> None:
                     or any(c not in '0123456789abcdef' for c in row['sha256'])
                     for row in media['tracks'].values())):
             raise ValueError('compact media receipt terminal checks failed')
+    if preparation.get('online', {}).get('profile') == 'standalone-online-sequence-av-policy-v1':
+        if receipt.get('video_identity_mode') != 'source-sequence':
+            raise ValueError('capture output worker identity mode mismatch')
+        OUTPUT['CHANNEL']['verify_identity_audit'](receipt.get('video_identity_audit'), expected['video_pair'])
     PREPARE['verify_completion'](preparation['capture'], preparation['decode'], preparation['online'],
         decoder_deadline_mode=preparation.get('decoder_deadline_mode', 'wall'))
 
@@ -158,6 +162,7 @@ class CapturePlayback:
         self.used = False
         self._stop = Event()
         self.diagnostic_tail = diagnostic_tail
+        self.identity_mode = identity_mode
         preparation: dict[str, Any] = {}
         output: dict[str, Any] = {}
         report.update(profile='guarded-capture-pending-host-submissions-v1' if diagnostic_tail is None
@@ -224,7 +229,7 @@ class CapturePlayback:
         report['status'] = 'running'
         report['output']['profile'] = 'bounded-prepared-host-submissions-v1'
         try:
-            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop, diagnostic_tail=self.diagnostic_tail,
+            OUTPUT['play_prepared'](self.pull, self.args, report['output'], pending_input=True, stop=self._stop, diagnostic_tail=self.diagnostic_tail, video_identity_mode=self.identity_mode,
                 title='Bounded capture prefix (host submissions; not device sync)')
         except BaseException as error:
             primary = True

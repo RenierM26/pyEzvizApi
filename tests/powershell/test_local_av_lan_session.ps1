@@ -28,6 +28,18 @@ function Valid-Options {
     }
 }
 try {
+    $options = Valid-Options
+    $options.CaptureProfile = 'TwO-MiNuTe'
+    Invoke-LanWslSession -Options $options -WslExecutable $ProbeExecutable
+    $longArguments = @(Read-Probe)
+    $profileIndex = [Array]::IndexOf($longArguments, '--capture-profile')
+    Assert-True ($profileIndex -ge 0 -and $longArguments[$profileIndex + 1] -ceq 'two-minute') 'Finite profile was not forwarded canonically.'
+    $count++
+    $options.CaptureProfile = 'automatic'
+    $rejected = $false
+    try { [void]@(Get-LanWslArguments -Options $options) } catch { $rejected = $true }
+    Assert-True $rejected 'Unknown capture profile was accepted.'
+    $count++
     foreach ($code in @(0, 2, 130)) {
         $options = Valid-Options
         $env:LAN_WSL_PROBE_EXIT = $code.ToString()
@@ -105,6 +117,7 @@ try {
     $hostExecutable = (Get-Process -Id $PID).Path
     $env:LAN_WSL_ENTRYPOINT = (Resolve-Path -LiteralPath $entry).Path
     $binderCases = @(
+        @{Name = 'CaptureProfile'; Value = "'TwO-MiNuTe'"; Code = 0},
         @{ Value = '0.6'; Code = 2 }, @{ Value = '([double]1)'; Code = 2 },
         @{ Value = '([decimal]1)'; Code = 2 }, @{ Value = "'0.6'"; Code = 2 },
         @{ Value = '$true'; Code = 2 }, @{ Value = "'2147483648'"; Code = 2 },

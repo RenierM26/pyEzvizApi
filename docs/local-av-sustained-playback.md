@@ -4,7 +4,9 @@ This development profile exercises a persistent decoder and host scheduler beyon
 the older 60-second source/scheduler ceilings. It reads a local decrypted MPEG-PS
 recording, never starts a camera and accepts no credentials. It is not sustained
 live acquisition, a reconnect policy, a general camera player or physical A/V
-synchronization measurement. The attended LAN tool remains a 30-second profile.
+synchronization measurement. The attended LAN tool defaults to a 30-second profile;
+its separate [explicit two-minute profile](local-av-lan-playback.md#explicit-two-minute-live-profile)
+has its own acquisition, crypto, evidence and supervision bounds.
 
 ## Run
 
@@ -87,6 +89,6 @@ interrupt hook. If native work cannot join, the worker flushes a failed/cancelle
 receipt and the parent reaps its process group. A separate wall guard handles a
 native call that never returns. No automatic retry or network acquisition occurs.
 
-After this recorded control, longer live acquisition still needs its own
-end-to-end duration, crypto, evidence and supervisor policy, followed by attended
-validation. Other cameras, codecs, qualities and channels are separate coverage.
+The longer live profile still needs attended camera validation; this recorded
+control cannot substitute for it. Other cameras, codecs, qualities and channels
+are separate coverage.

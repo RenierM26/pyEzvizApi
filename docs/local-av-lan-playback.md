@@ -29,9 +29,10 @@ audio and optional native dependencies are required. This entrypoint installs
 nothing, configures no display/firewall, fetches no credentials and is not a
 standalone Windows bundle. Run `--help` for its finite option list.
 
-This remains a 30-second live profile. The separate
+The default remains a 30-second live profile. The separate
 [two-minute recorded playback control](local-av-sustained-playback.md) exercises
-longer source scheduling without changing these live limits or acquiring media.
+longer source scheduling without acquiring media. An explicit longer live profile
+is described below; recorded controls alone do not establish its camera coverage.
 
 The results directory must be new; it is created with mode 0700. The workflow
 runs the existing attended command, preserving its offline checks and **one Enter
@@ -161,6 +162,68 @@ span, before the first equal-PTS pair with both keyframe flags. All audio is kep
 and all pairing after the gate remains strict. Audio overlap defaults to rejection;
 the example explicitly permits the already declared 1-ms serial-PCM compromise.
 No gain, resampling, target shift, native VQE or device synchronization is added.
+
+## Explicit two-minute live profile
+
+Add `--capture-profile two-minute` to the Linux/WSL session or playback command;
+use `-CaptureProfile two-minute` with the Windows PowerShell bridge. Omitting the
+option retains the existing `prefix-30s` behavior and receipt shape. The session
+forwards the selected profile to both capture and subsequent offline verification.
+No camera starts without the existing checks, `--play` and Enter gate.
+
+| Independent limit | Default `prefix-30s` | Explicit `two-minute` |
+| --- | --- | --- |
+| Acquisition duration | 30 seconds | 120 seconds |
+| Encrypted packet bodies | 15,000 | 60,000 |
+| Encrypted/clear total-byte allowance | 32 MiB | 128 MiB |
+| Video-pair allowance | 900 | 3,000 |
+| Relative event-start span | 60 seconds | 120 seconds |
+| Crypto wall / decoder charged-processing allowance | 60 seconds | 150 seconds |
+| Capture worker supervisor | 70 seconds | 210 seconds |
+| Offline verifier supervisor | 70 seconds | 180 seconds |
+| Encrypted evidence index file | 3 MiB | 12 MiB |
+
+Acquisition stops at the first duration, packet or byte limit. A completed prefix can therefore be
+shorter than the requested duration; inspect its stop reason, source timestamps
+and counts before claiming a two-minute result. Pair/span/processing violations
+fail rather than silently dropping media or shortening a successful run. Neither profile establishes
+network EOF, reconnection, broader camera/quality/channel support or physical sync.
+
+Resident media credits, the one-read reservation, 1-MiB crypto pending buffer,
+decoder startup 5-second/256-KiB window, exact pairing after startup, per-call
+timeouts and lateness checks are unchanged. The longer profile keeps strict
+source-sequence identities and two-row diagnostic tails. The larger evidence
+packet index is separate finite metadata storage, not constant-state media
+ownership; retained packet rows grow up to the stated cap. The offline verifier
+also owns a bounded immutable encrypted snapshot, up to 128 MiB in this profile.
+
+The crypto wall allowance includes source reads and consumer waits. Decoder
+charged time excludes only explicit downstream borrows; network IO, decode,
+flush and finalization remain charged. Original source timestamps and the one
+host anchor are preserved. Supervisor extension is explicit and independent of
+startup, per-call, cleanup and lateness budgets. TERM10/KILL3 escalation is unchanged.
+SIGINT and SIGTERM are explicitly handled even if the launch environment ignored
+SIGINT; click the terminal before Ctrl-C, not the video window.
+
+Longer evidence has a distinct `encrypted-lan-packets-120s-v1` format. Standalone
+checks must explicitly select the same profile:
+
+```sh
+python -I tools/local_av_packet_evidence.py --verify packets \
+  --capture-profile two-minute
+python -I tools/local_av_lan_verify.py --capture-profile two-minute \
+  --private-config /private/camera.json --receipt capture.json \
+  --packet-evidence packets --result new-verification.json
+```
+
+A mismatched profile, missing stage budget or downgraded limit fails; the checker
+does not infer permission for larger input from a supplied manifest or receipt.
+Partial encrypted evidence from a joined cancelled worker may pass integrity
+checks, but a failed/cancelled playback cannot become successful media verification.
+
+Offline synthetic encrypted-source controls exercise the full two-minute command
+graph and independent media verification without camera access. An attended
+two-minute camera run is still required before claiming sustained live validation.
 
 ## Private configuration
 

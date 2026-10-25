@@ -32,6 +32,13 @@ RUNTIME = runpy.run_path(str(BASE / "local_av_runtime.py"))
 EVIDENCE = runpy.run_path(str(BASE / "local_av_packet_evidence.py"))
 MAX_CONFIG = 65536
 MAX_RECEIPT = 2 * 1024 * 1024
+PROFILES = runpy.run_path(str(Path(__file__).with_name('local_av_lan_profiles.py')))
+
+
+def selected_profile(args: Any) -> dict[str, Any]:
+    return PROFILES['get'](getattr(args, 'capture_profile', PROFILES['DEFAULT']))
+
+
 LIMITS = dict(duration_seconds=30, max_packets=15000, max_bytes=32 * 1024 * 1024)
 OPTIONS = dict(
     diagnostic_tail=2,
@@ -121,12 +128,14 @@ def output_arguments(args: Any, mono: str) -> Any:
 
 def capture(args: Any, report: dict[str, Any]) -> None:
     """Worker-owned capture; no account client is constructed or borrowed."""
+    profile = selected_profile(args)
+    PROFILES['bind'](report, profile['name'])
     credentials, device, digest = private_config(args.private_config, args.config_sha256)
     report.update(
         config_sha256=digest,
         stage="live-acquisition",
-        requested_options=dict(OPTIONS, startup_pairing=args.startup_pairing),
-        capture_limits=dict(LIMITS),
+        requested_options=dict(profile['options'], startup_pairing=args.startup_pairing),
+        capture_limits=dict(profile['limits']),
         source_worker_retained=False,
         caller_cleanup_error_types=[],
     )
@@ -147,7 +156,8 @@ def capture(args: Any, report: dict[str, Any]) -> None:
     session = evidence = None
     try:
         if getattr(args, "packet_evidence", None) is not None:
-            evidence = EVIDENCE["PacketEvidence"](args.packet_evidence)
+            evidence = EVIDENCE["PacketEvidence"](args.packet_evidence,
+                **({} if profile['name'] == PROFILES['DEFAULT'] else dict(capture_profile=profile['name'])))
             original = owner.iter_media_packets
 
             def retain(**kwargs: Any) -> Any:
@@ -159,11 +169,11 @@ def capture(args: Any, report: dict[str, Any]) -> None:
             credentials.media_key,
             output_arguments(args, args.mono_option),
             report,
-            limits=pyezvizapi.CaptureLimits(**LIMITS),
+            limits=pyezvizapi.CaptureLimits(**profile['limits']),
             completion="bounded-prefix",
             codec="hevc",
             pes_ids=(0xE0, 0xE1, 0xC0),
-            **OPTIONS,
+            **profile['options'],
             startup_pairing=args.startup_pairing,
         )
         session.play()
@@ -285,6 +295,9 @@ def worker_command(args: Any, digest: str, mono: str, receipt: Path) -> list[str
             command.extend(["--" + name.replace("_", "-"), str(getattr(args, name))])
     if getattr(args, "packet_evidence", None) is not None:
         command.extend(["--packet-evidence", str(args.packet_evidence.resolve())])
+    profile = selected_profile(args)
+    if profile['name'] != PROFILES['DEFAULT']:
+        command.extend(['--capture-profile', profile['name']])
     return command
 
 
@@ -305,6 +318,8 @@ def finish_child(child: Any, receipt: Path, report: dict[str, Any], primary: boo
 
 
 def supervise(args: Any, report: dict[str, Any], digest: str, mono: str) -> None:
+    profile = selected_profile(args)
+    PROFILES['bind'](report, profile['name'])
     with tempfile.TemporaryDirectory(prefix="local-av-lan-") as temporary:
         receipt = Path(temporary) / "worker.json"
         command = worker_command(args, digest, mono, receipt)
@@ -318,26 +333,28 @@ def supervise(args: Any, report: dict[str, Any], digest: str, mono: str) -> None
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            code = child.wait(timeout=70)
+            code = child.wait(timeout=profile['worker_seconds'])
             report["playback"] = json.loads(read_regular(receipt, MAX_RECEIPT))
             playback = report["playback"]
             if code == 130:
                 raise KeyboardInterrupt
-            if code or playback.get("status") != "prefix-output-completed":
+            if (code or playback.get('status') != 'prefix-output-completed'
+                    or playback.get('capture_profile', PROFILES['DEFAULT']) != profile['name']):
                 raise ValueError("live prefix output failed")
             if (
                 playback.get("package_sha256") != args.expected_package_sha256
                 or playback.get("config_sha256") != digest
                 or playback.get("source_worker_retained") is not False
                 or playback.get("caller_cleanup_error_types")
-                or playback.get("capture_limits") != LIMITS
+                or playback.get("capture_limits") != profile['limits']
                 or playback.get("requested_options")
-                != dict(OPTIONS, startup_pairing=args.startup_pairing)
+                != dict(profile['options'], startup_pairing=args.startup_pairing)
             ):
                 raise ValueError("worker receipt binding failed")
             CAPTURE["verify_output"](playback["preparation"], playback["output"])
             if getattr(args, "packet_evidence", None) is not None:
-                summary = EVIDENCE["verify"](args.packet_evidence)
+                summary = EVIDENCE["verify"](args.packet_evidence,
+                    **({} if profile['name'] == PROFILES['DEFAULT'] else dict(capture_profile=profile['name'])))
                 if (
                     playback.get("packet_evidence") != dict(status="finalized", summary=summary)
                     or summary["packets"] != playback["final_owner"]["packets_yielded"]
@@ -361,6 +378,8 @@ def supervise(args: Any, report: dict[str, Any], digest: str, mono: str) -> None
 
 def attended(args: Any, report: dict[str, Any]) -> None:
     """Parent validates without IO, prompts once, then owns one bounded worker."""
+    profile = selected_profile(args)
+    PROFILES['bind'](report, profile['name'])
     CAPTURE["validate_output"](output_arguments(args, "channels"))
     CAPTURE["PREPARE"]["ONLINE"]["Policy"](
         (0, 1),
@@ -369,7 +388,8 @@ def attended(args: Any, report: dict[str, Any]) -> None:
         args.max_audio_overlap_ms,
         args.max_audio_phase_ms,
         identity_mode="source-sequence",
-        pair_limit=900,
+        pair_limit=profile['options']['pair_limit'],
+        span_limit=profile['options'].get('span_limit', 60),
     )
     CAPTURE["PREPARE"]["CHUNKED"]["DECODE"]["validate_startup_pairing"](args.startup_pairing)
     if not args.play:
@@ -388,7 +408,8 @@ def attended(args: Any, report: dict[str, Any]) -> None:
     report["stage"] = "operator-readiness"
     print("Offline checks passed. Camera has NOT started.", flush=True)
     print(
-        "LIVE LAN channel 0: up to 30 seconds / 32 MiB / 900 pairs. Startup: "
+        f"LIVE LAN channel 0: up to {profile['limits']['duration_seconds']} seconds / "
+        f"{profile['limits']['max_bytes'] // 1048576} MiB / {profile['options']['pair_limit']} pairs. Startup: "
         + args.startup_pairing,
         flush=True,
     )
@@ -407,6 +428,7 @@ def arguments() -> Any:
         help="new private directory for bounded encrypted media bodies",
     )
     parser.add_argument("--expected-package-sha256", required=True)
+    parser.add_argument('--capture-profile', choices=PROFILES['NAMES'], default=PROFILES['DEFAULT'])
     parser.add_argument("--play", action="store_true")
     parser.add_argument(
         "--startup-pairing", choices=["strict", "common-keyframe"], default="strict"
@@ -437,12 +459,14 @@ def main() -> int:
         print("Receipt must be a new writable file.", file=sys.stderr)
         return 2
     previous = signal.getsignal(signal.SIGTERM)
+    previous_int = signal.getsignal(signal.SIGINT)
     disabled = logging.root.manager.disable
 
     def stop(_signal: int, _frame: Any) -> None:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     logging.disable(logging.CRITICAL)
     with os.fdopen(fd, "wb") as output:
         try:
@@ -463,6 +487,7 @@ def main() -> int:
             report.update(status="failed", error_type=type(error).__name__)
         finally:
             signal.signal(signal.SIGTERM, previous)
+            signal.signal(signal.SIGINT, previous_int)
             logging.disable(disabled)
         raw = safe_receipt(report, args)
         output.write(raw)

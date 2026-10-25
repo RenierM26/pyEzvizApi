@@ -553,3 +553,20 @@ def test_slow_native_container_close_is_charged_before_success(monkeypatch):
     assert source.closed == 1 and report['status'] == 'failed'
     assert not report['input']['owned_chunk_bytes'] and 'source_sha256' not in report
     assert report['input']['processing_clock']['processing_seconds'] == 61
+
+
+@pytest.mark.parametrize('options', [dict(startup='unknown'), dict(streams=(0, 0)), dict(max_bytes=0)])
+def test_invalid_opt_in_preparation_clears_stale_success_before_claiming_input(monkeypatch, options):
+    source = Producer([b'x'])
+    monkeypatch.setitem(D['AUDIO'], 'load_av', lambda: pytest.fail('decoder opened'))
+    report = dict(caller='preserved', source_sha256='0' * 64, source_bytes=999,
+        input={'old': True}, input_before_cleanup={'old': True}, first_event_input={'old': True},
+        discovery_input={'old': True}, startup_ready_input={'old': True}, pyav_version='old', library_versions={'old': 1})
+    kwargs = dict(options)
+    streams = kwargs.pop('streams', (0, 2))
+    with pytest.raises(ValueError):
+        next(M['iter_chunks'](source, 'mpeg', streams, 1, report, deadline_mode='consumer-excluding', **kwargs))
+    assert report['status'] == 'failed' and report['caller'] == 'preserved'
+    assert source.pulls == source.closed == 0
+    assert not set(report).intersection({'source_sha256', 'source_bytes', 'input', 'input_before_cleanup',
+        'first_event_input', 'discovery_input', 'startup_ready_input', 'pyav_version', 'library_versions'})

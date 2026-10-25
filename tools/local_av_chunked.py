@@ -62,10 +62,15 @@ class ConsumerClock:
             completed_borrows=self.borrows, borrow_active=self.borrowed_at is not None)
 
 
-def processing_clock(mode: str) -> ConsumerClock | None:
+def processing_clock(mode: str, report: dict[str, Any]) -> ConsumerClock | None:
     if type(mode) is not str or mode not in ('wall', 'consumer-excluding'):
         raise ValueError('unknown chunk processing deadline mode')
-    return ConsumerClock() if mode == 'consumer-excluding' else None
+    if mode == 'consumer-excluding':
+        for field in ('source_sha256', 'source_bytes', 'input', 'input_before_cleanup',
+                'first_event_input', 'discovery_input', 'startup_ready_input', 'pyav_version', 'library_versions'):
+            report.pop(field, None)
+        return ConsumerClock()
+    return None
 
 
 class ChunkReader(io.RawIOBase):
@@ -300,7 +305,7 @@ def iter_chunks(chunks: Any, container_format: str, streams: tuple[int, int],
         output_devices_opened=False, source_kind='caller-supplied-clear-chunks', physical_av_sync_measured=False,
         delivery_order='demux-decode-order-not-global-presentation-order', cleanup_errors=[])
     try:
-        work_clock = processing_clock(deadline_mode)
+        work_clock = processing_clock(deadline_mode, report)
         if startup not in ('default', 'bounded-mpeg') or (startup == 'bounded-mpeg' and container_format != 'mpeg'):
             raise ValueError('bounded startup requires explicit MPEG-PS input')
         report['startup'] = dict(mode=startup, probe_options=dict(STARTUP_OPTIONS) if startup == 'bounded-mpeg' else {})

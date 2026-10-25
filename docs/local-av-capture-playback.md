@@ -120,3 +120,58 @@ renumbering, timestamp rewriting, payload changes or larger startup budget is
 introduced. Both selection records must agree for prefix completion. The
 selection itself does not verify a whole source or physical lens identity, nor
 does it promise that a later truncated capture or output failure will succeed.
+
+## Opt-in pending-input capture session
+
+`CapturePlayback` from the same development helper composes guarded capture with
+single-demand source pulling. Existing `capture_playback`, recorded CLI and
+launcher defaults remain synchronous and unchanged.
+
+```python
+session = helper['CapturePlayback'](
+    owner, private_key, args, report, limits=limits,
+    completion='bounded-prefix', pes_ids=(0xE0, 0xE1, 0xC0),
+)
+# Retain this object until its source worker is joined, including on failure.
+session.play()
+```
+
+Construction validates all options before claiming the pristine supplied owner.
+It copies the option namespace and starts one idle source worker, without
+acquisition or output. Call `play()` once, or `close()` to release an unstarted
+session. The caller supplies its own owner and borrowed client; this helper does
+not discover credentials or change transport selection. The owner's `close`
+must be a thread-safe, promptly returning IO interrupt, as on `AutoMediaStream`.
+
+Only the source worker calls `next` or `close` on the preparation pipeline.
+During active reads, shutdown interrupts the transport first, then joins the
+worker within the unchanged `args.deadline`. Arbitrary interrupt-hook duration
+is not bounded by the join timeout. The worker also releases a claimed but
+never-started capture; closing a lazy generator alone cannot do that. Capture
+startup that returns a connection after interruption still requires final
+transport release before the source worker can finish.
+
+A timed-out join raises and leaves `session.pull` and its executing source owned.
+Do **not** close nested generators, discard the session, start a replacement or
+reuse the owner. After the blocked operation can finish, call
+`session.close(timeout=...)` again (finite timeout in `(0, 30]` seconds). Recovery
+updates `report['source_pull']` but never upgrades a failed playback verdict.
+Call close/inspection only after play returns; session control is single-consumer,
+not an additional concurrent cancellation API. Caller signal handling is unchanged.
+
+The scheduler reserves one unknown event in both existing track budgets before
+each explicit request. Pending reads permit queued dispatch, acknowledgement
+harvest and deadline/liveness checks. Original targets, lateness, count/byte caps,
+payloads, PES selection, EOF policy and drains are unchanged. No unbounded producer
+queue, retry, drop or clock rebase is added. Native/GIL/interrupt stalls can still
+prevent timely playback; this is not a hard-real-time guarantee.
+
+The separate profile is `guarded-capture-pending-host-submissions-v1`.
+`prefix-output-completed` additionally requires a joined source worker, closed
+iterator, verified source end and no outstanding/abandoned result or source,
+interrupt or finalizer error. `source_pull` is refreshed on close/rejoin;
+`output.lookahead.source_pull` is the output cleanup-time snapshot. Nested partial
+receipts remain diagnostic, not independent permission to claim success. The
+same accepted-prefix-only and physical-clock limitations above apply. No new
+attended Windows run or sustained live-stream claim is supplied by this opt-in
+composition alone.

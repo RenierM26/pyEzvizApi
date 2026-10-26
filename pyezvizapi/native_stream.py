@@ -152,7 +152,7 @@ class _PsInput(io.RawIOBase):
     def read(self, size: int = -1) -> bytes:
         try:
             return self._read(size)
-        except BaseException as error:
+        except BaseException as error:  # lgtm [py/catch-base-exception]
             if not isinstance(error, _Cancelled):
                 self.failure = error
             if not isinstance(error, Exception):
@@ -364,7 +364,7 @@ class NativeMpegTsStream:
             try:
                 self._check_exit_cleanup()
                 await self.aclose()
-            except BaseException:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+            except BaseException:  # lgtm [py/catch-base-exception]
                 # Cleanup cannot replace the active consumer exception; a
                 # normal exit still re-raises every cleanup failure.
                 if primary is None:
@@ -381,7 +381,7 @@ class NativeMpegTsStream:
             if self._source is not None and not self._source_closed:
                 try:
                     self._source.close()
-                except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+                except BaseException as error:  # lgtm [py/catch-base-exception]
                     # This callback runs in an owned worker/canceller. A source
                     # interrupt must remain failed closure, not kill that thread
                     # before its completion/ownership evidence is published.
@@ -509,13 +509,13 @@ class NativeMpegTsStream:
                 primary = sys.exception()
                 try:
                     reader.close()
-                except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+                except BaseException as error:  # lgtm [py/catch-base-exception]
                     # Iterator-close failures are recorded separately without
                     # replacing the native/source failure already in flight.
                     self._record_cleanup(error)
                     if primary is None:
                         raise
-        except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+        except BaseException as error:  # lgtm [py/catch-base-exception]
             # Thread boundary: propagate to the consumer instead of silent EOF.
             if not self._stop.is_set():
                 self._failure = (

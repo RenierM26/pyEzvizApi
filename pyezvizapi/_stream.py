@@ -1771,9 +1771,9 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
             cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
                 aes_key
             )
-            decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+            decrypted = cipher.decrypt(  # lgtm [py/weak-cryptographic-algorithm]
                 bytes(state.pending_block)
-            )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+            )  # lgtm [py/weak-cryptographic-algorithm]
             for block_pos, decrypted_byte in zip(
                 state.pending_block_positions,
                 decrypted,

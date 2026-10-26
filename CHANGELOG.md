@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Read-only explicit fleet capability inventory with redacted reports, separate saved-sample codec/decode evidence, and finite headless H.264/HEVC plus AAC track-copy output for Home Assistant adapter development. Continuous native SDK-to-HA delivery and frontend compatibility remain unverified.
+
 - Explicit attended `two-minute-gaps` LAN profile with fixed single/cumulative padding bounds, shared A/V credits, distinct evidence binding and isolated full source/padding verification; existing default and strict two-minute profiles are unchanged.
 
 - Explicit development pending-capture API audio-gap integration with earlier padding targets, unchanged original media targets, shared bounded lookahead credits and separate verified padding receipts; attended launcher defaults remain strict.

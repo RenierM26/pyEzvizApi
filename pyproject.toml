@@ -44,6 +44,7 @@ Issues = "https://github.com/RenierM26/pyEzvizApi/issues"
 
 [project.scripts]
 pyezvizapi = "pyezvizapi.__main__:main"
+pyezvizapi-capabilities = "pyezvizapi.capabilities_cli:main"
 
 [project.optional-dependencies]
 dev = ["build", "codespell", "mypy", "pip-audit", "pyright", "pytest", "pytest-cov", "ruff", "twine", "types-requests"]

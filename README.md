@@ -251,6 +251,13 @@ See [`docs/streaming.md`](docs/streaming.md) for the source conformance matrix,
 lifecycle/output semantics, compatibility boundaries, golden fixtures, and
 offline/live validation procedure.
 
+For a read-only inventory across explicitly supplied cameras/channels, use
+`pyezvizapi-capabilities private-inventory.json`. Its report separates configured
+and advertised capabilities from optional saved-sample codec/decode evidence;
+it never starts previews or claims Home Assistant compatibility. See the
+[HA capability and delivery plan](docs/ha-streaming-plan.md) for the inventory
+schema, finite headless track-copy API and remaining continuous-adapter work.
+
 Use `source="hcnetsdk-command-port"`, `host="192.0.2.10"`, `command_port=8000`,
 and `hcnetsdk_command_frames=(...)` when an integration already has the complete
 full-local HCNetSDK port-8000 command bootstrap frames. For native-style flows

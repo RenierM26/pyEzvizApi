@@ -7,6 +7,7 @@ import hashlib
 import io
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from typing import cast
@@ -269,6 +270,48 @@ def test_primary_source_failure_and_cleanup_failure_are_both_retained():
     assert stream.receipt["source_closed"]
 
 
+@pytest.mark.parametrize("control", ["KeyboardInterrupt", "SystemExit"])
+def test_process_control_callback_is_translated_without_terminating_runner(control):
+    # A broken C callback boundary can finalize the interpreter. Isolate this
+    # fault injection so a regression cannot poison every subsequent pytest.
+    program = """
+import builtins, sys
+from pyezvizapi.native_stream import NativeMpegTsStream, NativeStreamOptions, NativeTrackSelection
+from pyezvizapi.exceptions import PyEzvizError
+control = getattr(builtins, sys.argv[1])
+class Source:
+    close_error = True
+    def iter_media_packets(self):
+        yield from ()
+        raise control("synthetic native callback")
+    def close(self):
+        if self.close_error:
+            raise OSError("synthetic cleanup")
+source = Source()
+stream = NativeMpegTsStream(lambda: source,
+    NativeStreamOptions(NativeTrackSelection(481), "hevc", startup_timeout=1, finite_source=True))
+try:
+    stream.read()
+except PyEzvizError as error:
+    assert isinstance(error.__cause__, control), type(error.__cause__).__name__
+else:
+    raise AssertionError("Native callback exception was lost")
+assert stream.receipt["worker_joined"]
+assert stream.receipt["cleanup_error_types"] == ["OSError"]
+assert not stream.receipt["source_closed"]
+source.close_error = False
+try:
+    stream.close()
+except PyEzvizError:
+    assert stream.receipt["cleanup_error_types"] == ["OSError"]
+assert stream.receipt["source_closed"]
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", program, control], capture_output=True, timeout=10, check=False
+    )
+    assert result.returncode == 0, result.stderr.decode()
+
+
 def test_close_before_start_is_lazy_and_missing_runtime_does_not_acquire(monkeypatch):
     calls = []
 
@@ -304,7 +347,8 @@ def test_async_pending_read_cancellation_joins_source_and_executor_read():
         assert await asyncio.to_thread(source.entered.wait, 2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            result = await task
+            pytest.fail(f"Consumer completed instead of cancellation: {result!r}")
         assert stream.receipt["worker_joined"] and stream.receipt["cancel_joined"]
         assert source.closed and source.iterator_closed.is_set()
 
@@ -336,7 +380,8 @@ def test_repeated_async_cancellation_waits_for_owned_shutdown():
         task.cancel()
         release_close.set()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            result = await task
+            pytest.fail(f"Consumer completed instead of cancellation: {result!r}")
         assert stream.receipt["worker_joined"] and stream.receipt["cancel_joined"]
 
     asyncio.run(run())
@@ -390,7 +435,8 @@ def test_async_exit_does_not_repeat_a_failed_shutdown_budget(monkeypatch):
         try:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
+                result = await task
+                pytest.fail(f"Consumer completed instead of cancellation: {result!r}")
             assert len(attempts) == 1
             assert stream.receipt["shutdown_timed_out"]
         finally:

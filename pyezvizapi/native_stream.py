@@ -68,11 +68,11 @@ class NativePacketStream(Protocol):
 
     def iter_media_packets(self) -> Iterator[MediaPacket]:
         """Return normalized PS packets; no implicit count/duration limits."""
-        ...
+        raise NotImplementedError
 
     def close(self) -> None:
         """Interrupt pending source I/O and release the source transport."""
-        ...
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -155,6 +155,12 @@ class _PsInput(io.RawIOBase):
         except BaseException as error:
             if not isinstance(error, _Cancelled):
                 self.failure = error
+            if not isinstance(error, Exception):
+                # Never pass process-control exceptions through native I/O:
+                # a backend may print SystemExit and finalize the interpreter.
+                # Preserve the original for the consumer, but cross the C
+                # callback boundary with an ordinary operation exception.
+                raise PyEzvizError("Native source callback terminated") from error
             raise
 
     def _read(self, size: int) -> bytes:
@@ -358,7 +364,9 @@ class NativeMpegTsStream:
             try:
                 self._check_exit_cleanup()
                 await self.aclose()
-            except BaseException:
+            except BaseException:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+                # Cleanup cannot replace the active consumer exception; a
+                # normal exit still re-raises every cleanup failure.
                 if primary is None:
                     raise
             finally:
@@ -373,7 +381,10 @@ class NativeMpegTsStream:
             if self._source is not None and not self._source_closed:
                 try:
                     self._source.close()
-                except Exception as error:
+                except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+                    # This callback runs in an owned worker/canceller. A source
+                    # interrupt must remain failed closure, not kill that thread
+                    # before its completion/ownership evidence is published.
                     # Preserve cleanup failure independently of the stream error.
                     self._record_cleanup(error)
                 else:
@@ -498,11 +509,13 @@ class NativeMpegTsStream:
                 primary = sys.exception()
                 try:
                     reader.close()
-                except BaseException as error:
+                except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
+                    # Iterator-close failures are recorded separately without
+                    # replacing the native/source failure already in flight.
                     self._record_cleanup(error)
                     if primary is None:
                         raise
-        except BaseException as error:
+        except BaseException as error:  # codeql[py/catch-base-exception] lgtm[py/catch-base-exception]
             # Thread boundary: propagate to the consumer instead of silent EOF.
             if not self._stop.is_set():
                 self._failure = (

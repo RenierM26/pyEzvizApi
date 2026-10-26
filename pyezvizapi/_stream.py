@@ -1736,7 +1736,143 @@ def _find_h264_nal_start_codes(
     ]
 
 
-def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
+def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
+    data: bytes,
+    output: bytearray,
+    *,
+    aes_key: bytes,
+    nalu_header_size: int,
+    states: dict[int, _MpegPsVideoDecryptState],
+    data_offset: int = 0,
+    output_offset: int = 0,
+) -> None:
+    """Apply the shared per-PES-stream cipher state to newly parsed packets.
+
+    Positions are absolute in the input byte stream. Streaming callers retain
+    every byte at/after the earliest pending AES position until it is resolved;
+    whole-buffer callers use zero offsets and the identical state machine.
+    """
+    find_nal_start_codes = (_find_h264_nal_start_codes if nalu_header_size == 1
+                           else _find_hevc_nal_start_codes)
+
+    def decrypt_nal_body_segment(state: _MpegPsVideoDecryptState, start: int, end: int) -> None:
+        if end <= start:
+            return
+        remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - state.active_nal_decrypted
+        if remaining <= 0:
+            return
+        decrypt_end = min(end, start + remaining)
+        for pos in range(start, decrypt_end):
+            state.pending_block_positions.append(data_offset + pos)
+            state.pending_block.append(output[data_offset + pos - output_offset])
+            state.active_nal_decrypted += 1
+            if len(state.pending_block) != AES.block_size:
+                continue
+            cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
+                aes_key
+            )
+            decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+                bytes(state.pending_block)
+            )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+            for block_pos, decrypted_byte in zip(
+                state.pending_block_positions,
+                decrypted,
+                strict=True,
+            ):
+                output[block_pos - output_offset] = decrypted_byte
+            state.pending_block_positions.clear()
+            state.pending_block.clear()
+
+    def is_post_prefix_tail_lookalike(
+        start_code_pos: int,
+        start_code_len: int,
+    ) -> bool:
+        if nalu_header_size == 1:
+            nal_type = _h264_nal_type(data, start_code_pos, start_code_len)
+            return nal_type is None or not 1 <= nal_type <= 5
+        nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
+        return nal_type is None or nal_type >= 32
+
+    for packet_range in _mpeg_ps_video_decrypt_ranges(data):
+        if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
+            continue
+        if not _is_video_pes_stream_id(packet_range.stream_id):
+            # Untimed legacy packets retain their old non-video boundary
+            # semantics. Timed picture continuations may span audio packets.
+            for legacy_state in states.values():
+                if legacy_state.picture_pts is None:
+                    legacy_state.reset()
+            continue
+
+        state = states.setdefault(packet_range.stream_id, _MpegPsVideoDecryptState())
+        payload_start = _pes_payload_start(data, packet_range.start)
+        if payload_start is None or payload_start >= packet_range.end:
+            continue
+        payload_end = packet_range.end
+        picture_pts = _mpeg_ps_packet_pts(data, packet_range.start, payload_end)
+        new_picture = picture_pts is not None and picture_pts != state.picture_pts
+        nal_starts = find_nal_start_codes(data, payload_start, payload_end)
+        segment_start = payload_start
+        if not nal_starts:
+            if state.active_nal:
+                decrypt_nal_body_segment(state, payload_start, payload_end)
+            continue
+
+        for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
+            decrypt_end = (
+                nal_starts[idx + 1][0]
+                if idx + 1 < len(nal_starts)
+                else payload_end
+            )
+            # PTS alone does not locate an AU within a PES that may start
+            # with an older NAL's tail. Only an explicitly aligned payload
+            # start may promote a post-prefix non-VCL candidate here.
+            aligned_picture_start = (
+                new_picture and bool(data[packet_range.start + 6] & 0x04)
+                and start_code_pos == payload_start
+            )
+            if (
+                state.active_nal
+                and state.active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and data_offset + start_code_pos
+                > state.active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
+                and not aligned_picture_start
+            ):
+                continue
+            if new_picture:
+                # PES PTS belongs to the first access unit starting here;
+                # its payload may first finish the previous picture's NAL.
+                if state.active_nal and segment_start < start_code_pos:
+                    decrypt_nal_body_segment(state, segment_start, start_code_pos)
+                state.reset()
+                state.picture_pts = picture_pts
+                new_picture = False
+            if state.active_nal:
+                candidate_decrypted = state.active_nal_decrypted + max(
+                    0,
+                    start_code_pos - segment_start,
+                )
+                if (
+                    candidate_decrypted
+                    < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    and candidate_decrypted == 0
+                ):
+                    continue
+            if state.active_nal and segment_start < start_code_pos:
+                decrypt_nal_body_segment(state, segment_start, start_code_pos)
+            state.reset()
+            state.active_nal = True
+            decrypt_start = start_code_pos + start_code_len + nalu_header_size
+            state.active_nal_body_start = data_offset + decrypt_start
+            decrypt_nal_body_segment(state, decrypt_start, decrypt_end)
+            segment_start = decrypt_end
+        if state.active_nal and segment_start < payload_end:
+            decrypt_nal_body_segment(state, segment_start, payload_end)
+
+
+
+def decrypt_hikvision_ps_video(  # noqa: PLR0915
     data: bytes,
     key: str | bytes,
     *,
@@ -1814,123 +1950,9 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0912, PLR0915
 
     if nalu_header_size != 0:
         output = bytearray(data)
-        states: dict[int, _MpegPsVideoDecryptState] = {}
-
-        def decrypt_nal_body_segment(state: _MpegPsVideoDecryptState, start: int, end: int) -> None:
-            if end <= start:
-                return
-            remaining = HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH - state.active_nal_decrypted
-            if remaining <= 0:
-                return
-            decrypt_end = min(end, start + remaining)
-            for pos in range(start, decrypt_end):
-                state.pending_block_positions.append(pos)
-                state.pending_block.append(output[pos])
-                state.active_nal_decrypted += 1
-                if len(state.pending_block) != AES.block_size:
-                    continue
-                cipher = _hikvision_aes_ecb_cipher(  # codeql[py/weak-cryptographic-algorithm]
-                    aes_key
-                )
-                decrypted = cipher.decrypt(  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                    bytes(state.pending_block)
-                )  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
-                for block_pos, decrypted_byte in zip(
-                    state.pending_block_positions,
-                    decrypted,
-                    strict=True,
-                ):
-                    output[block_pos] = decrypted_byte
-                state.pending_block_positions.clear()
-                state.pending_block.clear()
-
-        def is_post_prefix_tail_lookalike(
-            start_code_pos: int,
-            start_code_len: int,
-        ) -> bool:
-            if nalu_header_size == 1:
-                nal_type = _h264_nal_type(data, start_code_pos, start_code_len)
-                return nal_type is None or not 1 <= nal_type <= 5
-            nal_type = _hevc_nal_type(data, start_code_pos, start_code_len)
-            return nal_type is None or nal_type >= 32
-
-        for packet_range in _mpeg_ps_video_decrypt_ranges(data):
-            if _is_mpeg_ps_metadata_stream_id(packet_range.stream_id):
-                continue
-            if not _is_video_pes_stream_id(packet_range.stream_id):
-                # Untimed legacy packets retain their old non-video boundary
-                # semantics. Timed picture continuations may span audio packets.
-                for legacy_state in states.values():
-                    if legacy_state.picture_pts is None:
-                        legacy_state.reset()
-                continue
-
-            state = states.setdefault(packet_range.stream_id, _MpegPsVideoDecryptState())
-            payload_start = _pes_payload_start(data, packet_range.start)
-            if payload_start is None or payload_start >= packet_range.end:
-                continue
-            payload_end = packet_range.end
-            picture_pts = _mpeg_ps_packet_pts(data, packet_range.start, payload_end)
-            new_picture = picture_pts is not None and picture_pts != state.picture_pts
-            nal_starts = find_nal_start_codes(data, payload_start, payload_end)
-            segment_start = payload_start
-            if not nal_starts:
-                if state.active_nal:
-                    decrypt_nal_body_segment(state, payload_start, payload_end)
-                continue
-
-            for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
-                decrypt_end = (
-                    nal_starts[idx + 1][0]
-                    if idx + 1 < len(nal_starts)
-                    else payload_end
-                )
-                # PTS alone does not locate an AU within a PES that may start
-                # with an older NAL's tail. Only an explicitly aligned payload
-                # start may promote a post-prefix non-VCL candidate here.
-                aligned_picture_start = (
-                    new_picture and bool(data[packet_range.start + 6] & 0x04)
-                    and start_code_pos == payload_start
-                )
-                if (
-                    state.active_nal
-                    and state.active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                    and start_code_pos
-                    > state.active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                    and is_post_prefix_tail_lookalike(start_code_pos, start_code_len)
-                    and not aligned_picture_start
-                ):
-                    continue
-                if new_picture:
-                    # PES PTS belongs to the first access unit starting here;
-                    # its payload may first finish the previous picture's NAL.
-                    if state.active_nal and segment_start < start_code_pos:
-                        decrypt_nal_body_segment(state, segment_start, start_code_pos)
-                    state.reset()
-                    state.picture_pts = picture_pts
-                    new_picture = False
-                if state.active_nal:
-                    candidate_decrypted = state.active_nal_decrypted + max(
-                        0,
-                        start_code_pos - segment_start,
-                    )
-                    if (
-                        candidate_decrypted
-                        < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                        and candidate_decrypted == 0
-                    ):
-                        continue
-                if state.active_nal and segment_start < start_code_pos:
-                    decrypt_nal_body_segment(state, segment_start, start_code_pos)
-                state.reset()
-                state.active_nal = True
-                decrypt_start = start_code_pos + start_code_len + nalu_header_size
-                state.active_nal_body_start = decrypt_start
-                decrypt_nal_body_segment(state, decrypt_start, decrypt_end)
-                segment_start = decrypt_end
-            if state.active_nal and segment_start < payload_end:
-                decrypt_nal_body_segment(state, segment_start, payload_end)
-
+        _decrypt_hikvision_ps_video_packets(
+            data, output, aes_key=aes_key, nalu_header_size=nalu_header_size, states={},
+        )
         return bytes(output)
 
     def decrypt_video_payload_run(payload: bytes) -> bytes:  # noqa: PLR0915

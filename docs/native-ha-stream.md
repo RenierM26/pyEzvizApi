@@ -101,8 +101,14 @@ explicit `close`/`aclose` is the recovery action after the source is repaired.
   have **no implicit 30s/120s capture cap**.
 - One input packet, retained PS continuation, clear read buffer and individual
   mux write are each capped at 1 MiB. Bounds precede append/copy. Pending video
-  PES continuations remain together for decryption rather than being split at
-  transport packet boundaries.
+  cipher state belongs to each PES video ID and timed picture, including
+  partial AES blocks across intervening audio/other-lens packets. Only bytes at
+  or after unresolved cipher positions remain buffered; completed video-only
+  pictures release without waiting for an audio packet. This uses the same
+  state machine as whole-buffer decryption. Untimed legacy non-video resets
+  remain unchanged. Streaming supports clear 1-/2-byte NAL headers; encrypted
+  whole-NAL-header mode (`nalu_header_size=0`) is explicitly rejected before
+  acquiring a source, rather than claiming an untested streaming cipher mode.
 - Four output credits reserve at most four 64 KiB chunks. Credit returns only
   when a chunk leaves the owned queue or abort discards it. The async consumer
   may additionally hold its currently yielded chunk.

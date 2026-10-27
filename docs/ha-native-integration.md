@@ -8,7 +8,7 @@ replace the official `ezviz` or existing `ezviz_cloud` integration.
 
 **This is an isolated validation integration, not a released dependency or
 upstream HA feature.** It has been tested against HA 2026.10.4 / Python 3.14 /
-PyAV 19.0.0. Other HA versions, browser playback and live-camera operation need
+PyAV 19.0.0, including Python 3.14.8 and 3.14.9 cancellation controls. Other HA versions, browser playback and live-camera operation need
 separate evidence. The shared `pyezvizapi.native_stream` API remains independent
 of HA. This example is not included in the library wheel.
 
@@ -38,6 +38,10 @@ of HA. This example is not included in the library wheel.
   match the configured current-session PES IDs, codec and parameters. H.264/HEVC
   plus optional AAC are the current explicit boundary. Other codecs/formats
   remain unknown; audio omission requires `audio_id=-1`.
+- Shielded executor tasks carry failures as result values; the owning consumer
+  re-raises them only after retrieval. This avoids Python 3.14.8 reporting
+  already-owned cancellation failures as unhandled shield errors. Repeated
+  cancellation still joins cleanup.
 - HTTP writes are awaited with a 10-second deadline and no body accumulation.
   Disconnect cancellation closes and joins the owned generator/transport/mux
   worker. The route explicitly closes its async generator even if a response

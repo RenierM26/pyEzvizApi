@@ -96,6 +96,8 @@ allow-magic-value-types = ["int", "str"]
 max-args = 10
 
 [tool.mypy]
+# The validation integration has its own pinned, real-HA typecheck runtime.
+exclude = ["^examples/home_assistant/"]
 python_version = "3.12"
 files = ["pyezvizapi"]
 ignore_missing_imports = true

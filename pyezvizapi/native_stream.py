@@ -150,18 +150,20 @@ class _PsInput(io.RawIOBase):
         return True
 
     def read(self, size: int = -1) -> bytes:
+        # Native demuxers may retry after swallowing a callback exception.
+        # Never pull the source again or replace the first failure with EOF.
+        if self.failure is not None:
+            raise PyEzvizError("Native source callback failed") from None
         try:
             return self._read(size)
         except BaseException as error:  # lgtm [py/catch-base-exception]
             if not isinstance(error, _Cancelled):
                 self.failure = error
-            if not isinstance(error, Exception):
-                # Never pass process-control exceptions through native I/O:
-                # a backend may print SystemExit and finalize the interpreter.
-                # Preserve the original for the consumer, but cross the C
-                # callback boundary with an ordinary operation exception.
-                raise PyEzvizError("Native source callback terminated") from error
-            raise
+            # Never pass process-control exceptions or private source text
+            # through native I/O: a backend may print/drop it, or even finalize
+            # the interpreter for SystemExit. Deliver the original separately
+            # through the worker's failure handoff, not the native callback.
+            raise PyEzvizError("Native source callback failed") from None
 
     def _read(self, size: int) -> bytes:
         self.check_stop()

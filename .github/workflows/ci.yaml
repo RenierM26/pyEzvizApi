@@ -163,3 +163,21 @@ jobs:
       - name: PowerShell 7 native argv and exit controls
         shell: pwsh
         run: .\tests\powershell\test_local_av_lan_session.ps1 -ProbeExecutable "$env:RUNNER_TEMP\lan-wsl-probe.exe"
+
+  ha-native-validation:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    name: HA native integration (2026.10.4)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install fixture encoder and image runtime
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libturbojpeg0
+      - name: Install isolated HA validation dependencies
+        run: pip install -e . -r examples/home_assistant/requirements-test.txt
+      - name: HA HTTP, config flow, stream and lifecycle controls
+        run: python -m pytest examples/home_assistant/tests -o asyncio_mode=auto
+      - name: Typecheck integration with actual HA types
+        run: python -m mypy --config-file examples/home_assistant/mypy.ini examples/home_assistant/custom_components/ezviz_native

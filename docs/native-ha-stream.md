@@ -10,7 +10,9 @@ pins `av==19.0.0`; this does not establish the installed HA runtime's version.
 Importing the library without that extra remains supported; the owned worker
 validates the runtime before calling any source factory.
 
-This is **not yet an HA camera platform or a published live URL**. The next
+This library alone is **not an HA camera platform or a published live URL**. A
+[temporary HA-hosted validation integration](ha-native-integration.md) now
+exercises the HTTP/camera/HLS contract in an isolated real HA runtime. The next
 integration milestone is an HA-hosted authenticated/capability-checked route,
 integration unload handling and actual HA stream/frontend validation. A
 temporary custom integration is the test vehicle; shared library code remains

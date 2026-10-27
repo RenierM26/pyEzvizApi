@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — HA native delivery validation
+
+- Add an opt-in temporary HA integration with a loopback-capability HTTP source,
+  explicit track config flow, bounded admission and joined unload/disconnect cleanup.
+- Verify real HA H.264/AAC and HEVC/AAC HLS ingestion in an isolated pinned runtime.
+- Keep original native callback failures sticky across backend retries and hide
+  private callback exception text from native-library error printing.
+
 All notable changes to this project should be documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/) for published releases.

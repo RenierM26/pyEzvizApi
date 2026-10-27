@@ -110,7 +110,9 @@ python3.14 -m venv .ha-venv
   examples/home_assistant/custom_components/ezviz_native
 ```
 
-FFmpeg and libturbojpeg are required by the fixture/HA runtime. The separate CI
+FFmpeg is required for encoded-media fixtures. The Python TurboJPEG wrapper is
+installed with HA, but no native image decode/snapshot is used by these controls.
+The separate CI
 job pins HA 2026.10.4, real HTTP/config flow/camera classes and PyAV 19.0.0;
 no fake HA modules substitute for those contracts. It exercises H.264/AAC and
 HEVC/AAC ingestion into HA-generated HLS, exact finite MPEG-TS HTTP delivery,

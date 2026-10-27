@@ -168,13 +168,20 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     name: HA native integration (2026.10.4)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - name: Install fixture encoder and image runtime
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg libturbojpeg0
+      - name: Check fixture encoder (install only if absent)
+        shell: bash
+        run: |
+          if ! command -v ffmpeg; then
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version
       - name: Install isolated HA validation dependencies
         run: pip install -e . -r examples/home_assistant/requirements-test.txt
       - name: HA HTTP, config flow, stream and lifecycle controls

@@ -61,7 +61,7 @@ jobs:
         run: python -m pip install -U pip wheel
 
       - name: Install project + dev deps
-        run: pip install -e .[dev]
+        run: pip install -e .[dev,streaming]
 
       - name: Check installed dependency consistency
         run: python -m pip check
@@ -132,6 +132,7 @@ jobs:
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pip check
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pyezvizapi --help
           /tmp/pyezvizapi-wheel-smoke/bin/pyezvizapi --help
+          /tmp/pyezvizapi-wheel-smoke/bin/python -c "import sys; import pyezvizapi.native_stream; assert 'av' not in sys.modules"
 
   windows-wsl-entrypoint:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false

@@ -12,6 +12,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Added
 
+- Optional PyAV 19 continuous local MPEG-PS source owner with incremental video decryption, current-session PES-ID H.264/HEVC plus AAC stream copy, bounded output credits and joined sync/async cancellation. No implicit session duration cap, player or listener; an HA-hosted route and frontend validation remain separate work.
+
 - Read-only explicit fleet capability inventory with redacted reports, separate saved-sample codec/decode evidence, and finite headless H.264/HEVC plus AAC track-copy output for Home Assistant adapter development. Continuous native SDK-to-HA delivery and frontend compatibility remain unverified.
 
 - Explicit attended `two-minute-gaps` LAN profile with fixed single/cumulative padding bounds, shared A/V credits, distinct evidence binding and isolated full source/padding verification; existing default and strict two-minute profiles are unchanged.

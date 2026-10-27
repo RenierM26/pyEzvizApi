@@ -7,22 +7,25 @@ custom integration for validation, and upstream the validated behavior.
 
 ## Delivery milestones
 
-1. **This change: evidence inventory.** Read-only fleet configuration/ability
+1. **Implemented: evidence inventory.** Read-only fleet configuration/ability
    queries, optional inspection and full decode of saved clear samples, and an
    explicit bounded acquisition helper around the existing typed clip API.
    Query every *supplied* camera/configuration channel, not a port/channel scan.
-2. **This change: finite encoded output boundary.** Select an observed video
+2. **Implemented: finite encoded output boundary.** Select an observed video
    stream and optional AAC stream, copying to a staged MPEG-TS response without
    the player, re-encoding, lens composition, silence or timestamp repair.
    This establishes a testable headless boundary, **not continuous streaming**.
-3. **Next change: continuous native source adapter.** Incremental decrypt,
+3. **Library boundary implemented: continuous native PS source adapter.** See
+   [native HA stream boundary](native-ha-stream.md) for the optional PyAV owner,
+   current-session PES-ID selection, bounded output credits and async cancellation.
+   Incremental decrypt,
    demux and selected-track remux from a context-managed SDK source. Bound
    queues, startup and shutdown, cancel blocked reads when HA disconnects, and
    retain each lens as a separate source. An HA-hosted endpoint should own the
    route/authentication and source lifetime; do not start an unauthenticated
    external listener or put camera credentials in published URLs. Existing
    experimental cloud HTTP proxy is not a validated native H9c adapter.
-4. **Integration acceptance.** Temporary custom integration using HA's stream
+4. **Next: HA-hosted route and integration acceptance.** Temporary custom integration using HA's stream
    pipeline, followed by upstream changes and a released dependency. The
    current upstream EZVIZ camera still returns RTSP URLs. Native SDK packets or
    successful FFmpeg decode alone do not satisfy that URL contract.

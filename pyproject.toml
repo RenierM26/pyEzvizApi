@@ -47,6 +47,7 @@ pyezvizapi = "pyezvizapi.__main__:main"
 pyezvizapi-capabilities = "pyezvizapi.capabilities_cli:main"
 
 [project.optional-dependencies]
+streaming = ["av>=19.0.0,<20"]
 dev = ["build", "codespell", "mypy", "pip-audit", "pyright", "pytest", "pytest-cov", "ruff", "twine", "types-requests"]
 
 [tool.setuptools.packages.find]

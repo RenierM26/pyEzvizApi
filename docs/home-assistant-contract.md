@@ -150,6 +150,10 @@ inventory, see [Camera capabilities and HA delivery](ha-streaming-plan.md).
 The finite encoded-sample utilities are not a replacement for the current HA
 RTSP source URL contract or a claim of continuous native SDK support.
 
+The optional [continuous native PS boundary](native-ha-stream.md) now owns
+incremental selected-track copy and source cancellation. Its HA HTTP route and
+actual frontend acceptance remain separate integration work.
+
 When publishing a `pyezvizapi` release intended for Home Assistant consumption:
 
 1. Confirm CI is green on `main`, including Ruff, codespell, dependency audit,

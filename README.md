@@ -258,6 +258,12 @@ it never starts previews or claims Home Assistant compatibility. See the
 [HA capability and delivery plan](docs/ha-streaming-plan.md) for the inventory
 schema, finite headless track-copy API and remaining continuous-adapter work.
 
+The optional `pyezvizapi[streaming]` extra adds a
+[continuous native PS source owner](docs/native-ha-stream.md) with per-session
+PES-ID selection, incremental decryption, bounded output credit and async
+cancellation. It is a library boundary for an HA-hosted route, not a standalone
+server or a completed HA integration.
+
 Use `source="hcnetsdk-command-port"`, `host="192.0.2.10"`, `command_port=8000`,
 and `hcnetsdk_command_frames=(...)` when an integration already has the complete
 full-local HCNetSDK port-8000 command bootstrap frames. For native-style flows

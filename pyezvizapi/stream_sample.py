@@ -82,7 +82,7 @@ def inspect_media_sample(
         "ha_verified": False,
     }
     fields = (
-        "index,codec_type,codec_name,profile,width,height,pix_fmt,"
+        "index,id,codec_type,codec_name,profile,width,height,pix_fmt,"
         "sample_rate,channels,r_frame_rate,avg_frame_rate,time_base"
     )
     try:

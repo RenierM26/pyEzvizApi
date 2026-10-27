@@ -49,6 +49,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Apply daylight saving time to cameras that report a fixed `timeZone` offset (for example `UTC+01:00`) with `daylightSavingTime` enabled, so `Motion_Trigger` no longer fires one hour late during summer time (#314).
+
 - Keep compressed-reference codec prerequisites across long native selection gaps without copying explicitly unselected outputs; preserve delayed-output identity and strict selection/checkpoint guards. Collapse identical native header observations while rejecting conflicts.
 
 - Release unused reference-capture snapshot copies after the final permitted pair is fully emitted, preserving pending and partially emitted selections. This does not claim to fix the intermittent native decoder failure.

@@ -7,6 +7,7 @@ import datetime
 from hashlib import md5
 import json
 import logging
+import os
 import re as _re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -349,10 +350,18 @@ def normalize_alarm_time(
                     dt_str_local = datetime.datetime.strptime(
                         raw_norm, "%Y-%m-%d %H:%M:%S"
                     ).replace(tzinfo=tzinfo)
-                    diff = abs(
-                        (
-                            event_utc - dt_str_local.astimezone(datetime.UTC)
-                        ).total_seconds()
+                    # Check both folds so the repeated hour at the end of DST
+                    # matches the epoch instead of looking one hour off.
+                    diff = min(
+                        abs(
+                            (
+                                event_utc
+                                - dt_str_local.replace(fold=fold).astimezone(
+                                    datetime.UTC
+                                )
+                            ).total_seconds()
+                        )
+                        for fold in (0, 1)
                     )
                     if diff > 120:
                         # Reinterpret epoch as local clock time in camera tz
@@ -421,12 +430,74 @@ def compute_motion_from_alarm(
     return seconds < window_seconds, seconds, alarm_str
 
 
-def parse_timezone_value(tz_val: Any) -> datetime.tzinfo:
+# Representative IANA zones used when a camera reports a fixed standard offset
+# with daylight saving time enabled, keyed by standard offset in minutes.
+# Offsets shared by zones that observe DST in opposite seasons (UTC-04:00:
+# America/Halifax vs America/Santiago, UTC-06:00: America/Chicago vs
+# Pacific/Easter) are left out on purpose.
+_DST_ZONES_BY_STANDARD_OFFSET: dict[int, str] = {
+    -600: "America/Adak",
+    -540: "America/Anchorage",
+    -480: "America/Los_Angeles",
+    -420: "America/Denver",
+    -300: "America/New_York",
+    -210: "America/St_Johns",
+    0: "Europe/London",
+    60: "Europe/Paris",
+    120: "Europe/Athens",
+    570: "Australia/Adelaide",
+    600: "Australia/Sydney",
+    720: "Pacific/Auckland",
+}
+
+
+def _observes_dst_with_standard_offset(
+    zone: datetime.tzinfo, offset_minutes: int
+) -> bool:
+    """Return True if zone observes DST and its standard offset matches."""
+    year = datetime.datetime.now(tz=datetime.UTC).year
+    # Sample twice a month so short DST periods (e.g. around Ramadan) are seen.
+    offsets = {
+        zone.utcoffset(datetime.datetime(year, month, day))
+        for month in range(1, 13)
+        for day in (1, 15)
+    }
+    if len(offsets) < 2 or None in offsets:
+        return False
+    standard = min(o for o in offsets if o is not None)
+    return standard == datetime.timedelta(minutes=offset_minutes)
+
+
+def _dst_zone_for_offset(offset_minutes: int) -> datetime.tzinfo | None:
+    """Return a DST-aware zone for a fixed standard offset, if one is known.
+
+    Prefer the host time zone (``TZ``) when it shares the standard offset and
+    observes DST, since it most likely matches the camera's region; otherwise
+    use a representative zone for the offset.
+    """
+    candidates = [os.environ.get("TZ", "").lstrip(":")]
+    candidates.append(_DST_ZONES_BY_STANDARD_OFFSET.get(offset_minutes, ""))
+    for name in candidates:
+        if not name or "/" not in name:
+            continue
+        try:
+            zone = ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+        if _observes_dst_with_standard_offset(zone, offset_minutes):
+            return zone
+    return None
+
+
+def parse_timezone_value(tz_val: Any, dst_enabled: bool = False) -> datetime.tzinfo:
     """Parse EZVIZ timeZone value into a tzinfo.
 
     Supports:
       - IANA names like 'Europe/Paris'
       - Offsets like 'UTC+02:00', 'GMT-5', '+0530', or integers (hours/minutes/seconds)
+    When ``dst_enabled`` is True and the value is a fixed offset, return a
+    DST-aware zone whose standard offset matches (EZVIZ reports the standard
+    offset, e.g. 'UTC+01:00', plus a separate daylight saving flag).
     Falls back to the local system timezone, or UTC if unavailable.
     """
     # IANA zone name
@@ -455,6 +526,8 @@ def parse_timezone_value(tz_val: Any) -> datetime.tzinfo:
             offset_minutes = sign * (hours * 60 + minutes)
 
     if offset_minutes is not None:
+        if dst_enabled and (dst_zone := _dst_zone_for_offset(offset_minutes)):
+            return dst_zone
         return datetime.timezone(datetime.timedelta(minutes=offset_minutes))
 
     # Fallbacks

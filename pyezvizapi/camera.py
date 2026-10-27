@@ -10,6 +10,7 @@ from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
 from .models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
 from .utils import (
+    coerce_int,
     compute_motion_from_alarm,
     fetch_nested_value,
     parse_timezone_value,
@@ -338,7 +339,8 @@ class EzvizCamera:
     def _get_tzinfo(self) -> datetime.tzinfo:
         """Return tzinfo from camera setting if recognizable, else local tzinfo."""
         tz_val = self.fetch_key(["STATUS", "optionals", "timeZone"])
-        return parse_timezone_value(tz_val)
+        dst_val = self.fetch_key(["STATUS", "optionals", "daylightSavingTime"])
+        return parse_timezone_value(tz_val, dst_enabled=coerce_int(dst_val) == 1)
 
     def _is_alarm_schedules_enabled(self) -> bool:
         """Check if alarm schedules enabled."""

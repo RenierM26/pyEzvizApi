@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Native EZVIZ validation source",
+        "description": "Use an existing private local-credential file and observed PES IDs. No camera is contacted during setup. Audio ID -1 explicitly omits audio. One entry per video track. This is a validation integration; HA and browser support remain to be tested.",
+        "data": {
+          "name": "Name",
+          "credentials_path": "Absolute private credential JSON path on HA",
+          "channel": "Known SDK preview channel (not configuration channel)",
+          "video_id": "Observed video PES ID (decimal)",
+          "audio_id": "Observed AAC PES ID, or -1 for no audio",
+          "video_codec": "Observed video codec",
+          "nalu_header_size": "Clear NAL header bytes (H.264: 1, HEVC: 2)"
+        }
+      }
+    },
+    "error": {"invalid_settings": "Check the private file and explicit track settings. No discovery or login was attempted."},
+    "abort": {"already_configured": "This camera/channel/video track is already configured."}
+  }
+}

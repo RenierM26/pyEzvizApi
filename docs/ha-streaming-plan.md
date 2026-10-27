@@ -25,7 +25,7 @@ custom integration for validation, and upstream the validated behavior.
    route/authentication and source lifetime; do not start an unauthenticated
    external listener or put camera credentials in published URLs. Existing
    experimental cloud HTTP proxy is not a validated native H9c adapter.
-4. **Next: HA-hosted route and integration acceptance.** Temporary custom integration using HA's stream
+4. **Validation implementation: HA-hosted route.** See [temporary native integration](ha-native-integration.md). Real HA HTTP/camera/HLS controls are isolated from the running instance; attended frontend and live acceptance remain outstanding. Temporary custom integration using HA's stream
    pipeline, followed by upstream changes and a released dependency. The
    current upstream EZVIZ camera still returns RTSP URLs. Native SDK packets or
    successful FFmpeg decode alone do not satisfy that URL contract.

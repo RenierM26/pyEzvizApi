@@ -19,7 +19,7 @@ from queue import Empty, Queue
 import sys
 from threading import BoundedSemaphore, Event, Lock, Thread, current_thread
 import time
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from .clip import AutoClipSource
 from .exceptions import PyEzvizError
@@ -49,6 +49,26 @@ async def _join_async_task[T](task: asyncio.Task[T]) -> T:
             task.result()
         raise asyncio.CancelledError
     return task.result()
+
+
+type _CallOutcome[T] = tuple[T | None, Exception | None]
+
+
+async def _owned_thread_call[T](call: Callable[[], T]) -> _CallOutcome[T]:
+    # Python 3.14.8 shield logs a cancelled outer future's later inner error,
+    # even when its owner subsequently joins/retrieves it. Owned calls must
+    # carry errors as values across that boundary, not as task exceptions.
+    try:
+        return await asyncio.to_thread(call), None
+    except Exception as error:
+        return None, error
+
+
+def _unwrap_call[T](outcome: _CallOutcome[T]) -> T:
+    value, error = outcome
+    if error is not None:
+        raise error
+    return cast(T, value)
 
 
 class NativeStreamClosed(PyEzvizError):
@@ -150,18 +170,20 @@ class _PsInput(io.RawIOBase):
         return True
 
     def read(self, size: int = -1) -> bytes:
+        # Native demuxers may retry after swallowing a callback exception.
+        # Never pull the source again or replace the first failure with EOF.
+        if self.failure is not None:
+            raise PyEzvizError("Native source callback failed") from None
         try:
             return self._read(size)
         except BaseException as error:  # lgtm [py/catch-base-exception]
             if not isinstance(error, _Cancelled):
                 self.failure = error
-            if not isinstance(error, Exception):
-                # Never pass process-control exceptions through native I/O:
-                # a backend may print SystemExit and finalize the interpreter.
-                # Preserve the original for the consumer, but cross the C
-                # callback boundary with an ordinary operation exception.
-                raise PyEzvizError("Native source callback terminated") from error
-            raise
+            # Never pass process-control exceptions or private source text
+            # through native I/O: a backend may print/drop it, or even finalize
+            # the interpreter for SystemExit. Deliver the original separately
+            # through the worker's failure handoff, not the native callback.
+            raise PyEzvizError("Native source callback failed") from None
 
     def _read(self, size: int) -> bytes:
         self.check_stop()
@@ -342,7 +364,8 @@ class NativeMpegTsStream:
         # Wake executor reads before submitting cleanup to that executor. Even
         # a saturated/shared HA executor must not delay transport cancellation.
         self._request_stop()
-        await _join_async_task(asyncio.create_task(asyncio.to_thread(self.close)))
+        outcome = await _join_async_task(asyncio.create_task(_owned_thread_call(self.close)))
+        _unwrap_call(outcome)
 
     async def async_chunks(self) -> AsyncGenerator[bytes, None]:
         """Backpressured async bridge; join any outstanding read on cancellation.
@@ -350,12 +373,13 @@ class NativeMpegTsStream:
         Use inside async with. A route disconnect must close this generator or
         cancel its task; no input is accumulated while its consumer is paused.
         """
-        pending: asyncio.Task[bytes] | None = None
+        pending: asyncio.Task[_CallOutcome[bytes]] | None = None
         try:
             while True:
-                pending = asyncio.create_task(asyncio.to_thread(self.read))
-                chunk = await asyncio.shield(pending)
+                pending = asyncio.create_task(_owned_thread_call(self.read))
+                outcome = await asyncio.shield(pending)
                 pending = None
+                chunk = _unwrap_call(outcome)
                 if not chunk:
                     return
                 yield chunk

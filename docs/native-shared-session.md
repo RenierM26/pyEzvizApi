@@ -4,7 +4,9 @@ This local spike is not part of draft PR397 and is not wired into the HA
 validation config flow. It tests the missing source primitive behind the
 [consumer architecture](ha-consumer-architecture.md): one physical acquisition,
 one incremental decrypt/demux worker, separately selected MPEG-TS lens outputs.
-It is not dynamic subscription support or a production session registry.
+It is not dynamic subscription support or a production session registry. The
+HA example now contains an explicit, unregistered group controller described
+below; the normal config entries still use the original per-entry runtime.
 
 ## Ownership
 
@@ -119,14 +121,64 @@ PCM and clock comparisons pass. Stopping the first HLS worker after 40 pictures
 leaves the other complete, without another factory call. All owners close/join.
 These are worker-ingestion tests, not frontend, live-camera or physical A/V proof.
 
+## Explicit HA group-controller prototype
+
+`examples/home_assistant/custom_components/ezviz_native/group.py` owns the
+physical session separately from per-lens HTTP leases. It is not registered by
+`async_setup_entry`, exposed in the config flow, or connected to the existing
+Prepare button. Tests explicitly declare the complete group and register its
+separate `GroupStreamView` with isolated HA.
+
+- `GroupIdentity` requires an explicit physical selector, verified profile, and
+  opaque credential revision. These are caller-supplied identity assertions, not
+  automatic verification of a factory or comparison/hashing of camera secrets.
+  An existing physical key cannot acquire another profile/revision until closed.
+- A declaration copies/freezes one to four compatible output policies without
+  starting native transport. Each member has its own random loopback capability.
+- Synchronous admission reserves one attempt for the whole physical group. All
+  declared readers must arrive within a bounded cold barrier (default five
+  seconds, maximum thirty) before any read starts. A missing/disconnected member
+  ends that attempt without starting a source. No manifest is silently shrunk.
+- The four-active limit counts physical groups, including cold barriers and
+  retained failed joins, rather than counting lens requests. This limit is local
+  to `GroupRegistry`: the separately registered legacy `Registry` has its own
+  counter. Do not enable both as independent production admission authorities;
+  production composition needs one integration-wide allocator.
+- Releasing/unloading a running lens closes only its output and revokes its
+  capability. Its already-admitted sibling continues. Removing a cold member
+  aborts the whole attempt; a detached manifest cannot be prepared again.
+- Whole-group `prepare` requires no active leases and confirmed physical cleanup.
+  It rotates every capability and constructs a new lazy owner without acquiring.
+  Concurrent Prepare requests cannot each create a generation. Changed manifests
+  or credential/profile revisions require full close and explicit redeclaration.
+- Group shutdown revokes first, cancels HTTP tasks, then joins the physical owner.
+  A failed implicit join retains that exact owner and admission slot; handler
+  cleanup does not repeat its shutdown budget. Explicit Prepare/close can retry.
+  Closing an old group cannot remove a subsequently reassigned member mapping.
+
+HTTP EOF and output closure are not proof all sibling delivery and physical
+cleanup finished. Observe the group lease/cleanup state and authoritative source
+receipt. The route emits explicit no-retry metadata, preserves the owner-derived
+clock descriptor, bounds output writes and closes an incomplete response on error.
+It does not implement relay registration, provider invalidation or a new player.
+
+Generated-source controls exercise real HA HTTP and two actual HLS workers,
+capability revocation, lazy re-arm/reopen, physical admission limits, incomplete
+barriers, sibling unload and failed-join retention/recovery. Retained encrypted
+replay through this controller again yields complete 1,783-picture / 1,857-AAC
+outputs from one factory/demux/decrypt path; stopping one worker leaves its sibling
+complete. Payload hashes and complete timestamp vectors equal the prior source
+spike's independently decoded NAL/pixel/PCM/clock oracles. This is not supported
+browser HEVC playback or a live-camera acceptance claim.
+
 ## Next integration gates
 
 1. Review this source API separately from PR397's already-reviewed single-output
    contracts. Do not silently replace that PR's head/CI evidence with this spike.
-2. Implement a true HA group/session registry with a verified physical selector,
-   source profile and opaque credential generation. Count physical owners once;
-   retain the authoritative session on failure. The existing per-entry Runtime
-   cannot simply treat an output handle as an independent physical owner.
+2. Compose the explicit group controller into HA entry ownership: verified
+   physical/profile/credential declarations, one shared admission allocator,
+   group-level recovery UI and stable per-lens entities. The existing per-entry
+   Runtime cannot simply treat an output as an independent physical owner.
 3. Define dynamic late attach at an original random-access boundary, parameter
    dependencies and a current common-clock reference, without replay/clock guesses
    or another camera preview. The current fixed-cold API does not provide this.

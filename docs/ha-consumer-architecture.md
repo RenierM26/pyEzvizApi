@@ -114,6 +114,16 @@ The current example implements the one-shot relay mode using an explicit Prepare
 button and diagnostic status sensor. A future core integration should retain
 these semantics without replacing the existing EZVIZ entity unique IDs.
 
+## Local fixed-cold group follow-up
+
+The separate local shared-lens spike adds `NativeMpegTsSession` and an explicitly
+declared HA `GroupRegistry`/`GroupStreamView`, with one physical attempt, bounded
+cold membership, per-lens leases and retained failed-join ownership. See the
+[prototype contract](native-shared-session.md#explicit-ha-group-controller-prototype).
+This is not part of PR397 and does not change normal config-entry behavior.
+Automatic entry grouping, group UI/provider/relay composition, one common
+admission authority with the legacy route, and dynamic late attach remain gates.
+
 ## Media and common-clock contract
 
 Copy original selected encoded video/AAC and rational PTS/DTS; no per-track

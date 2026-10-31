@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 import hmac
@@ -49,6 +50,27 @@ class Runtime:
     relay: SharedRelay | None = None
     acquisition_attempts: int = 0
     retry_rejections: int = 0
+    delivery_ended: bool = False
+    rearming: bool = False
+    status_changed: Callable[[], None] = field(default=lambda: None)
+
+    @property
+    def exhausted(self) -> bool:
+        """Only a completed admitted relay attempt consumes the session."""
+        return self.relay is not None and self.acquisition_attempts > 0 and self.delivery_ended
+
+    @property
+    def session_status(self) -> str:
+        """Describe ownership, not browser codec compatibility."""
+        if self.closing:
+            return "closing"
+        if self.delivery_ended and self.active is not None:
+            return "cleanup_pending"
+        if self.active is not None:
+            return "streaming"
+        if self.exhausted:
+            return "failed" if self.last_receipt and self.last_receipt["source"]["error_type"] else "ended"
+        return "ready"
 
     def reserve_attempt(self) -> None:
         """Bound relay retries across EOF, disconnect and failure until reload."""
@@ -56,6 +78,7 @@ class Runtime:
             self.retry_rejections += 1
             raise web.HTTPServiceUnavailable()
         self.acquisition_attempts += 1
+        self.delivery_ended = False
 
     def make_owner(self) -> NativeMpegTsStream:
         """Only a verified HTTP request may construct the lazy source owner."""
@@ -66,6 +89,35 @@ class Runtime:
             options=self.settings.options, channel=self.settings.channel,
             nalu_header_size=self.settings.nalu_header_size,
         )
+
+    def open_session(self, task: asyncio.Task[Any]) -> Session:
+        """Retain an explicit failed admission even if lazy construction fails."""
+        try:
+            return Session(self.make_owner(), task)
+        except Exception as error:
+            self.delivery_ended = True
+            self.last_receipt = {"source": {
+                "error_type": type(error).__name__, "finite_source_end": False,
+            }}
+            self.status_changed()
+            raise web.HTTPBadGateway() from None
+
+    def finish_session(self, session: Session) -> None:
+        """Publish lifecycle only after the handler's joined-cleanup attempt."""
+        self.last_receipt = {
+            "source": session.owner.receipt,
+            "http_write_bytes": session.write_bytes,
+            "http_write_calls": session.write_calls,
+            "ha_verified": False,
+        }
+        receipt = session.owner.receipt
+        if receipt["worker_joined"] and receipt["cancel_joined"] and (
+            receipt["source_closed"] or (receipt["source_packets"] == 0
+                                          and not receipt["cleanup_error_types"])
+        ):
+            self.active = None
+        self.delivery_ended = True
+        self.status_changed()
 
 
 class Registry:
@@ -78,6 +130,7 @@ class Registry:
         """Revoke first; retain timed-out owners for explicit retry."""
         runtime = self.entries[entry_id]
         runtime.closing = True
+        runtime.status_changed()
         runtime.token = secrets.token_urlsafe(32)
         if session := runtime.active:
             if session.response is not None:
@@ -132,8 +185,9 @@ class NativeStreamView(HomeAssistantView):
         runtime.reserve_attempt()
         task = asyncio.current_task()
         assert task is not None
-        session = Session(runtime.make_owner(), task)
+        session = runtime.open_session(task)
         runtime.active = session  # No await between admission check and ownership.
+        runtime.status_changed()
         response = web.StreamResponse(headers={
             "Content-Type": "video/mp2t", "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
@@ -170,18 +224,7 @@ class NativeStreamView(HomeAssistantView):
         finally:
             if not complete and response.prepared and request.transport is not None:
                 request.transport.close()
-            runtime.last_receipt = {
-                "source": session.owner.receipt,
-                "http_write_bytes": session.write_bytes,
-                "http_write_calls": session.write_calls,
-                "ha_verified": False,
-            }
-            receipt = session.owner.receipt
-            if receipt["worker_joined"] and receipt["cancel_joined"] and (
-                receipt["source_closed"] or (receipt["source_packets"] == 0
-                                              and not receipt["cleanup_error_types"])
-            ):
-                runtime.active = None
+            runtime.finish_session(session)
 
 
 def source_url(hass: HomeAssistant, entry_id: str, runtime: Runtime) -> str:

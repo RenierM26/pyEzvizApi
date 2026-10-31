@@ -25,5 +25,7 @@ async def async_get_config_entry_diagnostics(
         "shared_relay": runtime.relay is not None,
         "acquisition_attempts": runtime.acquisition_attempts,
         "retry_rejections": runtime.retry_rejections,
+        "validation_session": runtime.session_status,
+        "prepare_new_session_required": runtime.exhausted,
         "ha_frontend_verified": False,
     }

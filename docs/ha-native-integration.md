@@ -144,14 +144,19 @@ audibility, physical A/V synchronization or long-running network stability.
 
 ## Opt-in shared RTSP relay (isolated validation)
 
-**Acceptance blocked:** retained/generated testing of go2rtc 1.9.15 → RTSP →
+**Stock relay acceptance blocked:** retained/generated testing of go2rtc 1.9.15 → RTSP →
 PyAV 19.0.0 shows different per-track PTS shifts and lost relative A/V timing.
 The delivered encoded windows match, but that is not full recording, decoder
 startup or common-clock parity. First video timestamps are missing and cold
 joins can omit reference pictures. Do not use this adapter for live validation
 or make it the default on the strength of earlier browser playback. The direct
 PyAV → HA HLS path remains the timestamp-preserving baseline. Fix/validate
-common-clock signalling and cold-join dependencies before frontend/live work.
+common-clock signalling and cold-join dependencies before using the stock relay.
+
+The follow-up sections below describe a separate patched-relay prototype, not
+a change in stock support. Offline clock/media, mixed H.264 frontend and explicit
+session recovery controls pass there; released dependency support, HEVC client
+playback and live acceptance remain open.
 
 
 The direct URL remains the default. HA may start HLS and WebRTC readers at the
@@ -203,9 +208,9 @@ GO2RTC_TEST_BINARY=/path/to/reviewed/go2rtc .ha-venv/bin/python -m pytest \
 
 Without that variable the real-server contract is skipped. Tested with go2rtc
 1.9.15; no new dependency is added (aiohttp is already provided by HA).
-Retained encoded payload/rational-clock parity through RTSP and full frontend
-acceptance with this adapter remain required before live testing. Earlier
-prototype results are not evidence for this implementation. No silent
+For a different relay binary, retained encoded payload/rational-clock parity
+and full frontend acceptance must be repeated before live testing. The later
+results below apply only to their reviewed patched relay, not stock 1.9.15. No silent
 transcoding, clock repair or browser codec-policy change is introduced.
 
 ### Isolated sender-report follow-up
@@ -222,7 +227,8 @@ applies; do not replace HA's managed binary or infer live readiness.
 ### Controlled closure of the remaining delivery gaps
 
 The subsequent isolated go2rtc prototype defers fresh producer start until PLAY
-and gates first audio on the complete opening video access unit. Existing queue
+and gates first audio on the opening video parser boundary (HEVC first complete
+AU; H.264 next distinct original timestamp/AU as detailed below). Existing queue
 caps are unchanged; overflow fails the connection. Explicit finite input flushes
 only complete PES at clean TS EOF, drains senders, emits BYE and retains completed
 state to prevent input retries. Truncation/transport failures remain failures.
@@ -295,3 +301,53 @@ disconnect while native input is idle. Retained media and source ownership must
 be checked independently: disconnection of a stalled viewer is not proof that
 the healthy viewer received every original picture/audio packet, and a failed
 source must not send a success BYE or trigger a new native acquisition.
+
+### Explicit session recovery and HA state (2026-10-31)
+
+Relay entries expose a configuration-category **Prepare new session** button.
+It is unavailable until the admitted one-shot attempt has ended and its native
+owner has joined. Pressing it reloads the entry: revoke the old capability, stop
+old HA outputs, remove only the owned relay source, and create fresh lazy
+runtime/registration state. It does not itself acquire a preview. Close existing viewers before preparing,
+then open the camera afterward to consume the new allowance; a still-open live
+card can itself request playback immediately after reload. Concurrent presses, active
+acquisitions and unjoined cleanup cannot silently grant another allowance.
+Direct mode is unchanged and does not expose this one-shot recovery button.
+
+Camera attributes describe `validation_session` (`ready`, `streaming`, `ended`,
+`failed`, `cleanup_pending`, `closing`), `prepare_new_session_required`, admitted
+attempt count and the configured observed codec. They do not infer browser
+codec support. Exhausted entries return no source URL, so a new playback request
+cannot revive an exhausted registration. Source errors and aborted acquisitions
+make the camera unavailable and refresh HA's provider selection through its
+public API. Aborted delivery also stops the independent native HLS retry worker,
+disables its preload, and blocks cached HLS stream creation after exhaustion.
+Clean finite completion does not immediately tear down accepted
+last packets still draining downstream; the native HA stream lifecycle remains
+in charge of those outputs. Existing final camera capability APIs are unchanged.
+
+The patched relay now preserves an explicitly declared one-shot acquisition
+policy across an RTSP DESCRIBE response as `X-Stream-Retry: never`; the receiving
+patched RTSP producer retains that policy. Immutable source-policy metadata is
+separate from clock metadata and successful EOF. Undeclared RTSP sources keep
+the existing reconnect defaults. Other clients may ignore this private header;
+this remains a prototype dependency contract, not a supported released API or
+a guarantee that every frontend/FFmpeg retry loop is suppressed.
+
+A relay-only diagnostic enum sensor keeps the same session state and recovery
+guidance visible even when HA hides attributes on an unavailable camera. Its
+HEVC playback requirement describes the configured codec, not detected client
+support. Status changes use HA dispatcher subscriptions with entity-removal
+unsubscription; no polling or additional acquisition is needed.
+
+### H.264 parser-boundary startup guard
+
+An intermittent cold-worker failure retained all 600 H.264 pictures but only
+935 of 939 AAC packets. Wire inspection placed the four opening audio packets
+between the first and second video access units: flushing one AU is not proof
+that FFmpeg has published its first parsed video packet. The opted-in writer
+now releases audio after the next original H.264 video timestamp/AU completes,
+using existing queues and unchanged media timestamps/payloads. A finite source
+containing only one H.264 AU fails closed rather than claiming complete delivery.
+This is a constrained prototype policy; it is not generic arbitrary-short-stream
+support. HEVC keeps its existing first-complete-AU gate.

@@ -119,7 +119,8 @@ async def test_group_setup_entities_and_source_registration_never_acquire(hass, 
         entry, _, records, _, calls = await setup(hass, aiohttp_client, data)
         runtime = entry.runtime_data
         assert len(cameras(hass)) == 2
-        assert len(hass.states.async_all("button")) == len(hass.states.async_all("sensor")) == 1
+        assert len(hass.states.async_all("button")) == 3
+        assert len(hass.states.async_all("sensor")) == 1
         assert runtime.group.attempts == 0 and hass.data[DOMAIN].admission.active == 0
         assert calls == []
         urls = await asyncio.gather(*(camera.stream_source() for camera in cameras(hass)))

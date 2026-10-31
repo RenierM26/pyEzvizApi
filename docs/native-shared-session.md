@@ -5,8 +5,9 @@ supports explicit physical entries with declared child lenses. It tests the miss
 [consumer architecture](ha-consumer-architecture.md): one physical acquisition,
 one incremental decrypt/demux worker, separately selected MPEG-TS lens outputs.
 It is not a production session registry. Explicit `late_join=True` now allows
-staged, single-use activation of declared outputs; it does not add arbitrary
-tracks, replace finished subscriptions or reopen a source. The HA example composes the group controller below for explicit multi-lens
+staged activation and explicit replacement of a retired lens while a healthy
+sibling keeps the source alive. It does not add arbitrary tracks or reopen a
+source. The HA example composes the group controller below for explicit multi-lens
 entries; single-lens entries retain their original delivery path.
 
 ## Ownership
@@ -127,8 +128,8 @@ The existing startup timeout bounds waiting for a usable IDR. Timeout/cancel,
 unsupported dependencies or finite EOF before admission do not restart the source
 or cancel an already requested healthy sibling. Closing the final requested
 output stops and joins the physical source even if declared unused lenses remain.
-No output can activate after physical EOF or reopen after close; retry/replacement
-requires an explicitly rearmed acquisition.
+No output handle can reopen after close, and no subscription can activate after
+physical EOF. An explicit fresh handle may replace a retired lens as below.
 
 Receipts distinguish unused declared capacity, requested subscriptions, cold/IDR
 mode, and exact join reference. `all_outputs_completed` still covers the whole
@@ -137,6 +138,35 @@ source/session receipt never treats an unconsumed mux tail as completed delivery
 Late AAC has normal decoder priming: encoded suffix parity does not imply the
 first decoded block equals a continuously running decoder. Retained controls
 compare PCM after the first 1,024 samples and report that priming boundary.
+
+### Explicit replacement without another acquisition
+
+In late mode only, `session.replace_output(previous_handle)` returns a fresh,
+lazy handle for that same declared selection. The caller must first close the
+previous handle and finish its reader. A requested healthy sibling must still
+keep the physical worker alive. The call can wait up to `close_timeout` for the
+worker to close the old mux; run it off an event loop. A retirement timeout
+retains the previous handle and requires an explicit retry, not a source restart.
+Stale handles, active readers, fixed-cold mode, stopped/failed sources and EOF
+cannot replace a subscription. Old close calls cannot close a newer generation.
+
+The worker reuses one per-selection context stack, closing its old mux before
+opening another. Retired output queues must have no outstanding credits. Neither
+mux callbacks nor receipt histories accumulate; only bounded cumulative retired
+byte/count counters remain in the owner. Caller-held old handles remain the
+caller's responsibility. The active declared queue capacity is unchanged.
+
+The new handle requests no media until read/start, then admits a fresh original
+IDR with its own current source clock and AAC cutoff. No old chunks, cached
+parameter sets or old source-origin clock are carried forward. Source attempts,
+transport, decrypt/demux and selected track declarations remain unchanged.
+
+Receipts expose `subscription_generation` and verified `mux_retired`. Current
+`outputs`/`output_totals` are separate from cumulative `retired_output_totals`,
+`retired_subscriptions`, failed and partial retired counts. Historical aborted
+delivery keeps aggregate status partial/failed even if current outputs finish;
+`current_requested_outputs_completed` distinguishes successful current delivery
+from `all_requested_outputs_completed` across retired generations.
 
 ## HA startup boundary found by the spike
 
@@ -190,7 +220,8 @@ entries is performed. Both HTTP routes use one integration-wide `Admission`.
   ends that attempt without starting a source. No manifest is silently shrunk.
   Explicit `declare(..., late_join=True)` starts on the first reader and lets
   subsequent declared readers use the library IDR admission rule without a cold
-  barrier. It still permits only one activation per member in that acquisition.
+  barrier. HTTP retries remain blocked after that member's first lease until an
+  explicit per-lens preparation authorizes one new subscription.
 - The four-active limit counts physical groups, including cold barriers and
   retained failed joins, rather than counting lens requests. When constructed alone this limit is local
   to `GroupRegistry`; the composed `IntegrationRegistry` instead supplies one shared allocator to
@@ -256,6 +287,21 @@ state: shutdown retries retained cleanup, and restart is required. Do not advert
 ordinary reload as recovery after FAILED_UNLOAD. This differs from in-place
 Prepare of an otherwise loaded entry, which can explicitly retry failed joins.
 
+Each lens also exposes **Prepare lens subscription**, available only after that
+lens's HTTP lease closes while a sibling remains active. It blocks/revokes only
+that member before awaiting provider cleanup, clears its cached HLS stream and
+refreshes its WebRTC providers, narrowly removes its old relay registration, and
+asks the source worker for a fresh output handle. The sibling's capability,
+relay, lease, physical attempt and admission reservation remain unchanged. The
+replacement relay stays unregistered and the handle unused until the next
+explicit preview. Automatic HTTP/relay retries still cannot obtain another lease.
+
+Failed cleanup retains the blocked member and uncertain relay handles for an
+explicit retry. Cancellation during off-loop replacement waits for the result,
+retaining a completed-but-unpublished handle rather than losing or automatically
+activating it. Whole-group Prepare still requires all viewers closed and handles
+recovery after physical EOF; no per-lens operation can resurrect a source.
+
 Actual entry/camera → patched relay RTSP → HA HLS controls preserve complete cold
 and original late encoded/decoded suffixes. Source/native HTTP clocks remain
 unchanged. RTSP/PyAV uses a common presentation rebase; tested AAC/video phase
@@ -274,8 +320,8 @@ of identical absolute RTSP timestamps or physical A/V sync.
    reset. Ordinary session failures use in-place Prepare before entry unload.
 3. Review and broaden staged IDR admission where needed: CRA/leading-picture,
    parameter changes, long-GOP/no-IDR and wrap/startup boundaries. Arbitrary new
-   track selection and repeated subscriptions within an acquisition remain
-   unsupported; do not introduce replay/clock guesses or another camera preview.
+   track selection remains unsupported. Broaden repeated-subscription coverage
+   across source boundaries without replay/clock guesses or another camera preview.
 4. Exercise per-lens simultaneous HLS/WebRTC through a supported shared protocol
    boundary, group Prepare/re-arm/unload, credential replacement and TLS topology.
 5. Preserve separate maintained-relay, supported-client HEVC and attended

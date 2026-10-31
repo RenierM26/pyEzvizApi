@@ -125,7 +125,11 @@ cold membership, per-lens leases and retained failed-join ownership. See the
 This is not part of PR397. Single-lens behavior remains compatible, while the
 explicit multi-lens flow now composes group UI/provider/relay lifecycle and one
 common admission authority. Automatic grouping of existing entries is not added. Opt-in staged IDR activation now supports sequential
-opening of declared lenses; arbitrary/repeated subscriptions remain unsupported.
+opening of declared lenses. Explicit per-lens preparation now replaces a retired
+subscription at a fresh original IDR while a healthy sibling keeps the source
+alive; automatic retries, arbitrary selections and reopening a source remain
+unsupported. The physical owner, generation-specific lens handles, HA entities
+and relay registrations remain separate lifetime scopes.
 
 ## Media and common-clock contract
 

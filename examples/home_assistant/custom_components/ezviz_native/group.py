@@ -76,6 +76,7 @@ class Group:
     admission: Admission = field(default_factory=Admission)
     status_changed: Callable[[], None] = field(default=lambda: None)
     paused: bool = False
+    blocked_members: set[str] = field(default_factory=set)
     retry_rejections: int = 0
 
     @property
@@ -196,7 +197,7 @@ class GroupRegistry:
         if member in group.leases:
             raise web.HTTPTooManyRequests()
         if (group.closing or group.paused or group.terminal or group.cleanup_pending
-                or member in group.used):
+                or member in group.blocked_members or member in group.used):
             group.retry_rejections += 1
             raise web.HTTPServiceUnavailable()
         if not group.attempts:
@@ -238,6 +239,7 @@ class GroupRegistry:
             group.rotate()
             group.attempts = 0
             group.used.clear()
+            group.blocked_members.clear()
             group.ready = asyncio.Event()
             group.terminal = group.cleanup_pending = False
             self.admission.release(group)

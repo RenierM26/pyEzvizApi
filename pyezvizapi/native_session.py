@@ -3,8 +3,11 @@
 A single inherited transport/decrypt/demux worker owns every mux context. Outputs
 are declared before start; they have independent stream-copy muxers and existing
 four-chunk credits. Optional late activation waits for original self-contained
-IDR dependencies and admits each declared output once, without media replay. A stalled output fails, never drops packets while succeeding.
+IDR dependencies. Explicit replacement retires the previous mux on its worker,
+without media replay. A stalled output fails, never drops packets while succeeding.
 """
+# The physical owner and its private output handles share lifecycle state.
+# ruff: noqa: SLF001
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -36,10 +39,13 @@ def _no_source() -> NativePacketStream:
 
 
 class _SessionOutput(NativeMpegTsStream):
-    def __init__(self, session: NativeMpegTsSession, options: NativeStreamOptions) -> None:
+    def __init__(self, session: NativeMpegTsSession, options: NativeStreamOptions,
+                 generation: int = 0) -> None:
         super().__init__(_no_source, options)
         self.session = session
         self._requested = Event()
+        self._retired = Event()
+        self.generation = generation
         self.join_pts: Fraction | None = None
         self.join_clock: NativeSourceClock | None = None
         self.cold = False
@@ -58,13 +64,7 @@ class _SessionOutput(NativeMpegTsStream):
         return not self._closed and self._failure is None
 
     def start(self) -> _SessionOutput:
-        if self._closed:
-            raise NativeStreamClosed("Session output is closed")
-        if self.session.late_join and not self._requested.is_set():
-            if self.session.source_finished:
-                raise NativeStreamClosed("Cannot attach after physical source completion")
-            self._requested.set()
-        self.session.start()
+        self.session._start_output(self)
         return self
 
     def bind_tracks(self, incoming: Any) -> list[Any]:
@@ -112,6 +112,8 @@ class _SessionOutput(NativeMpegTsStream):
         result = super().receipt
         # A subscription owns no source worker; do not hide the physical owner.
         result["physical_source"] = self.session.physical_receipt
+        result["subscription_generation"] = self.generation
+        result["mux_retired"] = self._retired.is_set()
         if self.session.late_join:
             result["subscription_requested"] = self.requested
             result["subscription_mode"] = "cold" if self.cold else "idr"
@@ -141,13 +143,14 @@ class _Binding:
     tracks: list[Any]
     muxer: Any
     mapping: dict[int, Any]
+    context: ExitStack | None = None
 
 
 class NativeMpegTsSession(NativeMpegTsStream):
     """One explicit local source with 1-4 predeclared lens outputs.
 
-    Default: fixed cold delivery. Explicit late_join enables one activation per
-    declared output at original same-AU IDR dependencies, with no replay/cache,
+    Default: fixed cold delivery. Explicit late_join enables activation and
+    explicit replacement at original same-AU IDR dependencies, with no replay/cache,
     new track selection, automatic restart or acquisition registry. Always retain
     this authoritative physical owner, including close failure.
     """
@@ -176,6 +179,57 @@ class NativeMpegTsSession(NativeMpegTsStream):
         self.output_timeout = float(output_timeout)
         self.outputs = tuple(_SessionOutput(self, option) for option in outputs)
         self._session_close_lock = Lock()
+        self._retired_count = self._retired_failed = self._retired_partial = 0
+        self._retired_bytes = {key: 0 for key in (
+            "output_bytes", "read_output_bytes", "discarded_output_bytes",
+        )}
+
+    def _start_output(self, output: _SessionOutput) -> None:
+        with self._session_close_lock:
+            if output._closed or output not in self.outputs:
+                raise NativeStreamClosed("Session output is closed or superseded")
+            if self.late_join and not output.requested:
+                if self.source_finished or self.stop_requested:
+                    raise NativeStreamClosed("Cannot attach after physical source completion")
+                output._requested.set()
+            self.start()
+
+    def replace_output(self, previous: NativeMpegTsStream) -> NativeMpegTsStream:
+        """Explicitly replace one closed late-mode handle, never its source.
+
+        May wait up to close_timeout for worker-owned mux retirement. Call off an
+        event loop. A healthy requested sibling must keep the acquisition alive;
+        EOF, cancellation, active/reading outputs and stale handles fail closed.
+        The returned handle remains lazy until read/start and always joins at a
+        new original IDR. No histories, muxers or queues accumulate per renewal.
+        """
+        def eligible() -> bool:
+            return (self.late_join and previous in self.outputs
+                    and previous._closed and not previous._read_lock.locked()
+                    and not self.stop_requested and not self.source_finished
+                    and self._failure is None and not self._cleanup_errors
+                    and self._worker is not None and self._worker.is_alive()
+                    and any(out is not previous and out.requested and out.accepting
+                            for out in self.outputs))
+
+        with self._session_close_lock:
+            if not eligible():
+                raise NativeStreamClosed("Replacement requires a retired lens and live sibling")
+        assert isinstance(previous, _SessionOutput)
+        if not previous._retired.wait(self.options.close_timeout):
+            raise PyEzvizError("Lens mux retirement timed out; previous handle retained")
+        with self._session_close_lock:
+            if not eligible() or previous.receipt["owned_output_chunks"]:
+                raise NativeStreamClosed("Lens or physical generation changed during retirement")
+            output = _SessionOutput(self, previous.options, previous.generation + 1)
+            receipt = previous.receipt
+            self._retired_count += 1
+            self._retired_failed += receipt["status"] == "failed"
+            self._retired_partial += receipt["status"] != "completed"
+            for key in self._retired_bytes:
+                self._retired_bytes[key] += receipt[key]
+            self.outputs = tuple(output if out is previous else out for out in self.outputs)
+            return output
 
     def start(self) -> NativeMpegTsSession:
         """Late-mode context entry alone cannot open an idle acquisition."""
@@ -230,11 +284,12 @@ class NativeMpegTsSession(NativeMpegTsStream):
                 selected.update({stream.index: stream for stream in tracks})
                 # Requests present before selected demux begins retain the
                 # existing complete cold prefix, including early-demuxed AAC.
-                output.cold = self.late_join and output.requested
+                output.cold = self.late_join and output.requested and output.generation == 0
+                context = stack.enter_context(ExitStack())
                 outgoing, mapping = (None, {}) if self.late_join and not output.cold else self._open_output(
-                    av, stack, output, tracks,
+                    av, context, output, tracks,
                 )
-                bindings.append(_Binding(output, tracks, outgoing, mapping))
+                bindings.append(_Binding(output, tracks, outgoing, mapping, context))
             self._tracks = [dict(id=s.id, index=s.index, kind=s.type, codec=s.codec_context.name)
                             for s in selected.values()]
             identities = {s.index: (s.id, s.codec_context.name) for s in selected.values()}
@@ -255,13 +310,23 @@ class NativeMpegTsSession(NativeMpegTsStream):
                 if index in last_dts and stamp <= last_dts[index]:
                     raise PyEzvizError("Session source decode timestamp repeated or moved backwards")
                 last_dts[index] = stamp
-                for binding in bindings:
-                    self._deliver_packet(av, stack, binding, packet)
+                for position, binding in enumerate(bindings):
+                    if binding.output._closed and not binding.output._retired.is_set():
+                        assert binding.context is not None
+                        binding.context.close()  # Only this worker may close a PyAV muxer.
+                        binding.muxer, binding.mapping = None, {}
+                        binding.output._retired.set()
+                    current = self.outputs[position]
+                    if current is not binding.output:
+                        binding.output = current
+                    self._deliver_packet(av, binding.context, binding, packet)
                 count += 1
             if not count or not reader.ended:
                 raise PyEzvizError("Session source did not verify finite completion")
+        for binding in bindings:
+            binding.output._retired.set()  # ExitStack verified every mux close.
 
-    def _deliver_packet(self, av: Any, stack: ExitStack, binding: _Binding,
+    def _deliver_packet(self, av: Any, stack: ExitStack | None, binding: _Binding,
                         packet: Any) -> None:
         output, outgoing, mapping, tracks = (binding.output, binding.muxer,
                                              binding.mapping, binding.tracks)
@@ -272,6 +337,7 @@ class NativeMpegTsSession(NativeMpegTsStream):
             if not self._admit_idr(output, packet):
                 return
             try:
+                assert stack is not None
                 outgoing, mapping = self._open_output(av, stack, output, tracks)
             except Exception as error:
                 output.fail_output(error)
@@ -341,17 +407,26 @@ class NativeMpegTsSession(NativeMpegTsStream):
         for key in (*counters, "peak_owned_output_chunks", "peak_owned_output_bytes"):
             result.pop(key)
         result["source_status"] = result["status"]
+        result["retired_subscriptions"] = self._retired_count
+        result["retired_failed_subscriptions"] = self._retired_failed
+        result["retired_partial_subscriptions"] = self._retired_partial
+        result["retired_output_totals"] = dict(self._retired_bytes)
         considered = [row for row in outputs if row.get("subscription_requested", True)]
-        if any(row["status"] == "failed" for row in considered):
+        if self._retired_failed or any(row["status"] == "failed" for row in considered):
             result["status"] = "failed"
-        elif result["status"] == "completed" and any(
+        elif result["status"] == "completed" and (self._retired_partial or any(
             row["status"] != "completed" for row in considered
-        ):
+        )):
             result["status"] = "partial"
         result["outputs"] = outputs
-        result["all_outputs_completed"] = all(row["status"] == "completed" for row in outputs)
-        result["all_requested_outputs_completed"] = bool(considered) and all(
+        result["all_outputs_completed"] = not self._retired_partial and all(
+            row["status"] == "completed" for row in outputs
+        )
+        result["current_requested_outputs_completed"] = bool(considered) and all(
             row["status"] == "completed" for row in considered
+        )
+        result["all_requested_outputs_completed"] = (
+            not self._retired_partial and result["current_requested_outputs_completed"]
         )
         result["output_queue_capacity_bytes"] = sum(row["queue_capacity_bytes"] for row in outputs)
         return result

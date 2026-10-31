@@ -19,7 +19,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     if isinstance(entry.runtime_data, GroupEntry):
-        async_add_entities([PrepareGroupButton(entry)])
+        async_add_entities([PrepareGroupButton(entry), *(
+            PrepareLensButton(entry, key) for key in entry.runtime_data.lenses
+        )])
     elif entry.runtime_data.relay is not None:
         async_add_entities([PrepareSessionButton(entry)])
 
@@ -96,3 +98,21 @@ class PrepareGroupButton(ButtonEntity):
     async def async_press(self) -> None:
         if not await self.runtime.prepare():
             raise HomeAssistantError("Close all group viewers and finish cleanup before preparing")
+
+
+class PrepareLensButton(PrepareGroupButton):
+    """Re-arm one retired lens only while its physical sibling remains active."""
+
+    def __init__(self, entry: NativeConfigEntry, key: str) -> None:
+        super().__init__(entry)
+        self.key = key
+        self._attr_unique_id = f"{entry.entry_id}_{key}_prepare_lens"
+        self._attr_name = f"{self.runtime.lenses[key].name} prepare lens subscription"
+
+    @property
+    def available(self) -> bool:
+        return self.runtime.can_prepare_lens(self.key)
+
+    async def async_press(self) -> None:
+        if not await self.runtime.prepare_lens(self.key):
+            raise HomeAssistantError("Keep a sibling streaming and finish this lens cleanup first")

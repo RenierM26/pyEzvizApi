@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+import secrets
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -12,7 +13,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.clip import AutoClipSource
-from pyezvizapi.native_stream import NativePacketStream
+from pyezvizapi.native_stream import NativeMpegTsStream, NativePacketStream
 
 from .config import Settings
 from .const import DOMAIN
@@ -68,18 +69,82 @@ class GroupEntry:
         )
 
     def _new_relays(self) -> None:
+        for lens in self.lenses.values():
+            lens.relay = self._make_relay()
+
+    def _make_relay(self) -> SharedRelay:
         assert self.settings.relay_api_port is not None
         session = async_get_clientsession(self.hass)
-        for lens in self.lenses.values():
-            lens.relay = SharedRelay(
-                session, self.settings.relay_api_port, self.settings.relay_rtsp_port,
-                trusted_source_clock=True, atomic_ownership=True,
-            )
+        return SharedRelay(
+            session, self.settings.relay_api_port, self.settings.relay_rtsp_port,
+            trusted_source_clock=True, atomic_ownership=True,
+        )
 
     @property
     def can_prepare(self) -> bool:
         return ((bool(self.group.attempts) or self.recovery_pending) and not self.group.leases
-                and not self.closing and not self.rearming)
+                and not self.closing and not self.rearming
+                and not any(lens.preparing for lens in self.lenses.values()))
+
+    def can_prepare_lens(self, key: str) -> bool:
+        """Only an explicit replacement can re-arm a retired member of a live group."""
+        lens = self.lenses[key]
+        return (not self.closing and not self.rearming and not lens.preparing
+                and not self.group.closing and not self.group.paused
+                and not self.group.terminal and not self.group.cleanup_pending
+                and not self.group.owner.source_finished and not self.group.owner.stop_requested
+                and lens.member in self.group.used and lens.member not in self.group.leases
+                and bool(self.group.leases))
+
+    async def prepare_lens(self, key: str) -> bool:
+        """Retire this provider/relay only; keep the sibling's source and URL intact."""
+        if not self.can_prepare_lens(key):
+            return False
+        lens = self.lenses[key]
+        lens.preparing = True
+        self.group.blocked_members.add(lens.member)
+        self.group.tokens[lens.member] = secrets.token_urlsafe(32)
+        self.status_changed()
+        owner = self.group.owner
+        success = False
+        try:
+            stopper = self.stoppers.get(key)
+            if stopper is not None:
+                await stopper()
+            if lens.relay is None or not await lens.relay.close():
+                return False
+            relay = self._make_relay()
+            index = tuple(self.group.options).index(lens.member)
+            previous = owner.outputs[index]
+            if lens.pending_output is not previous:
+                pending = self.hass.async_add_executor_job(owner.replace_output, previous)
+                cancelled = False
+                while True:
+                    try:
+                        lens.pending_output = await asyncio.shield(pending)
+                        break
+                    except asyncio.CancelledError:
+                        if pending.cancelled():
+                            raise
+                        cancelled = True
+                if cancelled:
+                    raise asyncio.CancelledError
+            if (self.closing or self.rearming or self.group.closing or self.group.terminal
+                    or self.group.paused or owner is not self.group.owner
+                    or owner.source_finished or owner.stop_requested):
+                return False
+            lens.relay = relay
+            self.group.used.remove(lens.member)
+            self.group.blocked_members.remove(lens.member)
+            lens.pending_output = None
+            success = True
+            return True
+        except Exception:
+            return False  # Retain blocked member and any uncertain relay ownership.
+        finally:
+            lens.preparing = False
+            lens.recovery_pending = not success
+            self.status_changed()
 
     @property
     def session_status(self) -> str:
@@ -131,6 +196,9 @@ class GroupEntry:
                                                allow_unused=self.recovery_pending):
                 return False
             self._new_relays()  # Construction/register-source lookup do not acquire.
+            for lens in self.lenses.values():
+                lens.recovery_pending = False
+                lens.pending_output = None
             success = True
             return True
         except Exception:
@@ -160,6 +228,8 @@ class LensRuntime:
     def __init__(self, entry: GroupEntry, key: str, name: str, settings: Settings) -> None:
         self.entry, self.key, self.name, self.settings = entry, key, name, settings
         self.relay: SharedRelay | None = None
+        self.preparing = self.recovery_pending = False
+        self.pending_output: NativeMpegTsStream | None = None
 
     @property
     def group(self) -> Group:
@@ -179,7 +249,8 @@ class LensRuntime:
 
     @property
     def rearming(self) -> bool:
-        return self.entry.rearming or self.group.paused
+        return (self.entry.rearming or self.group.paused
+                or self.member in self.group.blocked_members)
 
     @property
     def exhausted(self) -> bool:
@@ -209,6 +280,8 @@ class LensRuntime:
 
     @property
     def session_status(self) -> str:
+        if self.preparing or self.recovery_pending:
+            return "preparing" if self.preparing else "cleanup_pending"
         shared = self.entry.session_status
         if shared in {"closing", "preparing", "cleanup_pending"}:
             return shared

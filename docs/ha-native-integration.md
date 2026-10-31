@@ -207,3 +207,14 @@ Retained encoded payload/rational-clock parity through RTSP and full frontend
 acceptance with this adapter remain required before live testing. Earlier
 prototype results are not evidence for this implementation. No silent
 transcoding, clock repair or browser codec-policy change is introduced.
+
+### Isolated sender-report follow-up
+
+A local go2rtc v1.9.15 prototype with explicit consumer `?source_clock=1` restores
+relative A/V timing to within one 16 kHz RTP tick on the generated/retained
+fixtures. It adds compound RTCP Sender Reports/shared CNAME without rewriting
+RTP media. This is not a released or supported go2rtc option, and this example
+does not enable it. Cold-join dependencies, missing initial video timestamps,
+finite EOF, wrap/discontinuity recovery and an explicit upstream common-origin
+clock contract remain unresolved. The existing experimental warning still
+applies; do not replace HA's managed binary or infer live readiness.

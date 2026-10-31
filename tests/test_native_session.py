@@ -225,3 +225,16 @@ def test_session_declares_video_pes_extent_for_demux_startup(sample):
     # Small complete AUs must not require the next unbounded PES before a
     # demuxer can surface the initial keyframe ahead of following AAC.
     assert len(video_pes_lengths) > 1 and all(video_pes_lengths)
+
+
+
+def test_completed_mux_with_unread_tail_is_not_completed_delivery():
+    session = NativeMpegTsSession(lambda: pytest.fail("no acquisition"), (options(),))
+    output = session.outputs[0]
+    output.publish(b"unconsumed tail")
+    output.source_finished(completed=True, failure=None, cleanup_errors=[])
+    assert output.receipt["status"] == "draining"
+    output.close()
+    assert output.receipt["status"] == "partial"
+    assert output.receipt["discarded_output_bytes"] == len(b"unconsumed tail")
+    assert not session.receipt["all_outputs_completed"]

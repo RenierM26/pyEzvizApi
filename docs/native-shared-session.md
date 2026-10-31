@@ -83,7 +83,8 @@ A failed join retains the session for explicit recovery. Per-output receipts
 include a `physical_source` snapshot; their local absence of a worker must not
 be mistaken for proof the physical owner joined. Session receipts distinguish
 source status, aggregate delivery status (including partial delivery), per-output
-counters and final totals. Per-output peaks are not mislabeled simultaneous
+counters and final totals. A finished mux with an unread queue is draining;
+abandoning that tail is partial delivery, not successful consumption. Per-output peaks are not mislabeled simultaneous
 aggregate peaks.
 
 ## HA startup boundary found by the spike

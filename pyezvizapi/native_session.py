@@ -93,6 +93,11 @@ class _SessionOutput(NativeMpegTsStream):
         result = super().receipt
         # A subscription owns no source worker; do not hide the physical owner.
         result["physical_source"] = self.session.physical_receipt
+        if result["status"] == "completed":
+            if result["discarded_output_bytes"]:
+                result["status"] = "partial"
+            elif result["owned_output_chunks"]:
+                result["status"] = "draining"
         return result
 
     def close_local(self) -> None:

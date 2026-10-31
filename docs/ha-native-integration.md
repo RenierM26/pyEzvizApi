@@ -144,6 +144,16 @@ audibility, physical A/V synchronization or long-running network stability.
 
 ## Opt-in shared RTSP relay (isolated validation)
 
+**Acceptance blocked:** retained/generated testing of go2rtc 1.9.15 → RTSP →
+PyAV 19.0.0 shows different per-track PTS shifts and lost relative A/V timing.
+The delivered encoded windows match, but that is not full recording, decoder
+startup or common-clock parity. First video timestamps are missing and cold
+joins can omit reference pictures. Do not use this adapter for live validation
+or make it the default on the strength of earlier browser playback. The direct
+PyAV → HA HLS path remains the timestamp-preserving baseline. Fix/validate
+common-clock signalling and cold-join dependencies before frontend/live work.
+
+
 The direct URL remains the default. HA may start HLS and WebRTC readers at the
 same time; the direct one-reader native route rejects the second reader with
 429. An opt-in standard go2rtc REST adapter registers a separate random upstream

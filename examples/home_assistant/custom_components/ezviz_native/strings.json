@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Native EZVIZ validation source",
-        "description": "Use an existing private local-credential file and observed PES IDs. No camera is contacted during setup. Audio ID -1 explicitly omits audio. One entry per video track. This is a validation integration; HA and browser support remain to be tested. Optional shared relay uses an operator-managed go2rtc on IPv4 loopback. Leave API port blank for direct delivery. Relay mode permits one native acquisition per entry reload; keep preload off.",
+        "description": "Use an existing private local-credential file and observed PES IDs. No camera is contacted during setup. Audio ID -1 explicitly omits audio. One entry per video track. This is a validation integration; HA and browser support remain to be tested. Optional shared relay uses an operator-managed go2rtc on IPv4 loopback. Leave API port blank for direct delivery. Relay mode permits one native acquisition per entry reload; keep preload off. Experimental relay currently fails A/V clock preservation in the tested RTSP/PyAV path; do not use for live cameras.",
         "data": {
           "name": "Name",
           "credentials_path": "Absolute private credential JSON path on HA",

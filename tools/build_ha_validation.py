@@ -3,6 +3,8 @@
 Requires uv. No install, release, relay replacement, HA access or source acquisition.
 """
 import argparse
+import copy
+import gzip
 import hashlib
 import io
 import json
@@ -17,6 +19,24 @@ import zipfile
 
 def git(root: Path, *args: str) -> bytes:
     return subprocess.check_output(["git", "-C", str(root), *args])
+
+
+def normalize_sdist(path: Path, epoch: int) -> None:
+    """Setuptools leaves generated tar member mtimes at build time."""
+    output = io.BytesIO()
+    with (
+        tarfile.open(path) as original,
+        gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=epoch) as compressed,
+        tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as normalized,
+    ):
+        for member in sorted(original.getmembers(), key=lambda entry: entry.name):
+            item = copy.copy(member)
+            item.mtime, item.uid, item.gid = epoch, 0, 0
+            item.uname = item.gname = ""
+            item.pax_headers = {}
+            item.mode = 0o755 if item.isdir() or item.mode & 0o111 else 0o644
+            normalized.addfile(item, original.extractfile(member) if member.isfile() else None)
+    path.write_bytes(output.getvalue())
 
 
 def build(root: Path, output: Path, python: str) -> None:
@@ -42,6 +62,8 @@ def build(root: Path, output: Path, python: str) -> None:
             "uv", "build", "--python", python, "--build-constraint", str(constraints),
             "--out-dir", str(output / "dist"), str(source),
         ], env={**os.environ, "SOURCE_DATE_EPOCH": epoch}, check=True)
+        sdist, = (output / "dist").glob("*.tar.gz")
+        normalize_sdist(sdist, int(epoch))
 
         integration = source / "examples/home_assistant/custom_components/ezviz_native"
         integration_zip = output / f"ezviz_native-validation-g{commit[:12]}.zip"
@@ -79,6 +101,7 @@ def build(root: Path, output: Path, python: str) -> None:
             "git_commit": commit, "source_date_epoch": int(epoch),
             "original_version": original, "local_validation_version": version,
             "build_constraints": constraints.read_text().splitlines(),
+            "sdist_normalization": "sorted members, fixed epoch, uid/gid zero, original contents/executable bits",
             "files": files, "production_ready": False,
             "relay_included": False, "camera_or_ha_access": False,
         }, indent=2) + "\n")

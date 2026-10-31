@@ -15,7 +15,8 @@ python tools/build_ha_validation.py --output /tmp/ezviz-validation-build
 
 The builder uses only the clean Git HEAD, not ignored/untracked credential or
 capture files. It builds a wheel and sdist with setuptools 80.9.0 / wheel 0.45.1,
-sets `SOURCE_DATE_EPOCH` to the commit time, and assigns a local-only version
+sets `SOURCE_DATE_EPOCH` to the commit time, normalizes generated sdist tar/gzip
+metadata without changing file contents or executable bits, and assigns a local-only version
 `<project-version>+ha.relay.g<commit>`. The repository version is not changed.
 It also creates a sorted, fixed-timestamp zip containing the tracked integration
 Python/JSON files under `custom_components/ezviz_native/` and its license.

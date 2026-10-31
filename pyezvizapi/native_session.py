@@ -224,8 +224,8 @@ class NativeMpegTsSession(NativeMpegTsStream):
             output = _SessionOutput(self, previous.options, previous.generation + 1)
             receipt = previous.receipt
             self._retired_count += 1
-            self._retired_failed += receipt["status"] == "failed"
-            self._retired_partial += receipt["status"] != "completed"
+            self._retired_failed += receipt["subscription_requested"] and receipt["status"] == "failed"
+            self._retired_partial += receipt["subscription_requested"] and receipt["status"] != "completed"
             for key in self._retired_bytes:
                 self._retired_bytes[key] += receipt[key]
             self.outputs = tuple(output if out is previous else out for out in self.outputs)

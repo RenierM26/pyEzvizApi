@@ -4,7 +4,7 @@ from dataclasses import replace
 from threading import Event, get_ident
 
 import pytest
-from test_native_late_join import oracle
+from test_native_late_join import gated_session, oracle
 from test_native_session import choices, collect, sample as sample  # noqa: PLC0414
 from test_native_stream import Source, repeated_ps_packets
 
@@ -140,3 +140,39 @@ def test_mux_retirement_timeout_retains_handle_without_restart():
     assert session.outputs[1] is previous and not source.closed
     assert session.receipt["retired_subscriptions"] == 0
     session.close()
+
+
+def test_replacing_closed_but_never_requested_lens_is_not_aborted_delivery(sample, monkeypatch):
+    session, source, counts, ready, release, payload = gated_session(sample, monkeypatch)
+    next_ready, next_release = Event(), Event()
+    original = session._deliver_packet  # noqa: SLF001
+
+    def deliver(av, stack, binding, packet):
+        original(av, stack, binding, packet)
+        if (binding.output is session.outputs[0] and packet.stream.id == 480
+                and counts["primary_video"] == 80):
+            next_ready.set()
+            assert next_release.wait(5)
+
+    monkeypatch.setattr(session, "_deliver_packet", deliver)
+    with session, ThreadPoolExecutor(2) as executor:
+        primary = executor.submit(collect, session.outputs[0])
+        try:
+            assert ready.wait(5)
+            unused = session.outputs[1]
+            unused.close()
+            release.set()
+            assert next_ready.wait(5)
+            fresh = session.replace_output(unused)
+            secondary = executor.submit(collect, fresh)
+            next_release.set()
+            first, second = primary.result(timeout=5), secondary.result(timeout=5)
+        finally:
+            release.set()
+            next_release.set()
+    assert unused.receipt["status"] == "unused" and not unused.receipt["output_bytes"]
+    assert oracle(first)[256] == oracle(payload)[480] and oracle(second)[256]
+    receipt = session.receipt
+    assert counts["factory"] == 1 and source.closed and receipt["worker_joined"]
+    assert receipt["retired_subscriptions"] == 1 and receipt["retired_partial_subscriptions"] == 0
+    assert receipt["status"] == "completed" and receipt["all_requested_outputs_completed"]

@@ -164,9 +164,10 @@ transport, decrypt/demux and selected track declarations remain unchanged.
 Receipts expose `subscription_generation` and verified `mux_retired`. Current
 `outputs`/`output_totals` are separate from cumulative `retired_output_totals`,
 `retired_subscriptions`, failed and partial retired counts. Historical aborted
-delivery keeps aggregate status partial/failed even if current outputs finish;
+requested delivery keeps aggregate status partial/failed even if current outputs finish;
 `current_requested_outputs_completed` distinguishes successful current delivery
-from `all_requested_outputs_completed` across retired generations.
+from `all_requested_outputs_completed` across retired generations. Retiring a
+never-requested lens does not invent an aborted delivery or fail healthy outputs.
 
 ## HA startup boundary found by the spike
 
@@ -311,7 +312,11 @@ of identical absolute RTSP timestamps or physical A/V sync.
 
 The later replacement control exposes an additional HLS startup boundary. Native
 HTTP PTS/DTS remain exact for every cold/replacement packet, but raw FFmpeg/PyAV
-RTSP demux yields no PTS/DTS for its first video packet. HA 2026.10.4 reconstructs
+RTSP demux yields no PTS/DTS for its first video packet. A bounded transparent TCP
+observer verifies every on-wire RTP timestamp (including that opening video AU)
+against the source at its advertised clock rate, with sequence continuity and
+sender reports; the timestamp loss occurs at the receiving demux boundary, not
+in the source output or the relay's RTP timestamp mapping. HA 2026.10.4 reconstructs
 that packet from the second video's DTS minus duration. At the tested replacement
 IDR, the source's first interval is 6,002 rather than 6,000 ticks, so HA's first
 video PTS/DTS differs by two 90 kHz ticks (22.222 microseconds) from the otherwise

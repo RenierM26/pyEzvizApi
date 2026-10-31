@@ -418,3 +418,34 @@ the local prototype, not for arbitrary internal direct field mutation or config
 persistence transactions. It has not been reviewed/released upstream. The earlier
 bundled b810aba/f88ff6c handoff does not contain this option; do not infer that
 its legacy preflight became atomic.
+
+
+### Signed presentation origin / MPEG-TS wire reference
+
+The earlier near-33-bit startup limitation is superseded for a valid shared
+presentation clock. PyAV can return a negative presentation origin while MPEG-TS
+already serializes that timestamp modulo 2**33. The owner now retains the signed
+`origin_90k` and exposes its exact `mpegts_origin_90k` wire residue; the route
+exports the latter. No timestamp or payload is rewritten and no capture epoch
+is inferred. Actual HA cold/late consumers are verified across this generated
+boundary; genuine timestamp discontinuities still fail rather than being fixed.
+
+The [HA consumer architecture](ha-consumer-architecture.md) separates this
+library contract from optional relay support, multi-lens session sharing,
+client HEVC compatibility and attended/live release gates. Earlier reports
+remain historical evidence for the previous implementation.
+
+
+### Experimental contract negotiation
+
+Before registering any source, experimental clock or atomic-ownership mode
+requires `GET /api/streams/owned` to return HTTP 200, the exact
+`X-Stream-Ownership: runtime-token-v1` header, and a JSON object with
+`contract: "runtime-token-v1"` and a string-list `features`. Clock mode requires
+`source-clock-v1` and `no-retry-v1`; atomic mode requires `runtime-token-v1` and
+`no-retry-v1`. This read is static and must not create a source/consumer.
+A stock endpoint, ignored query flag, missing feature or malformed declaration
+fails before registration/acquisition, with no destructive legacy fallback.
+A relay build implementing ownership but not this negotiation is intentionally
+unsupported by these new experimental modes. Ordinary legacy mode is unchanged
+and makes no claim of those guarantees.

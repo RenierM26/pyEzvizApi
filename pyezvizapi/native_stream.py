@@ -335,8 +335,7 @@ class NativeMpegTsStream:
             raise _Cancelled
 
     def _publish(self, chunk: bytes) -> None:
-        while not self._output_slots.acquire(timeout=_POLL_SECONDS):
-            self._check_stop()
+        self._reserve_output_slot()
         if self._stop.is_set():
             self._output_slots.release()
             raise _Cancelled
@@ -347,6 +346,10 @@ class NativeMpegTsStream:
             self._peak_queue = max(self._peak_queue, self._output_owned)
             self._published += len(chunk)
         self._queue.put_nowait(chunk)  # A reserved credit guarantees capacity.
+
+    def _reserve_output_slot(self) -> None:
+        while not self._output_slots.acquire(timeout=_POLL_SECONDS):
+            self._check_stop()
 
     def _return_output_credit(self, chunk: bytes, *, abandon: bool = False) -> bool:
         with self._lock:
@@ -498,6 +501,57 @@ class NativeMpegTsStream:
             with self._lock:
                 self._source_clock = NativeSourceClock(int(origin))
 
+    def _mux_selected(self, av: Any, incoming: Any, reader: _PsInput) -> None:
+        selected = self._selected_streams(incoming)
+        with av.open(
+            _TsOutput(self._publish),
+            mode="w",
+            format="mpegts",
+            options={
+                "mpegts_copyts": "1",
+                "max_delay": "0",
+                "flush_packets": "1",
+                # With strictly increasing per-track DTS, a 1us
+                # interleave delta cannot accumulate a missing
+                # track's seconds of encoded packets in libav.
+                "max_interleave_delta": "1",
+                "avoid_negative_ts": "disabled",
+            },
+        ) as outgoing:
+            mapping = {
+                stream.index: outgoing.add_stream_from_template(stream)
+                for stream in selected
+            }
+            count = 0
+            last_dts: dict[int, Fraction] = {}
+            identities = {
+                stream.index: (stream.id, stream.codec_context.name)
+                for stream in selected
+            }
+            for packet in incoming.demux(selected):
+                self._check_stop()
+                if not packet.size:
+                    continue  # libav demux flush sentinel, not a source picture.
+                self._check_packet_clock(packet, count)
+                index = packet.stream.index
+                if (packet.stream.id, packet.stream.codec_context.name) != identities[
+                    index
+                ]:
+                    raise PyEzvizError(
+                        "Native selected track identity or codec changed"
+                    )
+                stamp = Fraction(packet.dts) * packet.time_base
+                if index in last_dts and stamp <= last_dts[index]:
+                    raise PyEzvizError(
+                        "Native decode timestamp repeated or moved backwards"
+                    )
+                last_dts[index] = stamp
+                packet.stream = mapping[index]
+                outgoing.mux(packet)
+                count += 1
+            if not count or not reader.ended:
+                raise PyEzvizError("Native stream did not verify its finite source end")
+
     def _run(self) -> None:
         try:
             self._check_stop()
@@ -522,55 +576,7 @@ class NativeMpegTsStream:
                         "max_streams": "64",
                     },
                 ) as incoming:
-                    selected = self._selected_streams(incoming)
-                    with av.open(
-                        _TsOutput(self._publish),
-                        mode="w",
-                        format="mpegts",
-                        options={
-                            "mpegts_copyts": "1",
-                            "max_delay": "0",
-                            "flush_packets": "1",
-                            # With strictly increasing per-track DTS, a 1us
-                            # interleave delta cannot accumulate a missing
-                            # track's seconds of encoded packets in libav.
-                            "max_interleave_delta": "1",
-                            "avoid_negative_ts": "disabled",
-                        },
-                    ) as outgoing:
-                        mapping = {
-                            stream.index: outgoing.add_stream_from_template(stream)
-                            for stream in selected
-                        }
-                        count = 0
-                        last_dts: dict[int, Fraction] = {}
-                        identities = {
-                            stream.index: (stream.id, stream.codec_context.name)
-                            for stream in selected
-                        }
-                        for packet in incoming.demux(selected):
-                            self._check_stop()
-                            if not packet.size:
-                                continue  # libav demux flush sentinel, not a source picture.
-                            self._check_packet_clock(packet, count)
-                            index = packet.stream.index
-                            if (packet.stream.id, packet.stream.codec_context.name) != identities[
-                                index
-                            ]:
-                                raise PyEzvizError(
-                                    "Native selected track identity or codec changed"
-                                )
-                            stamp = Fraction(packet.dts) * packet.time_base
-                            if index in last_dts and stamp <= last_dts[index]:
-                                raise PyEzvizError(
-                                    "Native decode timestamp repeated or moved backwards"
-                                )
-                            last_dts[index] = stamp
-                            packet.stream = mapping[index]
-                            outgoing.mux(packet)
-                            count += 1
-                        if not count or not reader.ended:
-                            raise PyEzvizError("Native stream did not verify its finite source end")
+                    self._mux_selected(av, incoming, reader)
                 self._completed = True
             finally:
                 primary = sys.exception()

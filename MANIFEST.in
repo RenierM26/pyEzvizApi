@@ -15,3 +15,5 @@ include tools/check_installed_native_wheel.py
 include docs/ha-validation-release.md
 
 include docs/ha-consumer-architecture.md
+
+include docs/native-shared-session.md

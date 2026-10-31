@@ -20,6 +20,8 @@ class Settings:
     channel: int
     options: NativeStreamOptions
     nalu_header_size: int
+    relay_api_port: int | None = None
+    relay_rtsp_port: int = 8554
 
 
 def integer(value: Any, low: int, high: int) -> int:
@@ -78,4 +80,7 @@ def load_settings(data: dict[str, Any]) -> Settings:
             video_codec=data["video_codec"],
         ),
         integer(data["nalu_header_size"], 1, 2),
+        (integer(data["relay_api_port"], 1, 65535)
+         if "relay_api_port" in data else None),
+        integer(data.get("relay_rtsp_port", 8554), 1, 65535),
     )

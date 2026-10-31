@@ -37,7 +37,10 @@ class NativeCamera(Camera):
         """Return only the internal capability, never camera credentials."""
         if self.runtime.closing:
             return None
-        return source_url(self.hass, self.entry_id, self.runtime)
+        upstream = source_url(self.hass, self.entry_id, self.runtime)
+        if self.runtime.relay is not None:
+            return await self.runtime.relay.source(upstream)
+        return upstream
 
     async def async_camera_image(self, width: int | None = None,
                                  height: int | None = None) -> bytes | None:

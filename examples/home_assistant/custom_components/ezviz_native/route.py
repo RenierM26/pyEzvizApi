@@ -20,6 +20,7 @@ from pyezvizapi.native_stream import NativeMpegTsStream, native_mpegts_stream_fr
 
 from .config import Settings
 from .const import MAX_ACTIVE, WRITE_TIMEOUT
+from .relay import SharedRelay
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +46,16 @@ class Runtime:
     active: Session | None = None
     closing: bool = False
     last_receipt: dict[str, Any] | None = None
+    relay: SharedRelay | None = None
+    acquisition_attempts: int = 0
+    retry_rejections: int = 0
+
+    def reserve_attempt(self) -> None:
+        """Bound relay retries across EOF, disconnect and failure until reload."""
+        if self.relay is not None and self.acquisition_attempts >= 1:
+            self.retry_rejections += 1
+            raise web.HTTPServiceUnavailable()
+        self.acquisition_attempts += 1
 
     def make_owner(self) -> NativeMpegTsStream:
         """Only a verified HTTP request may construct the lazy source owner."""
@@ -84,6 +95,8 @@ class Registry:
                 except Exception:  # Owner and sanitized evidence remain available.
                     return False
                 runtime.active = None
+        if runtime.relay is not None:
+            return await runtime.relay.close()
         return True
 
 
@@ -116,6 +129,7 @@ class NativeStreamView(HomeAssistantView):
         if (runtime.active is not None
                 or sum(r.active is not None for r in self.registry.entries.values()) >= MAX_ACTIVE):
             raise web.HTTPTooManyRequests()
+        runtime.reserve_attempt()
         task = asyncio.current_task()
         assert task is not None
         session = Session(runtime.make_owner(), task)
@@ -137,9 +151,10 @@ class NativeStreamView(HomeAssistantView):
                         await response.write(chunk)
                     session.write_bytes += len(chunk)
                     session.write_calls += 1
-                async with asyncio.timeout(WRITE_TIMEOUT):
-                    await response.write_eof()
-                complete = True
+            # A successful EOF must follow joined source cleanup, not precede it.
+            async with asyncio.timeout(WRITE_TIMEOUT):
+                await response.write_eof()
+            complete = True
             return response
         except asyncio.CancelledError:
             raise

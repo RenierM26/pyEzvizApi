@@ -141,3 +141,59 @@ audibility, physical A/V synchronization or long-running network stability.
   inventory/advertised/configured/observed/decoded evidence into `ha_verified`
   without actual acceptance results. Current diagnostics keep frontend verification
   false rather than inferring it from HTTP/HLS success.
+
+## Opt-in shared RTSP relay (isolated validation)
+
+The direct URL remains the default. HA may start HLS and WebRTC readers at the
+same time; the direct one-reader native route rejects the second reader with
+429. An opt-in standard go2rtc REST adapter registers a separate random upstream
+and returns its RTSP URL to HA. go2rtc supplies fan-out; native ownership limits
+remain unchanged.
+
+Supply optional `relay_api_port` (for example 1984) and `relay_rtsp_port`
+(default 8554) in the config flow. Omitting the API port selects direct delivery.
+Both endpoints are fixed to IPv4 `127.0.0.1`. The operator must provision a
+compatible same-network-namespace go2rtc with loopback-only HTTP and RTSP
+listeners. Do not expose these listeners to the LAN. The adapter does not
+start/reconfigure HA's managed server, weaken authentication, discover sockets
+or use private HA go2rtc objects. HTTP basic auth, remote endpoints and
+Unix-socket-only API deployments are not supported.
+
+Registration occurs on first `stream_source()`, not setup, and is serialized
+across cold callers. It uses go2rtc 1.9.15's **runtime-only PATCH**, not PUT
+(which persists the capability URL). The random upstream name is independent
+from HA's consumer alias. No preload or probe is requested. API/RTSP inventory
+remains private because it can contain the internal HTTP capability.
+
+Relay validation permits **one native acquisition attempt per entry reload**.
+EOF, disconnect and failed startup all consume the attempt; further authorized
+requests get 503 before another owner is constructed. Active concurrent readers
+still get 429. Failed joins retain their owner. Explicit successful unload/reload
+creates a new capability, relay name and attempt allowance. This is a restrictive
+validation control, not production reconnection/backoff or a session duration
+cap. Keep preload off; unload explicitly to stop active readers. Diagnostics
+report attempts and rejected retries without URLs or credentials.
+
+Unload revokes admission and joins native ownership before deleting only the
+adapter's random stream. Uncertain registration and failed deletion retain
+ownership for explicit recovery. go2rtc DELETE may report config-save failure
+after removing runtime state; GET confirms absence before accepting that outcome.
+DELETE can rewrite the config file, but PATCH never persists the capability.
+Process death is not graceful cleanup: reload revokes old native tokens, and
+stale relay state may need operator cleanup. A go2rtc restart needs entry reload.
+
+Offline controls use real HA classes and HTTP, concurrent REST requests, cancelled
+registration, collisions, failed cleanup/recovery, invalid ports and native
+EOF/startup retry rejection. Optional actual-binary check:
+
+```sh
+GO2RTC_TEST_BINARY=/path/to/reviewed/go2rtc .ha-venv/bin/python -m pytest \
+  examples/home_assistant/tests -o asyncio_mode=auto
+```
+
+Without that variable the real-server contract is skipped. Tested with go2rtc
+1.9.15; no new dependency is added (aiohttp is already provided by HA).
+Retained encoded payload/rational-clock parity through RTSP and full frontend
+acceptance with this adapter remain required before live testing. Earlier
+prototype results are not evidence for this implementation. No silent
+transcoding, clock repair or browser codec-policy change is introduced.

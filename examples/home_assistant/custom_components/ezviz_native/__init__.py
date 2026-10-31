@@ -8,12 +8,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import PyEzvizError
 
 from .config import load_settings
 from .const import DOMAIN
+from .relay import SharedRelay
 from .route import NativeStreamView, Registry, Runtime, source_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +36,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: NativeConfigEntry) -> bo
         raise ConfigEntryError(
             "Validation requires plain HA HTTP on IPv4 loopback; direct TLS is not supported"
         ) from None
+    if settings.relay_api_port is not None:
+        runtime.relay = SharedRelay(
+            async_get_clientsession(hass), settings.relay_api_port, settings.relay_rtsp_port,
+        )
     registry = hass.data.get(DOMAIN)
     if registry is None:
         registry = hass.data[DOMAIN] = Registry()

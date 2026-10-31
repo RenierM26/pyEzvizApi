@@ -309,6 +309,20 @@ difference is -11/240000 seconds (about -45.833 microseconds), within one 16 kHz
 AAC timestamp tick (62.5 microseconds), constant without drift. This is not a claim
 of identical absolute RTSP timestamps or physical A/V sync.
 
+The later replacement control exposes an additional HLS startup boundary. Native
+HTTP PTS/DTS remain exact for every cold/replacement packet, but raw FFmpeg/PyAV
+RTSP demux yields no PTS/DTS for its first video packet. HA 2026.10.4 reconstructs
+that packet from the second video's DTS minus duration. At the tested replacement
+IDR, the source's first interval is 6,002 rather than 6,000 ticks, so HA's first
+video PTS/DTS differs by two 90 kHz ticks (22.222 microseconds) from the otherwise
+constant source shift. AAC and later video retain constant per-track shifts.
+The first A/V phase error is -49/720000 seconds (-68.056 microseconds), outside
+the previously tested one-AAC-tick (62.5 microseconds) budget; later phase error
+is again -11/240000 seconds. Do not describe this as zero drift/exact startup
+clock parity or silently widen that budget. Original payloads/pictures/AAC remain
+unchanged. The example does not falsify durations, repair source clocks or patch
+HA's worker. An upstream RTSP-demux/HA startup-clock review remains a separate gate.
+
 ## Next integration gates
 
 1. Review this source API separately from PR397's already-reviewed single-output

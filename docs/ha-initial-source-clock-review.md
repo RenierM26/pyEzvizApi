@@ -55,7 +55,7 @@ uses a child-process-only diagnostic interposer, not rebuilt/installed FFmpeg.
 
 For the retained replacement IDR, the source's first interval is 6,002 ticks while
 nominal duration is 6,000. The stock path changes the first video time by two
-90 kHz ticks. The combined proposals preserve every initial/later raw and HLS
+90 kHz ticks. The combined proposals preserve every initial/later raw-demux and HA HLS-mux-input
 PTS/DTS, including the original first interval. The measured A/V phase is a
 constant -11/240000 seconds (about -45.833 microseconds) from the first picture
 onward, within the existing 62.5-microsecond AAC tick budget. The stock path's
@@ -68,7 +68,8 @@ prior independent source/picture/PCM oracles exactly. Wire timestamps and RTP
 sequence continuity remain exact. No source timestamp, duration, media byte,
 backpressure limit, synchronization budget or acquisition policy is changed.
 
-These are content/presentation-clock results, not capture UTC, physical A/V sync,
+Actual delivered fMP4/HLS sample times and browser presentation were not observed
+in this pass. These are content/mux-input clock results, not capture UTC, physical A/V sync,
 audible output, browser HEVC acceptance or battery/live-camera readiness.
 
 ## Structure and next gates

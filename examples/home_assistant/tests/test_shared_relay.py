@@ -119,14 +119,16 @@ def test_relay_ports_are_explicit_integers(data, field, value):
 
 async def test_relay_eof_retries_cannot_reacquire(hass, aiohttp_client, runtime, tmp_path):
     body = await asyncio.to_thread(lambda: encode_three_track_ps(tmp_path).read_bytes())
-    owner = NativeMpegTsStream(lambda: Source(body),
-                              replace(runtime.settings.options, finite_source=True))
+    runtime.settings = replace(runtime.settings,
+                               options=replace(runtime.settings.options, finite_source=True))
+    owner = NativeMpegTsStream(lambda: Source(body), runtime.settings.options)
     relay, _, _, _, _, _ = await relay_server(aiohttp_client)
     runtime.relay = relay
     client, registry = await route_client(hass, aiohttp_client, runtime)
     with patch.object(Runtime, "make_owner", return_value=owner) as factory:
         response = await client.get(path(runtime))
         assert response.status == 200
+        assert response.headers["X-Stream-Finite"] == "1"
         assert await response.read()
         for _ in range(3):
             response = await client.get(path(runtime))

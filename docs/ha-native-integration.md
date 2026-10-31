@@ -218,3 +218,25 @@ does not enable it. Cold-join dependencies, missing initial video timestamps,
 finite EOF, wrap/discontinuity recovery and an explicit upstream common-origin
 clock contract remain unresolved. The existing experimental warning still
 applies; do not replace HA's managed binary or infer live readiness.
+
+### Controlled closure of the remaining delivery gaps
+
+The subsequent isolated go2rtc prototype defers fresh producer start until PLAY
+and gates first audio on the complete opening video access unit. Existing queue
+caps are unchanged; overflow fails the connection. Explicit finite input flushes
+only complete PES at clean TS EOF, drains senders, emits BYE and retains completed
+state to prevent input retries. Truncation/transport failures remain failures.
+The example declares `X-Stream-Finite` from the source options (live by default).
+
+Authoritative source-origin declarations support full 33-bit PES clocks, integer
+RTP conversion and epoch/wrap lifting. Invalid origins, backward/excessive jumps
+and bounded queue overflow reject/close rather than repair timestamps. The test
+harness supplies the origin metadata; trusted live metadata export and an
+upstream-supported interface/release are still required.
+
+Two repeated real-HA-worker runs recover every picture and AAC packet in all
+three fixtures, with exact independent decoded pictures/PCM and valid first
+muxer timestamps. HA's existing initial-keyframe timestamp handling is unchanged;
+raw PyAV's missing first timestamp is not fixed. This is worker/muxer-input
+acceptance, not frontend, late-join, concurrency or live-camera certification.
+All existing experimental/default warnings still apply to stock delivery.

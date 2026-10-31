@@ -137,6 +137,7 @@ class NativeStreamView(HomeAssistantView):
         response = web.StreamResponse(headers={
             "Content-Type": "video/mp2t", "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
+            "X-Stream-Finite": "1" if runtime.settings.options.finite_source else "0",
         })
         session.response = response
         # A prepare/write failure must close an incomplete response, never

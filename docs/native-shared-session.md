@@ -96,10 +96,11 @@ aggregate peaks.
 
 `NativeMpegTsSession(..., late_join=True)` retains the declared 1-4 selections
 but does not mux or queue an unused output. Calling an output's `start()` or
-beginning its read requests that one subscription. The source worker alone owns
+beginning its read requests that one subscription. Entering the physical session
+context alone remains lazy in this mode. The source worker alone owns
 all new mux contexts, and no second transport/decrypt/demux is started.
 
-Requests present before selected demux begins retain the existing complete cold
+Requests present at the worker's initial output-binding snapshot retain the existing complete cold
 prefix, including AAC that demux may surface before the opening video access
 unit. Requests observed after that boundary wait for a selected, noncorrupt
 keyframe whose Annex-B access unit carries an independently admissible IDR:

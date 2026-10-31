@@ -277,3 +277,20 @@ def test_leading_picture_after_idr_fails_subscription_instead_of_silently_droppi
     assert output.receipt["error_type"] == "PyEzvizError"
     binding.muxer.mux.assert_not_called()
     session.close()
+
+
+
+def test_late_mode_context_is_lazy_until_a_subscription_is_requested():
+    calls = []
+    source = Source(block=True)
+
+    def factory():
+        calls.append(1)
+        return source
+
+    session = NativeMpegTsSession(factory, choices(), late_join=True)
+    with session:
+        assert calls == [] and not source.entered.is_set()
+        session.outputs[0].start()
+        assert source.entered.wait(2) and calls == [1]
+    assert session.receipt["worker_joined"] and source.closed

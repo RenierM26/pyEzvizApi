@@ -177,6 +177,12 @@ class NativeMpegTsSession(NativeMpegTsStream):
         self.outputs = tuple(_SessionOutput(self, option) for option in outputs)
         self._session_close_lock = Lock()
 
+    def start(self) -> NativeMpegTsSession:
+        """Late-mode context entry alone cannot open an idle acquisition."""
+        if not self.late_join or any(output.requested for output in self.outputs):
+            super().start()
+        return self
+
     @property
     def source_finished(self) -> bool:
         """A completed acquisition never admits another subscription."""

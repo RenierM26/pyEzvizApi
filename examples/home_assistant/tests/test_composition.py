@@ -564,3 +564,28 @@ async def test_partial_setup_constructor_failure_rolls_back_group_and_client(
     registry = hass.data[DOMAIN]
     assert not registry.groups.groups and not registry.group_entries
     assert registry.admission.active == 0 and list(records) == ["unrelated"]
+
+
+
+async def test_direct_provider_source_lookup_discards_a_revoked_generation(
+    hass, aiohttp_client, data,
+):
+    entry, _, _, _, _ = await setup(hass, aiohttp_client, data)
+    runtime = entry.runtime_data
+    camera = next(c for c in cameras(hass) if c.runtime.key == "primary")
+    relay = runtime.lenses["primary"].relay
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed(_upstream):
+        entered.set()
+        await release.wait()
+        return relay.url
+
+    with patch.object(relay, "source", delayed):
+        pending = asyncio.create_task(camera.stream_source())
+        await entered.wait()
+        runtime.relay_failed()
+        release.set()
+        assert await pending is None
+    assert runtime.group.attempts == 0 and await runtime.prepare()
+    assert await hass.config_entries.async_unload(entry.entry_id)

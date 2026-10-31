@@ -58,8 +58,13 @@ class NativeCamera(Camera):
         upstream = (self.runtime.upstream(self.hass) if isinstance(self.runtime, LensRuntime)
                     else source_url(self.hass, self.entry_id, self.runtime))
         if self.runtime.relay is not None:
+            token = self.runtime.token
             try:
-                return await self.runtime.relay.source(upstream)
+                result = await self.runtime.relay.source(upstream)
+                if (self.runtime.closing or self.runtime.exhausted or self.runtime.rearming
+                        or token != self.runtime.token):
+                    return None
+                return result
             except (RelayError, asyncio.CancelledError):
                 if isinstance(self.runtime, LensRuntime):
                     self.runtime.entry.relay_failed()

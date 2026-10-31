@@ -8,12 +8,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import PyEzvizError
 
 from .config import load_settings
-from .const import DOMAIN
+from .const import DOMAIN, status_signal
+from .relay import SharedRelay
 from .route import NativeStreamView, Registry, Runtime, source_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +37,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: NativeConfigEntry) -> bo
         raise ConfigEntryError(
             "Validation requires plain HA HTTP on IPv4 loopback; direct TLS is not supported"
         ) from None
+    if settings.relay_api_port is not None:
+        runtime.relay = SharedRelay(
+            async_get_clientsession(hass), settings.relay_api_port, settings.relay_rtsp_port,
+            trusted_source_clock=settings.relay_source_clock,
+            atomic_ownership=settings.relay_atomic_ownership,
+        )
     registry = hass.data.get(DOMAIN)
     if registry is None:
         registry = hass.data[DOMAIN] = Registry()
@@ -49,7 +58,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: NativeConfigEntry) -> bo
 
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop)
     registry.entries[entry.entry_id] = entry.runtime_data = runtime
-    await hass.config_entries.async_forward_entry_setups(entry, [Platform.CAMERA])
+    runtime.status_changed = lambda: async_dispatcher_send(hass, status_signal(entry.entry_id))
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.CAMERA, Platform.BUTTON, Platform.SENSOR])
     return True
 
 
@@ -58,7 +68,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: NativeConfigEntry) -> b
     registry: Registry = hass.data[DOMAIN]
     if not await registry.close_entry(entry.entry_id):
         return False
-    if not await hass.config_entries.async_unload_platforms(entry, [Platform.CAMERA]):
+    if not await hass.config_entries.async_unload_platforms(entry, [Platform.CAMERA, Platform.BUTTON, Platform.SENSOR]):
         return False
     await hass.async_add_executor_job(entry.runtime_data.client.close_session)
     registry.entries.pop(entry.entry_id)

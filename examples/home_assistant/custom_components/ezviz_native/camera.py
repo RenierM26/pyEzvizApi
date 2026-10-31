@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.core import HomeAssistant
+from homeassistant.components.stream import Stream
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NativeConfigEntry
+from .const import status_signal
 from .route import Runtime, source_url
 
 
@@ -35,9 +38,59 @@ class NativeCamera(Camera):
 
     async def stream_source(self) -> str | None:
         """Return only the internal capability, never camera credentials."""
-        if self.runtime.closing:
+        if self.runtime.closing or self.runtime.exhausted:
             return None
-        return source_url(self.hass, self.entry_id, self.runtime)
+        upstream = source_url(self.hass, self.entry_id, self.runtime)
+        if self.runtime.relay is not None:
+            return await self.runtime.relay.source(upstream)
+        return upstream
+
+    async def async_create_stream(self) -> Stream | None:
+        """Do not let HA's cached HLS stream bypass exhausted source admission."""
+        if self.runtime.closing or self.runtime.exhausted:
+            return None
+        return await super().async_create_stream()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | int | bool]:
+        """Sanitized recovery guidance; no claim of browser HEVC capability."""
+        return {
+            "validation_session": self.runtime.session_status,
+            "native_acquisition_attempts": self.runtime.acquisition_attempts,
+            "prepare_new_session_required": self.runtime.exhausted,
+            "observed_video_codec": self.runtime.settings.options.video_codec,
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(async_dispatcher_connect(
+            self.hass, status_signal(self.entry_id), self._async_delivery_changed,
+        ))
+
+    @callback
+    def _async_delivery_changed(self) -> None:
+        # Clean finite input may still be draining downstream queues. Do not
+        # tear down an accepted final picture just because its native owner ended.
+        receipt = self.runtime.last_receipt
+        aborted = self.runtime.exhausted and receipt is not None and not (
+            receipt["source"]["finite_source_end"]
+        )
+        self._attr_available = not (self.runtime.closing or aborted)
+        self.async_write_ha_state()
+        if aborted:
+            self.hass.async_create_task(self._async_stop_aborted_delivery())
+
+    async def _async_stop_aborted_delivery(self) -> None:
+        """Provider refresh stops WebRTC, not the separate native HLS retry worker."""
+        await self.async_refresh_providers()
+        await self._async_stop_stream()
+
+    async def _async_stop_stream(self) -> None:
+        if self.stream is not None:
+            self.stream.dynamic_stream_settings.preload_stream = False
+            for provider in list(self.stream.outputs().values()):
+                await self.stream.remove_provider(provider)
+            await self.stream.stop()
 
     async def async_camera_image(self, width: int | None = None,
                                  height: int | None = None) -> bytes | None:
@@ -46,9 +99,5 @@ class NativeCamera(Camera):
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop HA ingest too, even if preload was enabled during validation."""
-        if self.stream is not None:
-            self.stream.dynamic_stream_settings.preload_stream = False
-            for provider in list(self.stream.outputs().values()):
-                await self.stream.remove_provider(provider)
-            await self.stream.stop()
+        await self._async_stop_stream()
         await super().async_will_remove_from_hass()

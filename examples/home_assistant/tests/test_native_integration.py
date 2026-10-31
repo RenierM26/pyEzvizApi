@@ -131,12 +131,18 @@ async def test_socket_peer_not_forwarded_ip(runtime, peer):
         await NativeStreamView(registry).get(request, "entry")
 
 
-async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tmp_path):
-    data = await asyncio.to_thread(lambda: encode_three_track_ps(tmp_path).read_bytes())
+@pytest.mark.parametrize("timestamp_offset", [0, (1 << 33) - 200000])
+async def test_actual_native_copy_over_ha_http(
+    hass, aiohttp_client, runtime, tmp_path, timestamp_offset
+):
+    data = await asyncio.to_thread(
+        lambda: encode_three_track_ps(tmp_path, timestamp_offset_90k=timestamp_offset).read_bytes()
+    )
     source = Source(data)
     options = replace(runtime.settings.options, finite_source=True)
     owner = NativeMpegTsStream(lambda: source, options)
     expected = NativeMpegTsStream(lambda: Source(data), options)
+    assert owner.source_clock is None  # No factory call or fixture-derived guess.
     expected_body = await asyncio.to_thread(lambda: b"".join(expected))
     expected.close()
     client, _ = await route_client(hass, aiohttp_client, runtime)
@@ -145,6 +151,11 @@ async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tm
         assert response.status == 200
         assert response.headers["Content-Type"] == "video/mp2t"
         assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["X-Stream-Retry"] == "default"
+        assert owner.source_clock is not None
+        assert response.headers["X-Stream-Clock-Origin-90k"] == str(
+            owner.source_clock.mpegts_origin_90k
+        )
         actual = await response.read()
     assert actual == expected_body
     await hass.async_block_till_done()
@@ -386,3 +397,31 @@ def test_credential_document_is_bounded(data):
         target.write(b" " * 65537)
     with pytest.raises(ValueError, match="limit"):
         load_settings(data)
+
+
+@pytest.mark.parametrize("value", [True, 1, "true"])
+def test_source_clock_requires_explicit_relay(data, value):
+    data["relay_source_clock"] = value
+    with pytest.raises(ValueError):
+        load_settings(data)
+
+
+def test_source_clock_is_opt_in(data):
+    assert not load_settings(data).relay_source_clock
+    data.update(relay_api_port=1984, relay_source_clock=True)
+    assert load_settings(data).relay_source_clock
+
+
+@pytest.mark.parametrize("value", [1, "true", None])
+async def test_atomic_ownership_rejects_non_boolean(data, value):
+    data.update(relay_api_port=1984, relay_atomic_ownership=value)
+    with pytest.raises(ValueError, match="Atomic ownership"):
+        load_settings(data)
+
+
+async def test_atomic_ownership_requires_explicit_relay(data):
+    data["relay_atomic_ownership"] = True
+    with pytest.raises(ValueError, match="Atomic ownership"):
+        load_settings(data)
+    data["relay_api_port"] = 1984
+    assert load_settings(data).relay_atomic_ownership

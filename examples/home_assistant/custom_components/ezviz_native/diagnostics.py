@@ -22,5 +22,10 @@ async def async_get_config_entry_diagnostics(
         "closing": runtime.closing,
         "active": runtime.active is not None,
         "last_delivery": runtime.last_receipt,
+        "shared_relay": runtime.relay is not None,
+        "acquisition_attempts": runtime.acquisition_attempts,
+        "retry_rejections": runtime.retry_rejections,
+        "validation_session": runtime.session_status,
+        "prepare_new_session_required": runtime.exhausted,
         "ha_frontend_verified": False,
     }

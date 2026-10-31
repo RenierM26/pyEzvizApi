@@ -9,3 +9,9 @@ recursive-include tests/fixtures/stream *.hex
 include docs/app-timing.md
 include tests/fixtures/app_timing_oracle.json
 include tests/fixtures/app_timing_boundaries.json
+
+include tools/build_ha_validation.py
+include tools/check_installed_native_wheel.py
+include docs/ha-validation-release.md
+
+include docs/ha-consumer-architecture.md

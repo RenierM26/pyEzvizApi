@@ -20,6 +20,10 @@ class Settings:
     channel: int
     options: NativeStreamOptions
     nalu_header_size: int
+    relay_api_port: int | None = None
+    relay_rtsp_port: int = 8554
+    relay_source_clock: bool = False
+    relay_atomic_ownership: bool = False
 
 
 def integer(value: Any, low: int, high: int) -> int:
@@ -68,6 +72,12 @@ def load_settings(data: dict[str, Any]) -> Settings:
             stream_port=None if stream_port is None else integer(stream_port, 1, 65535),
         ), device, media_key,
     )
+    clock = data.get("relay_source_clock", False)
+    if not isinstance(clock, bool) or (clock and "relay_api_port" not in data):
+        raise ValueError("Source clock requires explicit experimental relay")
+    ownership = data.get("relay_atomic_ownership", False)
+    if not isinstance(ownership, bool) or (ownership and "relay_api_port" not in data):
+        raise ValueError("Atomic ownership requires explicit experimental relay")
     audio = integer(data.get("audio_id", -1), -1, 511)
     return Settings(
         credentials,
@@ -78,4 +88,9 @@ def load_settings(data: dict[str, Any]) -> Settings:
             video_codec=data["video_codec"],
         ),
         integer(data["nalu_header_size"], 1, 2),
+        (integer(data["relay_api_port"], 1, 65535)
+         if "relay_api_port" in data else None),
+        integer(data.get("relay_rtsp_port", 8554), 1, 65535),
+        clock,
+        ownership,
     )

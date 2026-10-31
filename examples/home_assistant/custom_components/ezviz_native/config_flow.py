@@ -22,6 +22,11 @@ SCHEMA = vol.Schema({
     vol.Required("video_codec", default="hevc"): selector.SelectSelector(
         selector.SelectSelectorConfig(options=["h264", "hevc"])),
     vol.Required("nalu_header_size", default=2): vol.In([1, 2]),
+    vol.Optional("relay_source_clock", default=False): bool,
+    vol.Optional("relay_atomic_ownership", default=False): bool,
+    vol.Optional("relay_api_port"): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
+    vol.Optional("relay_rtsp_port", default=8554): vol.All(
+        vol.Coerce(int), vol.Range(min=1, max=65535)),
 })
 
 

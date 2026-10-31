@@ -326,7 +326,10 @@ the previously tested one-AAC-tick (62.5 microseconds) budget; later phase error
 is again -11/240000 seconds. Do not describe this as zero drift/exact startup
 clock parity or silently widen that budget. Original payloads/pictures/AAC remain
 unchanged. The example does not falsify durations, repair source clocks or patch
-HA's worker. An upstream RTSP-demux/HA startup-clock review remains a separate gate.
+HA's worker. An upstream RTSP-demux/HA startup-clock review remains a separate gate. A subsequent
+[isolated upstream review](ha-initial-source-clock-review.md) reproduces the parser
+byte-offset cause and validates two external proposals without shipping them or
+changing this runtime.
 
 ## Next integration gates
 

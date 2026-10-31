@@ -6,6 +6,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import NativeConfigEntry
+from .entry_runtime import GroupEntry
 
 
 async def async_get_config_entry_diagnostics(
@@ -14,6 +15,15 @@ async def async_get_config_entry_diagnostics(
     """Keep HA verification distinct from encoded/HTTP ingestion evidence."""
     runtime = entry.runtime_data
     settings = runtime.settings
+    if isinstance(runtime, GroupEntry):
+        return {
+            "validation_session": runtime.session_status,
+            "acquisition_attempts": runtime.group.attempts,
+            "physical_cleanup_joined": runtime.group.joined,
+            "lens_sessions": {key: lens.session_status for key, lens in runtime.lenses.items()},
+            "last_delivery": runtime.group.last_receipt,
+            "ha_frontend_verified": False,
+        }
     return {
         "preview_channel": settings.channel,
         "video_id": settings.options.selection.video_id,

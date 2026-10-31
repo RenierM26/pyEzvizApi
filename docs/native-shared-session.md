@@ -1,14 +1,13 @@
 # Experimental declared-output native session
 
-This local spike is not part of draft PR397 and is not wired into the HA
-validation config flow. It tests the missing source primitive behind the
+This local spike is not part of draft PR397. The HA validation config flow now
+supports explicit physical entries with declared child lenses. It tests the missing source primitive behind the
 [consumer architecture](ha-consumer-architecture.md): one physical acquisition,
 one incremental decrypt/demux worker, separately selected MPEG-TS lens outputs.
 It is not a production session registry. Explicit `late_join=True` now allows
 staged, single-use activation of declared outputs; it does not add arbitrary
-tracks, replace finished subscriptions or reopen a source. The HA example has
-an explicit, unregistered group controller described below; normal config entries
-still use the original per-entry runtime.
+tracks, replace finished subscriptions or reopen a source. The HA example composes the group controller below for explicit multi-lens
+entries; single-lens entries retain their original delivery path.
 
 ## Ownership
 
@@ -174,10 +173,10 @@ These are worker-ingestion tests, not frontend, live-camera or physical A/V proo
 ## Explicit HA group-controller prototype
 
 `examples/home_assistant/custom_components/ezviz_native/group.py` owns the
-physical session separately from per-lens HTTP leases. It is not registered by
-`async_setup_entry`, exposed in the config flow, or connected to the existing
-Prepare button. Tests explicitly declare the complete group and register its
-separate `GroupStreamView` with isolated HA.
+physical session separately from per-lens HTTP leases. The `GroupEntry` composition
+in `entry_runtime.py` now connects explicit multi-lens config entries, stable child
+cameras and one shared Prepare/status UI. No automatic grouping of separate
+entries is performed. Both HTTP routes use one integration-wide `Admission`.
 
 - `GroupIdentity` requires an explicit physical selector, verified profile, and
   opaque credential revision. These are caller-supplied identity assertions, not
@@ -193,10 +192,9 @@ separate `GroupStreamView` with isolated HA.
   subsequent declared readers use the library IDR admission rule without a cold
   barrier. It still permits only one activation per member in that acquisition.
 - The four-active limit counts physical groups, including cold barriers and
-  retained failed joins, rather than counting lens requests. This limit is local
-  to `GroupRegistry`: the separately registered legacy `Registry` has its own
-  counter. Do not enable both as independent production admission authorities;
-  production composition needs one integration-wide allocator.
+  retained failed joins, rather than counting lens requests. When constructed alone this limit is local
+  to `GroupRegistry`; the composed `IntegrationRegistry` instead supplies one shared allocator to
+  both routes. Separately constructed test registries retain independent budgets.
 - Releasing/unloading a running lens closes only its output and revokes its
   capability. Its already-admitted sibling continues. Removing a cold member
   aborts the whole attempt; a detached manifest cannot be prepared again.
@@ -213,7 +211,8 @@ HTTP EOF and output closure are not proof all sibling delivery and physical
 cleanup finished. Observe the group lease/cleanup state and authoritative source
 receipt. The route emits explicit no-retry metadata, preserves the owner-derived
 clock descriptor, bounds output writes and closes an incomplete response on error.
-It does not implement relay registration, provider invalidation or a new player.
+The composed entry adds one lazy, atomic/common-clock relay registration per
+lens and coordinated provider invalidation. It does not add a player.
 
 Generated-source controls exercise real HA HTTP and two actual HLS workers,
 capability revocation, lazy re-arm/reopen, physical admission limits, incomplete
@@ -224,14 +223,55 @@ complete. Payload hashes and complete timestamp vectors equal the prior source
 spike's independently decoded NAL/pixel/PCM/clock oracles. This is not supported
 browser HEVC playback or a live-camera acceptance claim.
 
+## Config entry and recovery composition
+
+Single-lens configuration remains compatible. To opt into a shared physical
+entry, select additional lenses in the user flow and explicitly supply a verified
+profile label, opaque credential revision and up to three child mappings. The
+primary lens retains its existing entry unique ID. Each child uses a stable
+logical key, not a PES ID/ordinal/display name, and shares one HA device with the
+primary camera, recovery button and diagnostic sensor. Renaming/reordering a
+child does not create a new entity identity. No credentials are discovered or
+stored inline in the config entry; the private file remains the source.
+
+Group entries require explicit loopback relay, source-clock and atomic ownership
+contracts. Each lens has a distinct lazy relay upstream; stock/unverified relay
+contracts do not fall back to direct multi-reader acquisition. Setup, source URL
+registration, still images and Prepare do not acquire a preview. Two legacy/group
+routes cannot acquire the same physical device/SDK selector concurrently, and the
+common four-source limit includes failed joins and cold barriers.
+
+Prepare pauses admission and revokes every lens token before awaiting cleanup.
+It serializes against in-flight cached stream creation, refreshes WebRTC providers,
+stops HLS/preload and discards cached source URLs. Only joined physical cleanup
+and confirmed narrow relay removal allow fresh lazy owners/relay names. Uncertain
+registration is explicitly recoverable even before a native attempt; construction
+failure after partial re-arm remains paused and retryable. No private HA storage
+or config-entry state is changed to make a failed cleanup look successful.
+
+Normal config-entry unload revokes and stops all consumers before dropping client
+ownership. If cleanup is uncertain, handles remain retained and HA reports failed
+unload. HA 2026.10 does not allow a normal reload retry from that non-recoverable
+state: shutdown retries retained cleanup, and restart is required. Do not advertise
+ordinary reload as recovery after FAILED_UNLOAD. This differs from in-place
+Prepare of an otherwise loaded entry, which can explicitly retry failed joins.
+
+Actual entry/camera → patched relay RTSP → HA HLS controls preserve complete cold
+and original late encoded/decoded suffixes. Source/native HTTP clocks remain
+unchanged. RTSP/PyAV uses a common presentation rebase; tested AAC/video phase
+difference is -11/240000 seconds (about -45.833 microseconds), within one 16 kHz
+AAC timestamp tick (62.5 microseconds), constant without drift. This is not a claim
+of identical absolute RTSP timestamps or physical A/V sync.
+
 ## Next integration gates
 
 1. Review this source API separately from PR397's already-reviewed single-output
    contracts. Do not silently replace that PR's head/CI evidence with this spike.
-2. Compose the explicit group controller into HA entry ownership: verified
-   physical/profile/credential declarations, one shared admission allocator,
-   group-level recovery UI and stable per-lens entities. The existing per-entry
-   Runtime cannot simply treat an output as an independent physical owner.
+2. Review the new explicit physical-entry composition: verified declarations,
+   common admission, stable lens keys and coordinated provider/relay recovery.
+   Normal failed unload puts HA into non-recoverable FAILED_UNLOAD; retained
+   cleanup is retried at shutdown and HA restart is required, not a private state
+   reset. Ordinary session failures use in-place Prepare before entry unload.
 3. Review and broaden staged IDR admission where needed: CRA/leading-picture,
    parameter changes, long-GOP/no-IDR and wrap/startup boundaries. Arbitrary new
    track selection and repeated subscriptions within an acquisition remain

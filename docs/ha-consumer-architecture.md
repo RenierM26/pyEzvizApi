@@ -68,9 +68,11 @@ subscriber is slow; fail the slow subscription within declared bounds.
 **Implemented now:** multiple downstream viewers of the same selected stream
 can share one relay upstream/native owner.
 
-**Not implemented:** two separate validation entries for different lenses may
-still acquire two native transports. The proposed cross-lens session registry
-is a later milestone, not an acceptance claim for this PR.
+**PR397 baseline (unchanged):** two separate validation entries for different
+lenses may acquire separate transports. That PR does not claim cross-lens sharing.
+The separate local spike now has explicit physical entries with stable child
+lenses, a shared source/session and a single admission authority across both
+routes. It does not infer grouping between existing entries.
 
 ## Admission and lifecycle contract
 
@@ -120,9 +122,9 @@ The separate local shared-lens spike adds `NativeMpegTsSession` and an explicitl
 declared HA `GroupRegistry`/`GroupStreamView`, with one physical attempt, bounded
 cold membership, per-lens leases and retained failed-join ownership. See the
 [prototype contract](native-shared-session.md#explicit-ha-group-controller-prototype).
-This is not part of PR397 and does not change normal config-entry behavior.
-Automatic entry grouping, group UI/provider/relay composition and one common admission authority with the
-legacy route remain gates. Opt-in staged IDR activation now supports sequential
+This is not part of PR397. Single-lens behavior remains compatible, while the
+explicit multi-lens flow now composes group UI/provider/relay lifecycle and one
+common admission authority. Automatic grouping of existing entries is not added. Opt-in staged IDR activation now supports sequential
 opening of declared lenses; arbitrary/repeated subscriptions remain unsupported.
 
 ## Media and common-clock contract

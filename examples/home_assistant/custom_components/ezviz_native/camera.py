@@ -1,6 +1,8 @@
 """Separate camera entity for one explicitly configured native video track."""
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.stream import Stream
 from homeassistant.core import HomeAssistant, callback
@@ -9,6 +11,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NativeConfigEntry
 from .const import status_signal
+from .entry_runtime import GroupEntry, LensRuntime
+from .relay import RelayError
 from .route import Runtime, source_url
 
 
@@ -17,7 +21,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Register without opening a transport or fetching a snapshot."""
-    async_add_entities([NativeCamera(entry)])
+    runtime = entry.runtime_data
+    async_add_entities([NativeCamera(entry, lens) for lens in runtime.lenses.values()]
+                       if isinstance(runtime, GroupEntry) else [NativeCamera(entry)])
 
 
 class NativeCamera(Camera):
@@ -27,29 +33,54 @@ class NativeCamera(Camera):
     _attr_should_poll = False
     _attr_brand = "EZVIZ"
 
-    def __init__(self, entry: NativeConfigEntry) -> None:
+    def __init__(self, entry: NativeConfigEntry, lens: LensRuntime | None = None) -> None:
         super().__init__()
         self.entry_id = entry.entry_id
-        self.runtime: Runtime = entry.runtime_data
-        self._attr_unique_id = entry.entry_id
-        self._attr_name = entry.title
+        self._delivery_stop_lock = asyncio.Lock()
+        self._delivery_create_lock = asyncio.Lock()
+        self.runtime: Runtime | LensRuntime
+        if lens is None:
+            assert isinstance(entry.runtime_data, Runtime)
+            self.runtime = entry.runtime_data
+        else:
+            self.runtime = lens
+            self._attr_device_info = lens.entry.device_info
+        self._attr_unique_id = (entry.entry_id if lens is None or lens.key == "primary"
+                               else f"{entry.entry_id}_{lens.key}")
+        self._attr_name = lens.name if lens is not None else entry.title
         # Source clocks already exist; do not enable wall-clock timestamp repair.
         self.stream_options = {"use_wallclock_as_timestamps": False}
 
     async def stream_source(self) -> str | None:
         """Return only the internal capability, never camera credentials."""
-        if self.runtime.closing or self.runtime.exhausted:
+        if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:
             return None
-        upstream = source_url(self.hass, self.entry_id, self.runtime)
+        upstream = (self.runtime.upstream(self.hass) if isinstance(self.runtime, LensRuntime)
+                    else source_url(self.hass, self.entry_id, self.runtime))
         if self.runtime.relay is not None:
-            return await self.runtime.relay.source(upstream)
+            try:
+                return await self.runtime.relay.source(upstream)
+            except (RelayError, asyncio.CancelledError):
+                if isinstance(self.runtime, LensRuntime):
+                    self.runtime.entry.relay_failed()
+                raise
         return upstream
 
     async def async_create_stream(self) -> Stream | None:
         """Do not let HA's cached HLS stream bypass exhausted source admission."""
-        if self.runtime.closing or self.runtime.exhausted:
+        if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:
             return None
-        return await super().async_create_stream()
+        async with self._delivery_create_lock:
+            token = self.runtime.token
+            if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:
+                return None
+            stream = await super().async_create_stream()
+            if (self.runtime.closing or self.runtime.exhausted or self.runtime.rearming
+                    or token != self.runtime.token):
+                async with self._delivery_stop_lock:
+                    await self._stop_stream_owned()
+                return None
+            return stream
 
     @property
     def extra_state_attributes(self) -> dict[str, str | int | bool]:
@@ -63,6 +94,16 @@ class NativeCamera(Camera):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        if isinstance(self.runtime, LensRuntime):
+            entry, key = self.runtime.entry, self.runtime.key
+            stopper = self._async_stop_aborted_delivery
+            entry.stoppers[key] = stopper
+
+            def remove_stopper() -> None:
+                if entry.stoppers.get(key) is stopper:
+                    entry.stoppers.pop(key)
+
+            self.async_on_remove(remove_stopper)
         self.async_on_remove(async_dispatcher_connect(
             self.hass, status_signal(self.entry_id), self._async_delivery_changed,
         ))
@@ -72,8 +113,9 @@ class NativeCamera(Camera):
         # Clean finite input may still be draining downstream queues. Do not
         # tear down an accepted final picture just because its native owner ended.
         receipt = self.runtime.last_receipt
-        aborted = self.runtime.exhausted and receipt is not None and not (
-            receipt["source"]["finite_source_end"]
+        aborted = self.runtime.exhausted and (
+            (receipt is not None and not receipt["source"]["finite_source_end"])
+            or (isinstance(self.runtime, LensRuntime) and receipt is None)
         )
         self._attr_available = not (self.runtime.closing or aborted)
         self.async_write_ha_state()
@@ -82,15 +124,23 @@ class NativeCamera(Camera):
 
     async def _async_stop_aborted_delivery(self) -> None:
         """Provider refresh stops WebRTC, not the separate native HLS retry worker."""
-        await self.async_refresh_providers()
-        await self._async_stop_stream()
+        async with self._delivery_create_lock, self._delivery_stop_lock:
+            await self.async_refresh_providers()
+            await self._stop_stream_owned()
 
     async def _async_stop_stream(self) -> None:
-        if self.stream is not None:
-            self.stream.dynamic_stream_settings.preload_stream = False
-            for provider in list(self.stream.outputs().values()):
-                await self.stream.remove_provider(provider)
-            await self.stream.stop()
+        async with self._delivery_create_lock, self._delivery_stop_lock:
+            await self._stop_stream_owned()
+
+    async def _stop_stream_owned(self) -> None:
+        stream = self.stream
+        if stream is not None:
+            stream.dynamic_stream_settings.preload_stream = False
+            for provider in list(stream.outputs().values()):
+                await stream.remove_provider(provider)
+            await stream.stop()
+            if self.stream is stream:
+                self.stream = None  # Rearm must not retain an old capability URL.
 
     async def async_camera_image(self, width: int | None = None,
                                  height: int | None = None) -> bytes | None:

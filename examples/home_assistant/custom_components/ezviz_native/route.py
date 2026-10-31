@@ -19,6 +19,7 @@ from pyezvizapi.client import EzvizClient
 from pyezvizapi.clip import AutoClipSource
 from pyezvizapi.native_stream import NativeMpegTsStream, native_mpegts_stream_from_client
 
+from .admission import Admission
 from .config import Settings
 from .const import MAX_ACTIVE, WRITE_TIMEOUT
 from .relay import SharedRelay
@@ -52,6 +53,7 @@ class Runtime:
     retry_rejections: int = 0
     delivery_ended: bool = False
     rearming: bool = False
+    admission: Admission | None = None
     status_changed: Callable[[], None] = field(default=lambda: None)
 
     @property
@@ -116,6 +118,8 @@ class Runtime:
                                           and not receipt["cleanup_error_types"])
         ):
             self.active = None
+            if self.admission is not None:
+                self.admission.release(self)
         self.delivery_ended = True
         self.status_changed()
 
@@ -123,8 +127,29 @@ class Runtime:
 class Registry:
     """Constant bounded concurrency, explicit unload/recovery ownership."""
 
-    def __init__(self) -> None:
+    def __init__(self, admission: Admission | None = None) -> None:
         self.entries: dict[str, Runtime] = {}
+        self.admission = admission if admission is not None else Admission()
+
+    def admit(self, runtime: Runtime, task: asyncio.Task[Any]) -> Session:
+        """Reserve and publish ownership atomically on the event loop."""
+        if runtime.closing:
+            raise web.HTTPServiceUnavailable()
+        if (runtime.active is not None
+                or sum(r.active is not None for r in self.entries.values()) >= MAX_ACTIVE):
+            raise web.HTTPTooManyRequests()
+        if not self.admission.reserve(runtime, physical_key(runtime.settings)):
+            raise web.HTTPTooManyRequests()
+        runtime.admission = self.admission
+        try:
+            runtime.reserve_attempt()
+            session = runtime.open_session(task)
+        except BaseException:
+            self.admission.release(runtime)  # No physical owner started.
+            raise
+        runtime.active = session
+        runtime.status_changed()
+        return session
 
     async def close_entry(self, entry_id: str) -> bool:
         """Revoke first; retain timed-out owners for explicit retry."""
@@ -148,6 +173,7 @@ class Registry:
                 except Exception:  # Owner and sanitized evidence remain available.
                     return False
                 runtime.active = None
+                self.admission.release(runtime)
         if runtime.relay is not None:
             return await runtime.relay.close()
         return True
@@ -177,17 +203,9 @@ class NativeStreamView(HomeAssistantView):
         if (not loopback or runtime is None or not supplied.isascii()
                 or not hmac.compare_digest(supplied, runtime.token)):
             raise web.HTTPForbidden()
-        if runtime.closing:
-            raise web.HTTPServiceUnavailable()
-        if (runtime.active is not None
-                or sum(r.active is not None for r in self.registry.entries.values()) >= MAX_ACTIVE):
-            raise web.HTTPTooManyRequests()
-        runtime.reserve_attempt()
         task = asyncio.current_task()
         assert task is not None
-        session = runtime.open_session(task)
-        runtime.active = session  # No await between admission check and ownership.
-        runtime.status_changed()
+        session = self.registry.admit(runtime, task)
         response = web.StreamResponse(headers={
             "Content-Type": "video/mp2t", "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
@@ -229,17 +247,27 @@ class NativeStreamView(HomeAssistantView):
 
 def source_url(hass: HomeAssistant, entry_id: str, runtime: Runtime) -> str:
     """Return a redacted-by-HA query capability, never camera credentials."""
+    validate_http(hass)
+    return (f"http://127.0.0.1:{hass.http.server_port}/api/ezviz_native/"
+            f"{entry_id}/stream.ts?auth={runtime.token}")
+
+
+def validate_http(hass: HomeAssistant) -> None:
+    """Reject unsupported listener topology without disabling TLS elsewhere."""
     api = hass.config.api
     if api is None or api.use_ssl:
         raise ValueError("Validation integration requires HA HTTP without direct TLS")
     hosts = hass.http.server_host
     if hosts and not any(host in {"0.0.0.0", "127.0.0.1"} for host in hosts):
         raise ValueError("HA HTTP must listen on IPv4 loopback")
-    return (f"http://127.0.0.1:{hass.http.server_port}/api/ezviz_native/"
-            f"{entry_id}/stream.ts?auth={runtime.token}")
 
 
 def clock_headers(owner: NativeMpegTsStream) -> dict[str, str]:
     """Export only this admitted owner's immutable common media origin."""
     clock = owner.source_clock
     return ({"X-Stream-Clock-Origin-90k": str(clock.mpegts_origin_90k)} if clock else {})
+
+
+def physical_key(settings: Settings) -> str:
+    """Device/SDK selector exclusion across group and legacy entry modes."""
+    return f"{settings.credentials.device_info.serial}:{settings.channel}"

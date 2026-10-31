@@ -1,7 +1,7 @@
-"""Experimental HA-owned fixed-cold groups, separate from per-entry Runtime.
+"""HA-owned declared groups, separate from per-lens entity/HTTP leases.
 
 The caller declares a verified physical selector/profile and opaque credential
-revision. No discovery, secret hashing, dynamic attach or automatic UI grouping.
+revision. No discovery, secret hashing or automatic grouping of existing entries.
 All methods run on HA's event loop; only owner cleanup runs off-loop.
 """
 from __future__ import annotations
@@ -23,7 +23,8 @@ from homeassistant.components.http import HomeAssistantView
 from pyezvizapi.native_session import NativeMpegTsSession
 from pyezvizapi.native_stream import NativeMpegTsStream, NativePacketStream, NativeStreamOptions
 
-from .const import MAX_ACTIVE, WRITE_TIMEOUT
+from .admission import Admission
+from .const import WRITE_TIMEOUT
 from .route import clock_headers
 
 
@@ -72,6 +73,10 @@ class Group:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_receipt: dict[str, Any] | None = None
+    admission: Admission = field(default_factory=Admission)
+    status_changed: Callable[[], None] = field(default=lambda: None)
+    paused: bool = False
+    retry_rejections: int = 0
 
     @property
     def reserved(self) -> bool:
@@ -112,7 +117,11 @@ class Group:
                 return False
             finally:
                 self.last_receipt = self.owner.receipt
+                self.status_changed()
             self.cleanup_pending = not self.joined
+            if not self.cleanup_pending and not self.leases:
+                self.admission.release(self)
+            self.status_changed()
             return not self.cleanup_pending
 
     async def abort(self) -> bool:
@@ -144,12 +153,14 @@ class Group:
             if not self.cleanup_pending:
                 await self.close_owner()
             self.last_receipt = self.owner.receipt
+        self.status_changed()
 
 
 class GroupRegistry:
     """Explicit declarations and global physical-source admission, not lens counts."""
 
-    def __init__(self) -> None:
+    def __init__(self, admission: Admission | None = None) -> None:
+        self.admission = admission if admission is not None else Admission()
         self.groups: dict[str, Group] = {}
         self.members: dict[str, Group] = {}
 
@@ -172,7 +183,8 @@ class GroupRegistry:
                                        media_key=media_key, nalu_header_size=nalu_header_size,
                                        late_join=late_join)
 
-        group = Group(identity, MappingProxyType(choices), build, build(), float(barrier_timeout))
+        group = Group(identity, MappingProxyType(choices), build, build(), float(barrier_timeout),
+                      admission=self.admission)
         group.rotate()
         self.groups[identity.physical] = group
         self.members.update(dict.fromkeys(choices, group))
@@ -183,10 +195,12 @@ class GroupRegistry:
         group = self.members[member]
         if member in group.leases:
             raise web.HTTPTooManyRequests()
-        if group.closing or group.terminal or group.cleanup_pending or member in group.used:
+        if (group.closing or group.paused or group.terminal or group.cleanup_pending
+                or member in group.used):
+            group.retry_rejections += 1
             raise web.HTTPServiceUnavailable()
         if not group.attempts:
-            if sum(g.reserved for g in self.groups.values()) >= MAX_ACTIVE:
+            if not self.admission.reserve(group, group.identity.physical):
                 raise web.HTTPTooManyRequests()
             group.attempts = 1
         output = group.owner.outputs[tuple(group.options).index(member)]
@@ -195,18 +209,19 @@ class GroupRegistry:
         group.used.add(member)
         if group.owner.late_join or len(group.leases) == len(group.options):
             group.ready.set()
+        group.status_changed()
         return group, lease
 
-    async def prepare(self, physical: str) -> bool:
+    async def prepare(self, physical: str, *, allow_unused: bool = False) -> bool:
         """Whole-group recovery is lazy; rotate every capability after joining."""
         group = self.groups[physical]
-        if (group.leases or not group.attempts or group.closing
+        if (group.leases or (not group.attempts and not allow_unused) or group.closing
                 or any(self.members.get(member) is not group for member in group.options)):
             return False
         # Lock encompasses rebuild/rotation as well as cleanup. Concurrent
         # prepare calls must not each replace an already rearmed generation.
         async with group.lock:
-            if (group.leases or not group.attempts or group.closing
+            if (group.leases or (not group.attempts and not allow_unused) or group.closing
                 or any(self.members.get(member) is not group for member in group.options)):
                 return False
             try:
@@ -225,6 +240,8 @@ class GroupRegistry:
             group.used.clear()
             group.ready = asyncio.Event()
             group.terminal = group.cleanup_pending = False
+            self.admission.release(group)
+            group.status_changed()
             return True
 
     async def detach(self, member: str) -> bool:
@@ -257,6 +274,7 @@ class GroupRegistry:
             group.rotate()
             group.terminal = True
             group.ready.set()
+            group.status_changed()
             tasks = []
             for lease in tuple(group.leases.values()):
                 if lease.response is not None:
@@ -278,7 +296,7 @@ class GroupRegistry:
 
 
 class GroupStreamView(HomeAssistantView):
-    """Explicit test/prototype route; not registered by existing config entries."""
+    """Loopback route whose members require an explicit declared group."""
 
     url = "/api/ezviz_native_group/{member}/stream.ts"
     name = "api:ezviz_native_group:stream"

@@ -191,3 +191,27 @@ async def test_opt_in_entry_camera_and_unload_use_public_relay(hass, aiohttp_cli
         assert await hass.config_entries.async_unload(entry.entry_id)
     assert entry.entry_id not in hass.data[DOMAIN].entries
     assert set(streams) == {"unrelated"}
+
+
+async def test_replaced_registration_is_not_removed(aiohttp_client):
+    relay, streams, calls, _, _, _ = await relay_server(aiohttp_client)
+    await relay.source("http://127.0.0.1/owned?auth=TEST_ONLY")
+    streams[relay.name] = ["http://127.0.0.1:1/reassigned.ts"]
+    assert not await relay.close()
+    assert streams[relay.name] == ["http://127.0.0.1:1/reassigned.ts"]
+    assert not any(method == "DELETE" for method, _ in calls)
+
+
+@pytest.mark.parametrize("value", [
+    {"producers": []},
+    {"producers": [{"url": "http://127.0.0.1/owned?auth=***"}]},
+    {"producers": [{"url": "http://127.0.0.1/owned?auth=TEST_ONLY"},
+                   {"url": "http://127.0.0.1/extra"}]},
+])
+async def test_uncertain_inventory_is_not_removed(aiohttp_client, value):
+    relay, streams, calls, _, _, _ = await relay_server(aiohttp_client)
+    await relay.source("http://127.0.0.1/owned?auth=TEST_ONLY")
+    streams[relay.name] = value
+    assert not await relay.close()
+    assert streams[relay.name] == value
+    assert not any(method == "DELETE" for method, _ in calls)

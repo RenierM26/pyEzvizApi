@@ -65,3 +65,67 @@ async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_ena
         if process.returncode is None:
             process.terminate()
         await asyncio.wait_for(process.wait(), 5)
+
+
+@pytest.mark.parametrize("reassigned", [False, True])
+async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_enabled, reassigned):
+    binary = os.environ.get("GO2RTC_TEST_BINARY")
+    if not binary:
+        pytest.skip("Set GO2RTC_TEST_BINARY for optional real-server contract")
+    api_port, rtsp_port = free_port(), free_port()
+    config = tmp_path / "restart.json"
+    config.write_text(json.dumps({
+        "api": {"listen": f"127.0.0.1:{api_port}"},
+        "rtsp": {"listen": f"127.0.0.1:{rtsp_port}"}, "webrtc": {"listen": ""},
+        "streams": {"unrelated": "http://127.0.0.1:1/unrelated.ts"},
+    }))
+    process = None
+    async with ClientSession() as session:
+        api = f"http://127.0.0.1:{api_port}/api/streams"
+
+        async def start():
+            nonlocal process
+            process = await asyncio.create_subprocess_exec(
+                str(Path(binary).resolve()), "-config", str(config),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            async with asyncio.timeout(5):
+                while True:
+                    try:
+                        async with session.get(api) as response:
+                            if response.status == 200:
+                                return process
+                    except ClientError:
+                        pass
+                    await asyncio.sleep(0.02)
+
+        try:
+            process = await start()
+            relay = SharedRelay(session, api_port, rtsp_port)
+            await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
+            process.kill()
+            await asyncio.wait_for(process.wait(), 5)
+            assert not await relay.close()  # API is down; retain explicit recovery ownership.
+            process = await start()
+            foreign = "http://127.0.0.1:1/reassigned.ts"
+            if reassigned:
+                async with session.patch(api, params={"name": relay.name, "src": foreign}) as response:
+                    assert response.status == 200
+            assert await relay.close() is not reassigned
+            async with session.get(api) as response:
+                streams = await response.json()
+            assert "unrelated" in streams
+            if reassigned:
+                assert streams[relay.name]["producers"][0]["url"] == foreign
+                assert "bytes_recv" not in streams[relay.name]["producers"][0]
+                # Test operator removes its own foreign registration, not adapter cleanup.
+                async with session.delete(api, params={"src": relay.name}) as response:
+                    assert response.status == 200
+                assert await relay.close()
+            else:
+                assert set(streams) == {"unrelated"}
+            assert "TEST_ONLY" not in config.read_text()
+        finally:
+            if process is not None and process.returncode is None:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), 5)

@@ -351,3 +351,40 @@ using existing queues and unchanged media timestamps/payloads. A finite source
 containing only one H.264 AU fails closed rather than claiming complete delivery.
 This is a constrained prototype policy; it is not generic arbitrary-short-stream
 support. HEVC keeps its existing first-complete-AU gate.
+
+### Relay restart and removal preflight
+
+Before removal, compare the observed registration with its original runtime-only
+upstream capability. An absent registration after relay restart is already
+removed. API failure, observed reassignment, redacted/unknown inventory and
+multiple producers retain explicit unload-recovery state without DELETE.
+The inventory request does not create a consumer or acquire a camera.
+
+This preflight is not atomic ownership: stock go2rtc has no conditional DELETE,
+and active producer URLs can describe cached connections rather than current
+configured sources. Concurrent writers and authoritative registration identity
+require an upstream conditional-removal/generation contract before claiming
+race-free cleanup. Do not interpret a matching inventory URL as a lease.
+
+A forced relay crash during actual HA HLS is tested offline: native ownership
+joins, aborted HLS output stops, relay restart alone does not reacquire, and
+explicit Prepare/reopen yields exactly one fresh owner and original media.
+The prior entry capability is revoked. This is explicit recovery, not seamless
+automatic reconnect or unattended battery-camera acceptance.
+
+### Native timestamp startup limits
+
+Actual native-owner metadata and HA workers preserve the generated source at
+ordinary origin, earliest audio timestamp zero, and across a 32-bit RTP video
+wrap. Cold workers retain complete encoded pictures/AAC and independently
+decoded video/PCM; corresponding A/V offset error is at most one 16 kHz tick.
+Late AAC decoder priming remains a separately measured suffix condition.
+
+Starting the native MPEG-PS source immediately before its 33-bit timestamp wrap
+can make PyAV expose negative initial timestamps. The current unsigned trusted
+clock declaration is then absent; the relay refuses playback without another
+native acquisition. An earlier diagnostic test that supplies a known origin
+does not establish this real metadata path. Negative-leading startup also
+has a retained fail-closed control. No modulo guess, timeline repair or fixture
+origin injection is applied. Native startup near this boundary and arbitrary
+long-running live epochs remain open acceptance/design gates.

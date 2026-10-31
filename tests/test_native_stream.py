@@ -2,7 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 import hashlib
 import io
 import shutil
@@ -130,6 +130,10 @@ def test_continuous_boundary_copies_selected_id_audio_and_original_clock(sample)
     stream = NativeMpegTsStream(lambda: source, options())
     with stream:
         output = b"".join(stream)
+    clock = stream.source_clock
+    assert clock is not None
+    with pytest.raises(FrozenInstanceError):
+        clock.origin_90k = 0
     original = packet_oracle(sample)
     actual = packet_oracle(output)
     assert actual[1] == original[1]  # Full AAC bodies and exact PTS/DTS/duration.

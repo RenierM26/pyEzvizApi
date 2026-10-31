@@ -247,6 +247,17 @@ class _TsOutput:
         return len(data)
 
 
+@dataclass(frozen=True)
+class NativeSourceClock:
+    """Selected MPEG-PS presentation origin; 90 kHz media time, never UTC.
+
+    Published by this owner before its first output chunk. No preview/read or
+    additional buffering is performed to obtain the shared container clock.
+    """
+
+    origin_90k: int
+
+
 class NativeMpegTsStream:
     """One lazy continuous stream-copy owner; always use a context manager.
 
@@ -291,10 +302,17 @@ class NativeMpegTsStream:
         self._failure: BaseException | None = None
         self._cleanup_errors: list[str] = []
         self._tracks: list[dict[str, Any]] = []
+        self._source_clock: NativeSourceClock | None = None
         self._published = self._peak_queue = self._output_owned = 0
         self._read_bytes = self._discarded_bytes = self._output_owned_bytes = (
             self._peak_output_bytes
         ) = 0
+
+    @property
+    def source_clock(self) -> NativeSourceClock | None:
+        """Immutable owner-local descriptor, absent until selected media is ready."""
+        with self._lock:
+            return self._source_clock
 
     def _check_stop(self) -> None:
         if self._stop.is_set():
@@ -447,6 +465,23 @@ class NativeMpegTsStream:
             selected.append(stream)
         return selected
 
+    def _check_packet_clock(self, packet: Any, count: int) -> None:
+        if (packet.size > MAX_PENDING_PS_BYTES or packet.pts is None
+                or packet.dts is None or packet.time_base is None):
+            raise PyEzvizError(
+                "Native packet has missing timestamps or exceeds the byte budget"
+            )
+        self._declare_source_clock(packet, count)
+
+    def _declare_source_clock(self, packet: Any, count: int) -> None:
+        if count:
+            return
+        origin = Fraction(packet.pts) * packet.time_base * 90000
+        # No rounding, epoch guess, preview or additional buffered packet.
+        if origin.denominator == 1 and 0 <= origin < (1 << 33):
+            with self._lock:
+                self._source_clock = NativeSourceClock(int(origin))
+
     def _run(self) -> None:
         try:
             self._check_stop()
@@ -501,15 +536,7 @@ class NativeMpegTsStream:
                             self._check_stop()
                             if not packet.size:
                                 continue  # libav demux flush sentinel, not a source picture.
-                            if (
-                                packet.size > MAX_PENDING_PS_BYTES
-                                or packet.pts is None
-                                or packet.dts is None
-                                or packet.time_base is None
-                            ):
-                                raise PyEzvizError(
-                                    "Native packet has missing timestamps or exceeds the byte budget"
-                                )
+                            self._check_packet_clock(packet, count)
                             index = packet.stream.index
                             if (packet.stream.id, packet.stream.codec_context.name) != identities[
                                 index

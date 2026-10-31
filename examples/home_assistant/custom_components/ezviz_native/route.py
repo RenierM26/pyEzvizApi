@@ -148,6 +148,7 @@ class NativeStreamView(HomeAssistantView):
                 async for chunk in chunks:
                     async with asyncio.timeout(WRITE_TIMEOUT):
                         if not response.prepared:
+                            response.headers.update(clock_headers(session.owner))
                             await response.prepare(request)
                         await response.write(chunk)
                     session.write_bytes += len(chunk)
@@ -192,3 +193,9 @@ def source_url(hass: HomeAssistant, entry_id: str, runtime: Runtime) -> str:
         raise ValueError("HA HTTP must listen on IPv4 loopback")
     return (f"http://127.0.0.1:{hass.http.server_port}/api/ezviz_native/"
             f"{entry_id}/stream.ts?auth={runtime.token}")
+
+
+def clock_headers(owner: NativeMpegTsStream) -> dict[str, str]:
+    """Export only this admitted owner's immutable common media origin."""
+    clock = owner.source_clock
+    return ({"X-Stream-Clock-Origin-90k": str(clock.origin_90k)} if clock else {})

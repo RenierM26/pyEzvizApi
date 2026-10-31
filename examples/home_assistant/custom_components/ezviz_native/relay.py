@@ -14,11 +14,14 @@ class RelayError(Exception):
 class SharedRelay:
     """Own only one random named upstream; no preload or acquisition at setup."""
 
-    def __init__(self, session: ClientSession, api_port: int, rtsp_port: int) -> None:
+    def __init__(self, session: ClientSession, api_port: int, rtsp_port: int,
+                 *, trusted_source_clock: bool = False) -> None:
         self._session = session
         self._api = f"http://127.0.0.1:{api_port}/api/streams"
         self.name = "ezviz_native_upstream_" + secrets.token_hex(16)
         self.url = f"rtsp://127.0.0.1:{rtsp_port}/{self.name}"
+        if trusted_source_clock:
+            self.url += "?source_clock=trusted"
         self._lock = asyncio.Lock()
         self._owned = False
         self._registered = False

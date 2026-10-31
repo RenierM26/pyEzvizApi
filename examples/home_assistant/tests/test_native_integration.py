@@ -137,6 +137,7 @@ async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tm
     options = replace(runtime.settings.options, finite_source=True)
     owner = NativeMpegTsStream(lambda: source, options)
     expected = NativeMpegTsStream(lambda: Source(data), options)
+    assert owner.source_clock is None  # No factory call or fixture-derived guess.
     expected_body = await asyncio.to_thread(lambda: b"".join(expected))
     expected.close()
     client, _ = await route_client(hass, aiohttp_client, runtime)
@@ -145,6 +146,10 @@ async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tm
         assert response.status == 200
         assert response.headers["Content-Type"] == "video/mp2t"
         assert response.headers["Cache-Control"] == "no-store"
+        assert owner.source_clock is not None
+        assert response.headers["X-Stream-Clock-Origin-90k"] == str(
+            owner.source_clock.origin_90k
+        )
         actual = await response.read()
     assert actual == expected_body
     await hass.async_block_till_done()
@@ -386,3 +391,16 @@ def test_credential_document_is_bounded(data):
         target.write(b" " * 65537)
     with pytest.raises(ValueError, match="limit"):
         load_settings(data)
+
+
+@pytest.mark.parametrize("value", [True, 1, "true"])
+def test_source_clock_requires_explicit_relay(data, value):
+    data["relay_source_clock"] = value
+    with pytest.raises(ValueError):
+        load_settings(data)
+
+
+def test_source_clock_is_opt_in(data):
+    assert not load_settings(data).relay_source_clock
+    data.update(relay_api_port=1984, relay_source_clock=True)
+    assert load_settings(data).relay_source_clock

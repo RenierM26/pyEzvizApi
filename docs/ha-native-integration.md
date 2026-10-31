@@ -240,3 +240,40 @@ muxer timestamps. HA's existing initial-keyframe timestamp handling is unchanged
 raw PyAV's missing first timestamp is not fixed. This is worker/muxer-input
 acceptance, not frontend, late-join, concurrency or live-camera certification.
 All existing experimental/default warnings still apply to stock delivery.
+
+### Owner-derived clock metadata and concurrent-worker prototype (2026-10-31)
+
+The optional library owner now exposes an immutable `source_clock` descriptor
+once its first selected, timestamped MPEG-PS packet is ready. Its integer
+`origin_90k` is shared-container presentation time, **not camera UTC**. The
+existing incremental demux/mux path supplies it before any output chunk; it
+performs no extra preview, source read, timestamp rounding, media rewrite or
+buffer expansion. Non-integral, negative or out-of-33-bit origins leave the
+optional descriptor absent rather than guessing an epoch. The admitted HTTP
+route exports it as `X-Stream-Clock-Origin-90k` before preparing its response.
+
+`relay_source_clock` defaults to **false**. Enabling it requires a relay API port
+and the separately patched, isolated go2rtc source-clock build; it is not an
+assertion of compatibility with stock go2rtc. The relay then returns
+`?source_clock=trusted`, with no caller-supplied timestamp. The prototype binds
+receivers to one producer-owned clock descriptor, rejects missing/mixed-domain
+metadata, and uses the producer's atomic current source position when a late
+viewer attaches. Transcoded/unrelated receivers do not inherit the assertion.
+The earlier explicit-origin query remains a diagnostic control, not the adapter
+path. Upstream API/dependency release and production deployment are outstanding.
+
+Controlled offline checks include two cold and one late HA stream worker on each
+of the H.264/AAC and retained HEVC/AAC fixtures, all sharing one native acquisition
+per fixture. Cold workers retain the full media; late workers retain a contiguous
+suffix starting at an original random-access picture. Late AAC decoder warm-up
+is not full PCM parity: original AAC bytes and source timing remain unchanged,
+with the independently decoded matching PCM suffix reported separately.
+
+Real-process race instrumentation exposed shared audio marker mutation,
+unsynchronized PLAY-state reads, and receiver attach/detach traversal (including
+EOF shutdown). The prototype fixes input immutability, adds an opt-in PLAY-ready
+barrier, and snapshots topology under the attach/detach lock without holding it
+while invoking child handlers. Sender queue sizes and native acquisition limits
+are unchanged. Full frontend/mixed HLS-WebRTC, slow-reader isolation and live
+camera acceptance remain separate gates; selected race tests are not a claim
+that the dependency's full unchanged baseline test suite passes.

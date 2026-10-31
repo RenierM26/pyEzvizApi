@@ -16,8 +16,9 @@ def free_port():
         return sock.getsockname()[1]
 
 
+@pytest.mark.parametrize("atomic_ownership", [False, True])
 @pytest.mark.parametrize("raw_config", [False, True])
-async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_enabled, raw_config):
+async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_enabled, raw_config, atomic_ownership):
     binary = os.environ.get("GO2RTC_TEST_BINARY")
     if not binary:
         pytest.skip("Set GO2RTC_TEST_BINARY for optional real-server contract")
@@ -46,7 +47,7 @@ async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_ena
                     except ClientError:
                         pass
                     await asyncio.sleep(0.02)
-            relay = SharedRelay(session, api_port, rtsp_port)
+            relay = SharedRelay(session, api_port, rtsp_port, atomic_ownership=atomic_ownership)
             await asyncio.gather(*(relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
                                    for _ in range(8)))
             assert config.read_text() == initial  # No capability persisted.
@@ -67,8 +68,9 @@ async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_ena
         await asyncio.wait_for(process.wait(), 5)
 
 
+@pytest.mark.parametrize("atomic_ownership", [False, True])
 @pytest.mark.parametrize("reassigned", [False, True])
-async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_enabled, reassigned):
+async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_enabled, reassigned, atomic_ownership):
     binary = os.environ.get("GO2RTC_TEST_BINARY")
     if not binary:
         pytest.skip("Set GO2RTC_TEST_BINARY for optional real-server contract")
@@ -101,7 +103,7 @@ async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_ena
 
         try:
             process = await start()
-            relay = SharedRelay(session, api_port, rtsp_port)
+            relay = SharedRelay(session, api_port, rtsp_port, atomic_ownership=atomic_ownership)
             await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
             process.kill()
             await asyncio.wait_for(process.wait(), 5)

@@ -41,6 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NativeConfigEntry) -> bo
         runtime.relay = SharedRelay(
             async_get_clientsession(hass), settings.relay_api_port, settings.relay_rtsp_port,
             trusted_source_clock=settings.relay_source_clock,
+            atomic_ownership=settings.relay_atomic_ownership,
         )
     registry = hass.data.get(DOMAIN)
     if registry is None:

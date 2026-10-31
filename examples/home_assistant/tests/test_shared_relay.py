@@ -215,3 +215,69 @@ async def test_uncertain_inventory_is_not_removed(aiohttp_client, value):
     assert not await relay.close()
     assert streams[relay.name] == value
     assert not any(method == "DELETE" for method, _ in calls)
+
+
+async def test_atomic_mode_refuses_stock_and_never_falls_back(aiohttp_client):
+    calls = []
+
+    async def stock(request):
+        calls.append((request.method, request.path))
+        return web.Response(status=404)
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", stock)
+    client = await aiohttp_client(app)
+    relay = SharedRelay(client.session, client.server.port, 18554, atomic_ownership=True)
+    with pytest.raises(RelayError, match="Atomic relay registration unavailable"):
+        await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
+    assert not await relay.close()
+    assert calls == [("POST", "/api/streams/owned"), ("DELETE", "/api/streams/owned")]
+
+
+async def test_atomic_uncertain_create_and_foreign_reassignment(aiohttp_client):
+    calls = []
+    lease = {}
+    fail_create = [True]
+    foreign = [False]
+
+    async def owned(request):
+        calls.append(request.method)
+        headers = {"X-Stream-Ownership": "runtime-token-v1"}
+        key = request.headers["Authorization"]
+        if request.method == "POST":
+            lease[request.query["name"]] = key
+            return web.Response(status=500 if fail_create[0] else 201, headers=headers)
+        if foreign[0]:
+            return web.Response(status=409, headers=headers)
+        assert lease.pop(request.query["name"]) == key
+        return web.Response(status=204, headers=headers)
+
+    app = web.Application()
+    app.router.add_route("*", "/api/streams/owned", owned)
+    client = await aiohttp_client(app)
+    relay = SharedRelay(client.session, client.server.port, 18554, atomic_ownership=True)
+    with pytest.raises(RelayError):
+        await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
+    foreign[0] = True
+    assert not await relay.close()
+    assert relay.name in lease
+    foreign[0] = False
+    assert await relay.close()
+    assert calls == ["POST", "DELETE", "DELETE"]
+
+
+async def test_atomic_requires_contract_header_even_on_success(aiohttp_client):
+    calls = []
+
+    async def impostor(request):
+        calls.append(request.method)
+        return web.Response(status=201 if request.method == "POST" else 204)
+
+    app = web.Application()
+    app.router.add_route("*", "/api/streams/owned", impostor)
+    client = await aiohttp_client(app)
+    relay = SharedRelay(client.session, client.server.port, 18554, atomic_ownership=True)
+    with pytest.raises(RelayError):
+        await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
+    assert not await relay.close()
+    assert calls == ["POST", "DELETE"]

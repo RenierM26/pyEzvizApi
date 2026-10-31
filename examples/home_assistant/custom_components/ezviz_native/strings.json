@@ -14,7 +14,8 @@
           "nalu_header_size": "Clear NAL header bytes (H.264: 1, HEVC: 2)",
           "relay_api_port": "Optional go2rtc loopback HTTP API port (enables one-shot relay)",
           "relay_rtsp_port": "go2rtc loopback RTSP port",
-          "relay_source_clock": "Experimental source clock (requires patched go2rtc; offline validation only)"
+          "relay_source_clock": "Experimental source clock (requires patched go2rtc; offline validation only)",
+          "relay_atomic_ownership": "Experimental atomic runtime ownership (requires patched go2rtc)"
         }
       }
     },

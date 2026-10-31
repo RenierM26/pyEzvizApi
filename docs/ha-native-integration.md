@@ -388,3 +388,33 @@ does not establish this real metadata path. Negative-leading startup also
 has a retained fail-closed control. No modulo guess, timeline repair or fixture
 origin injection is applied. Native startup near this boundary and arbitrary
 long-running live epochs remain open acceptance/design gates.
+
+### Private atomic runtime ownership option
+
+`relay_atomic_ownership: true` explicitly opts into the separately patched relay's
+`runtime-token-v1` endpoint. It requires `relay_api_port`; the default remains
+false for compatibility. This is independent of `relay_source_clock` and does
+not make unsupported timestamps or HEVC clients supported.
+
+HA generates a fresh 256-bit management token before creating the lazy source.
+Creation is create-only/idempotent, uses a form body for the upstream capability,
+and never writes the relay config. Conditional runtime removal checks the token
+and authoritative registration under the same relay registry lock. Administrative
+replacement, same-source rewriting, or mutation through an alias revokes ownership.
+A cached active connection URL cannot authorize removal. Missing runtime state
+after restart is already removed; a reassigned name is preserved and requires
+explicit operator recovery. An uncertain create retains its original token so
+cleanup can safely handle a committed request whose response was lost.
+
+Both create and delete require the exact private contract response header and
+status. Stock/unsupported relays fail closed; HA never falls back to unguarded
+stock DELETE in this mode. The token is not included in the RTSP URL, config entry,
+relay inventory, or persistent configuration. Existing aliases/consumers are not
+forcibly stopped by removing a registration: HA native-owner and HLS cleanup still
+apply independently. No automatic retry/acquisition allowance is added.
+
+This closes the registry GET/DELETE race for participating registry writers in
+the local prototype, not for arbitrary internal direct field mutation or config
+persistence transactions. It has not been reviewed/released upstream. The earlier
+bundled b810aba/f88ff6c handoff does not contain this option; do not infer that
+its legacy preflight became atomic.

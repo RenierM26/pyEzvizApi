@@ -15,7 +15,9 @@ class SharedRelay:
     """Own only one random named upstream; no preload or acquisition at setup."""
 
     def __init__(self, session: ClientSession, api_port: int, rtsp_port: int,
-                 *, trusted_source_clock: bool = False) -> None:
+                 *, trusted_source_clock: bool = False, atomic_ownership: bool = False) -> None:
+        self._atomic_ownership = atomic_ownership
+        self._ownership_token = secrets.token_hex(32)
         self._session = session
         self._api = f"http://127.0.0.1:{api_port}/api/streams"
         self.name = "ezviz_native_upstream_" + secrets.token_hex(16)
@@ -39,6 +41,20 @@ class SharedRelay:
                 raise RelayError("Relay registration uncertain; unload required")
             try:
                 async with asyncio.timeout(10):
+                    if self._atomic_ownership:
+                        # Reserve before sending: a timeout may follow a committed create.
+                        self._owned = True
+                        self._upstream = upstream
+                        async with self._session.post(
+                            self._api + "/owned", params={"name": self.name},
+                            data={"src": upstream}, headers=self._ownership_headers(),
+                            allow_redirects=False,
+                        ) as response:
+                            if (response.status != 201 or response.headers.get(
+                                "X-Stream-Ownership") != "runtime-token-v1"):
+                                raise RelayError("Atomic relay registration unavailable")
+                        self._registered = True
+                        return self.url
                     async with self._session.get(self._api, allow_redirects=False) as response:
                         if response.status != 200:
                             raise RelayError("Relay inventory failed")
@@ -67,29 +83,46 @@ class SharedRelay:
                 return True
             try:
                 async with asyncio.timeout(10):
-                    owned = await self._owned_status()
-                    if owned is None:
+                    removed = (await self._remove_atomic() if self._atomic_ownership
+                               else await self._remove_legacy())
+                    if not removed:
                         return False
-                    if owned:
-                        async with self._session.delete(
-                            self._api, params={"src": self.name}, allow_redirects=False,
-                        ) as response:
-                            if response.status not in {200, 404}:
-                                # go2rtc can remove runtime state but fail to save config
-                                # (e.g. managed raw-config mode). Confirm removal explicitly.
-                                async with self._session.get(
-                                    self._api, allow_redirects=False,
-                                ) as check:
-                                    if check.status != 200:
-                                        return False
-                                    streams = await check.json()
-                                    if not isinstance(streams, dict) or self.name in streams:
-                                        return False
             except (ClientError, TimeoutError, ValueError):
                 return False
             self._owned = self._registered = False
             self._upstream = None
             return True
+
+    async def _remove_atomic(self) -> bool:
+        async with self._session.delete(
+            self._api + "/owned", params={"name": self.name},
+            headers=self._ownership_headers(), allow_redirects=False,
+        ) as response:
+            return (response.status == 204 and response.headers.get(
+                "X-Stream-Ownership") == "runtime-token-v1")
+
+    async def _remove_legacy(self) -> bool:
+        owned = await self._owned_status()
+        if owned is None:
+            return False
+        if owned:
+            async with self._session.delete(
+                self._api, params={"src": self.name}, allow_redirects=False,
+            ) as response:
+                if response.status not in {200, 404}:
+                    # Runtime removal can succeed while config persistence fails.
+                    async with self._session.get(
+                        self._api, allow_redirects=False,
+                    ) as check:
+                        if check.status != 200:
+                            return False
+                        streams = await check.json()
+                        if not isinstance(streams, dict) or self.name in streams:
+                            return False
+        return True
+
+    def _ownership_headers(self) -> dict[str, str]:
+        return {"Authorization": "Bearer " + self._ownership_token}
 
     async def _owned_status(self) -> bool | None:
         """False means absent, None uncertain/foreign; inventory GET does not preview."""

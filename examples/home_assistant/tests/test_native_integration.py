@@ -405,3 +405,18 @@ def test_source_clock_is_opt_in(data):
     assert not load_settings(data).relay_source_clock
     data.update(relay_api_port=1984, relay_source_clock=True)
     assert load_settings(data).relay_source_clock
+
+
+@pytest.mark.parametrize("value", [1, "true", None])
+async def test_atomic_ownership_rejects_non_boolean(data, value):
+    data.update(relay_api_port=1984, relay_atomic_ownership=value)
+    with pytest.raises(ValueError, match="Atomic ownership"):
+        load_settings(data)
+
+
+async def test_atomic_ownership_requires_explicit_relay(data):
+    data["relay_atomic_ownership"] = True
+    with pytest.raises(ValueError, match="Atomic ownership"):
+        load_settings(data)
+    data["relay_api_port"] = 1984
+    assert load_settings(data).relay_atomic_ownership

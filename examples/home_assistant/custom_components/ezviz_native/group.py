@@ -156,7 +156,7 @@ class GroupRegistry:
     def declare(self, identity: GroupIdentity, members: dict[str, NativeStreamOptions],
                 source_factory: Callable[[], NativePacketStream], *,
                 media_key: str | bytes | None = None, nalu_header_size: int | None = None,
-                barrier_timeout: float = 5.0) -> Group:
+                barrier_timeout: float = 5.0, late_join: bool = False) -> Group:
         """Validate fixed membership before committing any registry mutation."""
         if (not isinstance(identity, GroupIdentity) or identity.physical in self.groups
                 or not members or any(not isinstance(m, str) or not m.strip() for m in members)
@@ -169,7 +169,8 @@ class GroupRegistry:
 
         def build() -> NativeMpegTsSession:
             return NativeMpegTsSession(source_factory, tuple(choices.values()),
-                                       media_key=media_key, nalu_header_size=nalu_header_size)
+                                       media_key=media_key, nalu_header_size=nalu_header_size,
+                                       late_join=late_join)
 
         group = Group(identity, MappingProxyType(choices), build, build(), float(barrier_timeout))
         group.rotate()
@@ -192,7 +193,7 @@ class GroupRegistry:
         lease = Lease(member, output, task)
         group.leases[member] = lease
         group.used.add(member)
-        if len(group.leases) == len(group.options):
+        if group.owner.late_join or len(group.leases) == len(group.options):
             group.ready.set()
         return group, lease
 

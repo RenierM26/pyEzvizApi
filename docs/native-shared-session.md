@@ -1,12 +1,14 @@
-# Experimental fixed-output native session
+# Experimental declared-output native session
 
 This local spike is not part of draft PR397 and is not wired into the HA
 validation config flow. It tests the missing source primitive behind the
 [consumer architecture](ha-consumer-architecture.md): one physical acquisition,
 one incremental decrypt/demux worker, separately selected MPEG-TS lens outputs.
-It is not dynamic subscription support or a production session registry. The
-HA example now contains an explicit, unregistered group controller described
-below; the normal config entries still use the original per-entry runtime.
+It is not a production session registry. Explicit `late_join=True` now allows
+staged, single-use activation of declared outputs; it does not add arbitrary
+tracks, replace finished subscriptions or reopen a source. The HA example has
+an explicit, unregistered group controller described below; normal config entries
+still use the original per-entry runtime.
 
 ## Ownership
 
@@ -59,11 +61,12 @@ recording assertion; it does not make live transport exhaustion successful EOF.
 
 ## Cold membership and limits
 
-Declare and consume all intended outputs from the start, or close unused outputs
-before starting. An unread/stalled output fails under its bounded backpressure
+In the default fixed-cold mode, declare and consume all intended outputs from
+the start, or close unused outputs before starting. An unread/stalled output fails under its bounded backpressure
 grace (default 0.1 seconds, configurable up to one second). A failed/closed output
 cannot be revived within that acquisition. There is no replay cache, additional
-preview, automatic restart, profile change or new late-subscriber keyframe policy.
+preview, automatic restart or profile change. The opt-in staged activation policy
+is separate and described below.
 
 Each output retains the existing four 64 KiB credits. Two declared lens outputs
 therefore have 512 KiB of declared queue capacity, the same per-output limits as
@@ -88,6 +91,52 @@ source status, aggregate delivery status (including partial delivery), per-outpu
 counters and final totals. A finished mux with an unread queue is draining;
 abandoning that tail is partial delivery, not successful consumption. Per-output peaks are not mislabeled simultaneous
 aggregate peaks.
+
+## Opt-in staged activation at an original IDR
+
+`NativeMpegTsSession(..., late_join=True)` retains the declared 1-4 selections
+but does not mux or queue an unused output. Calling an output's `start()` or
+beginning its read requests that one subscription. The source worker alone owns
+all new mux contexts, and no second transport/decrypt/demux is started.
+
+Requests present before selected demux begins retain the existing complete cold
+prefix, including AAC that demux may surface before the opening video access
+unit. Requests observed after that boundary wait for a selected, noncorrupt
+keyframe whose Annex-B access unit carries an independently admissible IDR:
+
+- H.264 IDR slices with reference priority and an in-band SPS → PPS → slice
+  identifier chain. Partition/extension and non-IDR starts are unsupported.
+- HEVC base-layer, temporal-id-zero IDR_W_RADL/IDR_N_LP with in-band VPS → SPS →
+  PPS → slice identifiers. CRA/BLA and scalable/temporal variants are unsupported.
+- Dependencies must precede the first picture in that same access unit, with
+  exactly one first slice and no ambiguous duplicate parameter IDs. Missing or
+  mismatched sets do not join. The bounded parser checks dependency identifiers;
+  it is not a decoder or a complete codec/parameter-set validator. Complete access
+  unit framing remains the demuxer's responsibility.
+
+There is no cached parameter injection or media replay. The late output begins
+with that original IDR and retains original encoded bytes and PTS/DTS. Its clock
+descriptor is the integral signed 90 kHz presentation reference of that actual
+IDR, not a stale source-start origin or a guessed wrap epoch. Unsupported clock
+references fail only that output. AAC starts at the first subsequently demuxed
+packet with PTS at or after the IDR; earlier-demuxed AAC is not backfilled.
+Subsequent leading video with PTS before the IDR fails the subscription instead
+of silently dropping a picture while claiming success.
+
+The existing startup timeout bounds waiting for a usable IDR. Timeout/cancel,
+unsupported dependencies or finite EOF before admission do not restart the source
+or cancel an already requested healthy sibling. Closing the final requested
+output stops and joins the physical source even if declared unused lenses remain.
+No output can activate after physical EOF or reopen after close; retry/replacement
+requires an explicitly rearmed acquisition.
+
+Receipts distinguish unused declared capacity, requested subscriptions, cold/IDR
+mode, and exact join reference. `all_outputs_completed` still covers the whole
+manifest; `all_requested_outputs_completed` excludes unused outputs. The aggregate
+source/session receipt never treats an unconsumed mux tail as completed delivery.
+Late AAC has normal decoder priming: encoded suffix parity does not imply the
+first decoded block equals a continuously running decoder. Retained controls
+compare PCM after the first 1,024 samples and report that priming boundary.
 
 ## HA startup boundary found by the spike
 
@@ -135,10 +184,13 @@ separate `GroupStreamView` with isolated HA.
   An existing physical key cannot acquire another profile/revision until closed.
 - A declaration copies/freezes one to four compatible output policies without
   starting native transport. Each member has its own random loopback capability.
-- Synchronous admission reserves one attempt for the whole physical group. All
-  declared readers must arrive within a bounded cold barrier (default five
+- Synchronous admission reserves one attempt for the whole physical group. In
+  default fixed-cold mode all declared readers must arrive within a bounded cold barrier (default five
   seconds, maximum thirty) before any read starts. A missing/disconnected member
   ends that attempt without starting a source. No manifest is silently shrunk.
+  Explicit `declare(..., late_join=True)` starts on the first reader and lets
+  subsequent declared readers use the library IDR admission rule without a cold
+  barrier. It still permits only one activation per member in that acquisition.
 - The four-active limit counts physical groups, including cold barriers and
   retained failed joins, rather than counting lens requests. This limit is local
   to `GroupRegistry`: the separately registered legacy `Registry` has its own
@@ -179,9 +231,10 @@ browser HEVC playback or a live-camera acceptance claim.
    physical/profile/credential declarations, one shared admission allocator,
    group-level recovery UI and stable per-lens entities. The existing per-entry
    Runtime cannot simply treat an output as an independent physical owner.
-3. Define dynamic late attach at an original random-access boundary, parameter
-   dependencies and a current common-clock reference, without replay/clock guesses
-   or another camera preview. The current fixed-cold API does not provide this.
+3. Review and broaden staged IDR admission where needed: CRA/leading-picture,
+   parameter changes, long-GOP/no-IDR and wrap/startup boundaries. Arbitrary new
+   track selection and repeated subscriptions within an acquisition remain
+   unsupported; do not introduce replay/clock guesses or another camera preview.
 4. Exercise per-lens simultaneous HLS/WebRTC through a supported shared protocol
    boundary, group Prepare/re-arm/unload, credential replacement and TLS topology.
 5. Preserve separate maintained-relay, supported-client HEVC and attended

@@ -121,8 +121,9 @@ declared HA `GroupRegistry`/`GroupStreamView`, with one physical attempt, bounde
 cold membership, per-lens leases and retained failed-join ownership. See the
 [prototype contract](native-shared-session.md#explicit-ha-group-controller-prototype).
 This is not part of PR397 and does not change normal config-entry behavior.
-Automatic entry grouping, group UI/provider/relay composition, one common
-admission authority with the legacy route, and dynamic late attach remain gates.
+Automatic entry grouping, group UI/provider/relay composition and one common admission authority with the
+legacy route remain gates. Opt-in staged IDR activation now supports sequential
+opening of declared lenses; arbitrary/repeated subscriptions remain unsupported.
 
 ## Media and common-clock contract
 

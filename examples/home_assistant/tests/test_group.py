@@ -1,6 +1,7 @@
 """Explicit HA group admission and real HTTP cold delivery, never live acquisition."""
 import asyncio
 from dataclasses import replace
+from threading import Event
 from unittest.mock import MagicMock, patch
 
 from aiohttp import web
@@ -354,3 +355,55 @@ async def test_old_group_close_preserves_reassigned_detached_member():
     assert registry.members["a"] is replacement
     assert await registry.close("replacement")
     assert old.joined
+
+
+async def test_explicit_late_mode_opens_second_http_lens_without_cold_barrier(
+    hass, aiohttp_client, sample,
+):
+    registry = GroupRegistry()
+    source = Source(bodies=repeated_ps_packets(sample, 20))
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return source
+
+    group = registry.declare(identity(), members(), factory, late_join=True)
+    ready, release = Event(), Event()
+    original = group.owner._deliver_packet  # noqa: SLF001
+    count = 0
+
+    def observed(av, stack, binding, packet):
+        nonlocal count
+        original(av, stack, binding, packet)
+        if binding.output is group.owner.outputs[0] and packet.stream.id == 480:
+            count += 1
+            if count == 40:
+                ready.set()
+                assert release.wait(3)
+
+    client = await route(hass, aiohttp_client, registry)
+
+    async def read(member):
+        response = await client.get(path(group, member))
+        assert response.status == 200
+        return await response.read()
+
+    with patch.object(group.owner, "_deliver_packet", observed):
+        first = asyncio.create_task(read("a"))
+        assert await asyncio.to_thread(ready.wait, 3)
+        assert set(group.leases) == {"a"} and calls == [1]
+        second = asyncio.create_task(read("b"))
+        async with asyncio.timeout(3):
+            while not group.owner.outputs[1].requested:
+                await asyncio.sleep(0.01)
+        release.set()
+        bodies = await asyncio.gather(first, second)
+    async with asyncio.timeout(2):
+        while group.reserved:
+            await asyncio.sleep(0.01)
+    full, late = [packet_oracle(body) for body in bodies]
+    assert len(late[0]) < len(full[0]) and late[0][0][1] > full[0][0][1]
+    assert group.owner.outputs[1].receipt["join_origin_90k"] == late[0][0][1]
+    assert calls == [1] and group.attempts == 1 and group.joined
+    assert await registry.close("source")

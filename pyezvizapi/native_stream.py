@@ -251,11 +251,27 @@ class _TsOutput:
 class NativeSourceClock:
     """Selected MPEG-PS presentation origin; 90 kHz media time, never UTC.
 
-    Published by this owner before its first output chunk. No preview/read or
-    additional buffering is performed to obtain the shared container clock.
+    Published by this owner before its first output chunk. The signed origin is
+    the demuxer's presentation domain, not an assertion of capture/wrap epoch.
+    mpegts_origin_90k gives its exact on-wire residue. No preview/read or extra
+    buffering is performed to obtain this shared container reference.
     """
 
     origin_90k: int
+
+    def __post_init__(self) -> None:
+        if (isinstance(self.origin_90k, bool) or not isinstance(self.origin_90k, int)
+                or not -(1 << 32) <= self.origin_90k < (1 << 33)):
+            raise ValueError("Presentation origin is outside the MPEG timestamp domain")
+
+    @property
+    def mpegts_origin_90k(self) -> int:
+        """Exact 33-bit wire representation, not a recovered capture epoch.
+
+        MPEG-TS already serializes signed presentation timestamps modulo 2**33.
+        This descriptor does not rewrite, rebase or independently align tracks.
+        """
+        return self.origin_90k % (1 << 33)
 
 
 class NativeMpegTsStream:
@@ -478,7 +494,7 @@ class NativeMpegTsStream:
             return
         origin = Fraction(packet.pts) * packet.time_base * 90000
         # No rounding, epoch guess, preview or additional buffered packet.
-        if origin.denominator == 1 and 0 <= origin < (1 << 33):
+        if origin.denominator == 1 and -(1 << 32) <= origin < (1 << 33):
             with self._lock:
                 self._source_clock = NativeSourceClock(int(origin))
 

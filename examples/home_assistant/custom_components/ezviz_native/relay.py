@@ -16,6 +16,7 @@ class SharedRelay:
 
     def __init__(self, session: ClientSession, api_port: int, rtsp_port: int,
                  *, trusted_source_clock: bool = False, atomic_ownership: bool = False) -> None:
+        self._trusted_source_clock = trusted_source_clock
         self._atomic_ownership = atomic_ownership
         self._ownership_token = secrets.token_hex(32)
         self._session = session
@@ -41,6 +42,7 @@ class SharedRelay:
                 raise RelayError("Relay registration uncertain; unload required")
             try:
                 async with asyncio.timeout(10):
+                    await self._require_contracts()
                     if self._atomic_ownership:
                         # Reserve before sending: a timeout may follow a committed create.
                         self._owned = True
@@ -92,6 +94,30 @@ class SharedRelay:
             self._owned = self._registered = False
             self._upstream = None
             return True
+
+    async def _require_contracts(self) -> None:
+        """Reject unsupported experimental contracts before registration/acquisition."""
+        required = set()
+        if self._trusted_source_clock:
+            required.update({"source-clock-v1", "no-retry-v1"})
+        if self._atomic_ownership:
+            required.update({"runtime-token-v1", "no-retry-v1"})
+        if not required:
+            return
+        async with self._session.get(
+            self._api + "/owned", allow_redirects=False,
+        ) as response:
+            if (response.status != 200 or response.headers.get(
+                "X-Stream-Ownership") != "runtime-token-v1"):
+                raise RelayError("Experimental relay contracts unavailable")
+            manifest = await response.json()
+            features = manifest.get("features") if isinstance(manifest, dict) else None
+            if (not isinstance(manifest, dict)
+                    or manifest.get("contract") != "runtime-token-v1"
+                    or not isinstance(features, list)
+                    or not all(isinstance(value, str) for value in features)
+                    or not required.issubset(features)):
+                raise RelayError("Experimental relay contracts unavailable")
 
     async def _remove_atomic(self) -> bool:
         async with self._session.delete(

@@ -131,8 +131,13 @@ async def test_socket_peer_not_forwarded_ip(runtime, peer):
         await NativeStreamView(registry).get(request, "entry")
 
 
-async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tmp_path):
-    data = await asyncio.to_thread(lambda: encode_three_track_ps(tmp_path).read_bytes())
+@pytest.mark.parametrize("timestamp_offset", [0, (1 << 33) - 200000])
+async def test_actual_native_copy_over_ha_http(
+    hass, aiohttp_client, runtime, tmp_path, timestamp_offset
+):
+    data = await asyncio.to_thread(
+        lambda: encode_three_track_ps(tmp_path, timestamp_offset_90k=timestamp_offset).read_bytes()
+    )
     source = Source(data)
     options = replace(runtime.settings.options, finite_source=True)
     owner = NativeMpegTsStream(lambda: source, options)
@@ -149,7 +154,7 @@ async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tm
         assert response.headers["X-Stream-Retry"] == "default"
         assert owner.source_clock is not None
         assert response.headers["X-Stream-Clock-Origin-90k"] == str(
-            owner.source_clock.origin_90k
+            owner.source_clock.mpegts_origin_90k
         )
         actual = await response.read()
     assert actual == expected_body

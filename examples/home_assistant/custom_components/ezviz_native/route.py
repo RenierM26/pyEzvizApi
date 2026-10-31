@@ -242,4 +242,4 @@ def source_url(hass: HomeAssistant, entry_id: str, runtime: Runtime) -> str:
 def clock_headers(owner: NativeMpegTsStream) -> dict[str, str]:
     """Export only this admitted owner's immutable common media origin."""
     clock = owner.source_clock
-    return ({"X-Stream-Clock-Origin-90k": str(clock.origin_90k)} if clock else {})
+    return ({"X-Stream-Clock-Origin-90k": str(clock.mpegts_origin_90k)} if clock else {})

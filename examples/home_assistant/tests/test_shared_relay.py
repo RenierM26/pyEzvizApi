@@ -228,10 +228,10 @@ async def test_atomic_mode_refuses_stock_and_never_falls_back(aiohttp_client):
     app.router.add_route("*", "/{path:.*}", stock)
     client = await aiohttp_client(app)
     relay = SharedRelay(client.session, client.server.port, 18554, atomic_ownership=True)
-    with pytest.raises(RelayError, match="Atomic relay registration unavailable"):
+    with pytest.raises(RelayError, match="Experimental relay contracts unavailable"):
         await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
-    assert not await relay.close()
-    assert calls == [("POST", "/api/streams/owned"), ("DELETE", "/api/streams/owned")]
+    assert await relay.close()  # Negotiation failed before registration was attempted.
+    assert calls == [("GET", "/api/streams/owned")]
 
 
 async def test_atomic_uncertain_create_and_foreign_reassignment(aiohttp_client):
@@ -243,6 +243,10 @@ async def test_atomic_uncertain_create_and_foreign_reassignment(aiohttp_client):
     async def owned(request):
         calls.append(request.method)
         headers = {"X-Stream-Ownership": "runtime-token-v1"}
+        if request.method == "GET":
+            return web.json_response({"contract": "runtime-token-v1", "features": [
+                "runtime-token-v1", "source-clock-v1", "no-retry-v1",
+            ]}, headers=headers)
         key = request.headers["Authorization"]
         if request.method == "POST":
             lease[request.query["name"]] = key
@@ -263,7 +267,7 @@ async def test_atomic_uncertain_create_and_foreign_reassignment(aiohttp_client):
     assert relay.name in lease
     foreign[0] = False
     assert await relay.close()
-    assert calls == ["POST", "DELETE", "DELETE"]
+    assert calls == ["GET", "POST", "DELETE", "DELETE"]
 
 
 async def test_atomic_requires_contract_header_even_on_success(aiohttp_client):
@@ -271,6 +275,10 @@ async def test_atomic_requires_contract_header_even_on_success(aiohttp_client):
 
     async def impostor(request):
         calls.append(request.method)
+        if request.method == "GET":
+            return web.json_response({"contract": "runtime-token-v1", "features": [
+                "runtime-token-v1", "no-retry-v1",
+            ]}, headers={"X-Stream-Ownership": "runtime-token-v1"})
         return web.Response(status=201 if request.method == "POST" else 204)
 
     app = web.Application()
@@ -280,4 +288,28 @@ async def test_atomic_requires_contract_header_even_on_success(aiohttp_client):
     with pytest.raises(RelayError):
         await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
     assert not await relay.close()
-    assert calls == ["POST", "DELETE"]
+    assert calls == ["GET", "POST", "DELETE"]
+
+
+@pytest.mark.parametrize("manifest", [
+    [], {}, {"contract": "unknown", "features": []},
+    {"contract": "runtime-token-v1", "features": "source-clock-v1"},
+    {"contract": "runtime-token-v1", "features": [None]},
+    {"contract": "runtime-token-v1", "features": ["no-retry-v1"]},
+    {"contract": "runtime-token-v1", "features": ["source-clock-v1"]},
+])
+async def test_clock_contracts_reject_unsupported_before_registration(aiohttp_client, manifest):
+    calls = []
+
+    async def unsupported(request):
+        calls.append(request.method)
+        return web.json_response(manifest, headers={"X-Stream-Ownership": "runtime-token-v1"})
+
+    app = web.Application()
+    app.router.add_route("*", "/api/streams/owned", unsupported)
+    client = await aiohttp_client(app)
+    relay = SharedRelay(client.session, client.server.port, 18554, trusted_source_clock=True)
+    with pytest.raises(RelayError, match="contracts unavailable"):
+        await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
+    assert await relay.close()
+    assert calls == ["GET"]  # No create, destructive fallback or upstream ingest.

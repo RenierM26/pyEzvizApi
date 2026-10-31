@@ -13,6 +13,8 @@ on:
       - "tests/**"
       - "tools/apk-re/**"
       - "tools/local_av_lan_session.ps1"
+      - "tools/check_installed_native_wheel.py"
+      - "tools/build_ha_validation.py"
       - "discovery/apk/**"
       - ".github/workflows/**"
       - "!**/*.md"
@@ -132,7 +134,7 @@ jobs:
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pip check
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pyezvizapi --help
           /tmp/pyezvizapi-wheel-smoke/bin/pyezvizapi --help
-          /tmp/pyezvizapi-wheel-smoke/bin/python -c "import sys; import pyezvizapi.native_stream; assert 'av' not in sys.modules"
+          /tmp/pyezvizapi-wheel-smoke/bin/python -I tools/check_installed_native_wheel.py
 
   windows-wsl-entrypoint:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false

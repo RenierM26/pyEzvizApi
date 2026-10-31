@@ -129,6 +129,7 @@ async def test_relay_eof_retries_cannot_reacquire(hass, aiohttp_client, runtime,
         response = await client.get(path(runtime))
         assert response.status == 200
         assert response.headers["X-Stream-Finite"] == "1"
+        assert response.headers["X-Stream-Retry"] == "never"
         assert await response.read()
         for _ in range(3):
             response = await client.get(path(runtime))

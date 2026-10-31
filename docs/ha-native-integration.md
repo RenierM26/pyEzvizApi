@@ -277,3 +277,21 @@ while invoking child handlers. Sender queue sizes and native acquisition limits
 are unchanged. Full frontend/mixed HLS-WebRTC, slow-reader isolation and live
 camera acceptance remain separate gates; selected race tests are not a claim
 that the dependency's full unchanged baseline test suite passes.
+
+### One-shot acquisition terminal state (2026-10-31)
+
+Relay-mode HTTP responses now explicitly declare `X-Stream-Retry: never`;
+direct delivery declares `default`. The experimental go2rtc MPEG-TS producer
+preserves this policy across source failure, cancellation, and stop-before-PLAY,
+retaining a terminal acquisition tombstone until fresh registration. This is
+independent of `X-Stream-Finite`: a transport error remains a failed stream,
+never a successful finite EOF. Undeclared producers retain default reconnect
+behavior. The pinned stock relay ignores this private header, so the HA-side
+one-attempt guard remains mandatory regardless of dependency support.
+
+Real race-instrumented boundary tests exercise stalled RTSP readers alongside
+healthy HA workers, abrupt source failure after media begins, and final-reader
+disconnect while native input is idle. Retained media and source ownership must
+be checked independently: disconnection of a stalled viewer is not proof that
+the healthy viewer received every original picture/audio packet, and a failed
+source must not send a success BYE or trigger a new native acquisition.

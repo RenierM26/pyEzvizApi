@@ -137,6 +137,7 @@ class NativeStreamView(HomeAssistantView):
         response = web.StreamResponse(headers={
             "Content-Type": "video/mp2t", "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
+            "X-Stream-Retry": "never" if runtime.relay is not None else "default",
             "X-Stream-Finite": "1" if runtime.settings.options.finite_source else "0",
         })
         session.response = response

@@ -146,6 +146,7 @@ async def test_actual_native_copy_over_ha_http(hass, aiohttp_client, runtime, tm
         assert response.status == 200
         assert response.headers["Content-Type"] == "video/mp2t"
         assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["X-Stream-Retry"] == "default"
         assert owner.source_clock is not None
         assert response.headers["X-Stream-Clock-Origin-90k"] == str(
             owner.source_clock.origin_90k

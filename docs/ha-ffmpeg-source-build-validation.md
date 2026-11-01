@@ -51,3 +51,10 @@ trial. Stock HA/go2rtc is not certified by these proposed-contract tests. Do not
 install the local libraries globally or expand the existing draft PR implicitly.
 
 [Full findings and generated-only source review package](https://bookstack.home.moor.co.za/books/home-infrastructure/page/ezviz-real-ffmpeg-source-build-validation-2026-11-01).
+
+## Upstream HA component-suite follow-up
+
+[HA stream compatibility and review boundary](ha-upstream-stream-compatibility.md)
+now records exact-release baseline/candidate80case parity, the133case combined
+component suite and a separately applicable98case clock-policy proposal. Full
+HA development/pre-commit/platform CI and maintained release support remain open.

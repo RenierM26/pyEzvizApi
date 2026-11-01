@@ -72,6 +72,11 @@ Actual delivered fMP4/HLS sample times and browser presentation were not observe
 in this pass. These are content/mux-input clock results, not capture UTC, physical A/V sync,
 audible output, browser HEVC acceptance or battery/live-camera readiness.
 
+A [subsequent delivered-HLS audit](ha-finite-hls-review.md) verifies HTTP-served
+sample clocks and encoded payloads, exposes a separate final-fragment loss, and
+tests a private finite-completion-gated drain diagnostic. The original 79-check
+result above remains a mux-input milestone, not evidence of complete HLS delivery.
+
 ## Structure and next gates
 
 Keep the library source owner, subscription generations, HA policy and optional

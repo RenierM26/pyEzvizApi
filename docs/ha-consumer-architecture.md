@@ -106,6 +106,11 @@ stateDiagram-v2
 - Abort must stop both provider sessions and the separate HLS worker/preload
   lifecycle. Preserve draining of accepted downstream media on verified finite
   EOF; live transport loss must never masquerade as successful completion.
+- Distinguish source/subscription completion, receiving EOF, mux ingestion,
+  published fragments and terminal HLS signaling. A completed source does not
+  prove that HA published its final buffered samples. Keep the generation-bound
+  completion bridge in HA and terminal fragment/playlist ownership in its stream
+  provider; see the [finite-HLS boundary review](ha-finite-hls-review.md).
 - Revoke capabilities before unload/reload, cancel owned delivery, join source
   workers, stop HA outputs and remove only an owned registration. Retain failed
   cleanup handles and deny fresh acquisition until recovery succeeds.

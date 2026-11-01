@@ -139,6 +139,43 @@ Late AAC has normal decoder priming: encoded suffix parity does not imply the
 first decoded block equals a continuously running decoder. Retained controls
 compare PCM after the first 1,024 samples and report that priming boundary.
 
+### Generated startup-boundary qualification (2026-11-01)
+
+`tests/test_native_startup_boundaries.py` adds twelve offline encoder-backed
+controls, without changing runtime admission. These qualify the native PS → TS
+boundary only; they do not certify HA segmentation, MP4 configuration records,
+browser decoders or a live camera's parameter-change behavior.
+
+| Generated source | Observed contract |
+| --- | --- |
+| HEVC open GOP with actual CRA and RASL pictures | Late request never admits CRA, emits no bytes and fails at finite EOF; cold sibling retains every encoded AU, timestamp and decoded picture. |
+| HEVC IDR_W_RADL with actual RADL pictures | The self-contained IDR admits; a subsequent picture before its presentation reference fails that subscription, rather than silently dropping it and reporting completion. Cold sibling remains exact. |
+| H.264/HEVC long GOP with no later IDR | No late completion or output at EOF. During a blocked worker interval, the reader's startup deadline fails/closes only that handle. It cannot restart itself. |
+| Fresh in-band parameters with a resolution change, H.264/HEVC | Native TS preserves original NAL payloads, AAC and PTS/DTS; cold decoding sees both 64×48 and 96×64. A new IDR join decodes the exact new-resolution suffix without cached parameter injection. |
+| Same transition across the 33-bit wire boundary | Both fresh late joins and explicit replacement of an already active old mux use the current signed demux reference. Old negative and new positive references stay distinct; no guessed epoch or source reopen. |
+| Explicit replacement after a no-IDR timeout | A healthy sibling keeps the one factory/source alive; a fresh subscription joins a later original IDR with new parameters. The failed old handle never acquires completion. |
+
+Video comparisons hash visible decoded YUV bytes, excluding allocation padding,
+as well as original non-AUD NAL payloads and exact packet PTS/DTS. AAC checks are
+encoded-byte/timestamp comparisons, not a new decoded-PCM or physical-audio
+claim. The generated splice deliberately declares a forward interval between
+encoder segments, avoiding overlapping independent AAC priming/tails; production
+timestamps are not changed. All cases close their source and join the worker.
+
+This does **not** add CRA/leading-picture support, arbitrary parameter-set
+validation, seamless HA resolution renegotiation, all wrap epochs or all GOP
+layouts. Unsupported late starts still fail closed within the existing reader
+startup/finite-EOF rules. Calling `start()` without reading is not an independently
+scheduled deadline: the reader owns that timeout. Generated bounded controls do
+not establish live pacing, wall-clock soak or every source boundary.
+
+Validation: 89 scoped access/startup/session/replacement tests pass; the full
+library suite passes 5,032 tests with 90.38% coverage (105.47 seconds). Ruff,
+Mypy (62 library source files), Pyright and scoped spelling checks pass. These
+are source-checkout tests, not a new installed-wheel or HA/relay delivery claim.
+Runtime library and HA example files remain byte-identical to `72c8a5645a38`;
+only tests and documentation change in this checkpoint.
+
 ### Explicit replacement without another acquisition
 
 In late mode only, `session.replace_output(previous_handle)` returns a fresh,
@@ -340,10 +377,13 @@ changing this runtime.
    Normal failed unload puts HA into non-recoverable FAILED_UNLOAD; retained
    cleanup is retried at shutdown and HA restart is required, not a private state
    reset. Ordinary session failures use in-place Prepare before entry unload.
-3. Review and broaden staged IDR admission where needed: CRA/leading-picture,
-   parameter changes, long-GOP/no-IDR and wrap/startup boundaries. Arbitrary new
-   track selection remains unsupported. Broaden repeated-subscription coverage
-   across source boundaries without replay/clock guesses or another camera preview.
+3. Review whether to broaden IDR-only admission: CRA/leading pictures remain
+   unsupported, with encoder-backed refusal/sibling-isolation controls above.
+   Generated parameter changes, no-IDR EOF/deadline recovery and replacement
+   across wrap now have native-boundary controls; HA configuration renegotiation,
+   other GOP/layout/epoch cases and live behavior remain gates. Arbitrary new
+   track selection remains unsupported. Never infer a fixture epoch or acquire
+   another camera preview to make a late subscription succeed.
 4. Exercise per-lens simultaneous HLS/WebRTC through a supported shared protocol
    boundary, group Prepare/re-arm/unload, credential replacement and TLS topology.
 5. Preserve separate maintained-relay, supported-client HEVC and attended

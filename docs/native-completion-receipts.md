@@ -100,3 +100,42 @@ The host API, first-clock policy and FFmpeg parser fix remain separate review
 proposals requiring maintained source/FATE/HA/platform acceptance. The native
 recording tests do not establish browser rendering, supported-client HEVC,
 physical A/V, live/battery behavior, broader startup/IRAP/wrap/topology or soak.
+
+### Recorded acceptance milestone
+
+The committed runtime/package snapshot is `72c8a5645a38ea20b8426bfd734d42fc47455c25`.
+Its complete library suite passes 5020 checks in 102.35 seconds with 90.39%
+coverage. Static validation passes Ruff, library/HA mypy, Pyright and Twine.
+The wheel/HA zip are built from that clean commit; this pass makes no repeated
+build/reproducibility claim.
+
+Installed-wheel/extracted-adapter verification passes 149 HA checks plus eight
+optional real-relay checks, and 131 installed native-library checks: 288 distinct
+checks across those runs. The first HA collection attempt lacked a copied
+generated-fixture helper; it was corrected in the isolated harness, not production
+code. All 163 named HA dependency pins and nine installed HA stream files remain
+unchanged. A fresh Python3.12 base-wheel environment verifies lazy completion
+without PyAV or HA installed.
+
+Two additional actual normal camera/provider tests, LL-HLS and non-LL HLS, pass
+using the installed wheel, extracted normal adapter and versioned host proposal
+`808667ef4ce79df0a794120294bed061d0f929b8`. No private source-count wrapper or
+second demux supplies their authorization. Each uses one factory, one input demux
+and 8840 decrypt feeds. Public completion counts match every delivered primary
+1783-video/1857-AAC and replacement 1663/1731 sample. The stopped subscription
+has no completion snapshot and remains partial.
+
+Independent source, wire and MP4-box/PyAV audits preserve all delivered PTS/DTS,
+video NAL/config and AAC bytes. A/V phase remains -11/240000 seconds within the
+unchanged 1/16000-second budget. Both final playlists have ENDLIST/no preload
+hint, terminal requests keep worker attempts at one, physical cleanup joins,
+admission returns to zero and owned relay processes exit. These real-path tests
+still need the child-only diagnostic parser proposal; they are not stock-host
+or maintained FFmpeg-build certification. The separate host contract/revocation
+controls pass 85 checks.
+
+The remaining host-contract delta adds an explicit version marker and a public
+synchronous revoke call, closing the await-before-cancellation race for normal
+integration teardown. Stable-entity browser HLS/WebRTC and supported HEVC-client
+acceptance, maintained upstream/platform integration and broader live/physical
+gates remain next. No library PR/head push, release or deployment was made.

@@ -55,3 +55,12 @@ startup/topology, and separately bounded attended hardware/physical A/V tests.
 PR397 and library runtime72c8a5645a38 stay separate and unchanged.
 
 [Full findings and source review handoff](https://bookstack.home.moor.co.za/books/home-infrastructure/page/ezviz-upstream-ha-compatibility-and-review-handoff-2026-11-01).
+
+## Full-development follow-up
+
+[Development qualification and publication fixes](ha-development-qualification.md)
+now records complete isolated setup,137cases, scoped Mypy/Pylint and13CI-style
+hooks. It also fixes publication/unknown-duration handling, so the earlier808667e
+runtime identity and133-case evidence above remain historical, not the updated
+host source fingerprint. Full-repository/platform and maintained-host gates stay
+separate.

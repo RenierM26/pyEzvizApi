@@ -139,3 +139,10 @@ synchronous revoke call, closing the await-before-cancellation race for normal
 integration teardown. Stable-entity browser HLS/WebRTC and supported HEVC-client
 acceptance, maintained upstream/platform integration and broader live/physical
 gates remain next. No library PR/head push, release or deployment was made.
+
+## Actual dependency source-build validation
+
+[FFmpeg source-build validation boundary](ha-ffmpeg-source-build-validation.md)
+records the no-preload FFmpeg9.0.2/PyAV19 checks, actual HTTP delivery audits and
+remaining maintained-host, relay, platform and frontend gates. It does not change
+this library API or certify stock-host finite delivery.

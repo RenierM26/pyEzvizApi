@@ -31,6 +31,21 @@ native-owner limit to conceal that conflict.
 
 ## Ownership boundaries
 
+The [isolated topology qualification](ha-topology-qualification.md) now exercises
+the real HA go2rtc provider alongside both native HLS lens consumers. The
+provider adds a camera-name child stream and standard AAC-to-Opus conversion;
+it is not merely another direct reader of the native HTTP route. Keep encoded
+AAC unchanged for HLS and label WebRTC audio conversion explicitly. A separate
+relay AP depayloading correction is required for byte-correct HEVC on the tested
+RTSP-to-WebRTC hop; the prior direct-RTSP result did not cover this path.
+
+The process owner must supply an ephemeral writable provider configuration,
+preserve its base configuration and clean the temporary file at termination.
+Raw-config-only launch is not compatible with HA's stream-registration API.
+At a TLS edge, deny native capability routes explicitly rather than relying on
+the loopback peer check after a local reverse proxy has forwarded the request.
+The test-CA HLS model does not certify production proxy/auth/WebSocket behavior.
+
 | Layer | Owns | Must not own |
 | --- | --- | --- |
 | pyezvizapi | Explicit local transport, incremental framing/decryption, selected encoded tracks, native timestamps, bounded mux output, cancellation/join and sanitized receipts | HA entities/config entries, HTTP listener, go2rtc process/config, frontend decisions, automatic account/wake fallback |

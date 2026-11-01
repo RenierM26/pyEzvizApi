@@ -87,6 +87,12 @@ Review cancellation/EOF races, failures during final publication, stale
 generations, terminal playlist requests and supported LL/non-LL behavior before
 turning this diagnostic into an upstream implementation.
 
+A [subsequent host API review candidate](ha-finite-completion-proposal.md) now
+exercises generation-bound authorization, expected source access-unit counts,
+terminal publication/ENDLIST, retention and no-restart behavior through both HLS
+modes. Its source-count feed is still private audit instrumentation; a maintained
+library completion receipt and normal adapter wiring remain release prerequisites.
+
 No public PR/head update, release, production change or live-camera test was made.
 The existing single-output draft PR397 remains separate from this unpublished
 shared-lens spike and the external FFmpeg/HA review proposals.

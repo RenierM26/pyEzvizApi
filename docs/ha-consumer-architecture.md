@@ -111,6 +111,11 @@ stateDiagram-v2
   prove that HA published its final buffered samples. Keep the generation-bound
   completion bridge in HA and terminal fragment/playlist ownership in its stream
   provider; see the [finite-HLS boundary review](ha-finite-hls-review.md).
+- For a declared finite source, correlate authoritative selected access-unit
+  counts with the receiving worker's counts as well as EOF. Owner completion
+  alone cannot exclude a cleanly truncated relay stream. The separate
+  [host completion API proposal](ha-finite-completion-proposal.md) exercises this
+  contract; its private counter feed is not yet a public library receipt.
 - Revoke capabilities before unload/reload, cancel owned delivery, join source
   workers, stop HA outputs and remove only an owned registration. Retain failed
   cleanup handles and deny fresh acquisition until recovery succeeds.

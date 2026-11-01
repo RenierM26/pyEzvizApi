@@ -21,6 +21,7 @@ from typing import Any
 
 from .exceptions import PyEzvizError
 from .native_access import self_contained_idr
+from .native_completion import NativeMediaCompletion
 from .native_stream import (
     _POLL_SECONDS,
     NativeMpegTsStream,
@@ -46,6 +47,8 @@ class _SessionOutput(NativeMpegTsStream):
         self._requested = Event()
         self._retired = Event()
         self.generation = generation
+        self._source_generation = session.source_generation
+        self._subscription_generation = generation
         self.join_pts: Fraction | None = None
         self.join_clock: NativeSourceClock | None = None
         self.cold = False
@@ -127,6 +130,12 @@ class _SessionOutput(NativeMpegTsStream):
             elif result["owned_output_chunks"]:
                 result["status"] = "draining"
         return result
+
+    @property
+    def completion(self) -> NativeMediaCompletion | None:
+        """Require this subscription and its authoritative physical source."""
+        receipt = self.receipt
+        return self._completion_from_receipts(receipt, receipt["physical_source"])
 
     def close_local(self) -> None:
         # No worker/transport belongs to an output. This drains only its credits.
@@ -363,11 +372,16 @@ class NativeMpegTsSession(NativeMpegTsStream):
         copied.stream = mapping[index]
         try:
             outgoing.mux(copied)
+            if output.accepting:
+                output._record_access_unit(index)
         except Exception as error:
             output.fail_output(error)
 
     def _open_output(self, av: Any, stack: ExitStack, output: _SessionOutput,
                      tracks: list[Any]) -> tuple[Any, dict[int, Any]]:
+        with output._lock:
+            output._tracks = [dict(id=track.id, index=track.index, kind=track.type,
+                                   codec=track.codec_context.name) for track in tracks]
         outgoing = stack.enter_context(av.open(
             _TsOutput(output.publish), mode="w", format="mpegts",
             options={"mpegts_copyts": "1", "max_delay": "0", "flush_packets": "1",
@@ -392,6 +406,11 @@ class NativeMpegTsSession(NativeMpegTsStream):
             output.fail_output(error)
             return False
         return True
+
+    @property
+    def completion(self) -> NativeMediaCompletion | None:
+        """Query a declared output for completion, never the physical aggregate."""
+        return None
 
     @property
     def physical_receipt(self) -> dict[str, Any]:

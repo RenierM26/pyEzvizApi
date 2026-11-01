@@ -100,6 +100,11 @@ subscription generation and capability generation plus completed/empty/joined
 receipts, and confirms the host handle with those published counts. The library
 must remain independent of HA, HLS, relay processes and receipt polling policy.
 
+A subsequent [library receipt and normal adapter implementation](native-completion-receipts.md)
+now provides immutable owner-derived counts on the isolated shared-lens branch.
+It replaces the private source-count feed in normal camera/provider acceptance;
+the earlier 84-check result above remains the historical host-proposal milestone.
+
 This closes the tested host terminal-protocol gap as a review candidate, not a
 stock-host release gate. Maintained library receipts/adapter wiring, upstream
 FFmpeg build/FATE and HA/platform acceptance remain before normal frontend/HEVC,

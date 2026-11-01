@@ -116,6 +116,9 @@ stateDiagram-v2
   alone cannot exclude a cleanly truncated relay stream. The separate
   [host completion API proposal](ha-finite-completion-proposal.md) exercises this
   contract; its private counter feed is not yet a public library receipt.
+  The later [native completion receipt](native-completion-receipts.md) follow-up
+  implements that library boundary and a version-negotiated normal group/lens
+  camera adapter on the isolated spike; stock-host release gates remain open.
 - Revoke capabilities before unload/reload, cancel owned delivery, join source
   workers, stop HA outputs and remove only an owned registration. Retain failed
   cleanup handles and deny fresh acquisition until recovery succeeds.

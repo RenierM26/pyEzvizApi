@@ -16,6 +16,7 @@ from importlib import import_module
 import io
 import math
 from queue import Empty, Queue
+import secrets
 import sys
 from threading import BoundedSemaphore, Event, Lock, Thread, current_thread
 import time
@@ -24,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from .clip import AutoClipSource
 from .exceptions import PyEzvizError
 from .media import MediaPacket
+from .native_completion import NativeMediaCompletion, NativeTrackCompletion
 from .native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
 
 if TYPE_CHECKING:
@@ -319,6 +321,10 @@ class NativeMpegTsStream:
         self._cleanup_errors: list[str] = []
         self._tracks: list[dict[str, Any]] = []
         self._source_clock: NativeSourceClock | None = None
+        self._source_generation = secrets.token_hex(16)
+        self._subscription_generation = 0
+        self._accepted_units: dict[int, int] = {}
+        self._completion_cache: NativeMediaCompletion | None = None
         self._published = self._peak_queue = self._output_owned = 0
         self._read_bytes = self._discarded_bytes = self._output_owned_bytes = (
             self._peak_output_bytes
@@ -329,6 +335,60 @@ class NativeMpegTsStream:
         """Immutable owner-local descriptor, absent until selected media is ready."""
         with self._lock:
             return self._source_clock
+
+    @property
+    def source_generation(self) -> str:
+        """Opaque physical source identity, stable before acquisition and after EOF."""
+        return self._source_generation
+
+    @property
+    def subscription_generation(self) -> int:
+        """Generation of this immutable selected-output handle."""
+        return self._subscription_generation
+
+    def _record_access_unit(self, index: int) -> None:
+        with self._lock:
+            self._accepted_units[index] = self._accepted_units.get(index, 0) + 1
+
+    def _access_unit_rows(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(track, access_units=self._accepted_units.get(track["index"], 0))
+                    for track in self._tracks]
+
+    def _completion_from_receipts(
+        self, output: dict[str, Any], source: dict[str, Any],
+    ) -> NativeMediaCompletion | None:
+        if (not source["finite_source_end"] or source["source_generation"] != self.source_generation
+                or any(row["status"] != "completed" or not row["worker_joined"]
+                       or not row["cancel_joined"] or not row["source_closed"]
+                       or row["error_type"] or row["cleanup_error_types"]
+                       or row["shutdown_timed_out"] for row in (output, source))
+                or output["owned_output_chunks"] or output["owned_output_bytes"]
+                or output["discarded_output_bytes"]):
+            return None
+        with self._lock:
+            rows = tuple(NativeTrackCompletion(
+                track_id=track["id"], index=track["index"], kind=track["kind"],
+                codec=track["codec"], access_units=self._accepted_units.get(track["index"], 0),
+            ) for track in self._tracks)
+            if not rows or any(track.access_units <= 0 for track in rows):
+                return None
+            if self._completion_cache is None:
+                self._completion_cache = NativeMediaCompletion(
+                    self.source_generation, self.subscription_generation, rows,
+                )
+            return self._completion_cache
+
+    @property
+    def completion(self) -> NativeMediaCompletion | None:
+        """Immutable proof only after finite EOF, joined cleanup and full TS read.
+
+        Partial, queued/draining, cancelled and failed-cleanup output has no
+        successful completion, even if another output or the source completes.
+        Merely reading this property never joins, waits, retries or acquires.
+        """
+        receipt = self.receipt
+        return self._completion_from_receipts(receipt, receipt)
 
     def _check_stop(self) -> None:
         if self._stop.is_set():
@@ -548,6 +608,7 @@ class NativeMpegTsStream:
                 last_dts[index] = stamp
                 packet.stream = mapping[index]
                 outgoing.mux(packet)
+                self._record_access_unit(index)
                 count += 1
             if not count or not reader.ended:
                 raise PyEzvizError("Native stream did not verify its finite source end")
@@ -729,7 +790,10 @@ class NativeMpegTsStream:
             discarded_output_bytes=self._discarded_bytes,
             owned_output_bytes=self._output_owned_bytes,
             peak_owned_output_bytes=self._peak_output_bytes,
-            selected_tracks=list(self._tracks),
+            selected_tracks=[dict(track) for track in self._tracks],
+            source_generation=self.source_generation,
+            subscription_generation=self.subscription_generation,
+            accepted_access_units=self._access_unit_rows(),
             source_packets=reader.packets if reader else 0,
             source_bytes=reader.received if reader else 0,
             clear_bytes=reader.clear_bytes if reader else 0,

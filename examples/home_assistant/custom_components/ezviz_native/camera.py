@@ -10,6 +10,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NativeConfigEntry
+from .completion import GroupFiniteDelivery, maybe_finite_delivery
 from .const import status_signal
 from .entry_runtime import GroupEntry, LensRuntime
 from .relay import RelayError
@@ -38,6 +39,7 @@ class NativeCamera(Camera):
         self.entry_id = entry.entry_id
         self._delivery_stop_lock = asyncio.Lock()
         self._delivery_create_lock = asyncio.Lock()
+        self._finite_delivery: GroupFiniteDelivery | None = None
         self.runtime: Runtime | LensRuntime
         if lens is None:
             assert isinstance(entry.runtime_data, Runtime)
@@ -85,6 +87,9 @@ class NativeCamera(Camera):
                 async with self._delivery_stop_lock:
                     await self._stop_stream_owned()
                 return None
+            if (stream is not None and isinstance(self.runtime, LensRuntime)
+                    and (self._finite_delivery is None or self._finite_delivery.stream is not stream)):
+                self._finite_delivery = maybe_finite_delivery(self.hass, self.runtime, stream)
             return stream
 
     @property
@@ -129,6 +134,8 @@ class NativeCamera(Camera):
 
     async def _async_stop_aborted_delivery(self) -> None:
         """Provider refresh stops WebRTC, not the separate native HLS retry worker."""
+        if self._finite_delivery is not None:
+            self._finite_delivery.revoke()
         async with self._delivery_create_lock, self._delivery_stop_lock:
             await self.async_refresh_providers()
             await self._stop_stream_owned()
@@ -138,6 +145,9 @@ class NativeCamera(Camera):
             await self._stop_stream_owned()
 
     async def _stop_stream_owned(self) -> None:
+        if self._finite_delivery is not None:
+            delivery, self._finite_delivery = self._finite_delivery, None
+            await delivery.close()
         stream = self.stream
         if stream is not None:
             stream.dynamic_stream_settings.preload_stream = False

@@ -93,6 +93,14 @@ def test_repeated_lens_suffixes_retire_muxes_on_worker_and_leave_primary_exact(s
         assert actual[257][0][1] >= actual[256][0][1]
     assert starts == sorted(set(starts))
     assert oracle(final_body)[256] == baseline[481][starts[-1]:]
+    completion = session.outputs[1].completion
+    assert completion is not None
+    assert completion.source_generation == session.source_generation
+    assert completion.subscription_generation == session.outputs[1].generation == 2
+    assert completion.video_units == len(oracle(final_body)[256])
+    assert completion.audio_units == len(oracle(final_body)[257])
+    assert all(old.completion is None for old, _ in retired)
+
     assert len(contexts) == 4 and len({id(context) for context in contexts}) == 2
     assert len(set(threads)) == 1 and threads[0] != get_ident()
     receipt = session.receipt

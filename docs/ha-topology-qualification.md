@@ -17,6 +17,14 @@ convert AAC to Opus: received Opus packets decode to nonzero 48-kHz audio.
 This is not AAC PCM parity, complete audio-tail equivalence, WebRTC A/V phase,
 a browser decoder result, hardware playback or physical synchronization.
 
+The audio limit is observable, not merely untested: final WebRTC receivers
+decode 5,632–5,655 Opus packets (112.64–113.10 seconds at 48 kHz), shorter than
+the full source's nominal 118.848 seconds of AAC. Received RTP sequences are
+contiguous, but that does not establish complete audio delivery before/after
+codec attachment. First/last source-to-Opus coverage and A/V alignment through
+the standard transcoder remain explicit gates; do not label this complete
+WebRTC audiovisual playback.
+
 Final cases pass in 51.10 seconds total. Each refuses whole-group Prepare while
 readers are active; after EOF, repeated WebRTC offers fail without acquisition
 and HLS cannot restart its completed worker. Explicit whole-group Prepare

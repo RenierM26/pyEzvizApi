@@ -1,3 +1,5 @@
+> **Later audio correction:** [WebRTC queue and startup qualification](ha-webrtc-audio-qualification.md) fixes a silent internal Opus hole, retains late-attachment limits and records a separate intermittent HLS initial-AAC failure. The historical results below are unchanged.
+
 # Isolated HA consumer topology qualification
 
 ## Tested boundary

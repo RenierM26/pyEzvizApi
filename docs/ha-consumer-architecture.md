@@ -29,6 +29,16 @@ solution for simultaneous automatic HLS/WebRTC readers: that topology has
 reproduced admission conflicts. Do not enable a global HA setting or raise the
 native-owner limit to conceal that conflict.
 
+## Audio delivery checkpoint
+
+The [audio qualification](ha-webrtc-audio-qualification.md) separates converter
+attachment, probe retention, bounded WebRTC queue delivery and actual playback.
+A native one-shot consumer must fail explicitly on overflow rather than silently
+drop media; source clocks must not be attributed to converted Opus without
+evidence. An intermittent HLS initial-AAC failure still blocks cold-start
+qualification. This is a separate private relay experiment, not a new library
+runtime dependency or a change to stable draft PR397.
+
 ## Ownership boundaries
 
 The [isolated topology qualification](ha-topology-qualification.md) now exercises

@@ -233,6 +233,15 @@
     "CodeQL_suppressions_added": false,
     "subscription_identity_initialized_once_at_base_construction": true,
     "full_library_tests_after_quality_changes": 5032,
-    "library_coverage_after_quality_changes_percent": 90.39
+    "library_coverage_after_quality_changes_percent": 90.39,
+    "NAL_prefix_finding": "https://github.com/RenierM26/pyEzvizApi/pull/397#discussion_r4466601594",
+    "NAL_identifier_parse_window_bytes": 256,
+    "NAL_extra_byte_validated_but_not_consumed": true,
+    "NAL_lookahead_controls_added": 9,
+    "process_sampler_race_controls_added": 7,
+    "process_sampler_root_and_persistent_active_permission_errors_remain_fatal": true,
+    "process_sampler_transient_retry_maximum": 1,
+    "full_library_tests_after_all_followups": 5048,
+    "library_coverage_after_all_followups_percent": 90.38
   }
 }

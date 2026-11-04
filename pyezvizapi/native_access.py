@@ -21,7 +21,8 @@ class _Bits:
         zeros = 0
         for index, value in enumerate(raw):
             if zeros >= 2 and value == 3:
-                if index + 1 == len(raw) or raw[index + 1] > 3:
+                # The bounded parse window must not invent EOF in the original NAL.
+                if index + 1 == len(data) or data[index + 1] > 3:
                     raise ValueError("Invalid emulation prevention prefix")
                 zeros = 0
                 continue

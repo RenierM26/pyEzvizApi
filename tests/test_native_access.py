@@ -115,3 +115,30 @@ def test_h264_idr_and_parameter_sets_must_have_reference_priority():
     for header in (b"\x67", b"\x68", b"\x65"):
         changed = chain("h264").replace(header, bytes([header[0] & 31]), 1)
         assert not self_contained_idr(changed, "h264")
+
+
+@pytest.mark.parametrize('following', [0, 1, 2, 3])
+def test_emulation_prevention_at_prefix_end_uses_unparsed_lookahead(following):
+    prefix = b'\x55' * 253 + b'\x00\x00\x03'
+    reader = _Bits(memoryview(prefix + bytes([following]) + b'\x80'))
+    assert bytes(reader.data) == prefix[:-1]
+    _ = reader.bits(len(reader.data) * 8)
+    with pytest.raises(ValueError, match='Truncated'):
+        reader.bits(1)  # The validated lookahead must not expand identifier parsing.
+
+
+@pytest.mark.parametrize('tail', [b'', b'\x04', b'\xff'])
+def test_emulation_prevention_at_prefix_end_still_rejects_invalid_tail(tail):
+    prefix = b'\x55' * 253 + b'\x00\x00\x03'
+    with pytest.raises(ValueError, match='Invalid emulation prevention'):
+        _Bits(memoryview(prefix + tail))
+
+
+@pytest.mark.parametrize('codec', ['h264', 'hevc'])
+def test_valid_unregistered_sei_at_prefix_boundary_does_not_block_idr(codec):
+    # Type 5 / size 254: 16 UUID bytes and 238 data bytes, then RBSP trailing bits.
+    payload = b'\x05\xfe' + b'\x55' * 251 + b'\x00\x00\x03\x01\x80'
+    assert len(payload) == 258 and list(payload[255:257]) == [3, 1]
+    header = b'\x06' if codec == 'h264' else b'\x4e\x01'
+    sei = b'\x00\x00\x00\x01' + header + payload
+    assert self_contained_idr(sei + chain(codec), codec)

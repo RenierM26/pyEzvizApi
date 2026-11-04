@@ -174,3 +174,16 @@ behavior is documented; subscriptions receive their private physical/subscriptio
 identity at base construction; and the owner test uses its context manager. The
 security-and-quality query suite is unchanged, with no suppressions added. The
 full library suite passes 5,032 tests at 90.39% coverage; HA remains 182 tests.
+
+A later Codex review corrected emulation-prevention validation at the 256-byte
+NAL prefix boundary: one following byte is checked in the original view, but is
+not copied into or consumed by identifier parsing. Nine added controls cover all
+valid lookahead values, invalid/missing tails and valid H.264/HEVC SEI admission.
+The existing generated startup/replacement controls remain intact.
+
+The supervised recorded-playback resource sampler now treats confirmed zombie,
+dead or vanished descendants as explicitly missed non-atomic samples. It yields
+and retries at most once on a transient descendant-access race; persistent active
+process and root permission errors still fail. Seven new real-process/controlled
+race cases cover these boundaries; media/resource caps and the wall guard are
+unchanged. Full local follow-up validation passes 5,048 tests at 90.38% coverage.

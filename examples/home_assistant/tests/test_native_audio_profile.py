@@ -58,7 +58,8 @@ async def test_missing_native_relay_capability_never_registers(aiohttp_client):
                             trusted_source_clock=True, atomic_ownership=True, native_opus=True)
         with pytest.raises(RelayError, match="unavailable"):
             await relay.source("http://127.0.0.1/forbidden-source")
-        assert await relay.close()
+        close_result = await relay.close()
+        assert close_result
     assert calls == ["GET"]
 
 

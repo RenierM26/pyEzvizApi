@@ -231,7 +231,8 @@ async def test_unload_retries_uncertain_relay_after_physical_group_is_removed(
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
     assert list(records) == ["unrelated"]
-    assert all(await asyncio.gather(*(lens.relay.close() for lens in runtime.lenses.values())))
+    close_result = await asyncio.gather(*(lens.relay.close() for lens in runtime.lenses.values()))
+    assert all(close_result)
 
 
 async def test_shared_budget_excludes_same_physical_source_between_both_routes(runtime):
@@ -253,7 +254,8 @@ async def test_shared_budget_excludes_same_physical_source_between_both_routes(r
         registry.admit(runtime, task)
     await group.release(lease)
     assert registry.admission.active == 0
-    assert await registry.groups.close(group.identity.physical)
+    close_result = await registry.groups.close(group.identity.physical)
+    assert close_result
 
 
 async def test_four_source_limit_is_one_budget_across_route_types(runtime):
@@ -279,7 +281,8 @@ async def test_four_source_limit_is_one_budget_across_route_types(runtime):
         await session.owner.aclose()
         old.finish_session(session)
     assert registry.admission.active == 0
-    assert await registry.groups.close("fourth")
+    close_result = await registry.groups.close("fourth")
+    assert close_result
 
 
 async def test_multilens_flow_is_explicit_and_keeps_logical_key(hass, data):

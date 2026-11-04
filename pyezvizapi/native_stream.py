@@ -291,6 +291,7 @@ class NativeMpegTsStream:
         *,
         media_key: str | bytes | None = None,
         nalu_header_size: int | None = None,
+        _completion_identity: tuple[str, int] | None = None,
     ) -> None:
         header = (
             nalu_header_size
@@ -321,8 +322,10 @@ class NativeMpegTsStream:
         self._cleanup_errors: list[str] = []
         self._tracks: list[dict[str, Any]] = []
         self._source_clock: NativeSourceClock | None = None
-        self._source_generation = secrets.token_hex(16)
-        self._subscription_generation = 0
+        # Session subscriptions inherit their physical identity at construction.
+        self._source_generation, self._subscription_generation = (
+            _completion_identity if _completion_identity is not None else (secrets.token_hex(16), 0)
+        )
         self._accepted_units: dict[int, int] = {}
         self._completion_cache: NativeMediaCompletion | None = None
         self._published = self._peak_queue = self._output_owned = 0

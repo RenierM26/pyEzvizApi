@@ -18,6 +18,7 @@ def interrupted(output):
         with output:
             chunks.extend(output)
     except PyEzvizError:
+        # Keep the consumed prefix so aborted subscriptions can be audited.
         pass
     return b"".join(chunks)
 

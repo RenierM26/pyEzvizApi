@@ -164,3 +164,13 @@ HLS. Twelve incomplete-host regression cases fail before the fix and pass after
 it; all 182 example tests (including the eight real-relay cases) pass locally.
 The earlier 169-test and media qualification records above remain their original
 checkpoint; this guard changes admission, not media bytes/clocks or queue limits.
+
+The ready-triggered CodeQL quality gate also identified state-changing test calls
+inside assertions, protocol/cancellation expression statements, undocumented
+expected-exception handlers, inherited completion-identity reassignments and an
+explicit-close test. Operations now execute before pure assertions; protocol
+stubs raise explicitly; cancellation waits retain their result; expected handler
+behavior is documented; subscriptions receive their private physical/subscription
+identity at base construction; and the owner test uses its context manager. The
+security-and-quality query suite is unchanged, with no suppressions added. The
+full library suite passes 5,032 tests at 90.39% coverage; HA remains 182 tests.

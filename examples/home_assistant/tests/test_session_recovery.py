@@ -140,7 +140,7 @@ async def test_prepare_rejects_active_cleanup_and_concurrent_presses(hass, runti
         with pytest.raises(HomeAssistantError):
             await button.async_press()
         release.set()
-        await first
+        _ = await first
         call.assert_awaited_once_with(entry.entry_id)
 
     runtime.status_changed = MagicMock()

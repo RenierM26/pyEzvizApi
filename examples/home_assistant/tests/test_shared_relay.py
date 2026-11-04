@@ -61,13 +61,16 @@ async def test_cold_readers_lazy_single_registration_and_narrow_cleanup(aiohttp_
     assert "auth" not in urls[0]
     assert [method for method, _ in calls] == ["GET", "PATCH"]
     reject_delete[0] = True
-    assert not await relay.close()
+    close_result = await relay.close()
+    assert not close_result
     assert relay.name in streams
     with pytest.raises(RelayError, match="closing"):
         await relay.source("ignored")
     reject_delete[0] = False
-    assert await relay.close()
-    assert await relay.close()
+    close_result = await relay.close()
+    assert close_result
+    close_result = await relay.close()
+    assert close_result
     assert streams == {"unrelated": ["rtsp://example.invalid/original"]}
     assert calls[-1] == ("DELETE", {"src": relay.name})
 
@@ -81,7 +84,8 @@ async def test_uncertain_registration_is_not_retried_and_is_removed(aiohttp_clie
     with pytest.raises(RelayError, match="uncertain"):
         await relay.source("ignored")
     assert sum(method == "PATCH" for method, _ in calls) == 1
-    assert await relay.close()
+    close_result = await relay.close()
+    assert close_result
     assert relay.name not in streams
 
 
@@ -94,9 +98,10 @@ async def test_cancelled_patch_retains_ownership_for_removal(aiohttp_client):
             await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
     patch_gate[0].set()
-    assert await relay.close()
+    close_result = await relay.close()
+    assert close_result
     assert relay.name not in streams
 
 
@@ -105,7 +110,8 @@ async def test_collision_is_never_overwritten_or_removed(aiohttp_client):
     streams[relay.name] = ["existing"]
     with pytest.raises(RelayError, match="unavailable"):
         await relay.source("ignored")
-    assert await relay.close()
+    close_result = await relay.close()
+    assert close_result
     assert calls == [("GET", {})]
     assert streams[relay.name] == ["existing"]
 
@@ -197,7 +203,8 @@ async def test_replaced_registration_is_not_removed(aiohttp_client):
     relay, streams, calls, _, _, _ = await relay_server(aiohttp_client)
     await relay.source("http://127.0.0.1/owned?auth=TEST_ONLY")
     streams[relay.name] = ["http://127.0.0.1:1/reassigned.ts"]
-    assert not await relay.close()
+    close_result = await relay.close()
+    assert not close_result
     assert streams[relay.name] == ["http://127.0.0.1:1/reassigned.ts"]
     assert not any(method == "DELETE" for method, _ in calls)
 
@@ -212,7 +219,8 @@ async def test_uncertain_inventory_is_not_removed(aiohttp_client, value):
     relay, streams, calls, _, _, _ = await relay_server(aiohttp_client)
     await relay.source("http://127.0.0.1/owned?auth=TEST_ONLY")
     streams[relay.name] = value
-    assert not await relay.close()
+    close_result = await relay.close()
+    assert not close_result
     assert streams[relay.name] == value
     assert not any(method == "DELETE" for method, _ in calls)
 
@@ -230,7 +238,8 @@ async def test_atomic_mode_refuses_stock_and_never_falls_back(aiohttp_client):
     relay = SharedRelay(client.session, client.server.port, 18554, atomic_ownership=True)
     with pytest.raises(RelayError, match="Experimental relay contracts unavailable"):
         await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
-    assert await relay.close()  # Negotiation failed before registration was attempted.
+    close_result = await relay.close()
+    assert close_result  # Negotiation failed before registration was attempted.
     assert calls == [("GET", "/api/streams/owned")]
 
 
@@ -253,7 +262,8 @@ async def test_atomic_uncertain_create_and_foreign_reassignment(aiohttp_client):
             return web.Response(status=500 if fail_create[0] else 201, headers=headers)
         if foreign[0]:
             return web.Response(status=409, headers=headers)
-        assert lease.pop(request.query["name"]) == key
+        removed_lease = lease.pop(request.query["name"])
+        assert removed_lease == key
         return web.Response(status=204, headers=headers)
 
     app = web.Application()
@@ -263,10 +273,12 @@ async def test_atomic_uncertain_create_and_foreign_reassignment(aiohttp_client):
     with pytest.raises(RelayError):
         await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
     foreign[0] = True
-    assert not await relay.close()
+    close_result = await relay.close()
+    assert not close_result
     assert relay.name in lease
     foreign[0] = False
-    assert await relay.close()
+    close_result = await relay.close()
+    assert close_result
     assert calls == ["GET", "POST", "DELETE", "DELETE"]
 
 
@@ -287,7 +299,8 @@ async def test_atomic_requires_contract_header_even_on_success(aiohttp_client):
     relay = SharedRelay(client.session, client.server.port, 18554, atomic_ownership=True)
     with pytest.raises(RelayError):
         await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
-    assert not await relay.close()
+    close_result = await relay.close()
+    assert not close_result
     assert calls == ["GET", "POST", "DELETE"]
 
 
@@ -311,5 +324,6 @@ async def test_clock_contracts_reject_unsupported_before_registration(aiohttp_cl
     relay = SharedRelay(client.session, client.server.port, 18554, trusted_source_clock=True)
     with pytest.raises(RelayError, match="contracts unavailable"):
         await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
-    assert await relay.close()
+    close_result = await relay.close()
+    assert close_result
     assert calls == ["GET"]  # No create, destructive fallback or upstream ingest.

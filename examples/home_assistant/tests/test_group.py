@@ -98,7 +98,8 @@ async def test_actual_ha_http_two_lenses_one_attempt_then_whole_group_prepare(
         while group.reserved:
             await asyncio.sleep(0.01)
     assert calls == [1, 1] and group.attempts == 1
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
     assert not registry.members and not registry.groups
 
 
@@ -111,7 +112,8 @@ async def test_barrier_timeout_is_terminal_without_source_acquisition(hass, aioh
     assert not group.leases and not group.reserved and group.joined
     assert (await client.get(path(group, "b"))).status == 503
     assert await registry.prepare("source") and calls == []
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
 
 
 async def test_duplicate_reader_and_prepare_cannot_acquire_during_barrier():
@@ -124,7 +126,8 @@ async def test_duplicate_reader_and_prepare_cannot_acquire_during_barrier():
     assert not group.ready.is_set() and group.reserved and calls == []
     await group.release(lease)
     assert group.terminal and calls == []
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
 
 
 async def test_global_limit_counts_physical_groups_not_lenses():
@@ -144,7 +147,8 @@ async def test_global_limit_counts_physical_groups_not_lenses():
     for group, lease in leases:
         await group.release(lease)
     for physical in tuple(registry.groups):
-        assert await registry.close(physical)
+        close_result = await registry.close(physical)
+        assert close_result
 
 
 @pytest.mark.parametrize("changes", [{}, {"profile": "different"},
@@ -197,10 +201,12 @@ async def test_failed_physical_join_retains_owner_and_budget_until_explicit_reco
     with pytest.raises(web.HTTPServiceUnavailable):
         registry.acquire("a", asyncio.current_task())
     assert not await registry.prepare("source")
-    assert not await registry.close("source")
+    close_result = await registry.close("source")
+    assert not close_result
     assert registry.groups["source"].owner is owner
     source.release.set()
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
     assert owner.physical_receipt["worker_joined"] and source.closed
     assert not registry.groups
 
@@ -244,7 +250,8 @@ async def test_remote_socket_or_forged_forwarded_peer_never_acquires():
     with pytest.raises(web.HTTPForbidden):
         await GroupStreamView(registry).get(request, "a")
     assert group.attempts == 0 and calls == []
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
 
 
 async def test_real_ha_hls_workers_share_group_http_source(hass, aiohttp_client, sample):
@@ -285,7 +292,8 @@ async def test_real_ha_hls_workers_share_group_http_source(hass, aiohttp_client,
         assert "b" in group.leases and not source.closed
         assert not await registry.prepare("source")
     finally:
-        assert await registry.close("source")
+        close_result = await registry.close("source")
+        assert close_result
         for stream, provider in zip(streams, providers, strict=True):
             if provider.name in stream.outputs():
                 await stream.remove_provider(provider)
@@ -305,12 +313,14 @@ async def test_http_failed_join_does_not_repeat_implicit_cleanup_budget(hass, ai
     with patch.object(group.owner, "close", wraps=group.owner.close) as close:
         # The final output invokes _close_session itself. Neither handler exit
         # nor registry.close may then call the physical close method implicitly.
-        assert not await registry.close("source")
+        close_result = await registry.close("source")
+        assert not close_result
         close.assert_not_called()
     await asyncio.gather(*pending, return_exceptions=True)
     assert group.cleanup_pending and group.reserved
     source.release.set()
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
 
 
 async def test_disconnect_during_cold_barrier_never_acquires(hass, aiohttp_client):
@@ -327,7 +337,8 @@ async def test_disconnect_during_cold_barrier_never_acquires(hass, aiohttp_clien
         while group.reserved:
             await asyncio.sleep(0.01)
     assert calls == [] and group.terminal and group.attempts == 1
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
 
 
 async def test_manifest_is_copied_and_frozen_and_redeclaration_requires_full_close():
@@ -338,11 +349,13 @@ async def test_manifest_is_copied_and_frozen_and_redeclaration_requires_full_clo
     assert tuple(group.options) == ("a", "b")
     with pytest.raises(TypeError):
         group.options["a"] = options()
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
     revised = registry.declare(identity(credential_revision="new-generation"), members(),
                                lambda: pytest.fail("not acquired"))
     assert revised is not group and revised.identity != group.identity
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
 
 
 async def test_old_group_close_preserves_reassigned_detached_member():
@@ -351,9 +364,11 @@ async def test_old_group_close_preserves_reassigned_detached_member():
     assert await registry.detach("a")
     replacement = registry.declare(identity("replacement"), {"a": options()},
                                    lambda: pytest.fail("not acquired"))
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result
     assert registry.members["a"] is replacement
-    assert await registry.close("replacement")
+    close_result = await registry.close("replacement")
+    assert close_result
     assert old.joined
 
 
@@ -406,4 +421,5 @@ async def test_explicit_late_mode_opens_second_http_lens_without_cold_barrier(
     assert len(late[0]) < len(full[0]) and late[0][0][1] > full[0][0][1]
     assert group.owner.outputs[1].receipt["join_origin_90k"] == late[0][0][1]
     assert calls == [1] and group.attempts == 1 and group.joined
-    assert await registry.close("source")
+    close_result = await registry.close("source")
+    assert close_result

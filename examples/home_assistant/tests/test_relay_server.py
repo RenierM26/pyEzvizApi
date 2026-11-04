@@ -16,6 +16,20 @@ def free_port():
         return sock.getsockname()[1]
 
 
+async def wait_for_api(session, api):
+    """Wait within the original bounded startup budget, without acquiring media."""
+    async with asyncio.timeout(5):
+        while True:
+            try:
+                async with session.get(api) as response:
+                    if response.status == 200:
+                        return
+            except ClientError:
+                # A starting server is retried only within the outer timeout.
+                pass
+            await asyncio.sleep(0.02)
+
+
 @pytest.mark.parametrize("atomic_ownership", [False, True])
 @pytest.mark.parametrize("raw_config", [False, True])
 async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_enabled, raw_config, atomic_ownership):
@@ -38,15 +52,7 @@ async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_ena
     try:
         async with ClientSession() as session:
             api = f"http://127.0.0.1:{api_port}/api/streams"
-            async with asyncio.timeout(5):
-                while True:
-                    try:
-                        async with session.get(api) as response:
-                            if response.status == 200:
-                                break
-                    except ClientError:
-                        pass
-                    await asyncio.sleep(0.02)
+            await wait_for_api(session, api)
             relay = SharedRelay(session, api_port, rtsp_port, atomic_ownership=atomic_ownership)
             await asyncio.gather(*(relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
                                    for _ in range(8)))
@@ -56,7 +62,8 @@ async def test_real_go2rtc_runtime_registration_and_removal(tmp_path, socket_ena
             assert set(streams) == {"unrelated", relay.name}
             # Unreachable source registration must remain lazy, not a failed dial.
             assert all("bytes_recv" not in p for p in streams[relay.name]["producers"])
-            assert await relay.close()
+            close_result = await relay.close()
+            assert close_result
             async with session.get(api) as response:
                 streams = await response.json()
             assert set(streams) == {"unrelated"}
@@ -91,15 +98,8 @@ async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_ena
                 str(Path(binary).resolve()), "-config", str(config),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
-            async with asyncio.timeout(5):
-                while True:
-                    try:
-                        async with session.get(api) as response:
-                            if response.status == 200:
-                                return process
-                    except ClientError:
-                        pass
-                    await asyncio.sleep(0.02)
+            await wait_for_api(session, api)
+            return process
 
         try:
             process = await start()
@@ -107,13 +107,15 @@ async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_ena
             await relay.source("http://127.0.0.1:1/native?auth=TEST_ONLY")
             process.kill()
             await asyncio.wait_for(process.wait(), 5)
-            assert not await relay.close()  # API is down; retain explicit recovery ownership.
+            close_result = await relay.close()
+            assert not close_result  # API is down; retain explicit recovery ownership.
             process = await start()
             foreign = "http://127.0.0.1:1/reassigned.ts"
             if reassigned:
                 async with session.patch(api, params={"name": relay.name, "src": foreign}) as response:
                     assert response.status == 200
-            assert await relay.close() is not reassigned
+            close_result = await relay.close()
+            assert close_result is not reassigned
             async with session.get(api) as response:
                 streams = await response.json()
             assert "unrelated" in streams
@@ -123,7 +125,8 @@ async def test_real_restart_does_not_delete_reassigned_name(tmp_path, socket_ena
                 # Test operator removes its own foreign registration, not adapter cleanup.
                 async with session.delete(api, params={"src": relay.name}) as response:
                     assert response.status == 200
-                assert await relay.close()
+                close_result = await relay.close()
+                assert close_result
             else:
                 assert set(streams) == {"unrelated"}
             assert "TEST_ONLY" not in config.read_text()

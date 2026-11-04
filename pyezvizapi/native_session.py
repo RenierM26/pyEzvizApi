@@ -42,13 +42,12 @@ def _no_source() -> NativePacketStream:
 class _SessionOutput(NativeMpegTsStream):
     def __init__(self, session: NativeMpegTsSession, options: NativeStreamOptions,
                  generation: int = 0) -> None:
-        super().__init__(_no_source, options)
+        super().__init__(_no_source, options,
+                         _completion_identity=(session.source_generation, generation))
         self.session = session
         self._requested = Event()
         self._retired = Event()
         self.generation = generation
-        self._source_generation = session.source_generation
-        self._subscription_generation = generation
         self.join_pts: Fraction | None = None
         self.join_clock: NativeSourceClock | None = None
         self.cold = False

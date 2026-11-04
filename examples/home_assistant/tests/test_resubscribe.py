@@ -175,7 +175,7 @@ async def test_cancelled_prepare_retains_executor_result_until_explicit_retry(
     finally:
         release.set()
     with pytest.raises(asyncio.CancelledError):
-        await pending
+        _ = await pending
     assert lens.recovery_pending and lens.member in runtime.group.blocked_members
     assert lens.pending_output is runtime.group.owner.outputs[1]
     assert await runtime.prepare_lens("telephoto")

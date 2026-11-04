@@ -106,13 +106,11 @@ def test_draining_or_abandoned_tail_is_not_complete(sample):
     with baseline:
         chunks = list(baseline)
     owner = NativeMpegTsStream(lambda: Source(sample), options())
-    try:
+    with owner:
         for _ in chunks[:-1]:
             assert owner.read()
         assert owner._finished.wait(5)  # noqa: SLF001
         assert owner.receipt["owned_output_bytes"] > 0 and owner.completion is None
-    finally:
-        owner.close()
     assert owner.receipt["discarded_output_bytes"] > 0 and owner.completion is None
 
 

@@ -227,6 +227,12 @@
     "incomplete_host_regression_cases": 12,
     "supported_direct_WebRTC_without_HLS_control": true,
     "HA_example_tests_with_real_relay_enabled": 182,
-    "media_checkpoint_above_not_replaced_by_this_admission_only_change": true
+    "media_checkpoint_above_not_replaced_by_this_admission_only_change": true,
+    "CodeQL_quality_patterns_corrected": 51,
+    "CodeQL_queries_or_gates_disabled": false,
+    "CodeQL_suppressions_added": false,
+    "subscription_identity_initialized_once_at_base_construction": true,
+    "full_library_tests_after_quality_changes": 5032,
+    "library_coverage_after_quality_changes_percent": 90.39
   }
 }

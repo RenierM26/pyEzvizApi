@@ -28,10 +28,17 @@ class _FiniteHost(Protocol):
     """Shape used only after explicit host-version negotiation."""
 
     @property
-    def finite_source_state(self) -> str | None: ...
-    def async_prepare_finite_source(self) -> object: ...
-    def async_confirm_finite_source(self, handle: object, counts: object) -> bool: ...
-    def async_cancel_finite_source(self, handle: object) -> bool: ...
+    def finite_source_state(self) -> str | None:
+        raise NotImplementedError
+
+    def async_prepare_finite_source(self) -> object:
+        raise NotImplementedError
+
+    def async_confirm_finite_source(self, handle: object, counts: object) -> bool:
+        raise NotImplementedError
+
+    def async_cancel_finite_source(self, handle: object) -> bool:
+        raise NotImplementedError
 
 
 class GroupFiniteDelivery:

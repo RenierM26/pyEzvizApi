@@ -73,7 +73,8 @@ async def test_joint_offer_refuses_without_registration_or_acquisition(hass, dat
 
 @pytest.mark.usefixtures("supported_host")
 @pytest.mark.parametrize("video", ["H265", "H264"])
-async def test_compatible_joint_offer_delegates_to_real_provider_contract(hass, data, video):
+@pytest.mark.parametrize("bundle_only", [False, True])
+async def test_compatible_joint_offer_delegates_to_real_provider_contract(hass, data, video, bundle_only):
     registry = GroupRegistry()
     config = {**configured(data), "video_codec": "hevc" if video == "H265" else "h264"}
     owner = GroupEntry(hass, "entry", "Primary", load_settings(config),
@@ -81,7 +82,8 @@ async def test_compatible_joint_offer_delegates_to_real_provider_contract(hass, 
     camera = NativeCamera(MagicMock(entry_id="entry", title="Primary", runtime_data=owner),
                           owner.lenses["primary"])
     camera.hass = hass
-    assert camera.async_validate_webrtc_offer(offer(video=video)) is None
+    sdp = bundled_offer(video=video) if bundle_only else offer(video=video)
+    assert camera.async_validate_webrtc_offer(sdp) is None
     assert type(camera).async_handle_async_webrtc_offer is Camera.async_handle_async_webrtc_offer
     assert owner.group.attempts == 0
     await registry.close(owner.group.identity.physical)
@@ -99,3 +101,37 @@ async def test_legacy_offer_keeps_existing_provider_negotiation(hass, data):
     assert type(camera).async_handle_async_webrtc_offer is Camera.async_handle_async_webrtc_offer
     assert owner.group.attempts == 0
     await registry.close(owner.group.identity.physical)
+
+
+def bundled_offer(*, zero_kind="audio", video="H265", group="video audio", bundle_only=True):
+    sdp = offer(video=video).replace("v=0\r\n", f"v=0\r\na=group:BUNDLE {group}\r\n")
+    for kind, formats in (("video", "96"), ("audio", "111")):
+        port = "0" if kind == zero_kind else "9"
+        attributes = f"a=mid:{kind}\r\n"
+        if kind == zero_kind and bundle_only:
+            attributes += "a=bundle-only\r\n"
+        sdp = sdp.replace(f"m={kind} 9 UDP/TLS/RTP/SAVPF {formats}\r\n",
+                          f"m={kind} {port} UDP/TLS/RTP/SAVPF {formats}\r\n{attributes}")
+    return sdp
+
+
+@pytest.mark.parametrize(("sdp", "kind", "expected"), [
+    (bundled_offer(), "audio", True),
+    (bundled_offer(zero_kind="video", group="audio video"), "video", True),
+    (bundled_offer().replace("m=audio 0", "m=audio 00000"), "audio", True),
+    (bundled_offer(bundle_only=False), "audio", False),
+    (bundled_offer(group="video"), "audio", False),
+    (bundled_offer().replace("a=mid:audio\r\n", ""), "audio", False),
+    (bundled_offer().replace("a=mid:audio", "a=mid:elsewhere"), "audio", False),
+    (bundled_offer().replace("a=group:BUNDLE video audio\r\n", ""), "audio", False),
+    (bundled_offer().replace("a=group:BUNDLE", "a=group:LS"), "audio", False),
+    (bundled_offer().replace("a=group:BUNDLE video audio\r\n", "")
+     + "a=group:BUNDLE video audio\r\n", "audio", False),
+    (bundled_offer().replace("a=mid:audio", "a=sendonly\r\na=mid:audio")
+     .replace("a=rtpmap:111 opus/48000/2\r\na=recvonly", "a=rtpmap:111 opus/48000/2"),
+     "audio", False),
+    (bundled_offer().replace("opus/48000/2", "PCMA/8000"), "audio", False),
+])
+def test_zero_port_requires_bundle_only_and_session_group_membership(sdp, kind, expected):
+    codec, rate = ("opus", 48000) if kind == "audio" else ("H265", 90000)
+    assert receives_codec(sdp, kind, codec, rate) is expected

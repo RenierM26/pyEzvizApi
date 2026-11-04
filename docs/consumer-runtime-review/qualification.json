@@ -600,7 +600,7 @@
     "local_validation": {
       "library_tests": 5056,
       "coverage_percent": 90.39,
-      "HA_example_tests_including_real_relay": 212,
+      "HA_example_tests_including_real_relay": 226,
       "real_relay_controls": 8,
       "library_mypy_files": 243,
       "HA_example_mypy_files": 15,
@@ -610,6 +610,16 @@
       "aiohttp_active_closed_controls": 4,
       "aiohttp_closed_controls_fail_unchanged": 2,
       "full_dependency_or_platform_CI_claimed": false
+    },
+    "bundle_only_review_follow_up": {
+      "RFC": "8843 section 6",
+      "SDP_profile_controls": 42,
+      "before_fix_failures": 5,
+      "before_fix_passes": 37,
+      "after_fix_all_42_pass": true,
+      "session_BUNDLE_group_membership_and_media_mid_bundle_only_required_for_zero_port": true,
+      "genuinely_rejected_or_unlisted_or_nonreceiving_media_remain_refused": true,
+      "compatible_H264_H265_bundle_only_audio_delegation_controls": 2
     }
   }
 }

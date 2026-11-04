@@ -52,7 +52,7 @@ private HA provider flags nor implements its own signaling/candidate lifecycle.
 Incomplete hosts reject before registration/acquisition; the public completion
 API, validation hook and source-clock contract must all be present.
 
-The example has 28 SDP/profile controls and two additional missing-hook host
+The example has 42 SDP/profile controls and two additional missing-hook host
 controls. Three source-side camera tests cover rejection, provider delegation
 and the default no-op. Actual authenticated HA WebSocket commands independently
 exercise both refusals and compatible offers in the browser lab.
@@ -179,8 +179,21 @@ source/FATE package is unchanged; its full external-sample/platform CI remains a
 maintainer gate. This bundle is review input, not a maintained dependency fork.
 
 Current local repository checkpoint: 5,056 library tests, 90.39% coverage;
-212 example tests including eight separately enabled real-relay controls; library
+226 example tests including eight separately enabled real-relay controls; library
 mypy (243 files), actual-HA mypy (15), Pyright, Ruff and spelling checks pass.
 Exact-head hosted checks and review closure are recorded on PR400, not inferred
 from these local results. Physical HEVC/audio/A/V, attended battery/live tests,
 long-run stability and maintained upstream releases remain separate gates.
+
+## Codex follow-up: zero-port bundle-only offers
+
+RFC 8843 section 6 distinguishes a rejected zero-port media section from a
+`bundle-only` member using its group's transport. The preflight now accepts
+zero-port members only with a media MID, its `bundle-only` marker and matching
+session-level BUNDLE membership. Missing/unlisted MIDs, media-level group
+lookalikes, ordinary rejected sections, unsupported codecs and non-receiving
+directions remain refused. Full transport/SDP validity remains with the provider.
+Five compatible controls fail before this correction; all 42 SDP/profile
+controls and all 226 example tests pass afterward, including real-provider
+contract delegation for both H.264/H.265 with bundle-only Opus audio. No media,
+source-clock, source proposal or resource-bound behavior changes in this fix.

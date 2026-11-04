@@ -79,7 +79,121 @@
       "old_negotiation_positive_cases_fail": 4,
       "cached_RTX_sequence_positive_cases_fail": 4,
       "receiver_feedback_model": "explicit bounded NACKs derived from restored original identities; not stock automatic Pion feedback or browser acceptance",
-      "media_checkpoint_above_not_replaced": true
+      "media_checkpoint_above_not_replaced": true,
+      "retained_LL_and_nonLL": {
+        "ll": {
+          "native_acquisitions": 1,
+          "demux_decrypt_owners": 1,
+          "decrypt_callbacks": 8840,
+          "HLS_samples_per_lens": [
+            {
+              "hevc": 1783,
+              "aac": 1857
+            },
+            {
+              "hevc": 1783,
+              "aac": 1857
+            }
+          ],
+          "converter_inputs_all_1857_original_AAC_packets_and_PTS": true,
+          "shared_RTCP_mapping_spread_seconds": 2.071377821266651e-05,
+          "peers": {
+            "primary": {
+              "original_datagrams_dropped": 74,
+              "first_RTX_repair_also_dropped": true,
+              "NACK_missing_counts": [
+                74,
+                24
+              ],
+              "original_HEVC_NALs_received": 1873,
+              "encoded_and_received_Opus": 5943,
+              "decoded_48k_samples": 5705280,
+              "all_RTP_sequences_restored": true,
+              "video_repair_max_lag_packets": 317
+            },
+            "secondary": {
+              "original_datagrams_dropped": 74,
+              "first_RTX_repair_also_dropped": true,
+              "NACK_missing_counts": [
+                74,
+                24
+              ],
+              "original_HEVC_NALs_received": 1873,
+              "encoded_and_received_Opus": 5943,
+              "decoded_48k_samples": 5705280,
+              "all_RTP_sequences_restored": true,
+              "video_repair_max_lag_packets": 309
+            }
+          },
+          "source_closed": true,
+          "admission_after_unload": 0,
+          "relay_and_peers_exit_zero": true,
+          "Prepare_reload_lazy_and_identities_stable": true,
+          "ephemeral_config_removed": true,
+          "browser_or_physical_playback": false,
+          "stock_automatic_Pion_feedback_claimed": false
+        },
+        "nonll": {
+          "native_acquisitions": 1,
+          "demux_decrypt_owners": 1,
+          "decrypt_callbacks": 8840,
+          "HLS_samples_per_lens": [
+            {
+              "hevc": 1783,
+              "aac": 1857
+            },
+            {
+              "hevc": 1783,
+              "aac": 1857
+            }
+          ],
+          "converter_inputs_all_1857_original_AAC_packets_and_PTS": true,
+          "shared_RTCP_mapping_spread_seconds": 2.0658131688833237e-05,
+          "peers": {
+            "primary": {
+              "original_datagrams_dropped": 74,
+              "first_RTX_repair_also_dropped": true,
+              "NACK_missing_counts": [
+                74,
+                24
+              ],
+              "original_HEVC_NALs_received": 1873,
+              "encoded_and_received_Opus": 5943,
+              "decoded_48k_samples": 5705280,
+              "all_RTP_sequences_restored": true,
+              "video_repair_max_lag_packets": 317
+            },
+            "secondary": {
+              "original_datagrams_dropped": 74,
+              "first_RTX_repair_also_dropped": true,
+              "NACK_missing_counts": [
+                74,
+                24
+              ],
+              "original_HEVC_NALs_received": 1873,
+              "encoded_and_received_Opus": 5943,
+              "decoded_48k_samples": 5705280,
+              "all_RTP_sequences_restored": true,
+              "video_repair_max_lag_packets": 309
+            }
+          },
+          "source_closed": true,
+          "admission_after_unload": 0,
+          "relay_and_peers_exit_zero": true,
+          "Prepare_reload_lazy_and_identities_stable": true,
+          "ephemeral_config_removed": true,
+          "browser_or_physical_playback": false,
+          "stock_automatic_Pion_feedback_claimed": false
+        }
+      },
+      "earlier_LL_mixed_loss": {
+        "observed_hook_drops_primary": 23,
+        "observed_hook_drops_secondary": 60,
+        "first_NACK_missing_each": 74,
+        "additional_loss_before_hook_not_fully_localized": true,
+        "all_media_eventually_recovered": true,
+        "not_called_74_controlled_hook_drops": true
+      }
     }
   },
   "home_assistant": {

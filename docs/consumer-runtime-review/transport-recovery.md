@@ -86,9 +86,46 @@ relabeled as a passing client qualification. The maintained receiver API is used
 for decoding/restoration and RTCP; the manual feedback schedule is an explicit
 fault-injection test contract, not a replacement client implementation.
 
-Retained-topology results are recorded separately after independent payload,
-clock, HLS and lifecycle audits. Generated test success alone is not a retained
-media or physical playback result.
+## Retained topology qualification
+
+Final LL-HLS and non-LL runs both pass. Each uses the real HA HLS worker and
+WebRTC provider for both lenses, one acquisition and one demux/decrypt owner
+(8,840 callbacks). Each peer deliberately drops original sequences 95–168 before
+SRTP, waits until sequence 400 before requesting them, and also loses its first
+RTX repair. Subsequent feedback requests only remaining original identities.
+The source proposal and runtime binary are identical between the two runs;
+the LL fixture batches diagnostic output rather than logging every dropped packet.
+
+Six independent audits verify:
+
+- Each HLS lens retains all 1,783 HEVC and 1,857 AAC samples through the verified
+  non-loopback test-CA HTTPS edge.
+- Both converter inputs contain all 1,857 original AAC packet bytes and exact PTS.
+- Each WebRTC lens receives all 1,873 original ordered non-AUD HEVC NALs and all
+  5,943 converter-emitted Opus packets, with exact source-RTP mappings and no
+  missing prefix/internal interval/tail. Decoding yields 5,705,280 samples at
+  48 kHz with nonzero audio, not a claim of lossless AAC PCM parity.
+- Offline reconstruction restores every RTP sequence despite repaired out-of-order
+  video packets. Detailed maximum repair lags and NACK missing counts are recorded
+  in `qualification.json`; packet recovery is not timely browser-frame display.
+- Shared cross-lens/cross-track RTCP mapping spreads are 20.714 microseconds LL
+  and 20.658 microseconds non-LL, within one unchanged 48 kHz tick.
+- Terminal offers cannot reacquire; Prepare/revision reload remain lazy, identities
+  remain stable, unload returns admission to zero, source/relay/peers close and
+  only owned ephemeral configuration is removed.
+
+An earlier trace-enabled LL run had only 23/60 observed injection-hook drops,
+although each peer requested 74 missing packets and eventually recovered all
+media. Additional pre-hook loss was not fully localized. It is not reported as
+74 controlled hook drops per peer. The final focused LL check uses batched
+logging and verifies all 74 actual hook drops without changing transport limits.
+A separate first instrumentation pass omitted converter pipe traces and is not
+counted as a complete audio/clock audit. All these observations remain retained.
+
+No new physical capture, production topology or stock automatic-feedback
+acceptance is inferred. The historical host-load failure remains its original
+evidence; these runs qualify the explicitly injected burst and feedback policy,
+not arbitrary host load.
 
 ## Gates still separate from this PR
 

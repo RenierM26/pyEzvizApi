@@ -262,7 +262,7 @@ def test_resource_sampler_records_exited_descendants_without_failing(monkeypatch
 @pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
 @pytest.mark.parametrize('denied_process', ['root', 'active'])
 def test_resource_sampler_does_not_hide_active_or_root_permission_failures(monkeypatch, denied_process):
-    """Only confirmed exits may be excluded from the non-atomic resource sample."""
+    """Root and persistent identity-bound permission failures cannot be accepted."""
     with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
         try:
@@ -276,9 +276,13 @@ def test_resource_sampler_does_not_hide_active_or_root_permission_failures(monke
 
             monkeypatch.setattr(Path, 'iterdir', denied_while_active)
             resources = M['Resources']()
+            if denied_process == 'active':
+                resources.sample(os.getpid())
+                with pytest.raises(PermissionError, match='unresolved after cleanup'):
+                    resources.require_complete()
             with pytest.raises(PermissionError):
                 resources.sample(os.getpid())
-            assert resources.result()['missed_process_samples'] == 0
+            assert resources.result()['missed_process_samples'] == (1 if denied_process == 'active' else 0)
         finally:
             child.kill()
             child.wait(timeout=3)
@@ -316,6 +320,85 @@ def test_resource_sampler_rechecks_one_transient_permission_race(monkeypatch, re
             assert denied == [True] and yielded == [True]
             assert result['missed_process_samples'] == (1 if recovery == 'exited' else 0)
             assert result['windows']['0']['peak_rss_bytes'] > 0
+        finally:
+            child.kill()
+            child.wait(timeout=3)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+@pytest.mark.parametrize('recovery', ['readable', 'exited', 'unlisted'])
+def test_resource_sampler_defers_exec_visibility_to_next_sample(monkeypatch, recovery):
+    """An exec visibility gap can outlast one scheduler yield without being permanent."""
+    with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        original = Path.iterdir
+        denied: list[bool] = []
+
+        def denied_for_one_snapshot(path):
+            if path == Path('/proc') / str(child.pid) / 'fd' and len(denied) < 2:
+                denied.append(True)
+                raise PermissionError('Synthetic exec visibility lasts beyond one yield')
+            return original(path)
+
+        monkeypatch.setattr(Path, 'iterdir', denied_for_one_snapshot)
+        resources = M['Resources']()
+        try:
+            resources.sample(os.getpid())
+            first = resources.result()
+            assert first['deferred_permission_samples'] == 1
+            assert first['pending_permission_checks'] == 1
+            assert first['missed_process_samples'] == 1
+            if recovery == 'exited':
+                child.kill()
+                child.wait(timeout=3)
+            if recovery == 'unlisted':
+                original_read = Path.read_text
+                children_path = Path('/proc') / str(os.getpid()) / 'task' / str(os.getpid()) / 'children'
+
+                def no_longer_listed(path, *args, **kwargs):
+                    return '' if path == children_path else original_read(path, *args, **kwargs)
+
+                monkeypatch.setattr(Path, 'read_text', no_longer_listed)
+            resources.sample(os.getpid())
+            resources.require_complete()
+            assert resources.result()['pending_permission_checks'] == 0
+            assert denied == [True, True]
+        finally:
+            child.kill()
+            child.wait(timeout=3)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+def test_resource_sampler_distinguishes_reused_pid_start_time(monkeypatch):
+    """A recycled PID gets its own visibility check, not an old denial identity."""
+    with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        namespace = M['Resources'].sample.__globals__
+        original_identity = namespace['process_identity']
+        original_iterdir = Path.iterdir
+        recycled: list[bool] = []
+
+        def process_identity(path):
+            identity = original_identity(path)
+            if identity is not None and path == Path('/proc') / str(child.pid) and recycled:
+                return identity[0], identity[1] + 1
+            return identity
+
+        def denied(path):
+            if path == Path('/proc') / str(child.pid) / 'fd':
+                raise PermissionError('Synthetic active-process visibility check')
+            return original_iterdir(path)
+
+        monkeypatch.setitem(namespace, 'process_identity', process_identity)
+        monkeypatch.setattr(Path, 'iterdir', denied)
+        resources = M['Resources']()
+        try:
+            resources.sample(os.getpid())
+            recycled.append(True)
+            resources.sample(os.getpid())
+            assert resources.result()['deferred_permission_samples'] == 2
+            with pytest.raises(PermissionError):
+                resources.sample(os.getpid())
         finally:
             child.kill()
             child.wait(timeout=3)

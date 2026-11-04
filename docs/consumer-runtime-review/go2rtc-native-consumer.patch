@@ -3445,17 +3445,47 @@ index 0000000..b6a1a67
 +	}
 +}
 diff --git a/pkg/webrtc/api.go b/pkg/webrtc/api.go
-index 5551d65..03335ca 100644
+index 5551d65..d85518e 100644
 --- a/pkg/webrtc/api.go
 +++ b/pkg/webrtc/api.go
-@@ -103,6 +103,7 @@ func NewServerAPI(network, address string, filters *Filters) (*webrtc.API, error
+@@ -103,6 +103,8 @@ func NewServerAPI(network, address string, filters *Filters) (*webrtc.API, error
  	}
  
  	i := &interceptor.Registry{}
 +	i.Add(&nativeReportFactory{})
++	i.Add(&rtxSequenceFactory{})
  	if err := webrtc.RegisterDefaultInterceptors(m, i); err != nil {
  		return nil, err
  	}
+@@ -269,7 +271,7 @@ func RegisterDefaultCodecs(m *webrtc.MediaEngine) error {
+ 		{"nack", ""},
+ 		{"nack", "pli"},
+ 	}
+-	for _, codec := range []webrtc.RTPCodecParameters{
++	for index, codec := range []webrtc.RTPCodecParameters{
+ 		{
+ 			RTPCodecCapability: webrtc.RTPCodecCapability{
+ 				MimeType:     webrtc.MimeTypeH264,
+@@ -310,6 +312,19 @@ func RegisterDefaultCodecs(m *webrtc.MediaEngine) error {
+ 		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+ 			return err
+ 		}
++		// Negotiated RTX carries late repairs on an independent SSRC/sequence
++		// space. Same-SSRC resends outside the receiver's SRTP replay window
++		// are inadmissible even when the NACK cache still holds the packet.
++		// Let Pion own RTX wrapping, cache lifetime and receiver restoration.
++		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
++			RTPCodecCapability: webrtc.RTPCodecCapability{
++				MimeType: webrtc.MimeTypeRTX, ClockRate: codec.ClockRate,
++				SDPFmtpLine: fmt.Sprintf("apt=%d", codec.PayloadType),
++			},
++			PayloadType: webrtc.PayloadType(102 + index),
++		}, webrtc.RTPCodecTypeVideo); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	return nil
 diff --git a/pkg/webrtc/conn.go b/pkg/webrtc/conn.go
 index 924fd55..f811455 100644
 --- a/pkg/webrtc/conn.go
@@ -3743,6 +3773,330 @@ index 0000000..8479d54
 +		}
 +		if n >= 12 && b[0]>>6 == 2 && b[1]&0x7f == 96 && binary.BigEndian.Uint16(b[2:4]) == 2 && c.dropped.CompareAndSwap(false, true) {
 +			continue
++		}
++		return n, addr, nil
++	}
++}
+diff --git a/pkg/webrtc/native_recovery_test.go b/pkg/webrtc/native_recovery_test.go
+new file mode 100644
+index 0000000..1d5dbb2
+--- /dev/null
++++ b/pkg/webrtc/native_recovery_test.go
+@@ -0,0 +1,318 @@
++package webrtc
++
++import (
++	"bytes"
++	"encoding/binary"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/ice/v4"
++	"github.com/pion/interceptor"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++	pion "github.com/pion/webrtc/v4"
++)
++
++// A receiver must be able to repair a burst after its primary SRTP replay
++// window advances, without increasing that window or the retransmission cache.
++func TestNativeRecoveryLateFeedback(t *testing.T) {
++	for _, profile := range []struct{ name, codec, fmtp string }{
++		{"H264-baseline", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
++		{"H264-constrained", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
++		{"H264-high", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032"},
++		{"H265", core.CodecH265, ""},
++	} {
++		for _, scenario := range []struct {
++			name           string
++			rtx            bool
++			total, missing uint16
++			recovered      bool
++		}{
++			{"negotiated_rtx_late_burst_and_lost_repair", true, 256, 74, true},
++			{"no_rtx_early_feedback", false, 32, 16, true},
++			{"no_rtx_keeps_replay_protection", false, 256, 74, false},
++			{"expired_cache_stays_bounded", true, 1200, 74, false},
++		} {
++			t.Run(profile.name+"/"+scenario.name, func(t *testing.T) {
++				nativeRecoveryLateFeedback(t, profile.codec, profile.fmtp, scenario.rtx, scenario.total, scenario.missing, scenario.recovered)
++			})
++		}
++	}
++}
++
++func nativeRecoveryLateFeedback(t *testing.T, codec, fmtp string, offerRTX bool, total, missingCount uint16, recovered bool) {
++	old := OnNewListener
++	OnNewListener = func(v any) {
++		if closer, ok := v.(io.Closer); ok {
++			t.Cleanup(func() { _ = closer.Close() })
++		}
++	}
++	api, err := NewServerAPI("udp", "127.0.0.1:0", &Filters{Loopback: true, Interfaces: []string{"lo"}, Networks: []string{"udp4"}})
++	OnNewListener = old
++	if err != nil {
++		t.Fatal(err)
++	}
++	pc, err := api.NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := NewConn(pc)
++	c.Mode = core.ModePassiveConsumer
++	defer c.Close()
++	m := &pion.MediaEngine{}
++	mime, nal := pion.MimeTypeH265, []byte{0x26, 1, 5, 6, 7}
++	if codec == core.CodecH264 {
++		mime = pion.MimeTypeH264
++		nal = []byte{0x65, 5, 6, 7}
++	}
++	if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: mime, ClockRate: 90000, SDPFmtpLine: fmtp, RTCPFeedback: []pion.RTCPFeedback{{Type: "nack"}}}, PayloadType: 96}, pion.RTPCodecTypeVideo); err != nil {
++		t.Fatal(err)
++	}
++	if offerRTX {
++		if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: pion.MimeTypeRTX, ClockRate: 90000, SDPFmtpLine: "apt=96"}, PayloadType: 97}, pion.RTPCodecTypeVideo); err != nil {
++			t.Fatal(err)
++		}
++	}
++	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	loss := &nativeBurstLossConn{PacketConn: socket, dropped: map[uint16]bool{}, last: missingCount + 1, dropFirstRTX: offerRTX}
++	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: loss})
++	defer mux.Close()
++	se := pion.SettingEngine{}
++	se.SetICEUDPMux(mux)
++	se.SetIncludeLoopbackCandidate(true)
++	se.SetInterfaceFilter(func(name string) bool { return name == "lo" })
++	se.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
++	// Manual feedback is generated from the receiver's restored original
++	// sequence inventory. Delay its first request past the unchanged SRTP
++	// replay window, and retry only still-missing packets, not repaired ones.
++	remote, err := pion.NewAPI(pion.WithMediaEngine(m), pion.WithSettingEngine(se), pion.WithInterceptorRegistry(&interceptor.Registry{})).NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer remote.Close()
++	connected := make(chan struct{}, 1)
++	remote.OnConnectionStateChange(func(state pion.PeerConnectionState) {
++		if state == pion.PeerConnectionStateConnected {
++			select {
++			case connected <- struct{}{}:
++			default:
++			}
++		}
++	})
++	type receipt struct {
++		found map[uint16][]byte
++		err   error
++	}
++	result := make(chan receipt, 1)
++	remote.OnTrack(func(track *pion.TrackRemote, _ *pion.RTPReceiver) {
++		_ = track.SetReadDeadline(time.Now().Add(3 * time.Second))
++		found := map[uint16][]byte{}
++		requested := false
++		highest := uint16(0)
++		var lastNack time.Time
++		for {
++			packet, _, readErr := track.ReadRTP()
++			if readErr != nil {
++				result <- receipt{found, readErr}
++				return
++			}
++			found[packet.SequenceNumber] = append([]byte(nil), packet.Payload...)
++			if packet.SequenceNumber > highest {
++				highest = packet.SequenceNumber
++			}
++			if highest >= total && time.Since(lastNack) >= 75*time.Millisecond {
++				missing := make([]uint16, 0, missingCount)
++				for seq := uint16(2); seq <= missingCount+1; seq++ {
++					if _, ok := found[seq]; !ok {
++						missing = append(missing, seq)
++					}
++				}
++				if len(missing) > 0 {
++					if writeErr := remote.WriteRTCP([]rtcp.Packet{&rtcp.TransportLayerNack{MediaSSRC: uint32(track.SSRC()), Nacks: rtcp.NackPairsFromSequenceNumbers(missing)}}); writeErr != nil {
++						result <- receipt{found, writeErr}
++						return
++					}
++					lastNack = time.Now()
++				}
++				if !requested {
++					_ = track.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
++					requested = true
++				}
++			}
++			complete := requested
++			for seq := uint16(1); complete && seq <= total; seq++ {
++				_, complete = found[seq]
++			}
++			if complete {
++				result <- receipt{found, nil}
++				return
++			}
++		}
++	})
++	if _, err = remote.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
++		t.Fatal(err)
++	}
++	offer, err := remote.CreateOffer(nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	gathered := pion.GatheringCompletePromise(remote)
++	if err = remote.SetLocalDescription(offer); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = c.SetOffer(remote.LocalDescription().SDP); err != nil {
++		t.Fatal(err)
++	}
++	media := c.Medias[0]
++	inputCodec := &core.Codec{Name: codec, ClockRate: 90000, PayloadType: 96}
++	input := core.NewReceiver(&core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{inputCodec}}, inputCodec)
++	input.SourcePolicy = &core.SourcePolicy{OneShot: true}
++	if err = c.AddTrack(media, media.Codecs[0], input); err != nil {
++		t.Fatal(err)
++	}
++	gathered = pion.GatheringCompletePromise(pc)
++	if _, err = c.GetAnswer(); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = remote.SetRemoteDescription(*pc.LocalDescription()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-connected:
++	case <-time.After(3 * time.Second):
++		t.Fatal("connect timeout")
++	}
++	writePacket := func(i uint16) {
++		payload := append(append([]byte(nil), nal...), byte(i>>8), byte(i))
++		input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: i, Timestamp: uint32(i) * 3000}, Payload: payload})
++	}
++	for i := uint16(1); i <= total; i++ {
++		writePacket(i)
++	}
++	// Continue ordinary media after feedback, as a running source does. Pion
++	// polls its bounded repair queue between primary reads; do not enlarge it.
++	stop := make(chan struct{})
++	var continuing sync.WaitGroup
++	continuing.Add(1)
++	go func() {
++		defer continuing.Done()
++		for i := total + 1; i <= total+100; i++ {
++			select {
++			case <-stop:
++				return
++			case <-time.After(5 * time.Millisecond):
++				writePacket(i)
++			}
++		}
++	}()
++	defer func() { close(stop); continuing.Wait() }()
++
++	select {
++	case got := <-result:
++		loss.mu.Lock()
++		dropped, rtx, resent, lostRepair := len(loss.dropped), loss.rtx, loss.resent, loss.rtxDropped
++		loss.mu.Unlock()
++		if dropped != int(missingCount) {
++			t.Fatalf("drop count=%d", dropped)
++		}
++		if recovered {
++			if got.err != nil {
++				t.Fatalf("late burst unrecovered: unique=%d want=%d err=%v feedback=%d rtx=%d", len(got.found), total, got.err, c.nativeFeedbackPackets.Load(), rtx)
++			}
++			if offerRTX {
++				if rtx <= int(missingCount) || !lostRepair {
++					t.Fatalf("RTX packets=%d lost-first-repair=%v", rtx, lostRepair)
++				}
++			} else if rtx != 0 || resent < int(missingCount) {
++				t.Fatalf("early same-SSRC recovery: RTX=%d resends=%d", rtx, resent)
++			}
++		} else {
++			var timeout net.Error
++			if !errors.As(got.err, &timeout) || !timeout.Timeout() {
++				t.Fatalf("expected bounded timeout, got %v", got.err)
++			}
++			last := uint16(0)
++			for seq := range got.found {
++				if seq > last {
++					last = seq
++				}
++			}
++			if len(got.found) != int(last)-int(missingCount) {
++				t.Fatalf("unexpected recovery/extra loss: unique=%d last=%d", len(got.found), last)
++			}
++			if offerRTX && rtx != 0 {
++				t.Fatalf("expired cache produced %d RTX packets", rtx)
++			}
++			if !offerRTX && resent < int(missingCount) {
++				t.Fatalf("same-SSRC repairs=%d want>=%d", resent, missingCount)
++			}
++		}
++		for seq, payload := range got.found {
++			expected := append(append([]byte(nil), nal...), byte(seq>>8), byte(seq))
++			if !bytes.Equal(payload, expected) {
++				t.Fatalf("payload changed seq=%d: %x != %x", seq, payload, expected)
++			}
++		}
++		if c.nativeFeedbackPackets.Load() == 0 {
++			t.Fatal("NACK not read by native sender")
++		}
++	case <-time.After(4 * time.Second):
++		t.Fatal("receiver timeout")
++	}
++}
++
++type nativeBurstLossConn struct {
++	net.PacketConn
++	mu           sync.Mutex
++	dropped      map[uint16]bool
++	rtx          int
++	resent       int
++	last         uint16
++	dropFirstRTX bool
++	rtxDropped   bool
++}
++
++func (c *nativeBurstLossConn) ReadFrom(b []byte) (int, net.Addr, error) {
++	for {
++		n, addr, err := c.PacketConn.ReadFrom(b)
++		if err != nil {
++			return n, addr, err
++		}
++		if n >= 12 && b[0]>>6 == 2 {
++			pt := b[1] & 0x7f
++			seq := binary.BigEndian.Uint16(b[2:4])
++			c.mu.Lock()
++			drop := false
++			if pt == 96 && seq >= 2 && seq <= c.last {
++				if !c.dropped[seq] {
++					c.dropped[seq] = true
++					drop = true
++				} else {
++					c.resent++
++				}
++			}
++			if pt == 97 {
++				c.rtx++
++				if c.dropFirstRTX && !c.rtxDropped {
++					c.rtxDropped = true
++					drop = true
++				}
++			}
++			c.mu.Unlock()
++			if drop {
++				continue
++			}
 +		}
 +		return n, addr, nil
 +	}
@@ -4180,6 +4534,142 @@ index 0000000..f0084cc
 +	require.Equal(t, 1, sender.Drops)
 +	require.False(t, c.nativeFailed.Load())
 +	sender.Close()
++}
+diff --git a/pkg/webrtc/rtx_sequence.go b/pkg/webrtc/rtx_sequence.go
+new file mode 100644
+index 0000000..ef5cce9
+--- /dev/null
++++ b/pkg/webrtc/rtx_sequence.go
+@@ -0,0 +1,41 @@
++package webrtc
++
++import (
++	"sync"
++
++	"github.com/pion/interceptor"
++	"github.com/pion/rtp"
++)
++
++// Pion's responder caches RTX headers with their sequence number. Allocate the
++// transport sequence at actual transmission instead: every retransmission is
++// a new RTX packet, even when its original media sequence is unchanged.
++// Otherwise a repeated repair may be rejected by SRTP after later RTX traffic
++// advances the receiver's replay window, or after an authenticated repair is
++// discarded by the receiver's bounded application queue.
++type rtxSequenceFactory struct{}
++
++func (*rtxSequenceFactory) NewInterceptor(string) (interceptor.Interceptor, error) {
++	return &rtxSequenceInterceptor{}, nil
++}
++
++type rtxSequenceInterceptor struct{ interceptor.NoOp }
++
++func (*rtxSequenceInterceptor) BindLocalStream(info *interceptor.StreamInfo, writer interceptor.RTPWriter) interceptor.RTPWriter {
++	if info.SSRCRetransmission == 0 {
++		return writer
++	}
++	sequence := rtp.NewRandomSequencer()
++	var mu sync.Mutex
++	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {
++		if header.SSRC != info.SSRCRetransmission {
++			return writer.Write(header, payload, attributes)
++		}
++		mu.Lock()
++		defer mu.Unlock()
++		// The cache and concurrent resend owners retain the original header.
++		output := header.Clone()
++		output.SequenceNumber = sequence.NextSequenceNumber()
++		return writer.Write(&output, payload, attributes)
++	})
++}
+diff --git a/pkg/webrtc/rtx_sequence_test.go b/pkg/webrtc/rtx_sequence_test.go
+new file mode 100644
+index 0000000..8b34732
+--- /dev/null
++++ b/pkg/webrtc/rtx_sequence_test.go
+@@ -0,0 +1,83 @@
++package webrtc
++
++import (
++	"bytes"
++	"errors"
++	"sync"
++	"testing"
++
++	"github.com/pion/interceptor"
++	"github.com/pion/rtp"
++)
++
++func TestRTXSequenceImmutableCacheAndWrap(t *testing.T) {
++	header := &rtp.Header{Version: 2, SSRC: 9, SequenceNumber: 17, Timestamp: 123, Marker: true}
++	payload := []byte{0, 7, 5, 6}
++	original := header.Clone()
++	var previous uint16
++	count := 0
++	writer := interceptor.RTPWriterFunc(func(actual *rtp.Header, body []byte, _ interceptor.Attributes) (int, error) {
++		if count > 0 && actual.SequenceNumber != previous+1 {
++			t.Fatalf("sequence=%d previous=%d", actual.SequenceNumber, previous)
++		}
++		previous = actual.SequenceNumber
++		count++
++		if actual.Timestamp != 123 || actual.SSRC != 9 || !actual.Marker || !bytes.Equal(body, payload) {
++			t.Fatal("RTX media/clock changed")
++		}
++		return len(body), nil
++	})
++	output := (&rtxSequenceInterceptor{}).BindLocalStream(&interceptor.StreamInfo{SSRC: 7, SSRCRetransmission: 9}, writer)
++	for range 65537 {
++		if _, err := output.Write(header, payload, nil); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if count != 65537 || header.SequenceNumber != original.SequenceNumber || header.Timestamp != original.Timestamp || header.SSRC != original.SSRC {
++		t.Fatal("cached header modified")
++	}
++}
++
++func TestRTXSequenceConcurrentResends(t *testing.T) {
++	header := &rtp.Header{Version: 2, SSRC: 9, SequenceNumber: 17}
++	sequences := map[uint16]bool{}
++	writer := interceptor.RTPWriterFunc(func(actual *rtp.Header, _ []byte, _ interceptor.Attributes) (int, error) {
++		if sequences[actual.SequenceNumber] {
++			t.Error("transport sequence reused")
++		}
++		sequences[actual.SequenceNumber] = true
++		return 1, nil
++	})
++	output := (&rtxSequenceInterceptor{}).BindLocalStream(&interceptor.StreamInfo{SSRC: 7, SSRCRetransmission: 9}, writer)
++	var workers sync.WaitGroup
++	for range 64 {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			if _, err := output.Write(header, []byte{1}, nil); err != nil {
++				t.Error(err)
++			}
++		}()
++	}
++	workers.Wait()
++	if len(sequences) != 64 || header.SequenceNumber != 17 {
++		t.Fatal("resend count/cache identity changed")
++	}
++}
++
++func TestRTXSequencePassThroughAndErrors(t *testing.T) {
++	for _, rtxSSRC := range []uint32{0, 9} {
++		expected := errors.New("bounded writer failure")
++		primary := &rtp.Header{Version: 2, SSRC: 7, SequenceNumber: 55}
++		writer := interceptor.RTPWriterFunc(func(actual *rtp.Header, _ []byte, _ interceptor.Attributes) (int, error) {
++			if actual != primary || actual.SequenceNumber != 55 {
++				t.Fatal("primary/legacy header replaced")
++			}
++			return 0, expected
++		})
++		output := (&rtxSequenceInterceptor{}).BindLocalStream(&interceptor.StreamInfo{SSRC: 7, SSRCRetransmission: rtxSSRC}, writer)
++		if _, err := output.Write(primary, nil, nil); !errors.Is(err, expected) {
++			t.Fatalf("writer error changed: %v", err)
++		}
++	}
 +}
 diff --git a/pkg/webrtc/track.go b/pkg/webrtc/track.go
 index 657eee1..65b52fb 100644

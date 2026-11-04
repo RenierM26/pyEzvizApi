@@ -111,6 +111,37 @@ def playback(args: Any, report: dict[str, Any]) -> None:
     verify(report, args.expected_source_sha256)
 
 
+def process_has_ended(base: Path) -> bool:
+    """A vanished or zombie descendant cannot provide a live resource sample."""
+    try:
+        state = (base / 'stat').read_text().rsplit(') ', 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    return state in {'Z', 'X'}
+
+
+def process_resources(base: Path, *, descendant: bool) -> tuple[int, int, list[int]] | None:
+    """Retry one transient exit/exec race; retain genuine permission failures."""
+    retries = 1
+    while True:
+        try:
+            if descendant and process_has_ended(base):
+                return None
+            resident = int((base / 'statm').read_text().split()[1]) * os.sysconf('SC_PAGE_SIZE')
+            descriptors = len(list((base / 'fd').iterdir()))
+            children = [int(child) for child in (base / 'task' / base.name / 'children').read_text().split()]
+            return resident, descriptors, children
+        except PermissionError:
+            if not descendant:
+                raise
+            if process_has_ended(base):
+                return None
+            if not retries:
+                raise
+            retries -= 1
+            time.sleep(0)  # Yield to an exiting/execing task without changing the wall budget.
+
+
 class Resources:
     """Sampled, non-atomic process-tree RSS/FD totals, not allocation accounting."""
 
@@ -130,13 +161,16 @@ class Resources:
             if len(seen) >= 16:
                 raise ValueError('recorded playback process-tree bound exceeded')
             seen.add(pid)
+            base = Path('/proc') / str(pid)
             try:
-                base = Path('/proc') / str(pid)
-                resident = int((base / 'statm').read_text().split()[1]) * os.sysconf('SC_PAGE_SIZE')
-                descriptors += len(list((base / 'fd').iterdir()))
-                children = (base / 'task' / str(pid) / 'children').read_text().split()
+                snapshot = process_resources(base, descendant=pid != root)
+                if snapshot is None:
+                    self.missed_process_samples += 1
+                    continue
+                resident, descriptor_count, children = snapshot
                 rss += resident
-                pending.extend(int(child) for child in children)
+                descriptors += descriptor_count
+                pending.extend(children)
             except (FileNotFoundError, ProcessLookupError):
                 self.missed_process_samples += 1
         window = str(min(int((time.monotonic() - self.started) // 30), WALL // 30))

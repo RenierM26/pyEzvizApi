@@ -43,6 +43,9 @@ class GroupEntry:
             choices, self.make_source, media_key=settings.credentials.media_key,
             nalu_header_size=settings.nalu_header_size, late_join=True,
         )
+        self.group.native_audio_profile = (
+            "opus-source-clock-v1" if settings.relay_native_opus else None
+        )
         self.group.status_changed = self.notify
         self.lenses = {"primary": LensRuntime(self, "primary", title, settings)}
         self.lenses.update({lens.key: LensRuntime(
@@ -78,6 +81,7 @@ class GroupEntry:
         return SharedRelay(
             session, self.settings.relay_api_port, self.settings.relay_rtsp_port,
             trusted_source_clock=True, atomic_ownership=True,
+            native_opus=self.settings.relay_native_opus,
         )
 
     @property

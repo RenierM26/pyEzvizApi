@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.stream import Stream
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -15,6 +17,8 @@ from .const import status_signal
 from .entry_runtime import GroupEntry, LensRuntime
 from .relay import RelayError
 from .route import Runtime, source_url
+
+_hls_source: ContextVar[bool] = ContextVar("ezviz_native_hls_source", default=False)
 
 
 async def async_setup_entry(
@@ -52,6 +56,8 @@ class NativeCamera(Camera):
         self._attr_name = lens.name if lens is not None else entry.title
         # Source clocks already exist; do not enable wall-clock timestamp repair.
         self.stream_options = {"use_wallclock_as_timestamps": False}
+        if self.runtime.settings.relay_native_opus:
+            self.stream_options["preserve_initial_timestamps"] = True
 
     async def stream_source(self) -> str | None:
         """Return only the internal capability, never camera credentials."""
@@ -66,6 +72,8 @@ class NativeCamera(Camera):
                 if (self.runtime.closing or self.runtime.exhausted or self.runtime.rearming
                         or token != self.runtime.token):
                     return None
+                if self.runtime.settings.relay_native_opus and not _hls_source.get():
+                    return result + "&video&audio=opus"
                 return result
             except (RelayError, asyncio.CancelledError):
                 if isinstance(self.runtime, LensRuntime):
@@ -74,6 +82,14 @@ class NativeCamera(Camera):
         return upstream
 
     async def async_create_stream(self) -> Stream | None:
+        """Keep HLS on original AAC while WebRTC requests the native Opus view."""
+        token = _hls_source.set(True)
+        try:
+            return await self._async_create_native_stream()
+        finally:
+            _hls_source.reset(token)
+
+    async def _async_create_native_stream(self) -> Stream | None:
         """Do not let HA's cached HLS stream bypass exhausted source admission."""
         if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:
             return None
@@ -90,6 +106,8 @@ class NativeCamera(Camera):
             if (stream is not None and isinstance(self.runtime, LensRuntime)
                     and (self._finite_delivery is None or self._finite_delivery.stream is not stream)):
                 self._finite_delivery = maybe_finite_delivery(self.hass, self.runtime, stream)
+            if self.runtime.settings.relay_native_opus and self._finite_delivery is None:
+                raise HomeAssistantError("Native finite AV requires the public HA finite-source API")
             return stream
 
     @property

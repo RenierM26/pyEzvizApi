@@ -1,0 +1,1738 @@
+--- a/homeassistant/components/stream/__init__.py
++++ b/homeassistant/components/stream/__init__.py
+@@ -48,6 +48,7 @@
+     CONF_EXTRA_PART_WAIT_TIME,
+     CONF_LL_HLS,
+     CONF_PART_DURATION,
++    CONF_PRESERVE_INITIAL_TIMESTAMPS,
+     CONF_RTSP_TRANSPORT,
+     CONF_SEGMENT_DURATION,
+     CONF_USE_WALLCLOCK_AS_TIMESTAMPS,
+@@ -77,22 +78,36 @@
+ )
+ from .diagnostics import Diagnostics
+ from .exceptions import StreamOpenClientError, StreamWorkerError
++from .finite import (
++    FiniteSourceCounts,
++    FiniteSourceHandle,
++    FiniteSourceSession,
++    FiniteSourceState,
++)
+ from .hls import HlsStreamOutput, async_setup_hls
+ 
+ if TYPE_CHECKING:
+     from homeassistant.components.camera import DynamicStreamSettings
++
++FINITE_SOURCE_COMPLETION_CONTRACT = "source-access-units-v1"
++
+ 
+ __all__ = [
+     "ATTR_SETTINGS",
+     "CONF_EXTRA_PART_WAIT_TIME",
++    "CONF_PRESERVE_INITIAL_TIMESTAMPS",
+     "CONF_RTSP_TRANSPORT",
+     "CONF_USE_WALLCLOCK_AS_TIMESTAMPS",
+     "DOMAIN",
++    "FINITE_SOURCE_COMPLETION_CONTRACT",
+     "FORMAT_CONTENT_TYPE",
+     "HLS_PROVIDER",
+     "OUTPUT_FORMATS",
+     "RTSP_TRANSPORTS",
+     "SOURCE_TIMEOUT",
++    "FiniteSourceCounts",
++    "FiniteSourceHandle",
++    "FiniteSourceState",
+     "Orientation",
+     "Stream",
+     "StreamClientError",
+@@ -159,6 +174,16 @@
+     except probatio.Invalid as exc:
+         raise HomeAssistantError(f"Invalid stream options: {exc}") from exc
+ 
++    stream_settings.preserve_initial_timestamps = bool(
++        stream_options.get(CONF_PRESERVE_INITIAL_TIMESTAMPS, False)
++    )
++    if stream_settings.preserve_initial_timestamps and stream_options.get(
++        CONF_USE_WALLCLOCK_AS_TIMESTAMPS
++    ):
++        raise HomeAssistantError(
++            "Preserving source timestamps cannot use wall-clock replacement"
++        )
++
+     # FFmpeg 9 verifies TLS peers by default; cameras use self-signed certificates
+     pyav_options: dict[str, str] = {
+         "tls_verify": "1" if stream_options.get(CONF_VERIFY_SSL) else "0"
+@@ -178,7 +203,9 @@
+     if isinstance(stream_source, str) and stream_source[:7] == "rtsp://":
+         pyav_options = {
+             "rtsp_flags": ATTR_PREFER_TCP,
+-            "stimeout": "5000000",
++            "stimeout": str(SOURCE_TIMEOUT * 1000000)
++            if stream_settings.preserve_initial_timestamps
++            else "5000000",
+             **pyav_options,
+         }
+     return pyav_options, stream_settings
+@@ -356,6 +383,61 @@
+             else _LOGGER
+         )
+         self._diagnostics = Diagnostics()
++        self._finite_source: FiniteSourceSession | None = None
++        self._ever_started = False
++
++    @callback
++    def async_prepare_finite_source(self) -> FiniteSourceHandle:
++        """Declare one-shot ingestion before start; use a new Stream to rearm.
++
++        The integration must correlate its own source/subscription generation and
++        verify complete, joined delivery before calling async_confirm_finite_source.
++        This is an explicit source contract, not a generic FFmpeg EOF option.
++        """
++        if self._ever_started or self._finite_source is not None:
++            raise HomeAssistantError("Finite source must be declared once before start")
++        if any(fmt != HLS_PROVIDER for fmt in self._outputs):
++            raise HomeAssistantError("Finite source currently supports HLS only")
++        self._finite_source = FiniteSourceSession()
++        return self._finite_source.handle
++
++    @callback
++    def async_confirm_finite_source(
++        self, session: FiniteSourceHandle, counts: FiniteSourceCounts
++    ) -> bool:
++        """Authorize finalization for the exact current finite-source generation."""
++        return (
++            self._finite_source is not None
++            and self._finite_source.handle is session
++            and isinstance(counts, FiniteSourceCounts)
++            and self._finite_source.confirm(counts)
++        )
++
++    @callback
++    def async_cancel_finite_source(self, session: FiniteSourceHandle) -> bool:
++        """Revoke current finite publication synchronously before awaited teardown."""
++        if self._finite_source is None or self._finite_source.handle is not session:
++            return False
++        self._finite_source.cancel()
++        self._thread_quit.set()
++        return True
++
++    @property
++    def finite_source_state(self) -> FiniteSourceState | None:
++        """Return the finite-source state, or None for legacy streams."""
++        return self._finite_source.state if self._finite_source else None
++
++    @callback
++    def _async_publish_finite(
++        self, session: FiniteSourceSession, publish: Callable[[], None]
++    ) -> None:
++        """Publish buffered media then terminal markers without an await boundary."""
++        if self._finite_source is not session:
++            return
++        try:
++            session.publish(publish)
++        except Exception:
++            self._logger.exception("Failed to publish finite stream completion")
+ 
+     def endpoint_url(self, fmt: str) -> str:
+         """Start the stream and returns a url for the output format."""
+@@ -374,6 +456,20 @@
+ 
+     def add_provider(self, fmt: str, timeout: int | None = None) -> StreamOutput:
+         """Add provider output stream."""
++        if self._finite_source is not None and (
++            fmt != HLS_PROVIDER
++            or (
++                self._finite_source.state
++                not in (
++                    FiniteSourceState.READY,
++                    FiniteSourceState.ACTIVE,
++                    FiniteSourceState.WAITING,
++                    FiniteSourceState.FINALIZING,
++                )
++                and fmt not in self._outputs
++            )
++        ):
++            raise HomeAssistantError("Finite source provider is unavailable")
+         if not (provider := self._outputs.get(fmt)):
+             startup_timeout = OUTPUT_STARTUP_TIMEOUT
+             if timeout is None:
+@@ -383,7 +479,8 @@
+ 
+             async def idle_callback() -> None:
+                 if (
+-                    not self.dynamic_stream_settings.preload_stream
++                    self._finite_source is not None
++                    or not self.dynamic_stream_settings.preload_stream
+                     or fmt == RECORDER_PROVIDER
+                 ) and fmt in self._outputs:
+                     await self.remove_provider(self._outputs[fmt])
+@@ -437,6 +534,9 @@
+         async with self._start_stop_lock:
+             if self._thread and self._thread.is_alive():
+                 return
++            if self._finite_source and not self._finite_source.begin():
++                return
++            self._ever_started = True
+             if self._thread is not None:
+                 # The thread must have crashed/exited. Join to clean up the
+                 # previous thread.
+@@ -446,13 +546,20 @@
+                 name="stream_worker",
+                 target=self._run_worker,
+             )
+-            self._thread.start()
++            try:
++                self._thread.start()
++            except Exception:
++                if self._finite_source is not None:
++                    self._finite_source.fail()
++                raise
+             self._logger.debug(
+                 "Started stream: %s", redact_credentials(str(self.source))
+             )
+ 
+     def update_source(self, new_source: str) -> None:
+         """Restart the stream with a new stream source."""
++        if self._finite_source is not None:
++            raise HomeAssistantError("A finite source requires a new Stream generation")
+         self._diagnostics.increment("update_source")
+         self._logger.debug(
+             "Updating stream source %s", redact_credentials(str(new_source))
+@@ -475,6 +582,9 @@
+         from .worker import StreamState, stream_worker  # noqa: PLC0415
+ 
+         stream_state = StreamState(self.hass, self.outputs, self._diagnostics)
++        if self._finite_source is not None:
++            stream_state.finite_source = self._finite_source
++            stream_state.publish_finite = self._async_publish_finite
+         wait_timeout = 0
+         while not self._thread_quit.wait(timeout=wait_timeout):
+             start_time = time.time()
+@@ -496,9 +606,24 @@
+                     self._thread_quit,
+                 )
+             except StreamWorkerError as err:
++                if self._finite_source is not None:
++                    self._finite_source.fail()
+                 self._diagnostics.increment("worker_error")
+                 self._logger.error("Error from stream worker: %s", str(err))
+ 
++            except Exception:
++                if self._finite_source is None:
++                    raise
++                self._finite_source.fail()
++                self._logger.exception("Unexpected finite stream failure")
++
++            if self._finite_source is not None:
++                if self._finite_source.state in (
++                    FiniteSourceState.ACTIVE,
++                    FiniteSourceState.WAITING,
++                ):
++                    self._finite_source.cancel() if self._thread_quit.is_set() else self._finite_source.fail()
++                break
+             stream_state.discontinuity()
+             if not _should_retry() or self._thread_quit.is_set():
+                 if self._fast_restart_once:
+@@ -528,6 +653,12 @@
+             )
+ 
+         async def worker_finished() -> None:
++            if (
++                self._finite_source is not None
++                and self._finite_source.state == FiniteSourceState.COMPLETED
++            ):
++                # Keep existing bounded provider queues and token until idle/stop.
++                return
+             # The worker is no longer checking availability
+             # of the stream and can no longer track it so
+             # mark it as available, otherwise the frontend
+@@ -543,10 +674,17 @@
+ 
+     async def stop(self) -> None:
+         """Remove outputs and access token."""
++        if self._finite_source is not None:
++            self._finite_source.cancel()
++            for provider in self._outputs.values():
++                provider.cleanup()
+         self._outputs = {}
+         self.access_token = None
+ 
+-        if not self.dynamic_stream_settings.preload_stream:
++        if (
++            self._finite_source is not None
++            or not self.dynamic_stream_settings.preload_stream
++        ):
+             await self._stop()
+ 
+     async def _stop(self) -> None:
+@@ -637,6 +775,7 @@
+     {
+         probatio.Optional(CONF_RTSP_TRANSPORT): probatio.In(RTSP_TRANSPORTS),
+         probatio.Optional(CONF_USE_WALLCLOCK_AS_TIMESTAMPS): bool,
++        probatio.Optional(CONF_PRESERVE_INITIAL_TIMESTAMPS): bool,
+         probatio.Optional(CONF_EXTRA_PART_WAIT_TIME): cv.positive_float,
+         probatio.Optional(CONF_VERIFY_SSL): bool,
+     }
+--- a/homeassistant/components/stream/const.py
++++ b/homeassistant/components/stream/const.py
+@@ -58,6 +58,7 @@
+     "http": "HTTP",
+ }
+ CONF_USE_WALLCLOCK_AS_TIMESTAMPS = "use_wallclock_as_timestamps"
++CONF_PRESERVE_INITIAL_TIMESTAMPS = "preserve_initial_timestamps"
+ CONF_EXTRA_PART_WAIT_TIME = "extra_part_wait_time"
+ 
+ 
+--- a/homeassistant/components/stream/core.py
++++ b/homeassistant/components/stream/core.py
+@@ -58,6 +58,7 @@
+     part_target_duration: float
+     hls_advance_part_limit: int
+     hls_part_timeout: float
++    preserve_initial_timestamps: bool = False
+ 
+ 
+ STREAM_SETTINGS_NON_LL_HLS = StreamSettings(
+@@ -90,6 +91,7 @@
+     stream_id: int
+     start_time: datetime.datetime
+     _stream_outputs: Iterable[StreamOutput]
++    _published: bool = field(default=False, init=False, repr=False, compare=False)
+     duration: float = 0
+     parts: list[Part] = field(default_factory=list)
+     # Store text of this segment's hls playlist for reuse
+@@ -104,7 +106,18 @@
+     def __post_init__(self) -> None:
+         """Run after init."""
+         for output in self._stream_outputs:
++            self._published = True
+             output.put(self)
++
++    @callback
++    def async_publish(self, outputs: Iterable[StreamOutput]) -> None:
++        """Publish an unpublished finite segment on the event loop."""
++        if self._published:
++            raise RuntimeError("Segment is already published")
++        self._stream_outputs = tuple(outputs)
++        self._published = True
++        for output in self._stream_outputs:
++            output.async_put(self)
+ 
+     @property
+     def complete(self) -> bool:
+@@ -286,6 +299,8 @@
+         self.dynamic_stream_settings = dynamic_stream_settings
+         self._event = asyncio.Event()
+         self._part_event = asyncio.Event()
++        self.completed = False
++        self.ended = False
+         self._segments: deque[Segment] = deque(maxlen=deque_maxlen)
+ 
+     @property
+@@ -331,12 +346,14 @@
+ 
+     async def part_recv(self, timeout: float | None = None) -> bool:
+         """Wait for an event signalling the latest part segment."""
++        if self.ended:
++            return False
+         try:
+             async with asyncio.timeout(timeout):
+                 await self._part_event.wait()
+         except TimeoutError:
+             return False
+-        return True
++        return not self.ended
+ 
+     def part_put(self) -> None:
+         """Set event signalling the latest part segment."""
+@@ -346,24 +363,42 @@
+ 
+     async def recv(self) -> bool:
+         """Wait for the latest segment."""
++        if self.ended:
++            return False
+         await self._event.wait()
+-        return self.last_segment is not None
++        return not self.ended and self.last_segment is not None
+ 
+     def put(self, segment: Segment) -> None:
+         """Store output."""
+         self._hass.loop.call_soon_threadsafe(self._async_put, segment)
+ 
+     @callback
++    def async_put(self, segment: Segment) -> None:
++        """Publish from an existing event-loop transaction."""
++        self._async_put(segment)
++
++    @callback
+     def _async_put(self, segment: Segment) -> None:
+         """Store output from event loop."""
++        if self.ended:
++            return
+         # Start idle timeout when we start receiving data
+         self.idle_timer.start()
+         self._segments.append(segment)
+         self._event.set()
+         self._event.clear()
+ 
++    @callback
++    def finish(self) -> None:
++        """Signal successfully published finite media, waking all waiters."""
++        self.completed = self.ended = True
++        self._event.set()
++        self._part_event.set()
++
+     def cleanup(self) -> None:
+         """Handle cleanup."""
++        self.ended = True
++        self._part_event.set()
+         self._event.set()
+         self.idle_timer.clear()
+ 
+@@ -393,6 +428,11 @@
+ 
+         # Start worker if not already started
+         await stream.start()
++        if stream.finite_source_state is not None and (
++            stream.finite_source_state in ("failed", "cancelled")
++            or "hls" not in stream.outputs()
++        ):
++            raise web.HTTPGone
+ 
+         return await self.handle(request, stream, sequence, part_num)
+ 
+--- /dev/null
++++ b/homeassistant/components/stream/finite.py
+@@ -0,0 +1,158 @@
++"""One-shot finite stream authorization, independent of transport and integration."""
++
++from collections.abc import Callable
++from dataclasses import dataclass
++from enum import StrEnum
++from threading import Event, Lock
++from time import monotonic
++
++
++class FiniteSourceState(StrEnum):
++    """Finite ingest lifetime; completion is not inferred from transport EOF."""
++
++    READY = "ready"
++    ACTIVE = "active"
++    WAITING = "waiting_for_confirmation"
++    FINALIZING = "finalizing"
++    COMPLETED = "completed"
++    FAILED = "failed"
++    CANCELLED = "cancelled"
++
++
++@dataclass(frozen=True, slots=True)
++class FiniteSourceCounts:
++    """Expected receiving access-unit counts from an authoritative source owner.
++
++    Container/relay adapters must establish one-to-one access-unit correspondence;
++    do not derive these counts from the receiving EOF or a cached fixture.
++    """
++
++    video: int
++    audio: int
++
++    def __post_init__(self) -> None:
++        """Refuse malformed or empty video declarations."""
++        if (
++            type(self.video) is not int
++            or type(self.audio) is not int
++            or self.video <= 0
++            or self.audio < 0
++        ):
++            raise ValueError(
++                "Finite access-unit counts require positive video and nonnegative audio"
++            )
++
++
++@dataclass(frozen=True, slots=True, eq=False)
++class FiniteSourceHandle:
++    """Opaque identity of one finite Stream generation; no mutable owner state."""
++
++
++class FiniteSourceSession:
++    """Opaque stream-specific generation and thread-safe one-shot state.
++
++    Integrations confirm through Stream only after their own authoritative source
++    and subscription completion checks. This object does not validate media or
++    proprietary receipts. Its state never authorizes another ingest attempt.
++    """
++
++    def __init__(self) -> None:
++        """Initialize an unstarted finite generation."""
++        self.handle = FiniteSourceHandle()
++        self._lock = Lock()
++        self._changed = Event()
++        self._state = FiniteSourceState.READY
++        self._confirmed = False
++        self.expected_counts: FiniteSourceCounts | None = None
++
++    @property
++    def state(self) -> FiniteSourceState:
++        """Return an immutable state snapshot."""
++        with self._lock:
++            return self._state
++
++    def begin(self) -> bool:
++        """Claim the only worker attempt."""
++        with self._lock:
++            if self._state != FiniteSourceState.READY:
++                return False
++            self._state = FiniteSourceState.ACTIVE
++            return True
++
++    def confirm(self, counts: FiniteSourceCounts) -> bool:
++        """Record trusted owner completion without publishing terminal media."""
++        with self._lock:
++            if self._state not in (
++                FiniteSourceState.ACTIVE,
++                FiniteSourceState.WAITING,
++                FiniteSourceState.FINALIZING,
++                FiniteSourceState.COMPLETED,
++            ):
++                return False
++            if self.expected_counts is not None and self.expected_counts != counts:
++                return False
++            self.expected_counts = counts
++            self._confirmed = True
++            self._changed.set()
++            return True
++
++    def receive_eof(self, quit_event: Event, timeout: float = 5) -> bool:
++        """Wait within a finite budget for independent completion authorization."""
++        deadline = monotonic() + timeout
++        with self._lock:
++            if self._state != FiniteSourceState.ACTIVE:
++                return False
++            self._state = FiniteSourceState.WAITING
++        while True:
++            with self._lock:
++                if quit_event.is_set() or self._state == FiniteSourceState.CANCELLED:
++                    self._state = FiniteSourceState.CANCELLED
++                    return False
++                if self._state != FiniteSourceState.WAITING:
++                    return False
++                if self._confirmed:
++                    self._state = FiniteSourceState.FINALIZING
++                    return True
++                if (remaining := deadline - monotonic()) <= 0:
++                    self._state = FiniteSourceState.FAILED
++                    return False
++            self._changed.wait(min(remaining, 0.02))
++
++    def publish(self, publish_callback: Callable[[], None]) -> bool:
++        """Commit on the HA event loop; no awaits separate admission/publication."""
++        # All publication/cancel calls run on the same event loop. Do not hold
++        # a thread lock across callbacks or native muxer operations.
++        with self._lock:
++            if self._state != FiniteSourceState.FINALIZING:
++                return False
++        try:
++            publish_callback()
++        except BaseException:
++            self.fail()
++            raise
++        return self._complete_publication()
++
++    def _complete_publication(self) -> bool:
++        """Recheck state after a possibly reentrant publication callback."""
++        with self._lock:
++            if self._state != FiniteSourceState.FINALIZING:
++                return False
++            self._state = FiniteSourceState.COMPLETED
++        return True
++
++    def fail(self) -> None:
++        """Retain failure without authorizing a retry."""
++        with self._lock:
++            if self._state not in (
++                FiniteSourceState.CANCELLED,
++                FiniteSourceState.COMPLETED,
++            ):
++                self._state = FiniteSourceState.FAILED
++            self._changed.set()
++
++    def cancel(self) -> None:
++        """Revoke pending publication before any asynchronous teardown."""
++        with self._lock:
++            if self._state != FiniteSourceState.FAILED:
++                self._state = FiniteSourceState.CANCELLED
++            self._changed.set()
+--- a/homeassistant/components/stream/hls.py
++++ b/homeassistant/components/stream/hls.py
+@@ -127,7 +127,11 @@
+         # Calculate file size / duration and use a small
+         # multiplier to account for variation
+         # hls spec already allows for 25% variation
+-        if not (segment := track.get_segment(track.sequences[-2])):
++        if not (
++            segment := track.get_segment(
++                track.sequences[-2 if len(track.sequences) > 1 else -1]
++            )
++        ):
+             return ""
+         bandwidth = round(segment.data_size_with_init * 8 / segment.duration * 1.2)
+         codecs = get_codec_string(segment.init)
+@@ -148,7 +152,12 @@
+         # Make sure at least two segments are ready (last one may not be complete)
+         if not track.sequences and not await track.recv():
+             return web.HTTPNotFound()
+-        if len(track.sequences) == 1 and not await track.recv():
++        if (
++            len(track.sequences) == 1
++            and not track.completed
++            and not await track.recv()
++            and not track.completed
++        ):
+             return web.HTTPNotFound()
+         response = web.Response(
+             body=self.render(track).encode("utf-8"),
+@@ -236,10 +245,12 @@
+             segments[-1].render_hls(
+                 last_stream_id=last_stream_id,
+                 render_parts=track.stream_settings.ll_hls,
+-                add_hint=track.stream_settings.ll_hls,
+-            )
+-        )
+-
++                add_hint=track.stream_settings.ll_hls and not track.completed,
++            )
++        )
++
++        if track.completed:
++            playlist.append("#EXT-X-ENDLIST")
+         return "\n".join(playlist) + "\n"
+ 
+     @staticmethod
+@@ -278,6 +289,8 @@
+             return web.HTTPBadRequest()
+ 
+         hls_msn = int(hls_msn or 0)
++        if track.completed:
++            return self.response(track)
+ 
+         # If the _HLS_msn is greater than the Media Sequence Number of the last
+         # Media Segment in the current Playlist plus two, or if the _HLS_part
+@@ -296,7 +309,11 @@
+ 
+         while hls_msn > track.last_sequence:
+             if not await track.recv():
+-                return self.not_found(blocking_request, track.target_duration)
++                return (
++                    self.response(track)
++                    if track.completed
++                    else self.not_found(blocking_request, track.target_duration)
++                )
+         if track.last_segment is None:
+             return self.not_found(blocking_request, 0)
+         if (
+@@ -318,7 +335,11 @@
+             if not await track.part_recv(
+                 timeout=track.stream_settings.hls_part_timeout
+             ):
+-                return self.not_found(blocking_request, track.target_duration)
++                return (
++                    self.response(track)
++                    if track.completed
++                    else self.not_found(blocking_request, track.target_duration)
++                )
+         # Now we should have msn.part >= hls_msn.hls_part. However, in the case
+         # that we have a rollover part request from the previous segment, we need
+         # to make sure that the new segment has a part. From 6.2.5.2 of the RFC:
+@@ -335,8 +356,13 @@
+             ):
+                 return self.not_found(blocking_request, track.target_duration)
+ 
++        return self.response(track)
++
++    @classmethod
++    def response(cls, track: HlsStreamOutput) -> web.Response:
++        """Render the current or final playlist."""
+         response = web.Response(
+-            body=self.render(track).encode("utf-8"),
++            body=cls.render(track).encode("utf-8"),
+             headers={
+                 "Content-Type": FORMAT_CONTENT_TYPE[HLS_PROVIDER],
+             },
+--- a/homeassistant/components/stream/worker.py
++++ b/homeassistant/components/stream/worker.py
+@@ -5,6 +5,8 @@
+ import contextlib
+ from dataclasses import fields
+ import datetime
++from fractions import Fraction
++from functools import partial
+ from io import SEEK_END, BytesIO
+ import logging
+ import math
+@@ -16,6 +18,7 @@
+ from av.codec.codec import UnknownCodecError  # pylint: disable=no-name-in-module
+ import av.container
+ from av.container import InputContainer
++from av.rational import AVRational  # pylint: disable=no-name-in-module
+ import av.stream
+ 
+ from homeassistant.core import HomeAssistant
+@@ -42,6 +45,7 @@
+ )
+ from .diagnostics import Diagnostics
+ from .exceptions import StreamEndedError, StreamWorkerError
++from .finite import FiniteSourceCounts, FiniteSourceSession
+ from .fmp4utils import read_init
+ from .hls import HlsStreamOutput
+ 
+@@ -81,6 +85,10 @@
+         # has a sequence number of 0.
+         self._sequence = -1
+         self._diagnostics = diagnostics
++        self.finite_source: FiniteSourceSession | None = None
++        self.publish_finite: (
++            Callable[[FiniteSourceSession, Callable[[], None]], None] | None
++        ) = None
+ 
+     @property
+     def sequence(self) -> int:
+@@ -150,6 +158,10 @@
+         self._stream_settings = stream_settings
+         self._stream_state = stream_state
+         self._start_time = dt_util.utcnow()
++        self._finite_counts = {"video": 0, "audio": 0}
++        self._finite_last: dict[
++            str, tuple[int | None, int | None, int | None, AVRational | Fraction]
++        ] = {}
+ 
+     @staticmethod
+     def _add_stream_from_template(
+@@ -287,6 +299,14 @@
+     def mux_packet(self, packet: av.Packet) -> None:
+         """Mux a packet to the appropriate output stream."""
+ 
++        if self._stream_state.finite_source is not None:
++            self._finite_counts[packet.stream.type] += 1
++            self._finite_last[packet.stream.type] = (
++                packet.pts,
++                packet.dts,
++                packet.duration,
++                packet.time_base,
++            )
+         # Check for end of segment
+         if packet.stream == self._input_video_stream:
+             if (
+@@ -422,8 +442,84 @@
+             self._part_start_dts = adjusted_dts
+         self._part_has_keyframe = False
+ 
++    def prepare_finite_end(self) -> Callable[[], None]:
++        """Flush real buffered bytes; defer publication to a generation-checked callback.
++
++        This initial opt-in proposal supports no-B-frame finite input with known
++        positive terminal durations. Unsupported terminal metadata fails closed.
++        """
++        finite = self._stream_state.finite_source
++        if finite is None or finite.expected_counts != FiniteSourceCounts(
++            **self._finite_counts
++        ):
++            raise StreamWorkerError(
++                "Finite receiving access-unit counts do not match source completion"
++            )
++        ends = []
++        for pts, dts, sample_duration, time_base in self._finite_last.values():
++            if (
++                pts is None
++                or pts != dts
++                or sample_duration is None
++                or sample_duration <= 0
++            ):
++                raise StreamWorkerError(
++                    "Finite terminal sample metadata is unsupported"
++                )
++            ends.append((Fraction(pts) + sample_duration) * time_base)
++        if not ends:
++            raise StreamWorkerError("Finite input has no terminal samples")
++        end = max(ends)
++        part_duration = (
++            end - Fraction(self._part_start_dts) * self._input_video_stream.time_base
++        )
++        duration = (
++            end - Fraction(self._segment_start_dts) * self._input_video_stream.time_base
++        )
++        if part_duration <= 0 or duration <= 0:
++            raise StreamWorkerError("Finite terminal sample end is not positive")
++        self._av_output.close()
++        segment = self._segment
++        new_segment = segment is None
++        if segment is None:
++            segment = Segment(
++                sequence=self._stream_state.sequence,
++                stream_id=self._stream_state.stream_id,
++                init=read_init(self._memory_file),
++                _stream_outputs=(),
++                start_time=self._start_time,
++            )
++            self._memory_file_pos = self._memory_file.tell()
++        self._memory_file.seek(self._memory_file_pos)
++        body = self._memory_file.read()
++        self._memory_file.close()
++        if not body:
++            raise StreamWorkerError("Finite terminal fragment is empty")
++        part = Part(
++            duration=float(part_duration),
++            has_keyframe=self._part_has_keyframe,
++            data=body,
++        )
++
++        def publish() -> None:
++            outputs = self._stream_state.outputs
++            if not outputs or any(output.ended for output in outputs):
++                raise StreamWorkerError(
++                    "Finite providers were revoked before publication"
++                )
++            if new_segment:
++                segment.async_publish(outputs)
++            segment.async_add_part(part, float(duration))
++            for output in outputs:
++                output.finish()
++
++        return publish
++
+     def close(self) -> None:
+         """Close stream buffer."""
++        # Astroid treats the BytesIO.closed descriptor as a constant.
++        if self._memory_file.closed:  # pylint: disable=using-constant-test
++            return
+         try:
+             self._av_output.close()
+         finally:
+@@ -491,12 +587,47 @@
+             yield packet
+ 
+ 
+-def repair_initial_missing_dts(packets: PeekIterator) -> None:
++def _finite_first_keyframe(packets: PeekIterator) -> av.Packet:
++    """Retain bounded audio-first input; never discard finite video prerequisites."""
++    for index, packet in enumerate(packets.peek()):
++        if packet.stream.type == "video":
++            if not packet.is_keyframe:
++                raise StreamWorkerError("Finite input must begin with a video keyframe")
++            return packet
++        if index >= PACKETS_TO_WAIT_FOR_AUDIO:
++            raise StreamWorkerError("Finite initial audio prefix exceeds startup bound")
++    raise StopIteration
++
++
++def _initial_keyframe(packets: PeekIterator, *, finite: bool) -> av.Packet:
++    """Keep finite startup packets while retaining legacy keyframe seeking."""
++    if finite:
++        return _finite_first_keyframe(packets)
++    return next(
++        packet
++        for packet in packets
++        if packet.is_keyframe and packet.stream.type == "video"
++    )
++
++
++def _source_initial_dts(packet: av.Packet) -> int:
++    """Require complete source clocks instead of inferring an initial timestamp."""
++    if packet.pts is None or packet.dts is None:
++        raise StreamWorkerError("Source initial video timestamps are unavailable")
++    return packet.dts
++
++
++def repair_initial_missing_dts(
++    packets: PeekIterator, *, preserve_initial_timestamps: bool = False
++) -> None:
+     """Repair a missing DTS on the initial video keyframe."""
+     buffered_packets = packets.peek()
+     first_video_packet = next(
+         (packet for packet in buffered_packets if packet.stream.type == "video"), None
+     )
++    if preserve_initial_timestamps and first_video_packet is not None:
++        _source_initial_dts(first_video_packet)
++        return
+     if (
+         first_video_packet is None
+         or not first_video_packet.is_keyframe
+@@ -562,11 +693,15 @@
+ 
+ 
+ def get_audio_bitstream_filter(
+-    packets: Iterator[av.Packet], audio_stream: Any
++    packets: Iterator[av.Packet], audio_stream: Any, *, finite_source: bool = False
+ ) -> str | None:
+     """Return the aac_adtstoasc bitstream filter if ADTS AAC is detected."""
+     if not audio_stream:
+         return None
++    if finite_source and audio_stream.name == "aac":
++        # The filter also passes declared raw AAC unchanged. Finite delivery
++        # cannot infer no-ADTS from an arbitrary video-first probe prefix.
++        return "aac_adtstoasc"
+     for count, packet in enumerate(packets):
+         if count >= PACKETS_TO_WAIT_FOR_AUDIO:
+             # Some streams declare an audio stream and never send any packets
+@@ -624,6 +759,21 @@
+         raise StreamWorkerError(
+             f"Error opening stream ({redact_av_error_string(err)})"
+         ) from err
++
++
++def _finite_packet_valid(validator: TimestampValidator, packet: av.Packet) -> bool:
++    """Refuse clock loss/reordering/discard instead of certifying partial input."""
++    if packet.size:
++        if packet.pts is None or packet.pts != packet.dts:
++            raise StreamWorkerError(
++                "Finite input requires known no-B-frame sample clocks"
++            )
++        if not validator.is_valid(packet):
++            raise StreamWorkerError(
++                "Finite input cannot silently discard invalid sample clocks"
++            )
++        return True
++    return validator.is_valid(packet)
+ 
+ 
+ def stream_worker(
+@@ -658,6 +808,8 @@
+     # Disable ll-hls for hls inputs
+     if container.format.name == "hls":
+         for field in fields(StreamSettings):
++            if field.name == "preserve_initial_timestamps":
++                continue
+             setattr(
+                 stream_settings,
+                 field.name,
+@@ -673,9 +825,11 @@
+         int(1 / audio_stream.time_base) if audio_stream else 1,
+     )
+     unvalidated_packets = PeekIterator(container.demux((video_stream, audio_stream)))
+-    container_packets = PeekIterator(
+-        filter(dts_validator.is_valid, unvalidated_packets)
+-    )
++
++    validate_packet = dts_validator.is_valid
++    if stream_state.finite_source is not None:
++        validate_packet = partial(_finite_packet_valid, dts_validator)
++    container_packets = PeekIterator(filter(validate_packet, unvalidated_packets))
+ 
+     def is_video(packet: av.Packet) -> Any:
+         """Return true if the packet is for the video stream."""
+@@ -688,26 +842,37 @@
+     # Use a peeking iterator to peek into the start of the stream, ensuring
+     # everything looks good, then go back to the start when muxing below.
+     try:
+-        repair_initial_missing_dts(unvalidated_packets)
++        repair_initial_missing_dts(
++            unvalidated_packets,
++            preserve_initial_timestamps=stream_settings.preserve_initial_timestamps,
++        )
+         # Get the required bitstream filter
+-        audio_bsf = get_audio_bitstream_filter(container_packets.peek(), audio_stream)
++        audio_bsf = get_audio_bitstream_filter(
++            container_packets.peek(),
++            audio_stream,
++            finite_source=stream_state.finite_source is not None,
++        )
+         # Advance to the first keyframe for muxing, then rewind so the muxing
+         # loop below can consume.
+-        first_keyframe = next(
+-            filter(lambda pkt: is_keyframe(pkt) and is_video(pkt), container_packets)
+-        )
+-        # Deal with problem #1 above (bad first packet pts/dts) by recalculating
+-        # using pts/dts from second packet. Use the peek iterator to advance
+-        # without consuming from container_packets. Skip over the first keyframe
+-        # then use the duration from the second video packet to adjust dts.
+-        next_video_packet = next(filter(is_video, container_packets.peek()))
+-        # Since the is_valid filter has already been applied before the following
+-        # adjustment, it does not filter out the case where the duration below is
+-        # 0 and both the first_keyframe and next_video_packet end up with the same
+-        # dts. Use "or 1" to deal with this.
+-        assert next_video_packet.dts is not None
+-        start_dts = next_video_packet.dts - (next_video_packet.duration or 1)
+-        first_keyframe.dts = first_keyframe.pts = start_dts
++        first_keyframe = _initial_keyframe(
++            container_packets, finite=stream_state.finite_source is not None
++        )
++        if stream_settings.preserve_initial_timestamps:
++            # Explicitly asserted source clocks must be present, not inferred.
++            start_dts = _source_initial_dts(first_keyframe)
++        else:
++            # Deal with problem #1 above (bad first packet pts/dts) by recalculating
++            # using pts/dts from second packet. Use the peek iterator to advance
++            # without consuming from container_packets. Skip over the first keyframe
++            # then use the duration from the second video packet to adjust dts.
++            next_video_packet = next(filter(is_video, container_packets.peek()))
++            # Since the is_valid filter has already been applied before the following
++            # adjustment, it does not filter out the case where the duration below is
++            # 0 and both the first_keyframe and next_video_packet end up with the same
++            # dts. Use "or 1" to deal with this.
++            assert next_video_packet.dts is not None
++            start_dts = next_video_packet.dts - (next_video_packet.duration or 1)
++            first_keyframe.dts = first_keyframe.pts = start_dts
+     except StreamWorkerError:
+         container.close()
+         raise
+@@ -734,7 +899,11 @@
+     with closing_stream_worker(container, muxer):
+         # Mux the first keyframe, then proceed through the rest of the packets
+         try:
+-            muxer.mux_packet(first_keyframe)
++            muxer.mux_packet(
++                next(container_packets)
++                if stream_state.finite_source is not None
++                else first_keyframe
++            )
+         except av.FFmpegError as ex:
+             raise StreamWorkerError(
+                 f"Error muxing first keyframe ({redact_av_error_string(ex)})"
+@@ -746,6 +915,17 @@
+             except StreamWorkerError:
+                 raise
+             except StopIteration as ex:
++                if (finite := stream_state.finite_source) is not None:
++                    if not finite.receive_eof(quit_event):
++                        raise StreamWorkerError(
++                            "Finite EOF lacks current completion authorization"
++                        ) from ex
++                    publish = muxer.prepare_finite_end()
++                    assert stream_state.publish_finite is not None
++                    stream_state.hass.loop.call_soon_threadsafe(
++                        stream_state.publish_finite, finite, publish
++                    )
++                    return
+                 raise StreamEndedError("Stream ended; no additional packets") from ex
+             except av.FFmpegError as ex:
+                 raise StreamWorkerError(
+--- /dev/null
++++ b/tests/components/stream/test_finite_source.py
+@@ -0,0 +1,421 @@
++"""Finite source generation, publication and terminal HLS regression controls."""
++
++# White-box tests deliberately control thread/publication boundaries.
++
++import asyncio
++from collections.abc import Callable
++from fractions import Fraction
++import threading
++from typing import cast
++from unittest.mock import AsyncMock, MagicMock, patch
++
++import pytest
++
++from homeassistant.components.camera import DynamicStreamSettings
++from homeassistant.components.stream import Stream
++from homeassistant.components.stream.core import Part, Segment, StreamSettings
++from homeassistant.components.stream.finite import (
++    FiniteSourceCounts,
++    FiniteSourceSession,
++    FiniteSourceState as State,
++)
++from homeassistant.components.stream.hls import HlsMasterPlaylistView, HlsPlaylistView
++from homeassistant.components.stream.worker import StreamMuxer, StreamWorkerError
++from homeassistant.core import HomeAssistant
++from homeassistant.exceptions import HomeAssistantError
++from homeassistant.util import dt as dt_util
++
++
++@pytest.fixture
++def stream(hass: HomeAssistant) -> Stream:
++    """Stream."""
++    return Stream(
++        hass,
++        "unused://retained",
++        {},
++        StreamSettings(True, 5.9, 1, 3, 2),
++        DynamicStreamSettings(),
++    )
++
++
++def active() -> FiniteSourceSession:
++    """Active."""
++    s = FiniteSourceSession()
++    assert s.begin()
++    return s
++
++
++def confirmed() -> FiniteSourceSession:
++    """Return an active session with authoritative completion counts."""
++    s = active()
++    assert s.confirm(FiniteSourceCounts(1, 0))
++    return s
++
++
++def finalizing() -> FiniteSourceSession:
++    """Return a session that received matching owner confirmation and EOF."""
++    s = confirmed()
++    assert s.receive_eof(threading.Event(), timeout=0)
++    return s
++
++
++def completed() -> FiniteSourceSession:
++    """Return a session that published its terminal media."""
++    s = finalizing()
++    assert s.publish(lambda: None)
++    return s
++
++
++def test_once_and_idempotent_confirmation() -> None:
++    """Once and idempotent confirmation."""
++    s = active()
++    assert not s.begin()
++    assert s.confirm(FiniteSourceCounts(1, 0)) and s.confirm(FiniteSourceCounts(1, 0))
++    assert s.state == State.ACTIVE
++    assert s.receive_eof(threading.Event(), 0)
++    count = []
++    assert s.publish(lambda: count.append(1))
++    assert not s.publish(lambda: count.append(2))
++    assert s.confirm(FiniteSourceCounts(1, 0))
++    assert count == [1] and s.state == State.COMPLETED
++    assert not s.begin()
++
++
++def test_confirmation_before_start_refused() -> None:
++    """Confirmation before start refused."""
++    s = FiniteSourceSession()
++    assert not s.confirm(FiniteSourceCounts(1, 0))
++    assert s.state == State.READY
++
++
++def test_unconfirmed_eof_fails_without_retry() -> None:
++    """Unconfirmed eof fails without retry."""
++    s = active()
++    assert not s.receive_eof(threading.Event(), 0)
++    assert s.state == State.FAILED
++    assert not s.confirm(FiniteSourceCounts(1, 0)) and not s.begin()
++    s.cancel()
++    assert s.state == State.FAILED
++
++
++async def test_confirmation_can_arrive_after_receiving_eof() -> None:
++    """Confirmation can arrive after receiving eof."""
++    s = active()
++    task = asyncio.create_task(asyncio.to_thread(s.receive_eof, threading.Event(), 1))
++    async with asyncio.timeout(1):
++        while s.state != State.WAITING:
++            await asyncio.sleep(0.001)
++    assert s.confirm(FiniteSourceCounts(1, 0))
++    assert await task
++    assert s.state == State.FINALIZING
++
++
++async def test_stop_wakes_unconfirmed_eof() -> None:
++    """Stop wakes unconfirmed eof."""
++    s = active()
++    quit_event = threading.Event()
++    task = asyncio.create_task(asyncio.to_thread(s.receive_eof, quit_event, 1))
++    async with asyncio.timeout(1):
++        while s.state != State.WAITING:
++            await asyncio.sleep(0.001)
++    s.cancel()
++    assert not await task
++    assert s.state == State.CANCELLED
++
++
++@pytest.mark.parametrize(
++    "source_state",
++    [FiniteSourceSession, active, confirmed, finalizing, completed],
++    ids=["ready", "active", "confirmed", "finalizing", "completed"],
++)
++def test_cancel_revokes_each_boundary(
++    source_state: Callable[[], FiniteSourceSession],
++) -> None:
++    """Revocation invalidates publication from every admitted state."""
++    s = source_state()
++    s.cancel()
++    assert not s.confirm(FiniteSourceCounts(1, 0))
++    assert not s.publish(lambda: pytest.fail("stale publication"))
++    assert not s.begin() and s.state == State.CANCELLED
++
++
++def test_quit_race_prevents_finalization() -> None:
++    """Quit race prevents finalization."""
++    s = active()
++    s.confirm(FiniteSourceCounts(1, 0))
++    q = threading.Event()
++    q.set()
++    assert not s.receive_eof(q, 0)
++    assert s.state == State.CANCELLED
++
++
++def test_publication_error_is_not_completion() -> None:
++    """Publication error is not completion."""
++    s = finalizing()
++
++    def fail() -> None:
++        """Fail."""
++        raise OSError("publication failed")
++
++    with pytest.raises(OSError):
++        s.publish(fail)
++    assert s.state == State.FAILED
++    assert not s.confirm(FiniteSourceCounts(1, 0)) and not s.begin()
++
++
++async def test_stream_opaque_generation_and_stop(
++    stream: Stream, hass: HomeAssistant
++) -> None:
++    """Stream opaque generation and stop."""
++    first = stream.async_prepare_finite_source()
++    assert not stream.async_confirm_finite_source(first, FiniteSourceCounts(1, 0))
++    other = Stream(
++        hass, "unused", {}, StreamSettings(True, 5.9, 1, 3, 2), DynamicStreamSettings()
++    )
++    alien = other.async_prepare_finite_source()
++    with pytest.raises(HomeAssistantError):
++        stream.async_prepare_finite_source()
++    assert not stream.async_confirm_finite_source(alien, FiniteSourceCounts(1, 0))
++    assert stream._finite_source.begin()
++    assert stream.async_confirm_finite_source(first, FiniteSourceCounts(1, 0))
++    await stream.stop()
++    assert not stream.async_confirm_finite_source(first, FiniteSourceCounts(1, 0))
++    with patch("threading.Thread.start") as start:
++        await stream.start()
++        start.assert_not_called()
++    with pytest.raises(HomeAssistantError):
++        stream.update_source("unused://new")
++
++
++async def test_legacy_prepare_after_start_refused(stream: Stream) -> None:
++    """Legacy prepare after start refused."""
++    with patch("threading.Thread.start"):
++        await stream.start()
++    with pytest.raises(HomeAssistantError):
++        stream.async_prepare_finite_source()
++    stream._thread = None
++
++
++async def test_failed_thread_start_cannot_retry(stream: Stream) -> None:
++    """Failed thread start cannot retry."""
++    stream.async_prepare_finite_source()
++    with (
++        patch("threading.Thread.start", side_effect=RuntimeError("cannot start")),
++        pytest.raises(RuntimeError),
++    ):
++        await stream.start()
++    assert stream.finite_source_state == State.FAILED
++    with patch("threading.Thread.start") as start:
++        await stream.start()
++        start.assert_not_called()
++    stream._thread = None
++
++
++async def test_default_stream_retry_behavior_untouched(stream: Stream) -> None:
++    """Default stream retry behavior untouched."""
++    with patch("threading.Thread") as factory:
++        factory.return_value.is_alive.return_value = False
++        await stream.start()
++        await stream.start()
++        assert factory.return_value.start.call_count == 2
++    assert stream.finite_source_state is None
++    stream.update_source("unused://new")
++    assert stream.source == "unused://new"
++    stream._thread = None
++
++
++@pytest.mark.parametrize("ll", [True, False])
++async def test_blocking_playlist_wakes_with_terminal_marker(
++    stream: Stream, hass: HomeAssistant, ll: bool
++) -> None:
++    """Blocking playlist wakes with terminal marker."""
++    stream._stream_settings.ll_hls = ll
++    provider = stream.add_provider("hls")
++    segment = Segment(
++        sequence=0,
++        init=b"init",
++        stream_id=0,
++        start_time=dt_util.utcnow(),
++        _stream_outputs=[provider],
++    )
++    await hass.async_block_till_done()
++    stream.start = AsyncMock()
++    request = MagicMock()
++    request.query = {"_HLS_msn": "1", "_HLS_part": "0"}
++    task = asyncio.create_task(HlsPlaylistView().handle(request, stream, "", ""))
++    await asyncio.sleep(0)
++    assert not task.done()
++    segment.async_add_part(Part(data=b"media", duration=1, has_keyframe=True), 1)
++    provider.finish()
++    response = await asyncio.wait_for(task, 1)
++    assert response.status == 200 and response.body.count(b"#EXT-X-ENDLIST") == 1
++    assert b"#EXT-X-PRELOAD-HINT" not in response.body
++    assert not await provider.recv() and not await provider.part_recv()
++    await stream.stop()
++    provider.cleanup()
++
++
++@pytest.mark.parametrize("ll", [True, False])
++async def test_single_terminal_segment_master(
++    stream: Stream, hass: HomeAssistant, ll: bool
++) -> None:
++    """Single terminal segment master."""
++    stream._stream_settings.ll_hls = ll
++    provider = stream.add_provider("hls")
++    segment = Segment(
++        sequence=0,
++        init=b"init",
++        stream_id=0,
++        start_time=dt_util.utcnow(),
++        _stream_outputs=[provider],
++    )
++    await hass.async_block_till_done()
++    segment.async_add_part(Part(data=b"media", duration=1, has_keyframe=True), 1)
++    provider.finish()
++    stream.start = AsyncMock()
++    with patch(
++        "homeassistant.components.stream.hls.get_codec_string", return_value="hvc1"
++    ):
++        response = await HlsMasterPlaylistView().handle(MagicMock(), stream, "", "")
++    assert response.status == 200 and b"playlist.m3u8" in response.body
++    await stream.stop()
++    provider.cleanup()
++
++
++async def test_terminal_idle_cleans_up_even_with_preload(
++    stream: Stream, hass: HomeAssistant
++) -> None:
++    """Terminal idle cleans up even with preload."""
++    stream.async_prepare_finite_source()
++    provider = stream.add_provider("hls")
++    session = stream._finite_source
++    session.begin()
++    session.confirm(FiniteSourceCounts(1, 0))
++    session.receive_eof(threading.Event(), 0)
++    session.publish(provider.finish)
++    stream.dynamic_stream_settings.preload_stream = True
++    provider.idle_timer.fire(None)
++    await hass.async_block_till_done()
++    assert (
++        not stream.outputs()
++        and stream.access_token is None
++        and stream.finite_source_state == State.CANCELLED
++    )
++    with patch("threading.Thread.start") as start:
++        await stream.start()
++        start.assert_not_called()
++    with pytest.raises(HomeAssistantError):
++        stream.add_provider("hls")
++
++
++async def test_non_hls_provider_refused(stream: Stream) -> None:
++    """Non hls provider refused."""
++    stream.async_prepare_finite_source()
++    with pytest.raises(HomeAssistantError):
++        stream.add_provider("recorder")
++
++
++async def test_stale_publication_after_stop_is_discarded(stream: Stream) -> None:
++    """Stale publication after stop is discarded."""
++    stream.async_prepare_finite_source()
++    session = stream._finite_source
++    session.begin()
++    session.confirm(FiniteSourceCounts(1, 0))
++    session.receive_eof(threading.Event(), 0)
++    await stream.stop()
++    published = []
++    stream._async_publish_finite(session, lambda: published.append(1))
++    assert not published
++
++
++async def test_provider_removal_revokes_pending_publication(stream: Stream) -> None:
++    """Provider removal revokes pending publication."""
++    stream.async_prepare_finite_source()
++    provider = stream.add_provider("hls")
++    session = stream._finite_source
++    session.begin()
++    session.confirm(FiniteSourceCounts(1, 0))
++    session.receive_eof(threading.Event(), 0)
++    await stream.remove_provider(provider)
++    published = []
++    stream._async_publish_finite(session, lambda: published.append(1))
++    assert not published
++
++
++async def test_opaque_handle_has_no_controller_mutators(stream: Stream) -> None:
++    """Opaque handle has no controller mutators."""
++    handle = stream.async_prepare_finite_source()
++    assert (
++        not hasattr(handle, "confirm")
++        and not hasattr(handle, "cancel")
++        and not hasattr(handle, "begin")
++    )
++
++
++def test_conflicting_confirmation_counts_refused() -> None:
++    """Conflicting confirmation counts refused."""
++    s = active()
++    assert s.confirm(FiniteSourceCounts(1, 0))
++    assert not s.confirm(FiniteSourceCounts(2, 0))
++
++
++@pytest.mark.parametrize(
++    ("video", "audio"), [(0, 0), (-1, 0), (1, -1), (True, 0), (1, False), (1.0, 0)]
++)
++def test_invalid_counts(video: float, audio: int) -> None:
++    """Invalid counts."""
++    with pytest.raises(ValueError):
++        FiniteSourceCounts(cast(int, video), audio)
++
++
++def test_publication_callback_revocation_prevents_completion() -> None:
++    """A synchronous publication callback may revoke its own generation."""
++    session = finalizing()
++    assert not session.publish(session.cancel)
++    assert session.state == State.CANCELLED
++    assert not session.confirm(FiniteSourceCounts(1, 0))
++
++
++def test_empty_iterator_segment_can_publish_once() -> None:
++    """An empty iterator is not evidence that media was already published."""
++    segment = Segment(
++        sequence=0,
++        init=b"init",
++        stream_id=0,
++        start_time=dt_util.utcnow(),
++        _stream_outputs=iter(()),
++    )
++    output = MagicMock()
++    segment.async_publish([output])
++    output.async_put.assert_called_once_with(segment)
++    with pytest.raises(RuntimeError, match="already published"):
++        segment.async_publish([output])
++    output.async_put.assert_called_once_with(segment)
++
++
++def test_removed_providers_do_not_allow_segment_republication() -> None:
++    """Provider collection mutation cannot authorize a second publication."""
++    output = MagicMock()
++    outputs = [output]
++    segment = Segment(
++        sequence=0,
++        init=b"init",
++        stream_id=0,
++        start_time=dt_util.utcnow(),
++        _stream_outputs=outputs,
++    )
++    outputs.clear()
++    output.put.assert_called_once_with(segment)
++    with pytest.raises(RuntimeError, match="already published"):
++        segment.async_publish([output])
++    output.async_put.assert_not_called()
++
++
++def test_unknown_terminal_duration_refuses_publication() -> None:
++    """Optional packet duration is not a verified finite sample end."""
++    muxer = object.__new__(StreamMuxer)
++    muxer._stream_state = MagicMock(finite_source=finalizing())
++    muxer._finite_counts = {"video": 1, "audio": 0}
++    muxer._finite_last = {"video": (0, 0, None, Fraction(1, 90000))}
++    with pytest.raises(StreamWorkerError, match="terminal sample metadata"):
++        muxer.prepare_finite_end()
+--- /dev/null
++++ b/tests/components/stream/test_finite_source_contract.py
+@@ -0,0 +1,50 @@
++"""Version negotiation and pre-await finite publication revocation."""
++
++# White-box boundary controls deliberately inspect worker state.
++from threading import Event
++
++from homeassistant.components.camera import DynamicStreamSettings
++from homeassistant.components.stream import FINITE_SOURCE_COMPLETION_CONTRACT, Stream
++from homeassistant.components.stream.core import StreamSettings
++from homeassistant.components.stream.finite import (
++    FiniteSourceCounts,
++    FiniteSourceHandle,
++)
++from homeassistant.core import HomeAssistant
++
++
++async def test_declared_completion_contract() -> None:
++    """Declared completion contract."""
++    assert FINITE_SOURCE_COMPLETION_CONTRACT == "source-access-units-v1"
++
++
++async def test_foreign_revoke_cannot_cancel_current_worker(hass: HomeAssistant) -> None:
++    """Foreign revoke cannot cancel current worker."""
++    stream = Stream(
++        hass, "unused", {}, StreamSettings(True, 5.9, 1, 3, 2), DynamicStreamSettings()
++    )
++    stream.async_prepare_finite_source()
++    assert not stream.async_cancel_finite_source(FiniteSourceHandle())
++    assert stream.finite_source_state == "ready" and not stream._thread_quit.is_set()
++    await stream.stop()
++
++
++async def test_revocation_before_await_prevents_pending_publication(
++    hass: HomeAssistant,
++) -> None:
++    """Revocation before await prevents pending publication."""
++    stream = Stream(
++        hass, "unused", {}, StreamSettings(True, 5.9, 1, 3, 2), DynamicStreamSettings()
++    )
++    handle = stream.async_prepare_finite_source()
++    controller = stream._finite_source
++    assert controller.begin() and stream.async_confirm_finite_source(
++        handle, FiniteSourceCounts(1, 0)
++    )
++    assert controller.receive_eof(Event(), 0)
++    assert stream.async_cancel_finite_source(handle)
++    assert stream.finite_source_state == "cancelled" and stream._thread_quit.is_set()
++    published = []
++    stream._async_publish_finite(controller, lambda: published.append(1))
++    assert not published
++    await stream.stop()
+--- a/tests/components/stream/test_worker.py
++++ b/tests/components/stream/test_worker.py
+@@ -15,12 +15,14 @@
+ 
+ import asyncio
+ from collections.abc import Callable
++from dataclasses import replace
+ import fractions
+ import io
+ import logging
+ import math
+ from pathlib import Path
+ import threading
++from typing import Any
+ from unittest.mock import MagicMock, patch
+ 
+ import av
+@@ -28,7 +30,12 @@
+ import numpy as np
+ import pytest
+ 
+-from homeassistant.components.stream import KeyFrameConverter, Stream, create_stream
++from homeassistant.components.stream import (
++    KeyFrameConverter,
++    Stream,
++    _convert_stream_options,
++    create_stream,
++)
+ from homeassistant.components.stream.const import (
+     ATTR_SETTINGS,
+     CONF_LL_HLS,
+@@ -52,6 +59,7 @@
+     stream_worker,
+ )
+ from homeassistant.core import HomeAssistant
++from homeassistant.exceptions import HomeAssistantError
+ from homeassistant.setup import async_setup_component
+ 
+ from .common import dynamic_stream_settings, generate_h264_video, generate_h265_video
+@@ -1217,3 +1225,110 @@
+         ((template,), {}),
+         ((template,), {"opaque": True}),
+     ]
++
++
++@pytest.mark.parametrize("preserve", [False, True])
++@pytest.mark.parametrize(
++    ("base", "pts_delta"), [(0, 0), (-9000, 0), (3851129924, 0), (0, 18000)]
++)
++async def test_explicit_policy_preserves_both_initial_clocks_default_reconstructs(
++    hass: HomeAssistant, preserve: bool, base: int, pts_delta: int
++) -> None:
++    """Preserve present source clocks only when explicitly requested."""
++    packets = list(PacketSequence(120))
++    for i, packet in enumerate(packets):
++        packet.pts = packet.dts = base + i * 6000 + (2 if i == 1 else 0)
++        packet.duration = 6000
++    packets[0].pts += pts_delta
++    settings = replace(
++        hass.data[DOMAIN][ATTR_SETTINGS], preserve_initial_timestamps=preserve
++    )
++    decoded = await async_decode_stream(hass, packets, stream_settings=settings)
++    assert len(decoded.video_packets) == len(packets)
++    first = decoded.video_packets[0]
++    assert first.dts == (base if preserve else base + 2)
++    assert first.pts == (base + pts_delta if preserve else base + 2)
++    assert decoded.video_packets[1].dts == base + 6002
++
++
++@pytest.mark.parametrize("missing", ["pts", "dts", "both"])
++async def test_trusted_missing_initial_clock_fails_before_mux_without_repair(
++    hass: HomeAssistant, missing: str
++) -> None:
++    """Refuse missing clock metadata without inventing a first timestamp."""
++    packets = list(PacketSequence(24))
++    first = packets[0]
++    if missing in ("pts", "both"):
++        first.pts = None
++    if missing in ("dts", "both"):
++        first.dts = None
++    original = (first.pts, first.dts)
++    settings = replace(
++        hass.data[DOMAIN][ATTR_SETTINGS], preserve_initial_timestamps=True
++    )
++    with pytest.raises(
++        StreamWorkerError, match="initial video timestamps are unavailable"
++    ):
++        await async_decode_stream(hass, packets, stream_settings=settings)
++    assert (first.pts, first.dts) == original
++
++
++@pytest.mark.parametrize("requested", [False, True])
++def test_stream_option_is_internal_not_forwarded_as_ffmpeg_option(
++    hass: HomeAssistant, requested: bool
++) -> None:
++    """Keep the policy on the worker instead of leaking an unknown FFmpeg flag."""
++    opts, settings = _convert_stream_options(
++        hass,
++        "rtsp://127.0.0.1:1/test",
++        {"preserve_initial_timestamps": requested},
++    )
++    assert settings.preserve_initial_timestamps is requested
++    assert "preserve_initial_timestamps" not in opts
++    assert not hass.data[DOMAIN][ATTR_SETTINGS].preserve_initial_timestamps
++
++
++@pytest.mark.parametrize("bad", [1, "true", None])
++def test_option_rejects_ambiguous_values(hass: HomeAssistant, bad: Any) -> None:
++    """Require a boolean policy instead of permissive coercion."""
++    with pytest.raises(HomeAssistantError):
++        _convert_stream_options(
++            hass, "http://127.0.0.1:1/test", {"preserve_initial_timestamps": bad}
++        )
++
++
++def test_wallclock_replacement_cannot_be_combined_with_source_preservation(
++    hass: HomeAssistant,
++) -> None:
++    """Reject contradictory source and wall-clock declarations."""
++    with pytest.raises(HomeAssistantError, match="cannot use wall-clock"):
++        _convert_stream_options(
++            hass,
++            "rtsp://127.0.0.1:1/test",
++            {
++                "preserve_initial_timestamps": True,
++                "use_wallclock_as_timestamps": True,
++            },
++        )
++
++
++async def test_hls_timing_defaults_do_not_clear_explicit_clock_policy(
++    hass: HomeAssistant,
++) -> None:
++    """Disable LL-HLS for HLS inputs without erasing the requested clock policy."""
++    packets = list(PacketSequence(120))
++    for i, packet in enumerate(packets):
++        packet.pts = packet.dts = i * 6000 + (2 if i == 1 else 0)
++        packet.duration = 6000
++    py_av = MockPyAv()
++    py_av.container.format.name = "hls"
++    settings = replace(
++        hass.data[DOMAIN][ATTR_SETTINGS],
++        ll_hls=True,
++        preserve_initial_timestamps=True,
++    )
++    decoded = await async_decode_stream(
++        hass, packets, py_av=py_av, stream_settings=settings
++    )
++    assert not settings.ll_hls and settings.preserve_initial_timestamps
++    assert decoded.video_packets[0].pts == decoded.video_packets[0].dts == 0
+--- /dev/null
++++ b/tests/components/stream/test_finite_startup.py
+@@ -0,0 +1,101 @@
++"""Retain bounded finite AAC startup without changing live stream behavior."""
++
++from collections.abc import Iterator
++from dataclasses import replace
++from types import SimpleNamespace
++from typing import Any
++from unittest.mock import patch
++
++import av
++import pytest
++
++from homeassistant.components.stream import _convert_stream_options, worker
++from homeassistant.components.stream.const import ATTR_SETTINGS, DOMAIN, SOURCE_TIMEOUT
++from homeassistant.core import HomeAssistant
++
++from .test_worker import (
++    AUDIO_STREAM,
++    MockPyAv,
++    PacketSequence,
++    async_decode_stream,
++    mock_stream_settings,  # noqa: F401 -- register the upstream autouse fixture
++)
++
++
++@pytest.mark.parametrize("prefix", [0, 1, 2, 19, 20])
++@pytest.mark.parametrize("finite", [True, False])
++async def test_audio_before_initial_keyframe(
++    hass: HomeAssistant, prefix: int, finite: bool
++) -> None:
++    """Preserve a finite audio prefix; the legacy keyframe search still trims it."""
++    packets = list(PacketSequence(120))
++    audio = list(PacketSequence(prefix))
++    for i, packet in enumerate(audio):
++        packet.stream = AUDIO_STREAM
++        packet.time_base = AUDIO_STREAM.time_base
++        packet.pts = packet.dts = i * 1024
++        packet.duration = 1024
++    py_av = MockPyAv(audio=True)
++    settings = replace(
++        hass.data[DOMAIN][ATTR_SETTINGS], preserve_initial_timestamps=True
++    )
++    original = worker.StreamState.__init__
++
++    def state_init(self: Any, *args: Any, **kwargs: Any) -> None:
++        original(self, *args, **kwargs)
++        if finite:
++            self.finite_source = SimpleNamespace(receive_eof=lambda _: False)
++
++    with patch.object(worker.StreamState, "__init__", state_init):
++        if finite:
++            with pytest.raises(
++                worker.StreamWorkerError, match="completion authorization"
++            ):
++                await async_decode_stream(
++                    hass, audio + packets, py_av=py_av, stream_settings=settings
++                )
++        else:
++            await async_decode_stream(
++                hass, audio + packets, py_av=py_av, stream_settings=settings
++            )
++    assert len(py_av.capture_buffer.audio_packets) == (prefix if finite else 0)
++    assert len(py_av.capture_buffer.video_packets) == 120
++
++
++@pytest.mark.parametrize("bad", ["overflow", "nonkey", "eof"])
++def test_finite_startup_rejects_without_silent_trimming(bad: str) -> None:
++    """Reject overflow, absent keyframes and empty sources without a lossy suffix."""
++    packets = list(PacketSequence(21))
++    for packet in packets:
++        packet.stream = AUDIO_STREAM
++    if bad == "nonkey":
++        packets = list(PacketSequence(2))[1:]
++    if bad == "eof":
++        packets = []
++    expected = StopIteration if bad == "eof" else worker.StreamWorkerError
++    with pytest.raises(expected):
++        worker._finite_first_keyframe(worker.PeekIterator(iter(packets)))
++
++
++def test_declared_finite_aac_does_not_guess_from_video_probe_prefix() -> None:
++    """Select the AAC filter from the declared finite stream, not packet order."""
++
++    class UnreadPackets(Iterator[av.Packet]):
++        def __next__(self) -> av.Packet:
++            raise AssertionError("Finite AAC selection must not consume probe media")
++
++    stream = SimpleNamespace(name="aac")
++    assert (
++        worker.get_audio_bitstream_filter(UnreadPackets(), stream, finite_source=True)
++        == "aac_adtstoasc"
++    )
++
++
++def test_source_clock_rtsp_open_uses_existing_outer_budget(hass: HomeAssistant) -> None:
++    """Use the existing host open budget only for explicit source-clock policy."""
++    options, _ = _convert_stream_options(
++        hass, "rtsp://127.0.0.1/test", {"preserve_initial_timestamps": True}
++    )
++    assert options["stimeout"] == str(SOURCE_TIMEOUT * 1000000)
++    legacy, _ = _convert_stream_options(hass, "rtsp://127.0.0.1/test", {})
++    assert legacy["stimeout"] == "5000000"

@@ -78,6 +78,8 @@ class Group:
     paused: bool = False
     blocked_members: set[str] = field(default_factory=set)
     retry_rejections: int = 0
+    native_audio_profile: str | None = None
+    clock_domain: str = field(default_factory=lambda: secrets.token_hex(32))
 
     @property
     def reserved(self) -> bool:
@@ -96,6 +98,7 @@ class Group:
     def rotate(self) -> None:
         """Revoke the complete manifest, never just the selected lens."""
         self.tokens = {member: secrets.token_urlsafe(32) for member in self.options}
+        self.clock_domain = secrets.token_hex(32)
 
     async def wait_ready(self) -> None:
         """No native read starts until every declared member has a lease."""
@@ -327,6 +330,9 @@ class GroupStreamView(HomeAssistantView):
             "X-Accel-Buffering": "no", "X-Stream-Retry": "never",
             "X-Stream-Finite": "1" if lease.output.options.finite_source else "0",
         })
+        if group.native_audio_profile is not None:
+            response.headers["X-Native-Audio-Profile"] = group.native_audio_profile
+            response.headers["X-Stream-Clock-Domain"] = group.clock_domain
         lease.response = response
         complete = False
         try:

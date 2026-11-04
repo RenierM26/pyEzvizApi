@@ -15,7 +15,11 @@ from pyezvizapi.native_stream import NativeMpegTsStream, NativeTrackSelection
 
 def test_single_output_counts_match_independent_packet_oracle(sample):
     calls = []
-    owner = NativeMpegTsStream(lambda: (calls.append(1), Source(sample))[1], options())
+    def factory():
+        calls.append(1)
+        return Source(sample)
+
+    owner = NativeMpegTsStream(factory, options())
     generation = owner.source_generation
     assert owner.completion is None and calls == []
     with owner:
@@ -42,8 +46,10 @@ def test_receipt_mutation_cannot_change_completion_track_identity(sample):
     receipt = owner.receipt
     receipt["selected_tracks"][0]["id"] = 123
     receipt["accepted_access_units"][0]["access_units"] = 0
-    assert owner.completion.tracks[0].track_id != 123
-    assert all(t.access_units > 0 for t in owner.completion.tracks)
+    completion = owner.completion
+    assert completion is not None
+    assert completion.tracks[0].track_id != 123
+    assert all(t.access_units > 0 for t in completion.tracks)
 
 
 def test_physical_identity_shared_but_new_sources_never_reuse_it(sample):

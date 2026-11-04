@@ -15,7 +15,8 @@ class SharedRelay:
     """Own only one random named upstream; no preload or acquisition at setup."""
 
     def __init__(self, session: ClientSession, api_port: int, rtsp_port: int,
-                 *, trusted_source_clock: bool = False, atomic_ownership: bool = False) -> None:
+                 *, trusted_source_clock: bool = False, atomic_ownership: bool = False, native_opus: bool = False) -> None:
+        self._native_opus = native_opus
         self._trusted_source_clock = trusted_source_clock
         self._atomic_ownership = atomic_ownership
         self._ownership_token = secrets.token_hex(32)
@@ -98,6 +99,8 @@ class SharedRelay:
     async def _require_contracts(self) -> None:
         """Reject unsupported experimental contracts before registration/acquisition."""
         required = set()
+        if self._native_opus:
+            required.add("native-opus-source-clock-v1")
         if self._trusted_source_clock:
             required.update({"source-clock-v1", "no-retry-v1"})
         if self._atomic_ownership:

@@ -103,7 +103,11 @@ def pixel_hash(frame):
 
 def controlled_session(payload, codec, monkeypatch, gates=(4,)):
     source, calls = Source(payload), []
-    session = NativeMpegTsSession(lambda: (calls.append(1), source)[1], tuple(
+    def factory():
+        calls.append(1)
+        return source
+
+    session = NativeMpegTsSession(factory, tuple(
         replace(o, video_codec=codec) for o in choices()
     ), late_join=True)
     events = {n: (Event(), Event()) for n in gates}
@@ -295,7 +299,9 @@ def test_active_lens_replacement_does_not_reuse_old_parameters_across_wrap(encod
     assert late[256] == baseline[481][30:]
     audio_start = baseline[448].index(late[257][0])
     assert late[257] == baseline[448][audio_start:]
-    assert fresh.source_clock.origin_90k == late[256][0][1] * 90000 > 0
+    fresh_clock = fresh.source_clock
+    assert fresh_clock is not None
+    assert fresh_clock.origin_90k == late[256][0][1] * 90000 > 0
     pixels = decoded_video(second, 256)
     assert pixels == decoded_video(payload, 481)[30:]
     assert {(row[1], row[2]) for row in pixels} == {(96, 64)}

@@ -13,7 +13,7 @@ from test_native_stream import Source, repeated_ps_packets
 
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.native_access import _units
-from pyezvizapi.native_session import NativeMpegTsSession
+from pyezvizapi.native_session import NativeMpegTsSession, _Binding
 
 
 @pytest.fixture(params=["h264", "hevc"])
@@ -32,15 +32,16 @@ def short_encoded(request):
 
 def oracle(data, codec="hevc"):
     av = pytest.importorskip("av")
-    result = {}
+    result: dict[int, list[tuple[bytes | tuple[bytes, ...], Fraction, Fraction]]] = {}
     with av.open(io.BytesIO(data)) as container:
         for packet in container.demux():
             if not packet.size:
                 continue
             kind = packet.stream.type
-            payload = bytes(packet)
+            raw_payload = bytes(packet)
+            payload: bytes | tuple[bytes, ...] = raw_payload
             if kind == "video":
-                payload = tuple(bytes(n) for n in _units(payload) if ((n[0] >> 1) & 63 != 35 if codec == "hevc" else n[0] & 31 != 9))
+                payload = tuple(bytes(n) for n in _units(raw_payload) if ((n[0] >> 1) & 63 != 35 if codec == "hevc" else n[0] & 31 != 9))
             result.setdefault(packet.stream.id, []).append((
                 payload, Fraction(packet.pts) * packet.time_base,
                 Fraction(packet.dts) * packet.time_base,
@@ -230,7 +231,9 @@ def test_join_clock_is_current_source_reference_without_rounding(pts, base, acce
     output = session.outputs[1]
     assert session._admit_idr(output, Candidate(pts, base)) == accepted  # noqa: SLF001
     if accepted:
-        assert output.source_clock.origin_90k == pts * base * 90000
+        clock = output.source_clock
+        assert clock is not None
+        assert clock.origin_90k == pts * base * 90000
     else:
         assert output.receipt["error_type"] == "ValueError"
     session.close()
@@ -272,7 +275,7 @@ def test_leading_picture_after_idr_fails_subscription_instead_of_silently_droppi
     output.join_pts = Fraction(2)
     packet = SimpleNamespace(stream=SimpleNamespace(id=481, index=0, type="video"),
                              pts=1, time_base=Fraction(1))
-    binding = SimpleNamespace(output=output, muxer=MagicMock(), mapping={0: object()}, tracks=[])
+    binding = _Binding(output=output, muxer=MagicMock(), mapping={0: object()}, tracks=[])
     session._deliver_packet(None, None, binding, packet)  # noqa: SLF001
     assert output.receipt["error_type"] == "PyEzvizError"
     binding.muxer.mux.assert_not_called()

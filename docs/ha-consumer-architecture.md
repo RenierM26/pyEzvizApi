@@ -29,24 +29,25 @@ solution for simultaneous automatic HLS/WebRTC readers: that topology has
 reproduced admission conflicts. Do not enable a global HA setting or raise the
 native-owner limit to conceal that conflict.
 
-## Audio delivery checkpoint
+## Finite joint-delivery checkpoint
 
-The [audio qualification](ha-webrtc-audio-qualification.md) separates converter
-attachment, probe retention, bounded WebRTC queue delivery and actual playback.
-A native one-shot consumer must fail explicitly on overflow rather than silently
-drop media; source clocks must not be attributed to converted Opus without
-evidence. An intermittent HLS initial-AAC failure still blocks cold-start
-qualification. This is a separate private relay experiment, not a new library
-runtime dependency or a change to stable draft PR397.
+The [source-review bundle](consumer-runtime-review/README.md) supersedes the
+historical [audio checkpoint](ha-webrtc-audio-qualification.md). Bounded finite
+AAC-first startup, converter attachment, Opus packet delivery, shared RTCP mapping
+and controlled UDP-loss recovery now pass local LL/non-LL qualification. The
+explicit finite joint profile is not a live-camera default or a released relay
+contract. Browser/physical playback and upstream support remain separate gates.
 
 ## Ownership boundaries
 
 The [isolated topology qualification](ha-topology-qualification.md) now exercises
 the real HA go2rtc provider alongside both native HLS lens consumers. The
-provider adds a camera-name child stream and standard AAC-to-Opus conversion;
-it is not merely another direct reader of the native HTTP route. Keep encoded
+provider adds a camera-name child stream; the finite joint profile selects the
+explicit producer-owned AAC-to-Opus branch before source flow, while older
+conversion checkpoints used a late RTSP converter. It
+is not merely another direct reader of the native HTTP route. Keep encoded
 AAC unchanged for HLS and label WebRTC audio conversion explicitly. A separate
-relay AP depayloading correction is required for byte-correct HEVC on the tested
+relay AP depayloading correction (included in the source review) is required for byte-correct HEVC on the tested
 RTSP-to-WebRTC hop; the prior direct-RTSP result did not cover this path.
 
 The process owner must supply an ephemeral writable provider configuration,
@@ -79,7 +80,7 @@ options only after their selector/mapping is observed; configured, advertised,
 observed, decoded and HA-verified capabilities are different evidence levels.
 An auth failure or empty response is unknown, not proof of codec absence.
 
-For an eventual multi-lens implementation, use an integration-owned session
+For the explicit multi-lens validation implementation, use an integration-owned session
 registry keyed by device, verified SDK preview selector/profile and an opaque
 credential generation. Two entities may share a physical acquisition only when
 that exact source is verified to carry both requested tracks. The source owner
@@ -93,11 +94,10 @@ subscriber is slow; fail the slow subscription within declared bounds.
 **Implemented now:** multiple downstream viewers of the same selected stream
 can share one relay upstream/native owner.
 
-**PR397 baseline (unchanged):** two separate validation entries for different
-lenses may acquire separate transports. That PR does not claim cross-lens sharing.
-The separate local spike now has explicit physical entries with stable child
-lenses, a shared source/session and a single admission authority across both
-routes. It does not infer grouping between existing entries.
+**Included in the current draft:** explicit physical entries with stable child
+lenses, a shared source/session and one admission authority across both routes.
+Grouping is never inferred between existing entries. This remains a validation
+adapter, not automatic migration of existing cameras.
 
 ## Admission and lifecycle contract
 
@@ -160,7 +160,7 @@ The separate local shared-lens spike adds `NativeMpegTsSession` and an explicitl
 declared HA `GroupRegistry`/`GroupStreamView`, with one physical attempt, bounded
 cold membership, per-lens leases and retained failed-join ownership. See the
 [prototype contract](native-shared-session.md#explicit-ha-group-controller-prototype).
-This is not part of PR397. Single-lens behavior remains compatible, while the
+This is now included as opt-in PR397 validation scope. Single-lens behavior remains compatible, while the
 explicit multi-lens flow now composes group UI/provider/relay lifecycle and one
 common admission authority. Automatic grouping of existing entries is not added. Opt-in staged IDR activation now supports sequential
 opening of declared lenses. Explicit per-lens preparation now replaces a retired
@@ -218,6 +218,9 @@ Legacy inventory GET/DELETE remains a compatibility-only best-effort mode, not
 race-free cleanup. A production-safe shared-relay mode should require maintained
 versions of the contracts and reject unsupported combinations before acquisition.
 A stock relay's ability to render video is not evidence of clock/lifecycle parity.
+The explicit finite joint audio profile additionally negotiates
+`native-opus-source-clock-v1`; its source proposal and prerequisites are in the
+[review bundle](consumer-runtime-review/README.md).
 
 ## HA integration structure
 
@@ -235,8 +238,9 @@ Keep production code responsibilities small and independently testable:
 - `button.py`, `sensor.py`, `diagnostics.py`: explicit Prepare and sanitized status
   without tokens, addresses, serials or private source error text.
 
-These filenames describe the target split; the validation example still keeps
-its runtime in `route.py`. Do not rename working modules just for diagram parity.
+The validation example now separates physical groups, entry/lens delivery,
+finite completion and relay ownership. The eventual core integration still needs
+its own maintainers' review; validation module names are not a release contract.
 
 The current test route requires plain IPv4-loopback HA HTTP (HTTPS reverse proxy
 can remain). Direct-TLS/non-loopback-only HA fails setup. Do not disable TLS or
@@ -270,5 +274,5 @@ be attached to a public PR. Use generated fixtures and sanitized receipts.
 The generated near-33-bit-wrap source is now covered through the real
 owner/HTTP/relay/HA path. Truly discontinuous/ambiguous timestamps remain rejected.
 Supported-client HEVC, Windows probe outcome/remote cleanup, attended physical
-A/V, long-run live behavior, cross-lens sharing and maintained relay releases
+A/V, long-run live behavior and maintained relay releases
 are still open. A draft PR is not a dependency release or deployment approval.

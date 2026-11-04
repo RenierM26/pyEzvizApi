@@ -1,0 +1,224 @@
+{
+  "status": "source-review-only-not-deployment",
+  "go2rtc": {
+    "public_base": "7c05066c90ab6ad1fccb506d5f0408aa31ebe60f",
+    "local_source_commit": "fe794ba8a6f25211ad01fd37a595ff6f6f448f4f",
+    "patch_applied_to_public_base": true,
+    "extracted_source_sha256": {
+      "internal/http/http.go": "9c10f8587ad50e0ad9ea0d98cddb8e164e6a95573a87c45d520a9ee32625c45c",
+      "internal/streams/add_consumer.go": "35cc653de5b6906c8eabfc4545667628b35d119774c23cc771bd616a200b0d01",
+      "internal/streams/api.go": "cff08784757d3c2198fffb2a658cd99c32aaf3881711605cd4c496d5bc1ae9ae",
+      "internal/streams/owned.go": "219a7ffdbd229fd593b52b7ced4e2423c657602522ff877ff4189548cf7dbb5f",
+      "internal/streams/owned_test.go": "53e0d12f6d931093795132d70672ad3359e7bab1eb5e446b6276dababcac7763",
+      "internal/streams/producer.go": "a421197312c4f1307d5467a82316e37706dd5d0071ed2df49be13e0d7b13df29",
+      "internal/streams/source_terminal_test.go": "d94c81936c57fe85bb19c0d704efcf00ae923eee4a8259181bfa3d5cc0daf5c4",
+      "internal/streams/streams.go": "f7439521091ce7ec43e3fb0ecf55064b516da27c5fc085b9e928b50e073ea364",
+      "pkg/core/finite.go": "6c288b63e04991133b4531a199318970f00f8ca2c7aa1875257038584a50661c",
+      "pkg/core/native_ref.go": "022297a5e8b36d2f72b44e0ffa2ad043ab98f591f188321992d24d0a1ad2149b",
+      "pkg/core/node.go": "356cb911b6404e85b3aab955edd5234feb5738562148720431cc29ab758a6e22",
+      "pkg/core/presentation_clock.go": "9716cf3e76a7f595efc19c5bac95d6eb34139e2666fd041e50e2efc05de0a57b",
+      "pkg/core/sender_timeout.go": "56b2cfc9e73474749ddcabb1c527ea5ed5327e4ad3be0d3c32da437b075b2677",
+      "pkg/core/sender_timeout_test.go": "14f90e937c1621cfd0ad6975e57f0effa77035d7acf314339f2e434739a573f1",
+      "pkg/core/start_gate.go": "9ad6c7fd06f0f8e6012998cd51edb359e4ac93e672dae97419e35f1e4681697a",
+      "pkg/core/track.go": "9c7e817dc8d848aa775829756ff6fdecd76e3e1a7f3907f6eae5e9f6c4c3d22d",
+      "pkg/h264/annexb/annexb.go": "6cdb9bf05a37df7422ca4afdbcb47a5fcbe57b6c3a1c882233323580db504e7a",
+      "pkg/h264/payloader.go": "bd6519ad81e3fde7e59ac285104cee61173b924cfcd0b4e0b930cd95a2be67c0",
+      "pkg/h264/rtp.go": "80ab4a134cd18ef3ee368aa5099b1712f2cec5bb8fe522c972f9c987e506149c",
+      "pkg/h265/rtp.go": "078ea02262988ead7e69f52ebfb953adfac484357d7e341960e59483829efffc",
+      "pkg/h265/rtp_aggregation_test.go": "bcaaf0ce1c75ab19513958d5a8a668df68c154efdee34f431f4f6e77e986d4d6",
+      "pkg/mpegts/demuxer.go": "763e9469102d7a22dc33bea9a1b65270c89a2e2a2003042daac7bd0af4d9f5e5",
+      "pkg/mpegts/end_order_test.go": "e4ab538a2a96b6077036447139ff6b2d407d7fa607427dd93c988eca23fd1244",
+      "pkg/mpegts/finite_test.go": "dcf4a6f2580c3266f1b1088f13967b6df6805e767b57a9f8833355075dba31f3",
+      "pkg/mpegts/muxer.go": "98d0767346a5db9f3de1bf3f23eb137a2892acd82b2473802475d7f90b5d3dd3",
+      "pkg/mpegts/native_opus.go": "10e9c18565d31af94f7a865d832881df12b39b1448930a38cfe12e2c22b9d5f0",
+      "pkg/mpegts/native_opus_test.go": "e4c27ef9ef8b11907eab17f7a54ecacda42d31bf0c466dcc566af902d14d505c",
+      "pkg/mpegts/producer.go": "266c05e59582b70c1360c99c8cb3d7d26732a4261b6991f5cddb86695647daad",
+      "pkg/mpegts/source_epoch.go": "1dca72eff04ec0a9c6a29df67c849ddb2f1bc6d2bcbdabde237fc55821fb3c3b",
+      "pkg/mpegts/source_epoch_test.go": "9e13a33069a185feeece381e222a990c083560e39515e49a6d62556a6dd2c250",
+      "pkg/rtsp/client.go": "58fd34674136b07074f417a8e5514a820e600bf19a77764e34c26440425729cc",
+      "pkg/rtsp/conn.go": "24e2e0077dd7da85ac41190fead30321b9b5d8fd4e7ca0bd48cc9677067f4682",
+      "pkg/rtsp/consumer.go": "aff11fc9a75c7c47f44b5fd1e97f9c0c92a9b84514d6fd548807b43eb061dbce",
+      "pkg/rtsp/producer.go": "bdc561d88652f1b5b3b16787201de5d5bd6ccb6e09e0e92a065649abdfcac53f",
+      "pkg/rtsp/server.go": "eeec3a3e8c2db6f1ac2eee7e4648ee928fd879a843f827471c63a9264ddc19d2",
+      "pkg/rtsp/source_clock.go": "7341ee0b5772caa268c5ce55db24240b07395b80fefca3e1aaf092b646e6f708",
+      "pkg/rtsp/source_clock_test.go": "85788b07cfe69257e185ef53f6cc658905a5d02582eedc95153904b0bd5ddc57",
+      "pkg/rtsp/source_policy_test.go": "f4fd60dbe0c40d8c3f4d60074ec02a5cd308e701442ecc035962f1869da573c7",
+      "pkg/webrtc/api.go": "7b13ff37abc366b27cfec3f9a1eac4692f89ec628aed6f8f04160a7411babebe",
+      "pkg/webrtc/conn.go": "f92b7d922f986d7ace5a1b8e73a162c8e722624ce66f619197aaeb0760e61ea0",
+      "pkg/webrtc/consumer.go": "d5b5a19f1b0bec9679c713e802c496a772f4a9af3ce152ddd3306cf284e72386",
+      "pkg/webrtc/native_feedback_test.go": "4b677e2c7906b7345ed5d2b836f0065bb3a0860676a2ffd118297b43fc6c676f",
+      "pkg/webrtc/native_report.go": "c1e1b06cf31abfb6e5c5d35cf66e3cb0665564f72eb2d71d8b97a1cef47824c2",
+      "pkg/webrtc/native_report_test.go": "26ba595c28cebf5a6c7b28a590cbf4356bd30f8eed1afb7e77b15049f3664a4b",
+      "pkg/webrtc/native_start.go": "caa17541cce8c22c0bdd3d1dcfb579042a0182f5f0be44b280e451170b8546e8",
+      "pkg/webrtc/native_start_test.go": "2abc79d6d52ba11584b68024886f452d490f7d0dd452c03ea3f84482d592bdde",
+      "pkg/webrtc/track.go": "67ec8c14da1d049f9453552b67d8cf9cc5bb09eb349ba84918147b02ffeec22d"
+    },
+    "selected_race_tests": 38,
+    "hevc_aggregation_controls": 4,
+    "full_external_CI_claimed": false
+  },
+  "home_assistant": {
+    "public_base": "357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b",
+    "patch_applied_to_public_base": true,
+    "extracted_source_sha256": {
+      "homeassistant/components/stream/__init__.py": "567eaf9fdbbc2f6dd7186a2aeaf43e03f81f418a52cb76b16d75b86ccdeaa2e7",
+      "homeassistant/components/stream/const.py": "2d5a6202e983c20c65c6ba674208116dd717df722108a051d065128a16a85112",
+      "homeassistant/components/stream/core.py": "fea05e80531217f109a24ae1f2e88e2d85c3ccccdb5702e0e722e4e445d3c691",
+      "homeassistant/components/stream/finite.py": "559e6d7e90dc796e5a32500941a324cb975f0ef75fc6ea8300770a73c500a453",
+      "homeassistant/components/stream/hls.py": "b4997ba1004450cdd7cf75ee67b2386279cc4451447ecf473d8b9e830fab5808",
+      "homeassistant/components/stream/worker.py": "1668f1658cbf525afaac57591eaaa56c5ad1a6191ac3338b6b5acac072dfe410",
+      "tests/components/stream/test_finite_source.py": "0824df813c67c601180c5274c1e2f6b7075cd53496f1d70a5b1f002dd6b700d8",
+      "tests/components/stream/test_finite_source_contract.py": "db7e5c4c66f302b70f3938ef6b64a60f35a1bd25e9407cf03af2716e8ea83810",
+      "tests/components/stream/test_finite_startup.py": "2c407dd63ced75e5b735f9e05c7d9bacf238154bef71a3efe427f1f761bf3e73",
+      "tests/components/stream/test_worker.py": "c83ae3e3b61b920ec619cf746c3a663c5e04f5d433eec2322a34c583c362ad1e"
+    },
+    "combined_component_tests": 152,
+    "new_startup_cases": 15,
+    "full_repository_or_platform_CI_claimed": false
+  },
+  "ffmpeg": {
+    "public_base": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+    "release": "n9.0.2",
+    "archive_sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+    "patch_applied_to_release_archive": true,
+    "extracted_source_sha256": {
+      "libavcodec/parser.c": "f400f0bac3e2afc581d82f7a010b4f8014b343250985df5d0274a34ba6314650",
+      "libavcodec/Makefile": "600e496ccf367d7ce8742f9ede725cfd519277772d8a148c3fe7520782a7ed7e",
+      "tests/fate/libavcodec.mak": "eeb1ce935285743fac4ee766d681da8cecae33e9fe87cc834533d3ea2588c13a",
+      "libavcodec/tests/parser_timestamp.c": "73270bd656a640d224335df8a989910d284d65ebdb3d7cec9c01b25bc855136d"
+    },
+    "prior_selected_fate_targets": 24,
+    "full_FATE_claimed": false
+  },
+  "patch_sha256": {
+    "ffmpeg-parser-source-and-fate.patch": "c00bbe6ff11b02377a98f71147524e83ccb2a5f08092b1f3ae156604e2b03424",
+    "go2rtc-native-consumer.patch": "69c926382aafb2734f09e5cf8d5a15ce0d9010f141ef3ac20bdffe084054b5ae",
+    "home-assistant-finite-stream.patch": "9831b6283e66648ebbb1bf6291ac82568268a6a8d14945c4e0cf9b24e2fd7922"
+  },
+  "python": {
+    "library_tests": 5032,
+    "coverage_percent": 90.37,
+    "final_typing_regressions": 45,
+    "HA_example_tests": 161,
+    "additional_enabled_real_relay_cases": 8,
+    "library_mypy_files": 242,
+    "HA_example_mypy_files": 14
+  },
+  "private_evidence_not_included": [
+    "source recordings",
+    "packet bodies and private packet hashes",
+    "SDP and ICE credentials",
+    "source capabilities",
+    "SDK and binaries",
+    "certificates and private keys"
+  ],
+  "acceptance_not_claimed": [
+    "physical audibility or audiovisual synchronization",
+    "browser/frontend HEVC support",
+    "production proxy/auth/WebSocket topology",
+    "long-run live/battery safety",
+    "arbitrary source-profile or transport-load acceptance",
+    "maintained upstream dependency releases"
+  ],
+  "retained_acceptance": {
+    "ll_hls": {
+      "native_acquisitions": 1,
+      "decrypt_demux_owners": 1,
+      "decrypt_callbacks": 8840,
+      "HLS_video_samples_per_lens": 1783,
+      "HLS_AAC_samples_per_lens": 1857,
+      "converter_AAC_input_per_lens": 1857,
+      "converter_input_payloads_and_PTS_exact": true,
+      "peers": {
+        "primary": {
+          "encoded_Opus": 5943,
+          "received_Opus": 5943,
+          "all_payloads_and_source_RTP_clocks_exact": true,
+          "missing_prefix_internal_tail": 0,
+          "decoded_48k_samples": 5705280,
+          "nonzero_frames": 5943,
+          "single_A_V_presentation_mapping": true,
+          "standard_Opus_priming_seconds": "37/15000",
+          "video_original_nals": 1873,
+          "video_received_nals": 1873
+        },
+        "secondary": {
+          "encoded_Opus": 5943,
+          "received_Opus": 5943,
+          "all_payloads_and_source_RTP_clocks_exact": true,
+          "missing_prefix_internal_tail": 0,
+          "decoded_48k_samples": 5705280,
+          "nonzero_frames": 5943,
+          "single_A_V_presentation_mapping": true,
+          "standard_Opus_priming_seconds": "37/15000",
+          "video_original_nals": 1873,
+          "video_received_nals": 1873
+        }
+      },
+      "RTCP_mapping_spread_seconds": 2.063857391476631e-05,
+      "shared_cross_lens_presentation_domain": true,
+      "received_sequences_complete_after_offline_reordering": true,
+      "HLS_complete_delivery": true,
+      "HLS_source_phase_error_seconds": "-11/240000",
+      "source_phase_budget_seconds": "1/16000",
+      "controlled_video_datagram_drop_before_SRTP_sequence": 265,
+      "browser_or_physical_playback": false
+    },
+    "non_ll_hls": {
+      "native_acquisitions": 1,
+      "decrypt_demux_owners": 1,
+      "decrypt_callbacks": 8840,
+      "HLS_video_samples_per_lens": 1783,
+      "HLS_AAC_samples_per_lens": 1857,
+      "converter_AAC_input_per_lens": 1857,
+      "converter_input_payloads_and_PTS_exact": true,
+      "peers": {
+        "primary": {
+          "encoded_Opus": 5943,
+          "received_Opus": 5943,
+          "all_payloads_and_source_RTP_clocks_exact": true,
+          "missing_prefix_internal_tail": 0,
+          "decoded_48k_samples": 5705280,
+          "nonzero_frames": 5943,
+          "single_A_V_presentation_mapping": true,
+          "standard_Opus_priming_seconds": "37/15000",
+          "video_original_nals": 1873,
+          "video_received_nals": 1873
+        },
+        "secondary": {
+          "encoded_Opus": 5943,
+          "received_Opus": 5943,
+          "all_payloads_and_source_RTP_clocks_exact": true,
+          "missing_prefix_internal_tail": 0,
+          "decoded_48k_samples": 5705280,
+          "nonzero_frames": 5943,
+          "single_A_V_presentation_mapping": true,
+          "standard_Opus_priming_seconds": "37/15000",
+          "video_original_nals": 1873,
+          "video_received_nals": 1873
+        }
+      },
+      "RTCP_mapping_spread_seconds": 2.0670471712946892e-05,
+      "shared_cross_lens_presentation_domain": true,
+      "received_sequences_complete_after_offline_reordering": true,
+      "HLS_complete_delivery": true,
+      "HLS_source_phase_error_seconds": "-11/240000",
+      "source_phase_budget_seconds": "1/16000",
+      "controlled_video_datagram_drop_before_SRTP_sequence": 265,
+      "browser_or_physical_playback": false
+    }
+  },
+  "retained_failed_stress_control": {
+    "concurrent_broad_repository_checks": true,
+    "HLS_and_Opus_complete": true,
+    "primary_video_missing_RTP_sequences": 74,
+    "interval": [
+      95,
+      168
+    ],
+    "RTCP_feedback_present": true,
+    "cause_not_fully_localized": true,
+    "not_hidden_by_larger_buffers_or_tolerance": true,
+    "does_not_claim_arbitrary_burst_loss_recovery": true
+  }
+}

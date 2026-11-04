@@ -97,7 +97,7 @@ components/configuration and use a deliberately selected camera/profile.
    Do not publish the internal source URL. Download integration diagnostics for
    sanitized source/HTTP counters if the test fails.
 
-The example has no snapshot implementation, transcoding, silence insertion,
+The default example has no snapshot implementation, implicit transcoding, silence insertion,
 clock repair, automatic codec fallback, profile switching or automatic probes.
 Configure known supported streams; do not reinterpret auth/no-data as unsupported.
 
@@ -449,3 +449,18 @@ fails before registration/acquisition, with no destructive legacy fallback.
 A relay build implementing ownership but not this negotiation is intentionally
 unsupported by these new experimental modes. Ordinary legacy mode is unchanged
 and makes no claim of those guarantees.
+
+## Current finite joint audio validation (2026-11-04)
+
+The current draft includes explicit shared-lens ownership and a finite joint
+HLS/WebRTC validation profile. It closes the software startup, late converter
+attachment and common-clock gaps described by earlier historical sections.
+See the [source-review bundle](consumer-runtime-review/README.md) for exact bases,
+opt-in settings, complete sample/packet evidence and dependency proposals. Original
+AAC remains on HLS; only the explicitly declared WebRTC audio branch converts to
+Opus. Stock hosts/relays reject unsupported contracts before acquisition.
+
+This is a retained-source test profile, not a new normal UI live-recording flow.
+Production dependencies, managed components and default single-lens behavior are
+not replaced. Physical/browser playback, live acceptance and maintained upstream
+support remain required.

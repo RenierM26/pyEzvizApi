@@ -37,6 +37,7 @@ class Settings:
     lenses: tuple[LensSettings, ...] = ()
     group_profile: str | None = None
     credential_revision: str | None = None
+    relay_native_opus: bool = False
 
 
 def integer(value: Any, low: int, high: int) -> int:
@@ -95,12 +96,23 @@ def load_settings(data: dict[str, Any]) -> Settings:
     primary = NativeTrackSelection(integer(data["video_id"], 0, 511),
                                    None if audio == -1 else audio)
     lenses = load_lenses(data, primary)
+    native_opus = data.get("relay_native_opus", False)
+    finite_source = data.get("finite_source", False)
+    if not isinstance(native_opus, bool) or not isinstance(finite_source, bool):
+        raise ValueError("Finite audio profile requires explicit boolean settings")
+    if finite_source and not lenses:
+        raise ValueError("Finite source delivery requires a grouped public HA contract")
+    if native_opus and not (finite_source and clock and ownership and lenses
+                            and primary.audio_id is not None
+                            and all(lens.selection.audio_id is not None for lens in lenses)):
+        raise ValueError("Native Opus requires finite grouped clock/ownership contracts")
     return Settings(
         credentials,
         integer(data["channel"], 0, 255),
         NativeStreamOptions(
             selection=primary,
             video_codec=data["video_codec"],
+            finite_source=finite_source,
         ),
         integer(data["nalu_header_size"], 1, 2),
         (integer(data["relay_api_port"], 1, 65535)
@@ -111,6 +123,7 @@ def load_settings(data: dict[str, Any]) -> Settings:
         lenses,
         text(data["group_profile"]) if lenses else None,
         text(data["credential_revision"]) if lenses else None,
+        native_opus,
     )
 
 

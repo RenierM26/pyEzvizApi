@@ -25,7 +25,11 @@ def interrupted(output):
 def test_repeated_lens_suffixes_retire_muxes_on_worker_and_leave_primary_exact(sample, monkeypatch):  # noqa: PLR0915
     payload = b"".join(repeated_ps_packets(sample, 30))
     source, calls = Source(payload), []
-    session = NativeMpegTsSession(lambda: (calls.append(1), source)[1], choices(), late_join=True)
+    def factory():
+        calls.append(1)
+        return source
+
+    session = NativeMpegTsSession(factory, choices(), late_join=True)
     gates = {n: (Event(), Event()) for n in (40, 80, 120, 160, 200)}
     original, count = session._deliver_packet, [0]  # noqa: SLF001
     contexts, threads = [], []
@@ -81,13 +85,15 @@ def test_repeated_lens_suffixes_retire_muxes_on_worker_and_leave_primary_exact(s
     assert oracle(primary_body)[256] == baseline[480]
     assert oracle(primary_body)[257] == baseline[448]
     starts = []
-    for output, body in [*retired, (fresh, final_body)]:
+    for selected_output, body in [*retired, (fresh, final_body)]:
         actual = oracle(body)
         start = baseline[481].index(actual[256][0])
         starts.append(start)
         assert start > 0
         assert actual[256] == baseline[481][start:start + len(actual[256])]
-        assert output.source_clock.origin_90k == actual[256][0][1] * 90000
+        clock = selected_output.source_clock
+        assert clock is not None
+        assert clock.origin_90k == actual[256][0][1] * 90000
         audio_start = baseline[448].index(actual[257][0])
         assert actual[257] == baseline[448][audio_start:audio_start + len(actual[257])]
         assert actual[257][0][1] >= actual[256][0][1]
@@ -117,7 +123,10 @@ def test_repeated_lens_suffixes_retire_muxes_on_worker_and_leave_primary_exact(s
 def test_replacement_requires_late_mode_closed_handle_and_live_sibling(sample):
     for late in (False, True):
         source = Source(block=True)
-        session = NativeMpegTsSession(lambda source=source: source, choices(), late_join=late)
+        def factory(source: Source = source) -> Source:
+            return source
+
+        session = NativeMpegTsSession(factory, choices(), late_join=late)
         with pytest.raises(PyEzvizError):
             session.replace_output(session.outputs[1])
         session.outputs[0].start()

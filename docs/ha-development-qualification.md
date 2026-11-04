@@ -1,5 +1,8 @@
 # HA full development qualification and finite publication fixes
 
+> Historical checkpoint: the [current finite joint-delivery review](consumer-runtime-review/README.md)
+> supersedes its unresolved software-startup/audio/clock status and PR-head claims.
+
 The separate host review now has complete local script/setup environments, not
 just runtime overlays. Both full HA2026.10.4 baseline/candidate checkouts use
 Python3.14.9 and1691identical unique installed package versions. Build tools for

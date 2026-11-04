@@ -1,5 +1,8 @@
 # EZVIZ WebRTC audio queue correction and remaining startup gates — 2026-11-02
 
+> Historical checkpoint: the [current finite joint-delivery review](consumer-runtime-review/README.md)
+> supersedes its unresolved software-startup/audio/clock status and PR-head claims.
+
 ## Result
 
 A real silent WebRTC audio-loss bug is corrected in a separate local relay experiment. Both final paced LL-HLS and non-LL runs receive **every Opus packet emitted by FFmpeg**, byte-identically and with unchanged RTP timestamp references. Both final HLS runs retain every source HEVC/AAC sample and their existing timing budget.

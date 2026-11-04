@@ -387,5 +387,25 @@
     "master_playlist_waiter_controls_added": 6,
     "terminal_media_waiter_returns_playlist": true,
     "empty_terminal_and_cleanup_waiters_remain_404": true
+  },
+  "recorded_supervisor_follow_up": {
+    "CI_python": "3.14",
+    "failure": "supervisor PermissionError; no worker media error reported",
+    "process_identity": [
+      "pid",
+      "start_tick"
+    ],
+    "one_partial_snapshot_rechecked_at_next_existing_sample": true,
+    "pending_identity_retained_when_unlisted": true,
+    "PID_reuse_distinguished": true,
+    "root_and_persistent_identity_permission_denial_remain_fatal": true,
+    "unresolved_cleanup_permission_check_is_fatal": true,
+    "new_regression_controls": 4,
+    "tool_tests": 32,
+    "full_library_tests": 5052,
+    "library_coverage_percent": 90.38,
+    "library_mypy_files": 242,
+    "Pyright_errors": 0,
+    "media_wall_sample_interval_and_process_bounds_unchanged": true
   }
 }

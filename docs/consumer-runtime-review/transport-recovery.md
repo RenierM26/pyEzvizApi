@@ -3,8 +3,9 @@
 ## Scope
 
 PR397 was merged at `e231e42800effaca989671c027b5dac9ec236ce3`.
-This follow-up changes the cumulative **source-only relay proposal**, not the
-Python library API, a managed HA installation or a deployed relay. It adds
+This follow-up changes the cumulative **source-only relay proposal** and the
+recorded-playback supervisor, not the Python library API, a managed HA installation
+or a deployed relay. It adds
 negotiated video RTX and regression/CI evidence for a previously unqualified
 late-repair boundary. Original video/AAC bytes, source timestamps, source owners,
 queue/socket/cache limits and anti-replay protection remain unchanged.
@@ -140,3 +141,22 @@ not arbitrary host load.
 
 No release, deployment, camera/account change or repeat remote Windows probe is
 part of this follow-up.
+
+## Recorded-playback supervisor follow-up
+
+Python 3.14 CI exposed another supervisor `PermissionError` while its worker
+reported no media error. A deterministic `/proc` visibility control showed that
+an exec-time access gap can outlast the existing single scheduler yield.
+The sampler now records a partial descendant snapshot explicitly and rechecks
+that PID/start-time identity at its next existing sampling tick. It retains the
+pending identity even if the child disappears from its parent's current list;
+reused PIDs are not mistaken for the prior observation. Root denial, a second
+denial for the same identity, and unresolved visibility after cleanup still fail.
+
+Four new controls cover recovery, exit, no-longer-listed children and PID reuse;
+existing persistent/root and transient/exit cases remain covered. All 32 playback
+tool tests pass. No media timeout, wall guard, source or memory/process bound,
+verification rule, sample interval or test skip was relaxed. Resource peaks remain
+explicitly sampled/non-atomic, not exact allocation accounting; missed/deferred
+snapshots and unresolved checks are reported. The failed CI observation remains
+recorded rather than relabeled as a positive media test.

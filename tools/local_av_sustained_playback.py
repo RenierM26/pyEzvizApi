@@ -111,13 +111,19 @@ def playback(args: Any, report: dict[str, Any]) -> None:
     verify(report, args.expected_source_sha256)
 
 
+def process_identity(base: Path) -> tuple[str, int] | None:
+    """Read state and start tick so a recycled PID is not an old observation."""
+    try:
+        fields = (base / 'stat').read_text().rsplit(') ', 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return fields[0], int(fields[19])
+
+
 def process_has_ended(base: Path) -> bool:
     """A vanished or zombie descendant cannot provide a live resource sample."""
-    try:
-        state = (base / 'stat').read_text().rsplit(') ', 1)[1].split()[0]
-    except (FileNotFoundError, ProcessLookupError):
-        return True
-    return state in {'Z', 'X'}
+    identity = process_identity(base)
+    return identity is None or identity[0] in {'Z', 'X'}
 
 
 def process_resources(base: Path, *, descendant: bool) -> tuple[int, int, list[int]] | None:
@@ -149,9 +155,38 @@ class Resources:
         self.started = time.monotonic()
         self.windows: dict[str, dict[str, int]] = {}
         self.missed_process_samples = 0
+        self.deferred_permission_samples = 0
+        self._permission_pending: dict[int, int] = {}
+
+    def _pending(self, root: int) -> list[int]:
+        pending = []
+        for pid, start in tuple(self._permission_pending.items()):
+            identity = process_identity(Path('/proc') / str(pid))
+            if identity is not None and identity[0] not in {'Z', 'X'} and identity[1] == start:
+                pending.append(pid)
+            else:
+                self._permission_pending.pop(pid)
+        pending.append(root)
+        return pending
+
+    def _defer_permission(self, pid: int, base: Path) -> bool:
+        identity = process_identity(base)
+        if identity is None or identity[0] in {'Z', 'X'}:
+            self._permission_pending.pop(pid, None)
+            return True
+        if self._permission_pending.get(pid) == identity[1]:
+            return False
+        self._permission_pending[pid] = identity[1]
+        self.deferred_permission_samples += 1
+        return True
+
+    def require_complete(self) -> None:
+        """Do not accept a final resource report with unresolved visibility."""
+        if self._permission_pending:
+            raise PermissionError('Descendant resource visibility unresolved after cleanup')
 
     def sample(self, root: int) -> None:
-        pending = [root]
+        pending = self._pending(root)
         seen: set[int] = set()
         rss = descriptors = 0
         while pending:
@@ -165,13 +200,23 @@ class Resources:
             try:
                 snapshot = process_resources(base, descendant=pid != root)
                 if snapshot is None:
+                    self._permission_pending.pop(pid, None)
                     self.missed_process_samples += 1
                     continue
+                self._permission_pending.pop(pid, None)
                 resident, descriptor_count, children = snapshot
                 rss += resident
                 descriptors += descriptor_count
                 pending.extend(children)
             except (FileNotFoundError, ProcessLookupError):
+                self._permission_pending.pop(pid, None)
+                self.missed_process_samples += 1
+            except PermissionError:
+                # exec visibility can outlast one scheduler yield. Retry on the
+                # existing next sample, not in a blocking timing loop. A second
+                # denial for the same PID/start tick is a genuine failure.
+                if pid == root or not self._defer_permission(pid, base):
+                    raise
                 self.missed_process_samples += 1
         window = str(min(int((time.monotonic() - self.started) // 30), WALL // 30))
         row = self.windows.setdefault(window, dict(samples=0, peak_rss_bytes=0, peak_fd_count=0, peak_process_count=0))
@@ -182,7 +227,9 @@ class Resources:
     def result(self) -> dict[str, Any]:
         return dict(scope='sampled-parent-and-descendants-non-atomic-not-native-allocation-bound',
             interval_seconds=.25, window_seconds=30, windows=self.windows,
-            missed_process_samples=self.missed_process_samples)
+            missed_process_samples=self.missed_process_samples,
+            deferred_permission_samples=self.deferred_permission_samples,
+            pending_permission_checks=len(self._permission_pending))
 
 
 def worker(args: Any) -> int:
@@ -263,6 +310,7 @@ def supervise(args: Any, report: dict[str, Any]) -> int:  # noqa: PLR0912, PLR09
                 if result.exists():
                     report['playback'] = json.loads(LAN['read_regular'](result, MAX_RECEIPT))
                 resources.sample(os.getpid())
+                resources.require_complete()
             except Exception as error:
                 report['cleanup_error_type'] = type(error).__name__
                 if code == 0:

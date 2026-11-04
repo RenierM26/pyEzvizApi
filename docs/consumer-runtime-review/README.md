@@ -212,3 +212,8 @@ a lost repair, legacy early recovery, unchanged replay rejection and cache expir
 The dedicated Consumer Runtime Review workflow now applies and hashes the public
 source proposal before building/running these selected race checks. This is
 review-proposal CI, not an upstream dependency release or installed HA change.
+
+The recorded-playback supervisor also records an exec-visibility snapshot gap
+across one existing sampling interval, keyed by PID/start time. It refuses
+persistent/root denial and unresolved cleanup; partial observations are explicit.
+See the transport report for controls and the separate failed CI observation.

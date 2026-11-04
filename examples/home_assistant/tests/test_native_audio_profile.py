@@ -121,6 +121,7 @@ def supported_host(monkeypatch):
     monkeypatch.setattr(completion.ha_stream, "FINITE_SOURCE_COMPLETION_CONTRACT",
                         completion.CONTRACT, raising=False)
     monkeypatch.setattr(completion.ha_stream, "FiniteSourceCounts", SimpleNamespace, raising=False)
+    monkeypatch.setattr(Camera, "async_validate_webrtc_offer", lambda self, offer: None, raising=False)
     for method in ("async_prepare_finite_source", "async_confirm_finite_source",
                    "async_cancel_finite_source"):
         monkeypatch.setattr(completion.Stream, method, MagicMock(), raising=False)
@@ -130,7 +131,7 @@ def supported_host(monkeypatch):
 @pytest.mark.parametrize("consumer", ["hls", "webrtc"])
 @pytest.mark.parametrize("missing", [
     "missing_version", "wrong_version", "counts", "async_prepare_finite_source",
-    "async_confirm_finite_source", "async_cancel_finite_source",
+    "async_confirm_finite_source", "async_cancel_finite_source", "async_validate_webrtc_offer",
 ])
 async def test_incomplete_host_refuses_all_source_paths_before_registration(
     hass, data, monkeypatch, consumer, missing,
@@ -141,6 +142,8 @@ async def test_incomplete_host_refuses_all_source_paths_before_registration(
         monkeypatch.setattr(completion.ha_stream, "FINITE_SOURCE_COMPLETION_CONTRACT", "unknown")
     elif missing == "counts":
         monkeypatch.setattr(completion.ha_stream, "FiniteSourceCounts", None)
+    elif missing == "async_validate_webrtc_offer":
+        monkeypatch.setattr(Camera, missing, None)
     else:
         monkeypatch.setattr(completion.Stream, missing, None)
     registry = GroupRegistry()

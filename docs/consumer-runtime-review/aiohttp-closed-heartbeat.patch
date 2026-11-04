@@ -1,0 +1,62 @@
+diff --git a/CHANGES/0.bugfix.rst b/CHANGES/0.bugfix.rst
+new file mode 100644
+index 0000000..5b4035c
+--- /dev/null
++++ b/CHANGES/0.bugfix.rst
+@@ -0,0 +1 @@
++Prevent late server WebSocket parser notifications or deferred heartbeat resets from recreating timers after the WebSocket has closed -- by :user:`RenierM26`.
+diff --git a/aiohttp/web_ws.py b/aiohttp/web_ws.py
+index 50e944d..9af0046 100644
+--- a/aiohttp/web_ws.py
++++ b/aiohttp/web_ws.py
+@@ -155,7 +155,7 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
+             self._pong_response_cb = None
+ 
+     def _on_data_received(self) -> None:
+-        if self._heartbeat is None or self._need_heartbeat_reset:
++        if self._closed or self._heartbeat is None or self._need_heartbeat_reset:
+             return
+         loop = self._loop
+         assert loop is not None
+@@ -172,7 +172,7 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
+         self._need_heartbeat_reset = False
+ 
+     def _reset_heartbeat(self) -> None:
+-        if self._heartbeat is None:
++        if self._closed or self._heartbeat is None:
+             return
+         self._cancel_pong_response_cb()
+         req = self._req
+diff --git a/tests/test_websocket_closed_heartbeat.py b/tests/test_websocket_closed_heartbeat.py
+new file mode 100644
+index 0000000..77b4dce
+--- /dev/null
++++ b/tests/test_websocket_closed_heartbeat.py
+@@ -0,0 +1,27 @@
++"""A closed websocket must not recreate heartbeat timers on late parser data."""
++import asyncio
++
++import pytest
++
++from aiohttp.web_ws import WebSocketResponse
++
++
++@pytest.mark.parametrize("closed", [False, True])
++@pytest.mark.parametrize("entry", ["_on_data_received", "_reset_heartbeat"])
++async def test_heartbeat_callback_after_close_does_not_rearm(closed, entry):
++    ws = WebSocketResponse(heartbeat=10)
++    ws._loop = asyncio.get_running_loop()
++    if closed:
++        ws._set_closed()
++    try:
++        getattr(ws, entry)()
++        await asyncio.sleep(0)
++        if closed:
++            assert ws._heartbeat_cb is None
++            assert ws._heartbeat_reset_handle is None
++            assert not ws._need_heartbeat_reset
++        else:
++            assert ws._heartbeat_cb is not None
++            assert not ws._heartbeat_cb.cancelled()
++    finally:
++        ws._cancel_heartbeat()

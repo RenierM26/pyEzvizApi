@@ -3624,6 +3624,347 @@ index 767394d..83eaea0 100644
  	}
  
  	switch track.Codec.Name {
+diff --git a/pkg/webrtc/native_auto_feedback_test.go b/pkg/webrtc/native_auto_feedback_test.go
+new file mode 100644
+index 0000000..5b6d8b4
+--- /dev/null
++++ b/pkg/webrtc/native_auto_feedback_test.go
+@@ -0,0 +1,335 @@
++package webrtc
++
++import (
++	"bytes"
++	"encoding/binary"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/ice/v4"
++	"github.com/pion/interceptor"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++	pion "github.com/pion/webrtc/v4"
++)
++
++// A receiver must be able to repair a burst after its primary SRTP replay
++// window advances, without increasing that window or the retransmission cache.
++func TestNativeAutomaticRecovery(t *testing.T) {
++	for _, profile := range []struct{ name, codec, fmtp string }{
++		{"H264-baseline", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
++		{"H264-constrained", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
++		{"H264-high", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032"},
++		{"H265", core.CodecH265, ""},
++	} {
++		for _, scenario := range []struct {
++			name           string
++			rtx            bool
++			total, missing uint16
++			recovered      bool
++			continuation   bool
++		}{
++			{"automatic_late_burst_and_lost_repair", true, 256, 74, true, true},
++			{"terminal_repair_without_more_primary", true, 256, 74, true, false},
++			{"no_rtx_early_feedback", false, 32, 16, true, false},
++			{"no_rtx_keeps_replay_protection", false, 256, 74, false, false},
++		} {
++			t.Run(profile.name+"/"+scenario.name, func(t *testing.T) {
++				nativeAutomaticRecovery(t, profile.codec, profile.fmtp, scenario.rtx, scenario.total, scenario.missing, scenario.recovered, scenario.continuation)
++			})
++		}
++	}
++}
++
++func nativeAutomaticRecovery(t *testing.T, codec, fmtp string, offerRTX bool, total, missingCount uint16, recovered, continuation bool) {
++	old := OnNewListener
++	OnNewListener = func(v any) {
++		if closer, ok := v.(io.Closer); ok {
++			t.Cleanup(func() { _ = closer.Close() })
++		}
++	}
++	api, err := NewServerAPI("udp", "127.0.0.1:0", &Filters{Loopback: true, Interfaces: []string{"lo"}, Networks: []string{"udp4"}})
++	OnNewListener = old
++	if err != nil {
++		t.Fatal(err)
++	}
++	pc, err := api.NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := NewConn(pc)
++	c.Mode = core.ModePassiveConsumer
++	defer c.Close()
++	m := &pion.MediaEngine{}
++	mime, nal := pion.MimeTypeH265, []byte{0x26, 1, 5, 6, 7}
++	if codec == core.CodecH264 {
++		mime = pion.MimeTypeH264
++		nal = []byte{0x65, 5, 6, 7}
++	}
++	if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: mime, ClockRate: 90000, SDPFmtpLine: fmtp, RTCPFeedback: []pion.RTCPFeedback{{Type: "nack"}}}, PayloadType: 96}, pion.RTPCodecTypeVideo); err != nil {
++		t.Fatal(err)
++	}
++	if offerRTX {
++		if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: pion.MimeTypeRTX, ClockRate: 90000, SDPFmtpLine: "apt=96"}, PayloadType: 97}, pion.RTPCodecTypeVideo); err != nil {
++			t.Fatal(err)
++		}
++	}
++	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	loss := &nativeAutoLossConn{PacketConn: socket, dropped: map[uint16]bool{}, last: missingCount + 1, dropFirstRTX: offerRTX}
++	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: loss})
++	defer mux.Close()
++	se := pion.SettingEngine{}
++	se.SetICEUDPMux(mux)
++	se.SetIncludeLoopbackCandidate(true)
++	se.SetInterfaceFilter(func(name string) bool { return name == "lo" })
++	se.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
++	gate := &automaticFeedbackGate{}
++	registry := &interceptor.Registry{}
++	registry.Add(gate)
++	if err = pion.RegisterDefaultInterceptors(m, registry); err != nil {
++		t.Fatal(err)
++	}
++	remote, err := pion.NewAPI(pion.WithMediaEngine(m), pion.WithSettingEngine(se), pion.WithInterceptorRegistry(registry)).NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer remote.Close()
++	connected := make(chan struct{}, 1)
++	remote.OnConnectionStateChange(func(state pion.PeerConnectionState) {
++		if state == pion.PeerConnectionStateConnected {
++			select {
++			case connected <- struct{}{}:
++			default:
++			}
++		}
++	})
++	type receipt struct {
++		found map[uint16][]byte
++		err   error
++	}
++	result := make(chan receipt, 1)
++	remote.OnTrack(func(track *pion.TrackRemote, _ *pion.RTPReceiver) {
++		_ = track.SetReadDeadline(time.Now().Add(3 * time.Second))
++		found := map[uint16][]byte{}
++		requested := false
++		highest := uint16(0)
++		for {
++			packet, _, readErr := track.ReadRTP()
++			if readErr != nil {
++				result <- receipt{found, readErr}
++				return
++			}
++			found[packet.SequenceNumber] = append([]byte(nil), packet.Payload...)
++			if packet.SequenceNumber > highest {
++				highest = packet.SequenceNumber
++			}
++			if highest >= total && !requested {
++				gate.ready.Store(true)
++				requested = true
++				_ = track.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
++			}
++			complete := requested
++			for seq := uint16(1); complete && seq <= total; seq++ {
++				_, complete = found[seq]
++			}
++			if complete {
++				result <- receipt{found, nil}
++				return
++			}
++		}
++	})
++	if _, err = remote.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
++		t.Fatal(err)
++	}
++	offer, err := remote.CreateOffer(nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	gathered := pion.GatheringCompletePromise(remote)
++	if err = remote.SetLocalDescription(offer); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = c.SetOffer(remote.LocalDescription().SDP); err != nil {
++		t.Fatal(err)
++	}
++	media := c.Medias[0]
++	inputCodec := &core.Codec{Name: codec, ClockRate: 90000, PayloadType: 96}
++	input := core.NewReceiver(&core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{inputCodec}}, inputCodec)
++	input.SourcePolicy = &core.SourcePolicy{OneShot: true}
++	if err = c.AddTrack(media, media.Codecs[0], input); err != nil {
++		t.Fatal(err)
++	}
++	gathered = pion.GatheringCompletePromise(pc)
++	if _, err = c.GetAnswer(); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = remote.SetRemoteDescription(*pc.LocalDescription()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-connected:
++	case <-time.After(3 * time.Second):
++		t.Fatal("connect timeout")
++	}
++	writePacket := func(i uint16) {
++		payload := append(append([]byte(nil), nal...), byte(i>>8), byte(i))
++		input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: i, Timestamp: uint32(i) * 3000}, Payload: payload})
++	}
++	for i := uint16(1); i <= total; i++ {
++		writePacket(i)
++	}
++	// Continue ordinary media for the running-source case. The repair-only
++	// control disables this path so it cannot mask a blocked primary read.
++	stop := make(chan struct{})
++	var continuing sync.WaitGroup
++	continuing.Add(1)
++	go func() {
++		defer continuing.Done()
++		if !continuation {
++			return
++		}
++		for i := total + 1; i <= total+100; i++ {
++			select {
++			case <-stop:
++				return
++			case <-time.After(5 * time.Millisecond):
++				writePacket(i)
++			}
++		}
++	}()
++	defer func() { close(stop); continuing.Wait() }()
++
++	select {
++	case got := <-result:
++		loss.mu.Lock()
++		dropped, rtx, resent, lostRepair := len(loss.dropped), loss.rtx, loss.resent, loss.rtxDropped
++		loss.mu.Unlock()
++		if dropped != int(missingCount) {
++			t.Fatalf("drop count=%d", dropped)
++		}
++		if recovered {
++			if got.err != nil {
++				t.Fatalf("late burst unrecovered: unique=%d want=%d err=%v feedback=%d rtx=%d", len(got.found), total, got.err, c.nativeFeedbackPackets.Load(), rtx)
++			}
++			if offerRTX {
++				if rtx <= int(missingCount) || !lostRepair {
++					t.Fatalf("RTX packets=%d lost-first-repair=%v", rtx, lostRepair)
++				}
++			} else if rtx != 0 || resent < int(missingCount) {
++				t.Fatalf("early same-SSRC recovery: RTX=%d resends=%d", rtx, resent)
++			}
++		} else {
++			var timeout net.Error
++			if !errors.As(got.err, &timeout) || !timeout.Timeout() {
++				t.Fatalf("expected bounded timeout, got %v", got.err)
++			}
++			last := uint16(0)
++			for seq := range got.found {
++				if seq > last {
++					last = seq
++				}
++			}
++			if len(got.found) != int(last)-int(missingCount) {
++				t.Fatalf("unexpected recovery/extra loss: unique=%d last=%d", len(got.found), last)
++			}
++			if offerRTX && rtx != 0 {
++				t.Fatalf("expired cache produced %d RTX packets", rtx)
++			}
++			if !offerRTX && resent < int(missingCount) {
++				t.Fatalf("same-SSRC repairs=%d want>=%d", resent, missingCount)
++			}
++		}
++		for seq, payload := range got.found {
++			expected := append(append([]byte(nil), nal...), byte(seq>>8), byte(seq))
++			if !bytes.Equal(payload, expected) {
++				t.Fatalf("payload changed seq=%d: %x != %x", seq, payload, expected)
++			}
++		}
++		if c.nativeFeedbackPackets.Load() == 0 {
++			t.Fatal("NACK not read by native sender")
++		}
++	case <-time.After(4 * time.Second):
++		t.Fatal("receiver timeout")
++	}
++}
++
++type nativeAutoLossConn struct {
++	net.PacketConn
++	mu           sync.Mutex
++	dropped      map[uint16]bool
++	rtx          int
++	resent       int
++	last         uint16
++	dropFirstRTX bool
++	rtxDropped   bool
++}
++
++func (c *nativeAutoLossConn) ReadFrom(b []byte) (int, net.Addr, error) {
++	for {
++		n, addr, err := c.PacketConn.ReadFrom(b)
++		if err != nil {
++			return n, addr, err
++		}
++		if n >= 12 && b[0]>>6 == 2 {
++			pt := b[1] & 0x7f
++			seq := binary.BigEndian.Uint16(b[2:4])
++			c.mu.Lock()
++			drop := false
++			if pt == 96 && seq >= 2 && seq <= c.last {
++				if !c.dropped[seq] {
++					c.dropped[seq] = true
++					drop = true
++				} else {
++					c.resent++
++				}
++			}
++			if pt == 97 {
++				c.rtx++
++				if c.dropFirstRTX && !c.rtxDropped {
++					c.rtxDropped = true
++					drop = true
++				}
++			}
++			c.mu.Unlock()
++			if drop {
++				continue
++			}
++		}
++		return n, addr, nil
++	}
++}
++
++type automaticFeedbackGate struct {
++	interceptor.NoOp
++	ready atomic.Bool
++}
++
++func (g *automaticFeedbackGate) NewInterceptor(string) (interceptor.Interceptor, error) {
++	return g, nil
++}
++func (g *automaticFeedbackGate) BindRTCPWriter(writer interceptor.RTCPWriter) interceptor.RTCPWriter {
++	return interceptor.RTCPWriterFunc(func(packets []rtcp.Packet, attributes interceptor.Attributes) (int, error) {
++		out := make([]rtcp.Packet, 0, len(packets))
++		for _, packet := range packets {
++			if _, ok := packet.(*rtcp.TransportLayerNack); ok && !g.ready.Load() {
++				continue
++			}
++			out = append(out, packet)
++		}
++		if len(out) == 0 {
++			return 0, nil
++		}
++		return writer.Write(out, attributes)
++	})
++}
 diff --git a/pkg/webrtc/native_feedback_test.go b/pkg/webrtc/native_feedback_test.go
 new file mode 100644
 index 0000000..8479d54

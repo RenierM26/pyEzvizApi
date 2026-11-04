@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   relay-proposal:
-    name: Relay source proposal (selected race checks)
+    name: Relay and receiver proposals (selected race checks)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -40,6 +40,14 @@ jobs:
           path: consumer-go
           persist-credentials: false
 
+      - name: Check out the documented public receiver base
+        uses: actions/checkout@v7
+        with:
+          repository: pion/webrtc
+          ref: 0b9c2d861edeffda1eee0923f0acf3cf90914feb
+          path: consumer-pion
+          persist-credentials: false
+
       - name: Verify proposal bytes, apply and verify resulting sources
         shell: bash
         run: |
@@ -50,36 +58,44 @@ jobs:
           import subprocess
 
           bundle = Path("docs/consumer-runtime-review")
-          source = Path("consumer-go")
           qualification = json.loads((bundle / "qualification.json").read_text())
-          proposal = bundle / "go2rtc-native-consumer.patch"
-          actual_base = subprocess.check_output(
-              ["git", "rev-parse", "HEAD"], cwd=source, text=True
-          ).strip()
-          if actual_base != qualification["go2rtc"]["public_base"]:
-              raise SystemExit("Public source base mismatch")
-          if hashlib.sha256(proposal.read_bytes()).hexdigest() != qualification["patch_sha256"][proposal.name]:
-              raise SystemExit("Proposal hash mismatch")
-          subprocess.run(["git", "apply", "--check", str(proposal.resolve())], cwd=source, check=True)
-          subprocess.run(["git", "apply", str(proposal.resolve())], cwd=source, check=True)
-          changed = subprocess.check_output(
-              ["git", "diff", "--name-only", "HEAD"], cwd=source, text=True
-          ).splitlines()
-          added = subprocess.check_output(
-              ["git", "ls-files", "--others", "--exclude-standard"], cwd=source, text=True
-          ).splitlines()
-          if set(changed + added) != set(qualification["go2rtc"]["extracted_source_sha256"]):
-              raise SystemExit("Proposal changed paths do not match its source manifest")
-          for name, expected in qualification["go2rtc"]["extracted_source_sha256"].items():
-              if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
-                  raise SystemExit(f"Extracted source mismatch: {name}")
-          print("Public base, proposal and extracted source hashes verified")
+          for kind, folder, filename in (
+              ("go2rtc", "consumer-go", "go2rtc-native-consumer.patch"),
+              ("pion", "consumer-pion", "pion-rtx-pull.patch"),
+          ):
+              source = Path(folder)
+              proposal = bundle / filename
+              metadata = qualification[kind]
+              actual_base = subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], cwd=source, text=True
+              ).strip()
+              if actual_base != metadata["public_base"]:
+                  raise SystemExit(f"Public source base mismatch: {kind}")
+              if hashlib.sha256(proposal.read_bytes()).hexdigest() != qualification["patch_sha256"][proposal.name]:
+                  raise SystemExit(f"Proposal hash mismatch: {kind}")
+              subprocess.run(["git", "apply", "--check", str(proposal.resolve())], cwd=source, check=True)
+              subprocess.run(["git", "apply", str(proposal.resolve())], cwd=source, check=True)
+              changed = subprocess.check_output(
+                  ["git", "diff", "--name-only", "HEAD"], cwd=source, text=True
+              ).splitlines()
+              added = subprocess.check_output(
+                  ["git", "ls-files", "--others", "--exclude-standard"], cwd=source, text=True
+              ).splitlines()
+              if set(changed + added) != set(metadata["extracted_source_sha256"]):
+                  raise SystemExit(f"Proposal changed paths do not match its source manifest: {kind}")
+              for name, expected in metadata["extracted_source_sha256"].items():
+                  if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
+                      raise SystemExit(f"Extracted source mismatch: {kind}/{name}")
+          print("Both public bases, proposals and extracted source hashes verified")
           PY
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: consumer-go/go.mod
           cache-dependency-path: consumer-go/go.sum
+
+      - name: Associate source proposals without changing module pins
+        run: go work init ./consumer-go ./consumer-pion
 
       - name: Ensure generated Opus controls have FFmpeg
         shell: bash
@@ -88,6 +104,13 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y ffmpeg
           fi
+
+      - name: Receiver pull, loss-tracker, RTX and RID race controls
+        working-directory: consumer-pion
+        run: >-
+          go test -p 2 -race -vet=off .
+          -run 'TestRTPPull|TestRTPReceiver|TestPeerConnection_Simulcast_RTX|Test_PeerConnection_RTX_E2E'
+          -count=1
 
       - name: Build the proposed relay
         working-directory: consumer-go
@@ -100,3 +123,114 @@ jobs:
           ./pkg/webrtc ./pkg/rtsp ./pkg/mpegts ./internal/streams ./pkg/h265
           -run 'TestNative|TestRTX|TestSource|TestOwned|TestFinite|TestNoReconnect|TestAggregation|TestMalformedAggregation'
           -count=1
+
+  python-proposals:
+    name: Python proposal manifests and WebSocket controls
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v7
+        with:
+          repository: home-assistant/core
+          ref: 357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b
+          path: consumer-ha
+          persist-credentials: false
+          sparse-checkout: |
+            homeassistant/components/camera
+            homeassistant/components/stream
+            tests/components/camera
+            tests/components/stream
+
+      - uses: actions/checkout@v7
+        with:
+          repository: aio-libs/aiohttp
+          ref: f17c631bddcfd4ec712342db28f1d3381a3fec71
+          path: consumer-aiohttp
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Apply and hash public Python proposals (not full upstream CI)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          bundle = Path("docs/consumer-runtime-review")
+          qualification = json.loads((bundle / "qualification.json").read_text())
+          for kind, folder, filename in (
+              ("home_assistant", "consumer-ha", "home-assistant-finite-stream.patch"),
+              ("aiohttp", "consumer-aiohttp", "aiohttp-closed-heartbeat.patch"),
+          ):
+              source = Path(folder)
+              proposal = bundle / filename
+              metadata = qualification[kind]
+              base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+              if base != metadata["public_base"]:
+                  raise SystemExit(f"Public source base mismatch: {kind}")
+              if hashlib.sha256(proposal.read_bytes()).hexdigest() != qualification["patch_sha256"][filename]:
+                  raise SystemExit(f"Proposal hash mismatch: {kind}")
+              subprocess.run(["git", "apply", "--check", str(proposal.resolve())], cwd=source, check=True)
+              subprocess.run(["git", "apply", str(proposal.resolve())], cwd=source, check=True)
+              changed = subprocess.check_output(["git", "diff", "--name-only", "HEAD"], cwd=source, text=True).splitlines()
+              added = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard"], cwd=source, text=True).splitlines()
+              if set(changed + added) != set(metadata["extracted_source_sha256"]):
+                  raise SystemExit(f"Changed source paths mismatch: {kind}")
+              for name, expected in metadata["extracted_source_sha256"].items():
+                  if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
+                      raise SystemExit(f"Extracted source mismatch: {kind}/{name}")
+          print("Both public Python source proposals apply with exact path/hash manifests")
+          PY
+
+      - name: Install isolated WebSocket test dependencies with compiled extensions
+        run: python -m pip install 'aiohttp==3.14.5' pytest pytest-asyncio
+
+      - name: Prove closed-heartbeat controls fail before and pass after correction
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          import aiohttp
+          from aiohttp.http_websocket import WebSocketReader
+
+          source = Path("consumer-aiohttp").resolve()
+          installed = Path(aiohttp.__file__).resolve().parent
+          original = subprocess.check_output(["git", "show", "HEAD:aiohttp/web_ws.py"], cwd=source)
+          if hashlib.sha256((installed / "web_ws.py").read_bytes()).digest() != hashlib.sha256(original).digest():
+              raise SystemExit("Installed baseline Python source differs from public base")
+          if "reader_c" not in WebSocketReader.__module__:
+              raise SystemExit("Compiled WebSocket reader not active")
+          work = Path(os.environ["RUNNER_TEMP"]) / "closed-heartbeat-controls"
+          runtime = work / "runtime"
+          tests = work / "tests"
+          tests.mkdir(parents=True)
+          shutil.copytree(installed, runtime / "aiohttp", ignore=shutil.ignore_patterns("__pycache__"))
+          test = tests / "test_closed_heartbeat.py"
+          shutil.copy2(source / "tests/test_websocket_closed_heartbeat.py", test)
+          env = {**os.environ, "PYTHONPATH": str(runtime)}
+          command = [sys.executable, "-m", "pytest", "-c", "/dev/null", "--confcutdir", str(tests),
+                     "-q", "-o", "asyncio_mode=auto", str(test)]
+          before = subprocess.run(command, cwd=tests, env=env, text=True, capture_output=True)
+          print(before.stdout)
+          if before.returncode != 1 or "2 failed, 2 passed" not in before.stdout:
+              raise SystemExit("Expected two closed-baseline failures and two active passes")
+          shutil.copy2(source / "aiohttp/web_ws.py", runtime / "aiohttp/web_ws.py")
+          # The wheel and its compiled extensions stay unchanged; only the isolated
+          # runtime overlay's proposed Python source is loaded by the next process.
+          subprocess.run(command, cwd=tests, env=env, check=True)
+          PY

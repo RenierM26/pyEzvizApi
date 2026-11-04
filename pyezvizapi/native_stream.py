@@ -636,7 +636,11 @@ class NativeMpegTsStream:
                     format="mpeg",
                     options={
                         "probesize": "1048576",
-                        "analyzeduration": "5000000",
+                        # Explicit finite owners need codec discovery, not extended stream/rate
+                        # analysis that bursts the retained opening at viewers.
+                        # Keep the existing probe-byte, stream and startup/idle caps.
+                        "analyzeduration": "1" if self.options.finite_source else "5000000",
+                        **({"fpsprobesize": "0"} if self.options.finite_source else {}),
                         "max_streams": "64",
                     },
                 ) as incoming:

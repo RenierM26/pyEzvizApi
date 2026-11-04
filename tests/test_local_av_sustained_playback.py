@@ -121,8 +121,14 @@ def actual_receipt(tmp_path_factory):
     receipt = tmp_path / 'receipt.json'
     p = subprocess.run(command(source, receipt), capture_output=True, timeout=20,
         env=dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy'), check=False)
-    assert p.returncode == 0, (p.stderr, receipt.read_text())
-    return json.loads(receipt.read_text()), source
+    result = json.loads(receipt.read_text())
+    assert p.returncode == 0, {
+        'stderr': p.stderr,
+        'supervisor_errors': {key: value for key, value in result.items() if key.endswith('error_type')},
+        'worker_errors': {key: value for key, value in result.get('playback', {}).items()
+                          if key.endswith('error_type')},
+    }
+    return result, source
 
 
 def test_actual_isolated_profile_has_bounded_histories_native_identity_and_sampled_resources(actual_receipt):

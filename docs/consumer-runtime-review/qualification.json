@@ -43,19 +43,44 @@
       "pkg/rtsp/source_clock.go": "7341ee0b5772caa268c5ce55db24240b07395b80fefca3e1aaf092b646e6f708",
       "pkg/rtsp/source_clock_test.go": "85788b07cfe69257e185ef53f6cc658905a5d02582eedc95153904b0bd5ddc57",
       "pkg/rtsp/source_policy_test.go": "f4fd60dbe0c40d8c3f4d60074ec02a5cd308e701442ecc035962f1869da573c7",
-      "pkg/webrtc/api.go": "7b13ff37abc366b27cfec3f9a1eac4692f89ec628aed6f8f04160a7411babebe",
+      "pkg/webrtc/api.go": "b8ec93cdaf3d04f5451c3f66f9da182082c9fcd9b63858a9b38b15857d40f711",
       "pkg/webrtc/conn.go": "f92b7d922f986d7ace5a1b8e73a162c8e722624ce66f619197aaeb0760e61ea0",
       "pkg/webrtc/consumer.go": "d5b5a19f1b0bec9679c713e802c496a772f4a9af3ce152ddd3306cf284e72386",
       "pkg/webrtc/native_feedback_test.go": "4b677e2c7906b7345ed5d2b836f0065bb3a0860676a2ffd118297b43fc6c676f",
+      "pkg/webrtc/native_recovery_test.go": "931190eb7926d33ded11eb1ef3deec1f5f49ef0ab4bad89b0412119d90fae213",
       "pkg/webrtc/native_report.go": "c1e1b06cf31abfb6e5c5d35cf66e3cb0665564f72eb2d71d8b97a1cef47824c2",
       "pkg/webrtc/native_report_test.go": "26ba595c28cebf5a6c7b28a590cbf4356bd30f8eed1afb7e77b15049f3664a4b",
       "pkg/webrtc/native_start.go": "caa17541cce8c22c0bdd3d1dcfb579042a0182f5f0be44b280e451170b8546e8",
       "pkg/webrtc/native_start_test.go": "2abc79d6d52ba11584b68024886f452d490f7d0dd452c03ea3f84482d592bdde",
+      "pkg/webrtc/rtx_sequence.go": "2d19d6bf291c9b79b70694711bca7acd2cb1343ac9eb11daa7b15bca8382ddf3",
+      "pkg/webrtc/rtx_sequence_test.go": "bf3c92bf111c4fd92292ad0b7a20046a5eb0fd0962c919d3dc2e9f65233b0e85",
       "pkg/webrtc/track.go": "67ec8c14da1d049f9453552b67d8cf9cc5bb09eb349ba84918147b02ffeec22d"
     },
     "selected_race_tests": 38,
     "hevc_aggregation_controls": 4,
-    "full_external_CI_claimed": false
+    "full_external_CI_claimed": false,
+    "transport_recovery_follow_up": {
+      "video_profiles": [
+        "H264-baseline",
+        "H264-constrained",
+        "H264-high",
+        "H265"
+      ],
+      "late_recovery_cases": 16,
+      "RTX_transport_sequence_controls": 3,
+      "selected_race_leaf_tests": 95,
+      "selected_packages": 5,
+      "delayed_original_datagrams_dropped_per_peer": 74,
+      "first_RTX_repair_datagram_also_dropped": true,
+      "primary_SSRCreplay_window": 64,
+      "NACK_cache_packets": 1024,
+      "receiver_repair_queue_raised": false,
+      "cache_or_socket_or_source_queue_limit_raised": false,
+      "old_negotiation_positive_cases_fail": 4,
+      "cached_RTX_sequence_positive_cases_fail": 4,
+      "receiver_feedback_model": "explicit bounded NACKs derived from restored original identities; not stock automatic Pion feedback or browser acceptance",
+      "media_checkpoint_above_not_replaced": true
+    }
   },
   "home_assistant": {
     "public_base": "357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b",
@@ -92,7 +117,7 @@
   },
   "patch_sha256": {
     "ffmpeg-parser-source-and-fate.patch": "c00bbe6ff11b02377a98f71147524e83ccb2a5f08092b1f3ae156604e2b03424",
-    "go2rtc-native-consumer.patch": "69c926382aafb2734f09e5cf8d5a15ce0d9010f141ef3ac20bdffe084054b5ae",
+    "go2rtc-native-consumer.patch": "f992c4120eb0fbd6658e2b627a69bbfad7ca60b0175992715a52a79df9c815b6",
     "home-assistant-finite-stream.patch": "df4700fb4922ec3ad47d78971163381697adb168a76c7b0b3b93b4865e75725c"
   },
   "python": {

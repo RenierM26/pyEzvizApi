@@ -1,0 +1,102 @@
+name: Consumer Runtime Review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "docs/consumer-runtime-review/**"
+      - ".github/workflows/consumer-runtime-review.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/consumer-runtime-review/**"
+      - ".github/workflows/consumer-runtime-review.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relay-proposal:
+    name: Relay source proposal (selected race checks)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check out the documented public relay base
+        uses: actions/checkout@v7
+        with:
+          repository: AlexxIT/go2rtc
+          ref: 7c05066c90ab6ad1fccb506d5f0408aa31ebe60f
+          path: consumer-go
+          persist-credentials: false
+
+      - name: Verify proposal bytes, apply and verify resulting sources
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          bundle = Path("docs/consumer-runtime-review")
+          source = Path("consumer-go")
+          qualification = json.loads((bundle / "qualification.json").read_text())
+          proposal = bundle / "go2rtc-native-consumer.patch"
+          actual_base = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], cwd=source, text=True
+          ).strip()
+          if actual_base != qualification["go2rtc"]["public_base"]:
+              raise SystemExit("Public source base mismatch")
+          if hashlib.sha256(proposal.read_bytes()).hexdigest() != qualification["patch_sha256"][proposal.name]:
+              raise SystemExit("Proposal hash mismatch")
+          subprocess.run(["git", "apply", "--check", str(proposal.resolve())], cwd=source, check=True)
+          subprocess.run(["git", "apply", str(proposal.resolve())], cwd=source, check=True)
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", "HEAD"], cwd=source, text=True
+          ).splitlines()
+          added = subprocess.check_output(
+              ["git", "ls-files", "--others", "--exclude-standard"], cwd=source, text=True
+          ).splitlines()
+          if set(changed + added) != set(qualification["go2rtc"]["extracted_source_sha256"]):
+              raise SystemExit("Proposal changed paths do not match its source manifest")
+          for name, expected in qualification["go2rtc"]["extracted_source_sha256"].items():
+              if hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
+                  raise SystemExit(f"Extracted source mismatch: {name}")
+          print("Public base, proposal and extracted source hashes verified")
+          PY
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: consumer-go/go.mod
+          cache-dependency-path: consumer-go/go.sum
+
+      - name: Ensure generated Opus controls have FFmpeg
+        shell: bash
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
+      - name: Build the proposed relay
+        working-directory: consumer-go
+        run: go build -p 2 -buildvcs=false -o "$RUNNER_TEMP/go2rtc-consumer-proposal" .
+
+      - name: Selected proposal race checks (not full upstream CI)
+        working-directory: consumer-go
+        run: >-
+          go test -p 2 -race -vet=off
+          ./pkg/webrtc ./pkg/rtsp ./pkg/mpegts ./internal/streams ./pkg/h265
+          -run 'TestNative|TestRTX|TestSource|TestOwned|TestFinite|TestNoReconnect|TestAggregation|TestMalformedAggregation'
+          -count=1

@@ -9,7 +9,7 @@ Do not replace a managed HA component or relay binary with this bundle.
 
 | Proposal | Public source base | Contents |
 | --- | --- | --- |
-| [go2rtc](go2rtc-native-consumer.patch) | AlexxIT/go2rtc `7c05066c90ab6ad1fccb506d5f0408aa31ebe60f` (1.9.15) | Cumulative Go runtime/tests: source clocks, finite EOF, no retry, atomic runtime ownership, HEVC AP correction, bounded native queues, explicit joint Opus profile, RTCP mapping and NACK feedback |
+| [go2rtc](go2rtc-native-consumer.patch) | AlexxIT/go2rtc `7c05066c90ab6ad1fccb506d5f0408aa31ebe60f` (1.9.15) | Cumulative Go runtime/tests: source clocks, finite EOF, no retry, atomic runtime ownership, HEVC AP correction, bounded native queues, explicit joint Opus profile, RTCP mapping, NACK feedback and negotiated RTX repair |
 | [HA stream](home-assistant-finite-stream.patch) | home-assistant/core `357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b` (2026.10.4) | Cumulative stream component/tests: initial clocks, owner-confirmed finite completion, publication/revocation, bounded AAC-first startup and declared AAC filtering |
 | [FFmpeg](ffmpeg-parser-source-and-fate.patch) | FFmpeg `946fcce07b6dcd0331c8cc609192aeff5e1924f8` (`n9.0.2`) | Unknown parser byte-position initialization and generated AAC FATE regression |
 
@@ -76,7 +76,7 @@ For go2rtc, with Go and FFmpeg/libopus installed:
 
 ```sh
 go test -p 2 -race -vet=off ./pkg/webrtc ./pkg/rtsp ./pkg/mpegts ./internal/streams \
-  -run 'TestNative|TestSource|TestOwned|TestFinite|TestNoReconnect'
+  -run 'TestNative|TestRTX|TestSource|TestOwned|TestFinite|TestNoReconnect'
 go test -p 2 -race -vet=off ./pkg/h265 \
   -run 'TestAggregation|TestMalformedAggregation'
 ```
@@ -199,3 +199,16 @@ The two media cases fail on the previous proposal; all six pass with this guard.
 Generic receiver end semantics and acquisition/buffering limits are unchanged.
 The cumulative patch was re-extracted and apply-checked at the same public base;
 this proposal-only follow-up does not claim a new retained playback run.
+
+## Follow-up: bounded late RTX recovery
+
+The [transport-recovery report](transport-recovery.md) distinguishes original
+same-SSRC repairs from negotiated RTX. The cumulative relay proposal registers
+RTX for each supported video profile and assigns an independent RTX sequence at
+actual transmission, without modifying cached headers, original media identities
+or source clocks. It adds no media queue or larger cache/replay/socket allowance.
+Generated controls cover all four profiles, 74 lost originals, delayed feedback,
+a lost repair, legacy early recovery, unchanged replay rejection and cache expiry.
+The dedicated Consumer Runtime Review workflow now applies and hashes the public
+source proposal before building/running these selected race checks. This is
+review-proposal CI, not an upstream dependency release or installed HA change.

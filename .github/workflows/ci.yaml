@@ -13,6 +13,8 @@ on:
       - "tests/**"
       - "tools/apk-re/**"
       - "tools/local_av_lan_session.ps1"
+      - "tools/check_installed_native_wheel.py"
+      - "tools/build_ha_validation.py"
       - "discovery/apk/**"
       - ".github/workflows/**"
       - "!**/*.md"
@@ -101,6 +103,15 @@ jobs:
         if: matrix.python-version == '3.12'
         run: pyright pyezvizapi
 
+      - name: Check fixture encoder (install only if absent)
+        shell: bash
+        run: |
+          if ! command -v ffmpeg; then
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update
+            sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version
+
       - name: pytest with coverage (skip gracefully if no tests yet)
         shell: bash
         run: |
@@ -132,7 +143,7 @@ jobs:
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pip check
           /tmp/pyezvizapi-wheel-smoke/bin/python -m pyezvizapi --help
           /tmp/pyezvizapi-wheel-smoke/bin/pyezvizapi --help
-          /tmp/pyezvizapi-wheel-smoke/bin/python -c "import sys; import pyezvizapi.native_stream; assert 'av' not in sys.modules"
+          /tmp/pyezvizapi-wheel-smoke/bin/python -I tools/check_installed_native_wheel.py
 
   windows-wsl-entrypoint:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false

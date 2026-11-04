@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 import hmac
@@ -18,8 +19,10 @@ from pyezvizapi.client import EzvizClient
 from pyezvizapi.clip import AutoClipSource
 from pyezvizapi.native_stream import NativeMpegTsStream, native_mpegts_stream_from_client
 
+from .admission import Admission
 from .config import Settings
 from .const import MAX_ACTIVE, WRITE_TIMEOUT
+from .relay import SharedRelay
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +48,39 @@ class Runtime:
     active: Session | None = None
     closing: bool = False
     last_receipt: dict[str, Any] | None = None
+    relay: SharedRelay | None = None
+    acquisition_attempts: int = 0
+    retry_rejections: int = 0
+    delivery_ended: bool = False
+    rearming: bool = False
+    admission: Admission | None = None
+    status_changed: Callable[[], None] = field(default=lambda: None)
+
+    @property
+    def exhausted(self) -> bool:
+        """Only a completed admitted relay attempt consumes the session."""
+        return self.relay is not None and self.acquisition_attempts > 0 and self.delivery_ended
+
+    @property
+    def session_status(self) -> str:
+        """Describe ownership, not browser codec compatibility."""
+        if self.closing:
+            return "closing"
+        if self.delivery_ended and self.active is not None:
+            return "cleanup_pending"
+        if self.active is not None:
+            return "streaming"
+        if self.exhausted:
+            return "failed" if self.last_receipt and self.last_receipt["source"]["error_type"] else "ended"
+        return "ready"
+
+    def reserve_attempt(self) -> None:
+        """Bound relay retries across EOF, disconnect and failure until reload."""
+        if self.relay is not None and self.acquisition_attempts >= 1:
+            self.retry_rejections += 1
+            raise web.HTTPServiceUnavailable()
+        self.acquisition_attempts += 1
+        self.delivery_ended = False
 
     def make_owner(self) -> NativeMpegTsStream:
         """Only a verified HTTP request may construct the lazy source owner."""
@@ -56,17 +92,70 @@ class Runtime:
             nalu_header_size=self.settings.nalu_header_size,
         )
 
+    def open_session(self, task: asyncio.Task[Any]) -> Session:
+        """Retain an explicit failed admission even if lazy construction fails."""
+        try:
+            return Session(self.make_owner(), task)
+        except Exception as error:
+            self.delivery_ended = True
+            self.last_receipt = {"source": {
+                "error_type": type(error).__name__, "finite_source_end": False,
+            }}
+            self.status_changed()
+            raise web.HTTPBadGateway() from None
+
+    def finish_session(self, session: Session) -> None:
+        """Publish lifecycle only after the handler's joined-cleanup attempt."""
+        self.last_receipt = {
+            "source": session.owner.receipt,
+            "http_write_bytes": session.write_bytes,
+            "http_write_calls": session.write_calls,
+            "ha_verified": False,
+        }
+        receipt = session.owner.receipt
+        if receipt["worker_joined"] and receipt["cancel_joined"] and (
+            receipt["source_closed"] or (receipt["source_packets"] == 0
+                                          and not receipt["cleanup_error_types"])
+        ):
+            self.active = None
+            if self.admission is not None:
+                self.admission.release(self)
+        self.delivery_ended = True
+        self.status_changed()
+
 
 class Registry:
     """Constant bounded concurrency, explicit unload/recovery ownership."""
 
-    def __init__(self) -> None:
+    def __init__(self, admission: Admission | None = None) -> None:
         self.entries: dict[str, Runtime] = {}
+        self.admission = admission if admission is not None else Admission()
+
+    def admit(self, runtime: Runtime, task: asyncio.Task[Any]) -> Session:
+        """Reserve and publish ownership atomically on the event loop."""
+        if runtime.closing:
+            raise web.HTTPServiceUnavailable()
+        if (runtime.active is not None
+                or sum(r.active is not None for r in self.entries.values()) >= MAX_ACTIVE):
+            raise web.HTTPTooManyRequests()
+        if not self.admission.reserve(runtime, physical_key(runtime.settings)):
+            raise web.HTTPTooManyRequests()
+        runtime.admission = self.admission
+        try:
+            runtime.reserve_attempt()
+            session = runtime.open_session(task)
+        except BaseException:
+            self.admission.release(runtime)  # No physical owner started.
+            raise
+        runtime.active = session
+        runtime.status_changed()
+        return session
 
     async def close_entry(self, entry_id: str) -> bool:
         """Revoke first; retain timed-out owners for explicit retry."""
         runtime = self.entries[entry_id]
         runtime.closing = True
+        runtime.status_changed()
         runtime.token = secrets.token_urlsafe(32)
         if session := runtime.active:
             if session.response is not None:
@@ -84,6 +173,9 @@ class Registry:
                 except Exception:  # Owner and sanitized evidence remain available.
                     return False
                 runtime.active = None
+                self.admission.release(runtime)
+        if runtime.relay is not None:
+            return await runtime.relay.close()
         return True
 
 
@@ -111,18 +203,14 @@ class NativeStreamView(HomeAssistantView):
         if (not loopback or runtime is None or not supplied.isascii()
                 or not hmac.compare_digest(supplied, runtime.token)):
             raise web.HTTPForbidden()
-        if runtime.closing:
-            raise web.HTTPServiceUnavailable()
-        if (runtime.active is not None
-                or sum(r.active is not None for r in self.registry.entries.values()) >= MAX_ACTIVE):
-            raise web.HTTPTooManyRequests()
         task = asyncio.current_task()
         assert task is not None
-        session = Session(runtime.make_owner(), task)
-        runtime.active = session  # No await between admission check and ownership.
+        session = self.registry.admit(runtime, task)
         response = web.StreamResponse(headers={
             "Content-Type": "video/mp2t", "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
+            "X-Stream-Retry": "never" if runtime.relay is not None else "default",
+            "X-Stream-Finite": "1" if runtime.settings.options.finite_source else "0",
         })
         session.response = response
         # A prepare/write failure must close an incomplete response, never
@@ -133,13 +221,15 @@ class NativeStreamView(HomeAssistantView):
                 async for chunk in chunks:
                     async with asyncio.timeout(WRITE_TIMEOUT):
                         if not response.prepared:
+                            response.headers.update(clock_headers(session.owner))
                             await response.prepare(request)
                         await response.write(chunk)
                     session.write_bytes += len(chunk)
                     session.write_calls += 1
-                async with asyncio.timeout(WRITE_TIMEOUT):
-                    await response.write_eof()
-                complete = True
+            # A successful EOF must follow joined source cleanup, not precede it.
+            async with asyncio.timeout(WRITE_TIMEOUT):
+                await response.write_eof()
+            complete = True
             return response
         except asyncio.CancelledError:
             raise
@@ -152,27 +242,32 @@ class NativeStreamView(HomeAssistantView):
         finally:
             if not complete and response.prepared and request.transport is not None:
                 request.transport.close()
-            runtime.last_receipt = {
-                "source": session.owner.receipt,
-                "http_write_bytes": session.write_bytes,
-                "http_write_calls": session.write_calls,
-                "ha_verified": False,
-            }
-            receipt = session.owner.receipt
-            if receipt["worker_joined"] and receipt["cancel_joined"] and (
-                receipt["source_closed"] or (receipt["source_packets"] == 0
-                                              and not receipt["cleanup_error_types"])
-            ):
-                runtime.active = None
+            runtime.finish_session(session)
 
 
 def source_url(hass: HomeAssistant, entry_id: str, runtime: Runtime) -> str:
     """Return a redacted-by-HA query capability, never camera credentials."""
+    validate_http(hass)
+    return (f"http://127.0.0.1:{hass.http.server_port}/api/ezviz_native/"
+            f"{entry_id}/stream.ts?auth={runtime.token}")
+
+
+def validate_http(hass: HomeAssistant) -> None:
+    """Reject unsupported listener topology without disabling TLS elsewhere."""
     api = hass.config.api
     if api is None or api.use_ssl:
         raise ValueError("Validation integration requires HA HTTP without direct TLS")
     hosts = hass.http.server_host
     if hosts and not any(host in {"0.0.0.0", "127.0.0.1"} for host in hosts):
         raise ValueError("HA HTTP must listen on IPv4 loopback")
-    return (f"http://127.0.0.1:{hass.http.server_port}/api/ezviz_native/"
-            f"{entry_id}/stream.ts?auth={runtime.token}")
+
+
+def clock_headers(owner: NativeMpegTsStream) -> dict[str, str]:
+    """Export only this admitted owner's immutable common media origin."""
+    clock = owner.source_clock
+    return ({"X-Stream-Clock-Origin-90k": str(clock.mpegts_origin_90k)} if clock else {})
+
+
+def physical_key(settings: Settings) -> str:
+    """Device/SDK selector exclusion across group and legacy entry modes."""
+    return f"{settings.credentials.device_info.serial}:{settings.channel}"

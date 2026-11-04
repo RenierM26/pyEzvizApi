@@ -7,3 +7,6 @@
 *.webp binary
 *.ico binary
 *.pdf binary
+
+# Unified-diff context prefixes are data, not source indentation.
+docs/consumer-runtime-review/*.patch -whitespace

@@ -2,7 +2,6 @@
   "status": "source-review-only-not-deployment",
   "go2rtc": {
     "public_base": "7c05066c90ab6ad1fccb506d5f0408aa31ebe60f",
-    "local_source_commit": "fe794ba8a6f25211ad01fd37a595ff6f6f448f4f",
     "patch_applied_to_public_base": true,
     "extracted_source_sha256": {
       "internal/http/http.go": "9c10f8587ad50e0ad9ea0d98cddb8e164e6a95573a87c45d520a9ee32625c45c",
@@ -194,7 +193,9 @@
         "all_media_eventually_recovered": true,
         "not_called_74_controlled_hook_drops": true
       }
-    }
+    },
+    "prior_local_source_commit": "fe794ba8a6f25211ad01fd37a595ff6f6f448f4f",
+    "source_authority": "public_base + cumulative patch SHA256 + exact extracted source path/hash manifest; no new maintained dependency commit or release is claimed"
   },
   "home_assistant": {
     "public_base": "357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b",

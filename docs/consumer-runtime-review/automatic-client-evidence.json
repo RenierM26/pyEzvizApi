@@ -1,0 +1,165 @@
+{
+  "status": "source-review-only-not-deployment",
+  "automatic_feedback_generated_cases": 16,
+  "unchanged_receiver_failures": 7,
+  "unchanged_repair_only_failures": 4,
+  "post_probe_retained_runs": {
+    "ll": {
+      "all_three_independent_audits_pass": true,
+      "acquisition_demux_counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "HLS_per_lens": {
+        "HEVC_samples": 1783,
+        "AAC_samples": 1857,
+        "all_original_payloads_PTS_DTS_and_tail": true
+      },
+      "WebRTC_per_lens": {
+        "original_non_AUD_HEVC_NALs": 1873,
+        "emitted_received_Opus": 5943,
+        "decoded_48k_samples": 5705280,
+        "all_original_HEVC_and_encoded_Opus_payloads_and_source_clocks": true
+      },
+      "default_interceptor_NACK_inventory": {
+        "primary": [
+          74,
+          1
+        ],
+        "secondary": [
+          74,
+          1
+        ]
+      },
+      "RTCP_mapping_spread_seconds": 2.0693987607955933e-05,
+      "all_sources_closed": true,
+      "relay_exit": 0,
+      "verified_pre_SRTP_fault_counts": {
+        "primary": {
+          "original_datagrams_dropped": 74,
+          "RTX_repairs_dropped": 1
+        },
+        "secondary": {
+          "original_datagrams_dropped": 74,
+          "RTX_repairs_dropped": 1
+        }
+      }
+    },
+    "nonll": {
+      "all_three_independent_audits_pass": true,
+      "acquisition_demux_counts": {
+        "factory": 1,
+        "input_demux": 1,
+        "decrypt_feed": 8840
+      },
+      "HLS_per_lens": {
+        "HEVC_samples": 1783,
+        "AAC_samples": 1857,
+        "all_original_payloads_PTS_DTS_and_tail": true
+      },
+      "WebRTC_per_lens": {
+        "original_non_AUD_HEVC_NALs": 1873,
+        "emitted_received_Opus": 5943,
+        "decoded_48k_samples": 5705280,
+        "all_original_HEVC_and_encoded_Opus_payloads_and_source_clocks": true
+      },
+      "default_interceptor_NACK_inventory": {
+        "primary": [
+          74,
+          1
+        ],
+        "secondary": [
+          74,
+          1
+        ]
+      },
+      "RTCP_mapping_spread_seconds": 2.081110142171383e-05,
+      "all_sources_closed": true,
+      "relay_exit": 0,
+      "verified_pre_SRTP_fault_counts": {
+        "primary": {
+          "original_datagrams_dropped": 74,
+          "RTX_repairs_dropped": 1
+        },
+        "secondary": {
+          "original_datagrams_dropped": 74,
+          "RTX_repairs_dropped": 1
+        }
+      }
+    }
+  },
+  "browser": {
+    "clean_test_and_teardown": true,
+    "client": "Managed Linux Chromium 153; actual HA WebSocket protocol, not HA frontend",
+    "generated_clear_fixture": true,
+    "authenticated_HA_non_admin_user": true,
+    "secure_context": true,
+    "TLS": "isolated certificate SPKI pin plus independent test-CA/hostname validation; not production PKI",
+    "codec_refusals_before_acquisition": [
+      "unsupported_video_codec",
+      "unsupported_audio_codec"
+    ],
+    "clients": [
+      {
+        "video_frames_decoded": 120,
+        "presented_callbacks": 120,
+        "audio_RMS": 0.091210179073752,
+        "reported_RTP_packets_lost": [
+          0,
+          0
+        ],
+        "first_frame_after_source_begin_seconds": 0.1712031364440918,
+        "non_black_rendered_sample": true
+      },
+      {
+        "video_frames_decoded": 120,
+        "presented_callbacks": 107,
+        "audio_RMS": 0.11263038467595114,
+        "reported_RTP_packets_lost": [
+          0,
+          0
+        ],
+        "first_frame_after_source_begin_seconds": 0.971203088760376,
+        "non_black_rendered_sample": true
+      }
+    ],
+    "source_factory_count": 1,
+    "sources_closed": true,
+    "relay_exit": 0,
+    "Cython_websocket_reader": true,
+    "physical_audibility_or_AV_sync": false,
+    "HEVC_viewer_playback_report_received": false
+  },
+  "finite_probe": {
+    "new_controls": 4,
+    "unchanged_all_four_fail": true,
+    "complete_original_AAC_and_track_clocks_in_held_tail_controls": true,
+    "continuous_analysis_policy_unchanged": true,
+    "probe_queue_startup_and_idle_budgets_increased": false
+  },
+  "local_validation": {
+    "library_tests": 5056,
+    "coverage_percent": 90.39,
+    "HA_example_tests_including_real_relay": 226,
+    "real_relay_controls": 8,
+    "library_mypy_files": 243,
+    "HA_example_mypy_files": 15,
+    "Pyright_errors": 0,
+    "Ruff_spelling_clean": true,
+    "camera_source_controls": 3,
+    "aiohttp_active_closed_controls": 4,
+    "aiohttp_closed_controls_fail_unchanged": 2,
+    "full_dependency_or_platform_CI_claimed": false
+  },
+  "bundle_only_review_follow_up": {
+    "RFC": "8843 section 6",
+    "SDP_profile_controls": 42,
+    "before_fix_failures": 5,
+    "before_fix_passes": 37,
+    "after_fix_all_42_pass": true,
+    "session_BUNDLE_group_membership_and_media_mid_bundle_only_required_for_zero_port": true,
+    "genuinely_rejected_or_unlisted_or_nonreceiving_media_remain_refused": true,
+    "compatible_H264_H265_bundle_only_audio_delegation_controls": 2
+  }
+}

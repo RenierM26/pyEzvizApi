@@ -121,8 +121,14 @@ def actual_receipt(tmp_path_factory):
     receipt = tmp_path / 'receipt.json'
     p = subprocess.run(command(source, receipt), capture_output=True, timeout=20,
         env=dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy'), check=False)
-    assert p.returncode == 0, (p.stderr, receipt.read_text())
-    return json.loads(receipt.read_text()), source
+    result = json.loads(receipt.read_text())
+    assert p.returncode == 0, {
+        'stderr': p.stderr,
+        'supervisor_errors': {key: value for key, value in result.items() if key.endswith('error_type')},
+        'worker_errors': {key: value for key, value in result.get('playback', {}).items()
+                          if key.endswith('error_type')},
+    }
+    return result, source
 
 
 def test_actual_isolated_profile_has_bounded_histories_native_identity_and_sampled_resources(actual_receipt):
@@ -206,3 +212,193 @@ def test_real_noncooperative_worker_is_killed_and_reaped_on_wall_guard(tmp_path,
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=3)
+
+
+def wait_for_zombie(pid):
+    """Observe termination without reaping the child before the resource sample."""
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        state = (Path('/proc') / str(pid) / 'stat').read_text().rsplit(') ', 1)[1].split()[0]
+        if state == 'Z':
+            return
+        time.sleep(.01)
+    raise TimeoutError('Synthetic child did not reach the zombie state')
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+@pytest.mark.parametrize('exit_timing', ['before', 'during', 'reaped'])
+def test_resource_sampler_records_exited_descendants_without_failing(monkeypatch, exit_timing):
+    """Exited children are missing samples, not failures of a completed playback."""
+    code = 'pass' if exit_timing == 'before' else 'import time; time.sleep(10)'
+    with subprocess.Popen([sys.executable, '-I', '-c', code],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        try:
+            if exit_timing == 'before':
+                wait_for_zombie(child.pid)
+            else:
+                original = Path.iterdir
+
+                def denied_after_exit(path):
+                    if path == Path('/proc') / str(child.pid) / 'fd':
+                        child.kill()
+                        if exit_timing == 'reaped':
+                            child.wait(timeout=3)
+                        else:
+                            wait_for_zombie(child.pid)
+                        raise PermissionError('Synthetic exit during fd inspection')
+                    return original(path)
+
+                monkeypatch.setattr(Path, 'iterdir', denied_after_exit)
+            resources = M['Resources']()
+            resources.sample(os.getpid())
+            result = resources.result()
+            assert result['missed_process_samples'] >= 1
+            assert result['windows']['0']['peak_rss_bytes'] > 0
+        finally:
+            child.kill()
+            child.wait(timeout=3)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+@pytest.mark.parametrize('denied_process', ['root', 'active'])
+def test_resource_sampler_does_not_hide_active_or_root_permission_failures(monkeypatch, denied_process):
+    """Root and persistent identity-bound permission failures cannot be accepted."""
+    with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        try:
+            denied_pid = os.getpid() if denied_process == 'root' else child.pid
+            original = Path.iterdir
+
+            def denied_while_active(path):
+                if path == Path('/proc') / str(denied_pid) / 'fd':
+                    raise PermissionError('Synthetic active-process permission failure')
+                return original(path)
+
+            monkeypatch.setattr(Path, 'iterdir', denied_while_active)
+            resources = M['Resources']()
+            if denied_process == 'active':
+                resources.sample(os.getpid())
+                with pytest.raises(PermissionError, match='unresolved after cleanup'):
+                    resources.require_complete()
+            with pytest.raises(PermissionError):
+                resources.sample(os.getpid())
+            assert resources.result()['missed_process_samples'] == (1 if denied_process == 'active' else 0)
+        finally:
+            child.kill()
+            child.wait(timeout=3)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+@pytest.mark.parametrize('recovery', ['readable', 'exited'])
+def test_resource_sampler_rechecks_one_transient_permission_race(monkeypatch, recovery):
+    with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        try:
+            original_iterdir, original_sleep = Path.iterdir, time.sleep
+            denied: list[bool] = []
+            yielded: list[bool] = []
+
+            def transient_denial(path):
+                if path == Path('/proc') / str(child.pid) / 'fd' and not denied:
+                    denied.append(True)
+                    raise PermissionError('Synthetic transient process access')
+                return original_iterdir(path)
+
+            def exiting_task(seconds):
+                if seconds == 0:
+                    yielded.append(True)
+                    if recovery == 'exited':
+                        child.kill()
+                        wait_for_zombie(child.pid)
+                return original_sleep(seconds)
+
+            monkeypatch.setattr(Path, 'iterdir', transient_denial)
+            monkeypatch.setattr(time, 'sleep', exiting_task)
+            resources = M['Resources']()
+            resources.sample(os.getpid())
+            result = resources.result()
+            assert denied == [True] and yielded == [True]
+            assert result['missed_process_samples'] == (1 if recovery == 'exited' else 0)
+            assert result['windows']['0']['peak_rss_bytes'] > 0
+        finally:
+            child.kill()
+            child.wait(timeout=3)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+@pytest.mark.parametrize('recovery', ['readable', 'exited', 'unlisted'])
+def test_resource_sampler_defers_exec_visibility_to_next_sample(monkeypatch, recovery):
+    """An exec visibility gap can outlast one scheduler yield without being permanent."""
+    with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        original = Path.iterdir
+        denied: list[bool] = []
+
+        def denied_for_one_snapshot(path):
+            if path == Path('/proc') / str(child.pid) / 'fd' and len(denied) < 2:
+                denied.append(True)
+                raise PermissionError('Synthetic exec visibility lasts beyond one yield')
+            return original(path)
+
+        monkeypatch.setattr(Path, 'iterdir', denied_for_one_snapshot)
+        resources = M['Resources']()
+        try:
+            resources.sample(os.getpid())
+            first = resources.result()
+            assert first['deferred_permission_samples'] == 1
+            assert first['pending_permission_checks'] == 1
+            assert first['missed_process_samples'] == 1
+            if recovery == 'exited':
+                child.kill()
+                child.wait(timeout=3)
+            if recovery == 'unlisted':
+                original_read = Path.read_text
+                children_path = Path('/proc') / str(os.getpid()) / 'task' / str(os.getpid()) / 'children'
+
+                def no_longer_listed(path, *args, **kwargs):
+                    return '' if path == children_path else original_read(path, *args, **kwargs)
+
+                monkeypatch.setattr(Path, 'read_text', no_longer_listed)
+            resources.sample(os.getpid())
+            resources.require_complete()
+            assert resources.result()['pending_permission_checks'] == 0
+            assert denied == [True, True]
+        finally:
+            child.kill()
+            child.wait(timeout=3)
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux /proc ownership race')
+def test_resource_sampler_distinguishes_reused_pid_start_time(monkeypatch):
+    """A recycled PID gets its own visibility check, not an old denial identity."""
+    with subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(10)'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+        namespace = M['Resources'].sample.__globals__
+        original_identity = namespace['process_identity']
+        original_iterdir = Path.iterdir
+        recycled: list[bool] = []
+
+        def process_identity(path):
+            identity = original_identity(path)
+            if identity is not None and path == Path('/proc') / str(child.pid) and recycled:
+                return identity[0], identity[1] + 1
+            return identity
+
+        def denied(path):
+            if path == Path('/proc') / str(child.pid) / 'fd':
+                raise PermissionError('Synthetic active-process visibility check')
+            return original_iterdir(path)
+
+        monkeypatch.setitem(namespace, 'process_identity', process_identity)
+        monkeypatch.setattr(Path, 'iterdir', denied)
+        resources = M['Resources']()
+        try:
+            resources.sample(os.getpid())
+            recycled.append(True)
+            resources.sample(os.getpid())
+            assert resources.result()['deferred_permission_samples'] == 2
+            with pytest.raises(PermissionError):
+                resources.sample(os.getpid())
+        finally:
+            child.kill()
+            child.wait(timeout=3)

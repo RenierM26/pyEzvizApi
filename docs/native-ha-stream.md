@@ -12,9 +12,9 @@ validates the runtime before calling any source factory.
 
 This library alone is **not an HA camera platform or a published live URL**. A
 [temporary HA-hosted validation integration](ha-native-integration.md) now
-exercises the HTTP/camera/HLS contract in an isolated real HA runtime. The next
-integration milestone is an HA-hosted authenticated/capability-checked route,
-integration unload handling and actual HA stream/frontend validation. A
+exercises the HTTP/camera/HLS contract in an isolated real HA runtime. The integration-owned route and isolated HA stream/frontend controls are now
+implemented; see the [consumer architecture](ha-consumer-architecture.md) for
+shared-delivery, supported-client, maintained API and live-acceptance gates. A
 temporary custom integration is the test vehicle; shared library code remains
 upstream-compatible. No current HA configuration is changed by these APIs.
 
@@ -79,8 +79,9 @@ async with stream:
         await response.write(chunk)  # An integration-owned response, not created here.
 ```
 
-Use one owner per view/request. Await backpressure rather than collecting all
-chunks. A cancelled async read is shielded while transport cancellation runs;
+Use one owner per admitted upstream ingest, not one owner per frontend viewer.
+The integration/delivery layer owns downstream fan-out; never race readers of
+this destructive output queue. Await backpressure rather than collecting chunks. A cancelled async read is shielded while transport cancellation runs;
 the bridge then retrieves the outstanding executor read before returning. A
 second cancellation does not abandon already-owned cleanup. Explicitly close
 the generator when ending it early, or exit the async context. The integration
@@ -157,3 +158,19 @@ Actual HA ingestion/frontend compatibility (including browser-dependent HEVC),
 live long-run/concurrent-camera behavior, reconnects, other formats/profiles
 and physical A/V synchronization still require their own evidence. The existing
 player and attended launchers are unchanged.
+
+
+## Owner-published common clock
+
+`source_clock` is absent before startup and is frozen once the first selected
+packet is ready. `NativeSourceClock.origin_90k` is the demuxer's signed
+presentation origin in exact 90 kHz ticks, never capture UTC.
+`mpegts_origin_90k` is its exact 33-bit MPEG-TS wire residue. Consumers of a
+wire-clock declaration must use that property, not assume the demuxer returns
+nonnegative timestamps near wrap. This does not modify packets, repair DTS,
+infer how many capture wraps occurred, or prove downstream synchronization.
+The descriptor is absent for a missing/nonintegral/out-of-domain reference.
+Existing discontinuity checks and bounded output ownership are unchanged.
+
+See [HA consumer architecture](ha-consumer-architecture.md) for the recommended
+library/integration/relay split and staged production gates.

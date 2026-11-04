@@ -1,0 +1,5089 @@
+diff --git a/internal/http/http.go b/internal/http/http.go
+index 4b0560c..d5636a7 100644
+--- a/internal/http/http.go
++++ b/internal/http/http.go
+@@ -5,6 +5,7 @@ import (
+ 	"net"
+ 	"net/http"
+ 	"net/url"
++	"strconv"
+ 	"strings"
+ 
+ 	"github.com/AlexxIT/go2rtc/internal/api"
+@@ -13,6 +14,7 @@ import (
+ 	"github.com/AlexxIT/go2rtc/pkg/hls"
+ 	"github.com/AlexxIT/go2rtc/pkg/image"
+ 	"github.com/AlexxIT/go2rtc/pkg/magic"
++	"github.com/AlexxIT/go2rtc/pkg/mpegts"
+ 	"github.com/AlexxIT/go2rtc/pkg/mpjpeg"
+ 	"github.com/AlexxIT/go2rtc/pkg/pcm"
+ 	"github.com/AlexxIT/go2rtc/pkg/tcp"
+@@ -93,7 +95,33 @@ func do(req *http.Request) (core.Producer, error) {
+ 		return pcm.Open(res.Body)
+ 	}
+ 
+-	return magic.Open(res.Body)
++	prod, err := magic.Open(res.Body)
++	if ts, ok := prod.(*mpegts.Producer); ok && res.Header.Get("X-Stream-Finite") == "1" {
++		ts.Finite = true
++	}
++	if ts, ok := prod.(*mpegts.Producer); ok {
++		ts.OneShot = res.Header.Get("X-Stream-Retry") == "never"
++		if text := res.Header.Get("X-Stream-Clock-Origin-90k"); text != "" {
++			origin, parseErr := strconv.ParseUint(text, 10, 64)
++			if parseErr != nil || origin > (uint64(1)<<32)*90000-1 {
++				_ = res.Body.Close()
++				return nil, errors.New("invalid source clock origin")
++			}
++			ts.ClockOrigin90k = &origin
++		}
++	}
++	if ts, ok := prod.(*mpegts.Producer); ok && res.Header.Get("X-Native-Audio-Profile") == mpegts.NativeOpusProfile {
++		if e := ts.EnableNativeOpus(); e != nil {
++			_ = res.Body.Close()
++			return nil, e
++		}
++		if e := ts.SetNativeOpusDomain(res.Header.Get("X-Stream-Clock-Domain")); e != nil {
++			_ = ts.Stop()
++			_ = res.Body.Close()
++			return nil, e
++		}
++	}
++	return prod, err
+ }
+ 
+ func handleTCP(rawURL string) (core.Producer, error) {
+diff --git a/internal/streams/add_consumer.go b/internal/streams/add_consumer.go
+index 7400ce6..b48c33e 100644
+--- a/internal/streams/add_consumer.go
++++ b/internal/streams/add_consumer.go
+@@ -107,8 +107,13 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+ 	s.mu.Unlock()
+ 
+ 	// there may be duplicates, but that's not a problem
+-	for _, prod := range prodStarts {
+-		prod.start()
++	start := func() {
++		for _, prod := range prodStarts {
++			prod.start()
++		}
++	}
++	if ready, ok := cons.(interface{ DeferStart(func()) bool }); !ok || !ready.DeferStart(start) {
++		start()
+ 	}
+ 
+ 	return nil
+diff --git a/internal/streams/api.go b/internal/streams/api.go
+index d6142eb..a7ca77e 100644
+--- a/internal/streams/api.go
++++ b/internal/streams/api.go
+@@ -18,7 +18,13 @@ func apiStreams(w http.ResponseWriter, r *http.Request) {
+ 
+ 	// without source - return all streams list
+ 	if src == "" && r.Method != "POST" {
+-		api.ResponseJSON(w, streams)
++		streamsMu.Lock()
++		snapshot := make(map[string]*Stream, len(streams))
++		for name, stream := range streams {
++			snapshot[name] = stream
++		}
++		streamsMu.Unlock()
++		api.ResponseJSON(w, snapshot)
+ 		return
+ 	}
+ 
+@@ -43,7 +49,7 @@ func apiStreams(w http.ResponseWriter, r *http.Request) {
+ 
+ 			stream.RemoveConsumer(cons)
+ 		} else {
+-			api.ResponsePrettyJSON(w, streams[src])
++			api.ResponsePrettyJSON(w, stream)
+ 		}
+ 
+ 	case "PUT":
+@@ -98,7 +104,7 @@ func apiStreams(w http.ResponseWriter, r *http.Request) {
+ 		}
+ 
+ 	case "DELETE":
+-		delete(streams, src)
++		Delete(src)
+ 
+ 		if err := app.PatchConfig([]string{"streams", src}, nil); err != nil {
+ 			http.Error(w, err.Error(), http.StatusBadRequest)
+diff --git a/internal/streams/owned.go b/internal/streams/owned.go
+new file mode 100644
+index 0000000..fe8dca9
+--- /dev/null
++++ b/internal/streams/owned.go
+@@ -0,0 +1,101 @@
++package streams
++
++import (
++	"encoding/hex"
++	"encoding/json"
++	"github.com/AlexxIT/go2rtc/pkg/mpegts"
++	"net/http"
++)
++
++// Private v1 contract: runtime only, no aliases, probes, config writes or source
++// acquisition. Clients generate a fresh 256-bit token before sending the POST,
++// so a lost response can be cleaned up without adopting a foreign registration.
++type ownedStream struct {
++	stream        *Stream
++	token, source string
++}
++
++var ownedStreams = map[string]ownedStream{} // protected by streamsMu
++const ownershipContract = "runtime-token-v1"
++
++func apiOwnedStreams(w http.ResponseWriter, r *http.Request) {
++	w.Header().Set("X-Stream-Ownership", ownershipContract)
++	w.Header().Set("Cache-Control", "no-store")
++	if r.Method == http.MethodGet {
++		// Static, non-acquiring capability negotiation; never exposes leases.
++		w.Header().Set("Content-Type", "application/json")
++		features := []string{"runtime-token-v1", "source-clock-v1", "no-retry-v1"}
++		if mpegts.NativeOpusAvailable() {
++			features = append(features, "native-opus-source-clock-v1")
++		}
++		_ = json.NewEncoder(w).Encode(map[string]any{
++			"contract": ownershipContract,
++			"features": features,
++		})
++		return
++	}
++	name := r.URL.Query().Get("name")
++	token := r.Header.Get("Authorization")
++	const prefix = "Bearer "
++	if len(token) != len(prefix)+64 || token[:len(prefix)] != prefix || name == "" || len(name) > 256 {
++		w.WriteHeader(http.StatusBadRequest)
++		return
++	}
++	token = token[len(prefix):]
++	if _, err := hex.DecodeString(token); err != nil {
++		w.WriteHeader(http.StatusBadRequest)
++		return
++	}
++	switch r.Method {
++	case http.MethodPost:
++		// Form body keeps capability URLs out of access-log query strings.
++		r.Body = http.MaxBytesReader(w, r.Body, 8192)
++		if err := r.ParseForm(); err != nil {
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		source := r.PostForm.Get("src")
++		if !HasProducer(source) {
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		if err := Validate(source); err != nil {
++			w.WriteHeader(http.StatusBadRequest)
++			return
++		}
++		streamsMu.Lock()
++		defer streamsMu.Unlock()
++		if stream := streams[name]; stream != nil {
++			lease, ok := ownedStreams[name]
++			if ok && lease.stream == stream && lease.token == token && lease.source == source {
++				w.WriteHeader(http.StatusCreated)
++			} else {
++				w.WriteHeader(http.StatusConflict)
++			}
++			return
++		}
++		stream := NewStream(source)
++		streams[name] = stream
++		ownedStreams[name] = ownedStream{stream, token, source}
++		w.WriteHeader(http.StatusCreated)
++	case http.MethodDelete:
++		streamsMu.Lock()
++		defer streamsMu.Unlock()
++		stream := streams[name]
++		if stream == nil {
++			delete(ownedStreams, name)
++			w.WriteHeader(http.StatusNoContent)
++			return
++		}
++		lease, ok := ownedStreams[name]
++		if !ok || lease.stream != stream || lease.token != token {
++			w.WriteHeader(http.StatusConflict)
++			return
++		}
++		delete(streams, name)
++		delete(ownedStreams, name)
++		w.WriteHeader(http.StatusNoContent)
++	default:
++		w.WriteHeader(http.StatusMethodNotAllowed)
++	}
++}
+diff --git a/internal/streams/owned_test.go b/internal/streams/owned_test.go
+new file mode 100644
+index 0000000..1d9f5a0
+--- /dev/null
++++ b/internal/streams/owned_test.go
+@@ -0,0 +1,111 @@
++package streams
++
++import (
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/stretchr/testify/require"
++)
++
++func TestOwnedRegistration(t *testing.T) {
++	acquisitions := 0
++	HandleFunc("ownedtest", func(string) (core.Producer, error) { acquisitions++; return nil, nil })
++	token := strings.Repeat("a", 64)
++	request := func(method, name, key, source string) int {
++		body := strings.NewReader(url.Values{"src": {source}}.Encode())
++		req := httptest.NewRequest(method, "/api/streams/owned?name="+name, body)
++		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++		req.Header.Set("Authorization", "Bearer "+key)
++		w := httptest.NewRecorder()
++		apiOwnedStreams(w, req)
++		require.Equal(t, ownershipContract, w.Header().Get("X-Stream-Ownership"))
++		require.NotContains(t, w.Body.String(), key)
++		return w.Code
++	}
++	t.Run("static feature negotiation never acquires", func(t *testing.T) {
++		w := httptest.NewRecorder()
++		apiOwnedStreams(w, httptest.NewRequest("GET", "/api/streams/owned", nil))
++		require.Equal(t, 200, w.Code)
++		require.Equal(t, ownershipContract, w.Header().Get("X-Stream-Ownership"))
++		require.Contains(t, w.Body.String(), "source-clock-v1")
++		require.Contains(t, w.Body.String(), "no-retry-v1")
++		require.NotContains(t, w.Body.String(), token)
++	})
++	t.Run("uncertain create and stale token", func(t *testing.T) {
++		defer Delete("owned-test")
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		require.Equal(t, 409, request("DELETE", "owned-test", strings.Repeat("b", 64), ""))
++		require.Equal(t, 204, request("DELETE", "owned-test", token, ""))
++		require.Equal(t, 204, request("DELETE", "owned-test", token, ""))
++	})
++	t.Run("reassign same source revokes token", func(t *testing.T) {
++		defer Delete("owned-test")
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		_, err := Patch("owned-test", "ownedtest:original")
++		require.NoError(t, err)
++		require.Equal(t, 409, request("DELETE", "owned-test", token, ""))
++		require.NotNil(t, Get("owned-test"))
++	})
++	t.Run("alias mutation revokes original", func(t *testing.T) {
++		defer Delete("owned-test")
++		defer Delete("owned-alias")
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		_, err := Patch("owned-alias", "owned-test")
++		require.NoError(t, err)
++		_, err = Patch("owned-alias", "ownedtest:replacement")
++		require.NoError(t, err)
++		require.Equal(t, 409, request("DELETE", "owned-test", token, ""))
++		require.Equal(t, []string{"ownedtest:replacement"}, Get("owned-test").Sources())
++	})
++	t.Run("cached connection URL is not ownership", func(t *testing.T) {
++		defer Delete("owned-test")
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		stream := Get("owned-test")
++		stream.producers[0].conn = &oneShotTestProducer{Connection: core.Connection{URL: "ownedtest:original"}}
++		_, err := Patch("owned-test", "ownedtest:foreign")
++		require.NoError(t, err)
++		cached, err := stream.producers[0].MarshalJSON()
++		require.NoError(t, err)
++		require.Contains(t, string(cached), "ownedtest:original")
++		require.Equal(t, 409, request("DELETE", "owned-test", token, ""))
++		require.Equal(t, []string{"ownedtest:foreign"}, stream.Sources())
++	})
++	t.Run("multi-source replacement survives", func(t *testing.T) {
++		defer Delete("owned-test")
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		_, err := New("owned-test", "ownedtest:first", "ownedtest:second")
++		require.NoError(t, err)
++		require.Equal(t, 409, request("DELETE", "owned-test", token, ""))
++		require.Len(t, Get("owned-test").Sources(), 2)
++	})
++	t.Run("restart and ABA", func(t *testing.T) {
++		defer Delete("owned-test")
++		require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++		Delete("owned-test") // old process/registration is gone
++		require.Equal(t, 201, request("POST", "owned-test", strings.Repeat("c", 64), "ownedtest:original"))
++		require.Equal(t, 409, request("DELETE", "owned-test", token, ""))
++	})
++	t.Run("concurrent replace cannot be deleted", func(t *testing.T) {
++		for i := 0; i < 100; i++ {
++			Delete("owned-test")
++			require.Equal(t, 201, request("POST", "owned-test", token, "ownedtest:original"))
++			var wg sync.WaitGroup
++			wg.Add(2)
++			go func() { defer wg.Done(); _, err := New("owned-test", "ownedtest:foreign"); require.NoError(t, err) }()
++			go func() {
++				defer wg.Done()
++				code := request("DELETE", "owned-test", token, "")
++				require.Contains(t, []int{204, 409}, code)
++			}()
++			wg.Wait()
++			require.Equal(t, []string{"ownedtest:foreign"}, Get("owned-test").Sources())
++		}
++		Delete("owned-test")
++	})
++	require.Zero(t, acquisitions, "management must never dial a source")
++}
+diff --git a/internal/streams/producer.go b/internal/streams/producer.go
+index 09e2dcc..908f872 100644
+--- a/internal/streams/producer.go
++++ b/internal/streams/producer.go
+@@ -19,6 +19,7 @@ const (
+ 	stateStart
+ 	stateExternal
+ 	stateInternal
++	stateSourceEnded
+ )
+ 
+ type Producer struct {
+@@ -31,9 +32,10 @@ type Producer struct {
+ 	receivers []*core.Receiver
+ 	senders   []*core.Receiver
+ 
+-	state    state
+-	mu       sync.Mutex
+-	workerID int
++	state       state
++	mu          sync.Mutex
++	workerID    int
++	sourceEnded bool
+ }
+ 
+ const SourceTemplate = "{input}"
+@@ -58,6 +60,9 @@ func (p *Producer) Dial() error {
+ 	p.mu.Lock()
+ 	defer p.mu.Unlock()
+ 
++	if p.sourceEnded || p.state == stateSourceEnded {
++		return core.ErrSourceTerminal
++	}
+ 	if p.state == stateNone {
+ 		conn, err := GetProducer(p.url)
+ 		if err != nil {
+@@ -158,7 +163,17 @@ func (p *Producer) start() {
+ }
+ 
+ func (p *Producer) worker(conn core.Producer, workerID int) {
+-	if err := conn.Start(); err != nil {
++	err := conn.Start()
++	if errors.Is(err, core.ErrFiniteSource) || noReconnect(conn) {
++		p.mu.Lock()
++		if p.workerID == workerID {
++			p.state = stateSourceEnded
++			p.sourceEnded = true
++		}
++		p.mu.Unlock()
++		return
++	}
++	if err != nil {
+ 		p.mu.Lock()
+ 		closed := p.workerID != workerID
+ 		p.mu.Unlock()
+@@ -260,6 +275,9 @@ func (p *Producer) stop() {
+ 	log.Debug().Msgf("[streams] stop producer url=%s", p.url)
+ 
+ 	if p.conn != nil {
++		if done, ok := p.conn.(interface{ FiniteComplete() bool }); (ok && done.FiniteComplete()) || noReconnect(p.conn) {
++			p.sourceEnded = true
++		}
+ 		_ = p.conn.Stop()
+ 		p.conn = nil
+ 	}
+@@ -268,3 +286,9 @@ func (p *Producer) stop() {
+ 	p.receivers = nil
+ 	p.senders = nil
+ }
++
++// Keep the default reconnect contract for undeclared producers.
++func noReconnect(conn core.Producer) bool {
++	policy, ok := conn.(interface{ NoReconnect() bool })
++	return ok && policy.NoReconnect()
++}
+diff --git a/internal/streams/source_terminal_test.go b/internal/streams/source_terminal_test.go
+new file mode 100644
+index 0000000..5a24776
+--- /dev/null
++++ b/internal/streams/source_terminal_test.go
+@@ -0,0 +1,50 @@
++package streams
++
++import (
++	"errors"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"testing"
++)
++
++type oneShotTestProducer struct {
++	core.Connection
++	policy     bool
++	startError error
++	stops      int
++}
++
++func (c *oneShotTestProducer) Start() error      { return c.startError }
++func (c *oneShotTestProducer) Stop() error       { c.stops++; return nil }
++func (c *oneShotTestProducer) NoReconnect() bool { return c.policy }
++
++func TestOneShotFailureKeepsTerminalAcrossStop(t *testing.T) {
++	c := &oneShotTestProducer{policy: true, startError: errors.New("source failed")}
++	p := &Producer{conn: c, state: stateStart, workerID: 1}
++	p.worker(c, 1)
++	if !p.sourceEnded {
++		t.Fatal("source failure scheduled a retry")
++	}
++	p.stop()
++	if !errors.Is(p.Dial(), core.ErrSourceTerminal) || c.stops != 1 {
++		t.Fatal("failed acquisition was reopened")
++	}
++}
++func TestOneShotCancelledBeforeStart(t *testing.T) {
++	c := &oneShotTestProducer{policy: true}
++	p := &Producer{conn: c, state: stateTracks, workerID: 1}
++	p.stop()
++	if !p.sourceEnded || !errors.Is(p.Dial(), core.ErrSourceTerminal) {
++		t.Fatal("cancelled acquisition was reopened")
++	}
++}
++func TestOneShotPreservesDefaultAndFinitePolicies(t *testing.T) {
++	if noReconnect(&oneShotTestProducer{}) {
++		t.Fatal("default retry disabled")
++	}
++	c := &oneShotTestProducer{startError: core.ErrFiniteSource}
++	p := &Producer{conn: c, state: stateStart, workerID: 1}
++	p.worker(c, 1)
++	if !p.sourceEnded {
++		t.Fatal("clean finite completion lost")
++	}
++}
+diff --git a/internal/streams/streams.go b/internal/streams/streams.go
+index f3b8df0..47f086c 100644
+--- a/internal/streams/streams.go
++++ b/internal/streams/streams.go
+@@ -27,6 +27,7 @@ func Init() {
+ 	}
+ 
+ 	api.HandleFunc("api/streams", apiStreams)
++	api.HandleFunc("api/streams/owned", apiOwnedStreams)
+ 	api.HandleFunc("api/streams.dot", apiStreamsDOT)
+ 	api.HandleFunc("api/preload", apiPreload)
+ 	api.HandleFunc("api/schemes", apiSchemes)
+@@ -64,6 +65,7 @@ func New(name string, sources ...string) (*Stream, error) {
+ 	stream := NewStream(sources)
+ 
+ 	streamsMu.Lock()
++	delete(ownedStreams, name)
+ 	streams[name] = stream
+ 	streamsMu.Unlock()
+ 
+@@ -73,6 +75,8 @@ func New(name string, sources ...string) (*Stream, error) {
+ func Patch(name string, source string) (*Stream, error) {
+ 	streamsMu.Lock()
+ 	defer streamsMu.Unlock()
++	// Even an identical administrative write revokes an ephemeral lease.
++	delete(ownedStreams, name)
+ 
+ 	// check if source links to some stream name from go2rtc
+ 	if u, err := url.Parse(source); err == nil && u.Scheme == "rtsp" && len(u.Path) > 1 {
+@@ -105,6 +109,12 @@ func Patch(name string, source string) (*Stream, error) {
+ 
+ 	// check an existing stream with this name
+ 	if stream, ok := streams[name]; ok {
++		// Aliases share the configured stream; revoke every affected lease.
++		for key, lease := range ownedStreams {
++			if lease.stream == stream {
++				delete(ownedStreams, key)
++			}
++		}
+ 		stream.SetSource(source)
+ 		return stream, nil
+ 	}
+@@ -152,6 +162,7 @@ func Get(name string) *Stream {
+ func Delete(name string) {
+ 	streamsMu.Lock()
+ 	defer streamsMu.Unlock()
++	delete(ownedStreams, name)
+ 	delete(streams, name)
+ }
+ 
+diff --git a/pkg/core/finite.go b/pkg/core/finite.go
+new file mode 100644
+index 0000000..fb88e39
+--- /dev/null
++++ b/pkg/core/finite.go
+@@ -0,0 +1,8 @@
++package core
++
++import "errors"
++
++var ErrFiniteSource = errors.New("explicit finite source completed")
++
++// ErrSourceTerminal does not imply that media completed successfully.
++var ErrSourceTerminal = errors.New("declared source acquisition ended")
+diff --git a/pkg/core/native_ref.go b/pkg/core/native_ref.go
+new file mode 100644
+index 0000000..8cd03e7
+--- /dev/null
++++ b/pkg/core/native_ref.go
+@@ -0,0 +1,32 @@
++package core
++
++import (
++	"crypto/rand"
++	"encoding/hex"
++	"sync"
++)
++
++// NativeReference is an in-process capability, not an upstream clock assertion.
++type NativeReference struct {
++	Clock  *SourceClock
++	Policy *SourcePolicy
++}
++
++var nativeReferences sync.Map
++
++func RegisterNativeReference(ref *NativeReference) string {
++	b := make([]byte, 32)
++	if _, err := rand.Read(b); err != nil {
++		panic(err)
++	}
++	token := hex.EncodeToString(b)
++	nativeReferences.Store(token, ref)
++	return token
++}
++func LookupNativeReference(token string) *NativeReference {
++	if value, ok := nativeReferences.Load(token); ok {
++		return value.(*NativeReference)
++	}
++	return nil
++}
++func RemoveNativeReference(token string) { nativeReferences.Delete(token) }
+diff --git a/pkg/core/node.go b/pkg/core/node.go
+index a9959c3..dcd5b8c 100644
+--- a/pkg/core/node.go
++++ b/pkg/core/node.go
+@@ -26,6 +26,7 @@ type Node struct {
+ 	Codec  *Codec
+ 	Input  HandlerFunc
+ 	Output HandlerFunc
++	OnEnd  func(error)
+ 
+ 	id     uint32
+ 	childs []*Node
+@@ -62,11 +63,11 @@ func (n *Node) Close() {
+ 	if parent := n.parent; parent != nil {
+ 		parent.RemoveChild(n)
+ 
+-		if len(parent.childs) == 0 {
++		if len(parent.children()) == 0 {
+ 			parent.Close()
+ 		}
+ 	} else {
+-		for _, childs := range n.childs {
++		for _, childs := range n.children() {
+ 			childs.Close()
+ 		}
+ 	}
+@@ -86,3 +87,20 @@ func MoveNode(dst, src *Node) {
+ 		child.parent = dst
+ 	}
+ }
++
++// End notifies only consumers that explicitly implement source completion.
++func (n *Node) End(err error) {
++	for _, child := range n.children() {
++		if child.OnEnd != nil {
++			child.OnEnd(err)
++		}
++	}
++}
++
++// Snapshot topology under the same lock as attach/detach, never while calling
++// child handlers (which may initiate shutdown).
++func (n *Node) children() []*Node {
++	n.mu.Lock()
++	defer n.mu.Unlock()
++	return append([]*Node(nil), n.childs...)
++}
+diff --git a/pkg/core/presentation_clock.go b/pkg/core/presentation_clock.go
+new file mode 100644
+index 0000000..0e1a80f
+--- /dev/null
++++ b/pkg/core/presentation_clock.go
+@@ -0,0 +1,64 @@
++package core
++
++import (
++	"encoding/hex"
++	"errors"
++	"sync"
++	"time"
++)
++
++type PresentationClock struct {
++	mu          sync.Mutex
++	set         bool
++	source, ntp uint64
++}
++
++func (c *PresentationClock) Map(source uint64) uint64 {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !c.set {
++		now := time.Now()
++		c.source = source
++		c.ntp = uint64(now.Unix()+2208988800)<<32 + (uint64(now.Nanosecond())<<32)/1000000000
++		c.set = true
++	}
++	return c.ntp + source - c.source
++}
++
++type presentationLease struct {
++	clock *PresentationClock
++	refs  int
++}
++
++var presentationDomains = map[string]*presentationLease{}
++var presentationMu sync.Mutex
++
++// AcquirePresentationDomain requires an opaque owner-published acquisition id.
++func AcquirePresentationDomain(id string) (*PresentationClock, func(), error) {
++	if len(id) != 64 {
++		return nil, nil, errors.New("invalid native clock domain")
++	}
++	if _, err := hex.DecodeString(id); err != nil {
++		return nil, nil, errors.New("invalid native clock domain")
++	}
++	presentationMu.Lock()
++	lease := presentationDomains[id]
++	if lease == nil {
++		lease = &presentationLease{clock: &PresentationClock{}}
++		presentationDomains[id] = lease
++	}
++	lease.refs++
++	presentationMu.Unlock()
++	var once sync.Once
++	release := func() {
++		once.Do(func() {
++			presentationMu.Lock()
++			defer presentationMu.Unlock()
++			lease.refs--
++			if lease.refs == 0 {
++				delete(presentationDomains, id)
++			}
++		})
++	}
++	return lease.clock, release, nil
++}
+diff --git a/pkg/core/sender_timeout.go b/pkg/core/sender_timeout.go
+new file mode 100644
+index 0000000..3793808
+--- /dev/null
++++ b/pkg/core/sender_timeout.go
+@@ -0,0 +1,40 @@
++package core
++
++import "time"
++
++// InputWithTimeout gives an explicit finite consumer bounded backpressure using
++// the existing queue capacity. Legacy Input remains nonblocking/drop-on-full.
++func (s *Sender) InputWithTimeout(packet *Packet, timeout time.Duration) {
++	deadline := time.Now().Add(timeout)
++	for {
++		s.mu.Lock()
++		if s.buf == nil {
++			s.mu.Unlock()
++			return
++		}
++		select {
++		case s.buf <- packet:
++			s.Bytes += len(packet.Payload)
++			s.Packets++
++			s.mu.Unlock()
++			return
++		default:
++		}
++		remaining := time.Until(deadline)
++		if remaining <= 0 {
++			s.Drops++
++			if s.OnDrop != nil {
++				s.OnDrop()
++			}
++			s.mu.Unlock()
++			return
++		}
++		s.mu.Unlock()
++		// Never wait while holding the queue mutex: Start/Close need it too.
++		// One borrowed input is retained; no extra media queue is introduced.
++		if remaining > time.Millisecond {
++			remaining = time.Millisecond
++		}
++		time.Sleep(remaining)
++	}
++}
+diff --git a/pkg/core/sender_timeout_test.go b/pkg/core/sender_timeout_test.go
+new file mode 100644
+index 0000000..5da44b4
+--- /dev/null
++++ b/pkg/core/sender_timeout_test.go
+@@ -0,0 +1,77 @@
++package core
++
++import (
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/pion/rtp"
++	"github.com/stretchr/testify/require"
++)
++
++func audioSender() *Sender {
++	return NewSender(&Media{Kind: KindAudio}, &Codec{Name: CodecOpus, ClockRate: 48000})
++}
++func TestBoundedInputRetainsExistingCapacityAndAllowsStart(t *testing.T) {
++	s := audioSender()
++	var mu sync.Mutex
++	var stamps []uint32
++	s.Handler = func(p *Packet) { mu.Lock(); stamps = append(stamps, p.Timestamp); mu.Unlock() }
++	for i := range 128 {
++		s.Input(&rtp.Packet{Header: rtp.Header{Timestamp: uint32(i)}})
++	}
++	finished := make(chan struct{})
++	go func() {
++		s.InputWithTimeout(&rtp.Packet{Header: rtp.Header{Timestamp: 128}}, time.Second)
++		close(finished)
++	}()
++	// Start must acquire its mutex while bounded input is waiting for capacity.
++	s.Start()
++	select {
++	case <-finished:
++	case <-time.After(time.Second):
++		t.Fatal("bounded input prevented Start")
++	}
++	s.Close()
++	s.Wait()
++	mu.Lock()
++	defer mu.Unlock()
++	require.Len(t, stamps, 129)
++	for i, stamp := range stamps {
++		require.Equal(t, uint32(i), stamp)
++	}
++	require.Equal(t, 0, s.Drops)
++	require.Equal(t, 129, s.Packets)
++}
++func TestBoundedInputTimeoutFailsInsteadOfGrowingQueue(t *testing.T) {
++	s := audioSender()
++	for range 128 {
++		s.Input(&rtp.Packet{})
++	}
++	drops := 0
++	s.OnDrop = func() { drops++ }
++	s.InputWithTimeout(&rtp.Packet{}, 5*time.Millisecond)
++	require.Equal(t, 128, len(s.buf))
++	require.Equal(t, 128, cap(s.buf))
++	require.Equal(t, 128, s.Packets)
++	require.Equal(t, 1, s.Drops)
++	require.Equal(t, 1, drops)
++	s.Close()
++}
++func TestBoundedInputCloseUnblocksWaiterWithoutSendAfterClose(t *testing.T) {
++	for range 30 {
++		s := audioSender()
++		for range 128 {
++			s.Input(&rtp.Packet{})
++		}
++		finished := make(chan struct{})
++		go func() { s.InputWithTimeout(&rtp.Packet{}, time.Second); close(finished) }()
++		s.Close()
++		select {
++		case <-finished:
++		case <-time.After(time.Second):
++			t.Fatal("closed queue retained waiter")
++		}
++		require.Equal(t, 0, s.Drops)
++	}
++}
+diff --git a/pkg/core/start_gate.go b/pkg/core/start_gate.go
+new file mode 100644
+index 0000000..e143770
+--- /dev/null
++++ b/pkg/core/start_gate.go
+@@ -0,0 +1,12 @@
++package core
++
++import "sync"
++
++// StartGate joins explicitly declared native audiovisual consumers before flow.
++type StartGate struct {
++	once  sync.Once
++	Ready chan struct{}
++}
++
++func NewStartGate() *StartGate { return &StartGate{Ready: make(chan struct{})} }
++func (g *StartGate) Signal()   { g.once.Do(func() { close(g.Ready) }) }
+diff --git a/pkg/core/track.go b/pkg/core/track.go
+index f363a9f..722ea9c 100644
+--- a/pkg/core/track.go
++++ b/pkg/core/track.go
+@@ -3,13 +3,38 @@ package core
+ import (
+ 	"encoding/json"
+ 	"errors"
++	"sync"
++	"sync/atomic"
++	"time"
+ 
+ 	"github.com/pion/rtp"
+ )
+ 
+ var ErrCantGetTrack = errors.New("can't get track")
+ 
++// SourceClock is immutable per acquisition. Pointer identity binds tracks to
++// one producer; unrelated/transcoded tracks must not inherit this assertion.
++type SourceClock struct {
++	Domain                *PresentationClock
++	clockMu               sync.Mutex
++	clockSet              bool
++	clockSource, clockNTP uint64
++	Origin90k             uint64
++	Position90k           atomic.Uint64
++}
++
++// SourcePolicy is an immutable acquisition policy, independent of media clocks
++// and successful EOF. Relays propagate it only when a producer declares it.
++type SourcePolicy struct {
++	OneShot bool
++	AVReady *StartGate
++}
++
+ type Receiver struct {
++	SourcePolicy *SourcePolicy `json:"-"`
++
++	SourceClock *SourceClock `json:"-"`
++
+ 	Node
+ 
+ 	// Deprecated: should be removed
+@@ -29,7 +54,7 @@ func NewReceiver(media *Media, codec *Codec) *Receiver {
+ 	r.Input = func(packet *Packet) {
+ 		r.Bytes += len(packet.Payload)
+ 		r.Packets++
+-		for _, child := range r.childs {
++		for _, child := range r.children() {
+ 			child.Input(packet)
+ 		}
+ 	}
+@@ -43,7 +68,7 @@ func (r *Receiver) WriteRTP(packet *rtp.Packet) {
+ 
+ // Deprecated: should be removed
+ func (r *Receiver) Senders() []*Sender {
+-	if len(r.childs) > 0 {
++	if len(r.children()) > 0 {
+ 		return []*Sender{{}}
+ 	} else {
+ 		return nil
+@@ -66,6 +91,7 @@ type Sender struct {
+ 	Media *Media `json:"-"`
+ 	// Deprecated:
+ 	Handler HandlerFunc `json:"-"`
++	OnDrop  func()      `json:"-"`
+ 
+ 	Bytes   int `json:"bytes,omitempty"`
+ 	Packets int `json:"packets,omitempty"`
+@@ -105,6 +131,9 @@ func NewSender(media *Media, codec *Codec) *Sender {
+ 			s.Packets++
+ 		default:
+ 			s.Drops++
++			if s.OnDrop != nil {
++				s.OnDrop()
++			}
+ 		}
+ 		s.mu.Unlock()
+ 	}
+@@ -189,7 +218,7 @@ func (r *Receiver) MarshalJSON() ([]byte, error) {
+ 		Bytes:   r.Bytes,
+ 		Packets: r.Packets,
+ 	}
+-	for _, child := range r.childs {
++	for _, child := range r.children() {
+ 		v.Childs = append(v.Childs, child.id)
+ 	}
+ 	return json.Marshal(v)
+@@ -215,3 +244,19 @@ func (s *Sender) MarshalJSON() ([]byte, error) {
+ 	}
+ 	return json.Marshal(v)
+ }
++
++// MapPresentation maps one declared acquisition media clock, not camera UTC.
++func (c *SourceClock) MapPresentation(source uint64) uint64 {
++	if c.Domain != nil {
++		return c.Domain.Map(source)
++	}
++	c.clockMu.Lock()
++	defer c.clockMu.Unlock()
++	if !c.clockSet {
++		now := time.Now()
++		c.clockSource = source
++		c.clockNTP = uint64(now.Unix()+2208988800)<<32 + (uint64(now.Nanosecond())<<32)/1000000000
++		c.clockSet = true
++	}
++	return c.clockNTP + source - c.clockSource
++}
+diff --git a/pkg/h264/annexb/annexb.go b/pkg/h264/annexb/annexb.go
+index 26614a8..ad179b8 100644
+--- a/pkg/h264/annexb/annexb.go
++++ b/pkg/h264/annexb/annexb.go
+@@ -15,7 +15,9 @@ const startAUDstart = startAUD + StartCode
+ // FFmpeg MPEG-TS: 00000001 AUD 00000001 SPS 00000001 PPS 000001 IFrame
+ // FFmpeg H264:    00000001 SPS 00000001 PPS 000001 IFrame 00000001 PFrame
+ // Reolink:        000001 AUD 000001 VPS 00000001 SPS 00000001 PPS 00000001 IDR 00000001 IDR
+-func EncodeToAVCC(annexb []byte) (avc []byte) {
++func EncodeToAVCC(annexb []byte) (avc []byte)  { return encodeToAVCC(annexb, false) }
++func EncodeToAVCCWithAUD(annexb []byte) []byte { return encodeToAVCC(annexb, true) }
++func encodeToAVCC(annexb []byte, keepAUD bool) (avc []byte) {
+ 	var start int
+ 
+ 	avc = make([]byte, 0, len(annexb)+4) // init memory with little overhead
+@@ -51,7 +53,7 @@ func EncodeToAVCC(annexb []byte) (avc []byte) {
+ 			break
+ 		}
+ 
+-		if isAUD(annexb[i]) {
++		if !keepAUD && isAUD(annexb[i]) {
+ 			start = 0 // skip this NALU
+ 		} else {
+ 			start = i // save this position
+diff --git a/pkg/h264/payloader.go b/pkg/h264/payloader.go
+index efc8998..48c3247 100644
+--- a/pkg/h264/payloader.go
++++ b/pkg/h264/payloader.go
+@@ -5,6 +5,7 @@ import "encoding/binary"
+ // Payloader payloads H264 packets
+ type Payloader struct {
+ 	IsAVC     bool
++	KeepAUD   bool
+ 	stapANalu []byte
+ }
+ 
+@@ -97,8 +98,12 @@ func (p *Payloader) Payload(mtu uint16, payload []byte) [][]byte {
+ 		naluRefIdc := nalu[0] & naluRefIdcBitmask
+ 
+ 		switch naluType {
+-		case audNALUType, fillerNALUType:
++		case fillerNALUType:
+ 			return
++		case audNALUType:
++			if !p.KeepAUD {
++				return
++			}
+ 		case spsNALUType, ppsNALUType:
+ 			if p.stapANalu == nil {
+ 				p.stapANalu = []byte{outputStapAHeader}
+diff --git a/pkg/h264/rtp.go b/pkg/h264/rtp.go
+index bb5fe47..f347002 100644
+--- a/pkg/h264/rtp.go
++++ b/pkg/h264/rtp.go
+@@ -105,11 +105,17 @@ func RTPDepay(codec *core.Codec, handler core.HandlerFunc) core.HandlerFunc {
+ }
+ 
+ func RTPPay(mtu uint16, handler core.HandlerFunc) core.HandlerFunc {
++	return rtpPay(mtu, handler, false)
++}
++func RTPPayWithAUD(mtu uint16, handler core.HandlerFunc) core.HandlerFunc {
++	return rtpPay(mtu, handler, true)
++}
++func rtpPay(mtu uint16, handler core.HandlerFunc, keepAUD bool) core.HandlerFunc {
+ 	if mtu == 0 {
+ 		mtu = 1472
+ 	}
+ 
+-	payloader := &Payloader{IsAVC: true}
++	payloader := &Payloader{IsAVC: true, KeepAUD: keepAUD}
+ 	sequencer := rtp.NewRandomSequencer()
+ 	mtu -= 12 // rtp.Header size
+ 
+diff --git a/pkg/h265/rtp.go b/pkg/h265/rtp.go
+index 9c571ec..787404e 100644
+--- a/pkg/h265/rtp.go
++++ b/pkg/h265/rtp.go
+@@ -15,10 +15,20 @@ func RTPDepay(codec *core.Codec, handler core.HandlerFunc) core.HandlerFunc {
+ 	buf := make([]byte, 0, 512*1024) // 512K
+ 	var nuStart int
+ 	var seqNum uint16
++	var discardAU bool
++	donl := core.Between(codec.FmtpLine, "sprop-max-don-diff=", ";")
+ 
+ 	return func(packet *rtp.Packet) {
+ 		data := packet.Payload
++		if discardAU {
++			discardAU = !packet.Marker
++			return
++		}
+ 		if len(data) < 3 {
++			if len(data) >= 2 && (data[0]>>1)&0x3F == h265NaluAggregationPacketType {
++				buf = buf[:0]
++				discardAU = !packet.Marker
++			}
+ 			return
+ 		}
+ 
+@@ -45,7 +55,22 @@ func RTPDepay(codec *core.Codec, handler core.HandlerFunc) core.HandlerFunc {
+ 
+ 		seqNum = packet.SequenceNumber
+ 
+-		if nuType == NALUTypeFU {
++		if nuType == h265NaluAggregationPacketType {
++			// RFC 7798 AP members are NAL units, not a nested encoded NAL.
++			// Validate every member before appending so a truncated AP cannot
++			// publish a successful partial access unit. DONL is not implemented.
++			if (donl != "" && donl != "0") || !validAggregation(data) {
++				buf = buf[:0]
++				discardAU = !packet.Marker
++				return
++			}
++			for data = data[2:]; len(data) > 0; {
++				size := int(binary.BigEndian.Uint16(data))
++				buf = binary.BigEndian.AppendUint32(buf, uint32(size))
++				buf = append(buf, data[2:2+size]...)
++				data = data[2+size:]
++			}
++		} else if nuType == NALUTypeFU {
+ 			switch data[2] >> 6 {
+ 			case 0b10: // begin
+ 				nuType = data[2] & 0x3F
+@@ -114,6 +139,28 @@ func RTPDepay(codec *core.Codec, handler core.HandlerFunc) core.HandlerFunc {
+ 	}
+ }
+ 
++func validAggregation(data []byte) bool {
++	if len(data) < 2 || data[0]&0x80 != 0 || data[1]&7 == 0 {
++		return false
++	}
++	count := 0
++	for data = data[2:]; len(data) > 0; count++ {
++		if len(data) < 2 {
++			return false
++		}
++		size := int(binary.BigEndian.Uint16(data))
++		if size < 2 || size > len(data)-2 {
++			return false
++		}
++		nal := data[2 : 2+size]
++		if nal[0]&0x80 != 0 || nal[1]&7 == 0 || (nal[0]>>1)&0x3F >= h265NaluAggregationPacketType {
++			return false
++		}
++		data = data[2+size:]
++	}
++	return count >= 2
++}
++
+ func RTPPay(mtu uint16, handler core.HandlerFunc) core.HandlerFunc {
+ 	if mtu == 0 {
+ 		mtu = 1472
+diff --git a/pkg/h265/rtp_aggregation_test.go b/pkg/h265/rtp_aggregation_test.go
+new file mode 100644
+index 0000000..ae2f393
+--- /dev/null
++++ b/pkg/h265/rtp_aggregation_test.go
+@@ -0,0 +1,110 @@
++package h265
++
++import (
++	"bytes"
++	"encoding/binary"
++	"testing"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/AlexxIT/go2rtc/pkg/h264"
++	"github.com/pion/rtp"
++	"github.com/stretchr/testify/require"
++)
++
++func aggregate(nals ...[]byte) []byte {
++	b := []byte{48 << 1, 1}
++	for _, n := range nals {
++		b = binary.BigEndian.AppendUint16(b, uint16(len(n)))
++		b = append(b, n...)
++	}
++	return b
++}
++
++func TestAggregationDepayPreservesOriginalNALsAndClock(t *testing.T) {
++	aud := []byte{35 << 1, 1, 0x50}
++	slice := append([]byte{1 << 1, 1}, bytes.Repeat([]byte{0x81}, 1200)...)
++	input := aggregate(aud, slice)
++	var output []*rtp.Packet
++	depay := RTPDepay(&core.Codec{}, func(p *rtp.Packet) {
++		clone := *p
++		clone.Payload = bytes.Clone(p.Payload)
++		output = append(output, &clone)
++	})
++	depay(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, Timestamp: 0xfffffff0, SequenceNumber: 65535}, Payload: input})
++	require.Len(t, output, 1)
++	require.Equal(t, h264.JoinNALU(aud, slice), output[0].Payload)
++	require.Equal(t, uint32(0xfffffff0), output[0].Timestamp)
++	require.Equal(t, uint8(h264.RTPPacketVersionAVC), output[0].Version)
++}
++
++func TestAggregationRoundTripBetweenDifferentMTUs(t *testing.T) {
++	aud := []byte{35 << 1, 1, 0x50}
++	slice := append([]byte{1 << 1, 1}, bytes.Repeat([]byte{0x81}, 1200)...)
++	var wire []*rtp.Packet
++	small := RTPPay(1200, func(p *rtp.Packet) { wire = append(wire, p) })
++	depay := RTPDepay(&core.Codec{}, small)
++	large := RTPPay(1472, depay)
++	large(&rtp.Packet{Header: rtp.Header{Version: h264.RTPPacketVersionAVC, Timestamp: 987654321}, Payload: h264.JoinNALU(aud, slice)})
++	var decoded [][]byte
++	var pending []byte
++	for _, p := range wire {
++		require.LessOrEqual(t, len(p.Payload), 1200-12)
++		require.Equal(t, uint32(987654321), p.Timestamp)
++		kind := (p.Payload[0] >> 1) & 63
++		if kind == 49 {
++			fu := p.Payload[2]
++			require.Less(t, fu&63, byte(48), "an AP or FU cannot itself be fragmented")
++			if fu&128 != 0 {
++				require.Nil(t, pending)
++				pending = []byte{(p.Payload[0] & 0x81) | ((fu & 63) << 1), p.Payload[1]}
++			}
++			require.NotNil(t, pending)
++			pending = append(pending, p.Payload[3:]...)
++			if fu&64 != 0 {
++				decoded = append(decoded, pending)
++				pending = nil
++			}
++		} else if kind == 48 {
++			for data := p.Payload[2:]; len(data) > 0; {
++				n := int(binary.BigEndian.Uint16(data))
++				require.GreaterOrEqual(t, len(data), n+2)
++				decoded = append(decoded, data[2:n+2])
++				data = data[n+2:]
++			}
++		} else {
++			decoded = append(decoded, p.Payload)
++		}
++	}
++	require.Nil(t, pending)
++	require.Equal(t, [][]byte{aud, slice}, decoded)
++	require.True(t, wire[len(wire)-1].Marker)
++}
++
++func TestMalformedAggregationDropsWholeAUAndRecovers(t *testing.T) {
++	good := aggregate([]byte{70, 1, 0x50}, []byte{2, 1, 0x81})
++	invalid := map[string][]byte{
++		"empty": {96, 1}, "one": aggregate([]byte{2, 1, 1}), "truncated-length": {96, 1, 0},
++		"zero-length": {96, 1, 0, 0}, "short-header": {96, 1, 0, 1, 2}, "truncated-NAL": {96, 1, 0, 5, 2, 1},
++		"nested-AP": aggregate([]byte{96, 1, 1}, []byte{2, 1, 1}), "nested-FU": aggregate([]byte{98, 1, 1}, []byte{2, 1, 1}),
++		"PACI": aggregate([]byte{100, 1, 1}, []byte{2, 1, 1}), "forbidden": aggregate([]byte{130, 1, 1}, []byte{2, 1, 1}),
++		"zero-tid": aggregate([]byte{2, 0, 1}, []byte{2, 1, 1}), "valid-then-truncated": append(bytes.Clone(good), 0, 4, 2),
++	}
++	for name, payload := range invalid {
++		t.Run(name, func(t *testing.T) {
++			var output [][]byte
++			depay := RTPDepay(&core.Codec{}, func(p *rtp.Packet) { output = append(output, bytes.Clone(p.Payload)) })
++			depay(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 1}, Payload: payload})
++			depay(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 2, Marker: true}, Payload: []byte{2, 1, 0x81}})
++			require.Empty(t, output)
++			depay(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: 3, Marker: true}, Payload: good})
++			require.Equal(t, [][]byte{h264.JoinNALU([]byte{70, 1, 0x50}, []byte{2, 1, 0x81})}, output)
++		})
++	}
++}
++
++func TestAggregationWithNegotiatedDONLIsNotMisparsed(t *testing.T) {
++	output := 0
++	depay := RTPDepay(&core.Codec{FmtpLine: "sprop-max-don-diff=1"}, func(p *rtp.Packet) { output++ })
++	depay(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true}, Payload: aggregate([]byte{70, 1, 0x50}, []byte{2, 1, 0x81})})
++	require.Zero(t, output)
++}
+diff --git a/pkg/mpegts/demuxer.go b/pkg/mpegts/demuxer.go
+index 3e78fce..71fa45c 100644
+--- a/pkg/mpegts/demuxer.go
++++ b/pkg/mpegts/demuxer.go
+@@ -4,6 +4,7 @@ import (
+ 	"bytes"
+ 	"errors"
+ 	"io"
++	"sort"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/aac"
+ 	"github.com/AlexxIT/go2rtc/pkg/bits"
+@@ -19,8 +20,10 @@ type Demuxer struct {
+ 	pos  byte // current pos in buf
+ 	end  byte // end position
+ 
+-	pmtID uint16 // Program Map Table (PMT) PID
+-	pes   map[uint16]*PES
++	SourceTime90k uint64
++	KeepAUD       bool
++	pmtID         uint16 // Program Map Table (PMT) PID
++	pes           map[uint16]*PES
+ }
+ 
+ func NewDemuxer() *Demuxer {
+@@ -187,7 +190,7 @@ func (d *Demuxer) readPES(pid uint16, start bool) *rtp.Packet {
+ 	if start {
+ 		if len(pes.Payload) != 0 {
+ 			d.pos = skipRead
+-			return pes.GetPacket() // finish previous packet
++			return d.emit(pes) // finish previous packet
+ 		}
+ 
+ 		// https://en.wikipedia.org/wiki/Packetized_elementary_stream
+@@ -222,14 +225,17 @@ func (d *Demuxer) readPES(pid uint16, start bool) *rtp.Packet {
+ 		}
+ 
+ 		if ptsi != 0 {
+-			pes.PTS = d.readTime()
++			pes.SourcePTS = d.readTime()
++			pes.PTS = uint32(pes.SourcePTS)
++			pes.TimeKnown = true
+ 			headerSize -= 5
+ 		} else {
+ 			pes.PTS = 0
+ 		}
+ 
+ 		if dtsi != 0 {
+-			pes.DTS = d.readTime()
++			pes.SourceDTS = d.readTime()
++			pes.DTS = uint32(pes.SourceDTS)
+ 			headerSize -= 5
+ 		} else {
+ 			pes.DTS = 0
+@@ -243,7 +249,7 @@ func (d *Demuxer) readPES(pid uint16, start bool) *rtp.Packet {
+ 	}
+ 
+ 	if pes.Size != 0 && len(pes.Payload) >= pes.Size {
+-		return pes.GetPacket() // finish current packet
++		return d.emit(pes) // finish current packet
+ 	}
+ 
+ 	return nil
+@@ -291,15 +297,15 @@ func (d *Demuxer) readBits16(n byte) (res uint16) {
+ 	return
+ }
+ 
+-func (d *Demuxer) readTime() uint32 {
++func (d *Demuxer) readTime() uint64 {
+ 	// https://en.wikipedia.org/wiki/Packetized_elementary_stream
+ 	// xxxxAAAx BBBBBBBB BBBBBBBx CCCCCCCC CCCCCCCx
+ 	_ = d.readBits(4) // 0010b or 0011b or 0001b
+-	ts := d.readBits(3) << 30
++	ts := uint64(d.readBits(3)) << 30
+ 	_ = d.readBits(1) // 1b
+-	ts |= d.readBits(15) << 15
++	ts |= uint64(d.readBits(15)) << 15
+ 	_ = d.readBits(1) // 1b
+-	ts |= d.readBits(15)
++	ts |= uint64(d.readBits(15))
+ 	_ = d.readBits(1) // 1b
+ 	return ts
+ }
+@@ -336,14 +342,16 @@ const (
+ 
+ // PES - Packetized Elementary Stream
+ type PES struct {
+-	StreamID   byte   // from each PES header
+-	StreamType byte   // from PMT table
+-	Sequence   uint16 // manual
+-	Timestamp  uint32 // manual
+-	PTS        uint32 // from extra header, always 90000Hz
+-	DTS        uint32
+-	Payload    []byte // from PES body
+-	Size       int    // from PES header, can be 0
++	StreamID             byte   // from each PES header
++	StreamType           byte   // from PMT table
++	Sequence             uint16 // manual
++	Timestamp            uint32 // manual
++	SourcePTS, SourceDTS uint64
++	TimeKnown            bool
++	PTS                  uint32 // from extra header, always 90000Hz
++	DTS                  uint32
++	Payload              []byte // from PES body
++	Size                 int    // from PES header, can be 0
+ 
+ 	wr *bits.Writer
+ }
+@@ -358,7 +366,8 @@ func (p *PES) AppendBuffer(b []byte) {
+ 	p.Payload = append(p.Payload, b...)
+ }
+ 
+-func (p *PES) GetPacket() (pkt *rtp.Packet) {
++func (p *PES) GetPacket() (pkt *rtp.Packet) { return p.getPacket(false) }
++func (p *PES) getPacket(keepAUD bool) (pkt *rtp.Packet) {
+ 	switch p.StreamType {
+ 	case StreamTypeH264, StreamTypeH265:
+ 		pkt = &rtp.Packet{
+@@ -368,6 +377,9 @@ func (p *PES) GetPacket() (pkt *rtp.Packet) {
+ 			Payload: annexb.EncodeToAVCC(p.Payload),
+ 		}
+ 
++		if keepAUD {
++			pkt.Payload = annexb.EncodeToAVCCWithAUD(p.Payload)
++		}
+ 		if p.DTS != 0 {
+ 			pkt.Timestamp = p.DTS
+ 			// wrong place for CTS, but we don't have another one
+@@ -425,6 +437,9 @@ func (p *PES) GetPacket() (pkt *rtp.Packet) {
+ 
+ 		pkt.Payload, p.Payload = CutOPUSPacket(p.Payload)
+ 		p.PTS += opusDT
++		if p.TimeKnown {
++			p.SourcePTS = (p.SourcePTS + opusDT) & tsMask
++		}
+ 		return
+ 	}
+ 
+@@ -432,3 +447,48 @@ func (p *PES) GetPacket() (pkt *rtp.Packet) {
+ 
+ 	return
+ }
++
++// Flush is called only after explicitly finite, TS-aligned, clean input EOF.
++func (d *Demuxer) Flush() ([]SourcePacket, error) {
++	ids := make([]int, 0, len(d.pes))
++	for id, pes := range d.pes {
++		if len(pes.Payload) == 0 {
++			continue
++		}
++		if pes.Size != 0 && len(pes.Payload) < int(pes.Size) {
++			return nil, io.ErrUnexpectedEOF
++		}
++		ids = append(ids, int(id))
++	}
++	sort.Ints(ids)
++	var packets []SourcePacket
++	for _, id := range ids {
++		pes := d.pes[uint16(id)]
++		for len(pes.Payload) > 0 {
++			before := len(pes.Payload)
++			if pkt := d.emit(pes); pkt != nil {
++				packets = append(packets, SourcePacket{pkt, d.SourceTime90k})
++			}
++			if len(pes.Payload) >= before {
++				return nil, errors.New("finite PES flush made no progress")
++			}
++		}
++	}
++	return packets, nil
++}
++
++type SourcePacket struct {
++	Packet       *rtp.Packet
++	Timestamp90k uint64
++}
++
++func (d *Demuxer) emit(pes *PES) *rtp.Packet {
++	d.SourceTime90k = uint64(pes.PTS)
++	if pes.TimeKnown {
++		d.SourceTime90k = pes.SourcePTS
++		if pes.DTS != 0 {
++			d.SourceTime90k = pes.SourceDTS
++		}
++	}
++	return pes.getPacket(d.KeepAUD)
++}
+diff --git a/pkg/mpegts/end_order_test.go b/pkg/mpegts/end_order_test.go
+new file mode 100644
+index 0000000..2be675b
+--- /dev/null
++++ b/pkg/mpegts/end_order_test.go
+@@ -0,0 +1,78 @@
++package mpegts
++
++import (
++	"bytes"
++	"io"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++)
++
++// A gated audio sender cannot finish before the video sender is told to end.
++// Exercise Start's real completion/error path with audio registered first.
++func TestSourceEpochTerminalTrackNotificationsJoinWithoutOrderingDeadlock(t *testing.T) {
++	for _, failed := range []bool{false, true} {
++		t.Run(map[bool]string{false: "finite", true: "source_error"}[failed], func(t *testing.T) {
++			videoEnded := make(chan struct{})
++			audioRelease := make(chan struct{})
++			var endOnce sync.Once
++			release := func() { endOnce.Do(func() { close(videoEnded) }) }
++			defer release()
++			audio := core.NewReceiver(&core.Media{Kind: core.KindAudio}, &core.Codec{Name: core.CodecAAC})
++			video := core.NewReceiver(&core.Media{Kind: core.KindVideo}, &core.Codec{Name: core.CodecH264})
++			(&core.Node{OnEnd: func(error) { <-videoEnded; <-audioRelease }}).WithParent(&audio.Node)
++			(&core.Node{OnEnd: func(error) { release() }}).WithParent(&video.Node)
++			var input io.Reader = bytes.NewReader(nil)
++			expected := core.ErrFiniteSource
++			if failed {
++				input = failedReader{io.ErrClosedPipe}
++				expected = io.ErrClosedPipe
++			}
++			origin := uint64(0)
++			p := &Producer{Connection: core.Connection{Receivers: []*core.Receiver{audio, video}}, rd: core.NewReadBuffer(input), Finite: true, ClockOrigin90k: &origin}
++			done := make(chan error, 1)
++			go func() { done <- p.Start() }()
++			select {
++			case <-videoEnded:
++			case <-time.After(200 * time.Millisecond):
++				release()
++				close(audioRelease)
++				<-done
++				t.Fatal("audio-first terminal notification blocked video completion")
++			}
++			select {
++			case <-done:
++				close(audioRelease)
++				t.Fatal("Start returned before gated audio joined")
++			default:
++			}
++			close(audioRelease)
++			select {
++			case err := <-done:
++				if err != expected {
++					t.Fatalf("terminal outcome changed: %v", err)
++				}
++			case <-time.After(time.Second):
++				t.Fatal("terminal notifications did not join")
++			}
++		})
++	}
++}
++
++func TestSourceEpochUndeclaredTerminalOrderUnchanged(t *testing.T) {
++	var order []int
++	producer := &Producer{rd: core.NewReadBuffer(bytes.NewReader(nil)), Finite: true}
++	for i := 0; i < 3; i++ {
++		receiver := core.NewReceiver(&core.Media{Kind: core.KindAudio}, &core.Codec{Name: core.CodecAAC})
++		(&core.Node{OnEnd: func(error) { order = append(order, i) }}).WithParent(&receiver.Node)
++		producer.Receivers = append(producer.Receivers, receiver)
++	}
++	if err := producer.Start(); err != core.ErrFiniteSource {
++		t.Fatal(err)
++	}
++	if len(order) != 3 || order[0] != 0 || order[1] != 1 || order[2] != 2 {
++		t.Fatal("undeclared producer completion order changed", order)
++	}
++}
+diff --git a/pkg/mpegts/finite_test.go b/pkg/mpegts/finite_test.go
+new file mode 100644
+index 0000000..bdd44b3
+--- /dev/null
++++ b/pkg/mpegts/finite_test.go
+@@ -0,0 +1,50 @@
++package mpegts
++
++import (
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"io"
++	"testing"
++)
++
++func TestFiniteFlushOnlyCompletePendingPES(t *testing.T) {
++	d := NewDemuxer()
++	d.pes = map[uint16]*PES{
++		256: {StreamType: StreamTypeH264, PTS: 123, Payload: []byte{0, 0, 0, 1, 0x65, 1, 2}},
++	}
++	packets, err := d.Flush()
++	if err != nil || len(packets) != 1 || packets[0].Packet.Timestamp != 123 {
++		t.Fatal("last video lost", err)
++	}
++	packets, err = d.Flush()
++	if err != nil || len(packets) != 0 {
++		t.Fatal("tail duplicated")
++	}
++}
++
++func TestFiniteFlushIncompletePESFailsBeforeEmission(t *testing.T) {
++	d := NewDemuxer()
++	d.pes = map[uint16]*PES{
++		256: {StreamType: StreamTypeH264, PTS: 123, Payload: []byte{0, 0, 0, 1, 0x65}},
++		257: {StreamType: StreamTypeAAC, PTS: 125, Size: 100, Payload: []byte{1}},
++	}
++	packets, err := d.Flush()
++	if err != io.ErrUnexpectedEOF || len(packets) != 0 || len(d.pes[256].Payload) == 0 {
++		t.Fatal("incomplete tail became success")
++	}
++}
++
++type failedReader struct{ err error }
++
++func (r failedReader) Read(_ []byte) (int, error) { return 0, r.err }
++func TestFiniteTransportFailureIsNotCompletion(t *testing.T) {
++	expected := io.ErrClosedPipe
++	receiver := core.NewReceiver(&core.Media{Kind: core.KindVideo}, &core.Codec{Name: core.CodecH264, ClockRate: 90000})
++	var got error
++	called := false
++	child := &core.Node{OnEnd: func(err error) { called = true; got = err }}
++	child.WithParent(&receiver.Node)
++	producer := &Producer{Connection: core.Connection{Receivers: []*core.Receiver{receiver}}, rd: core.NewReadBuffer(failedReader{expected}), Finite: true}
++	if err := producer.Start(); err != expected || !called || got != expected {
++		t.Fatal("transport failure masked", err, got)
++	}
++}
+diff --git a/pkg/mpegts/muxer.go b/pkg/mpegts/muxer.go
+index 5d4129d..01bc7fd 100644
+--- a/pkg/mpegts/muxer.go
++++ b/pkg/mpegts/muxer.go
+@@ -8,7 +8,8 @@ import (
+ )
+ 
+ type Muxer struct {
+-	pes map[uint16]*PES
++	pes       map[uint16]*PES
++	sourcePTS map[uint16]uint64
+ }
+ 
+ func NewMuxer() *Muxer {
+@@ -73,7 +74,11 @@ func (m *Muxer) GetPayload(pid uint16, timestamp uint32, payload []byte) []byte
+ 	b[7] = 0x80 // PTS indicator
+ 	b[8] = 5    // PES header length
+ 
+-	WriteTime(b[9:], pes.PTS)
++	if source, ok := m.sourcePTS[pid]; ok {
++		writeTime64(b[9:], source)
++	} else {
++		WriteTime(b[9:], pes.PTS)
++	}
+ 
+ 	pes.Payload = append(b, payload...)
+ 	pes.Size = 1 // set PUSI in first PES
+@@ -224,3 +229,20 @@ func WriteTime(b []byte, t uint32) {
+ 	b[3] = byte(t >> (8 - 1))
+ 	b[4] = byte(t<<1) | 1 // t>>(0-1)
+ }
++
++// GetPayload90k writes an explicit source PTS, including its 33rd wire bit.
++func (m *Muxer) GetPayload90k(pid uint16, source uint64, payload []byte) []byte {
++	if m.sourcePTS == nil {
++		m.sourcePTS = map[uint16]uint64{}
++	}
++	m.sourcePTS[pid] = source
++	return m.GetPayload(pid, uint32(source), payload)
++}
++func writeTime64(b []byte, t uint64) {
++	t &= (uint64(1) << 33) - 1
++	b[0] = 0x20 | byte((t>>30)&7)<<1 | 1
++	b[1] = byte(t >> 22)
++	b[2] = byte(t>>15)<<1 | 1
++	b[3] = byte(t >> 7)
++	b[4] = byte(t)<<1 | 1
++}
+diff --git a/pkg/mpegts/native_opus.go b/pkg/mpegts/native_opus.go
+new file mode 100644
+index 0000000..54e7ebd
+--- /dev/null
++++ b/pkg/mpegts/native_opus.go
+@@ -0,0 +1,224 @@
++package mpegts
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"os/exec"
++	"runtime"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/aac"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtp"
++)
++
++// NativeOpusProfile declares joint, finite AV delivery. It is never inferred.
++const NativeOpusProfile = "opus-source-clock-v1"
++
++type nativeOpus struct {
++	domain        *core.PresentationClock
++	releaseDomain func()
++	codec         *core.Codec
++	gate          *core.StartGate
++	ctx           context.Context
++	cancel        context.CancelFunc
++	cmd           *exec.Cmd
++	input         io.WriteCloser
++	output        io.ReadCloser
++	done          chan error
++	mux           *Muxer
++	pid           uint16
++	once          sync.Once
++	track         *core.Receiver
++	clock         *core.SourceClock
++}
++
++func (c *Producer) EnableNativeOpus() error {
++	if !c.Finite || !c.OneShot || c.ClockOrigin90k == nil {
++		return errors.New("native opus requires finite one-shot source clocks")
++	}
++	var input *core.Codec
++	for _, m := range c.Medias {
++		for _, codec := range m.Codecs {
++			if codec.Name == core.CodecAAC {
++				input = codec
++			}
++		}
++	}
++	if input == nil || input.ClockRate != 16000 || input.Channels != 1 ||
++		!strings.EqualFold(core.Between(input.FmtpLine, "config=", ";"), "1408") {
++		return errors.New("native opus profile requires declared 16k mono AAC")
++	}
++	origin := *c.ClockOrigin90k
++	if origin >= uint64(1)<<33 {
++		return errors.New("native Opus requires a 33-bit source residue")
++	}
++	origin += uint64(1) << 33
++	c.ClockOrigin90k = &origin
++	ctx, cancel := context.WithCancel(context.Background())
++	n := &nativeOpus{codec: input, gate: core.NewStartGate(), ctx: ctx, cancel: cancel, done: make(chan error, 1), mux: NewMuxer()}
++	n.pid = n.mux.AddTrack(StreamTypeAAC)
++	c.nativeOpus = n
++	c.Medias = append(c.Medias, &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{{Name: core.CodecOpus, ClockRate: 48000, Channels: 2, PayloadType: core.PayloadTypeRAW}}})
++	return nil
++}
++func (n *nativeOpus) start() error {
++	select {
++	case <-n.gate.Ready:
++	case <-n.ctx.Done():
++		return n.ctx.Err()
++	case <-time.After(core.ProbeTimeout):
++		return errors.New("native AV consumer readiness expired")
++	}
++	if n.track == nil || n.clock == nil {
++		return errors.New("native Opus track not admitted")
++	}
++	n.cmd = exec.CommandContext(n.ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "mpegts", "-probesize", "32", "-analyzeduration", "1", "-copyts", "-i", "pipe:0", "-map", "0:a:0", "-c:a", "libopus", "-application", "lowdelay", "-frame_duration", "20", "-ar", "48000", "-ac", "1", "-avoid_negative_ts", "disabled", "-mpegts_copyts", "1", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", "-f", "mpegts", "pipe:1")
++	var err error
++	if n.input, err = n.cmd.StdinPipe(); err != nil {
++		return err
++	}
++	if n.output, err = n.cmd.StdoutPipe(); err != nil {
++		return err
++	}
++	if err = n.cmd.Start(); err != nil {
++		return err
++	}
++	go func() {
++		err := n.read()
++		if err != nil {
++			n.cancel()
++		}
++		processErr := n.cmd.Wait()
++		if err == nil {
++			err = processErr
++		}
++		n.done <- err
++	}()
++	if deadline, ok := n.input.(interface{ SetWriteDeadline(time.Time) error }); ok {
++		if err = deadline.SetWriteDeadline(time.Now().Add(core.ProbeTimeout)); err != nil {
++			n.cancel()
++			return err
++		}
++	} else {
++		n.cancel()
++		return errors.New("native Opus requires bounded pipe writes")
++	}
++	_, err = n.input.Write(n.mux.GetHeader())
++	return err
++}
++func (n *nativeOpus) write(packet *rtp.Packet, source uint64) error {
++	var failure error
++	if failure = n.input.(interface{ SetWriteDeadline(time.Time) error }).SetWriteDeadline(time.Now().Add(core.ProbeTimeout)); failure != nil {
++		return failure
++	}
++	aac.RTPToADTS(n.codec, func(adts *rtp.Packet) {
++		if failure != nil {
++			return
++		}
++		_, failure = n.input.Write(n.mux.GetPayload90k(n.pid, source, adts.Payload))
++	})(packet)
++	return failure
++}
++func (n *nativeOpus) read() error {
++	d := NewDemuxer()
++	epoch := sourceEpoch{}
++	emit := func(packet *rtp.Packet, raw uint64) error {
++		if packet.PayloadType == StreamTypeMetadata {
++			return nil
++		}
++		if packet.PayloadType != StreamTypePrivateOPUS || len(packet.Payload) == 0 {
++			return errors.New("native opus output invalid")
++		}
++		source, err := epoch.lift(raw, n.clock.Origin90k)
++		if err != nil {
++			return err
++		}
++		packet.Timestamp = uint32(source/90000*48000 + (source%90000)*48000/90000)
++		if n.track != nil {
++			n.track.WriteRTP(packet)
++		}
++		return nil
++	}
++	for {
++		packet, err := d.ReadPacket(n.output)
++		if err == io.EOF {
++			tail, e := d.Flush()
++			if e != nil {
++				return e
++			}
++			for _, p := range tail {
++				if e = emit(p.Packet, p.Timestamp90k); e != nil {
++					return e
++				}
++			}
++			return nil
++		}
++		if err != nil {
++			return err
++		}
++		if err = emit(packet, d.SourceTime90k); err != nil {
++			return err
++		}
++	}
++}
++func (n *nativeOpus) finish() error {
++	if n.input == nil {
++		return errors.New("native opus was not started")
++	}
++	if err := n.input.Close(); err != nil {
++		n.cancel()
++		return err
++	}
++	select {
++	case err := <-n.done:
++		return err
++	case <-time.After(core.ProbeTimeout):
++		n.cancel()
++		return errors.New("native opus drain expired")
++	}
++}
++func (n *nativeOpus) close() {
++	n.once.Do(func() {
++		n.cancel()
++		if n.releaseDomain != nil {
++			n.releaseDomain()
++		}
++	})
++}
++
++func (c *Producer) SetNativeOpusDomain(id string) error {
++	if c.nativeOpus == nil {
++		return errors.New("native Opus profile absent")
++	}
++	clock, release, err := core.AcquirePresentationDomain(id)
++	if err != nil {
++		return err
++	}
++	c.nativeOpus.domain = clock
++	c.nativeOpus.releaseDomain = release
++	return nil
++}
++
++var nativeOpusAvailability struct {
++	once      sync.Once
++	available bool
++}
++
++// NativeOpusAvailable checks the declared local encoder without opening media.
++func NativeOpusAvailable() bool {
++	nativeOpusAvailability.once.Do(func() {
++		if runtime.GOOS != "linux" {
++			return
++		}
++		ctx, cancel := context.WithTimeout(context.Background(), core.ProbeTimeout)
++		defer cancel()
++		out, err := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-encoders").Output()
++		nativeOpusAvailability.available = err == nil && bytes.Contains(out, []byte(" libopus "))
++	})
++	return nativeOpusAvailability.available
++}
+diff --git a/pkg/mpegts/native_opus_test.go b/pkg/mpegts/native_opus_test.go
+new file mode 100644
+index 0000000..9d21303
+--- /dev/null
++++ b/pkg/mpegts/native_opus_test.go
+@@ -0,0 +1,162 @@
++package mpegts
++
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"io"
++	"os/exec"
++	"sync"
++	"testing"
++
++	"github.com/AlexxIT/go2rtc/pkg/aac"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtp"
++)
++
++func TestNativeMuxFullSourcePTS(t *testing.T) {
++	for _, origin := range []uint64{0, 1<<32 + 101, 1<<33 - 101} {
++		t.Run(fmt.Sprint(origin), func(t *testing.T) {
++			m := NewMuxer()
++			pid := m.AddTrack(StreamTypeAAC)
++			codec := aac.ConfigToCodec(aac.EncodeConfig(2, 16000, 1, false))
++			unit := aac.CodecToADTS(codec)
++			unit = append(unit, 0, 0)
++			aac.WriteADTSSize(unit, 9)
++			b := append(m.GetHeader(), m.GetPayload90k(pid, origin, unit)...)
++			d := NewDemuxer()
++			r := bytes.NewReader(b)
++			var actual []SourcePacket
++			for {
++				pkt, err := d.ReadPacket(r)
++				if pkt != nil && pkt.PayloadType != StreamTypeMetadata {
++					actual = append(actual, SourcePacket{pkt, d.SourceTime90k})
++				}
++				if err == io.EOF {
++					break
++				}
++				if err != nil {
++					t.Fatal(err)
++				}
++			}
++			tail, err := d.Flush()
++			tail = append(actual, tail...)
++			if err != nil || len(tail) != 1 || tail[0].Timestamp90k != origin {
++				t.Fatalf("origin=%d tail=%v err=%v", origin, tail, err)
++			}
++		})
++	}
++}
++func TestNativeOpusFinitePESClockAndTail(t *testing.T) {
++	var payload []byte
++	for i := 0; i < 5; i++ {
++		payload = append(payload, 0x7f, 0xe0, 1, 0xf8)
++	}
++	for _, origin := range []uint64{90000, 1<<33 - 1000} {
++		d := NewDemuxer()
++		d.pes = map[uint16]*PES{256: {StreamType: StreamTypePrivateOPUS, PTS: uint32(origin), SourcePTS: origin, TimeKnown: true, Payload: bytes.Clone(payload)}}
++		out, err := d.Flush()
++		if err != nil || len(out) != 5 {
++			t.Fatalf("%v len=%d", err, len(out))
++		}
++		for i, p := range out {
++			if p.Timestamp90k != (origin+uint64(i)*1800)&tsMask {
++				t.Fatalf("packet%d pts%d", i, p.Timestamp90k)
++			}
++		}
++	}
++}
++func TestNativeOpusCancelledBeforeReadiness(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	n := nativeOpus{ctx: ctx, cancel: cancel, gate: core.NewStartGate()}
++	if n.start() != context.Canceled {
++		t.Fatal("cancelled producer started")
++	}
++}
++func TestNativeOpusGeneratedAACClock(t *testing.T) {
++	if _, err := exec.LookPath("ffmpeg"); err != nil {
++		t.Skip("FFmpeg optional local runtime")
++	}
++	input, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000:duration=1", "-c:a", "aac", "-f", "adts", "pipe:1").Output()
++	if err != nil {
++		t.Fatal(err)
++	}
++	codec := aac.ConfigToCodec(aac.EncodeConfig(2, 16000, 1, false))
++	for _, origin := range []uint64{0, 3850409924, (1 << 33) - 5000} {
++		t.Run(fmt.Sprint(origin), func(t *testing.T) {
++			p := &Producer{Connection: core.Connection{Medias: []*core.Media{{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{codec}}}}, Finite: true, OneShot: true, ClockOrigin90k: &origin}
++			if err := p.EnableNativeOpus(); err != nil {
++				t.Fatal(err)
++			}
++			n := p.nativeOpus
++			n.clock = &core.SourceClock{Origin90k: *p.ClockOrigin90k}
++			n.clock.Position90k.Store(*p.ClockOrigin90k)
++			n.track = core.NewReceiver(p.Medias[1], p.Medias[1].Codecs[0])
++			var mu sync.Mutex
++			var stamps []uint32
++			n.track.Input = func(pkt *rtp.Packet) { mu.Lock(); defer mu.Unlock(); stamps = append(stamps, pkt.Timestamp) }
++			n.gate.Signal()
++			if err := n.start(); err != nil {
++				t.Fatal(err)
++			}
++			defer n.close()
++			units := 0
++			for remaining := input; len(remaining) > 0; units++ {
++				size := int(aac.ReadADTSSize(remaining))
++				unit := remaining[:size]
++				remaining = remaining[size:]
++				source := origin + uint64(units)*5760
++				pkt := &rtp.Packet{Header: rtp.Header{PayloadType: StreamTypeAAC, Timestamp: uint32(source)}, Payload: aac.ADTStoRTP(unit)}
++				if err := n.write(pkt, source); err != nil {
++					t.Fatal(err)
++				}
++			}
++			if err := n.finish(); err != nil {
++				t.Fatal(err)
++			}
++			mu.Lock()
++			defer mu.Unlock()
++			if len(stamps) < units*3 {
++				t.Fatalf("short Opus output: %d for %d AAC", len(stamps), units)
++			}
++			expected := uint32((*p.ClockOrigin90k)/90000*48000+((*p.ClockOrigin90k)%90000)*48000/90000) - 120
++			if delta := int32(stamps[0] - expected); delta < -3 || delta > 3 {
++				t.Fatalf("first Opus clock %d expected %d", stamps[0], expected)
++			}
++			for i := 1; i < len(stamps); i++ {
++				if stamps[i]-stamps[i-1] != 960 {
++					t.Fatalf("Opus clock hole %d", i)
++				}
++			}
++		})
++	}
++}
++
++func TestNativeOpusRejectsUndeclaredProfiles(t *testing.T) {
++	good := aac.ConfigToCodec(aac.EncodeConfig(2, 16000, 1, false))
++	origin := uint64(0)
++	for _, name := range []string{"live", "retry", "no-clock", "stereo", "other-rate", "other-ASC"} {
++		t.Run(name, func(t *testing.T) {
++			codec := good.Clone()
++			p := &Producer{Connection: core.Connection{Medias: []*core.Media{{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{codec}}}}, Finite: true, OneShot: true, ClockOrigin90k: &origin}
++			switch name {
++			case "live":
++				p.Finite = false
++			case "retry":
++				p.OneShot = false
++			case "no-clock":
++				p.ClockOrigin90k = nil
++			case "stereo":
++				codec.Channels = 2
++			case "other-rate":
++				codec.ClockRate = 48000
++			case "other-ASC":
++				codec.FmtpLine = "config=140c"
++			}
++			if p.EnableNativeOpus() == nil {
++				t.Fatal("unsupported profile accepted")
++			}
++		})
++	}
++}
+diff --git a/pkg/mpegts/producer.go b/pkg/mpegts/producer.go
+index 14417bf..4af60f5 100644
+--- a/pkg/mpegts/producer.go
++++ b/pkg/mpegts/producer.go
+@@ -3,6 +3,8 @@ package mpegts
+ import (
+ 	"bytes"
+ 	"io"
++	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/aac"
+@@ -14,7 +16,15 @@ import (
+ 
+ type Producer struct {
+ 	core.Connection
+-	rd *core.ReadBuffer
++	rd             *core.ReadBuffer
++	Finite         bool
++	OneShot        bool
++	ClockOrigin90k *uint64
++	finiteComplete atomic.Bool
++	clocks         map[byte]*sourceEpoch
++	sourceClock    *core.SourceClock
++	sourcePolicy   *core.SourcePolicy
++	nativeOpus     *nativeOpus
+ }
+ 
+ func Open(rd io.Reader) (*Producer, error) {
+@@ -35,30 +45,104 @@ func Open(rd io.Reader) (*Producer, error) {
+ func (c *Producer) GetTrack(media *core.Media, codec *core.Codec) (*core.Receiver, error) {
+ 	receiver, _ := c.Connection.GetTrack(media, codec)
+ 	receiver.ID = StreamType(codec)
++	if c.OneShot {
++		if c.sourcePolicy == nil {
++			c.sourcePolicy = &core.SourcePolicy{OneShot: true}
++		}
++		if c.nativeOpus != nil {
++			c.sourcePolicy.AVReady = c.nativeOpus.gate
++		}
++		receiver.SourcePolicy = c.sourcePolicy
++	}
++	if c.ClockOrigin90k != nil {
++		if c.sourceClock == nil {
++			c.sourceClock = &core.SourceClock{Origin90k: *c.ClockOrigin90k}
++			if c.nativeOpus != nil {
++				c.sourceClock.Domain = c.nativeOpus.domain
++			}
++			c.sourceClock.Position90k.Store(*c.ClockOrigin90k)
++		}
++		receiver.SourceClock = c.sourceClock
++		if c.nativeOpus != nil {
++			if c.nativeOpus.clock == nil {
++				c.nativeOpus.clock = c.sourceClock
++			}
++			if codec.Name == core.CodecOpus && c.nativeOpus.track == nil {
++				c.nativeOpus.track = receiver
++			}
++		}
++	}
+ 	return receiver, nil
+ }
+ 
+ func (c *Producer) Start() error {
++	if c.nativeOpus != nil {
++		defer c.nativeOpus.close()
++		if err := c.nativeOpus.start(); err != nil {
++			c.endTracks(err)
++			return err
++		}
++	}
+ 	rd := NewDemuxer()
++	rd.KeepAUD = c.ClockOrigin90k != nil
+ 
+ 	for {
+ 		pkt, err := rd.ReadPacket(c.rd)
+ 		if err != nil {
++			if err == io.EOF && c.Finite {
++				tail, flushErr := rd.Flush()
++				if flushErr != nil {
++					c.endTracks(flushErr)
++					return flushErr
++				}
++				for _, last := range tail {
++					if err := c.deliver(last.Packet, last.Timestamp90k); err != nil {
++						c.endTracks(err)
++						return err
++					}
++				}
++				if c.nativeOpus != nil {
++					if err := c.nativeOpus.finish(); err != nil {
++						c.endTracks(err)
++						return err
++					}
++				}
++				c.finiteComplete.Store(true)
++				c.endTracks(nil)
++				return core.ErrFiniteSource
++			}
++			c.endTracks(err)
+ 			return err
+ 		}
+ 
+-		c.Recv += len(pkt.Payload)
+-
+ 		//log.Printf("[mpegts] size: %6d, muxer: %10d, pt: %2d", len(pkt.Payload), pkt.Timestamp, pkt.PayloadType)
+ 
++		if err := c.deliver(pkt, rd.SourceTime90k); err != nil {
++			c.endTracks(err)
++			return err
++		}
++	}
++}
++
++// Notify all opted-in tracks before joining any of them: audio may be waiting
++// for a video parser boundary that only video's terminal callback can release.
++// Start still joins every notification before it returns; legacy order is kept.
++func (c *Producer) endTracks(err error) {
++	if c.ClockOrigin90k == nil {
+ 		for _, receiver := range c.Receivers {
+-			if receiver.ID == pkt.PayloadType {
+-				TimestampToRTP(pkt, receiver.Codec)
+-				receiver.WriteRTP(pkt)
+-				break
+-			}
++			receiver.End(err)
+ 		}
++		return
++	}
++	var pending sync.WaitGroup
++	for _, receiver := range c.Receivers {
++		pending.Add(1)
++		go func(receiver *core.Receiver) {
++			defer pending.Done()
++			receiver.End(err)
++		}(receiver)
+ 	}
++	pending.Wait()
+ }
+ 
+ func (c *Producer) probe() error {
+@@ -66,6 +150,7 @@ func (c *Producer) probe() error {
+ 	defer c.rd.Reset()
+ 
+ 	rd := NewDemuxer()
++	rd.KeepAUD = c.ClockOrigin90k != nil
+ 
+ 	// Strategy:
+ 	// 1. Wait packet with metadata, init other packets for wait
+@@ -175,3 +260,53 @@ func TimestampToRTP(rtp *rtp.Packet, codec *core.Codec) {
+ 	}
+ 	rtp.Timestamp = uint32(float64(rtp.Timestamp) * float64(codec.ClockRate) / ClockRate)
+ }
++
++func (c *Producer) deliver(pkt *rtp.Packet, source uint64) error {
++	if pkt.PayloadType == StreamTypeMetadata {
++		return nil
++	}
++	c.Recv += len(pkt.Payload)
++	if c.nativeOpus != nil && pkt.PayloadType == StreamTypeAAC {
++		if err := c.nativeOpus.write(pkt, source); err != nil {
++			return err
++		}
++	}
++	if c.ClockOrigin90k != nil {
++		if c.clocks == nil {
++			c.clocks = map[byte]*sourceEpoch{}
++		}
++		state := c.clocks[pkt.PayloadType]
++		if state == nil {
++			state = &sourceEpoch{}
++			c.clocks[pkt.PayloadType] = state
++		}
++		var err error
++		source, err = state.lift(source, *c.ClockOrigin90k)
++		if err != nil {
++			return err
++		}
++	}
++	if c.sourceClock != nil {
++		c.sourceClock.Position90k.Store(source)
++	}
++	for _, receiver := range c.Receivers {
++		if receiver.ID == pkt.PayloadType {
++			pkt.Timestamp = uint32((source/90000)*uint64(receiver.Codec.ClockRate) + (source%90000)*uint64(receiver.Codec.ClockRate)/90000)
++			receiver.WriteRTP(pkt)
++			break
++		}
++	}
++	return nil
++}
++
++func (c *Producer) FiniteComplete() bool { return c.finiteComplete.Load() }
++
++// NoReconnect is an explicit source acquisition policy, not successful EOF.
++func (c *Producer) NoReconnect() bool { return c.OneShot }
++
++func (c *Producer) Stop() error {
++	if c.nativeOpus != nil {
++		c.nativeOpus.close()
++	}
++	return c.Connection.Stop()
++}
+diff --git a/pkg/mpegts/source_epoch.go b/pkg/mpegts/source_epoch.go
+new file mode 100644
+index 0000000..660d267
+--- /dev/null
++++ b/pkg/mpegts/source_epoch.go
+@@ -0,0 +1,39 @@
++package mpegts
++
++import "errors"
++
++const tsMask = uint64(1)<<33 - 1
++
++var errSourceClock = errors.New("source clock discontinuity or ambiguous epoch")
++
++type sourceEpoch struct {
++	started       bool
++	raw, extended uint64
++}
++
++func (s *sourceEpoch) lift(raw, origin uint64) (uint64, error) {
++	if !s.started {
++		v := (origin & ^tsMask) | (raw & tsMask)
++		if v+(uint64(1)<<32) < origin {
++			v += uint64(1) << 33
++		}
++		if v > origin+(uint64(1)<<32) && v >= uint64(1)<<33 {
++			v -= uint64(1) << 33
++		}
++		distance := int64(v) - int64(origin)
++		if distance < -900000 || distance > 900000 {
++			return 0, errSourceClock
++		}
++		s.started = true
++		s.raw = raw
++		s.extended = v
++		return v, nil
++	}
++	delta := (raw - s.raw) & tsMask
++	if delta > 900000 {
++		return 0, errSourceClock
++	}
++	s.raw = raw
++	s.extended += delta
++	return s.extended, nil
++}
+diff --git a/pkg/mpegts/source_epoch_test.go b/pkg/mpegts/source_epoch_test.go
+new file mode 100644
+index 0000000..d33dfc5
+--- /dev/null
++++ b/pkg/mpegts/source_epoch_test.go
+@@ -0,0 +1,56 @@
++package mpegts
++
++import (
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtp"
++	"testing"
++)
++
++func TestSourceEpochFull33BitRead(t *testing.T) {
++	for _, ts := range []uint64{0, 1, (uint64(1) << 32) + 12345, (uint64(1) << 33) - 1} {
++		d := NewDemuxer()
++		d.buf[0] = byte(0x21 | ((ts>>30)&7)<<1)
++		d.buf[1] = byte(ts >> 22)
++		d.buf[2] = byte((ts>>15)<<1 | 1)
++		d.buf[3] = byte(ts >> 7)
++		d.buf[4] = byte(ts<<1 | 1)
++		if got := d.readTime(); got != ts {
++			t.Fatal("source clock truncated", ts, got)
++		}
++	}
++}
++func TestSourceEpoch33WrapAndRejectReset(t *testing.T) {
++	s := &sourceEpoch{}
++	origin := (uint64(1) << 33) - 100
++	if x, e := s.lift(origin, origin); e != nil || x != origin {
++		t.Fatal(x, e)
++	}
++	if x, e := s.lift(100, origin); e != nil || x != (uint64(1)<<33)+100 {
++		t.Fatal("wrap", x, e)
++	}
++	if _, e := s.lift(99, origin); e == nil {
++		t.Fatal("reset repaired")
++	}
++	late := &sourceEpoch{}
++	x, e := late.lift(100, (uint64(3)<<33)+100)
++	if e != nil || x != (uint64(3)<<33)+100 {
++		t.Fatal("initial epoch guessed", x, e)
++	}
++}
++func TestSourceEpochRateConversionUsesFullTime(t *testing.T) {
++	source := (uint64(1) << 32) + 90000
++	p := &Producer{}
++	media := &core.Media{Kind: core.KindAudio}
++	codec := &core.Codec{Name: core.CodecAAC, ClockRate: 16000}
++	receiver, _ := p.GetTrack(media, codec)
++	var timestamp uint32
++	child := &core.Node{Input: func(pkt *rtp.Packet) { timestamp = pkt.Timestamp }}
++	child.WithParent(&receiver.Node)
++	if e := p.deliver(&rtp.Packet{Header: rtp.Header{PayloadType: StreamTypeAAC}}, source); e != nil {
++		t.Fatal(e)
++	}
++	expected := uint32((source/90000)*16000 + (source%90000)*16000/90000)
++	if timestamp != expected {
++		t.Fatal("audio epoch lost", timestamp, expected)
++	}
++}
+diff --git a/pkg/rtsp/client.go b/pkg/rtsp/client.go
+index c960732..27b10e5 100644
+--- a/pkg/rtsp/client.go
++++ b/pkg/rtsp/client.go
+@@ -191,9 +191,24 @@ func (c *Conn) Describe() error {
+ 		}
+ 	}
+ 
++	c.OneShot = res.Header.Get("X-Stream-Retry") == "never"
+ 	c.SDP = string(res.Body) // for info
+ 
+ 	medias, err := UnmarshalSDP(res.Body)
++	c.nativeRefs = make([]*core.NativeReference, len(medias))
++	for _, line := range strings.Split(string(res.Body), "\n") {
++		if strings.HasPrefix(line, "a=x-native-ref:") {
++			fields := strings.Fields(strings.TrimPrefix(line, "a=x-native-ref:"))
++			if len(fields) == 2 {
++				if i, e := strconv.Atoi(fields[0]); e == nil && i >= 0 && i < len(medias) {
++					c.nativeRefs[i] = core.LookupNativeReference(fields[1])
++					if c.nativeRefs[i] == nil {
++						return errors.New("native source reference is not owned by this process")
++					}
++				}
++			}
++		}
++	}
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -395,6 +410,15 @@ func (c *Conn) Teardown() (err error) {
+ }
+ 
+ func (c *Conn) Close() error {
++	c.nativeRefMu.Lock()
++	for _, token := range c.nativeTokens {
++		core.RemoveNativeReference(token)
++	}
++	c.nativeTokens = nil
++	c.nativeRefMu.Unlock()
++	if c.sourceClosed != nil {
++		c.sourceCloseOnce.Do(func() { close(c.sourceClosed) })
++	}
+ 	if c.mode == core.ModeActiveProducer {
+ 		_ = c.Teardown()
+ 	}
+diff --git a/pkg/rtsp/conn.go b/pkg/rtsp/conn.go
+index 2984c78..ff274d1 100644
+--- a/pkg/rtsp/conn.go
++++ b/pkg/rtsp/conn.go
+@@ -24,6 +24,7 @@ type Conn struct {
+ 	// public
+ 
+ 	Backchannel bool
++	OneShot     bool
+ 	Media       string
+ 	OnClose     func() error
+ 	PacketSize  uint16
+@@ -35,6 +36,11 @@ type Conn struct {
+ 
+ 	// internal
+ 
++	sourcePolicy *core.SourcePolicy
++	nativeRefs   []*core.NativeReference
++	nativeTokens []string
++	nativeRefMu  sync.Mutex
++
+ 	auth      *tcp.Auth
+ 	conn      net.Conn
+ 	keepalive int
+@@ -49,6 +55,18 @@ type Conn struct {
+ 	state   State
+ 	stateMu sync.Mutex
+ 
++	sourceClock      *sourceClockMapping
++	sourceStart      func()
++	sourceEnds       int
++	sourceEndMu      sync.Mutex
++	sourceVideoReady chan struct{}
++	sourcePlayReady  chan struct{}
++	sourcePlayOnce   sync.Once
++	sourceClosed     chan struct{}
++	sourceHasVideo   bool
++	sourceVideoOnce  sync.Once
++	sourceCloseOnce  sync.Once
++
+ 	udpConn []*net.UDPConn
+ 	udpAddr []*net.UDPAddr
+ }
+diff --git a/pkg/rtsp/consumer.go b/pkg/rtsp/consumer.go
+index e6525d9..880f7eb 100644
+--- a/pkg/rtsp/consumer.go
++++ b/pkg/rtsp/consumer.go
+@@ -1,6 +1,7 @@
+ package rtsp
+ 
+ import (
++	"errors"
+ 	"time"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/aac"
+@@ -49,6 +50,27 @@ func (c *Conn) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiv
+ 		panic(core.Caller())
+ 	}
+ 
++	if m := c.sourceClock; m != nil && m.trusted {
++		descriptor := track.SourceClock
++		if descriptor == nil || (descriptor.Origin90k >= uint64(1)<<33 && (track.SourcePolicy == nil || track.SourcePolicy.AVReady == nil)) {
++			m.failed.Store(true)
++			return errors.New("source clock metadata unavailable")
++		}
++		if m.descriptor == nil {
++			m.descriptor = descriptor
++			m.origin90k, m.explicitOrigin = descriptor.Position90k.Load(), true
++		} else if m.descriptor != descriptor {
++			m.failed.Store(true)
++			return errors.New("source clock domains differ")
++		}
++	}
++	if c.sourceClock != nil && track.Codec.IsVideo() {
++		c.sourceHasVideo = true
++	}
++	if track.SourcePolicy != nil && track.SourcePolicy.OneShot {
++		c.OneShot = true
++		c.sourcePolicy = track.SourcePolicy
++	}
+ 	// save original codec to sender (can have Codec.Name = ANY)
+ 	sender := core.NewSender(media, codec)
+ 	// important to send original codec for valid IsRTP check
+@@ -59,9 +81,29 @@ func (c *Conn) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiv
+ 		sender.Handler = pcm.RepackG711(true, sender.Handler)
+ 	}
+ 
++	if c.sourceClock != nil {
++		sender.OnDrop = func() { c.sourceClock.failed.Store(true); _ = c.Close() }
++		sender.OnEnd = func(err error) {
++			sender.Close()
++			sender.Wait()
++			if err == nil && track.Codec.Name == core.CodecH264 {
++				select {
++				case <-c.sourceVideoReady:
++				default:
++					err = errors.New("source ended before opening H264 parser boundary")
++				}
++			}
++			c.sourceEnded(err)
++		}
++	}
+ 	sender.HandleRTP(track)
+ 
+ 	c.Senders = append(c.Senders, sender)
++	var ref *core.NativeReference
++	if track.SourcePolicy != nil && track.SourcePolicy.AVReady != nil && track.SourceClock != nil {
++		ref = &core.NativeReference{Clock: track.SourceClock, Policy: track.SourcePolicy}
++	}
++	c.nativeRefs = append(c.nativeRefs, ref)
+ 	return nil
+ }
+ 
+@@ -76,8 +118,11 @@ const (
+ func (c *Conn) packetWriter(codec *core.Codec, channel, payloadType uint8) core.HandlerFunc {
+ 	var buf []byte
+ 	var n int
++	var openingVideoTimestamp uint32
++	var videoStarted bool
+ 
+ 	video := codec.IsVideo()
++	clockSender := sourceClockSender{mapping: c.sourceClock, rate: codec.ClockRate}
+ 	if video {
+ 		buf = make([]byte, startVideoBuf)
+ 	} else {
+@@ -87,15 +132,54 @@ func (c *Conn) packetWriter(codec *core.Codec, channel, payloadType uint8) core.
+ 	flushBuf := func() {
+ 		//log.Printf("[rtsp] channel:%2d write_size:%6d buffer_size:%6d", channel, n, len(buf))
+ 		if err := c.writeInterleavedData(buf[:n]); err != nil {
+-			c.Send += n
++			if c.sourceClock != nil {
++				_ = c.Close()
++			} else {
++				c.Send += n
++			}
+ 		}
+ 		n = 0
+ 	}
+ 
+ 	handlerFunc := func(packet *rtp.Packet) {
+-		if c.state == StateNone {
++		if c.sourceClock != nil {
++			if c.sourcePlayReady != nil {
++				select {
++				case <-c.sourcePlayReady:
++				case <-c.sourceClosed:
++					return
++				}
++			}
++			select {
++			case <-c.sourceClosed:
++				return
++			default:
++			}
++		} else if c.state == StateNone {
+ 			return
+ 		}
++		if !video && c.sourceHasVideo && c.sourceVideoReady != nil {
++			select {
++			case <-c.sourceVideoReady:
++			case <-c.sourceClosed:
++				return
++			}
++		}
++		if clockSender.mapping != nil {
++			report := clockSender.report(packet)
++			if clockSender.disabled || clockSender.mapping.failed.Load() {
++				_ = c.Close()
++				return
++			}
++			if report != nil {
++				// One complete interleaved compound RTCP write, before this RTP packet.
++				b := make([]byte, 4+len(report))
++				b[0], b[1] = '$', channel+1
++				b[2], b[3] = byte(len(report)>>8), byte(len(report))
++				copy(b[4:], report)
++				_ = c.writeInterleavedData(b)
++			}
++		}
+ 
+ 		clone := rtp.Packet{
+ 			Header: rtp.Header{
+@@ -110,7 +194,7 @@ func (c *Conn) packetWriter(codec *core.Codec, channel, payloadType uint8) core.
+ 		}
+ 
+ 		if !video {
+-			packet.Marker = true // better to have marker on all audio packets
++			clone.Marker = true // Never mutate media shared by other viewers.
+ 		}
+ 
+ 		size := rtpHdr + len(packet.Payload)
+@@ -138,7 +222,7 @@ func (c *Conn) packetWriter(codec *core.Codec, channel, payloadType uint8) core.
+ 
+ 		n += 4 + size
+ 
+-		if !packet.Marker || !c.playOK {
++		if !clone.Marker || (c.sourceClock == nil && !c.playOK) {
+ 			// collect continious video packets to buffer
+ 			// or wait OK for PLAY command for backchannel
+ 			//log.Printf("[rtsp] collecting buffer ok=%t", c.playOK)
+@@ -146,12 +230,27 @@ func (c *Conn) packetWriter(codec *core.Codec, channel, payloadType uint8) core.
+ 		}
+ 
+ 		flushBuf()
++		if video && c.sourceVideoReady != nil {
++			if !videoStarted {
++				openingVideoTimestamp = packet.Timestamp
++				videoStarted = true
++			}
++			// FFmpeg's H264 parser may retain the first marked AU until the
++			// next original AU boundary. Let it see that boundary before audio.
++			if codec.Name != core.CodecH264 || packet.Timestamp != openingVideoTimestamp {
++				c.sourceVideoOnce.Do(func() { close(c.sourceVideoReady) })
++			}
++		}
+ 	}
+ 
+ 	if !codec.IsRTP() {
+ 		switch codec.Name {
+ 		case core.CodecH264:
+-			handlerFunc = h264.RTPPay(c.PacketSize, handlerFunc)
++			if c.sourceClock != nil {
++				handlerFunc = h264.RTPPayWithAUD(c.PacketSize, handlerFunc)
++			} else {
++				handlerFunc = h264.RTPPay(c.PacketSize, handlerFunc)
++			}
+ 		case core.CodecH265:
+ 			handlerFunc = h265.RTPPay(c.PacketSize, handlerFunc)
+ 		case core.CodecAAC:
+@@ -164,7 +263,11 @@ func (c *Conn) packetWriter(codec *core.Codec, channel, payloadType uint8) core.
+ 	} else if c.PacketSize != 0 {
+ 		switch codec.Name {
+ 		case core.CodecH264:
+-			handlerFunc = h264.RTPPay(c.PacketSize, handlerFunc)
++			if c.sourceClock != nil {
++				handlerFunc = h264.RTPPayWithAUD(c.PacketSize, handlerFunc)
++			} else {
++				handlerFunc = h264.RTPPay(c.PacketSize, handlerFunc)
++			}
+ 			handlerFunc = h264.RTPDepay(codec, handlerFunc)
+ 		case core.CodecH265:
+ 			handlerFunc = h265.RTPPay(c.PacketSize, handlerFunc)
+diff --git a/pkg/rtsp/producer.go b/pkg/rtsp/producer.go
+index 3d818b6..94e8a91 100644
+--- a/pkg/rtsp/producer.go
++++ b/pkg/rtsp/producer.go
+@@ -44,6 +44,19 @@ func (c *Conn) GetTrack(media *core.Media, codec *core.Codec) (*core.Receiver, e
+ 	}
+ 
+ 	track := core.NewReceiver(media, codec)
++	if c.OneShot {
++		if c.sourcePolicy == nil {
++			c.sourcePolicy = &core.SourcePolicy{OneShot: true}
++		}
++		track.SourcePolicy = c.sourcePolicy
++	}
++	for i, m := range c.Medias {
++		if m == media && i < len(c.nativeRefs) && c.nativeRefs[i] != nil {
++			ref := c.nativeRefs[i]
++			track.SourcePolicy = ref.Policy
++			track.SourceClock = ref.Clock
++		}
++	}
+ 	track.ID = channel
+ 	c.Receivers = append(c.Receivers, track)
+ 
+@@ -141,3 +154,6 @@ func (c *Conn) Reconnect() error {
+ 
+ 	return nil
+ }
++
++// NoReconnect preserves an explicitly declared upstream acquisition policy.
++func (c *Conn) NoReconnect() bool { return c.OneShot }
+diff --git a/pkg/rtsp/server.go b/pkg/rtsp/server.go
+index 343bdc6..8bfb1d0 100644
+--- a/pkg/rtsp/server.go
++++ b/pkg/rtsp/server.go
+@@ -107,6 +107,22 @@ func (c *Conn) Accept() error {
+ 
+ 		case MethodDescribe:
+ 			c.mode = core.ModePassiveConsumer
++			// Explicit prototype assertion: all source RTP clocks share one origin.
++			if req.URL.Query().Get("source_clock") == "trusted" {
++				c.sourceClock = &sourceClockMapping{trusted: true}
++				c.sourceVideoReady = make(chan struct{})
++				c.sourcePlayReady = make(chan struct{})
++				c.sourceClosed = make(chan struct{})
++			} else if req.URL.Query().Get("source_clock") == "1" {
++				origin, parseErr := strconv.ParseUint(req.URL.Query().Get("source_clock_origin_90k"), 10, 64)
++				if parseErr != nil || origin > (uint64(1)<<32)*90000-1 {
++					return c.WriteResponse(&tcp.Response{Status: "400 Bad Request", Request: req})
++				}
++				c.sourceClock = &sourceClockMapping{origin90k: origin, explicitOrigin: true}
++				c.sourceVideoReady = make(chan struct{})
++				c.sourcePlayReady = make(chan struct{})
++				c.sourceClosed = make(chan struct{})
++			}
+ 			c.Fire(MethodDescribe)
+ 
+ 			if c.Senders == nil {
+@@ -124,6 +140,9 @@ func (c *Conn) Accept() error {
+ 				Request: req,
+ 			}
+ 
++			if c.OneShot {
++				res.Header.Set("X-Stream-Retry", "never")
++			}
+ 			// convert tracks to real output medias medias
+ 			var medias []*core.Media
+ 			for i, track := range c.Senders {
+@@ -151,6 +170,15 @@ func (c *Conn) Accept() error {
+ 				return err
+ 			}
+ 
++			c.nativeRefMu.Lock()
++			for i, ref := range c.nativeRefs {
++				if ref != nil {
++					token := core.RegisterNativeReference(ref)
++					c.nativeTokens = append(c.nativeTokens, token)
++					res.Body = append(res.Body, []byte(fmt.Sprintf("a=x-native-ref:%d %s\r\n", i, token))...)
++				}
++			}
++			c.nativeRefMu.Unlock()
+ 			c.SDP = string(res.Body) // for info
+ 
+ 			if err = c.WriteResponse(res); err != nil {
+@@ -205,6 +233,12 @@ func (c *Conn) Accept() error {
+ 			res := &tcp.Response{Request: req}
+ 			err = c.WriteResponse(res)
+ 			c.playOK = true
++			if err == nil && c.sourcePlayReady != nil {
++				c.sourcePlayOnce.Do(func() { close(c.sourcePlayReady) })
++			}
++			if err == nil && c.sourceStart != nil {
++				c.sourceStart()
++			}
+ 			return err
+ 
+ 		case MethodTeardown:
+diff --git a/pkg/rtsp/source_clock.go b/pkg/rtsp/source_clock.go
+new file mode 100644
+index 0000000..22a4cf5
+--- /dev/null
++++ b/pkg/rtsp/source_clock.go
+@@ -0,0 +1,149 @@
++package rtsp
++
++// Experimental source-clock assertion for known common-origin MPEG-TS ingests.
++// Not a clock recovery mechanism for arbitrary independently based RTP sources.
++import (
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++)
++
++type sourceClockMapping struct {
++	mu             sync.Mutex
++	trusted        bool
++	descriptor     *core.SourceClock
++	origin90k      uint64
++	explicitOrigin bool
++	failed         atomic.Bool
++	initialized    bool
++	source, ntp    uint64
++}
++
++func clockFixed(ts, rate uint32) uint64 { return clockFixed64(uint64(ts), rate) }
++
++func clockFixed64(ts uint64, rate uint32) uint64 {
++	return (ts/uint64(rate))<<32 + ((ts%uint64(rate))<<32)/uint64(rate)
++}
++
++func (m *sourceClockMapping) mapTime(source uint64) uint64 {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	if !m.initialized {
++		now := time.Now()
++		m.source = source
++		m.ntp = uint64(now.Unix()+2208988800)<<32 + (uint64(now.Nanosecond())<<32)/1000000000
++		m.initialized = true
++	}
++	return m.ntp + source - m.source
++}
++
++type sourceClockSender struct {
++	mapping         *sourceClockMapping
++	rate            uint32
++	sent            bool
++	disabled        bool
++	last, previous  uint32
++	unwrapped       uint64
++	started         bool
++	packets, octets uint32
++}
++
++func (s *sourceClockSender) report(packet *rtp.Packet) []byte {
++	if s.rate == 0 {
++		s.disabled = true
++		if s.mapping != nil {
++			s.mapping.failed.Store(true)
++		}
++		return nil
++	}
++	if s.disabled {
++		return nil
++	}
++	if s.mapping.failed.Load() {
++		s.disabled = true
++		return nil
++	}
++	if !s.started {
++		s.unwrapped = uint64(packet.Timestamp)
++		if s.mapping.explicitOrigin {
++			expected := (s.mapping.origin90k/90000)*uint64(s.rate) + (s.mapping.origin90k%90000)*uint64(s.rate)/90000
++			candidate := (expected & ^uint64(0xffffffff)) | uint64(packet.Timestamp)
++			if candidate+uint64(1)<<31 < expected {
++				candidate += uint64(1) << 32
++			}
++			if candidate > expected+uint64(1)<<31 && candidate >= uint64(1)<<32 {
++				candidate -= uint64(1) << 32
++			}
++			distance := int64(candidate) - int64(expected)
++			if distance < -int64(s.rate)*10 || distance > int64(s.rate)*10 {
++				s.disabled = true
++				s.mapping.failed.Store(true)
++				return nil
++			}
++			s.unwrapped = candidate
++		}
++		s.started = true
++	} else {
++		delta := int64(int32(packet.Timestamp - s.previous))
++		if delta < 0 || delta > int64(s.rate)*10 {
++			s.disabled = true
++			s.mapping.failed.Store(true)
++			return nil
++		}
++		s.unwrapped += uint64(delta)
++	}
++	s.previous = packet.Timestamp
++	var data []byte
++	if !s.sent || packet.Timestamp-s.last >= s.rate/2 {
++		report := &rtcp.SenderReport{
++			SSRC:        packet.SSRC,
++			NTPTime:     s.mapping.mapTime(clockFixed64(s.unwrapped, s.rate)),
++			RTPTime:     packet.Timestamp,
++			PacketCount: s.packets,
++			OctetCount:  s.octets,
++		}
++		cname := rtcp.NewCNAMESourceDescription(packet.SSRC, "source-clock-validation")
++		data, _ = rtcp.Marshal([]rtcp.Packet{report, cname})
++		s.last, s.sent = packet.Timestamp, true
++	}
++	s.packets++
++	s.octets += uint32(len(packet.Payload))
++	return data
++}
++
++// DeferStart is an opt-in cold-consumer handshake, not a new media queue.
++func (c *Conn) DeferStart(start func()) bool {
++	if c.sourceClock == nil {
++		return false
++	}
++	c.sourceStart = start
++	return true
++}
++
++func (c *Conn) sourceEnded(err error) {
++	c.sourceEndMu.Lock()
++	defer c.sourceEndMu.Unlock()
++	if err != nil {
++		c.sourceClock.failed.Store(true)
++		_ = c.Close()
++		return
++	}
++	c.sourceEnds++
++	if c.sourceEnds != len(c.Senders) || c.sourceClock.failed.Load() {
++		return
++	}
++	// All sender queues have drained before any BYE or socket close.
++	bye, _ := rtcp.Marshal([]rtcp.Packet{&rtcp.Goodbye{Sources: []uint32{0}, Reason: "finite source complete"}})
++	for i := range c.Senders {
++		b := make([]byte, 4+len(bye))
++		b[0], b[1] = '$', byte(i*2+1)
++		b[2], b[3] = byte(len(bye)>>8), byte(len(bye))
++		copy(b[4:], bye)
++		_ = c.writeInterleavedData(b)
++	}
++	_ = c.Close()
++}
+diff --git a/pkg/rtsp/source_clock_test.go b/pkg/rtsp/source_clock_test.go
+new file mode 100644
+index 0000000..db2251e
+--- /dev/null
++++ b/pkg/rtsp/source_clock_test.go
+@@ -0,0 +1,542 @@
++package rtsp
++
++import (
++	"bytes"
++	"fmt"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"time"
++)
++
++func TestSourceClockCommonOffset(t *testing.T) {
++	m := &sourceClockMapping{}
++	video := sourceClockSender{mapping: m, rate: 90000}
++	audio := sourceClockSender{mapping: m, rate: 16000}
++	a, _ := rtcp.Unmarshal(video.report(&rtp.Packet{Header: rtp.Header{Timestamp: 90000, SSRC: 10}, Payload: []byte{1, 2}}))
++	b, _ := rtcp.Unmarshal(audio.report(&rtp.Packet{Header: rtp.Header{Timestamp: 17600, SSRC: 20}, Payload: []byte{3}}))
++	srA, srB := a[0].(*rtcp.SenderReport), b[0].(*rtcp.SenderReport)
++	delta := srB.NTPTime - srA.NTPTime
++	if delta != (uint64(1)<<32)/10 {
++		t.Fatalf("offset changed: %d", delta)
++	}
++	if len(a) != 2 || len(b) != 2 {
++		t.Fatal("missing compound SDES")
++	}
++	if srA.RTPTime != 90000 || srB.RTPTime != 17600 {
++		t.Fatal("RTP rewritten")
++	}
++	if video.report(&rtp.Packet{Header: rtp.Header{Timestamp: 90001}}) != nil {
++		t.Fatal("unbounded reports")
++	}
++	if video.report(&rtp.Packet{Header: rtp.Header{Timestamp: 135000}}) == nil {
++		t.Fatal("periodic report absent")
++	}
++}
++
++func TestSourceClockRejectsBackwardAndZeroRate(t *testing.T) {
++	s := sourceClockSender{mapping: &sourceClockMapping{}, rate: 90000}
++	s.report(&rtp.Packet{Header: rtp.Header{Timestamp: 90000}})
++	if s.report(&rtp.Packet{Header: rtp.Header{Timestamp: 89999}}) != nil || !s.disabled {
++		t.Fatal("backward clock repaired")
++	}
++	z := sourceClockSender{mapping: &sourceClockMapping{}}
++	if z.report(&rtp.Packet{}) != nil {
++		t.Fatal("zero rate accepted")
++	}
++}
++
++func TestSourceClockConcurrentAnchor(t *testing.T) {
++	m := &sourceClockMapping{}
++	var wg sync.WaitGroup
++	values := make([]uint64, 16)
++	for i := range values {
++		wg.Add(1)
++		go func(i int) { defer wg.Done(); values[i] = m.mapTime(uint64(1) << 32) }(i)
++	}
++	wg.Wait()
++	for _, v := range values {
++		if v != values[0] {
++			t.Fatal("anchor race")
++		}
++	}
++}
++
++func TestSourceClockWriterOptInAndPayload(t *testing.T) {
++	for _, enabled := range []bool{false, true} {
++		t.Run(map[bool]string{false: "default", true: "opt-in"}[enabled], func(t *testing.T) {
++			left, right := net.Pipe()
++			defer left.Close()
++			defer right.Close()
++			right.SetReadDeadline(time.Now().Add(2 * time.Second))
++			conn := NewServer(left)
++			conn.state = StatePlay
++			conn.playOK = true
++			if enabled {
++				conn.sourceClock = &sourceClockMapping{}
++			}
++			send := conn.packetWriter(&core.Codec{Name: core.CodecAAC, ClockRate: 16000, PayloadType: 97}, 2, 97)
++			packet := &rtp.Packet{Header: rtp.Header{Version: 2, Marker: false, Timestamp: 16000, SequenceNumber: 7, SSRC: 40}, Payload: []byte{1, 2, 3}}
++			done := make(chan struct{})
++			go func() { send(packet); close(done) }()
++			read := func() (byte, []byte) {
++				h := make([]byte, 4)
++				if _, err := io.ReadFull(right, h); err != nil {
++					t.Fatal(err)
++				}
++				b := make([]byte, int(h[2])<<8|int(h[3]))
++				if _, err := io.ReadFull(right, b); err != nil {
++					t.Fatal(err)
++				}
++				if h[0] != '$' {
++					t.Fatal("invalid interleaving")
++				}
++				return h[1], b
++			}
++			channel, body := read()
++			if enabled {
++				if channel != 3 {
++					t.Fatal("missing RTCP before RTP")
++				}
++				reports, err := rtcp.Unmarshal(body)
++				if err != nil || len(reports) != 2 {
++					t.Fatal("bad compound report", err)
++				}
++				sr := reports[0].(*rtcp.SenderReport)
++				if sr.RTPTime != 16000 || sr.SSRC != 40 {
++					t.Fatal("bad SR identity")
++				}
++				channel, body = read()
++			}
++			if channel != 2 {
++				t.Fatal("default behavior changed")
++			}
++			got := &rtp.Packet{}
++			if err := got.Unmarshal(body); err != nil {
++				t.Fatal(err)
++			}
++			if got.Timestamp != packet.Timestamp || got.SequenceNumber != packet.SequenceNumber || !bytes.Equal(got.Payload, packet.Payload) {
++				t.Fatal("media changed")
++			}
++			if !got.Marker || packet.Marker {
++				t.Fatal("audio marker mutated shared input")
++			}
++			select {
++			case <-done:
++			case <-time.After(time.Second):
++				t.Fatal("writer did not finish")
++			}
++		})
++	}
++}
++
++func TestSourceClockWrapAndExplicitEpoch(t *testing.T) {
++	for _, rate := range []uint32{90000, 16000} {
++		// Begin after three complete RTP wraps using an authoritative origin.
++		full := (uint64(3) << 32) + uint64(rate)
++		origin := full * 90000 / uint64(rate)
++		mapping := &sourceClockMapping{origin90k: origin, explicitOrigin: true}
++		sender := sourceClockSender{mapping: mapping, rate: rate}
++		sender.report(&rtp.Packet{Header: rtp.Header{Timestamp: uint32(full)}})
++		if sender.disabled || sender.unwrapped != full {
++			t.Fatalf("epoch not preserved rate=%d: %d", rate, sender.unwrapped)
++		}
++		// A subsequent genuine modulo wrap advances time rather than resetting it.
++		near := (uint64(4) << 32) - 100
++		mapping = &sourceClockMapping{origin90k: near * 90000 / uint64(rate), explicitOrigin: true}
++		sender = sourceClockSender{mapping: mapping, rate: rate}
++		sender.report(&rtp.Packet{Header: rtp.Header{Timestamp: uint32(near)}})
++		sender.report(&rtp.Packet{Header: rtp.Header{Timestamp: 100}})
++		if sender.disabled || sender.unwrapped != (uint64(4)<<32)+100 {
++			t.Fatal("wrap lost", rate, sender.unwrapped)
++		}
++	}
++}
++
++func TestSourceClockDiscontinuityPoisonsAllTracks(t *testing.T) {
++	for _, next := range []uint32{89999, 90000 + 11*90000} {
++		m := &sourceClockMapping{origin90k: 90000, explicitOrigin: true}
++		v := sourceClockSender{mapping: m, rate: 90000}
++		a := sourceClockSender{mapping: m, rate: 16000}
++		v.report(&rtp.Packet{Header: rtp.Header{Timestamp: 90000}})
++		v.report(&rtp.Packet{Header: rtp.Header{Timestamp: next}})
++		a.report(&rtp.Packet{Header: rtp.Header{Timestamp: 16000}})
++		if !m.failed.Load() || !v.disabled || !a.disabled {
++			t.Fatal("discontinuity continued")
++		}
++	}
++}
++
++func TestSourceClockExplicitOriginMismatchFails(t *testing.T) {
++	m := &sourceClockMapping{origin90k: 90 * 90000, explicitOrigin: true}
++	s := sourceClockSender{mapping: m, rate: 90000}
++	s.report(&rtp.Packet{Header: rtp.Header{Timestamp: 1}})
++	if !s.disabled || !m.failed.Load() {
++		t.Fatal("ambiguous epoch guessed")
++	}
++}
++
++func TestSourceClockDefersOnlyOptedInStart(t *testing.T) {
++	c := &Conn{}
++	called := false
++	if c.DeferStart(func() { called = true }) {
++		t.Fatal("default changed")
++	}
++	c.sourceClock = &sourceClockMapping{}
++	if !c.DeferStart(func() { called = true }) || called {
++		t.Fatal("started before PLAY")
++	}
++	c.sourceStart()
++	if !called {
++		t.Fatal("start missing")
++	}
++}
++
++func TestSourceClockFailureClosesWithoutBYE(t *testing.T) {
++	left, right := net.Pipe()
++	defer right.Close()
++	conn := NewServer(left)
++	conn.sourceClock = &sourceClockMapping{}
++	conn.state = StatePlay
++	conn.sourceEnded(io.ErrUnexpectedEOF)
++	b := make([]byte, 1)
++	n, err := right.Read(b)
++	if n != 0 || err != io.EOF || !conn.sourceClock.failed.Load() {
++		t.Fatal("failure became successful BYE", n, err)
++	}
++}
++
++func TestSourceClockBadPacketNeverReachesWire(t *testing.T) {
++	left, right := net.Pipe()
++	defer right.Close()
++	defer left.Close()
++	right.SetReadDeadline(time.Now().Add(2 * time.Second))
++	conn := NewServer(left)
++	conn.sourceClock = &sourceClockMapping{origin90k: 90000, explicitOrigin: true}
++	conn.state = StatePlay
++	conn.playOK = true
++	send := conn.packetWriter(&core.Codec{Name: core.CodecAAC, ClockRate: 16000, PayloadType: 97}, 2, 97)
++	done := make(chan struct{})
++	go func() {
++		send(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, Timestamp: 16000}, Payload: []byte{1}})
++		send(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, Timestamp: 15999}, Payload: []byte{2}})
++		close(done)
++	}()
++	for i := 0; i < 2; i++ {
++		h := make([]byte, 4)
++		if _, e := io.ReadFull(right, h); e != nil {
++			t.Fatal(e)
++		}
++		b := make([]byte, int(h[2])<<8|int(h[3]))
++		if _, e := io.ReadFull(right, b); e != nil {
++			t.Fatal(e)
++		}
++	}
++	b := make([]byte, 1)
++	n, err := right.Read(b)
++	if n != 0 || err != io.EOF || !conn.sourceClock.failed.Load() {
++		t.Fatal("invalid media escaped", n, err)
++	}
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("writer blocked")
++	}
++}
++
++func TestSourceClockStartupGateCancellationAndOverflow(t *testing.T) {
++	left, right := net.Pipe()
++	defer right.Close()
++	defer left.Close()
++	c := NewServer(left)
++	c.sourceClock = &sourceClockMapping{}
++	c.mode = core.ModePassiveConsumer
++	c.state = StateSetup
++	c.sourceHasVideo = true
++	c.sourceVideoReady = make(chan struct{})
++	c.sourceClosed = make(chan struct{})
++	codec := &core.Codec{Name: core.CodecAAC, ClockRate: 16000, PayloadType: 97}
++	media := &core.Media{Kind: core.KindAudio}
++	receiver := core.NewReceiver(media, codec)
++	if err := c.AddTrack(media, codec, receiver); err != nil {
++		t.Fatal(err)
++	}
++	sender := c.Senders[0]
++	for i := 0; i < 140; i++ {
++		sender.Input(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, Timestamp: uint32(16000 + i*1024)}, Payload: []byte{1}})
++	}
++	if !c.sourceClock.failed.Load() {
++		t.Fatal("bounded overflow concealed")
++	}
++	sender.Close()
++	sender.Wait()
++	right.SetReadDeadline(time.Now().Add(time.Second))
++	b := make([]byte, 1)
++	if n, e := right.Read(b); n != 0 || e != io.EOF {
++		t.Fatal("startup media escaped", n, e)
++	}
++}
++
++func TestSourceClockTrustedMetadata(t *testing.T) {
++	a, b := net.Pipe()
++	defer a.Close()
++	defer b.Close()
++	c := NewServer(a)
++	c.mode = core.ModePassiveConsumer
++	c.sourceClock = &sourceClockMapping{trusted: true}
++	codec := &core.Codec{Name: core.CodecAAC, ClockRate: 16000}
++	media := &core.Media{Kind: core.KindAudio, Codecs: []*core.Codec{codec}}
++	track := core.NewReceiver(media, codec)
++	if err := c.AddTrack(media, codec, track); err == nil {
++		t.Fatal("missing producer metadata accepted")
++	}
++	domain := &core.SourceClock{Origin90k: 90000}
++	domain.Position90k.Store(180000)
++	c.sourceClock = &sourceClockMapping{trusted: true}
++	track.SourceClock = domain
++	if err := c.AddTrack(media, codec, track); err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		for _, s := range c.Senders {
++			s.Close()
++			s.Wait()
++		}
++	}()
++	if c.sourceClock.descriptor != domain || c.sourceClock.origin90k != 180000 {
++		t.Fatal("origin not inherited")
++	}
++	other := core.NewReceiver(media, codec)
++	other.SourceClock = &core.SourceClock{Origin90k: 90000}
++	if err := c.AddTrack(media, codec, other); err == nil {
++		t.Fatal("unrelated producer with same timestamp accepted")
++	}
++}
++
++func TestSourceClockH264ParserBoundaryBeforeAudio(t *testing.T) {
++	left, right := net.Pipe()
++	defer left.Close()
++	defer right.Close()
++	c := NewServer(left)
++	c.sourceClock = &sourceClockMapping{}
++	c.mode = core.ModePassiveConsumer
++	c.sourceVideoReady = make(chan struct{})
++	c.sourceClosed = make(chan struct{})
++	vc := &core.Codec{Name: core.CodecH264, ClockRate: 90000, PayloadType: core.PayloadTypeRAW}
++	ac := &core.Codec{Name: core.CodecAAC, ClockRate: 16000, PayloadType: core.PayloadTypeRAW}
++	vm := &core.Media{Kind: core.KindVideo}
++	am := &core.Media{Kind: core.KindAudio}
++	video := core.NewReceiver(vm, vc)
++	audio := core.NewReceiver(am, ac)
++	if err := c.AddTrack(vm, vc, video); err != nil {
++		t.Fatal(err)
++	}
++	if err := c.AddTrack(am, ac, audio); err != nil {
++		t.Fatal(err)
++	}
++	type event struct {
++		channel byte
++		ts      uint32
++		marker  bool
++	}
++	events := make(chan event, 32)
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		for {
++			h := make([]byte, 4)
++			if _, e := io.ReadFull(right, h); e != nil {
++				return
++			}
++			b := make([]byte, int(h[2])<<8|int(h[3]))
++			if _, e := io.ReadFull(right, b); e != nil {
++				return
++			}
++			if h[1]%2 == 0 {
++				p := &rtp.Packet{}
++				if p.Unmarshal(b) == nil {
++					events <- event{h[1], p.Timestamp, p.Marker}
++				}
++			}
++		}
++	}()
++	packet := func(ts uint32, nal byte) *rtp.Packet {
++		return &rtp.Packet{Header: rtp.Header{Timestamp: ts}, Payload: []byte{0, 0, 0, 2, nal, 0x80}}
++	}
++	video.WriteRTP(packet(90000, 0x65))
++	audio.WriteRTP(&rtp.Packet{Header: rtp.Header{Timestamp: 16000}, Payload: []byte{1, 2, 3}})
++	select {
++	case e := <-events:
++		if e.channel != 0 || !e.marker {
++			t.Fatal("opening video absent", e)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("opening video blocked")
++	}
++	select {
++	case e := <-events:
++		t.Fatal("audio overtook parser boundary", e)
++	case <-time.After(20 * time.Millisecond):
++	}
++	video.WriteRTP(packet(99000, 0x41))
++	select {
++	case e := <-events:
++		if e.channel != 0 || e.ts != 99000 || !e.marker {
++			t.Fatal("original next video boundary absent", e)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("next video blocked")
++	}
++	select {
++	case e := <-events:
++		if e.channel != 2 {
++			t.Fatal("audio not released", e)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("audio held after parser boundary")
++	}
++	video.End(nil)
++	audio.End(nil)
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("finite writers not closed")
++	}
++}
++
++func TestSourceClockSingleH264AUFailsWithoutFalseCompletion(t *testing.T) {
++	left, right := net.Pipe()
++	defer left.Close()
++	defer right.Close()
++	c := NewServer(left)
++	c.sourceClock = &sourceClockMapping{}
++	c.mode = core.ModePassiveConsumer
++	c.sourceVideoReady = make(chan struct{})
++	c.sourceClosed = make(chan struct{})
++	vc := &core.Codec{Name: core.CodecH264, ClockRate: 90000, PayloadType: core.PayloadTypeRAW}
++	vm := &core.Media{Kind: core.KindVideo}
++	video := core.NewReceiver(vm, vc)
++	if err := c.AddTrack(vm, vc, video); err != nil {
++		t.Fatal(err)
++	}
++	done := make(chan []byte, 1)
++	go func() { b, _ := io.ReadAll(right); done <- b }()
++	video.WriteRTP(&rtp.Packet{Header: rtp.Header{Timestamp: 90000}, Payload: []byte{0, 0, 0, 2, 0x65, 0x80}})
++	video.End(nil)
++	select {
++	case b := <-done:
++		if !c.sourceClock.failed.Load() {
++			t.Fatal("single AU declared complete")
++		}
++		for len(b) >= 4 {
++			n := int(b[2])<<8 | int(b[3])
++			if len(b) < 4+n {
++				break
++			}
++			if b[1]%2 == 1 {
++				packets, _ := rtcp.Unmarshal(b[4 : 4+n])
++				for _, p := range packets {
++					if _, ok := p.(*rtcp.Goodbye); ok {
++						t.Fatal("success BYE after missing parser boundary")
++					}
++				}
++			}
++			b = b[4+n:]
++		}
++	case <-time.After(time.Second):
++		t.Fatal("single AU shutdown blocked")
++	}
++}
++
++func TestSourceClockAudioFirstTerminalJoin(t *testing.T) {
++	for _, pictures := range []int{0, 1, 2} {
++		for _, failed := range []bool{false, true} {
++			t.Run(fmt.Sprintf("pictures_%d_error_%t", pictures, failed), func(t *testing.T) {
++				left, right := net.Pipe()
++				defer left.Close()
++				defer right.Close()
++				c := NewServer(left)
++				c.sourceClock = &sourceClockMapping{}
++				c.mode = core.ModePassiveConsumer
++				c.sourceVideoReady = make(chan struct{})
++				c.sourceClosed = make(chan struct{})
++				am, vm := &core.Media{Kind: core.KindAudio}, &core.Media{Kind: core.KindVideo}
++				ac := &core.Codec{Name: core.CodecAAC, ClockRate: 16000, PayloadType: core.PayloadTypeRAW}
++				vc := &core.Codec{Name: core.CodecH264, ClockRate: 90000, PayloadType: core.PayloadTypeRAW}
++				audio, video := core.NewReceiver(am, ac), core.NewReceiver(vm, vc)
++				if err := c.AddTrack(am, ac, audio); err != nil {
++					t.Fatal(err)
++				}
++				if err := c.AddTrack(vm, vc, video); err != nil {
++					t.Fatal(err)
++				}
++				wire := make(chan []byte, 1)
++				go func() { body, _ := io.ReadAll(right); wire <- body }()
++				audio.WriteRTP(&rtp.Packet{Header: rtp.Header{Timestamp: 16000}, Payload: []byte{1, 2, 3}})
++				for i := 0; i < pictures; i++ {
++					video.WriteRTP(&rtp.Packet{Header: rtp.Header{Timestamp: uint32(90000 + i*9000)}, Payload: []byte{0, 0, 0, 2, 0x65, 0x80}})
++				}
++				var sourceError error
++				if failed {
++					sourceError = io.ErrClosedPipe
++				}
++				entered, audioDone, videoDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
++				onEnd := c.Senders[0].OnEnd
++				c.Senders[0].OnEnd = func(err error) { close(entered); onEnd(err) }
++				go func() { audio.End(sourceError); close(audioDone) }()
++				<-entered
++				go func() { video.End(sourceError); close(videoDone) }()
++				for _, done := range []chan struct{}{audioDone, videoDone} {
++					select {
++					case <-done:
++					case <-time.After(time.Second):
++						_ = c.Close()
++						t.Fatal("terminal sender did not join")
++					}
++				}
++				var body []byte
++				select {
++				case body = <-wire:
++				case <-time.After(time.Second):
++					t.Fatal("terminal socket remained open")
++				}
++				bye, audioPackets := 0, 0
++				for len(body) >= 4 {
++					size := int(body[2])<<8 | int(body[3])
++					if len(body) < size+4 {
++						t.Fatal("partial interleaved output")
++					}
++					if body[1] == 0 {
++						audioPackets++
++					}
++					if body[1]%2 == 1 {
++						packets, err := rtcp.Unmarshal(body[4 : 4+size])
++						if err != nil {
++							t.Fatal(err)
++						}
++						for _, packet := range packets {
++							if _, ok := packet.(*rtcp.Goodbye); ok {
++								bye++
++							}
++						}
++					}
++					body = body[4+size:]
++				}
++				if failed || pictures < 2 {
++					if !c.sourceClock.failed.Load() || bye != 0 {
++						t.Fatal("failed/short source declared successful")
++					}
++					if pictures < 2 && audioPackets != 0 {
++						t.Fatal("audio escaped before parser boundary")
++					}
++				} else if c.sourceClock.failed.Load() || bye != 2 || audioPackets != 1 {
++					t.Fatal("complete source did not drain both tracks", bye, audioPackets)
++				}
++			})
++		}
++	}
++}
+diff --git a/pkg/rtsp/source_policy_test.go b/pkg/rtsp/source_policy_test.go
+new file mode 100644
+index 0000000..b6a1a67
+--- /dev/null
++++ b/pkg/rtsp/source_policy_test.go
+@@ -0,0 +1,61 @@
++package rtsp
++
++import (
++	"bufio"
++	"net"
++	"net/url"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/AlexxIT/go2rtc/pkg/tcp"
++)
++
++func TestOneShotRTSPDeclarationRoundTrip(t *testing.T) {
++	for _, enabled := range []bool{false, true} {
++		t.Run(map[bool]string{false: "default", true: "declared"}[enabled], func(t *testing.T) {
++			a, b := net.Pipe()
++			defer a.Close()
++			defer b.Close()
++			server := NewServer(b)
++			server.Listen(func(msg any) {
++				if msg != MethodDescribe {
++					return
++				}
++				codec := &core.Codec{Name: core.CodecAAC, ClockRate: 16000, Channels: 1, PayloadType: core.PayloadTypeRAW}
++				media := &core.Media{Kind: core.KindAudio, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{codec}}
++				track := core.NewReceiver(media, codec)
++				if enabled {
++					track.SourcePolicy = &core.SourcePolicy{OneShot: true}
++				}
++				if err := server.AddTrack(media, codec, track); err != nil {
++					t.Error(err)
++				}
++			})
++			done := make(chan struct{})
++			go func() { _ = server.Accept(); close(done) }()
++			client := NewClient("rtsp://127.0.0.1/policy")
++			client.URL, _ = url.Parse(client.uri)
++			client.conn = a
++			client.reader = bufio.NewReader(a)
++			client.auth = tcp.NewAuth(nil)
++			if err := client.Describe(); err != nil {
++				t.Fatal(err)
++			}
++			if client.NoReconnect() != enabled {
++				t.Fatal("RTSP policy lost or default changed")
++			}
++			a.Close()
++			b.Close()
++			select {
++			case <-done:
++			case <-time.After(time.Second):
++				t.Fatal("server not joined")
++			}
++			for _, sender := range server.Senders {
++				sender.Close()
++				sender.Wait()
++			}
++		})
++	}
++}
+diff --git a/pkg/webrtc/api.go b/pkg/webrtc/api.go
+index 5551d65..d85518e 100644
+--- a/pkg/webrtc/api.go
++++ b/pkg/webrtc/api.go
+@@ -103,6 +103,8 @@ func NewServerAPI(network, address string, filters *Filters) (*webrtc.API, error
+ 	}
+ 
+ 	i := &interceptor.Registry{}
++	i.Add(&nativeReportFactory{})
++	i.Add(&rtxSequenceFactory{})
+ 	if err := webrtc.RegisterDefaultInterceptors(m, i); err != nil {
+ 		return nil, err
+ 	}
+@@ -269,7 +271,7 @@ func RegisterDefaultCodecs(m *webrtc.MediaEngine) error {
+ 		{"nack", ""},
+ 		{"nack", "pli"},
+ 	}
+-	for _, codec := range []webrtc.RTPCodecParameters{
++	for index, codec := range []webrtc.RTPCodecParameters{
+ 		{
+ 			RTPCodecCapability: webrtc.RTPCodecCapability{
+ 				MimeType:     webrtc.MimeTypeH264,
+@@ -310,6 +312,19 @@ func RegisterDefaultCodecs(m *webrtc.MediaEngine) error {
+ 		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+ 			return err
+ 		}
++		// Negotiated RTX carries late repairs on an independent SSRC/sequence
++		// space. Same-SSRC resends outside the receiver's SRTP replay window
++		// are inadmissible even when the NACK cache still holds the packet.
++		// Let Pion own RTX wrapping, cache lifetime and receiver restoration.
++		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
++			RTPCodecCapability: webrtc.RTPCodecCapability{
++				MimeType: webrtc.MimeTypeRTX, ClockRate: codec.ClockRate,
++				SDPFmtpLine: fmt.Sprintf("apt=%d", codec.PayloadType),
++			},
++			PayloadType: webrtc.PayloadType(102 + index),
++		}, webrtc.RTPCodecTypeVideo); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	return nil
+diff --git a/pkg/webrtc/conn.go b/pkg/webrtc/conn.go
+index 924fd55..f811455 100644
+--- a/pkg/webrtc/conn.go
++++ b/pkg/webrtc/conn.go
+@@ -2,8 +2,11 @@ package webrtc
+ 
+ import (
+ 	"encoding/json"
++	"errors"
+ 	"fmt"
+ 	"strings"
++	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/core"
+@@ -22,6 +25,18 @@ type Conn struct {
+ 
+ 	offer  string
+ 	closed core.Waiter
++
++	nativeOneShot          atomic.Bool
++	nativeFailed           atomic.Bool
++	nativeStartMu          sync.Mutex
++	nativeReady            bool
++	nativeClosed           bool
++	nativeStart            func()
++	nativeGates            []*core.StartGate
++	nativeFeedbackWG       sync.WaitGroup
++	nativeFeedbackOnce     sync.Once
++	nativeFeedbackPackets  atomic.Uint64
++	nativePeerCloseStarted atomic.Bool
+ }
+ 
+ func NewConn(pc *webrtc.PeerConnection) *Conn {
+@@ -137,6 +152,7 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
+ 			for _, sender := range c.Senders {
+ 				sender.Start()
+ 			}
++			c.nativeConnected()
+ 		case webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+ 			// disconnect event comes earlier, than failed
+ 			// but it comes only for success connections
+@@ -148,12 +164,28 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
+ }
+ 
+ func (c *Conn) MarshalJSON() ([]byte, error) {
+-	return json.Marshal(c.Connection)
++	return json.Marshal(struct {
++		core.Connection
++		NativeDeliveryFailed  bool   `json:"native_delivery_failed,omitempty"`
++		NativeFeedbackPackets uint64 `json:"rtcp_feedback_packets,omitempty"`
++	}{c.Connection, c.nativeFailed.Load(), c.nativeFeedbackPackets.Load()})
+ }
+ 
+ func (c *Conn) Close() error {
+-	c.closed.Done(nil)
+-	return c.pc.Close()
++	// Pion emits Closed while closing; its callback can re-enter Close.
++	// Only the first caller owns peer shutdown and joins feedback readers.
++	if !c.nativePeerCloseStarted.CompareAndSwap(false, true) {
++		return nil
++	}
++	c.cancelNativeStart()
++	if c.nativeFailed.Load() {
++		c.closed.Done(errors.New("webrtc: native delivery queue overflow"))
++	} else {
++		c.closed.Done(nil)
++	}
++	err := c.pc.Close()
++	c.nativeFeedbackWG.Wait()
++	return err
+ }
+ 
+ func (c *Conn) AddCandidate(candidate string) error {
+diff --git a/pkg/webrtc/consumer.go b/pkg/webrtc/consumer.go
+index 767394d..83eaea0 100644
+--- a/pkg/webrtc/consumer.go
++++ b/pkg/webrtc/consumer.go
+@@ -2,6 +2,7 @@ package webrtc
+ 
+ import (
+ 	"errors"
++	"time"
+ 
+ 	"github.com/AlexxIT/go2rtc/pkg/core"
+ 	"github.com/AlexxIT/go2rtc/pkg/h264"
+@@ -16,6 +17,10 @@ func (c *Conn) GetMedias() []*core.Media {
+ 
+ func (c *Conn) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiver) error {
+ 	core.Assert(media.Direction == core.DirectionSendonly)
++	if c.Mode == core.ModePassiveConsumer && track.SourcePolicy != nil && track.SourcePolicy.OneShot {
++		c.nativeOneShot.Store(true)
++		c.nativeGate(track.SourcePolicy.AVReady)
++	}
+ 
+ 	for _, sender := range c.Senders {
+ 		if sender.Codec == codec {
+@@ -37,13 +42,38 @@ func (c *Conn) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiv
+ 		return errors.New("webrtc: can't get track")
+ 	}
+ 
++	if track.SourcePolicy != nil && track.SourcePolicy.AVReady != nil {
++		if track.SourceClock == nil {
++			return errors.New("native AV source clock absent")
++		}
++		if err := localTrack.nativeClock(track.SourceClock, track.Codec.ClockRate); err != nil {
++			return err
++		}
++	}
+ 	payloadType := codec.PayloadType
+ 
+ 	sender := core.NewSender(media, codec)
++	sender.OnDrop = c.nativeQueueOverflow
++	legacyInput := sender.Input
++	sender.Input = func(packet *core.Packet) {
++		if c.nativeFailed.Load() {
++			return
++		}
++		if c.nativeOneShot.Load() {
++			sender.InputWithTimeout(packet, 100*time.Millisecond)
++		} else {
++			legacyInput(packet)
++		}
++	}
+ 	sender.Handler = func(packet *rtp.Packet) {
++		if c.nativeFailed.Load() {
++			return
++		}
+ 		c.Send += packet.MarshalSize()
+ 		//important to send with remote PayloadType
+-		_ = localTrack.WriteRTP(payloadType, packet)
++		if err := localTrack.WriteRTP(payloadType, packet); err != nil {
++			c.nativeQueueOverflow()
++		}
+ 	}
+ 
+ 	switch track.Codec.Name {
+diff --git a/pkg/webrtc/native_auto_feedback_test.go b/pkg/webrtc/native_auto_feedback_test.go
+new file mode 100644
+index 0000000..5b6d8b4
+--- /dev/null
++++ b/pkg/webrtc/native_auto_feedback_test.go
+@@ -0,0 +1,335 @@
++package webrtc
++
++import (
++	"bytes"
++	"encoding/binary"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/ice/v4"
++	"github.com/pion/interceptor"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++	pion "github.com/pion/webrtc/v4"
++)
++
++// A receiver must be able to repair a burst after its primary SRTP replay
++// window advances, without increasing that window or the retransmission cache.
++func TestNativeAutomaticRecovery(t *testing.T) {
++	for _, profile := range []struct{ name, codec, fmtp string }{
++		{"H264-baseline", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
++		{"H264-constrained", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
++		{"H264-high", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032"},
++		{"H265", core.CodecH265, ""},
++	} {
++		for _, scenario := range []struct {
++			name           string
++			rtx            bool
++			total, missing uint16
++			recovered      bool
++			continuation   bool
++		}{
++			{"automatic_late_burst_and_lost_repair", true, 256, 74, true, true},
++			{"terminal_repair_without_more_primary", true, 256, 74, true, false},
++			{"no_rtx_early_feedback", false, 32, 16, true, false},
++			{"no_rtx_keeps_replay_protection", false, 256, 74, false, false},
++		} {
++			t.Run(profile.name+"/"+scenario.name, func(t *testing.T) {
++				nativeAutomaticRecovery(t, profile.codec, profile.fmtp, scenario.rtx, scenario.total, scenario.missing, scenario.recovered, scenario.continuation)
++			})
++		}
++	}
++}
++
++func nativeAutomaticRecovery(t *testing.T, codec, fmtp string, offerRTX bool, total, missingCount uint16, recovered, continuation bool) {
++	old := OnNewListener
++	OnNewListener = func(v any) {
++		if closer, ok := v.(io.Closer); ok {
++			t.Cleanup(func() { _ = closer.Close() })
++		}
++	}
++	api, err := NewServerAPI("udp", "127.0.0.1:0", &Filters{Loopback: true, Interfaces: []string{"lo"}, Networks: []string{"udp4"}})
++	OnNewListener = old
++	if err != nil {
++		t.Fatal(err)
++	}
++	pc, err := api.NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := NewConn(pc)
++	c.Mode = core.ModePassiveConsumer
++	defer c.Close()
++	m := &pion.MediaEngine{}
++	mime, nal := pion.MimeTypeH265, []byte{0x26, 1, 5, 6, 7}
++	if codec == core.CodecH264 {
++		mime = pion.MimeTypeH264
++		nal = []byte{0x65, 5, 6, 7}
++	}
++	if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: mime, ClockRate: 90000, SDPFmtpLine: fmtp, RTCPFeedback: []pion.RTCPFeedback{{Type: "nack"}}}, PayloadType: 96}, pion.RTPCodecTypeVideo); err != nil {
++		t.Fatal(err)
++	}
++	if offerRTX {
++		if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: pion.MimeTypeRTX, ClockRate: 90000, SDPFmtpLine: "apt=96"}, PayloadType: 97}, pion.RTPCodecTypeVideo); err != nil {
++			t.Fatal(err)
++		}
++	}
++	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	loss := &nativeAutoLossConn{PacketConn: socket, dropped: map[uint16]bool{}, last: missingCount + 1, dropFirstRTX: offerRTX}
++	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: loss})
++	defer mux.Close()
++	se := pion.SettingEngine{}
++	se.SetICEUDPMux(mux)
++	se.SetIncludeLoopbackCandidate(true)
++	se.SetInterfaceFilter(func(name string) bool { return name == "lo" })
++	se.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
++	gate := &automaticFeedbackGate{}
++	registry := &interceptor.Registry{}
++	registry.Add(gate)
++	if err = pion.RegisterDefaultInterceptors(m, registry); err != nil {
++		t.Fatal(err)
++	}
++	remote, err := pion.NewAPI(pion.WithMediaEngine(m), pion.WithSettingEngine(se), pion.WithInterceptorRegistry(registry)).NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer remote.Close()
++	connected := make(chan struct{}, 1)
++	remote.OnConnectionStateChange(func(state pion.PeerConnectionState) {
++		if state == pion.PeerConnectionStateConnected {
++			select {
++			case connected <- struct{}{}:
++			default:
++			}
++		}
++	})
++	type receipt struct {
++		found map[uint16][]byte
++		err   error
++	}
++	result := make(chan receipt, 1)
++	remote.OnTrack(func(track *pion.TrackRemote, _ *pion.RTPReceiver) {
++		_ = track.SetReadDeadline(time.Now().Add(3 * time.Second))
++		found := map[uint16][]byte{}
++		requested := false
++		highest := uint16(0)
++		for {
++			packet, _, readErr := track.ReadRTP()
++			if readErr != nil {
++				result <- receipt{found, readErr}
++				return
++			}
++			found[packet.SequenceNumber] = append([]byte(nil), packet.Payload...)
++			if packet.SequenceNumber > highest {
++				highest = packet.SequenceNumber
++			}
++			if highest >= total && !requested {
++				gate.ready.Store(true)
++				requested = true
++				_ = track.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
++			}
++			complete := requested
++			for seq := uint16(1); complete && seq <= total; seq++ {
++				_, complete = found[seq]
++			}
++			if complete {
++				result <- receipt{found, nil}
++				return
++			}
++		}
++	})
++	if _, err = remote.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
++		t.Fatal(err)
++	}
++	offer, err := remote.CreateOffer(nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	gathered := pion.GatheringCompletePromise(remote)
++	if err = remote.SetLocalDescription(offer); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = c.SetOffer(remote.LocalDescription().SDP); err != nil {
++		t.Fatal(err)
++	}
++	media := c.Medias[0]
++	inputCodec := &core.Codec{Name: codec, ClockRate: 90000, PayloadType: 96}
++	input := core.NewReceiver(&core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{inputCodec}}, inputCodec)
++	input.SourcePolicy = &core.SourcePolicy{OneShot: true}
++	if err = c.AddTrack(media, media.Codecs[0], input); err != nil {
++		t.Fatal(err)
++	}
++	gathered = pion.GatheringCompletePromise(pc)
++	if _, err = c.GetAnswer(); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = remote.SetRemoteDescription(*pc.LocalDescription()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-connected:
++	case <-time.After(3 * time.Second):
++		t.Fatal("connect timeout")
++	}
++	writePacket := func(i uint16) {
++		payload := append(append([]byte(nil), nal...), byte(i>>8), byte(i))
++		input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: i, Timestamp: uint32(i) * 3000}, Payload: payload})
++	}
++	for i := uint16(1); i <= total; i++ {
++		writePacket(i)
++	}
++	// Continue ordinary media for the running-source case. The repair-only
++	// control disables this path so it cannot mask a blocked primary read.
++	stop := make(chan struct{})
++	var continuing sync.WaitGroup
++	continuing.Add(1)
++	go func() {
++		defer continuing.Done()
++		if !continuation {
++			return
++		}
++		for i := total + 1; i <= total+100; i++ {
++			select {
++			case <-stop:
++				return
++			case <-time.After(5 * time.Millisecond):
++				writePacket(i)
++			}
++		}
++	}()
++	defer func() { close(stop); continuing.Wait() }()
++
++	select {
++	case got := <-result:
++		loss.mu.Lock()
++		dropped, rtx, resent, lostRepair := len(loss.dropped), loss.rtx, loss.resent, loss.rtxDropped
++		loss.mu.Unlock()
++		if dropped != int(missingCount) {
++			t.Fatalf("drop count=%d", dropped)
++		}
++		if recovered {
++			if got.err != nil {
++				t.Fatalf("late burst unrecovered: unique=%d want=%d err=%v feedback=%d rtx=%d", len(got.found), total, got.err, c.nativeFeedbackPackets.Load(), rtx)
++			}
++			if offerRTX {
++				if rtx <= int(missingCount) || !lostRepair {
++					t.Fatalf("RTX packets=%d lost-first-repair=%v", rtx, lostRepair)
++				}
++			} else if rtx != 0 || resent < int(missingCount) {
++				t.Fatalf("early same-SSRC recovery: RTX=%d resends=%d", rtx, resent)
++			}
++		} else {
++			var timeout net.Error
++			if !errors.As(got.err, &timeout) || !timeout.Timeout() {
++				t.Fatalf("expected bounded timeout, got %v", got.err)
++			}
++			last := uint16(0)
++			for seq := range got.found {
++				if seq > last {
++					last = seq
++				}
++			}
++			if len(got.found) != int(last)-int(missingCount) {
++				t.Fatalf("unexpected recovery/extra loss: unique=%d last=%d", len(got.found), last)
++			}
++			if offerRTX && rtx != 0 {
++				t.Fatalf("expired cache produced %d RTX packets", rtx)
++			}
++			if !offerRTX && resent < int(missingCount) {
++				t.Fatalf("same-SSRC repairs=%d want>=%d", resent, missingCount)
++			}
++		}
++		for seq, payload := range got.found {
++			expected := append(append([]byte(nil), nal...), byte(seq>>8), byte(seq))
++			if !bytes.Equal(payload, expected) {
++				t.Fatalf("payload changed seq=%d: %x != %x", seq, payload, expected)
++			}
++		}
++		if c.nativeFeedbackPackets.Load() == 0 {
++			t.Fatal("NACK not read by native sender")
++		}
++	case <-time.After(4 * time.Second):
++		t.Fatal("receiver timeout")
++	}
++}
++
++type nativeAutoLossConn struct {
++	net.PacketConn
++	mu           sync.Mutex
++	dropped      map[uint16]bool
++	rtx          int
++	resent       int
++	last         uint16
++	dropFirstRTX bool
++	rtxDropped   bool
++}
++
++func (c *nativeAutoLossConn) ReadFrom(b []byte) (int, net.Addr, error) {
++	for {
++		n, addr, err := c.PacketConn.ReadFrom(b)
++		if err != nil {
++			return n, addr, err
++		}
++		if n >= 12 && b[0]>>6 == 2 {
++			pt := b[1] & 0x7f
++			seq := binary.BigEndian.Uint16(b[2:4])
++			c.mu.Lock()
++			drop := false
++			if pt == 96 && seq >= 2 && seq <= c.last {
++				if !c.dropped[seq] {
++					c.dropped[seq] = true
++					drop = true
++				} else {
++					c.resent++
++				}
++			}
++			if pt == 97 {
++				c.rtx++
++				if c.dropFirstRTX && !c.rtxDropped {
++					c.rtxDropped = true
++					drop = true
++				}
++			}
++			c.mu.Unlock()
++			if drop {
++				continue
++			}
++		}
++		return n, addr, nil
++	}
++}
++
++type automaticFeedbackGate struct {
++	interceptor.NoOp
++	ready atomic.Bool
++}
++
++func (g *automaticFeedbackGate) NewInterceptor(string) (interceptor.Interceptor, error) {
++	return g, nil
++}
++func (g *automaticFeedbackGate) BindRTCPWriter(writer interceptor.RTCPWriter) interceptor.RTCPWriter {
++	return interceptor.RTCPWriterFunc(func(packets []rtcp.Packet, attributes interceptor.Attributes) (int, error) {
++		out := make([]rtcp.Packet, 0, len(packets))
++		for _, packet := range packets {
++			if _, ok := packet.(*rtcp.TransportLayerNack); ok && !g.ready.Load() {
++				continue
++			}
++			out = append(out, packet)
++		}
++		if len(out) == 0 {
++			return 0, nil
++		}
++		return writer.Write(out, attributes)
++	})
++}
+diff --git a/pkg/webrtc/native_feedback_test.go b/pkg/webrtc/native_feedback_test.go
+new file mode 100644
+index 0000000..8479d54
+--- /dev/null
++++ b/pkg/webrtc/native_feedback_test.go
+@@ -0,0 +1,147 @@
++package webrtc
++
++import (
++	"bytes"
++	"encoding/binary"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/ice/v4"
++	"github.com/pion/rtp"
++	pion "github.com/pion/webrtc/v4"
++	"io"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestNativeFeedbackRecoversRequestedPacket(t *testing.T) {
++	old := OnNewListener
++	OnNewListener = func(v any) {
++		if c, ok := v.(io.Closer); ok {
++			t.Cleanup(func() { _ = c.Close() })
++		}
++	}
++	api, err := NewServerAPI("udp", "127.0.0.1:0", &Filters{Loopback: true, Interfaces: []string{"lo"}, Networks: []string{"udp4"}})
++	OnNewListener = old
++	if err != nil {
++		t.Fatal(err)
++	}
++	pc, err := api.NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := NewConn(pc)
++	c.Mode = core.ModePassiveConsumer
++	defer c.Close()
++	m := &pion.MediaEngine{}
++	if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: "video/H265", ClockRate: 90000, RTCPFeedback: []pion.RTCPFeedback{{Type: "nack"}}}, PayloadType: 96}, pion.RTPCodecTypeVideo); err != nil {
++		t.Fatal(err)
++	}
++	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	loss := &nativeLossConn{PacketConn: socket}
++	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: loss})
++	defer mux.Close()
++	se := pion.SettingEngine{}
++	se.SetICEUDPMux(mux)
++	se.SetIncludeLoopbackCandidate(true)
++	se.SetInterfaceFilter(func(name string) bool { return name == "lo" })
++	se.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
++	remote, err := pion.NewAPI(pion.WithMediaEngine(m), pion.WithSettingEngine(se)).NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer remote.Close()
++	connected := make(chan struct{}, 1)
++	remote.OnConnectionStateChange(func(s pion.PeerConnectionState) {
++		if s == pion.PeerConnectionStateConnected {
++			connected <- struct{}{}
++		}
++	})
++	result := make(chan error, 1)
++	remote.OnTrack(func(track *pion.TrackRemote, _ *pion.RTPReceiver) {
++		_ = track.SetReadDeadline(time.Now().Add(2 * time.Second))
++		found := map[uint16][]byte{}
++		for len(found) < 8 {
++			packet, _, e := track.ReadRTP()
++			if e != nil {
++				result <- e
++				return
++			}
++			found[packet.SequenceNumber] = packet.Payload
++		}
++		if !bytes.Equal(found[1], found[2]) || !bytes.Equal(found[2], found[3]) {
++			result <- io.ErrUnexpectedEOF
++			return
++		}
++		result <- nil
++	})
++	_, err = remote.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly})
++	if err != nil {
++		t.Fatal(err)
++	}
++	offer, err := remote.CreateOffer(nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	done := pion.GatheringCompletePromise(remote)
++	if err = remote.SetLocalDescription(offer); err != nil {
++		t.Fatal(err)
++	}
++	<-done
++	if err = c.SetOffer(remote.LocalDescription().SDP); err != nil {
++		t.Fatal(err)
++	}
++	media := c.Medias[0]
++	codec := &core.Codec{Name: core.CodecH265, ClockRate: 90000, PayloadType: 96}
++	input := core.NewReceiver(&core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{codec}}, codec)
++	input.SourcePolicy = &core.SourcePolicy{OneShot: true}
++	if err = c.AddTrack(media, media.Codecs[0], input); err != nil {
++		t.Fatal(err)
++	}
++	gathered := pion.GatheringCompletePromise(pc)
++	if _, err = c.GetAnswer(); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = remote.SetRemoteDescription(*pc.LocalDescription()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-connected:
++	case <-time.After(3 * time.Second):
++		t.Fatal("loopback connection timeout")
++	}
++	t.Logf("sender codecs: %+v", pc.GetSenders()[0].GetParameters().Codecs)
++	for i := 0; i < 8; i++ {
++		input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: uint16(i + 1), Timestamp: uint32(90000 + i*6000)}, Payload: []byte{0x26, 1, 5, 6, 7}})
++	}
++	select {
++	case err = <-result:
++		if err != nil {
++			t.Fatalf("NACK recovery: %v feedback=%d", err, c.nativeFeedbackPackets.Load())
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatalf("NACK recovery timeout feedback=%d", c.nativeFeedbackPackets.Load())
++	}
++}
++
++type nativeLossConn struct {
++	net.PacketConn
++	dropped atomic.Bool
++}
++
++func (c *nativeLossConn) ReadFrom(b []byte) (int, net.Addr, error) {
++	for {
++		n, addr, err := c.PacketConn.ReadFrom(b)
++		if err != nil {
++			return n, addr, err
++		}
++		if n >= 12 && b[0]>>6 == 2 && b[1]&0x7f == 96 && binary.BigEndian.Uint16(b[2:4]) == 2 && c.dropped.CompareAndSwap(false, true) {
++			continue
++		}
++		return n, addr, nil
++	}
++}
+diff --git a/pkg/webrtc/native_recovery_test.go b/pkg/webrtc/native_recovery_test.go
+new file mode 100644
+index 0000000..1d5dbb2
+--- /dev/null
++++ b/pkg/webrtc/native_recovery_test.go
+@@ -0,0 +1,318 @@
++package webrtc
++
++import (
++	"bytes"
++	"encoding/binary"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/ice/v4"
++	"github.com/pion/interceptor"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++	pion "github.com/pion/webrtc/v4"
++)
++
++// A receiver must be able to repair a burst after its primary SRTP replay
++// window advances, without increasing that window or the retransmission cache.
++func TestNativeRecoveryLateFeedback(t *testing.T) {
++	for _, profile := range []struct{ name, codec, fmtp string }{
++		{"H264-baseline", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
++		{"H264-constrained", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
++		{"H264-high", core.CodecH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032"},
++		{"H265", core.CodecH265, ""},
++	} {
++		for _, scenario := range []struct {
++			name           string
++			rtx            bool
++			total, missing uint16
++			recovered      bool
++		}{
++			{"negotiated_rtx_late_burst_and_lost_repair", true, 256, 74, true},
++			{"no_rtx_early_feedback", false, 32, 16, true},
++			{"no_rtx_keeps_replay_protection", false, 256, 74, false},
++			{"expired_cache_stays_bounded", true, 1200, 74, false},
++		} {
++			t.Run(profile.name+"/"+scenario.name, func(t *testing.T) {
++				nativeRecoveryLateFeedback(t, profile.codec, profile.fmtp, scenario.rtx, scenario.total, scenario.missing, scenario.recovered)
++			})
++		}
++	}
++}
++
++func nativeRecoveryLateFeedback(t *testing.T, codec, fmtp string, offerRTX bool, total, missingCount uint16, recovered bool) {
++	old := OnNewListener
++	OnNewListener = func(v any) {
++		if closer, ok := v.(io.Closer); ok {
++			t.Cleanup(func() { _ = closer.Close() })
++		}
++	}
++	api, err := NewServerAPI("udp", "127.0.0.1:0", &Filters{Loopback: true, Interfaces: []string{"lo"}, Networks: []string{"udp4"}})
++	OnNewListener = old
++	if err != nil {
++		t.Fatal(err)
++	}
++	pc, err := api.NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := NewConn(pc)
++	c.Mode = core.ModePassiveConsumer
++	defer c.Close()
++	m := &pion.MediaEngine{}
++	mime, nal := pion.MimeTypeH265, []byte{0x26, 1, 5, 6, 7}
++	if codec == core.CodecH264 {
++		mime = pion.MimeTypeH264
++		nal = []byte{0x65, 5, 6, 7}
++	}
++	if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: mime, ClockRate: 90000, SDPFmtpLine: fmtp, RTCPFeedback: []pion.RTCPFeedback{{Type: "nack"}}}, PayloadType: 96}, pion.RTPCodecTypeVideo); err != nil {
++		t.Fatal(err)
++	}
++	if offerRTX {
++		if err = m.RegisterCodec(pion.RTPCodecParameters{RTPCodecCapability: pion.RTPCodecCapability{MimeType: pion.MimeTypeRTX, ClockRate: 90000, SDPFmtpLine: "apt=96"}, PayloadType: 97}, pion.RTPCodecTypeVideo); err != nil {
++			t.Fatal(err)
++		}
++	}
++	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	loss := &nativeBurstLossConn{PacketConn: socket, dropped: map[uint16]bool{}, last: missingCount + 1, dropFirstRTX: offerRTX}
++	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: loss})
++	defer mux.Close()
++	se := pion.SettingEngine{}
++	se.SetICEUDPMux(mux)
++	se.SetIncludeLoopbackCandidate(true)
++	se.SetInterfaceFilter(func(name string) bool { return name == "lo" })
++	se.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeUDP4})
++	// Manual feedback is generated from the receiver's restored original
++	// sequence inventory. Delay its first request past the unchanged SRTP
++	// replay window, and retry only still-missing packets, not repaired ones.
++	remote, err := pion.NewAPI(pion.WithMediaEngine(m), pion.WithSettingEngine(se), pion.WithInterceptorRegistry(&interceptor.Registry{})).NewPeerConnection(pion.Configuration{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer remote.Close()
++	connected := make(chan struct{}, 1)
++	remote.OnConnectionStateChange(func(state pion.PeerConnectionState) {
++		if state == pion.PeerConnectionStateConnected {
++			select {
++			case connected <- struct{}{}:
++			default:
++			}
++		}
++	})
++	type receipt struct {
++		found map[uint16][]byte
++		err   error
++	}
++	result := make(chan receipt, 1)
++	remote.OnTrack(func(track *pion.TrackRemote, _ *pion.RTPReceiver) {
++		_ = track.SetReadDeadline(time.Now().Add(3 * time.Second))
++		found := map[uint16][]byte{}
++		requested := false
++		highest := uint16(0)
++		var lastNack time.Time
++		for {
++			packet, _, readErr := track.ReadRTP()
++			if readErr != nil {
++				result <- receipt{found, readErr}
++				return
++			}
++			found[packet.SequenceNumber] = append([]byte(nil), packet.Payload...)
++			if packet.SequenceNumber > highest {
++				highest = packet.SequenceNumber
++			}
++			if highest >= total && time.Since(lastNack) >= 75*time.Millisecond {
++				missing := make([]uint16, 0, missingCount)
++				for seq := uint16(2); seq <= missingCount+1; seq++ {
++					if _, ok := found[seq]; !ok {
++						missing = append(missing, seq)
++					}
++				}
++				if len(missing) > 0 {
++					if writeErr := remote.WriteRTCP([]rtcp.Packet{&rtcp.TransportLayerNack{MediaSSRC: uint32(track.SSRC()), Nacks: rtcp.NackPairsFromSequenceNumbers(missing)}}); writeErr != nil {
++						result <- receipt{found, writeErr}
++						return
++					}
++					lastNack = time.Now()
++				}
++				if !requested {
++					_ = track.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
++					requested = true
++				}
++			}
++			complete := requested
++			for seq := uint16(1); complete && seq <= total; seq++ {
++				_, complete = found[seq]
++			}
++			if complete {
++				result <- receipt{found, nil}
++				return
++			}
++		}
++	})
++	if _, err = remote.AddTransceiverFromKind(pion.RTPCodecTypeVideo, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
++		t.Fatal(err)
++	}
++	offer, err := remote.CreateOffer(nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	gathered := pion.GatheringCompletePromise(remote)
++	if err = remote.SetLocalDescription(offer); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = c.SetOffer(remote.LocalDescription().SDP); err != nil {
++		t.Fatal(err)
++	}
++	media := c.Medias[0]
++	inputCodec := &core.Codec{Name: codec, ClockRate: 90000, PayloadType: 96}
++	input := core.NewReceiver(&core.Media{Kind: core.KindVideo, Direction: core.DirectionRecvonly, Codecs: []*core.Codec{inputCodec}}, inputCodec)
++	input.SourcePolicy = &core.SourcePolicy{OneShot: true}
++	if err = c.AddTrack(media, media.Codecs[0], input); err != nil {
++		t.Fatal(err)
++	}
++	gathered = pion.GatheringCompletePromise(pc)
++	if _, err = c.GetAnswer(); err != nil {
++		t.Fatal(err)
++	}
++	<-gathered
++	if err = remote.SetRemoteDescription(*pc.LocalDescription()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-connected:
++	case <-time.After(3 * time.Second):
++		t.Fatal("connect timeout")
++	}
++	writePacket := func(i uint16) {
++		payload := append(append([]byte(nil), nal...), byte(i>>8), byte(i))
++		input.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: i, Timestamp: uint32(i) * 3000}, Payload: payload})
++	}
++	for i := uint16(1); i <= total; i++ {
++		writePacket(i)
++	}
++	// Continue ordinary media after feedback, as a running source does. Pion
++	// polls its bounded repair queue between primary reads; do not enlarge it.
++	stop := make(chan struct{})
++	var continuing sync.WaitGroup
++	continuing.Add(1)
++	go func() {
++		defer continuing.Done()
++		for i := total + 1; i <= total+100; i++ {
++			select {
++			case <-stop:
++				return
++			case <-time.After(5 * time.Millisecond):
++				writePacket(i)
++			}
++		}
++	}()
++	defer func() { close(stop); continuing.Wait() }()
++
++	select {
++	case got := <-result:
++		loss.mu.Lock()
++		dropped, rtx, resent, lostRepair := len(loss.dropped), loss.rtx, loss.resent, loss.rtxDropped
++		loss.mu.Unlock()
++		if dropped != int(missingCount) {
++			t.Fatalf("drop count=%d", dropped)
++		}
++		if recovered {
++			if got.err != nil {
++				t.Fatalf("late burst unrecovered: unique=%d want=%d err=%v feedback=%d rtx=%d", len(got.found), total, got.err, c.nativeFeedbackPackets.Load(), rtx)
++			}
++			if offerRTX {
++				if rtx <= int(missingCount) || !lostRepair {
++					t.Fatalf("RTX packets=%d lost-first-repair=%v", rtx, lostRepair)
++				}
++			} else if rtx != 0 || resent < int(missingCount) {
++				t.Fatalf("early same-SSRC recovery: RTX=%d resends=%d", rtx, resent)
++			}
++		} else {
++			var timeout net.Error
++			if !errors.As(got.err, &timeout) || !timeout.Timeout() {
++				t.Fatalf("expected bounded timeout, got %v", got.err)
++			}
++			last := uint16(0)
++			for seq := range got.found {
++				if seq > last {
++					last = seq
++				}
++			}
++			if len(got.found) != int(last)-int(missingCount) {
++				t.Fatalf("unexpected recovery/extra loss: unique=%d last=%d", len(got.found), last)
++			}
++			if offerRTX && rtx != 0 {
++				t.Fatalf("expired cache produced %d RTX packets", rtx)
++			}
++			if !offerRTX && resent < int(missingCount) {
++				t.Fatalf("same-SSRC repairs=%d want>=%d", resent, missingCount)
++			}
++		}
++		for seq, payload := range got.found {
++			expected := append(append([]byte(nil), nal...), byte(seq>>8), byte(seq))
++			if !bytes.Equal(payload, expected) {
++				t.Fatalf("payload changed seq=%d: %x != %x", seq, payload, expected)
++			}
++		}
++		if c.nativeFeedbackPackets.Load() == 0 {
++			t.Fatal("NACK not read by native sender")
++		}
++	case <-time.After(4 * time.Second):
++		t.Fatal("receiver timeout")
++	}
++}
++
++type nativeBurstLossConn struct {
++	net.PacketConn
++	mu           sync.Mutex
++	dropped      map[uint16]bool
++	rtx          int
++	resent       int
++	last         uint16
++	dropFirstRTX bool
++	rtxDropped   bool
++}
++
++func (c *nativeBurstLossConn) ReadFrom(b []byte) (int, net.Addr, error) {
++	for {
++		n, addr, err := c.PacketConn.ReadFrom(b)
++		if err != nil {
++			return n, addr, err
++		}
++		if n >= 12 && b[0]>>6 == 2 {
++			pt := b[1] & 0x7f
++			seq := binary.BigEndian.Uint16(b[2:4])
++			c.mu.Lock()
++			drop := false
++			if pt == 96 && seq >= 2 && seq <= c.last {
++				if !c.dropped[seq] {
++					c.dropped[seq] = true
++					drop = true
++				} else {
++					c.resent++
++				}
++			}
++			if pt == 97 {
++				c.rtx++
++				if c.dropFirstRTX && !c.rtxDropped {
++					c.rtxDropped = true
++					drop = true
++				}
++			}
++			c.mu.Unlock()
++			if drop {
++				continue
++			}
++		}
++		return n, addr, nil
++	}
++}
+diff --git a/pkg/webrtc/native_report.go b/pkg/webrtc/native_report.go
+new file mode 100644
+index 0000000..670b5e9
+--- /dev/null
++++ b/pkg/webrtc/native_report.go
+@@ -0,0 +1,105 @@
++package webrtc
++
++import (
++	"errors"
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/interceptor"
++	"github.com/pion/rtcp"
++	"sync"
++)
++
++var nativeReportBindings sync.Map
++
++type nativeReportBinding struct {
++	mu       sync.Mutex
++	clock    *core.SourceClock
++	rate     uint32
++	seen     bool
++	raw      uint32
++	extended uint64
++}
++
++func (b *nativeReportBinding) register(ssrc uint32) error {
++	old, loaded := nativeReportBindings.LoadOrStore(ssrc, b)
++	if loaded && old != b {
++		return errors.New("native SSRC ownership conflict")
++	}
++	return nil
++}
++func (b *nativeReportBinding) observe(raw uint32) error {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	if b.rate == 0 {
++		return errors.New("native clock rate missing")
++	}
++	if !b.seen {
++		origin := b.clock.Position90k.Load()
++		expected := origin/90000*uint64(b.rate) + (origin%90000)*uint64(b.rate)/90000
++		candidate := (expected & ^uint64(0xffffffff)) | uint64(raw)
++		if candidate+(1<<31) < expected {
++			candidate += 1 << 32
++		}
++		if candidate > expected+(1<<31) && candidate >= 1<<32 {
++			candidate -= 1 << 32
++		}
++		distance := int64(candidate) - int64(expected)
++		if distance < -int64(b.rate)*10 || distance > int64(b.rate)*10 {
++			return errors.New("native clock epoch mismatch")
++		}
++		b.extended = candidate
++		b.seen = true
++	} else {
++		delta := int64(int32(raw - b.raw))
++		if delta < 0 || delta > int64(b.rate)*10 {
++			return errors.New("native RTP clock discontinuity")
++		}
++		b.extended += uint64(delta)
++	}
++	b.raw = raw
++	return nil
++}
++func (b *nativeReportBinding) report(original *rtcp.SenderReport) *rtcp.SenderReport {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	if !b.seen {
++		return nil
++	}
++	source := (b.extended/uint64(b.rate))<<32 + ((b.extended%uint64(b.rate))<<32)/uint64(b.rate)
++	// Preserve RTCP's actual sender-report wall time (also used for RTT).
++	// Project every native track from one source-presentation anchor instead
++	// of independently extrapolating each track's last send time.
++	referenceNTP := b.clock.MapPresentation(source)
++	atReport := source + original.NTPTime - referenceNTP
++	clone := *original
++	clone.RTPTime = uint32((atReport>>32)*uint64(b.rate) + ((atReport & 0xffffffff) * uint64(b.rate) >> 32))
++	return &clone
++}
++
++type nativeReportFactory struct{}
++
++func (*nativeReportFactory) NewInterceptor(string) (interceptor.Interceptor, error) {
++	return &nativeReportInterceptor{}, nil
++}
++
++type nativeReportInterceptor struct{ interceptor.NoOp }
++
++func (*nativeReportInterceptor) BindRTCPWriter(writer interceptor.RTCPWriter) interceptor.RTCPWriter {
++	return interceptor.RTCPWriterFunc(func(packets []rtcp.Packet, attributes interceptor.Attributes) (int, error) {
++		out := make([]rtcp.Packet, 0, len(packets))
++		for _, packet := range packets {
++			if sr, ok := packet.(*rtcp.SenderReport); ok {
++				if value, native := nativeReportBindings.Load(sr.SSRC); native {
++					if mapped := value.(*nativeReportBinding).report(sr); mapped != nil {
++						out = append(out, mapped)
++					}
++					continue
++				}
++			}
++			out = append(out, packet)
++		}
++		if len(out) == 0 {
++			return 0, nil
++		}
++		return writer.Write(out, attributes)
++	})
++}
+diff --git a/pkg/webrtc/native_report_test.go b/pkg/webrtc/native_report_test.go
+new file mode 100644
+index 0000000..ec2c62c
+--- /dev/null
++++ b/pkg/webrtc/native_report_test.go
+@@ -0,0 +1,113 @@
++package webrtc
++
++import (
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/interceptor"
++	"github.com/pion/rtcp"
++	"math"
++	"testing"
++	"time"
++)
++
++func TestNativePresentationReportsShareSourceEpoch(t *testing.T) {
++	for _, origin := range []uint64{900000, 3850409924, (1 << 33) - 9000, (1 << 33) + 9000} {
++		clock := &core.SourceClock{Origin90k: origin}
++		clock.Position90k.Store(origin)
++		video := nativeReportBinding{clock: clock, rate: 90000}
++		audio := nativeReportBinding{clock: clock, rate: 48000}
++		apts := origin + 10011
++		ar := uint32(apts/90000*48000 + (apts%90000)*48000/90000)
++		if err := video.observe(uint32(origin)); err != nil {
++			t.Fatal(err)
++		}
++		if err := audio.observe(ar); err != nil {
++			t.Fatal(err)
++		}
++		now := time.Now()
++		ntp := uint64(now.Unix()+2208988800)<<32 + (uint64(now.Nanosecond())<<32)/1000000000
++		v := video.report(&rtcp.SenderReport{NTPTime: ntp})
++		a := audio.report(&rtcp.SenderReport{NTPTime: ntp})
++		if v.NTPTime != ntp || a.NTPTime != ntp {
++			t.Fatal("RTCP wall time changed")
++		}
++		expected := uint64(origin) * 48000 / 90000
++		lift := func(raw uint32, ref uint64) uint64 {
++			n := (ref &^ uint64(0xffffffff)) | uint64(raw)
++			if n+(1<<31) < ref {
++				n += 1 << 32
++			}
++			if n > ref+(1<<31) {
++				n -= 1 << 32
++			}
++			return n
++		}
++		phase := float64(lift(a.RTPTime, expected))/48000 - float64(lift(v.RTPTime, origin))/90000
++		if math.Abs(phase) > 1.0/48000 {
++			t.Fatalf("origin%d phase%.9f", origin, phase)
++		}
++		later := audio.report(&rtcp.SenderReport{NTPTime: ntp + (1 << 32)})
++		if later.RTPTime-a.RTPTime != 48000 {
++			t.Fatal("presentation clock did not advance by one second")
++		}
++	}
++}
++func TestNativeReportRewritesOnlyOwnedSource(t *testing.T) {
++	clock := &core.SourceClock{Origin90k: 900000}
++	clock.Position90k.Store(900000)
++	binding := &nativeReportBinding{clock: clock, rate: 90000}
++	if err := binding.register(427); err != nil {
++		t.Fatal(err)
++	}
++	defer nativeReportBindings.CompareAndDelete(uint32(427), binding)
++	if (&nativeReportBinding{}).register(427) == nil {
++		t.Fatal("SSRC ownership collision allowed")
++	}
++	if err := binding.observe(900000); err != nil {
++		t.Fatal(err)
++	}
++	original := &rtcp.SenderReport{SSRC: 427, NTPTime: 33, RTPTime: 44, PacketCount: 12, OctetCount: 98}
++	legacy := &rtcp.SenderReport{SSRC: 428, NTPTime: 55, RTPTime: 66}
++	var got []rtcp.Packet
++	writer := (&nativeReportInterceptor{}).BindRTCPWriter(interceptor.RTCPWriterFunc(func(p []rtcp.Packet, _ interceptor.Attributes) (int, error) { got = p; return 0, nil }))
++	if _, err := writer.Write([]rtcp.Packet{original, legacy}, nil); err != nil {
++		t.Fatal(err)
++	}
++	mapped := got[0].(*rtcp.SenderReport)
++	if original.NTPTime != 33 || original.RTPTime != 44 || mapped == original || mapped.NTPTime != original.NTPTime || mapped.PacketCount != 12 || mapped.OctetCount != 98 {
++		t.Fatal("report ownership/counters changed")
++	}
++	if got[1] != legacy {
++		t.Fatal("legacy report changed")
++	}
++	if binding.observe(899999) == nil {
++		t.Fatal("backward source clock allowed")
++	}
++}
++
++func TestNativePresentationDomainOwnership(t *testing.T) {
++	id := "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
++	a, releaseA, err := core.AcquirePresentationDomain(id)
++	if err != nil {
++		t.Fatal(err)
++	}
++	b, releaseB, err := core.AcquirePresentationDomain(id)
++	if err != nil || a != b {
++		t.Fatal("acquisition domain split")
++	}
++	releaseA()
++	releaseA()
++	c, releaseC, err := core.AcquirePresentationDomain(id)
++	if err != nil || c != b {
++		t.Fatal("live sibling domain removed")
++	}
++	releaseB()
++	releaseC()
++	d, releaseD, err := core.AcquirePresentationDomain(id)
++	if err != nil || d == a {
++		t.Fatal("old generation domain reused")
++	}
++	releaseD()
++	if _, _, err := core.AcquirePresentationDomain("invalid"); err == nil {
++		t.Fatal("invalid owner id accepted")
++	}
++}
+diff --git a/pkg/webrtc/native_start.go b/pkg/webrtc/native_start.go
+new file mode 100644
+index 0000000..a182fe8
+--- /dev/null
++++ b/pkg/webrtc/native_start.go
+@@ -0,0 +1,88 @@
++package webrtc
++
++import "github.com/AlexxIT/go2rtc/pkg/core"
++
++// DeferStart uses the existing consumer-ready hook only for explicitly declared
++// one-shot sources. It adds no media queue and changes no legacy start policy.
++func (c *Conn) DeferStart(start func()) bool {
++	if c.Mode != core.ModePassiveConsumer || !c.nativeOneShot.Load() {
++		return false
++	}
++	c.nativeStartMu.Lock()
++	defer c.nativeStartMu.Unlock()
++	if c.nativeClosed || c.nativeFailed.Load() {
++		return true // A cancelled consumer must never start a deferred producer.
++	}
++	if c.nativeReady {
++		return false
++	}
++	c.nativeStart = start
++	return true
++}
++
++func (c *Conn) nativeConnected() {
++	c.nativeStartMu.Lock()
++	defer c.nativeStartMu.Unlock()
++	if c.nativeClosed {
++		return
++	}
++	c.nativeReady = true
++	if c.nativeOneShot.Load() && c.pc != nil {
++		c.nativeFeedbackOnce.Do(func() {
++			for _, sender := range c.pc.GetSenders() {
++				c.nativeFeedbackWG.Add(1)
++				go func() {
++					defer c.nativeFeedbackWG.Done()
++					for {
++						packets, _, err := sender.ReadRTCP()
++						if err != nil {
++							return
++						}
++						c.nativeFeedbackPackets.Add(uint64(len(packets)))
++					}
++				}()
++			}
++		})
++	}
++	for _, gate := range c.nativeGates {
++		gate.Signal()
++	}
++	if start := c.nativeStart; start != nil {
++		c.nativeStart = nil
++		// Producer.start launches workers, not a blocking transport read. Holding
++		// this lock linearizes it before a concurrent cancellation.
++		start()
++	}
++}
++
++func (c *Conn) cancelNativeStart() {
++	c.nativeStartMu.Lock()
++	c.nativeClosed = true
++	c.nativeStart = nil
++	c.nativeStartMu.Unlock()
++}
++
++func (c *Conn) nativeQueueOverflow() {
++	if !c.nativeOneShot.Load() || !c.nativeFailed.CompareAndSwap(false, true) {
++		return
++	}
++	c.cancelNativeStart()
++	// Sender invokes OnDrop under its queue lock. Peer teardown can remove that
++	// sender, so do not close the peer synchronously under the same lock.
++	go func() { _ = c.Close() }()
++}
++
++func (c *Conn) nativeGate(gate *core.StartGate) {
++	if gate == nil {
++		return
++	}
++	c.nativeStartMu.Lock()
++	defer c.nativeStartMu.Unlock()
++	if c.nativeClosed {
++		return
++	}
++	c.nativeGates = append(c.nativeGates, gate)
++	if c.nativeReady {
++		gate.Signal()
++	}
++}
+diff --git a/pkg/webrtc/native_start_test.go b/pkg/webrtc/native_start_test.go
+new file mode 100644
+index 0000000..f0084cc
+--- /dev/null
++++ b/pkg/webrtc/native_start_test.go
+@@ -0,0 +1,104 @@
++package webrtc
++
++import (
++	"encoding/json"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/AlexxIT/go2rtc/pkg/core"
++	"github.com/pion/rtp"
++	"github.com/pion/webrtc/v4"
++	"github.com/stretchr/testify/require"
++)
++
++func TestNativeConsumerDefersOnceUntilConnected(t *testing.T) {
++	c := &Conn{Mode: core.ModePassiveConsumer}
++	c.nativeOneShot.Store(true)
++	called := 0
++	require.True(t, c.DeferStart(func() { called++ }))
++	require.Zero(t, called)
++	c.nativeConnected()
++	c.nativeConnected()
++	require.Equal(t, 1, called)
++	require.False(t, c.DeferStart(func() { called++ }))
++	require.Equal(t, 1, called)
++}
++func TestNativeConsumerCancellationBeforeReadyNeverStarts(t *testing.T) {
++	c := &Conn{Mode: core.ModePassiveConsumer}
++	c.nativeOneShot.Store(true)
++	called := false
++	require.True(t, c.DeferStart(func() { called = true }))
++	c.cancelNativeStart()
++	c.nativeConnected()
++	require.False(t, called)
++	require.True(t, c.DeferStart(func() { called = true }))
++	c.nativeConnected()
++	require.False(t, called)
++}
++func TestNativeConsumerPreservesLegacyAndActiveProducerStart(t *testing.T) {
++	for _, mode := range []core.Mode{core.ModePassiveConsumer, core.ModeActiveProducer, core.ModePassiveProducer} {
++		c := &Conn{Mode: mode}
++		require.False(t, c.DeferStart(func() { t.Fatal("callback must remain caller-owned") }))
++		if mode != core.ModePassiveConsumer {
++			c.nativeOneShot.Store(true)
++			require.False(t, c.DeferStart(nil))
++		}
++	}
++}
++func TestNativeConsumerCancelAndConnectLinearize(t *testing.T) {
++	for range 200 {
++		c := &Conn{Mode: core.ModePassiveConsumer}
++		c.nativeOneShot.Store(true)
++		var calls atomic.Int32
++		require.True(t, c.DeferStart(func() { calls.Add(1) }))
++		var wg sync.WaitGroup
++		wg.Add(2)
++		go func() { defer wg.Done(); c.nativeConnected() }()
++		go func() { defer wg.Done(); c.cancelNativeStart() }()
++		wg.Wait()
++		before := calls.Load()
++		c.nativeConnected()
++		require.LessOrEqual(t, before, int32(1))
++		require.Equal(t, before, calls.Load())
++	}
++}
++func TestNativeOverflowFailsWholePeerWithoutIncreasingQueue(t *testing.T) {
++	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
++	require.NoError(t, err)
++	c := NewConn(pc)
++	defer c.Close()
++	c.Mode = core.ModePassiveConsumer
++	c.nativeOneShot.Store(true)
++	var started atomic.Bool
++	require.True(t, c.DeferStart(func() { started.Store(true) }))
++	sender := core.NewSender(&core.Media{Kind: core.KindAudio}, &core.Codec{Name: core.CodecOpus, ClockRate: 48000})
++	sender.OnDrop = c.nativeQueueOverflow
++	for i := range 129 {
++		sender.Input(&rtp.Packet{Header: rtp.Header{Timestamp: uint32(i * 960)}})
++	}
++	require.Equal(t, 128, sender.Packets)
++	require.Equal(t, 1, sender.Drops)
++	require.True(t, c.nativeFailed.Load())
++	c.nativeConnected()
++	require.False(t, started.Load())
++	require.Eventually(t, func() bool { return pc.ConnectionState() == webrtc.PeerConnectionStateClosed }, time.Second, time.Millisecond)
++	require.ErrorContains(t, c.closed.Wait(), "native delivery queue overflow")
++	b, err := json.Marshal(c)
++	require.NoError(t, err)
++	require.Contains(t, string(b), `"native_delivery_failed":true`)
++	sender.Close()
++}
++func TestLegacyOverflowDoesNotFailPeer(t *testing.T) {
++	c := &Conn{Mode: core.ModePassiveConsumer}
++	sender := core.NewSender(&core.Media{Kind: core.KindAudio}, &core.Codec{Name: core.CodecOpus, ClockRate: 48000})
++	sender.OnDrop = c.nativeQueueOverflow
++	for range 129 {
++		sender.Input(&rtp.Packet{})
++	}
++	require.Equal(t, 128, sender.Packets)
++	require.Equal(t, 1, sender.Drops)
++	require.False(t, c.nativeFailed.Load())
++	sender.Close()
++}
+diff --git a/pkg/webrtc/rtx_sequence.go b/pkg/webrtc/rtx_sequence.go
+new file mode 100644
+index 0000000..ef5cce9
+--- /dev/null
++++ b/pkg/webrtc/rtx_sequence.go
+@@ -0,0 +1,41 @@
++package webrtc
++
++import (
++	"sync"
++
++	"github.com/pion/interceptor"
++	"github.com/pion/rtp"
++)
++
++// Pion's responder caches RTX headers with their sequence number. Allocate the
++// transport sequence at actual transmission instead: every retransmission is
++// a new RTX packet, even when its original media sequence is unchanged.
++// Otherwise a repeated repair may be rejected by SRTP after later RTX traffic
++// advances the receiver's replay window, or after an authenticated repair is
++// discarded by the receiver's bounded application queue.
++type rtxSequenceFactory struct{}
++
++func (*rtxSequenceFactory) NewInterceptor(string) (interceptor.Interceptor, error) {
++	return &rtxSequenceInterceptor{}, nil
++}
++
++type rtxSequenceInterceptor struct{ interceptor.NoOp }
++
++func (*rtxSequenceInterceptor) BindLocalStream(info *interceptor.StreamInfo, writer interceptor.RTPWriter) interceptor.RTPWriter {
++	if info.SSRCRetransmission == 0 {
++		return writer
++	}
++	sequence := rtp.NewRandomSequencer()
++	var mu sync.Mutex
++	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {
++		if header.SSRC != info.SSRCRetransmission {
++			return writer.Write(header, payload, attributes)
++		}
++		mu.Lock()
++		defer mu.Unlock()
++		// The cache and concurrent resend owners retain the original header.
++		output := header.Clone()
++		output.SequenceNumber = sequence.NextSequenceNumber()
++		return writer.Write(&output, payload, attributes)
++	})
++}
+diff --git a/pkg/webrtc/rtx_sequence_test.go b/pkg/webrtc/rtx_sequence_test.go
+new file mode 100644
+index 0000000..8b34732
+--- /dev/null
++++ b/pkg/webrtc/rtx_sequence_test.go
+@@ -0,0 +1,83 @@
++package webrtc
++
++import (
++	"bytes"
++	"errors"
++	"sync"
++	"testing"
++
++	"github.com/pion/interceptor"
++	"github.com/pion/rtp"
++)
++
++func TestRTXSequenceImmutableCacheAndWrap(t *testing.T) {
++	header := &rtp.Header{Version: 2, SSRC: 9, SequenceNumber: 17, Timestamp: 123, Marker: true}
++	payload := []byte{0, 7, 5, 6}
++	original := header.Clone()
++	var previous uint16
++	count := 0
++	writer := interceptor.RTPWriterFunc(func(actual *rtp.Header, body []byte, _ interceptor.Attributes) (int, error) {
++		if count > 0 && actual.SequenceNumber != previous+1 {
++			t.Fatalf("sequence=%d previous=%d", actual.SequenceNumber, previous)
++		}
++		previous = actual.SequenceNumber
++		count++
++		if actual.Timestamp != 123 || actual.SSRC != 9 || !actual.Marker || !bytes.Equal(body, payload) {
++			t.Fatal("RTX media/clock changed")
++		}
++		return len(body), nil
++	})
++	output := (&rtxSequenceInterceptor{}).BindLocalStream(&interceptor.StreamInfo{SSRC: 7, SSRCRetransmission: 9}, writer)
++	for range 65537 {
++		if _, err := output.Write(header, payload, nil); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if count != 65537 || header.SequenceNumber != original.SequenceNumber || header.Timestamp != original.Timestamp || header.SSRC != original.SSRC {
++		t.Fatal("cached header modified")
++	}
++}
++
++func TestRTXSequenceConcurrentResends(t *testing.T) {
++	header := &rtp.Header{Version: 2, SSRC: 9, SequenceNumber: 17}
++	sequences := map[uint16]bool{}
++	writer := interceptor.RTPWriterFunc(func(actual *rtp.Header, _ []byte, _ interceptor.Attributes) (int, error) {
++		if sequences[actual.SequenceNumber] {
++			t.Error("transport sequence reused")
++		}
++		sequences[actual.SequenceNumber] = true
++		return 1, nil
++	})
++	output := (&rtxSequenceInterceptor{}).BindLocalStream(&interceptor.StreamInfo{SSRC: 7, SSRCRetransmission: 9}, writer)
++	var workers sync.WaitGroup
++	for range 64 {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			if _, err := output.Write(header, []byte{1}, nil); err != nil {
++				t.Error(err)
++			}
++		}()
++	}
++	workers.Wait()
++	if len(sequences) != 64 || header.SequenceNumber != 17 {
++		t.Fatal("resend count/cache identity changed")
++	}
++}
++
++func TestRTXSequencePassThroughAndErrors(t *testing.T) {
++	for _, rtxSSRC := range []uint32{0, 9} {
++		expected := errors.New("bounded writer failure")
++		primary := &rtp.Header{Version: 2, SSRC: 7, SequenceNumber: 55}
++		writer := interceptor.RTPWriterFunc(func(actual *rtp.Header, _ []byte, _ interceptor.Attributes) (int, error) {
++			if actual != primary || actual.SequenceNumber != 55 {
++				t.Fatal("primary/legacy header replaced")
++			}
++			return 0, expected
++		})
++		output := (&rtxSequenceInterceptor{}).BindLocalStream(&interceptor.StreamInfo{SSRC: 7, SSRCRetransmission: rtxSSRC}, writer)
++		if _, err := output.Write(primary, nil, nil); !errors.Is(err, expected) {
++			t.Fatalf("writer error changed: %v", err)
++		}
++	}
++}
+diff --git a/pkg/webrtc/track.go b/pkg/webrtc/track.go
+index 657eee1..65b52fb 100644
+--- a/pkg/webrtc/track.go
++++ b/pkg/webrtc/track.go
+@@ -1,6 +1,8 @@
+ package webrtc
+ 
+ import (
++	"errors"
++	"github.com/AlexxIT/go2rtc/pkg/core"
+ 	"sync"
+ 
+ 	"github.com/pion/rtp"
+@@ -15,6 +17,7 @@ type Track struct {
+ 	ssrc     uint32
+ 	writer   webrtc.TrackLocalWriter
+ 	mu       sync.Mutex
++	native   *nativeReportBinding
+ }
+ 
+ func NewTrack(kind string) *Track {
+@@ -29,6 +32,12 @@ func (t *Track) Bind(context webrtc.TrackLocalContext) (webrtc.RTPCodecParameter
+ 	t.mu.Lock()
+ 	t.ssrc = uint32(context.SSRC())
+ 	t.writer = context.WriteStream()
++	if t.native != nil {
++		if err := t.native.register(t.ssrc); err != nil {
++			t.mu.Unlock()
++			return webrtc.RTPCodecParameters{}, err
++		}
++	}
+ 	t.mu.Unlock()
+ 
+ 	for _, parameters := range context.CodecParameters() {
+@@ -42,6 +51,9 @@ func (t *Track) Bind(context webrtc.TrackLocalContext) (webrtc.RTPCodecParameter
+ func (t *Track) Unbind(context webrtc.TrackLocalContext) error {
+ 	t.mu.Lock()
+ 	t.writer = nil
++	if t.native != nil {
++		nativeReportBindings.CompareAndDelete(t.ssrc, t.native)
++	}
+ 	t.mu.Unlock()
+ 	return nil
+ }
+@@ -75,9 +87,29 @@ func (t *Track) WriteRTP(payloadType uint8, packet *rtp.Packet) (err error) {
+ 		header.SSRC = t.ssrc
+ 		header.PayloadType = payloadType
+ 		header.SequenceNumber = t.sequence
+-		_, err = t.writer.WriteRTP(&header, packet.Payload)
++		if t.native != nil {
++			err = t.native.observe(packet.Timestamp)
++		}
++		if err == nil {
++			_, err = t.writer.WriteRTP(&header, packet.Payload)
++		}
+ 	}
+ 
+ 	t.mu.Unlock()
+ 	return
+ }
++
++func (t *Track) nativeClock(clock *core.SourceClock, rate uint32) error {
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	if t.native != nil && t.native.clock != clock {
++		return errors.New("native source clock reassignment")
++	}
++	if t.native == nil {
++		t.native = &nativeReportBinding{clock: clock, rate: rate}
++	}
++	if t.writer != nil {
++		return t.native.register(t.ssrc)
++	}
++	return nil
++}

@@ -238,21 +238,23 @@ def test_metadata_failure_closes_the_newly_opened_evidence_file(tmp_path, monkey
     def fail_stat(_fd):
         raise OSError("metadata unavailable")
 
-    monkeypatch.setattr(os, "open", open_file)
-    monkeypatch.setattr(os, "fstat", fail_stat)
-    try:
-        with (
-            pytest.raises(OSError, match="metadata unavailable"),
-            M["regular"](
-                directory,
-                "manifest.json",
-                4096,
-            ),
-        ):
-            pytest.fail("metadata failure was ignored")
-        assert len(opened) == 1
-        with pytest.raises(OSError) as error:
-            real_stat(opened[0])
-        assert error.value.errno == 9  # EBADF: the file was closed on the failure path.
-    finally:
-        os.close(directory)
+    # Restore before pytest captures output; its own capture now calls fstat.
+    with monkeypatch.context() as scoped:
+        scoped.setattr(os, "open", open_file)
+        scoped.setattr(os, "fstat", fail_stat)
+        try:
+            with (
+                pytest.raises(OSError, match="metadata unavailable"),
+                M["regular"](
+                    directory,
+                    "manifest.json",
+                    4096,
+                ),
+            ):
+                pytest.fail("metadata failure was ignored")
+            assert len(opened) == 1
+            with pytest.raises(OSError) as error:
+                real_stat(opened[0])
+            assert error.value.errno == 9  # EBADF: the file was closed on the failure path.
+        finally:
+            os.close(directory)

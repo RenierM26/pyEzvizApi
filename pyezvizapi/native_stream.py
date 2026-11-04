@@ -16,6 +16,7 @@ from importlib import import_module
 import io
 import math
 from queue import Empty, Queue
+import secrets
 import sys
 from threading import BoundedSemaphore, Event, Lock, Thread, current_thread
 import time
@@ -24,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from .clip import AutoClipSource
 from .exceptions import PyEzvizError
 from .media import MediaPacket
+from .native_completion import NativeMediaCompletion, NativeTrackCompletion
 from .native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
 
 if TYPE_CHECKING:
@@ -247,6 +249,33 @@ class _TsOutput:
         return len(data)
 
 
+@dataclass(frozen=True)
+class NativeSourceClock:
+    """Selected MPEG-PS presentation origin; 90 kHz media time, never UTC.
+
+    Published by this owner before its first output chunk. The signed origin is
+    the demuxer's presentation domain, not an assertion of capture/wrap epoch.
+    mpegts_origin_90k gives its exact on-wire residue. No preview/read or extra
+    buffering is performed to obtain this shared container reference.
+    """
+
+    origin_90k: int
+
+    def __post_init__(self) -> None:
+        if (isinstance(self.origin_90k, bool) or not isinstance(self.origin_90k, int)
+                or not -(1 << 32) <= self.origin_90k < (1 << 33)):
+            raise ValueError("Presentation origin is outside the MPEG timestamp domain")
+
+    @property
+    def mpegts_origin_90k(self) -> int:
+        """Exact 33-bit wire representation, not a recovered capture epoch.
+
+        MPEG-TS already serializes signed presentation timestamps modulo 2**33.
+        This descriptor does not rewrite, rebase or independently align tracks.
+        """
+        return self.origin_90k % (1 << 33)
+
+
 class NativeMpegTsStream:
     """One lazy continuous stream-copy owner; always use a context manager.
 
@@ -262,6 +291,7 @@ class NativeMpegTsStream:
         *,
         media_key: str | bytes | None = None,
         nalu_header_size: int | None = None,
+        _completion_identity: tuple[str, int] | None = None,
     ) -> None:
         header = (
             nalu_header_size
@@ -291,18 +321,84 @@ class NativeMpegTsStream:
         self._failure: BaseException | None = None
         self._cleanup_errors: list[str] = []
         self._tracks: list[dict[str, Any]] = []
+        self._source_clock: NativeSourceClock | None = None
+        # Session subscriptions inherit their physical identity at construction.
+        self._source_generation, self._subscription_generation = (
+            _completion_identity if _completion_identity is not None else (secrets.token_hex(16), 0)
+        )
+        self._accepted_units: dict[int, int] = {}
+        self._completion_cache: NativeMediaCompletion | None = None
         self._published = self._peak_queue = self._output_owned = 0
         self._read_bytes = self._discarded_bytes = self._output_owned_bytes = (
             self._peak_output_bytes
         ) = 0
+
+    @property
+    def source_clock(self) -> NativeSourceClock | None:
+        """Immutable owner-local descriptor, absent until selected media is ready."""
+        with self._lock:
+            return self._source_clock
+
+    @property
+    def source_generation(self) -> str:
+        """Opaque physical source identity, stable before acquisition and after EOF."""
+        return self._source_generation
+
+    @property
+    def subscription_generation(self) -> int:
+        """Generation of this immutable selected-output handle."""
+        return self._subscription_generation
+
+    def _record_access_unit(self, index: int) -> None:
+        with self._lock:
+            self._accepted_units[index] = self._accepted_units.get(index, 0) + 1
+
+    def _access_unit_rows(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(track, access_units=self._accepted_units.get(track["index"], 0))
+                    for track in self._tracks]
+
+    def _completion_from_receipts(
+        self, output: dict[str, Any], source: dict[str, Any],
+    ) -> NativeMediaCompletion | None:
+        if (not source["finite_source_end"] or source["source_generation"] != self.source_generation
+                or any(row["status"] != "completed" or not row["worker_joined"]
+                       or not row["cancel_joined"] or not row["source_closed"]
+                       or row["error_type"] or row["cleanup_error_types"]
+                       or row["shutdown_timed_out"] for row in (output, source))
+                or output["owned_output_chunks"] or output["owned_output_bytes"]
+                or output["discarded_output_bytes"]):
+            return None
+        with self._lock:
+            rows = tuple(NativeTrackCompletion(
+                track_id=track["id"], index=track["index"], kind=track["kind"],
+                codec=track["codec"], access_units=self._accepted_units.get(track["index"], 0),
+            ) for track in self._tracks)
+            if not rows or any(track.access_units <= 0 for track in rows):
+                return None
+            if self._completion_cache is None:
+                self._completion_cache = NativeMediaCompletion(
+                    self.source_generation, self.subscription_generation, rows,
+                )
+            return self._completion_cache
+
+    @property
+    def completion(self) -> NativeMediaCompletion | None:
+        """Immutable proof only after finite EOF, joined cleanup and full TS read.
+
+        Partial, queued/draining, cancelled and failed-cleanup output has no
+        successful completion, even if another output or the source completes.
+        Merely reading this property never joins, waits, retries or acquires.
+        """
+        receipt = self.receipt
+        return self._completion_from_receipts(receipt, receipt)
 
     def _check_stop(self) -> None:
         if self._stop.is_set():
             raise _Cancelled
 
     def _publish(self, chunk: bytes) -> None:
-        while not self._output_slots.acquire(timeout=_POLL_SECONDS):
-            self._check_stop()
+        self._reserve_output_slot()
         if self._stop.is_set():
             self._output_slots.release()
             raise _Cancelled
@@ -313,6 +409,10 @@ class NativeMpegTsStream:
             self._peak_queue = max(self._peak_queue, self._output_owned)
             self._published += len(chunk)
         self._queue.put_nowait(chunk)  # A reserved credit guarantees capacity.
+
+    def _reserve_output_slot(self) -> None:
+        while not self._output_slots.acquire(timeout=_POLL_SECONDS):
+            self._check_stop()
 
     def _return_output_credit(self, chunk: bytes, *, abandon: bool = False) -> bool:
         with self._lock:
@@ -447,6 +547,75 @@ class NativeMpegTsStream:
             selected.append(stream)
         return selected
 
+    def _check_packet_clock(self, packet: Any, count: int) -> None:
+        if (packet.size > MAX_PENDING_PS_BYTES or packet.pts is None
+                or packet.dts is None or packet.time_base is None):
+            raise PyEzvizError(
+                "Native packet has missing timestamps or exceeds the byte budget"
+            )
+        self._declare_source_clock(packet, count)
+
+    def _declare_source_clock(self, packet: Any, count: int) -> None:
+        if count:
+            return
+        origin = Fraction(packet.pts) * packet.time_base * 90000
+        # No rounding, epoch guess, preview or additional buffered packet.
+        if origin.denominator == 1 and -(1 << 32) <= origin < (1 << 33):
+            with self._lock:
+                self._source_clock = NativeSourceClock(int(origin))
+
+    def _mux_selected(self, av: Any, incoming: Any, reader: _PsInput) -> None:
+        selected = self._selected_streams(incoming)
+        with av.open(
+            _TsOutput(self._publish),
+            mode="w",
+            format="mpegts",
+            options={
+                "mpegts_copyts": "1",
+                "max_delay": "0",
+                "flush_packets": "1",
+                # With strictly increasing per-track DTS, a 1us
+                # interleave delta cannot accumulate a missing
+                # track's seconds of encoded packets in libav.
+                "max_interleave_delta": "1",
+                "avoid_negative_ts": "disabled",
+            },
+        ) as outgoing:
+            mapping = {
+                stream.index: outgoing.add_stream_from_template(stream)
+                for stream in selected
+            }
+            count = 0
+            last_dts: dict[int, Fraction] = {}
+            identities = {
+                stream.index: (stream.id, stream.codec_context.name)
+                for stream in selected
+            }
+            for packet in incoming.demux(selected):
+                self._check_stop()
+                if not packet.size:
+                    continue  # libav demux flush sentinel, not a source picture.
+                self._check_packet_clock(packet, count)
+                index = packet.stream.index
+                if (packet.stream.id, packet.stream.codec_context.name) != identities[
+                    index
+                ]:
+                    raise PyEzvizError(
+                        "Native selected track identity or codec changed"
+                    )
+                stamp = Fraction(packet.dts) * packet.time_base
+                if index in last_dts and stamp <= last_dts[index]:
+                    raise PyEzvizError(
+                        "Native decode timestamp repeated or moved backwards"
+                    )
+                last_dts[index] = stamp
+                packet.stream = mapping[index]
+                outgoing.mux(packet)
+                self._record_access_unit(index)
+                count += 1
+            if not count or not reader.ended:
+                raise PyEzvizError("Native stream did not verify its finite source end")
+
     def _run(self) -> None:
         try:
             self._check_stop()
@@ -467,67 +636,15 @@ class NativeMpegTsStream:
                     format="mpeg",
                     options={
                         "probesize": "1048576",
-                        "analyzeduration": "5000000",
+                        # Explicit finite owners need codec discovery, not extended stream/rate
+                        # analysis that bursts the retained opening at viewers.
+                        # Keep the existing probe-byte, stream and startup/idle caps.
+                        "analyzeduration": "1" if self.options.finite_source else "5000000",
+                        **({"fpsprobesize": "0"} if self.options.finite_source else {}),
                         "max_streams": "64",
                     },
                 ) as incoming:
-                    selected = self._selected_streams(incoming)
-                    with av.open(
-                        _TsOutput(self._publish),
-                        mode="w",
-                        format="mpegts",
-                        options={
-                            "mpegts_copyts": "1",
-                            "max_delay": "0",
-                            "flush_packets": "1",
-                            # With strictly increasing per-track DTS, a 1us
-                            # interleave delta cannot accumulate a missing
-                            # track's seconds of encoded packets in libav.
-                            "max_interleave_delta": "1",
-                            "avoid_negative_ts": "disabled",
-                        },
-                    ) as outgoing:
-                        mapping = {
-                            stream.index: outgoing.add_stream_from_template(stream)
-                            for stream in selected
-                        }
-                        count = 0
-                        last_dts: dict[int, Fraction] = {}
-                        identities = {
-                            stream.index: (stream.id, stream.codec_context.name)
-                            for stream in selected
-                        }
-                        for packet in incoming.demux(selected):
-                            self._check_stop()
-                            if not packet.size:
-                                continue  # libav demux flush sentinel, not a source picture.
-                            if (
-                                packet.size > MAX_PENDING_PS_BYTES
-                                or packet.pts is None
-                                or packet.dts is None
-                                or packet.time_base is None
-                            ):
-                                raise PyEzvizError(
-                                    "Native packet has missing timestamps or exceeds the byte budget"
-                                )
-                            index = packet.stream.index
-                            if (packet.stream.id, packet.stream.codec_context.name) != identities[
-                                index
-                            ]:
-                                raise PyEzvizError(
-                                    "Native selected track identity or codec changed"
-                                )
-                            stamp = Fraction(packet.dts) * packet.time_base
-                            if index in last_dts and stamp <= last_dts[index]:
-                                raise PyEzvizError(
-                                    "Native decode timestamp repeated or moved backwards"
-                                )
-                            last_dts[index] = stamp
-                            packet.stream = mapping[index]
-                            outgoing.mux(packet)
-                            count += 1
-                        if not count or not reader.ended:
-                            raise PyEzvizError("Native stream did not verify its finite source end")
+                    self._mux_selected(av, incoming, reader)
                 self._completed = True
             finally:
                 primary = sys.exception()
@@ -680,7 +797,10 @@ class NativeMpegTsStream:
             discarded_output_bytes=self._discarded_bytes,
             owned_output_bytes=self._output_owned_bytes,
             peak_owned_output_bytes=self._peak_output_bytes,
-            selected_tracks=list(self._tracks),
+            selected_tracks=[dict(track) for track in self._tracks],
+            source_generation=self.source_generation,
+            subscription_generation=self.subscription_generation,
+            accepted_access_units=self._access_unit_rows(),
             source_packets=reader.packets if reader else 0,
             source_bytes=reader.received if reader else 0,
             clear_bytes=reader.clear_bytes if reader else 0,

@@ -1,0 +1,507 @@
+diff --git a/dtlstransport.go b/dtlstransport.go
+index 1e0651f..3fd09f5 100644
+--- a/dtlstransport.go
++++ b/dtlstransport.go
+@@ -70,6 +70,7 @@ type simulcastStreamPair struct {
+ }
+ 
+ type streamsForSSRCResult struct {
++	rtpReader                 *srtpRTPReader
+ 	rtpReadStream             *srtp.ReadStreamSRTP
+ 	rtpInterceptor            interceptor.RTPReader
+ 	startRTPReaderImmediately bool
+@@ -79,12 +80,11 @@ type streamsForSSRCResult struct {
+ 
+ type srtpRTPReader struct {
+ 	readStream *srtp.ReadStreamSRTP
++	repair     atomic.Pointer[rtxPullBinding]
+ }
+ 
+ func (r *srtpRTPReader) Read(in []byte, a interceptor.Attributes) (int, interceptor.Attributes, error) {
+-	n, err := r.readStream.Read(in)
+-
+-	return n, a, err
++	return r.readOriginalOrRepair(in, a)
+ }
+ 
+ // NewDTLSTransport creates a new DTLSTransport.
+@@ -770,7 +770,12 @@ func (t *DTLSTransport) streamsForSSRC(
+ 		}),
+ 	)
+ 
++	var pullReader *srtpRTPReader
++	if t.api.settingEngine.BufferFactory == nil {
++		pullReader = rtpReader
++	}
+ 	return &streamsForSSRCResult{
++		rtpReader:                 pullReader,
+ 		rtpReadStream:             rtpReadStream,
+ 		rtpInterceptor:            rtpInterceptor,
+ 		startRTPReaderImmediately: rtpInterceptor != rtpReader && t.api.settingEngine.BufferFactory == nil,
+diff --git a/peerconnection.go b/peerconnection.go
+index 70b803c..2fa906f 100644
+--- a/peerconnection.go
++++ b/peerconnection.go
+@@ -2223,6 +2223,7 @@ func (pc *PeerConnection) handleIncomingSSRC(rtpStream *srtp.ReadStreamSRTP, ssr
+ 					result.startRTPReaderImmediately,
+ 					rtcpReadStream,
+ 					rtcpInterceptor,
++					result.rtpReader,
+ 				)
+ 			}
+ 
+@@ -2236,6 +2237,7 @@ func (pc *PeerConnection) handleIncomingSSRC(rtpStream *srtp.ReadStreamSRTP, ssr
+ 				rtcpReadStream,
+ 				rtcpInterceptor,
+ 				peekedPackets,
++				result.rtpReader,
+ 			)
+ 			if err != nil {
+ 				return err
+diff --git a/peerconnection_media_test.go b/peerconnection_media_test.go
+index 519fdc2..8ae198a 100644
+--- a/peerconnection_media_test.go
++++ b/peerconnection_media_test.go
+@@ -2070,7 +2070,7 @@ func TestPeerConnection_RIDRepairReaderStartsForPrimaryWrapper(t *testing.T) { /
+ 						primaryBound:     receiver.tracks[i].streamInfo != nil,
+ 						repairBound:      receiver.tracks[i].repairStreamInfo != nil,
+ 						startImmediately: receiver.tracks[i].startRepairReaderImmediately,
+-						readerStarted:    receiver.tracks[i].repairReaderStarted,
++						readerStarted:    receiver.tracks[i].repairReaderStarted || receiver.tracks[i].repairPullBound,
+ 						readRequested:    receiver.tracks[i].track.repairReadRequested.Load(),
+ 					}
+ 				}
+diff --git a/rtpreceiver.go b/rtpreceiver.go
+index 436d0ac..4e13443 100644
+--- a/rtpreceiver.go
++++ b/rtpreceiver.go
+@@ -25,7 +25,9 @@ import (
+ // trackStreams maintains a mapping of RTP/RTCP streams to a specific track
+ // a RTPReceiver may contain multiple streams if we are dealing with Simulcast.
+ type trackStreams struct {
+-	track *TrackRemote
++	rtpReader, repairRTPReader *srtpRTPReader
++	repairPullBound            bool
++	track                      *TrackRemote
+ 
+ 	streamInfo, repairStreamInfo *interceptor.StreamInfo
+ 
+@@ -239,11 +241,15 @@ func (r *RTPReceiver) startReceive(parameters RTPReceiveParameters) error { //no
+ 		if err != nil {
+ 			return err
+ 		}
++		streams.rtpReader = result.rtpReader
+ 		streams.rtpReadStream = result.rtpReadStream
+ 		streams.rtpInterceptor = result.rtpInterceptor
+ 		streams.rtcpReadStream = result.rtcpReadStream
+ 		streams.rtcpInterceptor = result.rtcpInterceptor
+ 		streams.startRepairReaderImmediately = streams.startRepairReaderImmediately || result.startRTPReaderImmediately
++		if err = r.bindRepairPull(streams); err != nil {
++			return err
++		}
+ 		r.maybeStartRepairStreamReader(streams)
+ 
+ 		if rtxSsrc := parameters.Encodings[i].RTX.SSRC; rtxSsrc != 0 {
+@@ -274,6 +280,7 @@ func (r *RTPReceiver) startReceive(parameters RTPReceiveParameters) error { //no
+ 				result.startRTPReaderImmediately,
+ 				rtcpReadStream,
+ 				rtcpInterceptor,
++				result.rtpReader,
+ 			); err != nil {
+ 				return err
+ 			}
+@@ -559,6 +566,7 @@ func (r *RTPReceiver) receiveForRid(
+ 	rtcpReadStream *srtp.ReadStreamSRTCP,
+ 	rtcpInterceptor interceptor.RTCPReader,
+ 	peekedPackets []*peekedPacket,
++	rawReader ...*srtpRTPReader,
+ ) (*TrackRemote, error) {
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+@@ -577,12 +585,18 @@ func (r *RTPReceiver) receiveForRid(
+ 			r.tracks[i].track.peekedPackets = peekedPackets
+ 			r.tracks[i].track.mu.Unlock()
+ 
++			if len(rawReader) > 0 {
++				r.tracks[i].rtpReader = rawReader[0]
++			}
+ 			r.tracks[i].streamInfo = streamInfo
+ 			r.tracks[i].rtpReadStream = rtpReadStream
+ 			r.tracks[i].rtpInterceptor = rtpInterceptor
+ 			r.tracks[i].rtcpReadStream = rtcpReadStream
+ 			r.tracks[i].rtcpInterceptor = rtcpInterceptor
+ 			r.tracks[i].startRepairReaderImmediately = r.tracks[i].startRepairReaderImmediately || startImmediately
++			if err := r.bindRepairPull(&r.tracks[i]); err != nil {
++				return nil, err
++			}
+ 			r.maybeStartRepairStreamReader(&r.tracks[i])
+ 
+ 			return r.tracks[i].track, nil
+@@ -602,6 +616,7 @@ func (r *RTPReceiver) receiveForRtx(
+ 	startImmediately bool,
+ 	rtcpReadStream *srtp.ReadStreamSRTCP,
+ 	rtcpInterceptor interceptor.RTCPReader,
++	rawReader ...*srtpRTPReader,
+ ) error {
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+@@ -615,6 +630,7 @@ func (r *RTPReceiver) receiveForRtx(
+ 		startImmediately,
+ 		rtcpReadStream,
+ 		rtcpInterceptor,
++		rawReader...,
+ 	)
+ }
+ 
+@@ -628,6 +644,7 @@ func (r *RTPReceiver) receiveForRtxInternal(
+ 	startImmediately bool,
+ 	rtcpReadStream *srtp.ReadStreamSRTCP,
+ 	rtcpInterceptor interceptor.RTCPReader,
++	rawReader ...*srtpRTPReader,
+ ) error {
+ 	if r.haveClosed() {
+ 		return io.EOF
+@@ -653,14 +670,22 @@ func (r *RTPReceiver) receiveForRtxInternal(
+ 		return fmt.Errorf("%w: ssrc(%d) rsid(%s)", errRTPReceiverForRIDTrackStreamNotFound, ssrc, rsid)
+ 	}
+ 
++	if len(rawReader) > 0 {
++		track.repairRTPReader = rawReader[0]
++	}
+ 	track.repairStreamInfo = streamInfo
+ 	track.repairReadStream = rtpReadStream
+ 	track.repairInterceptor = rtpInterceptor
+ 	track.repairRtcpReadStream = rtcpReadStream
+ 	track.repairRtcpInterceptor = rtcpInterceptor
+-	track.repairStreamChannel = make(chan rtxPacketWithAttributes, 50)
++	if track.rtpReader == nil && track.repairRTPReader == nil {
++		track.repairStreamChannel = make(chan rtxPacketWithAttributes, 50)
++	}
+ 	track.repairReaderStarted = false
+ 	track.startRepairReaderImmediately = track.startRepairReaderImmediately || startImmediately
++	if err := r.bindRepairPull(track); err != nil {
++		return err
++	}
+ 	r.maybeStartRepairStreamReader(track)
+ 
+ 	return nil
+@@ -668,6 +693,9 @@ func (r *RTPReceiver) receiveForRtxInternal(
+ 
+ // maybeStartRepairStreamReader starts repair processing when needed. The caller must hold r.mu.
+ func (r *RTPReceiver) maybeStartRepairStreamReader(track *trackStreams) { //nolint:cyclop,gocognit
++	if track.rtpReader != nil || track.repairRTPReader != nil {
++		return
++	}
+ 	if track.repairReaderStarted || track.repairInterceptor == nil {
+ 		return
+ 	}
+diff --git a/rtpreceiver_test.go b/rtpreceiver_test.go
+index 9ac8b02..1e243c1 100644
+--- a/rtpreceiver_test.go
++++ b/rtpreceiver_test.go
+@@ -920,9 +920,11 @@ func TestRTPReceiverRTXStreamInfoMimeType(t *testing.T) {
+ 			rtpReceiver.mu.RLock()
+ 			trackCount := len(rtpReceiver.tracks)
+ 			repairReaderStarted := trackCount == 1 && rtpReceiver.tracks[0].repairReaderStarted
++			pullBound := trackCount == 1 && rtpReceiver.tracks[0].repairPullBound
+ 			rtpReceiver.mu.RUnlock()
+ 			require.Equal(t, 1, trackCount)
+-			assert.Equal(t, tt.configureNack, repairReaderStarted)
++			assert.True(t, pullBound, "default SRTP buffers must have one pull owner")
++			assert.False(t, repairReaderStarted, "pull mode adds no repair forwarding goroutine")
+ 		})
+ 	}
+ }
+diff --git a/rtx_pull.go b/rtx_pull.go
+new file mode 100644
+index 0000000..d271975
+--- /dev/null
++++ b/rtx_pull.go
+@@ -0,0 +1,114 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++//go:build !js
++
++package webrtc
++
++import (
++	"fmt"
++	"maps"
++	"strconv"
++	"strings"
++
++	"github.com/pion/interceptor"
++	"github.com/pion/rtp"
++)
++
++type rtxPullBinding struct {
++	reader      interceptor.RTPReader
++	payloadType func(uint8) (uint8, error)
++}
++
++// Bind the existing per-SSRC SRTP buffers instead of copying authenticated RTX
++// through another queue. Restored packets then traverse the original stream's
++// interceptor chain, so loss tracking observes repairs as well as originals.
++func (r *RTPReceiver) bindRepairPull(track *trackStreams) error {
++	if track.repairPullBound || track.rtpReader == nil || track.repairRTPReader == nil {
++		return nil
++	}
++	binding := &rtxPullBinding{reader: track.repairInterceptor, payloadType: func(pt uint8) (uint8, error) {
++		params, err := r.api.mediaEngine.getRTPParametersByPayloadType(PayloadType(pt))
++		if err != nil {
++			return 0, err
++		}
++		for _, codec := range params.Codecs {
++			if uint8(codec.PayloadType) != pt || !strings.EqualFold(codec.MimeType, MimeTypeRTX) {
++				continue
++			}
++			for _, part := range strings.Split(codec.SDPFmtpLine, ";") {
++				key, value, found := strings.Cut(strings.TrimSpace(part), "=")
++				if found && key == "apt" {
++					original, parseErr := strconv.ParseUint(value, 10, 7)
++					return uint8(original), parseErr
++				}
++			}
++		}
++		return 0, fmt.Errorf("RTX payload type %d has no negotiated association", pt)
++	}}
++	track.rtpReader.repair.Store(binding)
++	if err := track.rtpReadStream.SetRTX(track.repairReadStream.GetSSRC()); err != nil {
++		track.rtpReader.repair.Store(nil)
++		return err
++	}
++	track.repairPullBound = true
++	return nil
++}
++
++func (r *srtpRTPReader) readOriginalOrRepair(in []byte, a interceptor.Attributes) (int, interceptor.Attributes, error) {
++	for {
++		source, err := r.readStream.NextStream()
++		if err != nil {
++			return 0, nil, err
++		}
++		if source == r.readStream {
++			n, readErr := source.SourceReader().Read(in)
++			return n, a, readErr
++		}
++		binding := r.repair.Load()
++		if binding == nil {
++			return 0, nil, fmt.Errorf("unbound repair SSRC %d", source.GetSSRC())
++		}
++		n, attributes, readErr := binding.reader.Read(in, a)
++		if readErr != nil {
++			return n, attributes, readErr
++		}
++		packet := rtp.Packet{}
++		if err = packet.Unmarshal(in[:n]); err != nil || len(packet.Payload) < 2 {
++			continue
++		}
++		if attributes == nil {
++			attributes = make(interceptor.Attributes)
++		} else {
++			attributes = maps.Clone(attributes)
++		}
++		// Repair interceptors may cache the wire header. Preserve their attributes,
++		// replacing the cached header by identity after restoring the original RTP.
++		cached, cacheErr := attributes.GetRTPHeader(in[:n])
++		if cacheErr != nil {
++			return 0, nil, cacheErr
++		}
++		originalType, typeErr := binding.payloadType(packet.PayloadType)
++		if typeErr != nil {
++			return 0, nil, typeErr
++		}
++		attributes.Set(AttributeRtxPayloadType, packet.PayloadType)
++		attributes.Set(AttributeRtxSequenceNumber, packet.SequenceNumber)
++		attributes.Set(AttributeRtxSsrc, packet.SSRC)
++		packet.PayloadType = originalType
++		packet.SequenceNumber = uint16(packet.Payload[0])<<8 | uint16(packet.Payload[1])
++		packet.SSRC = r.readStream.GetSSRC()
++		packet.Payload = packet.Payload[2:]
++		n, err = packet.MarshalTo(in)
++		if err != nil {
++			return 0, nil, err
++		}
++		restored := packet.Header.Clone()
++		for key, value := range attributes {
++			if header, ok := value.(*rtp.Header); ok && header == cached {
++				attributes[key] = &restored
++			}
++		}
++		return n, attributes, nil
++	}
++}
+diff --git a/rtx_pull_test.go b/rtx_pull_test.go
+new file mode 100644
+index 0000000..902077a
+--- /dev/null
++++ b/rtx_pull_test.go
+@@ -0,0 +1,167 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++//go:build !js
++
++package webrtc
++
++import (
++	"bytes"
++	"io"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/pion/interceptor"
++	"github.com/pion/interceptor/pkg/nack"
++	"github.com/pion/rtcp"
++	"github.com/pion/rtp"
++	"github.com/pion/srtp/v3"
++	"github.com/stretchr/testify/require"
++)
++
++func pullTestStreams(t *testing.T) (*srtp.ReadStreamSRTP, *srtp.ReadStreamSRTP, *srtp.WriteStreamSRTP) {
++	t.Helper()
++	left, right := net.Pipe()
++	config := &srtp.Config{Profile: srtp.ProtectionProfileAes128CmHmacSha1_80, Keys: srtp.SessionKeys{LocalMasterKey: bytes.Repeat([]byte{1}, 16), LocalMasterSalt: bytes.Repeat([]byte{2}, 14), RemoteMasterKey: bytes.Repeat([]byte{1}, 16), RemoteMasterSalt: bytes.Repeat([]byte{2}, 14)}}
++	sender, err := srtp.NewSessionSRTP(left, config)
++	require.NoError(t, err)
++	receiver, err := srtp.NewSessionSRTP(right, config)
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, sender.Close()); require.NoError(t, receiver.Close()) })
++	primary, err := receiver.OpenReadStream(1111)
++	require.NoError(t, err)
++	repair, err := receiver.OpenReadStream(2222)
++	require.NoError(t, err)
++	writer, err := sender.OpenWriteStream()
++	require.NoError(t, err)
++	return primary, repair, writer
++}
++func pullTestReader(t *testing.T, primary, repair *srtp.ReadStreamSRTP) *srtpRTPReader {
++	t.Helper()
++	reader := &srtpRTPReader{readStream: primary}
++	reader.repair.Store(&rtxPullBinding{reader: &srtpRTPReader{readStream: repair}, payloadType: func(uint8) (uint8, error) { return 96, nil }})
++	require.NoError(t, primary.SetRTX(2222))
++	require.NoError(t, primary.SetReadDeadline(time.Now().Add(2*time.Second)))
++	return reader
++}
++
++func TestRTPPullRTXRetainsBurstWithoutForwardQueue(t *testing.T) {
++	primary, repair, writer := pullTestStreams(t)
++	reader := pullTestReader(t, primary, repair)
++	for i := uint16(1); i <= 100; i++ {
++		_, err := writer.WriteRTP(&rtp.Header{Version: 2, PayloadType: 97, SSRC: 2222, SequenceNumber: i, Timestamp: uint32(i) * 3000, Marker: true}, []byte{byte(i >> 8), byte(i), 7, 8})
++		require.NoError(t, err)
++	}
++	for i := uint16(1); i <= 100; i++ {
++		b := make([]byte, 1500)
++		n, attributes, err := reader.Read(b, nil)
++		require.NoError(t, err)
++		packet := rtp.Packet{}
++		require.NoError(t, packet.Unmarshal(b[:n]))
++		require.Equal(t, i, packet.SequenceNumber)
++		require.Equal(t, uint32(1111), packet.SSRC)
++		require.Equal(t, uint8(96), packet.PayloadType)
++		require.Equal(t, uint32(i)*3000, packet.Timestamp)
++		require.Equal(t, []byte{7, 8}, packet.Payload)
++		require.Equal(t, uint32(2222), attributes.Get(AttributeRtxSsrc))
++		header, err := attributes.GetRTPHeader(b[:n])
++		require.NoError(t, err)
++		require.Equal(t, i, header.SequenceNumber)
++	}
++}
++
++func TestRTPPullRTXPreservesAttributesExtensionsAndPadding(t *testing.T) {
++	primary, repair, writer := pullTestStreams(t)
++	reader := pullTestReader(t, primary, repair)
++	var originalHeader *rtp.Header
++	attributes := interceptor.Attributes{"diagnostic": "retained"}
++	reader.repair.Load().reader = interceptor.RTPReaderFunc(func(b []byte, _ interceptor.Attributes) (int, interceptor.Attributes, error) {
++		n, err := repair.Read(b)
++		if err != nil {
++			return 0, nil, err
++		}
++		originalHeader, err = attributes.GetRTPHeader(b[:n])
++		return n, attributes, err
++	})
++	packet := rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 97, SSRC: 2222, SequenceNumber: 400, Timestamp: 12345, Marker: true, Padding: true}, Payload: []byte{0, 19, 4, 5, 6}, PaddingSize: 4}
++	require.NoError(t, packet.SetExtension(1, []byte{7, 8}))
++	raw, err := packet.Marshal()
++	require.NoError(t, err)
++	_, err = writer.Write(raw)
++	require.NoError(t, err)
++	b := make([]byte, 1500)
++	n, out, err := reader.Read(b, nil)
++	require.NoError(t, err)
++	restored := rtp.Packet{}
++	require.NoError(t, restored.Unmarshal(b[:n]))
++	require.Equal(t, uint16(19), restored.SequenceNumber)
++	require.Equal(t, uint32(12345), restored.Timestamp)
++	require.Equal(t, []byte{4, 5, 6}, restored.Payload)
++	require.Equal(t, byte(4), restored.PaddingSize)
++	require.Equal(t, []byte{7, 8}, restored.GetExtension(1))
++	require.Equal(t, "retained", out.Get("diagnostic"))
++	require.Equal(t, uint16(400), originalHeader.SequenceNumber, "wire attributes were mutated")
++	require.Equal(t, uint16(400), out.Get(AttributeRtxSequenceNumber))
++	cached, err := out.GetRTPHeader(b[:n])
++	require.NoError(t, err)
++	require.Equal(t, uint16(19), cached.SequenceNumber)
++}
++
++func TestRTPPullRTXRepairsReachDefaultNackTracker(t *testing.T) {
++	primary, repair, writer := pullTestStreams(t)
++	reader := pullTestReader(t, primary, repair)
++	factory, err := nack.NewGeneratorInterceptor()
++	require.NoError(t, err)
++	generator, err := factory.NewInterceptor("test")
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, generator.Close()) })
++	requests := make(chan struct{}, 4)
++	generator.BindRTCPWriter(interceptor.RTCPWriterFunc(func(packets []rtcp.Packet, _ interceptor.Attributes) (int, error) {
++		for _, packet := range packets {
++			if _, ok := packet.(*rtcp.TransportLayerNack); ok {
++				select {
++				case requests <- struct{}{}:
++				default:
++				}
++			}
++		}
++		return 0, nil
++	}))
++	tracked := generator.BindRemoteStream(&interceptor.StreamInfo{SSRC: 1111, ClockRate: 90000, MimeType: MimeTypeVP8, RTCPFeedback: []interceptor.RTCPFeedback{{Type: "nack"}}}, reader)
++	for _, seq := range []uint16{10, 12} {
++		_, err = writer.WriteRTP(&rtp.Header{Version: 2, PayloadType: 96, SSRC: 1111, SequenceNumber: seq}, []byte{7})
++		require.NoError(t, err)
++		_, _, err = tracked.Read(make([]byte, 1500), nil)
++		require.NoError(t, err)
++	}
++	_, err = writer.WriteRTP(&rtp.Header{Version: 2, PayloadType: 97, SSRC: 2222, SequenceNumber: 1}, []byte{0, 11, 7})
++	require.NoError(t, err)
++	_, _, err = tracked.Read(make([]byte, 1500), nil)
++	require.NoError(t, err)
++	select {
++	case <-requests:
++		t.Fatal("default NACK generator re-requested a restored original")
++	case <-time.After(250 * time.Millisecond):
++	}
++}
++
++func TestRTPPullRTXDeadlineAndClose(t *testing.T) {
++	primary, repair, _ := pullTestStreams(t)
++	reader := pullTestReader(t, primary, repair)
++	require.NoError(t, primary.SetReadDeadline(time.Now().Add(20*time.Millisecond)))
++	_, _, err := reader.Read(make([]byte, 1500), nil)
++	var timeout net.Error
++	require.ErrorAs(t, err, &timeout)
++	require.True(t, timeout.Timeout())
++	require.NoError(t, primary.SetReadDeadline(time.Time{}))
++	finished := make(chan error, 1)
++	go func() { _, _, readErr := reader.Read(make([]byte, 1500), nil); finished <- readErr }()
++	require.NoError(t, primary.Close())
++	select {
++	case err = <-finished:
++		require.ErrorIs(t, err, io.EOF)
++	case <-time.After(time.Second):
++		t.Fatal("close did not wake pull owner")
++	}
++}

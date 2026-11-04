@@ -2,7 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 import hashlib
 import io
 import shutil
@@ -27,6 +27,7 @@ from pyezvizapi.native_ps import MAX_PENDING_PS_BYTES, NativePsTransform
 from pyezvizapi.native_stream import (
     OUTPUT_QUEUE_CHUNKS,
     NativeMpegTsStream,
+    NativeSourceClock,
     NativeStreamClosed,
     NativeStreamOptions,
     NativeTrackSelection,
@@ -130,6 +131,10 @@ def test_continuous_boundary_copies_selected_id_audio_and_original_clock(sample)
     stream = NativeMpegTsStream(lambda: source, options())
     with stream:
         output = b"".join(stream)
+    clock = stream.source_clock
+    assert clock is not None
+    with pytest.raises(FrozenInstanceError):
+        clock.origin_90k = 0  # type: ignore[misc]  # Exercise frozen runtime enforcement.
     original = packet_oracle(sample)
     actual = packet_oracle(output)
     assert actual[1] == original[1]  # Full AAC bodies and exact PTS/DTS/duration.
@@ -683,3 +688,36 @@ def test_client_policy_rejects_before_open(changes):
         native_mpegts_stream_from_client(
             client, CAMERA, source=source, options=options(finite_source=False), channel=0
         )
+
+
+@pytest.mark.parametrize("origin", [-45000, 0, (1 << 32) - 1, (1 << 33) - 1])
+def test_source_clock_explicit_wire_representation(origin):
+    clock = NativeSourceClock(origin)
+    assert clock.origin_90k == origin
+    assert clock.mpegts_origin_90k == origin % (1 << 33)
+
+
+@pytest.mark.parametrize("origin", [True, 1.5, -(1 << 32) - 1, 1 << 33])
+def test_source_clock_rejects_unknown_domain(origin):
+    with pytest.raises(ValueError, match="timestamp domain"):
+        NativeSourceClock(origin)
+
+
+def test_native_near_wrap_signed_origin_keeps_original_clocks(tmp_path):
+    data = encode_three_track_ps(
+        tmp_path, timestamp_offset_90k=(1 << 33) - 200000
+    ).read_bytes()
+    original = packet_oracle(data)
+    source = Source(data)
+    owner = NativeMpegTsStream(lambda: source, options())
+    assert owner.source_clock is None
+    with owner:
+        output = b"".join(owner)
+    clock = owner.source_clock
+    assert clock is not None and clock.origin_90k < 0
+    assert clock.mpegts_origin_90k == (1 << 33) + clock.origin_90k
+    actual = packet_oracle(output)
+    assert actual[1] == original[1]
+    assert [row[1:] for row in actual[0]] == [row[1:] for row in original[2]]
+    assert owner.receipt["status"] == "completed"
+    assert owner.receipt["worker_joined"] and source.closed

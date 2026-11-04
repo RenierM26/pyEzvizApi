@@ -1,0 +1,127 @@
+--- a/libavcodec/parser.c
++++ b/libavcodec/parser.c
+@@ -141,7 +141,7 @@
+ 
+     if (!(s->flags & PARSER_FLAG_FETCHED_OFFSET)) {
+         s->next_frame_offset =
+-        s->cur_offset        = pos;
++        s->cur_offset        = pos >= 0 ? pos : 0;
+         s->flags            |= PARSER_FLAG_FETCHED_OFFSET;
+     }
+ 
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1436,3 +1436,5 @@
+ $(SUBDIR)qdm2.o: $(SUBDIR)qdm2_tables.h
+ $(SUBDIR)sinewin.o: $(SUBDIR)sinewin_tables.h
+ endif
++
++TESTPROGS-$(CONFIG_AAC_PARSER)             += parser_timestamp
+--- a/tests/fate/libavcodec.mak
++++ b/tests/fate/libavcodec.mak
+@@ -114,5 +114,10 @@
+ fate-libavcodec-htmlsubtitles: libavcodec/tests/htmlsubtitles$(EXESUF)
+ fate-libavcodec-htmlsubtitles: CMD = run libavcodec/tests/htmlsubtitles$(EXESUF)
+ 
++FATE_LIBAVCODEC-$(CONFIG_AAC_PARSER) += fate-parser-timestamp
++fate-parser-timestamp: libavcodec/tests/parser_timestamp$(EXESUF)
++fate-parser-timestamp: CMD = run libavcodec/tests/parser_timestamp$(EXESUF)
++fate-parser-timestamp: CMP = null
++
+ FATE-$(CONFIG_AVCODEC) += $(FATE_LIBAVCODEC-yes)
+ fate-libavcodec: $(FATE_LIBAVCODEC-yes)
+--- /dev/null
++++ b/libavcodec/tests/parser_timestamp.c
+@@ -0,0 +1,92 @@
++/*
++ * Parser timestamps with an unknown initial byte position.
++ * Copyright (c) 2026
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++#include <inttypes.h>
++#include <stdio.h>
++#include <string.h>
++#include "libavcodec/avcodec.h"
++
++/* ADTS header declaring an eleven-byte frame; parser-only, not decoded. */
++static const uint8_t frame[] = { 0xff, 0xf1, 0x60, 0x40, 0x01, 0x7f, 0xfc,
++                                 0,    0,    0,    0 };
++
++static int check(int64_t pos, int64_t origin, int fragment)
++{
++    AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_AAC);
++    AVCodecContext *ctx = avcodec_alloc_context3(NULL);
++    uint8_t data[sizeof(frame) + AV_INPUT_BUFFER_PADDING_SIZE] = { 0 };
++    int count = 0, ret = 1;
++
++    if (!parser || !ctx)
++        goto end;
++    ctx->codec_id = AV_CODEC_ID_AAC;
++    for (int i = 0; i < 4; i++) {
++        int offset = 0;
++        while (offset < sizeof(frame)) {
++            uint8_t *out;
++            int size, chunk = fragment ? 3 : sizeof(frame);
++            int64_t stamp = origin + i * 6000 + (i == 1 ? 2 : 0);
++            int used;
++
++            if (chunk > sizeof(frame) - offset)
++                chunk = sizeof(frame) - offset;
++            memset(data, 0, sizeof(data));
++            memcpy(data, frame + offset, chunk);
++            used = av_parser_parse2(parser, ctx, &out, &size,
++                                    data, chunk, stamp, stamp, pos);
++            if (used < 0 || (!used && !size))
++                goto end;
++            offset += used;
++            if (size) {
++                int64_t expected = origin + count * 6000 + (count == 1 ? 2 : 0);
++                if (size != sizeof(frame) || memcmp(out, frame, sizeof(frame)) ||
++                    parser->pts != expected || parser->dts != expected ||
++                    parser->pos != pos) {
++                    fprintf(stderr, "position=%"PRId64" origin=%"PRId64
++                            " fragmented=%d output=%d pts=%"PRId64
++                            " dts=%"PRId64" pos=%"PRId64" expected=%"PRId64"\n",
++                            pos, origin, fragment, count, parser->pts,
++                            parser->dts, parser->pos, expected);
++                    goto end;
++                }
++                count++;
++            }
++        }
++    }
++    if (count != 4)
++        goto end;
++    ret = 0;
++end:
++    av_parser_close(parser);
++    avcodec_free_context(&ctx);
++    return ret;
++}
++
++int main(void)
++{
++    const int64_t positions[] = { -1, 0, 1024 };
++    const int64_t origins[] = { -90000, 0, INT64_C(3851129924) };
++    for (int p = 0; p < 3; p++)
++        for (int o = 0; o < 3; o++)
++            for (int fragment = 0; fragment < 2; fragment++)
++                if (check(positions[p], origins[o], fragment))
++                    return 1;
++    return 0;
++}

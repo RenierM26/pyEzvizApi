@@ -388,3 +388,13 @@ changing this runtime.
    boundary, group Prepare/re-arm/unload, credential replacement and TLS topology.
 5. Preserve separate maintained-relay, supported-client HEVC and attended
    live/long-run/physical A/V gates. No production configuration changes are made.
+
+## Explicit finite-source probe startup
+
+Caller-attested `finite_source=True` owners retain the existing 1 MiB input probe,
+64-stream cap and startup/idle/queue limits, but skip optional frame-rate analysis
+(`fpsprobesize=0`, minimal positive `analyzeduration`). Codec/track/clock validation
+still applies and unresolved codec parameters fail closed. No `nobuffer` discard
+flag is used: probed packets remain available to the sole demux owner. Continuous
+sources keep the original analysis policy. Held-tail single/grouped controls
+verify early publication plus complete original AAC identity and track clocks.

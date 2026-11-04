@@ -45,6 +45,7 @@
       "pkg/webrtc/api.go": "b8ec93cdaf3d04f5451c3f66f9da182082c9fcd9b63858a9b38b15857d40f711",
       "pkg/webrtc/conn.go": "f92b7d922f986d7ace5a1b8e73a162c8e722624ce66f619197aaeb0760e61ea0",
       "pkg/webrtc/consumer.go": "d5b5a19f1b0bec9679c713e802c496a772f4a9af3ce152ddd3306cf284e72386",
+      "pkg/webrtc/native_auto_feedback_test.go": "c0626e508c3d7c439ce867904285ff07b9f183606e5d5f980d72334a7e2496d0",
       "pkg/webrtc/native_feedback_test.go": "4b677e2c7906b7345ed5d2b836f0065bb3a0860676a2ffd118297b43fc6c676f",
       "pkg/webrtc/native_recovery_test.go": "931190eb7926d33ded11eb1ef3deec1f5f49ef0ab4bad89b0412119d90fae213",
       "pkg/webrtc/native_report.go": "c1e1b06cf31abfb6e5c5d35cf66e3cb0665564f72eb2d71d8b97a1cef47824c2",
@@ -201,12 +202,14 @@
     "public_base": "357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b",
     "patch_applied_to_public_base": true,
     "extracted_source_sha256": {
+      "homeassistant/components/camera/__init__.py": "f7a2e6b7633c8d5922177110f053ae63c317f48549a785cefda3b0920f0c0901",
       "homeassistant/components/stream/__init__.py": "567eaf9fdbbc2f6dd7186a2aeaf43e03f81f418a52cb76b16d75b86ccdeaa2e7",
       "homeassistant/components/stream/const.py": "2d5a6202e983c20c65c6ba674208116dd717df722108a051d065128a16a85112",
       "homeassistant/components/stream/core.py": "fea05e80531217f109a24ae1f2e88e2d85c3ccccdb5702e0e722e4e445d3c691",
       "homeassistant/components/stream/finite.py": "559e6d7e90dc796e5a32500941a324cb975f0ef75fc6ea8300770a73c500a453",
       "homeassistant/components/stream/hls.py": "f1f3321fc484a800189be93a36a7a529d77e111b344318144371d6bb4866f2db",
       "homeassistant/components/stream/worker.py": "1668f1658cbf525afaac57591eaaa56c5ad1a6191ac3338b6b5acac072dfe410",
+      "tests/components/camera/test_webrtc_validation.py": "22e2dd99cc4ddf65eb7a26611d3c37ffc11b4cbfc690896c191666e2c7501467",
       "tests/components/stream/test_finite_source.py": "146ec16d01121352094b2692a38f31e7e3b0058a4186eb6a3c99bdb514264862",
       "tests/components/stream/test_finite_source_contract.py": "db7e5c4c66f302b70f3938ef6b64a60f35a1bd25e9407cf03af2716e8ea83810",
       "tests/components/stream/test_finite_startup.py": "2c407dd63ced75e5b735f9e05c7d9bacf238154bef71a3efe427f1f761bf3e73",
@@ -214,7 +217,8 @@
     },
     "combined_component_tests": 158,
     "new_startup_cases": 15,
-    "full_repository_or_platform_CI_claimed": false
+    "full_repository_or_platform_CI_claimed": false,
+    "new_camera_validation_controls": 3
   },
   "ffmpeg": {
     "public_base": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
@@ -232,8 +236,10 @@
   },
   "patch_sha256": {
     "ffmpeg-parser-source-and-fate.patch": "c00bbe6ff11b02377a98f71147524e83ccb2a5f08092b1f3ae156604e2b03424",
-    "go2rtc-native-consumer.patch": "f992c4120eb0fbd6658e2b627a69bbfad7ca60b0175992715a52a79df9c815b6",
-    "home-assistant-finite-stream.patch": "df4700fb4922ec3ad47d78971163381697adb168a76c7b0b3b93b4865e75725c"
+    "go2rtc-native-consumer.patch": "50198d43b746c8902d4f9c2f3270038e367d3857cbcdc1079dfe1da0cf5559b0",
+    "home-assistant-finite-stream.patch": "5328eaef8153c2f48ae28477301a854f2e29b64abb7b3cd3d5df72f7ef40433a",
+    "pion-rtx-pull.patch": "07878706168d57a3c2eecb10b6d389dc9b8b369739a723f5ca3d77efae730b66",
+    "aiohttp-closed-heartbeat.patch": "b8439f7bb69e20eaf3ef2056630cfa1895bbeeb7578287316a0491f6a8b28d0e"
   },
   "python": {
     "library_tests": 5032,
@@ -258,7 +264,10 @@
     "production proxy/auth/WebSocket topology",
     "long-run live/battery safety",
     "arbitrary source-profile or transport-load acceptance",
-    "maintained upstream dependency releases"
+    "maintained upstream dependency releases",
+    "Actual requesting-viewer HEVC playback (private widget hosted, report not received)",
+    "Full Pion CI: unchanged vnet/TURN ICE acceptance test timeout reproduced",
+    "Full aiohttp/HA platform CI and operator-reviewed upstream submissions"
   ],
   "retained_acceptance": {
     "ll_hls": {
@@ -407,5 +416,200 @@
     "library_mypy_files": 242,
     "Pyright_errors": 0,
     "media_wall_sample_interval_and_process_bounds_unchanged": true
+  },
+  "pion": {
+    "public_base": "0b9c2d861edeffda1eee0923f0acf3cf90914feb",
+    "patch_applied_to_public_base": true,
+    "extracted_source_sha256": {
+      "dtlstransport.go": "480e5039b26dd2290b93b5bcb9db8cdbb8fce595f38fb11c8bcd596d09f5439a",
+      "peerconnection.go": "18ccf61f04a4b63cbf0fa8a682422a7b8db5883dd9e15a421945ea5b2865bff2",
+      "peerconnection_media_test.go": "af2680dd1ebf5ba5201fef85745b5946e3e91dbb9fc2473895d35384737cadce",
+      "rtpreceiver.go": "d70c1de2b2b92cfe1f1c6aee37c0af05aec1e7161692ab184e529473b88fa8f0",
+      "rtpreceiver_test.go": "417c1c10039d09a59bb75e24363653f32f9312f9bf0b970ed2d3f63f126fc02b",
+      "rtx_pull.go": "b4053c81958b36b18b3f420848fb50d7c5e5b94ce3c6cfffeb9b587352f0d773",
+      "rtx_pull_test.go": "e7c69725836d298819f0fb52e3d2c4f129476cf2a235f26d6ebda5ad5f45dec2"
+    },
+    "tag": "v4.2.25",
+    "selected_race_checks": "TestRTPPull|TestRTPReceiver|TestPeerConnection_Simulcast_RTX|Test_PeerConnection_RTX_E2E",
+    "automatic_profiles_scenarios": 16,
+    "patched_all_scenarios_pass": true,
+    "unchanged_failed_scenarios": 7,
+    "unchanged_failed_repair_only_scenarios": 4,
+    "extra_forwarding_queue": false,
+    "media_or_replay_budget_increased": false,
+    "custom_BufferFactory_path": "legacy fallback retained; no pull-path guarantee claimed",
+    "full_external_CI_claimed": false,
+    "full_local_suite": "not green: TestICEGatherer_RelayAcceptanceMinWait times out in unchanged vnet/TURN ICE path; exact unchanged dependency-graph baseline reproduces the same timeout"
+  },
+  "aiohttp": {
+    "public_base": "f17c631bddcfd4ec712342db28f1d3381a3fec71",
+    "patch_applied_to_public_base": true,
+    "extracted_source_sha256": {
+      "CHANGES/0.bugfix.rst": "34c98e5b48816a33babfd9e971b236d962dda16a6bb45db8fbd3d7b012f4f285",
+      "aiohttp/web_ws.py": "9f51a72e6c92dbda7a51d63d489496160eaf480224f6e1e7387e345f975a58df",
+      "tests/test_websocket_closed_heartbeat.py": "924d24ef6e518f336c12fa4dc2b9bab2f0ad8420431b24280b22eabc99e06902"
+    },
+    "tag": "v3.14.5",
+    "selected_heartbeat_controls": 4,
+    "unchanged_closed_controls_fail": 2,
+    "Cython_extensions_in_browser_lab": true,
+    "installed_dependencies_changed": false,
+    "full_upstream_CI_claimed": false,
+    "upstream_submission": "not submitted; fragment 0 requires a real issue/PR number and operator human review before a draft submission can leave draft"
+  },
+  "automatic_client_follow_up": {
+    "status": "source-review-only-not-deployment",
+    "automatic_feedback_generated_cases": 16,
+    "unchanged_receiver_failures": 7,
+    "unchanged_repair_only_failures": 4,
+    "post_probe_retained_runs": {
+      "ll": {
+        "all_three_independent_audits_pass": true,
+        "acquisition_demux_counts": {
+          "factory": 1,
+          "input_demux": 1,
+          "decrypt_feed": 8840
+        },
+        "HLS_per_lens": {
+          "HEVC_samples": 1783,
+          "AAC_samples": 1857,
+          "all_original_payloads_PTS_DTS_and_tail": true
+        },
+        "WebRTC_per_lens": {
+          "original_non_AUD_HEVC_NALs": 1873,
+          "emitted_received_Opus": 5943,
+          "decoded_48k_samples": 5705280,
+          "all_original_HEVC_and_encoded_Opus_payloads_and_source_clocks": true
+        },
+        "default_interceptor_NACK_inventory": {
+          "primary": [
+            74,
+            1
+          ],
+          "secondary": [
+            74,
+            1
+          ]
+        },
+        "RTCP_mapping_spread_seconds": 2.0693987607955933e-05,
+        "all_sources_closed": true,
+        "relay_exit": 0,
+        "verified_pre_SRTP_fault_counts": {
+          "primary": {
+            "original_datagrams_dropped": 74,
+            "RTX_repairs_dropped": 1
+          },
+          "secondary": {
+            "original_datagrams_dropped": 74,
+            "RTX_repairs_dropped": 1
+          }
+        }
+      },
+      "nonll": {
+        "all_three_independent_audits_pass": true,
+        "acquisition_demux_counts": {
+          "factory": 1,
+          "input_demux": 1,
+          "decrypt_feed": 8840
+        },
+        "HLS_per_lens": {
+          "HEVC_samples": 1783,
+          "AAC_samples": 1857,
+          "all_original_payloads_PTS_DTS_and_tail": true
+        },
+        "WebRTC_per_lens": {
+          "original_non_AUD_HEVC_NALs": 1873,
+          "emitted_received_Opus": 5943,
+          "decoded_48k_samples": 5705280,
+          "all_original_HEVC_and_encoded_Opus_payloads_and_source_clocks": true
+        },
+        "default_interceptor_NACK_inventory": {
+          "primary": [
+            74,
+            1
+          ],
+          "secondary": [
+            74,
+            1
+          ]
+        },
+        "RTCP_mapping_spread_seconds": 2.081110142171383e-05,
+        "all_sources_closed": true,
+        "relay_exit": 0,
+        "verified_pre_SRTP_fault_counts": {
+          "primary": {
+            "original_datagrams_dropped": 74,
+            "RTX_repairs_dropped": 1
+          },
+          "secondary": {
+            "original_datagrams_dropped": 74,
+            "RTX_repairs_dropped": 1
+          }
+        }
+      }
+    },
+    "browser": {
+      "clean_test_and_teardown": true,
+      "client": "Managed Linux Chromium 153; actual HA WebSocket protocol, not HA frontend",
+      "generated_clear_fixture": true,
+      "authenticated_HA_non_admin_user": true,
+      "secure_context": true,
+      "TLS": "isolated certificate SPKI pin plus independent test-CA/hostname validation; not production PKI",
+      "codec_refusals_before_acquisition": [
+        "unsupported_video_codec",
+        "unsupported_audio_codec"
+      ],
+      "clients": [
+        {
+          "video_frames_decoded": 120,
+          "presented_callbacks": 120,
+          "audio_RMS": 0.091210179073752,
+          "reported_RTP_packets_lost": [
+            0,
+            0
+          ],
+          "first_frame_after_source_begin_seconds": 0.1712031364440918,
+          "non_black_rendered_sample": true
+        },
+        {
+          "video_frames_decoded": 120,
+          "presented_callbacks": 107,
+          "audio_RMS": 0.11263038467595114,
+          "reported_RTP_packets_lost": [
+            0,
+            0
+          ],
+          "first_frame_after_source_begin_seconds": 0.971203088760376,
+          "non_black_rendered_sample": true
+        }
+      ],
+      "source_factory_count": 1,
+      "sources_closed": true,
+      "relay_exit": 0,
+      "Cython_websocket_reader": true,
+      "physical_audibility_or_AV_sync": false,
+      "HEVC_viewer_playback_report_received": false
+    },
+    "finite_probe": {
+      "new_controls": 4,
+      "unchanged_all_four_fail": true,
+      "complete_original_AAC_and_track_clocks_in_held_tail_controls": true,
+      "continuous_analysis_policy_unchanged": true,
+      "probe_queue_startup_and_idle_budgets_increased": false
+    },
+    "local_validation": {
+      "library_tests": 5056,
+      "coverage_percent": 90.39,
+      "HA_example_tests_including_real_relay": 212,
+      "real_relay_controls": 8,
+      "library_mypy_files": 243,
+      "HA_example_mypy_files": 15,
+      "Pyright_errors": 0,
+      "Ruff_spelling_clean": true,
+      "camera_source_controls": 3,
+      "aiohttp_active_closed_controls": 4,
+      "aiohttp_closed_controls_fail_unchanged": 2,
+      "full_dependency_or_platform_CI_claimed": false
+    }
   }
 }

@@ -2,6 +2,10 @@
 
 This review includes **source proposals, not installed dependencies**. They close
 local finite-recording startup, AAC-to-Opus attachment, delivery and clock gaps.
+The current [automatic receiver/browser follow-up](automatic-client-qualification.md)
+adds Pion pull-path recovery, non-acquiring offer validation, finite-probe startup
+and a server WebSocket closed-heartbeat correction. Earlier counts below are
+historical checkpoints; the follow-up and manifest identify current evidence.
 Stock HA/go2rtc/FFmpeg do not acquire these guarantees from installing pyezvizapi.
 Do not replace a managed HA component or relay binary with this bundle.
 
@@ -10,10 +14,12 @@ Do not replace a managed HA component or relay binary with this bundle.
 | Proposal | Public source base | Contents |
 | --- | --- | --- |
 | [go2rtc](go2rtc-native-consumer.patch) | AlexxIT/go2rtc `7c05066c90ab6ad1fccb506d5f0408aa31ebe60f` (1.9.15) | Cumulative Go runtime/tests: source clocks, finite EOF, no retry, atomic runtime ownership, HEVC AP correction, bounded native queues, explicit joint Opus profile, RTCP mapping, NACK feedback and negotiated RTX repair |
-| [HA stream](home-assistant-finite-stream.patch) | home-assistant/core `357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b` (2026.10.4) | Cumulative stream component/tests: initial clocks, owner-confirmed finite completion, publication/revocation, bounded AAC-first startup and declared AAC filtering |
+| [Pion receiver](pion-rtx-pull.patch) | pion/webrtc `0b9c2d861edeffda1eee0923f0acf3cf90914feb` (`v4.2.25`) | Existing SRTP primary/repair pull association, original-identity interceptor traversal, deadlines/close and automatic feedback regressions |
+| [aiohttp](aiohttp-closed-heartbeat.patch) | aio-libs/aiohttp `f17c631bddcfd4ec712342db28f1d3381a3fec71` (`v3.14.5`) | Ignore late/deferred heartbeat resets after WebSocket closure; active-connection controls |
+| [HA stream/camera](home-assistant-finite-stream.patch) | home-assistant/core `357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b` (2026.10.4) | Cumulative stream component/tests: initial clocks, owner-confirmed finite completion, publication/revocation, bounded AAC-first startup, declared AAC filtering and provider-preserving public offer preflight |
 | [FFmpeg](ffmpeg-parser-source-and-fate.patch) | FFmpeg `946fcce07b6dcd0331c8cc609192aeff5e1924f8` (`n9.0.2`) | Unknown parser byte-position initialization and generated AAC FATE regression |
 
-Upstream licenses remain applicable: go2rtc MIT, HA Apache-2.0, and FFmpeg's
+Upstream licenses remain applicable: go2rtc/Pion MIT, HA Apache-2.0, aiohttp Apache-2.0/MIT, and FFmpeg's
 applicable source licenses/build configuration. The patches retain source notices.
 They are review inputs for their respective maintainers, not upstream submissions,
 releases or a commitment to maintain a bundled fork. Human review and current
@@ -31,7 +37,8 @@ ending unexpectedly is still not successful recording completion.
 
 The joint profile additionally requires:
 
-- The public HA `source-access-units-v1` completion API and explicit initial-clock
+- The public HA `source-access-units-v1` completion API, public
+  `Camera.async_validate_webrtc_offer` hook, and explicit initial-clock
   preservation; unsupported hosts reject before native acquisition.
 - Negotiated relay `native-opus-source-clock-v1`, source-clock, no-retry and
   `runtime-token-v1` features before registration/acquisition. No silent fallback.
@@ -72,7 +79,9 @@ isolated source tree, with `git apply --check /absolute/path/to/patch` followed 
 to the earlier private prototypes. Apply-check and resulting source hashes were
 verified against the public bases; [provenance](qualification.json) records hashes.
 
-For go2rtc, with Go and FFmpeg/libopus installed:
+For the original go2rtc-only checkpoint, with Go and FFmpeg/libopus installed
+(the automatic receiver follow-up also needs the Pion proposal and Go workspace
+described in [its report](automatic-client-qualification.md)):
 
 ```sh
 go test -p 2 -race -vet=off ./pkg/webrtc ./pkg/rtsp ./pkg/mpegts ./internal/streams \

@@ -4,7 +4,11 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 
-from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera import (
+    Camera,
+    CameraEntityFeature,
+    WebRTCError,
+)
 from homeassistant.components.stream import Stream
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -17,6 +21,7 @@ from .const import status_signal
 from .entry_runtime import GroupEntry, LensRuntime
 from .relay import RelayError
 from .route import Runtime, source_url
+from .webrtc_offer import receives_codec
 
 _hls_source: ContextVar[bool] = ContextVar("ezviz_native_hls_source", default=False)
 
@@ -60,7 +65,10 @@ class NativeCamera(Camera):
             self.stream_options["preserve_initial_timestamps"] = True
 
     def _require_finite_host(self) -> None:
-        if self.runtime.settings.relay_native_opus and not finite_source_host_available():
+        if self.runtime.settings.relay_native_opus and (
+            not finite_source_host_available()
+            or not callable(getattr(Camera, "async_validate_webrtc_offer", None))
+        ):
             raise HomeAssistantError("Native finite AV requires the public HA finite-source API")
 
     async def stream_source(self) -> str | None:
@@ -85,6 +93,19 @@ class NativeCamera(Camera):
                     self.runtime.entry.relay_failed()
                 raise
         return upstream
+
+    @callback
+    def async_validate_webrtc_offer(self, offer_sdp: str) -> WebRTCError | None:
+        """Preflight the explicit joint profile without claiming native signaling."""
+        if self.runtime.settings.relay_native_opus:
+            video = "H265" if self.runtime.settings.options.video_codec == "hevc" else "H264"
+            for kind, codec, rate in (("video", video, 90000), ("audio", "opus", 48000)):
+                if not receives_codec(offer_sdp, kind, codec, rate):
+                    return WebRTCError(
+                        f"unsupported_{kind}_codec",
+                        f"This client cannot receive the configured native {codec} {kind} stream.",
+                    )
+        return None
 
     async def async_create_stream(self) -> Stream | None:
         """Keep HLS on original AAC while WebRTC requests the native Opus view."""

@@ -13,6 +13,15 @@ from homeassistant.core import HomeAssistant
 from .entry_runtime import LensRuntime
 
 CONTRACT = "source-access-units-v1"
+_HOST_METHODS = ("async_prepare_finite_source", "async_confirm_finite_source",
+                 "async_cancel_finite_source")
+
+
+def finite_source_host_available() -> bool:
+    """Inspect the public host contract without a stream, registration or source."""
+    return (getattr(ha_stream, "FINITE_SOURCE_COMPLETION_CONTRACT", None) == CONTRACT
+            and callable(getattr(ha_stream, "FiniteSourceCounts", None))
+            and all(callable(getattr(Stream, name, None)) for name in _HOST_METHODS))
 
 
 class _FiniteHost(Protocol):
@@ -100,8 +109,7 @@ def maybe_finite_delivery(
     if (not runtime.settings.options.finite_source
             or getattr(ha_stream, "FINITE_SOURCE_COMPLETION_CONTRACT", None) != CONTRACT):
         return None
-    names = ("async_prepare_finite_source", "async_confirm_finite_source", "async_cancel_finite_source")
-    if not all(callable(getattr(stream, name, None)) for name in names):
+    if not all(callable(getattr(stream, name, None)) for name in _HOST_METHODS):
         raise RuntimeError("HA finite-source contract is incomplete")
     if not callable(getattr(ha_stream, "FiniteSourceCounts", None)):
         raise RuntimeError("HA finite-source count contract is missing")

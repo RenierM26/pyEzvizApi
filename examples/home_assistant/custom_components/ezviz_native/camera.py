@@ -12,7 +12,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NativeConfigEntry
-from .completion import GroupFiniteDelivery, maybe_finite_delivery
+from .completion import GroupFiniteDelivery, finite_source_host_available, maybe_finite_delivery
 from .const import status_signal
 from .entry_runtime import GroupEntry, LensRuntime
 from .relay import RelayError
@@ -59,10 +59,15 @@ class NativeCamera(Camera):
         if self.runtime.settings.relay_native_opus:
             self.stream_options["preserve_initial_timestamps"] = True
 
+    def _require_finite_host(self) -> None:
+        if self.runtime.settings.relay_native_opus and not finite_source_host_available():
+            raise HomeAssistantError("Native finite AV requires the public HA finite-source API")
+
     async def stream_source(self) -> str | None:
         """Return only the internal capability, never camera credentials."""
         if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:
             return None
+        self._require_finite_host()
         upstream = (self.runtime.upstream(self.hass) if isinstance(self.runtime, LensRuntime)
                     else source_url(self.hass, self.entry_id, self.runtime))
         if self.runtime.relay is not None:
@@ -93,6 +98,7 @@ class NativeCamera(Camera):
         """Do not let HA's cached HLS stream bypass exhausted source admission."""
         if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:
             return None
+        self._require_finite_host()
         async with self._delivery_create_lock:
             token = self.runtime.token
             if self.runtime.closing or self.runtime.exhausted or self.runtime.rearming:

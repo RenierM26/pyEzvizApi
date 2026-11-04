@@ -220,5 +220,13 @@
     "cause_not_fully_localized": true,
     "not_hidden_by_larger_buffers_or_tolerance": true,
     "does_not_claim_arbitrary_burst_loss_recovery": true
+  },
+  "review_follow_up": {
+    "finding": "https://github.com/RenierM26/pyEzvizApi/pull/397#discussion_r4466285132",
+    "native_joint_profile_host_preflight_before_HLS_or_WebRTC_registration": true,
+    "incomplete_host_regression_cases": 12,
+    "supported_direct_WebRTC_without_HLS_control": true,
+    "HA_example_tests_with_real_relay_enabled": 182,
+    "media_checkpoint_above_not_replaced_by_this_admission_only_change": true
   }
 }

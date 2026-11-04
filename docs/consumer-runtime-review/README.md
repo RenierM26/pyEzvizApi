@@ -1,6 +1,6 @@
 # Finite HLS/WebRTC source-review bundle
 
-This draft includes **source proposals, not installed dependencies**. They close
+This review includes **source proposals, not installed dependencies**. They close
 local finite-recording startup, AAC-to-Opus attachment, delivery and clock gaps.
 Stock HA/go2rtc/FFmpeg do not acquire these guarantees from installing pyezvizapi.
 Do not replace a managed HA component or relay binary with this bundle.
@@ -150,4 +150,17 @@ physical A/V acceptance, real deployment proxy/auth/WebSocket behavior, attended
 live/battery tests, long-run stability, arbitrary source profiles, maintained
 upstream dependency releases and a supported core-HA integration. The test edge
 is not production TLS topology certification. No production/camera changes,
-merge or release are implied. Keep the PR draft.
+merge or release are implied. Ready-for-review status is not deployment or
+release approval.
+
+## Review follow-up: host negotiation before either consumer
+
+Native joint-profile source selection now checks the exact public HA contract
+marker, count constructor and Stream prepare/confirm/cancel methods before
+creating any upstream/relay URL. The same preflight guards cached HLS creation,
+so direct WebRTC cannot bypass host negotiation or consume a one-shot attempt on
+an unsupported host. Complete hosts still allow WebRTC without first creating
+HLS. Twelve incomplete-host regression cases fail before the fix and pass after
+it; all 182 example tests (including the eight real-relay cases) pass locally.
+The earlier 169-test and media qualification records above remain their original
+checkpoint; this guard changes admission, not media bytes/clocks or queue limits.

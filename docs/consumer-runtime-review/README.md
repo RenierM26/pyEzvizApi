@@ -94,7 +94,7 @@ Python 3.14 environment:
 uv run --no-sync pytest tests/components/stream
 ```
 
-The extracted combined component suite passes **152 tests**. Its new deterministic
+The extracted combined component suite passes **158 tests**. Its new deterministic
 controls include 0/1/2/19/20 audio-prefix packets, legacy trimming, over-limit and
 non-key rejection, AAC filter selection without consuming probe packets, and the
 explicit versus legacy RTSP open budget. Changed source/test Ruff and scoped
@@ -187,3 +187,15 @@ and retries at most once on a transient descendant-access race; persistent activ
 process and root permission errors still fail. Seven new real-process/controlled
 race cases cover these boundaries; media/resource caps and the wall guard are
 unchanged. Full local follow-up validation passes 5,048 tests at 90.38% coverage.
+
+## Review follow-up: terminal master-playlist waiter
+
+A master-playlist request already waiting for its first segment now rechecks
+completed media after `recv()` returns false on terminal completion. Atomic
+publication followed by `finish()` must return the completed playlist, not 404.
+Six deterministic LL/non-LL controls latch the waiter before publication:
+completed media returns 200; empty completion and cleanup still return 404.
+The two media cases fail on the previous proposal; all six pass with this guard.
+Generic receiver end semantics and acquisition/buffering limits are unchanged.
+The cumulative patch was re-extracted and apply-checked at the same public base;
+this proposal-only follow-up does not claim a new retained playback run.

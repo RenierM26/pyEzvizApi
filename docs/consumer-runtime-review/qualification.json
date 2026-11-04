@@ -65,14 +65,14 @@
       "homeassistant/components/stream/const.py": "2d5a6202e983c20c65c6ba674208116dd717df722108a051d065128a16a85112",
       "homeassistant/components/stream/core.py": "fea05e80531217f109a24ae1f2e88e2d85c3ccccdb5702e0e722e4e445d3c691",
       "homeassistant/components/stream/finite.py": "559e6d7e90dc796e5a32500941a324cb975f0ef75fc6ea8300770a73c500a453",
-      "homeassistant/components/stream/hls.py": "b4997ba1004450cdd7cf75ee67b2386279cc4451447ecf473d8b9e830fab5808",
+      "homeassistant/components/stream/hls.py": "f1f3321fc484a800189be93a36a7a529d77e111b344318144371d6bb4866f2db",
       "homeassistant/components/stream/worker.py": "1668f1658cbf525afaac57591eaaa56c5ad1a6191ac3338b6b5acac072dfe410",
-      "tests/components/stream/test_finite_source.py": "0824df813c67c601180c5274c1e2f6b7075cd53496f1d70a5b1f002dd6b700d8",
+      "tests/components/stream/test_finite_source.py": "146ec16d01121352094b2692a38f31e7e3b0058a4186eb6a3c99bdb514264862",
       "tests/components/stream/test_finite_source_contract.py": "db7e5c4c66f302b70f3938ef6b64a60f35a1bd25e9407cf03af2716e8ea83810",
       "tests/components/stream/test_finite_startup.py": "2c407dd63ced75e5b735f9e05c7d9bacf238154bef71a3efe427f1f761bf3e73",
       "tests/components/stream/test_worker.py": "c83ae3e3b61b920ec619cf746c3a663c5e04f5d433eec2322a34c583c362ad1e"
     },
-    "combined_component_tests": 152,
+    "combined_component_tests": 158,
     "new_startup_cases": 15,
     "full_repository_or_platform_CI_claimed": false
   },
@@ -93,7 +93,7 @@
   "patch_sha256": {
     "ffmpeg-parser-source-and-fate.patch": "c00bbe6ff11b02377a98f71147524e83ccb2a5f08092b1f3ae156604e2b03424",
     "go2rtc-native-consumer.patch": "69c926382aafb2734f09e5cf8d5a15ce0d9010f141ef3ac20bdffe084054b5ae",
-    "home-assistant-finite-stream.patch": "9831b6283e66648ebbb1bf6291ac82568268a6a8d14945c4e0cf9b24e2fd7922"
+    "home-assistant-finite-stream.patch": "df4700fb4922ec3ad47d78971163381697adb168a76c7b0b3b93b4865e75725c"
   },
   "python": {
     "library_tests": 5032,
@@ -242,6 +242,10 @@
     "process_sampler_root_and_persistent_active_permission_errors_remain_fatal": true,
     "process_sampler_transient_retry_maximum": 1,
     "full_library_tests_after_all_followups": 5048,
-    "library_coverage_after_all_followups_percent": 90.38
+    "library_coverage_after_all_followups_percent": 90.38,
+    "master_playlist_waiter_finding": "https://github.com/RenierM26/pyEzvizApi/pull/397#discussion_r4466839405",
+    "master_playlist_waiter_controls_added": 6,
+    "terminal_media_waiter_returns_playlist": true,
+    "empty_terminal_and_cleanup_waiters_remain_404": true
   }
 }

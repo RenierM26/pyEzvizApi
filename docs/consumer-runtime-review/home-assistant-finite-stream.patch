@@ -1,6 +1,8 @@
+diff --git a/homeassistant/components/stream/__init__.py b/homeassistant/components/stream/__init__.py
+index 89993013..0ec30293 100644
 --- a/homeassistant/components/stream/__init__.py
 +++ b/homeassistant/components/stream/__init__.py
-@@ -48,6 +48,7 @@
+@@ -48,6 +48,7 @@ from .const import (
      CONF_EXTRA_PART_WAIT_TIME,
      CONF_LL_HLS,
      CONF_PART_DURATION,
@@ -8,7 +10,7 @@
      CONF_RTSP_TRANSPORT,
      CONF_SEGMENT_DURATION,
      CONF_USE_WALLCLOCK_AS_TIMESTAMPS,
-@@ -77,22 +78,36 @@
+@@ -77,22 +78,36 @@ from .core import (
  )
  from .diagnostics import Diagnostics
  from .exceptions import StreamOpenClientError, StreamWorkerError
@@ -22,10 +24,10 @@
  
  if TYPE_CHECKING:
      from homeassistant.components.camera import DynamicStreamSettings
-+
+ 
 +FINITE_SOURCE_COMPLETION_CONTRACT = "source-access-units-v1"
 +
- 
++
  __all__ = [
      "ATTR_SETTINGS",
      "CONF_EXTRA_PART_WAIT_TIME",
@@ -45,7 +47,7 @@
      "Orientation",
      "Stream",
      "StreamClientError",
-@@ -159,6 +174,16 @@
+@@ -159,6 +174,16 @@ def _convert_stream_options(
      except probatio.Invalid as exc:
          raise HomeAssistantError(f"Invalid stream options: {exc}") from exc
  
@@ -62,7 +64,7 @@
      # FFmpeg 9 verifies TLS peers by default; cameras use self-signed certificates
      pyav_options: dict[str, str] = {
          "tls_verify": "1" if stream_options.get(CONF_VERIFY_SSL) else "0"
-@@ -178,7 +203,9 @@
+@@ -178,7 +203,9 @@ def _convert_stream_options(
      if isinstance(stream_source, str) and stream_source[:7] == "rtsp://":
          pyav_options = {
              "rtsp_flags": ATTR_PREFER_TCP,
@@ -73,7 +75,7 @@
              **pyav_options,
          }
      return pyav_options, stream_settings
-@@ -356,6 +383,61 @@
+@@ -356,6 +383,61 @@ class Stream:
              else _LOGGER
          )
          self._diagnostics = Diagnostics()
@@ -135,7 +137,7 @@
  
      def endpoint_url(self, fmt: str) -> str:
          """Start the stream and returns a url for the output format."""
-@@ -374,6 +456,20 @@
+@@ -374,6 +456,20 @@ class Stream:
  
      def add_provider(self, fmt: str, timeout: int | None = None) -> StreamOutput:
          """Add provider output stream."""
@@ -156,7 +158,7 @@
          if not (provider := self._outputs.get(fmt)):
              startup_timeout = OUTPUT_STARTUP_TIMEOUT
              if timeout is None:
-@@ -383,7 +479,8 @@
+@@ -383,7 +479,8 @@ class Stream:
  
              async def idle_callback() -> None:
                  if (
@@ -166,7 +168,7 @@
                      or fmt == RECORDER_PROVIDER
                  ) and fmt in self._outputs:
                      await self.remove_provider(self._outputs[fmt])
-@@ -437,6 +534,9 @@
+@@ -437,6 +534,9 @@ class Stream:
          async with self._start_stop_lock:
              if self._thread and self._thread.is_alive():
                  return
@@ -176,7 +178,7 @@
              if self._thread is not None:
                  # The thread must have crashed/exited. Join to clean up the
                  # previous thread.
-@@ -446,13 +546,20 @@
+@@ -446,13 +546,20 @@ class Stream:
                  name="stream_worker",
                  target=self._run_worker,
              )
@@ -198,7 +200,7 @@
          self._diagnostics.increment("update_source")
          self._logger.debug(
              "Updating stream source %s", redact_credentials(str(new_source))
-@@ -475,6 +582,9 @@
+@@ -475,6 +582,9 @@ class Stream:
          from .worker import StreamState, stream_worker  # noqa: PLC0415
  
          stream_state = StreamState(self.hass, self.outputs, self._diagnostics)
@@ -208,7 +210,7 @@
          wait_timeout = 0
          while not self._thread_quit.wait(timeout=wait_timeout):
              start_time = time.time()
-@@ -496,9 +606,24 @@
+@@ -496,9 +606,24 @@ class Stream:
                      self._thread_quit,
                  )
              except StreamWorkerError as err:
@@ -233,7 +235,7 @@
              stream_state.discontinuity()
              if not _should_retry() or self._thread_quit.is_set():
                  if self._fast_restart_once:
-@@ -528,6 +653,12 @@
+@@ -528,6 +653,12 @@ class Stream:
              )
  
          async def worker_finished() -> None:
@@ -246,7 +248,7 @@
              # The worker is no longer checking availability
              # of the stream and can no longer track it so
              # mark it as available, otherwise the frontend
-@@ -543,10 +674,17 @@
+@@ -543,10 +674,17 @@ class Stream:
  
      async def stop(self) -> None:
          """Remove outputs and access token."""
@@ -265,7 +267,7 @@
              await self._stop()
  
      async def _stop(self) -> None:
-@@ -637,6 +775,7 @@
+@@ -637,6 +775,7 @@ STREAM_OPTIONS_SCHEMA: Final = probatio.Schema(
      {
          probatio.Optional(CONF_RTSP_TRANSPORT): probatio.In(RTSP_TRANSPORTS),
          probatio.Optional(CONF_USE_WALLCLOCK_AS_TIMESTAMPS): bool,
@@ -273,9 +275,11 @@
          probatio.Optional(CONF_EXTRA_PART_WAIT_TIME): cv.positive_float,
          probatio.Optional(CONF_VERIFY_SSL): bool,
      }
+diff --git a/homeassistant/components/stream/const.py b/homeassistant/components/stream/const.py
+index caba25a4..08d816bf 100644
 --- a/homeassistant/components/stream/const.py
 +++ b/homeassistant/components/stream/const.py
-@@ -58,6 +58,7 @@
+@@ -58,6 +58,7 @@ RTSP_TRANSPORTS = {
      "http": "HTTP",
  }
  CONF_USE_WALLCLOCK_AS_TIMESTAMPS = "use_wallclock_as_timestamps"
@@ -283,9 +287,11 @@
  CONF_EXTRA_PART_WAIT_TIME = "extra_part_wait_time"
  
  
+diff --git a/homeassistant/components/stream/core.py b/homeassistant/components/stream/core.py
+index 3a3d9f9a..9b17c5e4 100644
 --- a/homeassistant/components/stream/core.py
 +++ b/homeassistant/components/stream/core.py
-@@ -58,6 +58,7 @@
+@@ -58,6 +58,7 @@ class StreamSettings:
      part_target_duration: float
      hls_advance_part_limit: int
      hls_part_timeout: float
@@ -293,7 +299,7 @@
  
  
  STREAM_SETTINGS_NON_LL_HLS = StreamSettings(
-@@ -90,6 +91,7 @@
+@@ -90,6 +91,7 @@ class Segment:
      stream_id: int
      start_time: datetime.datetime
      _stream_outputs: Iterable[StreamOutput]
@@ -301,13 +307,13 @@
      duration: float = 0
      parts: list[Part] = field(default_factory=list)
      # Store text of this segment's hls playlist for reuse
-@@ -104,7 +106,18 @@
+@@ -104,8 +106,19 @@ class Segment:
      def __post_init__(self) -> None:
          """Run after init."""
          for output in self._stream_outputs:
 +            self._published = True
              output.put(self)
-+
+ 
 +    @callback
 +    def async_publish(self, outputs: Iterable[StreamOutput]) -> None:
 +        """Publish an unpublished finite segment on the event loop."""
@@ -317,10 +323,11 @@
 +        self._published = True
 +        for output in self._stream_outputs:
 +            output.async_put(self)
- 
++
      @property
      def complete(self) -> bool:
-@@ -286,6 +299,8 @@
+         """Return whether the Segment is complete."""
+@@ -286,6 +299,8 @@ class StreamOutput:
          self.dynamic_stream_settings = dynamic_stream_settings
          self._event = asyncio.Event()
          self._part_event = asyncio.Event()
@@ -329,7 +336,7 @@
          self._segments: deque[Segment] = deque(maxlen=deque_maxlen)
  
      @property
-@@ -331,12 +346,14 @@
+@@ -331,12 +346,14 @@ class StreamOutput:
  
      async def part_recv(self, timeout: float | None = None) -> bool:
          """Wait for an event signalling the latest part segment."""
@@ -345,7 +352,7 @@
  
      def part_put(self) -> None:
          """Set event signalling the latest part segment."""
-@@ -346,24 +363,42 @@
+@@ -346,24 +363,42 @@ class StreamOutput:
  
      async def recv(self) -> bool:
          """Wait for the latest segment."""
@@ -359,12 +366,12 @@
          """Store output."""
          self._hass.loop.call_soon_threadsafe(self._async_put, segment)
  
-     @callback
++    @callback
 +    def async_put(self, segment: Segment) -> None:
 +        """Publish from an existing event-loop transaction."""
 +        self._async_put(segment)
 +
-+    @callback
+     @callback
      def _async_put(self, segment: Segment) -> None:
          """Store output from event loop."""
 +        if self.ended:
@@ -389,7 +396,7 @@
          self._event.set()
          self.idle_timer.clear()
  
-@@ -393,6 +428,11 @@
+@@ -393,6 +428,11 @@ class StreamView(HomeAssistantView):
  
          # Start worker if not already started
          await stream.start()
@@ -401,6 +408,9 @@
  
          return await self.handle(request, stream, sequence, part_num)
  
+diff --git a/homeassistant/components/stream/finite.py b/homeassistant/components/stream/finite.py
+new file mode 100644
+index 00000000..5b5b3b1c
 --- /dev/null
 +++ b/homeassistant/components/stream/finite.py
 @@ -0,0 +1,158 @@
@@ -562,9 +572,11 @@
 +            if self._state != FiniteSourceState.FAILED:
 +                self._state = FiniteSourceState.CANCELLED
 +            self._changed.set()
+diff --git a/homeassistant/components/stream/hls.py b/homeassistant/components/stream/hls.py
+index 75c8ab43..db377a80 100644
 --- a/homeassistant/components/stream/hls.py
 +++ b/homeassistant/components/stream/hls.py
-@@ -127,7 +127,11 @@
+@@ -127,7 +127,11 @@ class HlsMasterPlaylistView(StreamView):
          # Calculate file size / duration and use a small
          # multiplier to account for variation
          # hls spec already allows for 25% variation
@@ -577,9 +589,16 @@
              return ""
          bandwidth = round(segment.data_size_with_init * 8 / segment.duration * 1.2)
          codecs = get_codec_string(segment.init)
-@@ -148,7 +152,12 @@
+@@ -146,9 +150,18 @@ class HlsMasterPlaylistView(StreamView):
+         track = stream.add_provider(HLS_PROVIDER)
+         await stream.start()
          # Make sure at least two segments are ready (last one may not be complete)
-         if not track.sequences and not await track.recv():
+-        if not track.sequences and not await track.recv():
++        if (
++            not track.sequences
++            and not await track.recv()
++            and not (track.completed and track.sequences)
++        ):
              return web.HTTPNotFound()
 -        if len(track.sequences) == 1 and not await track.recv():
 +        if (
@@ -591,24 +610,21 @@
              return web.HTTPNotFound()
          response = web.Response(
              body=self.render(track).encode("utf-8"),
-@@ -236,10 +245,12 @@
+@@ -236,10 +249,12 @@ class HlsPlaylistView(StreamView):
              segments[-1].render_hls(
                  last_stream_id=last_stream_id,
                  render_parts=track.stream_settings.ll_hls,
 -                add_hint=track.stream_settings.ll_hls,
--            )
--        )
--
 +                add_hint=track.stream_settings.ll_hls and not track.completed,
-+            )
-+        )
-+
+             )
+         )
+ 
 +        if track.completed:
 +            playlist.append("#EXT-X-ENDLIST")
          return "\n".join(playlist) + "\n"
  
      @staticmethod
-@@ -278,6 +289,8 @@
+@@ -278,6 +293,8 @@ class HlsPlaylistView(StreamView):
              return web.HTTPBadRequest()
  
          hls_msn = int(hls_msn or 0)
@@ -617,7 +633,7 @@
  
          # If the _HLS_msn is greater than the Media Sequence Number of the last
          # Media Segment in the current Playlist plus two, or if the _HLS_part
-@@ -296,7 +309,11 @@
+@@ -296,7 +313,11 @@ class HlsPlaylistView(StreamView):
  
          while hls_msn > track.last_sequence:
              if not await track.recv():
@@ -630,7 +646,7 @@
          if track.last_segment is None:
              return self.not_found(blocking_request, 0)
          if (
-@@ -318,7 +335,11 @@
+@@ -318,7 +339,11 @@ class HlsPlaylistView(StreamView):
              if not await track.part_recv(
                  timeout=track.stream_settings.hls_part_timeout
              ):
@@ -643,7 +659,7 @@
          # Now we should have msn.part >= hls_msn.hls_part. However, in the case
          # that we have a rollover part request from the previous segment, we need
          # to make sure that the new segment has a part. From 6.2.5.2 of the RFC:
-@@ -335,8 +356,13 @@
+@@ -335,8 +360,13 @@ class HlsPlaylistView(StreamView):
              ):
                  return self.not_found(blocking_request, track.target_duration)
  
@@ -658,9 +674,11 @@
              headers={
                  "Content-Type": FORMAT_CONTENT_TYPE[HLS_PROVIDER],
              },
+diff --git a/homeassistant/components/stream/worker.py b/homeassistant/components/stream/worker.py
+index 70bf93ae..dffe3771 100644
 --- a/homeassistant/components/stream/worker.py
 +++ b/homeassistant/components/stream/worker.py
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,8 @@ from collections.abc import Callable, Generator, Iterator, Mapping
  import contextlib
  from dataclasses import fields
  import datetime
@@ -669,7 +687,7 @@
  from io import SEEK_END, BytesIO
  import logging
  import math
-@@ -16,6 +18,7 @@
+@@ -16,6 +18,7 @@ import av.audio
  from av.codec.codec import UnknownCodecError  # pylint: disable=no-name-in-module
  import av.container
  from av.container import InputContainer
@@ -677,7 +695,7 @@
  import av.stream
  
  from homeassistant.core import HomeAssistant
-@@ -42,6 +45,7 @@
+@@ -42,6 +45,7 @@ from .core import (
  )
  from .diagnostics import Diagnostics
  from .exceptions import StreamEndedError, StreamWorkerError
@@ -685,7 +703,7 @@
  from .fmp4utils import read_init
  from .hls import HlsStreamOutput
  
-@@ -81,6 +85,10 @@
+@@ -81,6 +85,10 @@ class StreamState:
          # has a sequence number of 0.
          self._sequence = -1
          self._diagnostics = diagnostics
@@ -696,7 +714,7 @@
  
      @property
      def sequence(self) -> int:
-@@ -150,6 +158,10 @@
+@@ -150,6 +158,10 @@ class StreamMuxer:
          self._stream_settings = stream_settings
          self._stream_state = stream_state
          self._start_time = dt_util.utcnow()
@@ -707,7 +725,7 @@
  
      @staticmethod
      def _add_stream_from_template(
-@@ -287,6 +299,14 @@
+@@ -287,6 +299,14 @@ class StreamMuxer:
      def mux_packet(self, packet: av.Packet) -> None:
          """Mux a packet to the appropriate output stream."""
  
@@ -722,7 +740,7 @@
          # Check for end of segment
          if packet.stream == self._input_video_stream:
              if (
-@@ -422,8 +442,84 @@
+@@ -422,8 +442,84 @@ class StreamMuxer:
              self._part_start_dts = adjusted_dts
          self._part_has_keyframe = False
  
@@ -807,7 +825,7 @@
          try:
              self._av_output.close()
          finally:
-@@ -491,12 +587,47 @@
+@@ -491,12 +587,47 @@ class PeekIterator(Iterator[av.Packet]):
              yield packet
  
  
@@ -856,7 +874,7 @@
      if (
          first_video_packet is None
          or not first_video_packet.is_keyframe
-@@ -562,11 +693,15 @@
+@@ -562,11 +693,15 @@ def is_keyframe(packet: av.Packet) -> Any:
  
  
  def get_audio_bitstream_filter(
@@ -873,12 +891,10 @@
      for count, packet in enumerate(packets):
          if count >= PACKETS_TO_WAIT_FOR_AUDIO:
              # Some streams declare an audio stream and never send any packets
-@@ -624,6 +759,21 @@
-         raise StreamWorkerError(
-             f"Error opening stream ({redact_av_error_string(err)})"
+@@ -626,6 +761,21 @@ def try_open_stream(
          ) from err
-+
-+
+ 
+ 
 +def _finite_packet_valid(validator: TimestampValidator, packet: av.Packet) -> bool:
 +    """Refuse clock loss/reordering/discard instead of certifying partial input."""
 +    if packet.size:
@@ -892,10 +908,12 @@
 +            )
 +        return True
 +    return validator.is_valid(packet)
- 
- 
++
++
  def stream_worker(
-@@ -658,6 +808,8 @@
+     source: str,
+     pyav_options: dict[str, str],
+@@ -658,6 +808,8 @@ def stream_worker(
      # Disable ll-hls for hls inputs
      if container.format.name == "hls":
          for field in fields(StreamSettings):
@@ -904,7 +922,7 @@
              setattr(
                  stream_settings,
                  field.name,
-@@ -673,9 +825,11 @@
+@@ -673,9 +825,11 @@ def stream_worker(
          int(1 / audio_stream.time_base) if audio_stream else 1,
      )
      unvalidated_packets = PeekIterator(container.demux((video_stream, audio_stream)))
@@ -919,7 +937,7 @@
  
      def is_video(packet: av.Packet) -> Any:
          """Return true if the packet is for the video stream."""
-@@ -688,26 +842,37 @@
+@@ -688,26 +842,37 @@ def stream_worker(
      # Use a peeking iterator to peek into the start of the stream, ensuring
      # everything looks good, then go back to the start when muxing below.
      try:
@@ -939,7 +957,9 @@
          # loop below can consume.
 -        first_keyframe = next(
 -            filter(lambda pkt: is_keyframe(pkt) and is_video(pkt), container_packets)
--        )
++        first_keyframe = _initial_keyframe(
++            container_packets, finite=stream_state.finite_source is not None
+         )
 -        # Deal with problem #1 above (bad first packet pts/dts) by recalculating
 -        # using pts/dts from second packet. Use the peek iterator to advance
 -        # without consuming from container_packets. Skip over the first keyframe
@@ -952,9 +972,6 @@
 -        assert next_video_packet.dts is not None
 -        start_dts = next_video_packet.dts - (next_video_packet.duration or 1)
 -        first_keyframe.dts = first_keyframe.pts = start_dts
-+        first_keyframe = _initial_keyframe(
-+            container_packets, finite=stream_state.finite_source is not None
-+        )
 +        if stream_settings.preserve_initial_timestamps:
 +            # Explicitly asserted source clocks must be present, not inferred.
 +            start_dts = _source_initial_dts(first_keyframe)
@@ -974,7 +991,7 @@
      except StreamWorkerError:
          container.close()
          raise
-@@ -734,7 +899,11 @@
+@@ -734,7 +899,11 @@ def stream_worker(
      with closing_stream_worker(container, muxer):
          # Mux the first keyframe, then proceed through the rest of the packets
          try:
@@ -987,7 +1004,7 @@
          except av.FFmpegError as ex:
              raise StreamWorkerError(
                  f"Error muxing first keyframe ({redact_av_error_string(ex)})"
-@@ -746,6 +915,17 @@
+@@ -746,6 +915,17 @@ def stream_worker(
              except StreamWorkerError:
                  raise
              except StopIteration as ex:
@@ -1005,9 +1022,12 @@
                  raise StreamEndedError("Stream ended; no additional packets") from ex
              except av.FFmpegError as ex:
                  raise StreamWorkerError(
+diff --git a/tests/components/stream/test_finite_source.py b/tests/components/stream/test_finite_source.py
+new file mode 100644
+index 00000000..ae0bf847
 --- /dev/null
 +++ b/tests/components/stream/test_finite_source.py
-@@ -0,0 +1,421 @@
+@@ -0,0 +1,473 @@
 +"""Finite source generation, publication and terminal HLS regression controls."""
 +
 +# White-box tests deliberately control thread/publication boundaries.
@@ -1292,6 +1312,58 @@
 +    provider.cleanup()
 +
 +
++@pytest.mark.parametrize("ll", [True, False])
++@pytest.mark.parametrize("terminal", ["media", "empty", "cleanup"])
++async def test_master_waiter_observes_terminal_publication(
++    stream: Stream, ll: bool, terminal: str
++) -> None:
++    """A waiting master request sees synchronously published finite media."""
++    stream._stream_settings.ll_hls = ll
++    provider = stream.add_provider("hls")
++    stream.start = AsyncMock()
++    waiting = asyncio.Event()
++    original_recv = provider.recv
++
++    async def wait_for_segment() -> bool:
++        waiting.set()
++        return await original_recv()
++
++    with (
++        patch.object(provider, "recv", side_effect=wait_for_segment),
++        patch(
++            "homeassistant.components.stream.hls.get_codec_string", return_value="hvc1"
++        ),
++    ):
++        task = asyncio.create_task(
++            HlsMasterPlaylistView().handle(MagicMock(), stream, "", "")
++        )
++        await waiting.wait()
++        assert not task.done() and not provider.sequences
++        if terminal == "media":
++            segment = Segment(
++                sequence=0,
++                init=b"init",
++                stream_id=0,
++                start_time=dt_util.utcnow(),
++                _stream_outputs=(),
++            )
++            segment.async_add_part(
++                Part(data=b"media", duration=1, has_keyframe=True), 1
++            )
++            segment.async_publish([provider])
++        if terminal == "cleanup":
++            provider.cleanup()
++        else:
++            provider.finish()
++        response = await task
++    if terminal == "media":
++        assert response.status == 200 and b"playlist.m3u8" in response.body
++    else:
++        assert response.status == 404
++    await stream.stop()
++    provider.cleanup()
++
++
 +async def test_terminal_idle_cleans_up_even_with_preload(
 +    stream: Stream, hass: HomeAssistant
 +) -> None:
@@ -1429,6 +1501,9 @@
 +    muxer._finite_last = {"video": (0, 0, None, Fraction(1, 90000))}
 +    with pytest.raises(StreamWorkerError, match="terminal sample metadata"):
 +        muxer.prepare_finite_end()
+diff --git a/tests/components/stream/test_finite_source_contract.py b/tests/components/stream/test_finite_source_contract.py
+new file mode 100644
+index 00000000..feaa943a
 --- /dev/null
 +++ b/tests/components/stream/test_finite_source_contract.py
 @@ -0,0 +1,50 @@
@@ -1482,9 +1557,118 @@
 +    stream._async_publish_finite(controller, lambda: published.append(1))
 +    assert not published
 +    await stream.stop()
+diff --git a/tests/components/stream/test_finite_startup.py b/tests/components/stream/test_finite_startup.py
+new file mode 100644
+index 00000000..7b083ed7
+--- /dev/null
++++ b/tests/components/stream/test_finite_startup.py
+@@ -0,0 +1,101 @@
++"""Retain bounded finite AAC startup without changing live stream behavior."""
++
++from collections.abc import Iterator
++from dataclasses import replace
++from types import SimpleNamespace
++from typing import Any
++from unittest.mock import patch
++
++import av
++import pytest
++
++from homeassistant.components.stream import _convert_stream_options, worker
++from homeassistant.components.stream.const import ATTR_SETTINGS, DOMAIN, SOURCE_TIMEOUT
++from homeassistant.core import HomeAssistant
++
++from .test_worker import (
++    AUDIO_STREAM,
++    MockPyAv,
++    PacketSequence,
++    async_decode_stream,
++    mock_stream_settings,  # noqa: F401 -- register the upstream autouse fixture
++)
++
++
++@pytest.mark.parametrize("prefix", [0, 1, 2, 19, 20])
++@pytest.mark.parametrize("finite", [True, False])
++async def test_audio_before_initial_keyframe(
++    hass: HomeAssistant, prefix: int, finite: bool
++) -> None:
++    """Preserve a finite audio prefix; the legacy keyframe search still trims it."""
++    packets = list(PacketSequence(120))
++    audio = list(PacketSequence(prefix))
++    for i, packet in enumerate(audio):
++        packet.stream = AUDIO_STREAM
++        packet.time_base = AUDIO_STREAM.time_base
++        packet.pts = packet.dts = i * 1024
++        packet.duration = 1024
++    py_av = MockPyAv(audio=True)
++    settings = replace(
++        hass.data[DOMAIN][ATTR_SETTINGS], preserve_initial_timestamps=True
++    )
++    original = worker.StreamState.__init__
++
++    def state_init(self: Any, *args: Any, **kwargs: Any) -> None:
++        original(self, *args, **kwargs)
++        if finite:
++            self.finite_source = SimpleNamespace(receive_eof=lambda _: False)
++
++    with patch.object(worker.StreamState, "__init__", state_init):
++        if finite:
++            with pytest.raises(
++                worker.StreamWorkerError, match="completion authorization"
++            ):
++                await async_decode_stream(
++                    hass, audio + packets, py_av=py_av, stream_settings=settings
++                )
++        else:
++            await async_decode_stream(
++                hass, audio + packets, py_av=py_av, stream_settings=settings
++            )
++    assert len(py_av.capture_buffer.audio_packets) == (prefix if finite else 0)
++    assert len(py_av.capture_buffer.video_packets) == 120
++
++
++@pytest.mark.parametrize("bad", ["overflow", "nonkey", "eof"])
++def test_finite_startup_rejects_without_silent_trimming(bad: str) -> None:
++    """Reject overflow, absent keyframes and empty sources without a lossy suffix."""
++    packets = list(PacketSequence(21))
++    for packet in packets:
++        packet.stream = AUDIO_STREAM
++    if bad == "nonkey":
++        packets = list(PacketSequence(2))[1:]
++    if bad == "eof":
++        packets = []
++    expected = StopIteration if bad == "eof" else worker.StreamWorkerError
++    with pytest.raises(expected):
++        worker._finite_first_keyframe(worker.PeekIterator(iter(packets)))
++
++
++def test_declared_finite_aac_does_not_guess_from_video_probe_prefix() -> None:
++    """Select the AAC filter from the declared finite stream, not packet order."""
++
++    class UnreadPackets(Iterator[av.Packet]):
++        def __next__(self) -> av.Packet:
++            raise AssertionError("Finite AAC selection must not consume probe media")
++
++    stream = SimpleNamespace(name="aac")
++    assert (
++        worker.get_audio_bitstream_filter(UnreadPackets(), stream, finite_source=True)
++        == "aac_adtstoasc"
++    )
++
++
++def test_source_clock_rtsp_open_uses_existing_outer_budget(hass: HomeAssistant) -> None:
++    """Use the existing host open budget only for explicit source-clock policy."""
++    options, _ = _convert_stream_options(
++        hass, "rtsp://127.0.0.1/test", {"preserve_initial_timestamps": True}
++    )
++    assert options["stimeout"] == str(SOURCE_TIMEOUT * 1000000)
++    legacy, _ = _convert_stream_options(hass, "rtsp://127.0.0.1/test", {})
++    assert legacy["stimeout"] == "5000000"
+diff --git a/tests/components/stream/test_worker.py b/tests/components/stream/test_worker.py
+index f2ddb961..efa2d5cc 100644
 --- a/tests/components/stream/test_worker.py
 +++ b/tests/components/stream/test_worker.py
-@@ -15,12 +15,14 @@
+@@ -15,12 +15,14 @@ failure modes or corner cases like how out of order packets are handled.
  
  import asyncio
  from collections.abc import Callable
@@ -1499,7 +1683,7 @@
  from unittest.mock import MagicMock, patch
  
  import av
-@@ -28,7 +30,12 @@
+@@ -28,7 +30,12 @@ from av.codec.codec import UnknownCodecError  # pylint: disable=no-name-in-modul
  import numpy as np
  import pytest
  
@@ -1513,7 +1697,7 @@
  from homeassistant.components.stream.const import (
      ATTR_SETTINGS,
      CONF_LL_HLS,
-@@ -52,6 +59,7 @@
+@@ -52,6 +59,7 @@ from homeassistant.components.stream.worker import (
      stream_worker,
  )
  from homeassistant.core import HomeAssistant
@@ -1521,7 +1705,7 @@
  from homeassistant.setup import async_setup_component
  
  from .common import dynamic_stream_settings, generate_h264_video, generate_h265_video
-@@ -1217,3 +1225,110 @@
+@@ -1217,3 +1225,110 @@ def test_add_stream_from_template_decoder_only_fallback() -> None:
          ((template,), {}),
          ((template,), {"opaque": True}),
      ]
@@ -1632,107 +1816,3 @@
 +    )
 +    assert not settings.ll_hls and settings.preserve_initial_timestamps
 +    assert decoded.video_packets[0].pts == decoded.video_packets[0].dts == 0
---- /dev/null
-+++ b/tests/components/stream/test_finite_startup.py
-@@ -0,0 +1,101 @@
-+"""Retain bounded finite AAC startup without changing live stream behavior."""
-+
-+from collections.abc import Iterator
-+from dataclasses import replace
-+from types import SimpleNamespace
-+from typing import Any
-+from unittest.mock import patch
-+
-+import av
-+import pytest
-+
-+from homeassistant.components.stream import _convert_stream_options, worker
-+from homeassistant.components.stream.const import ATTR_SETTINGS, DOMAIN, SOURCE_TIMEOUT
-+from homeassistant.core import HomeAssistant
-+
-+from .test_worker import (
-+    AUDIO_STREAM,
-+    MockPyAv,
-+    PacketSequence,
-+    async_decode_stream,
-+    mock_stream_settings,  # noqa: F401 -- register the upstream autouse fixture
-+)
-+
-+
-+@pytest.mark.parametrize("prefix", [0, 1, 2, 19, 20])
-+@pytest.mark.parametrize("finite", [True, False])
-+async def test_audio_before_initial_keyframe(
-+    hass: HomeAssistant, prefix: int, finite: bool
-+) -> None:
-+    """Preserve a finite audio prefix; the legacy keyframe search still trims it."""
-+    packets = list(PacketSequence(120))
-+    audio = list(PacketSequence(prefix))
-+    for i, packet in enumerate(audio):
-+        packet.stream = AUDIO_STREAM
-+        packet.time_base = AUDIO_STREAM.time_base
-+        packet.pts = packet.dts = i * 1024
-+        packet.duration = 1024
-+    py_av = MockPyAv(audio=True)
-+    settings = replace(
-+        hass.data[DOMAIN][ATTR_SETTINGS], preserve_initial_timestamps=True
-+    )
-+    original = worker.StreamState.__init__
-+
-+    def state_init(self: Any, *args: Any, **kwargs: Any) -> None:
-+        original(self, *args, **kwargs)
-+        if finite:
-+            self.finite_source = SimpleNamespace(receive_eof=lambda _: False)
-+
-+    with patch.object(worker.StreamState, "__init__", state_init):
-+        if finite:
-+            with pytest.raises(
-+                worker.StreamWorkerError, match="completion authorization"
-+            ):
-+                await async_decode_stream(
-+                    hass, audio + packets, py_av=py_av, stream_settings=settings
-+                )
-+        else:
-+            await async_decode_stream(
-+                hass, audio + packets, py_av=py_av, stream_settings=settings
-+            )
-+    assert len(py_av.capture_buffer.audio_packets) == (prefix if finite else 0)
-+    assert len(py_av.capture_buffer.video_packets) == 120
-+
-+
-+@pytest.mark.parametrize("bad", ["overflow", "nonkey", "eof"])
-+def test_finite_startup_rejects_without_silent_trimming(bad: str) -> None:
-+    """Reject overflow, absent keyframes and empty sources without a lossy suffix."""
-+    packets = list(PacketSequence(21))
-+    for packet in packets:
-+        packet.stream = AUDIO_STREAM
-+    if bad == "nonkey":
-+        packets = list(PacketSequence(2))[1:]
-+    if bad == "eof":
-+        packets = []
-+    expected = StopIteration if bad == "eof" else worker.StreamWorkerError
-+    with pytest.raises(expected):
-+        worker._finite_first_keyframe(worker.PeekIterator(iter(packets)))
-+
-+
-+def test_declared_finite_aac_does_not_guess_from_video_probe_prefix() -> None:
-+    """Select the AAC filter from the declared finite stream, not packet order."""
-+
-+    class UnreadPackets(Iterator[av.Packet]):
-+        def __next__(self) -> av.Packet:
-+            raise AssertionError("Finite AAC selection must not consume probe media")
-+
-+    stream = SimpleNamespace(name="aac")
-+    assert (
-+        worker.get_audio_bitstream_filter(UnreadPackets(), stream, finite_source=True)
-+        == "aac_adtstoasc"
-+    )
-+
-+
-+def test_source_clock_rtsp_open_uses_existing_outer_budget(hass: HomeAssistant) -> None:
-+    """Use the existing host open budget only for explicit source-clock policy."""
-+    options, _ = _convert_stream_options(
-+        hass, "rtsp://127.0.0.1/test", {"preserve_initial_timestamps": True}
-+    )
-+    assert options["stimeout"] == str(SOURCE_TIMEOUT * 1000000)
-+    legacy, _ = _convert_stream_options(hass, "rtsp://127.0.0.1/test", {})
-+    assert legacy["stimeout"] == "5000000"

@@ -95,6 +95,22 @@ Common light/smart-plug keys include:
 New keys are safe to add. Prefer adding keys over changing the meaning of
 existing keys.
 
+### Alarm times and daylight saving time
+
+Cameras usually report a fixed `timeZone` offset (for example `UTC+01:00`) and a
+separate `daylightSavingTime` flag, not a regional zone. `Motion_Trigger`,
+`Seconds_Last_Trigger` and `last_alarm_time` are derived as follows:
+
+- A trustworthy UTC epoch in the alarm payload is used as-is.
+- Otherwise the camera-local alarm time is read with the standard offset or, when
+  `daylightSavingTime` is set, one hour ahead; the most recent reading that is not
+  in the future wins. This is exact for recent alarms (the motion window) and on
+  the repeated hour when DST ends, but older alarms may be one hour off.
+- `EzvizClient(..., timezone="Europe/Paris")` (or `EzvizCamera(..., timezone=...)`)
+  optionally supplies the camera's IANA zone, e.g. Home Assistant's configured
+  time zone. It is only used when it has the camera's standard offset and DST
+  setting, otherwise it is ignored; the process `TZ` variable is never used.
+
 ## Auth and token behavior
 
 Integrations should be able to persist and reuse `EzvizClient.export_token()`.

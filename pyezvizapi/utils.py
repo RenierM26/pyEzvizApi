@@ -7,7 +7,6 @@ import datetime
 from hashlib import md5
 import json
 import logging
-import os
 import re as _re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -79,6 +78,7 @@ PathComponent = str | int
 WILDCARD_STEP = "*"
 _MISSING = object()
 MILLISECONDS_THRESHOLD = 1e11
+ALARM_TIME_TOLERANCE_SECONDS = 120
 
 
 def iter_nested(data: Any, path: Iterable[PathComponent]) -> Iterator[Any]:
@@ -306,9 +306,51 @@ def deep_merge(dict1: Any, dict2: Any) -> Any:
 # Time helpers for alarm/motion handling
 # ---------------------------------------------------------------------------
 
+def _local_candidates(
+    naive: datetime.datetime, tzinfo: datetime.tzinfo, dst_enabled: bool
+) -> list[datetime.datetime]:
+    """Return the possible aware datetimes for a camera-local wall time.
+
+    A fixed-offset camera with daylight saving time enabled may be on its
+    standard offset or one hour ahead; rule-based zones may repeat an hour
+    when DST ends.
+    """
+    if isinstance(tzinfo, datetime.timezone):
+        candidates = [naive.replace(tzinfo=tzinfo)]
+        if dst_enabled:
+            offset = tzinfo.utcoffset(None) + datetime.timedelta(hours=1)
+            candidates.append(naive.replace(tzinfo=datetime.timezone(offset)))
+        return candidates
+    return [naive.replace(tzinfo=tzinfo, fold=fold) for fold in (0, 1)]
+
+
+def _resolve_local_time(
+    naive: datetime.datetime,
+    tzinfo: datetime.tzinfo,
+    dst_enabled: bool,
+    now_utc: datetime.datetime,
+) -> datetime.datetime:
+    """Resolve an ambiguous camera-local wall time against the current time.
+
+    Alarms cannot happen in the future, so pick the most recent candidate that
+    is not later than now (with a small clock-skew tolerance). This is exact
+    for recent alarms, which is what motion detection needs; for alarms older
+    than the DST shift (one hour) the result may be one hour off when neither
+    a UTC epoch nor an explicit regional time zone is available.
+    """
+    candidates = _local_candidates(naive, tzinfo, dst_enabled)
+    limit = now_utc + datetime.timedelta(seconds=ALARM_TIME_TOLERANCE_SECONDS)
+    past = [c for c in candidates if c.astimezone(datetime.UTC) <= limit]
+    if past:
+        return max(past, key=lambda c: c.astimezone(datetime.UTC))
+    return min(candidates, key=lambda c: c.astimezone(datetime.UTC))
+
 
 def normalize_alarm_time(
-    last_alarm: dict[str, Any], tzinfo: datetime.tzinfo
+    last_alarm: dict[str, Any],
+    tzinfo: datetime.tzinfo,
+    *,
+    dst_enabled: bool = False,
 ) -> tuple[datetime.datetime | None, datetime.datetime | None, str | None]:
     """Normalize EZVIZ alarm timestamps.
 
@@ -322,6 +364,9 @@ def normalize_alarm_time(
       - If a string time exists and differs from the epoch by >120 seconds,
         reinterpret the epoch as if reported in camera local time.
       - If no epoch, fall back to parsing the string time in the camera tz.
+      - ``dst_enabled`` marks a fixed-offset ``tzinfo`` whose camera observes
+        daylight saving time: local times may then be on the standard offset
+        or one hour ahead, and the most recent non-future reading is used.
     """
     # Prefer epoch
     epoch = last_alarm.get("alarmStartTime") or last_alarm.get("alarmTime")
@@ -334,6 +379,7 @@ def normalize_alarm_time(
     alarm_str: str | None = None
 
     now_local = datetime.datetime.now(tz=tzinfo)
+    now_utc = datetime.datetime.now(tz=datetime.UTC)
 
     if epoch is not None:
         try:
@@ -347,30 +393,37 @@ def normalize_alarm_time(
             if raw_time_str:
                 raw_norm = raw_time_str.replace("Today", str(now_local.date()))
                 try:
-                    dt_str_local = datetime.datetime.strptime(
+                    naive_str = datetime.datetime.strptime(
                         raw_norm, "%Y-%m-%d %H:%M:%S"
-                    ).replace(tzinfo=tzinfo)
-                    # Check both folds so the repeated hour at the end of DST
-                    # matches the epoch instead of looking one hour off.
-                    diff = min(
-                        abs(
-                            (
-                                event_utc
-                                - dt_str_local.replace(fold=fold).astimezone(
-                                    datetime.UTC
-                                )
-                            ).total_seconds()
-                        )
-                        for fold in (0, 1)
                     )
-                    if diff > 120:
+                    # Compare against every possible reading of the local string
+                    # (DST on/off, repeated hour) before assuming a mismatch.
+                    diff, matched = min(
+                        (
+                            abs(
+                                (
+                                    event_utc - candidate.astimezone(datetime.UTC)
+                                ).total_seconds()
+                            ),
+                            candidate,
+                        )
+                        for candidate in _local_candidates(
+                            naive_str, tzinfo, dst_enabled
+                        )
+                    )
+                    if diff > ALARM_TIME_TOLERANCE_SECONDS:
                         # Reinterpret epoch as local clock time in camera tz
                         naive_utc = datetime.datetime.fromtimestamp(
                             ts, tz=datetime.UTC
                         ).replace(tzinfo=None)
-                        event_local_reint = naive_utc.replace(tzinfo=tzinfo)
+                        event_local_reint = _resolve_local_time(
+                            naive_utc, tzinfo, dst_enabled, now_utc
+                        )
                         alarm_dt_local = event_local_reint
                         alarm_dt_utc = event_local_reint.astimezone(datetime.UTC)
+                    elif dst_enabled:
+                        # Keep the camera's own wall time (and offset) for display.
+                        alarm_dt_local = event_utc.astimezone(matched.tzinfo)
                 except ValueError:
                     # Some firmware returns malformed timestamp strings; keep the
                     # epoch-derived value and allow the normal fallback path.
@@ -387,9 +440,12 @@ def normalize_alarm_time(
     if raw_time_str:
         raw = raw_time_str.replace("Today", str(now_local.date()))
         try:
-            alarm_dt_local = datetime.datetime.strptime(
-                raw, "%Y-%m-%d %H:%M:%S"
-            ).replace(tzinfo=tzinfo)
+            alarm_dt_local = _resolve_local_time(
+                datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S"),
+                tzinfo,
+                dst_enabled,
+                now_utc,
+            )
             alarm_dt_utc = alarm_dt_local.astimezone(datetime.UTC)
             alarm_str = alarm_dt_local.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
@@ -401,7 +457,11 @@ def normalize_alarm_time(
 
 
 def compute_motion_from_alarm(
-    last_alarm: dict[str, Any], tzinfo: datetime.tzinfo, window_seconds: float = 60.0
+    last_alarm: dict[str, Any],
+    tzinfo: datetime.tzinfo,
+    window_seconds: float = 60.0,
+    *,
+    dst_enabled: bool = False,
 ) -> tuple[bool, float, str | None]:
     """Compute motion state and seconds-since from an alarm payload.
 
@@ -409,8 +469,11 @@ def compute_motion_from_alarm(
     - Uses UTC for delta when epoch-derived UTC is available.
     - Falls back to camera local tz deltas when only string times are present.
     - Clamps negative deltas to 0.0 and deactivates motion.
+    - ``dst_enabled``: see ``normalize_alarm_time``.
     """
-    alarm_dt_local, alarm_dt_utc, alarm_str = normalize_alarm_time(last_alarm, tzinfo)
+    alarm_dt_local, alarm_dt_utc, alarm_str = normalize_alarm_time(
+        last_alarm, tzinfo, dst_enabled=dst_enabled
+    )
     if alarm_dt_local is None:
         return False, 0.0, None
 
@@ -430,86 +493,10 @@ def compute_motion_from_alarm(
     return seconds < window_seconds, seconds, alarm_str
 
 
-# Representative IANA zones used when a camera reports a fixed standard offset
-# with daylight saving time enabled, keyed by standard offset in minutes.
-# Offsets shared by zones that observe DST in opposite seasons (UTC-04:00:
-# America/Halifax vs America/Santiago, UTC-06:00: America/Chicago vs
-# Pacific/Easter) are left out on purpose.
-_DST_ZONES_BY_STANDARD_OFFSET: dict[int, str] = {
-    -600: "America/Adak",
-    -540: "America/Anchorage",
-    -480: "America/Los_Angeles",
-    -420: "America/Denver",
-    -300: "America/New_York",
-    -210: "America/St_Johns",
-    0: "Europe/London",
-    60: "Europe/Paris",
-    120: "Europe/Athens",
-    570: "Australia/Adelaide",
-    600: "Australia/Sydney",
-    720: "Pacific/Auckland",
-}
-
-
-def _observes_dst_with_standard_offset(
-    zone: datetime.tzinfo, offset_minutes: int
-) -> bool:
-    """Return True if zone observes DST and its standard offset matches."""
-    year = datetime.datetime.now(tz=datetime.UTC).year
-    # Sample twice a month so short DST periods (e.g. around Ramadan) are seen.
-    offsets = {
-        zone.utcoffset(datetime.datetime(year, month, day))
-        for month in range(1, 13)
-        for day in (1, 15)
-    }
-    if len(offsets) < 2 or None in offsets:
-        return False
-    standard = min(o for o in offsets if o is not None)
-    return standard == datetime.timedelta(minutes=offset_minutes)
-
-
-def _dst_zone_for_offset(offset_minutes: int) -> datetime.tzinfo | None:
-    """Return a DST-aware zone for a fixed standard offset, if one is known.
-
-    Prefer the host time zone (``TZ``) when it shares the standard offset and
-    observes DST, since it most likely matches the camera's region; otherwise
-    use a representative zone for the offset.
-    """
-    candidates = [os.environ.get("TZ", "").lstrip(":")]
-    candidates.append(_DST_ZONES_BY_STANDARD_OFFSET.get(offset_minutes, ""))
-    for name in candidates:
-        if not name or "/" not in name:
-            continue
-        try:
-            zone = ZoneInfo(name)
-        except (ZoneInfoNotFoundError, ValueError):
-            continue
-        if _observes_dst_with_standard_offset(zone, offset_minutes):
-            return zone
-    return None
-
-
-def parse_timezone_value(tz_val: Any, dst_enabled: bool = False) -> datetime.tzinfo:
-    """Parse EZVIZ timeZone value into a tzinfo.
-
-    Supports:
-      - IANA names like 'Europe/Paris'
-      - Offsets like 'UTC+02:00', 'GMT-5', '+0530', or integers (hours/minutes/seconds)
-    When ``dst_enabled`` is True and the value is a fixed offset, return a
-    DST-aware zone whose standard offset matches (EZVIZ reports the standard
-    offset, e.g. 'UTC+01:00', plus a separate daylight saving flag).
-    Falls back to the local system timezone, or UTC if unavailable.
-    """
-    # IANA zone name
-    if isinstance(tz_val, str) and "/" in tz_val:
-        try:
-            return ZoneInfo(tz_val)
-        except ZoneInfoNotFoundError:
-            pass
-
-    # Numeric offsets
+def _parse_offset_minutes(tz_val: Any) -> int | None:
+    """Parse a fixed EZVIZ offset ('UTC+02:00', 'GMT-5', '+0530', int)."""
     offset_minutes: int | None = None
-    if isinstance(tz_val, int):
+    if isinstance(tz_val, int) and not isinstance(tz_val, bool):
         if -14 <= tz_val <= 14:
             offset_minutes = tz_val * 60
         elif -24 * 60 <= tz_val <= 24 * 60:
@@ -524,11 +511,81 @@ def parse_timezone_value(tz_val: Any, dst_enabled: bool = False) -> datetime.tzi
             hours = int(m.group(2))
             minutes = int(m.group(3)) if m.group(3) else 0
             offset_minutes = sign * (hours * 60 + minutes)
+    return offset_minutes
 
+
+def parse_timezone_value(tz_val: Any) -> datetime.tzinfo:
+    """Parse EZVIZ timeZone value into a tzinfo.
+
+    Supports:
+      - IANA names like 'Europe/Paris'
+      - Offsets like 'UTC+02:00', 'GMT-5', '+0530', or integers (hours/minutes/seconds)
+    Falls back to the local system timezone, or UTC if unavailable.
+    """
+    # IANA zone name
+    if isinstance(tz_val, str) and "/" in tz_val:
+        try:
+            return ZoneInfo(tz_val)
+        except ZoneInfoNotFoundError:
+            pass
+
+    offset_minutes = _parse_offset_minutes(tz_val)
     if offset_minutes is not None:
-        if dst_enabled and (dst_zone := _dst_zone_for_offset(offset_minutes)):
-            return dst_zone
         return datetime.timezone(datetime.timedelta(minutes=offset_minutes))
 
     # Fallbacks
     return datetime.datetime.now().astimezone().tzinfo or datetime.UTC
+
+
+def _zone_matches_camera(
+    zone: datetime.tzinfo, offset_minutes: int, dst_enabled: bool
+) -> bool:
+    """Return True if zone has the camera's standard offset and DST setting."""
+    year = datetime.datetime.now(tz=datetime.UTC).year
+    # Sample twice a month so short DST periods (e.g. around Ramadan) are seen.
+    offsets = {
+        zone.utcoffset(datetime.datetime(year, month, day))
+        for month in range(1, 13)
+        for day in (1, 15)
+    }
+    if None in offsets:
+        return False
+    standard = min(o for o in offsets if o is not None)
+    observes_dst = len(offsets) > 1
+    return (
+        standard == datetime.timedelta(minutes=offset_minutes)
+        and observes_dst == dst_enabled
+    )
+
+
+def resolve_camera_timezone(
+    tz_val: Any,
+    dst_enabled: bool = False,
+    timezone: str | datetime.tzinfo | None = None,
+) -> tuple[datetime.tzinfo, bool]:
+    """Return the tzinfo to use for a camera and whether DST is still unresolved.
+
+    ``tz_val`` and ``dst_enabled`` come from the camera (``timeZone`` and
+    ``daylightSavingTime``). ``timezone`` is an optional IANA zone supplied by
+    the caller (e.g. the camera's region); it is only used when it agrees with
+    the camera's fixed offset and DST setting, so a wrong guess never changes
+    the result. The returned flag is True when the tzinfo is a fixed offset
+    whose camera observes DST; pass it to ``compute_motion_from_alarm``.
+    """
+    camera_tz = parse_timezone_value(tz_val)
+    offset_minutes = _parse_offset_minutes(tz_val)
+    if offset_minutes is None:
+        return camera_tz, False
+
+    zone: datetime.tzinfo | None = None
+    if isinstance(timezone, str) and timezone:
+        try:
+            zone = ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            _LOGGER.debug("Ignoring unknown time zone %s", timezone)
+    elif isinstance(timezone, datetime.tzinfo):
+        zone = timezone
+    if zone is not None and _zone_matches_camera(zone, offset_minutes, dst_enabled):
+        return zone, False
+
+    return camera_tz, dst_enabled

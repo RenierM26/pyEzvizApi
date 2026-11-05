@@ -29,7 +29,7 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
-- Apply daylight saving time to cameras that report a fixed `timeZone` offset (for example `UTC+01:00`) with `daylightSavingTime` enabled, so `Motion_Trigger` no longer fires one hour late during summer time (#314).
+- Honour the camera `daylightSavingTime` flag for fixed `timeZone` offsets (for example `UTC+01:00`), so `Motion_Trigger` no longer fires one hour late during summer time; recent alarm times are resolved without guessing regional DST rules. `EzvizClient`/`EzvizCamera` accept an optional `timezone` (IANA name) used only when it matches the camera offset and DST setting (#314).
 
 - Keep compressed-reference codec prerequisites across long native selection gaps without copying explicitly unselected outputs; preserve delayed-output identity and strict selection/checkpoint guards. Collapse identical native header observations while rejecting conflicts.
 

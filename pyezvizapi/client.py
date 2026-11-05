@@ -677,11 +677,18 @@ class EzvizClient:
         token: JsonDict | None = None,
         *,
         on_token_updated: Callable[[dict[str, Any]], None] | None = None,
+        timezone: str | dt.tzinfo | None = None,
     ) -> None:
-        """Initialize the client object."""
+        """Initialize the client object.
+
+        ``timezone`` is an optional IANA zone (e.g. Home Assistant's configured
+        zone) used for cameras that report a fixed offset; it is ignored for a
+        camera whose offset or daylight saving setting does not match it.
+        """
         validate_feature_code(token or {})
         self._token_lock = RLock()
         self._on_token_updated = on_token_updated
+        self.timezone = timezone
         self.account = account
         self.password = _ezviz_password_digest(password) if password else None
         self._token: ClientToken = cast(

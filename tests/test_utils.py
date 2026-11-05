@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from hashlib import md5
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from Crypto.Cipher import AES
 import pytest
@@ -22,6 +23,7 @@ from pyezvizapi.utils import (
     iter_nested,
     normalize_alarm_time,
     parse_timezone_value,
+    resolve_camera_timezone,
     return_password_hash,
     string_to_list,
 )
@@ -219,3 +221,147 @@ def test_convert_to_dict_decodes_json_string_values_in_place() -> None:
     assert convert_to_dict(payload) is payload
     assert payload == {"nested": {"enabled": True}, "invalid": "not-json", "plain": 1}
     assert convert_to_dict(["not", "a", "dict"]) == ["not", "a", "dict"]
+
+
+def _freeze_utc_now(monkeypatch, now_utc: dt.datetime) -> None:
+    class FixedDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz: dt.tzinfo | None = None) -> Any:
+            return now_utc.astimezone(tz) if tz is not None else now_utc.replace(tzinfo=None)
+
+    monkeypatch.setattr(utils.datetime, "datetime", FixedDateTime)
+
+
+def _utc(
+    year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0
+) -> dt.datetime:
+    return dt.datetime(year, month, day, hour, minute, second, tzinfo=dt.UTC)
+
+
+UTC_PLUS_1 = dt.timezone(dt.timedelta(hours=1))
+UTC_PLUS_2 = dt.timezone(dt.timedelta(hours=2))
+
+
+@pytest.mark.parametrize(
+    ("tzinfo", "alarm_str", "now_utc", "expected_utc"),
+    [
+        # Paris camera (UTC+01:00 + DST), summer: recent and 30 minutes old.
+        (UTC_PLUS_1, "2026-10-13 07:06:50", _utc(2026, 10, 13, 5, 7), _utc(2026, 10, 13, 5, 6, 50)),
+        (UTC_PLUS_1, "2026-10-13 07:06:50", _utc(2026, 10, 13, 5, 36, 50), _utc(2026, 10, 13, 5, 6, 50)),
+        # Same camera in winter.
+        (UTC_PLUS_1, "2026-12-01 07:06:50", _utc(2026, 12, 1, 6, 7), _utc(2026, 12, 1, 6, 6, 50)),
+        (UTC_PLUS_1, "2026-12-01 07:06:50", _utc(2026, 12, 1, 6, 36, 50), _utc(2026, 12, 1, 6, 6, 50)),
+        # Repeated 02:30 when DST ends in Paris: first and second occurrence.
+        (UTC_PLUS_1, "2026-10-25 02:30:00", _utc(2026, 10, 25, 0, 30, 10), _utc(2026, 10, 25, 0, 30)),
+        (UTC_PLUS_1, "2026-10-25 02:30:00", _utc(2026, 10, 25, 1, 30, 10), _utc(2026, 10, 25, 1, 30)),
+        # UTC+02:00 + DST on 10 April 2026: Cairo is still UTC+2, Athens is UTC+3.
+        (UTC_PLUS_2, "2026-04-10 12:00:00", _utc(2026, 4, 10, 10, 0, 10), _utc(2026, 4, 10, 10, 0)),
+        (UTC_PLUS_2, "2026-04-10 13:00:00", _utc(2026, 4, 10, 10, 0, 10), _utc(2026, 4, 10, 10, 0)),
+    ],
+)
+def test_normalize_alarm_time_resolves_dst_from_current_time(
+    monkeypatch,
+    tzinfo: dt.tzinfo,
+    alarm_str: str,
+    now_utc: dt.datetime,
+    expected_utc: dt.datetime,
+) -> None:
+    _freeze_utc_now(monkeypatch, now_utc)
+
+    # String only, and local-clock epoch (wall time encoded as if it were UTC).
+    local_clock_epoch = dt.datetime.fromisoformat(alarm_str + "+00:00").timestamp()
+    for alarm in (
+        {"alarmStartTimeStr": alarm_str},
+        {"alarmStartTime": int(local_clock_epoch * 1000), "alarmStartTimeStr": alarm_str},
+        {"alarmStartTime": int(expected_utc.timestamp() * 1000), "alarmStartTimeStr": alarm_str},
+    ):
+        local_dt, utc_dt, result_str = normalize_alarm_time(alarm, tzinfo, dst_enabled=True)
+
+        assert utc_dt == expected_utc
+        # The local value keeps the camera wall time with the offset in force.
+        assert local_dt == expected_utc
+        assert local_dt is not None
+        assert local_dt.strftime("%Y-%m-%d %H:%M:%S") == alarm_str
+        assert result_str == alarm_str
+
+
+def test_normalize_alarm_time_without_dst_flag_keeps_fixed_offset(monkeypatch) -> None:
+    _freeze_utc_now(monkeypatch, _utc(2026, 10, 13, 5, 7))
+
+    _, utc_dt, _ = normalize_alarm_time({"alarmStartTimeStr": "2026-10-13 07:06:50"}, UTC_PLUS_1)
+
+    assert utc_dt == _utc(2026, 10, 13, 6, 6, 50)
+
+
+def test_normalize_alarm_time_with_regional_zone_handles_repeated_hour(monkeypatch) -> None:
+    paris = ZoneInfo("Europe/Paris")
+    for now_utc, expected_utc in (
+        (_utc(2026, 10, 25, 0, 30, 10), _utc(2026, 10, 25, 0, 30)),
+        (_utc(2026, 10, 25, 1, 30, 10), _utc(2026, 10, 25, 1, 30)),
+    ):
+        _freeze_utc_now(monkeypatch, now_utc)
+        for alarm in (
+            {"alarmStartTimeStr": "2026-10-25 02:30:00"},
+            {
+                "alarmStartTime": int(expected_utc.timestamp() * 1000),
+                "alarmStartTimeStr": "2026-10-25 02:30:00",
+            },
+        ):
+            _, utc_dt, alarm_str = normalize_alarm_time(alarm, paris)
+            assert utc_dt == expected_utc
+            assert alarm_str == "2026-10-25 02:30:00"
+
+
+def test_compute_motion_from_alarm_is_active_on_time_during_dst(monkeypatch) -> None:
+    _freeze_utc_now(monkeypatch, _utc(2026, 10, 13, 5, 7))
+    alarm = {"alarmStartTimeStr": "2026-10-13 07:06:50"}
+
+    assert compute_motion_from_alarm(alarm, UTC_PLUS_1, dst_enabled=True) == (
+        True,
+        10.0,
+        "2026-10-13 07:06:50",
+    )
+    # Without the camera DST flag the alarm looks one hour in the future.
+    assert compute_motion_from_alarm(alarm, UTC_PLUS_1) == (
+        False,
+        0.0,
+        "2026-10-13 07:06:50",
+    )
+
+
+@pytest.mark.parametrize(
+    ("tz_val", "dst_enabled", "timezone", "expected_tz", "expected_dst"),
+    [
+        # No regional zone: fixed offset, DST resolved per alarm.
+        ("UTC+01:00", True, None, UTC_PLUS_1, True),
+        ("UTC+01:00", False, None, UTC_PLUS_1, False),
+        # Matching regional zone is used.
+        ("UTC+01:00", True, "Europe/Paris", ZoneInfo("Europe/Paris"), False),
+        ("UTC+01:00", True, ZoneInfo("Europe/Paris"), ZoneInfo("Europe/Paris"), False),
+        ("UTC+02:00", True, "Africa/Cairo", ZoneInfo("Africa/Cairo"), False),
+        ("UTC+05:30", False, "Asia/Kolkata", ZoneInfo("Asia/Kolkata"), False),
+        # Zones that disagree with the camera are ignored.
+        ("UTC+01:00", True, "America/New_York", UTC_PLUS_1, True),
+        ("UTC+01:00", False, "Europe/Paris", UTC_PLUS_1, False),
+        ("UTC+01:00", True, "Not/AZone", UTC_PLUS_1, True),
+        # A camera IANA zone always wins.
+        ("Europe/Paris", True, "America/New_York", ZoneInfo("Europe/Paris"), False),
+    ],
+)
+def test_resolve_camera_timezone(
+    tz_val: Any,
+    dst_enabled: bool,
+    timezone: Any,
+    expected_tz: dt.tzinfo,
+    expected_dst: bool,
+) -> None:
+    assert resolve_camera_timezone(tz_val, dst_enabled, timezone) == (
+        expected_tz,
+        expected_dst,
+    )
+
+
+def test_resolve_camera_timezone_ignores_process_tz(monkeypatch) -> None:
+    monkeypatch.setenv("TZ", "Europe/Paris")
+
+    assert resolve_camera_timezone("UTC+01:00", True) == (UTC_PLUS_1, True)

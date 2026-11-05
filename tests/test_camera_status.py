@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import time
+from types import SimpleNamespace
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from pyezvizapi.camera import EzvizCamera
 from pyezvizapi.client import EzvizClient
@@ -178,3 +181,38 @@ def test_camera_fetch_key_and_refresh_alarms_delegate(monkeypatch) -> None:
     camera.refresh_alarms()
 
     assert calls == 1
+
+
+def _dst_camera(payload_dst: str, client: Any = None, **kwargs: Any) -> EzvizCamera:
+    payload = _camera_payload()
+    payload["STATUS"]["optionals"]["timeZone"] = "UTC+01:00"
+    payload["STATUS"]["optionals"]["daylightSavingTime"] = payload_dst
+    return EzvizCamera(cast(EzvizClient, client or object()), "CAM123", device_obj=payload, **kwargs)
+
+
+def test_camera_resolves_timezone_from_dst_flag_and_optional_zone() -> None:
+    utc_plus_1 = timezone(timedelta(hours=1))
+    paris = ZoneInfo("Europe/Paris")
+
+    assert _dst_camera("1")._resolve_timezone() == (utc_plus_1, True)  # noqa: SLF001
+    assert _dst_camera("0")._resolve_timezone() == (utc_plus_1, False)  # noqa: SLF001
+
+    client = SimpleNamespace(timezone="Europe/Paris")
+    assert _dst_camera("1", client)._resolve_timezone() == (paris, False)  # noqa: SLF001
+    # A per-camera zone overrides the client zone; mismatching zones are ignored.
+    camera = _dst_camera("1", client, timezone="America/New_York")
+    assert camera._resolve_timezone() == (utc_plus_1, True)  # noqa: SLF001
+
+
+def test_camera_motion_trigger_follows_camera_dst_flag() -> None:
+    # Local camera time five seconds ago at UTC+02:00 (standard offset + DST).
+    local_str = (
+        datetime.now(tz=timezone(timedelta(hours=2))) - timedelta(seconds=5)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    latest_alarm = {"deviceSerial": "CAM123", "timeStr": local_str, "title": "Motion"}
+
+    status = cast(dict[str, Any], _dst_camera("1").status(refresh=True, latest_alarm=latest_alarm))
+    assert status["Motion_Trigger"] is True
+
+    status = cast(dict[str, Any], _dst_camera("0").status(refresh=True, latest_alarm=latest_alarm))
+    assert status["Motion_Trigger"] is False

@@ -10,9 +10,10 @@ from .constants import BatteryCameraWorkMode, DeviceSwitchType, SoundMode
 from .exceptions import PyEzvizError
 from .models import EzvizChimeMusic, EzvizDeviceChimeInfo, EzvizDeviceRecord
 from .utils import (
+    coerce_int,
     compute_motion_from_alarm,
     fetch_nested_value,
-    parse_timezone_value,
+    resolve_camera_timezone,
     string_to_list,
 )
 
@@ -90,8 +91,13 @@ class EzvizCamera:
         client: Any,
         serial: str,
         device_obj: EzvizDeviceRecord | dict | None = None,
+        *,
+        timezone: str | datetime.tzinfo | None = None,
     ) -> None:
         """Initialize the camera object.
+
+        ``timezone`` is an optional IANA zone for the camera's region. When it
+        is not given, the client's ``timezone`` attribute is used, if any.
 
         Raises:
             InvalidURL: If the API endpoint/connection is invalid when fetching device info.
@@ -100,6 +106,7 @@ class EzvizCamera:
         """
         self._client = client
         self._serial = serial
+        self._timezone = timezone
         self._alarmmotiontrigger: dict[str, Any] = {
             "alarm_trigger_active": False,
             "timepassed": None,
@@ -262,9 +269,9 @@ class EzvizCamera:
 
         Prefer numeric epoch fields if available to avoid parsing localized strings.
         """
-        tzinfo = self._get_tzinfo()
+        tzinfo, dst_enabled = self._resolve_timezone()
         active, seconds_out, last_alarm_str = compute_motion_from_alarm(
-            self._last_alarm, tzinfo
+            self._last_alarm, tzinfo, dst_enabled=dst_enabled
         )
 
         self._alarmmotiontrigger = {
@@ -335,10 +342,16 @@ class EzvizCamera:
             "ext": ext,
         }
 
+    def _resolve_timezone(self) -> tuple[datetime.tzinfo, bool]:
+        """Return the camera tzinfo and whether its DST state is unresolved."""
+        tz_val = self.fetch_key(["STATUS", "optionals", "timeZone"])
+        dst_val = self.fetch_key(["STATUS", "optionals", "daylightSavingTime"])
+        explicit = self._timezone or getattr(self._client, "timezone", None)
+        return resolve_camera_timezone(tz_val, coerce_int(dst_val) == 1, explicit)
+
     def _get_tzinfo(self) -> datetime.tzinfo:
         """Return tzinfo from camera setting if recognizable, else local tzinfo."""
-        tz_val = self.fetch_key(["STATUS", "optionals", "timeZone"])
-        return parse_timezone_value(tz_val)
+        return self._resolve_timezone()[0]
 
     def _is_alarm_schedules_enabled(self) -> bool:
         """Check if alarm schedules enabled."""

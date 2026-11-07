@@ -29,6 +29,14 @@ post-failure fallback, extra media queue or larger resource/time budget. A joint
 receiver must be selected before source start. A browser arriving later can use
 HLS; this does not promise arbitrary late finite WebRTC joins.
 
+## Cancellation review follow-up
+
+Recheck cancellation after acquiring the admission lock. A start that checked
+cancellation before waiting could otherwise freeze an HLS-only plan after Stop
+cancelled it. A deterministic offline control holds admission, observes the
+initial context check, cancels the source, then releases admission. It fails on
+the original PR head and passes after this correction under the race detector.
+
 ## Opt-in and negotiation
 
 The example config data adds `relay_hls_fallback: true`, **default false**, only

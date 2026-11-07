@@ -12,7 +12,7 @@
   "regression": {
     "original_readiness_failures": 2,
     "unchanged_cancellation_pass": true,
-    "fallback_unit_cases": 5,
+    "fallback_unit_cases": 6,
     "scoped_RTSP_status_controls": 3,
     "partial_admission_rollback_control": 1
   },
@@ -130,7 +130,7 @@
     },
     "nonll-joint": {
       "HLS_packet_hashes_PTS_DTS_timebases_identical_to_previous_joint_baseline": true,
-      "nominal_input_duration_differences_from_baseline": 2,
+      "nominal_input_duration_differences_from_baseline": 0,
       "counts": {
         "factory": 1,
         "input_demux": 1,
@@ -165,18 +165,18 @@
   "RTCP_mapping": {
     "ll": {
       "shared_cross_track_and_lens_RTCP_mapping": true,
-      "spread_seconds": 2.0127277821302414e-05,
+      "spread_seconds": 2.0682113245129585e-05,
       "reports": {
-        "primary_video": 25,
-        "primary_audio": 25,
-        "secondary_video": 25,
-        "secondary_audio": 25
+        "primary_video": 26,
+        "primary_audio": 26,
+        "secondary_video": 26,
+        "secondary_audio": 26
       },
       "physical_AV_sync_claimed": false
     },
     "nonll": {
       "shared_cross_track_and_lens_RTCP_mapping": true,
-      "spread_seconds": 2.0583625882864e-05,
+      "spread_seconds": 2.0346371456980705e-05,
       "reports": {
         "primary_video": 23,
         "primary_audio": 23,
@@ -201,5 +201,16 @@
     "serial_exact_extracted_selected_race_rerun_all_pass": true,
     "initial_HLS_test_fixture_empty_peer_assertion_and_missing_public_session_close_corrected": true,
     "initial_HTTP_auditor_resubscription_fixture_inappropriate_for_cold_two_lens_group": true
+  },
+  "review_follow_up": {
+    "reviewed_head": "508b92515e95c63e18060ad18d4731de2b23303d",
+    "finding": "Cancellation while producer start waits for admission was not rechecked before HLS-only admission",
+    "severity": "P2",
+    "deterministic_before_probe_failed": true,
+    "correction": "Recheck cancellation under admission lock before freezing the media plan",
+    "focused_race_controls_pass": true,
+    "independent_or_human_approval_claimed": false,
+    "fresh_retained_topology_cases_passed": 4,
+    "fresh_extracted_scoped_race_checks_pass": true
   }
 }

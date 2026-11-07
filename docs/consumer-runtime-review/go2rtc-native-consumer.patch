@@ -1728,10 +1728,10 @@ index 5d4129d..01bc7fd 100644
 +}
 diff --git a/pkg/mpegts/native_hls_fallback_test.go b/pkg/mpegts/native_hls_fallback_test.go
 new file mode 100644
-index 0000000..619abb2
+index 0000000..a04bb1a
 --- /dev/null
 +++ b/pkg/mpegts/native_hls_fallback_test.go
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,168 @@
 +package mpegts
 +
 +import (
@@ -1860,12 +1860,52 @@ index 0000000..619abb2
 +		t.Fatalf("got %v", err)
 +	}
 +}
++
++type admissionObservedContext struct {
++	context.Context
++	checked chan struct{}
++}
++
++func (c admissionObservedContext) Err() error {
++	err := c.Context.Err()
++	select {
++	case c.checked <- struct{}{}:
++	default:
++	}
++	return err
++}
++
++func TestNativeHLSFallbackCancellationWhileWaitingForAdmission(t *testing.T) {
++	p := fallbackProducer(t)
++	n := p.nativeOpus
++	checked := make(chan struct{}, 1)
++	n.ctx = admissionObservedContext{Context: n.ctx, checked: checked}
++	n.admission.Lock()
++	result := make(chan error, 1)
++	go func() { result <- n.start() }()
++	select {
++	case <-checked:
++	case <-time.After(time.Second):
++		n.admission.Unlock()
++		t.Fatal("start did not check cancellation")
++	}
++	n.cancel()
++	n.admission.Unlock()
++	select {
++	case err := <-result:
++		if err != context.Canceled {
++			t.Fatalf("cancelled queued source admitted: %v", err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("queued source did not exit")
++	}
++}
 diff --git a/pkg/mpegts/native_opus.go b/pkg/mpegts/native_opus.go
 new file mode 100644
-index 0000000..565219c
+index 0000000..91d38bb
 --- /dev/null
 +++ b/pkg/mpegts/native_opus.go
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,267 @@
 +package mpegts
 +
 +import (
@@ -1948,6 +1988,12 @@ index 0000000..565219c
 +	}
 +	if n.allowHLSFallback {
 +		n.admission.Lock()
++		// Cancellation can arrive while GetTrack owns admission. A queued start
++		// must recheck it before committing an HLS-only plan without a gate wait.
++		if err := n.ctx.Err(); err != nil {
++			n.admission.Unlock()
++			return err
++		}
 +		n.started = true
 +		n.hlsOnly = n.track == nil
 +		hlsOnly := n.hlsOnly

@@ -31,8 +31,8 @@
       "pkg/mpegts/end_order_test.go": "e4ab538a2a96b6077036447139ff6b2d407d7fa607427dd93c988eca23fd1244",
       "pkg/mpegts/finite_test.go": "dcf4a6f2580c3266f1b1088f13967b6df6805e767b57a9f8833355075dba31f3",
       "pkg/mpegts/muxer.go": "98d0767346a5db9f3de1bf3f23eb137a2892acd82b2473802475d7f90b5d3dd3",
-      "pkg/mpegts/native_hls_fallback_test.go": "34f62775e9f03265e89ba17baee4802a1ec5da196fab05460440f8da9e9c87b5",
-      "pkg/mpegts/native_opus.go": "e495eee34059f5aca0c6a66c6bcda2ad7388fa7ba781dc5240ae2a4280f72bf8",
+      "pkg/mpegts/native_hls_fallback_test.go": "026b3c891607a3423b10694342b7232869f3907cc10445d427de2845eafdaf66",
+      "pkg/mpegts/native_opus.go": "882a7495894825a4b8dbff173cf9b0231945a81eff121b17e901330ab665894d",
       "pkg/mpegts/native_opus_test.go": "e4c27ef9ef8b11907eab17f7a54ecacda42d31bf0c466dcc566af902d14d505c",
       "pkg/mpegts/producer.go": "49cab06de92a0ad33e73f18bd71a62c3e27af6deb634017de2d7a34027c9f626",
       "pkg/mpegts/source_epoch.go": "1dca72eff04ec0a9c6a29df67c849ddb2f1bc6d2bcbdabde237fc55821fb3c3b",
@@ -246,7 +246,7 @@
   },
   "patch_sha256": {
     "ffmpeg-parser-source-and-fate.patch": "c00bbe6ff11b02377a98f71147524e83ccb2a5f08092b1f3ae156604e2b03424",
-    "go2rtc-native-consumer.patch": "3a65e05361cbedeb8f1a8323c8572ceb28838da1fea298619e895e9b309047ec",
+    "go2rtc-native-consumer.patch": "dde9e169d590e56110b0b6637c7e3e287fac80a230ff1266e48c7c45fc203e99",
     "home-assistant-finite-stream.patch": "5328eaef8153c2f48ae28477301a854f2e29b64abb7b3cd3d5df72f7ef40433a",
     "pion-rtx-pull.patch": "07878706168d57a3c2eecb10b6d389dc9b8b369739a723f5ca3d77efae730b66",
     "aiohttp-closed-heartbeat.patch": "b8439f7bb69e20eaf3ef2056630cfa1895bbeeb7578287316a0491f6a8b28d0e"

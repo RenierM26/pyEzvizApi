@@ -26,6 +26,7 @@ def worker(monkeypatch):
 @pytest.mark.parametrize("phase", ["headers", "body"])
 def test_loopback_dribble_does_not_hold_caller_past_deadline(worker, phase):
     stopped = Event()
+    disconnected = Event()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
@@ -45,7 +46,7 @@ def test_loopback_dribble_does_not_hold_caller_past_deadline(worker, phase):
                         self.wfile.flush()
                         time.sleep(0.02)
             except (BrokenPipeError, ConnectionResetError):
-                pass
+                disconnected.set()
             finally:
                 stopped.set()
     server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -59,6 +60,8 @@ def test_loopback_dribble_does_not_hold_caller_past_deadline(worker, phase):
         elapsed = time.monotonic() - started
         assert elapsed < CALLER_RETURN_CEILING_SECONDS
         assert stopped.wait(2)
+        if phase == "body":
+            assert disconnected.is_set()
         thread.join(timeout=1)
     finally:
         session.close()

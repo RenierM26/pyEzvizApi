@@ -16,6 +16,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Reject application-level lock, unlock and PTZ command failures instead of reporting API acceptance.
+
 - Preserve exact source PTS during development-only AAC sample-format conversion, including 90-kHz timestamps not representable on the 16-kHz sample clock.
 
 ### Added

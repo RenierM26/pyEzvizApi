@@ -26,6 +26,7 @@ import requests
 
 from . import device_factory
 from ._auth import refresh_credentials
+from ._budget_http import budgeted_http_call
 from ._longlink_profile import (
     current_session_header,
     profile_for_token,
@@ -33,6 +34,7 @@ from ._longlink_profile import (
     session_header_for_token,
     synchronize_http_headers,
 )
+from ._pagelist import collect_pagelist
 from ._request_deadline import bounded_request_timeout, request_budget_lock
 from ._token import (
     ClientToken as ClientToken,  # noqa: PLC0414 - public type export
@@ -208,7 +210,7 @@ from .media import (
 from .models import EzvizDeviceRecord, build_device_records_map
 from .mqtt import MQTTClient
 from .stream_selection import AutoMediaStream, fallback_stream_source, select_stream_source
-from .utils import convert_to_dict, decrypt_image, deep_merge
+from .utils import convert_to_dict, decrypt_image
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -743,7 +745,7 @@ class EzvizClient:
         if push_enabled:
             payload.update(ANDROID_PROFILE.registration)
         try:
-            req = self._session.post(
+            req = budgeted_http_call(self._session, "post", 
                 url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGIN}",
                 allow_redirects=False,
                 data=payload,
@@ -846,7 +848,7 @@ class EzvizClient:
             )
         try:
             with request_budget_lock(self._token_lock):
-                req = self._session.request(
+                req = budgeted_http_call(self._session, "request", 
                     method=method,
                     url=url,
                     params=params,
@@ -1072,7 +1074,7 @@ class EzvizClient:
                     prepared.url = urlunsplit(parts._replace(netloc=self._token["api_url"]))
                     if "Host" in prepared.headers:
                         prepared.headers["Host"] = self._token["api_url"]
-                req = self._session.send(request=prepared, timeout=bounded_request_timeout(self._timeout))
+                req = budgeted_http_call(self._session, "send", request=prepared, timeout=bounded_request_timeout(self._timeout))
             req.raise_for_status()
         except requests.HTTPError as err:
             if retry_401 and err.response is not None and err.response.status_code == 401:
@@ -1218,48 +1220,29 @@ class EzvizClient:
         if page_filter is None:
             raise PyEzvizError("Trying to call get_pagelist without filter")
 
-        params: dict[str, int | str] = {
-            "groupId": group_id,
-            "limit": limit,
-            "offset": offset,
-            "filter": page_filter,
-        }
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise PyEzvizError("Pagelist limit must be a positive integer")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise PyEzvizError("Pagelist offset must be a non-negative integer")
 
-        json_output = self._request_json(
-            "GET",
-            API_ENDPOINT_PAGELIST,
-            params=params,
-            retry_401=True,
-            max_retries=max_retries,
-        )
-        if self._meta_code(json_output) != 200:
-            # session is wrong, need to relogin and retry
-            self.login()
-            _LOGGER.warning(
-                "Http_retry: serial=%s code=%s msg=%s",
-                "unknown",
-                self._meta_code(json_output),
-                "pagelist_relogin",
-            )
-            return self._api_get_pagelist(
-                page_filter, json_key, group_id, limit, offset, max_retries + 1
-            )
+        retries = max_retries
 
-        page_info = json_output.get("page") or {}
-        next_page = bool(page_info.get("hasNext", False))
+        def fetch_page(page_offset: int) -> JsonDict:
+            nonlocal retries
+            while retries <= MAX_RETRIES:
+                payload = self._request_json(
+                    "GET", API_ENDPOINT_PAGELIST,
+                    params={"groupId": group_id, "limit": limit, "offset": page_offset, "filter": page_filter},
+                    retry_401=True, max_retries=retries,
+                )
+                if self._meta_code(payload) == 200:
+                    return payload
+                self.login()
+                _LOGGER.warning("Http_retry: serial=%s code=%s msg=%s", "unknown", self._meta_code(payload), "pagelist_relogin")
+                retries += 1
+            raise PyEzvizError("Can't gather proper data. Max retries exceeded.")
 
-        data = json_output[json_key] if json_key else json_output
-
-        if next_page:
-            next_offset = offset + limit
-            # Recursive call to fetch next page
-            next_data = self._api_get_pagelist(
-                page_filter, json_key, group_id, limit, next_offset, max_retries
-            )
-            # Merge data from next page into current data
-            data = deep_merge(data, next_data)
-
-        return data
+        return collect_pagelist(fetch_page, json_key=json_key, limit=limit, offset=offset)
 
     def get_alarminfo(self, serial: str, limit: int = 1, max_retries: int = 0) -> JsonDict:
         """Get data from alarm info API for camera serial."""
@@ -4908,7 +4891,7 @@ class EzvizClient:
         """Close Ezviz session and remove login session from ezviz servers."""
         with request_budget_lock(self._token_lock):
             try:
-                req = self._session.delete(
+                req = budgeted_http_call(self._session, "delete", 
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_LOGOUT}",
                     timeout=bounded_request_timeout(self._timeout),
                 )
@@ -5387,7 +5370,7 @@ class EzvizClient:
             raise PyEzvizError("Unproper sensibility for type 0 (should be within 1 to 6).")
         try:
             with request_budget_lock(self._token_lock):
-                req = self._session.post(
+                req = budgeted_http_call(self._session, "post", 
                     url=f"https://{self._token['api_url']}{API_ENDPOINT_DETECTION_SENSIBILITY}",
                     data={
                         "subSerial": serial,

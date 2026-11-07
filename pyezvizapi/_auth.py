@@ -5,35 +5,18 @@ persisted before discovery; storage failures must propagate to the caller.
 """
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Callable
-from copy import copy, deepcopy
 from typing import Any
 
 import requests
-from requests.structures import CaseInsensitiveDict
 
+from ._budget_http import budgeted_http_call
+from ._http_transport import isolated_session  # noqa: F401 -- compatibility export
 from ._longlink_profile import profile_for_token, synchronize_http_headers
 from ._token import validate_feature_code
 from .api_endpoints import API_ENDPOINT_REFRESH_SESSION_ID, API_ENDPOINT_SERVER_INFO
 from .constants import FEATURE_CODE
 from .exceptions import EzvizAuthTokenExpired, HTTPError, PyEzvizError
-
-
-def isolated_session(source: requests.Session) -> requests.Session:
-    """Copy request state, borrowing transport adapters owned by the caller.
-
-    No transport pools are created here. Do not close this copy: adapter/pool
-    lifetime remains with the supplied session, including custom TLS adapters.
-    """
-    session = copy(source)
-    session.headers = CaseInsensitiveDict(source.headers)
-    session.cookies = source.cookies.copy()
-    session.params = deepcopy(source.params)
-    session.proxies = dict(source.proxies)
-    session.hooks = {name: list(hooks) for name, hooks in source.hooks.items()}
-    session.adapters = OrderedDict(source.adapters)
-    return session
 
 
 def discover_services(session: requests.Session, token: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -64,7 +47,7 @@ def refresh_credentials(
     """Rotate an existing login; account/password fallback belongs to the caller."""
     validate_feature_code(token)
     try:
-        response = session.put(
+        response = budgeted_http_call(session, "put", 
             url=f"https://{token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
             data={"refreshSessionId": token["rf_session_id"], "featureCode": FEATURE_CODE,
                   **profile_for_token(token).registration},

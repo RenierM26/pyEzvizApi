@@ -16,6 +16,8 @@ This project follows [Semantic Versioning](https://semver.org/) for published re
 
 ### Fixed
 
+- Bound scoped bootstrap HTTP caller waits and response sizes; collect pagelists iteratively with progress guards.
+
 - Bound RTSP authentication framing and I/O, close sockets deterministically, and retain the legacy import path.
 
 - Handle non-finite number/time values and invalid offsets, validate image padding, and honor empty diagnostic tails.

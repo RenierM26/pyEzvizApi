@@ -14,6 +14,7 @@ from threading import Event, Lock, Thread
 from typing import Any
 
 import requests
+from requests.cookies import RequestsCookieJar
 
 from ._http_transport import isolated_session
 from ._request_deadline import remaining_request_budget
@@ -24,9 +25,9 @@ _IDLE_SECONDS = 0.25
 
 
 def _commit_cookies(
-    target: requests.cookies.RequestsCookieJar,
-    initial: requests.cookies.RequestsCookieJar,
-    final: requests.cookies.RequestsCookieJar,
+    target: RequestsCookieJar,
+    initial: RequestsCookieJar,
+    final: RequestsCookieJar,
 ) -> None:
     """Commit only the successful worker's cookie delta, including deletions."""
     before = {(cookie.domain, cookie.path, cookie.name): cookie for cookie in initial}

@@ -3,6 +3,7 @@ from threading import RLock
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 from pyezvizapi._request_deadline import (
     bounded_request_timeout,
@@ -16,9 +17,11 @@ from pyezvizapi.cloud_stream import open_cloud_stream
 
 def test_deadline_bounds_http_without_mutating_client_and_resets(monkeypatch) -> None:
     client = EzvizClient(timeout=30)
-    response = Mock()
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b"{}"  # noqa: SLF001
     request = Mock(return_value=response)
-    monkeypatch.setattr(client._session, "request", request)  # noqa: SLF001
+    monkeypatch.setattr(type(client._session), "request", lambda _self, **kwargs: request(**kwargs))  # noqa: SLF001
     clock = [10.0]
     with pytest.raises(TimeoutError), request_deadline(12, lambda: clock[0]):
         client._http_request("GET", "https://example.invalid")  # noqa: SLF001
@@ -67,15 +70,15 @@ def test_nested_budget_cannot_extend_parent_and_is_restored() -> None:
 
 
 def test_expired_unauthorized_request_cannot_start_login(monkeypatch) -> None:
-    import requests  # noqa: PLC0415
     client = EzvizClient(timeout=30)
     clock = [10.0]
-    response = Mock(status_code=401)
+    response = requests.Response()
+    response.status_code = 401
+    response._content = b"{}"  # noqa: SLF001
     def request(**_kwargs):
         clock[0] = 12
-        response.raise_for_status.side_effect = requests.HTTPError(response=response)
         return response
-    monkeypatch.setattr(client._session, "request", request)  # noqa: SLF001
+    monkeypatch.setattr(type(client._session), "request", lambda _self, **kwargs: request(**kwargs))  # noqa: SLF001
     login = Mock()
     monkeypatch.setattr(client, "login", login)
     with pytest.raises(TimeoutError), request_deadline(12, lambda: clock[0]):
@@ -87,7 +90,6 @@ def test_expired_unauthorized_request_cannot_start_login(monkeypatch) -> None:
 def test_401_refresh_and_retry_share_budget_and_preserve_rotated_token(monkeypatch, expires_during_refresh) -> None:
     import json  # noqa: PLC0415
 
-    import requests  # noqa: PLC0415
     saved: list[dict] = []
     client = EzvizClient(timeout=30, token={
         "session_id": "old-session", "rf_session_id": "old-refresh",
@@ -112,8 +114,8 @@ def test_401_refresh_and_retry_share_budget_and_preserve_rotated_token(monkeypat
         return response(200, {"meta": {"code": 200}, "sessionInfo": {
             "sessionId": "new-session", "refreshSessionId": "new-refresh",
         }})
-    monkeypatch.setattr(client._session, "request", request)  # noqa: SLF001
-    monkeypatch.setattr(client._session, "put", refresh)  # noqa: SLF001
+    monkeypatch.setattr(type(client._session), "request", lambda _self, **kwargs: request(**kwargs))  # noqa: SLF001
+    monkeypatch.setattr(type(client._session), "put", lambda _self, **kwargs: refresh(**kwargs))  # noqa: SLF001
     if expires_during_refresh:
         with pytest.raises(TimeoutError), request_deadline(12, lambda: clock[0]):
             client._http_request("GET", "https://example.invalid")  # noqa: SLF001

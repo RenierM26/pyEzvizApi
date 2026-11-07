@@ -2,12 +2,21 @@
 import datetime as dt
 
 from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
 import pytest
 
+from pyezvizapi import _alarm_time, _coercion, _image_crypto, _mapping, utils
 from pyezvizapi.constants import HIK_ENCRYPTION_HEADER
 from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.remux import BoundedStderrTail
-from pyezvizapi.utils import coerce_int, decrypt_image, deep_merge, normalize_alarm_time, parse_timezone_value, return_password_hash
+from pyezvizapi.utils import (
+    coerce_int,
+    decrypt_image,
+    deep_merge,
+    normalize_alarm_time,
+    parse_timezone_value,
+    return_password_hash,
+)
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -58,7 +67,6 @@ def test_merge_keeps_existing_shallow_alias_contract():
 
 
 def test_utility_facade_preserves_function_identity():
-    from pyezvizapi import _alarm_time, _coercion, _image_crypto, _mapping, utils
     assert utils.coerce_int is _coercion.coerce_int
     assert utils.iter_nested is _mapping.iter_nested
     assert utils.decrypt_image is _image_crypto.decrypt_image
@@ -73,9 +81,8 @@ def test_iana_dst_and_explicit_fixed_offset_are_distinct():
     assert parse_timezone_value("UTC+01:00").utcoffset(dt.datetime(2024, 7, 1)) == dt.timedelta(hours=1)
 
 
-@pytest.mark.parametrize("size", list(range(16)) + [16384, 16385])
+@pytest.mark.parametrize("size", [*range(16), 16384, 16385])
 def test_valid_image_padding_and_legacy_trailing_bytes_remain_supported(size):
-    from Crypto.Util.Padding import pad
     clear = b"x" * size
     encrypted = AES.new(b"ABCDEF" + b"\0" * 10, AES.MODE_CBC, b"01234567" + b"\0" * 8).encrypt(pad(clear, 16))
     payload = HIK_ENCRYPTION_HEADER + return_password_hash("ABCDEF").encode() + encrypted

@@ -8,7 +8,10 @@ adapters; it does not close their pools. One lazy process-wide worker runs at
 most one job with one queued job. Queue saturation fails promptly. Idle workers
 exit. Expired queued jobs never acquire transport, and late responses are closed.
 Token changes and persistence stay with the caller under its existing lock;
-successful response cookies are committed by the caller, not the worker.
+successful response cookie additions, replacements and deletions are committed
+by the caller, not the worker. Cookie deltas are scoped by domain/path/name;
+unchanged cookies and unrelated caller-side edits are retained. Cancelled or
+failed jobs never commit cookie changes.
 
 The caller's wait is bounded even when system DNS or a server's slow headers/body
 ignore socket inactivity totals. Once a standard requests/urllib3 response socket

@@ -6,6 +6,7 @@ not create replacement workers. Ordinary HTTP remains synchronous and unchanged.
 from __future__ import annotations
 
 from contextlib import suppress
+from copy import copy
 from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
 import socket
@@ -20,6 +21,25 @@ from .exceptions import PyEzvizError
 
 MAX_BOOTSTRAP_BODY_BYTES = 8 * 1024 * 1024
 _IDLE_SECONDS = 0.25
+
+
+def _commit_cookies(
+    target: requests.cookies.RequestsCookieJar,
+    initial: requests.cookies.RequestsCookieJar,
+    final: requests.cookies.RequestsCookieJar,
+) -> None:
+    """Commit only the successful worker's cookie delta, including deletions."""
+    before = {(cookie.domain, cookie.path, cookie.name): cookie for cookie in initial}
+    after = {(cookie.domain, cookie.path, cookie.name): cookie for cookie in final}
+    current = {(cookie.domain, cookie.path, cookie.name): cookie for cookie in target}
+    for key in before.keys() - after.keys():
+        # A later caller-side replacement is not the cookie this response expired.
+        if key in current and vars(current[key]) == vars(before[key]):
+            with suppress(KeyError):
+                target.clear(*key)
+    for key, cookie in after.items():
+        if key not in before or vars(cookie) != vars(before[key]):
+            target.set_cookie(copy(cookie))
 
 
 def _response_socket(response: requests.Response) -> socket.socket | None:
@@ -152,6 +172,7 @@ def budgeted_http_call(session: requests.Session, operation: str, **kwargs: Any)
     if remaining is None:
         return getattr(session, operation)(**kwargs)
     borrowed = isolated_session(session)
+    initial_cookies = borrowed.cookies.copy()
     if operation == "send" and isinstance(kwargs.get("request"), requests.PreparedRequest):
         kwargs["request"] = kwargs["request"].copy()
     job = _HttpJob(borrowed, operation, {**kwargs, "stream": True})
@@ -168,5 +189,5 @@ def budgeted_http_call(session: requests.Session, operation: str, **kwargs: Any)
         raise value
     with job.lock:
         job.delivered = None
-    session.cookies.update(borrowed.cookies)
+    _commit_cookies(session.cookies, initial_cookies, borrowed.cookies)
     return value

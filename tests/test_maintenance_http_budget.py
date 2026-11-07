@@ -82,6 +82,7 @@ def test_stuck_call_does_not_spawn_replacements_or_execute_cancelled_queue(worke
     response.status_code = 200
     def get(_self, **_kwargs):
         calls.append(True)
+        _self.cookies.set("late-cookie", "discard")
         entered.set()
         release.wait(2)
         return response
@@ -102,6 +103,7 @@ def test_stuck_call_does_not_spawn_replacements_or_execute_cancelled_queue(worke
             worker._thread.join(timeout=2)
         session.close()
     assert len(calls) == 1 and response.closed
+    assert "late-cookie" not in session.cookies
     assert worker._thread is None
 
 
@@ -165,5 +167,64 @@ def test_ordinary_http_preserves_synchronous_behavior(worker, monkeypatch):
         budgeted_http_call(source, "get", url="https://unused.invalid")
         assert worker._thread is None
         assert "stream" not in kwargs_seen[0]
+    finally:
+        source.close()
+
+
+@pytest.mark.parametrize("expiration", ["Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"])
+def test_loopback_cookie_expiration_removes_only_the_matching_cookie(worker, expiration):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.send_header("Set-Cookie", f"session=; Path=/; {expiration}")
+            self.end_headers()
+            self.wfile.write(EMPTY_JSON)
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.handle_request, daemon=True)
+    thread.start()
+    source = requests.Session()
+    source.cookies.set("session", "expired", domain="127.0.0.1", path="/")
+    source.cookies.set("session", "other-path", domain="127.0.0.1", path="/other")
+    source.cookies.set("session", "other-domain", domain="example.test", path="/")
+    try:
+        with request_deadline(time.monotonic() + 2):
+            response = budgeted_http_call(source, "get", url=f"http://127.0.0.1:{server.server_port}/", timeout=1)
+        assert response.json() == {}
+        assert source.cookies.get("session", domain="127.0.0.1", path="/") is None
+        assert source.cookies.get("session", domain="127.0.0.1", path="/other") == "other-path"
+        assert source.cookies.get("session", domain="example.test", path="/") == "other-domain"
+    finally:
+        source.close()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def test_cookie_delta_preserves_caller_changes_and_applies_replacements(worker, monkeypatch):
+    source = requests.Session()
+    source.cookies.set("expired", "initial", domain="example.test", path="/")
+    source.cookies.set("unchanged", "initial", domain="example.test", path="/")
+    source.cookies.set("rotated", "initial", domain="example.test", path="/")
+    def get(borrowed, **_kwargs):
+        source.cookies.set("expired", "caller-new", domain="example.test", path="/")
+        source.cookies.set("unchanged", "caller-new", domain="example.test", path="/")
+        source.cookies.set("added-by-caller", "keep", domain="example.test", path="/")
+        borrowed.cookies.clear("example.test", "/", "expired")
+        borrowed.cookies.set("rotated", "server-new", domain="example.test", path="/")
+        borrowed.cookies.set("added-by-server", "keep", domain="example.test", path="/")
+        response = requests.Response()
+        response.status_code = 200
+        response._content = EMPTY_JSON
+        return response
+    monkeypatch.setattr(requests.Session, "get", get)
+    try:
+        with request_deadline(time.monotonic() + 1):
+            budgeted_http_call(source, "get", url="https://unused.invalid")
+        assert source.cookies.get_dict() == {
+            "expired": "caller-new", "unchanged": "caller-new", "rotated": "server-new",
+            "added-by-caller": "keep", "added-by-server": "keep",
+        }
     finally:
         source.close()

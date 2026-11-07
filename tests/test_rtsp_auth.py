@@ -55,8 +55,14 @@ def test_rtsp_auth_rejects_digest_non_200(monkeypatch: pytest.MonkeyPatch) -> No
         def connect(self, address: tuple[str, int]) -> None:
             assert address == ("192.0.2.10", 554)
 
-        def send(self, data: bytes) -> int:
-            return len(data)
+        def settimeout(self, _timeout: float) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def sendall(self, data: bytes) -> None:
+            pass
 
         def recv(self, size: int) -> bytes:
             return responses.pop(0)
@@ -72,8 +78,14 @@ def _fake_socket(monkeypatch: pytest.MonkeyPatch, responses: list[bytes]) -> Non
         def connect(self, address: tuple[str, int]) -> None:
             assert address == ("192.0.2.10", 554)
 
-        def send(self, data: bytes) -> int:
-            return len(data)
+        def settimeout(self, _timeout: float) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def sendall(self, data: bytes) -> None:
+            pass
 
         def recv(self, size: int) -> bytes:
             return responses.pop(0)

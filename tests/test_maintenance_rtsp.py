@@ -3,7 +3,9 @@ import socket
 
 import pytest
 
+from pyezvizapi import rtsp_auth
 from pyezvizapi.exceptions import AuthTestResultFailed, InvalidHost
+from pyezvizapi.rtsp_auth import TestRTSPAuth as Implementation
 from pyezvizapi.test_cam_rtsp import TestRTSPAuth
 
 REPLY = b"RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Length: 4\r\n\r\ndata"
@@ -72,7 +74,6 @@ def test_response_size_and_sequence_boundaries(monkeypatch, reply):
 
 
 def test_deadline_is_shared_across_fragmented_reads(monkeypatch):
-    from pyezvizapi import rtsp_auth
     clock = [0.0]
     class Dribble(Socket):
         def recv(self, _size):
@@ -83,10 +84,9 @@ def test_deadline_is_shared_across_fragmented_reads(monkeypatch):
     monkeypatch.setattr(rtsp_auth.time, "monotonic", lambda: clock[0])
     with pytest.raises(AuthTestResultFailed, match="deadline"):
         TestRTSPAuth("192.0.2.10", timeout=0.1).main()
-    assert session.closed and clock[0] < 0.15
+    assert session.closed and clock[0] == pytest.approx(0.12)
     assert session.timeouts[-1] < session.timeouts[0]
 
 
 def test_legacy_rtsp_import_is_the_same_implementation():
-    from pyezvizapi.rtsp_auth import TestRTSPAuth as implementation
-    assert TestRTSPAuth is implementation
+    assert TestRTSPAuth is Implementation

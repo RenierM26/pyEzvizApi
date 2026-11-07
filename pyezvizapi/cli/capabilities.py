@@ -8,9 +8,9 @@ import os
 from pathlib import Path
 import sys
 
-from pyezvizapi.hcnetsdk import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate
-from pyezvizapi.stream_capabilities import MAX_FLEET_SAMPLE_BYTES, MAX_FLEET_TARGETS, StreamCapabilityTarget, StreamSampleEvidence, probe_stream_capabilities
-from pyezvizapi.stream_sample import MAX_SAMPLE_BYTES
+from pyezvizapi.streaming.local.hcnetsdk.api import HcNetSdkLanEndpoint, HcNetSdkLoginCandidate
+from pyezvizapi.streaming.capabilities import MAX_FLEET_SAMPLE_BYTES, MAX_FLEET_TARGETS, StreamCapabilityTarget, StreamSampleEvidence, probe_stream_capabilities
+from pyezvizapi.streaming.sample import MAX_SAMPLE_BYTES
 
 
 def load_inventory(path: Path) -> tuple[list[StreamCapabilityTarget], list[StreamSampleEvidence]]:

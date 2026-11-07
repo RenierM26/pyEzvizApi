@@ -6,7 +6,7 @@ import argparse
 from typing import Any
 
 from pyezvizapi.constants import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, BatteryCameraWorkMode
-from pyezvizapi.local_stream_transport import HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+from pyezvizapi.streaming.local.transport import HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
 
 
 def _parse_duration_seconds(value: str) -> float | None:

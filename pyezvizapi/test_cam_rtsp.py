@@ -1,5 +1,20 @@
-"""Compatibility imports for the RTSP authentication probe (not a test suite)."""
-from pyezvizapi.rtsp_auth import RTSPDetails, TestRTSPAuth, _decode_response, genmsg_describe
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.rtsp_compat`.
 
-__test__ = False
-__all__ = ["RTSPDetails", "TestRTSPAuth", "_decode_response", "genmsg_describe"]
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
+
+from pyezvizapi.streaming import rtsp_compat as _implementation
+
+if TYPE_CHECKING:
+    from pyezvizapi.streaming.rtsp_compat import (
+    RTSPDetails as RTSPDetails,
+    TestRTSPAuth as TestRTSPAuth,
+    _decode_response as _decode_response,
+    genmsg_describe as genmsg_describe,
+    )
+
+sys.modules[__name__] = _implementation

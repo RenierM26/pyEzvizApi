@@ -1,31 +1,22 @@
-"""Atomic owner-only token storage for the command-line listeners."""
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.token_store`.
 
-import json
-import os
-from pathlib import Path
-import tempfile
-from typing import Any
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.cloud import token_store as _implementation
 
-def save_private_token(path: str, token: dict[str, Any]) -> None:
-    """Persist or raise; never let push continue after an unnoticed write failure."""
-    target = Path(path)
-    staged: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=target.parent, prefix=f".{target.name}.", delete=False
-        ) as temporary:
-            staged = Path(temporary.name)
-            json.dump(token, temporary)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(staged, target)
-        if os.name == "posix":
-            descriptor = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-    finally:
-        if staged is not None:
-            staged.unlink(missing_ok=True)
+if TYPE_CHECKING:
+    from pyezvizapi.cloud.token_store import (
+    Any as Any,
+    Path as Path,
+    json as json,
+    os as os,
+    save_private_token as save_private_token,
+    tempfile as tempfile,
+    )
+
+sys.modules[__name__] = _implementation

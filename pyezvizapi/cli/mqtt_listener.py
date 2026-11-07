@@ -16,7 +16,7 @@ import sys
 import time
 from typing import Any, cast
 
-from pyezvizapi._token_store import save_private_token
+from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, PyEzvizError
 

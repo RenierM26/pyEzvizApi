@@ -1,64 +1,28 @@
-"""Context-local HTTP bootstrap budgets, without mutating client settings."""
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-import time
-from typing import Any
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.deadline`.
 
-from urllib3.util import Timeout
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
-_BUDGET: ContextVar[tuple[float, Callable[[], float]] | None] = ContextVar("ezviz_request_budget", default=None)
+from pyezvizapi.cloud import deadline as _implementation
 
+if TYPE_CHECKING:
+    from pyezvizapi.cloud.deadline import (
+    Any as Any,
+    Callable as Callable,
+    ContextVar as ContextVar,
+    Iterator as Iterator,
+    Timeout as Timeout,
+    _BUDGET as _BUDGET,
+    bounded_request_timeout as bounded_request_timeout,
+    contextmanager as contextmanager,
+    remaining_request_budget as remaining_request_budget,
+    request_budget_lock as request_budget_lock,
+    request_deadline as request_deadline,
+    time as time,
+    )
 
-def remaining_request_budget() -> float | None:
-    """Reject an exhausted scoped request budget before doing more work."""
-    budget = _BUDGET.get()
-    if budget is None:
-        return None
-    remaining = budget[0] - budget[1]()
-    if remaining <= 0:
-        raise TimeoutError("Cloud bootstrap exhausted capture deadline")
-    return remaining
-
-
-@contextmanager
-def request_deadline(deadline: float | None, monotonic: Callable[[], float] = time.monotonic) -> Iterator[None]:
-    """Apply a budget to nested HTTP calls and authentication retries."""
-    if deadline is None:
-        yield
-        return
-    parent_remaining = remaining_request_budget()
-    if parent_remaining is not None:
-        deadline = min(deadline, monotonic() + parent_remaining)
-    token = _BUDGET.set((deadline, monotonic))
-    try:
-        remaining_request_budget()
-        yield
-        remaining_request_budget()
-    finally:
-        _BUDGET.reset(token)
-
-
-def bounded_request_timeout(default: float | None) -> Any:
-    """Give requests one total connect/read budget; preserve ordinary calls."""
-    remaining = remaining_request_budget()
-    if remaining is None:
-        return default
-    return Timeout(total=remaining if default is None else min(default, remaining))
-
-
-@contextmanager
-def request_budget_lock(lock: Any) -> Iterator[None]:
-    """Include token-lock contention in the scoped bootstrap deadline."""
-    remaining = remaining_request_budget()
-    if remaining is None:
-        with lock:
-            yield
-        return
-    if not lock.acquire(timeout=remaining):
-        raise TimeoutError("Cloud bootstrap token lock exhausted capture deadline")
-    try:
-        remaining_request_budget()
-        yield
-    finally:
-        lock.release()
+sys.modules[__name__] = _implementation

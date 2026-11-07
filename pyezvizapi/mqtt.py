@@ -1,470 +1,55 @@
-"""EZVIZ channel-99 push client with the historical MQTTClient API name.
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.push.mqtt`.
 
-Login registration uses the Android profile; LBS negotiates the device/session
-keys before a background MQTT connection delivers decoded notifications.
-Call EzvizClient.enable_channel99() to migrate an old web-profile login and
-provide a synchronous token persistence callback before connecting.
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
 """
-
-from __future__ import annotations
-
-from collections import OrderedDict
-from collections.abc import Callable
-from contextlib import suppress
-from copy import deepcopy
-import json
-import logging
-from threading import RLock
-from typing import Any, Final, TypedDict, cast
-
-import requests
-
-from pyezvizapi._auth import discover_services, isolated_session, refresh_credentials
-from pyezvizapi._longlink_profile import profile_for_token, synchronize_http_headers
-from pyezvizapi._longlink_session import Channel99Session
-from pyezvizapi._longlink_worker import PushWorker
-from pyezvizapi._token import ClientToken as EzvizToken, ServiceUrls, _push_endpoint, _push_serial, validate_push_token
-from pyezvizapi.constants import ANDROID_PROFILE, DEFAULT_TIMEOUT, PROFILE as PUSH_PROFILE, REGISTER as PUSH_REGISTER
-from pyezvizapi.exceptions import EzvizAuthTokenExpired, EzvizPushFatalError, EzvizTokenPersistenceError, HTTPError, PyEzvizError
-
-__all__ = ["EXT_FIELD_NAMES", "EzvizToken", "MQTTClient", "MqttData", "ServiceUrls"]
-
-_LOGGER = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Typed structures
-# ---------------------------------------------------------------------------
-
-
-class MqttData(TypedDict):
-    """Typed dictionary for EZVIZ MQTT connection data."""
-
-    mqtt_clientid: str | None
-    ticket: str | None
-    push_url: str
-
-
-# ---------------------------------------------------------------------------
-# Payload decoding helpers
-# ---------------------------------------------------------------------------
-
-# Field names in the comma-separated ``ext`` payload from EZVIZ.
-EXT_FIELD_NAMES: Final[tuple[str, ...]] = (
-    "channel_type",
-    "time",
-    "device_serial",
-    "channel_no",
-    "alert_type_code",
-    "default_pic_url",
-    "media_url_alt1",
-    "media_url_alt2",
-    "resource_type",
-    "status_flag",
-    "file_id",
-    "is_encrypted",
-    "picChecksum",
-    "is_dev_video",
-    "metadata",
-    "msgId",
-    "image",
-    "device_name",
-    "reserved",
-    "sequence_number",
-)
-
-# Fields that should be converted to ``int`` if present.
-EXT_INT_FIELDS: Final[frozenset[str]] = frozenset(
-    {
-        "channel_type",
-        "channel_no",
-        "alert_type_code",
-        "resource_type",
-        "status_flag",
-        "is_encrypted",
-        "is_dev_video",
-        "sequence_number",
-    }
-)
-
-
-# ---------------------------------------------------------------------------
-# Client
-# ---------------------------------------------------------------------------
-
-
-class MQTTClient:
-    """MQTT client for Ezviz push notifications.
-
-    Handles the Ezviz-specific registration and connection process,
-    maintains a persistent MQTT connection, and processes incoming messages.
-
-    Messages are stored per device_serial in `messages_by_device`, and an optional
-    callback can be provided to handle messages as they arrive.
-
-    Typical usage::
-
-        client = MQTTClient(token=auth_token)
-        client.connect(clean_session=True)
-
-        # Access last message for a device
-        last_msg = client.messages_by_device.get(device_serial)
-
-        # Stop the client when done
-        client.stop()
-    """
-
-    def __init__(
-        self,
-        token: EzvizToken | dict,
-        session: requests.Session,
-        timeout: int = DEFAULT_TIMEOUT,
-        on_message_callback: Callable[[dict[str, Any]], None] | None = None,
-        *,
-        max_messages: int = 1000,
-        on_token_updated: Callable[[dict[str, Any]], None] | None = None,
-        _token_lock: RLock | None = None,
-    ) -> None:
-        """Initialize the Ezviz MQTT client.
-
-        This client handles registration with the Ezviz push service, maintains
-        a persistent MQTT connection, and decodes incoming push messages.
-
-        Args:
-            token (dict): Authentication token dictionary returned by EzvizClient.login().
-                Must include:
-                    - 'username': Ezviz account username (The account aliase or generated one.)
-                    - 'session_id': session token for API access
-                    - 'service_urls': channel-99 pushDasDomain/pushDasPort discovery
-            timeout (int, optional): HTTP request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
-            session (requests.Session): Pre-configured requests session for HTTP calls.
-            on_message_callback (Callable[[dict[str, Any]], None], optional): Optional callback function
-                that will be called for each decoded MQTT message. The callback receives
-                a dictionary with the message data. Defaults to None.
-            on_token_updated:
-                Synchronous callback receiving the complete token snapshot. Must
-                durably save it before returning; required for push reception.
-            max_messages:
-                Maximum number of device entries kept in :attr:`messages_by_device`.
-                Oldest entries are evicted when the limit is exceeded. Defaults to ``1000``.
-
-        Raises:
-            PyEzvizError: If the provided token is missing required fields.
-        """
-        if not token or not token.get("username"):
-            raise PyEzvizError(
-                "Ezviz internal username is required. Ensure EzvizClient.login() was called first."
-            )
-
-        # Requests session (synchronous)
-        self._token_lock = _token_lock if _token_lock is not None else RLock()
-        self._session = session
-
-        self._token: EzvizToken | dict = token
-        self._timeout: int = timeout
-        self._on_message_callback = on_message_callback
-        self._on_token_updated = on_token_updated
-        self._push_worker: PushWorker | None = None
-        self._max_messages: int = max_messages
-
-        # Keep last payload per device, bounded by ``max_messages``
-        self.messages_by_device: OrderedDict[str, dict[str, Any]] = OrderedDict()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def connect(self, *, clean_session: bool = False, keepalive: int = 60) -> None:
-        """Start background channel-99 registration, negotiation and reception.
-
-        Returns before broker acceptance. Keep polling independent of push.
-        clean_session and keepalive remain accepted for source compatibility;
-        channel-99 uses its native clean-session profile and server keepalive.
-        """
-        if self._token.get("push_profile") != PUSH_PROFILE:
-            raise EzvizAuthTokenExpired(
-                "Legacy push registration is no longer supported; migrate with "
-                "EzvizClient.enable_channel99() and persist the returned token"
-            )
-        self._connect_channel99()
-
-    def raise_if_failed(self) -> None:
-        """Raise a fatal background error; call periodically while listening."""
-        if self._push_worker is not None:
-            self._push_worker.raise_if_failed()
-
-    def get_push_diagnostics(self) -> dict[str, Any]:
-        """Return credential-free channel-99 worker health."""
-        if self._push_worker is None:
-            return {
-                "state": "idle",
-                "worker_alive": False,
-                "retry_delay_seconds": None,
-                "attempts": 0,
-                "transient_failures": 0,
-                "last_error_type": None,
-                "fatal_error_type": None,
-                "session": None,
-            }
-        return self._push_worker.diagnostics()
-
-    def stop(self) -> None:
-        """Cancel push without calling the obsolete HTTP stop endpoint.
-
-        Raises TimeoutError if in-flight setup exceeds the worker join deadline.
-        Cancellation remains signalled; do not start another worker until it exits.
-        """
-        if self._push_worker is not None:
-            self._push_worker.stop()
-
-    def _connect_channel99(self) -> None:
-        """Start push in the background; persistence runs on the worker thread."""
-        if self._on_token_updated is None:
-            raise PyEzvizError("Channel-99 requires on_token_updated to durably save the token")
-        token = cast(dict[str, Any], self._token)
-        with self._token_lock:
-            validate_push_token(token)
-
-        def save_token(snapshot: dict[str, Any]) -> None:
-            assert self._on_token_updated is not None
-            try:
-                self._on_token_updated(snapshot)
-            except Exception as error:
-                raise EzvizTokenPersistenceError("Failed to persist channel-99 credentials") from error
-
-        def new_session() -> Channel99Session:
-            # Logins may replace discovery or the user; bind each attempt to one
-            # identity and HTTPS credential. An obsolete attempt must neither
-            # overwrite current state nor turn a stale rejection into a fatal error.
-            with self._token_lock:
-                user_id = token["user_id"]
-                session_id = cast(str, token["session_id"])
-                serial = _push_serial(user_id)
-                state = deepcopy(token.get("push_state", {}))
-                if not isinstance(state, dict):
-                    raise PyEzvizError("Invalid saved push state")
-
-                def current() -> bool:
-                    with self._token_lock:
-                        return (
-                            token.get("user_id") == user_id
-                            and token.get("session_id") == session_id
-                        )
-
-                def adopt_session(rotated_session_id: str) -> None:
-                    """Keep this attempt current after its own HTTPS refresh."""
-                    nonlocal session_id
-                    with self._token_lock:
-                        if (
-                            token.get("user_id") != user_id
-                            or token.get("session_id") != rotated_session_id
-                        ):
-                            raise PyEzvizError("Push credentials changed; reconnect required")
-                        session_id = rotated_session_id
-
-                def credentials_input() -> str:
-                    with self._token_lock:
-                        if not current():
-                            raise PyEzvizError("Push credentials changed; reconnect required")
-                        return session_id
-
-                def save(snapshot: dict[str, Any]) -> None:
-                    with self._token_lock:
-                        if not current():
-                            raise PyEzvizError("Push credentials changed; reconnect required")
-                        # Stage a detached snapshot: a failed pre-allocation save
-                        # must not poison the shared token with creation_pending.
-                        # After allocation, the previously committed pending guard
-                        # remains in place if saving the returned device keys fails.
-                        committed_state = deepcopy(snapshot)
-                        candidate = deepcopy(dict(token))
-                        candidate["push_state"] = deepcopy(committed_state)
-                        save_token(candidate)
-                        if not current():
-                            raise PyEzvizError("Push credentials changed; reconnect required")
-                        token["push_state"] = committed_state
-
-                return Channel99Session(
-                    _push_endpoint(token.get("service_urls", {})),
-                    serial,
-                    credentials_input,
-                    state,
-                    save,
-                    self._handle_payload,
-                    prepare=lambda: self._prepare_channel99(
-                        token, save_token, current, adopt_session
-                    ),
-                    is_current=current,
-                )
-
-        if self._push_worker is None:
-            self._push_worker = PushWorker(new_session)
-        self._push_worker.start()
-
-    def _prepare_channel99(
-        self,
-        token: dict[str, Any],
-        save_token: Callable[[dict[str, Any]], None],
-        is_current: Callable[[], bool] | None = None,
-        adopt_session: Callable[[str], None] | None = None,
-    ) -> None:
-        """Register push, refreshing rejected HTTPS credentials once per attempt."""
-        # Isolate requests state from the owner's concurrent polling requests.
-        with self._token_lock:
-            session = isolated_session(self._session)
-        synchronize_http_headers(
-            session.headers,
-            ANDROID_PROFILE,
-            token["session_id"],
-            scope="profile",
-        )
-        for attempt in range(2):
-            with self._token_lock:
-                if is_current is not None and not is_current():
-                    return
-                session.headers["sessionId"] = token["session_id"]
-            response = session.put(
-                f"https://{token['api_url']}/v3/push/token",
-                params=PUSH_REGISTER,
-                timeout=self._timeout,
-                allow_redirects=False,
-            )
-            expired = response.status_code in (401, 403)
-            if not expired:
-                response.raise_for_status()
-                code = response.json().get("meta", {}).get("code")
-                if code == 200:
-                    return
-                expired = code in (401, 403)
-            if not expired:
-                raise PyEzvizError("Channel-99 registration rejected")
-            if attempt or not token.get("rf_session_id"):
-                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required")
-            try:
-                with self._token_lock:
-                    # Polling may have rotated the credential while registration
-                    # was in flight. Leave that superseded attempt to the worker
-                    # rather than refreshing the replacement credential again.
-                    if is_current is not None and not is_current():
-                        return
-
-                    def notify() -> None:
-                        # Keep the polling transport current even if persistence fails.
-                        synchronize_http_headers(
-                            self._session.headers,
-                            profile_for_token(token),
-                            token["session_id"],
-                            scope="session",
-                        )
-                        if adopt_session is not None:
-                            adopt_session(cast(str, token["session_id"]))
-                        save_token(deepcopy(token))
-
-                    refresh_credentials(
-                        session, token, self._timeout, notify,
-                        lambda: discover_services(session, token, self._timeout),
-                    )
-            except EzvizAuthTokenExpired as error:
-                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
-            except HTTPError as error:
-                cause = error.__cause__
-                if (isinstance(cause, requests.HTTPError) and cause.response is not None
-                        and cause.response.status_code in (401, 403)):
-                    raise EzvizPushFatalError("Channel-99 refresh rejected; reauthentication required") from error
-                raise
-
-    # ------------------------------------------------------------------
-    # MQTT callbacks
-    # ------------------------------------------------------------------
-
-    def _handle_payload(self, payload: bytes) -> None:
-        """Preserve the public decoded-message/cache contract across transports."""
-        try:
-            decoded = self.decode_mqtt_message(payload)
-        except PyEzvizError as err:
-            _LOGGER.warning("MQTT decode error: msg=%s", str(err))
-            return
-
-        ext: dict[str, Any] = decoded.get("ext", {}) if isinstance(decoded.get("ext"), dict) else {}
-        device_serial = ext.get("device_serial")
-        alert_code = ext.get("alert_type_code")
-        msg_id = ext.get("msgId")
-
-        if device_serial:
-            self._cache_message(device_serial, decoded)
-            _LOGGER.debug(
-                "MQTT msg: serial=%s alert_code=%s msg_id=%s",
-                device_serial,
-                alert_code,
-                msg_id,
-            )
-        else:
-            _LOGGER.debug(
-                "MQTT message missing serial: alert_code=%s msg_id=%s",
-                alert_code,
-                msg_id,
-            )
-
-        if self._on_message_callback:
-            try:
-                self._on_message_callback(decoded)
-            except Exception:
-                _LOGGER.exception("The on_message_callback raised")
-
-    def _cache_message(self, device_serial: str, payload: dict[str, Any]) -> None:
-        """Cache latest message per device with an LRU-like policy.
-
-        Parameters:
-            device_serial (str): Device serial extracted from the message ``ext``.
-            payload (dict[str, Any]): Decoded message dictionary to store.
-        """
-        # Move existing to the end or insert new
-        if device_serial in self.messages_by_device:
-            del self.messages_by_device[device_serial]
-        self.messages_by_device[device_serial] = payload
-        # Evict oldest if above limit
-        while len(self.messages_by_device) > self._max_messages:
-            self.messages_by_device.popitem(last=False)
-
-    # ------------------------------------------------------------------
-    # Public decoding API
-    # ------------------------------------------------------------------
-
-    def decode_mqtt_message(self, payload_bytes: bytes) -> dict[str, Any]:
-        """Decode raw MQTT message payload into a structured dictionary.
-
-        The returned dictionary will contain all top-level fields from the message,
-        and the 'ext' field is parsed into named subfields with numeric fields converted to int.
-
-        Parameters:
-            payload_bytes (bytes): Raw payload received from MQTT broker.
-
-        Returns:
-            dict: Decoded message with ``ext`` mapped to named fields; numeric fields
-            converted to ``int`` where appropriate.
-
-        Raises:
-            PyEzvizError: If the payload is not valid JSON.
-        """
-        try:
-            payload_str = payload_bytes.decode("utf-8")
-            data: dict[str, Any] = json.loads(payload_str)
-
-            if "ext" in data and isinstance(data["ext"], str):
-                ext_parts = data["ext"].split(",")
-                ext_dict: dict[str, Any] = {}
-                for i, name in enumerate(EXT_FIELD_NAMES):
-                    value: Any = ext_parts[i] if i < len(ext_parts) else None
-                    if value is not None and name in EXT_INT_FIELDS:
-                        with suppress(ValueError):
-                            value = int(value)
-                    ext_dict[name] = value
-                data["ext"] = ext_dict
-
-        except json.JSONDecodeError as err:
-            # Stop the client on malformed payloads as a defensive measure,
-            # mirroring previous behaviour.
-            self.stop()
-            raise PyEzvizError(f"Unable to decode MQTT message: {err}") from err
-
-        return data
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
+
+from pyezvizapi.push import mqtt as _implementation
+
+if TYPE_CHECKING:
+    from pyezvizapi.push.mqtt import (
+    ANDROID_PROFILE as ANDROID_PROFILE,
+    Any as Any,
+    Callable as Callable,
+    Channel99Session as Channel99Session,
+    DEFAULT_TIMEOUT as DEFAULT_TIMEOUT,
+    EXT_FIELD_NAMES as EXT_FIELD_NAMES,
+    EXT_INT_FIELDS as EXT_INT_FIELDS,
+    EzvizAuthTokenExpired as EzvizAuthTokenExpired,
+    EzvizPushFatalError as EzvizPushFatalError,
+    EzvizToken as EzvizToken,
+    EzvizTokenPersistenceError as EzvizTokenPersistenceError,
+    Final as Final,
+    HTTPError as HTTPError,
+    MQTTClient as MQTTClient,
+    MqttData as MqttData,
+    OrderedDict as OrderedDict,
+    PUSH_PROFILE as PUSH_PROFILE,
+    PUSH_REGISTER as PUSH_REGISTER,
+    PushWorker as PushWorker,
+    PyEzvizError as PyEzvizError,
+    RLock as RLock,
+    ServiceUrls as ServiceUrls,
+    TypedDict as TypedDict,
+    _LOGGER as _LOGGER,
+    _push_endpoint as _push_endpoint,
+    _push_serial as _push_serial,
+    annotations as annotations,
+    cast as cast,
+    deepcopy as deepcopy,
+    discover_services as discover_services,
+    isolated_session as isolated_session,
+    json as json,
+    logging as logging,
+    profile_for_token as profile_for_token,
+    refresh_credentials as refresh_credentials,
+    requests as requests,
+    suppress as suppress,
+    synchronize_http_headers as synchronize_http_headers,
+    validate_push_token as validate_push_token,
+    )
+
+sys.modules[__name__] = _implementation

@@ -1,0 +1,1931 @@
+"""Shared RTP parsing, media routing, and video depacketization."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
+from fractions import Fraction
+from itertools import pairwise
+from typing import Literal
+
+from Crypto.Cipher import AES
+
+from pyezvizapi.exceptions import EzvizUnsupportedMediaError, PyEzvizError, UnsupportedRtpVideoCodecError
+
+ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
+MPEG_VIDEO_START_CODE_PREFIX = b"\x00\x00\x01"
+DEFAULT_VIDEO_PAYLOAD_TYPES = frozenset({96})
+KNOWN_VIDEO_PAYLOAD_TYPES = frozenset({26, 32, 96, 99})
+KNOWN_AUDIO_PAYLOAD_TYPES = frozenset(
+    {0, 4, 8, 11, 14, 18, 98, 100, 102, 103, 104, 115}
+)
+DEFAULT_AAC_PAYLOAD_TYPES = frozenset({104})
+DEFAULT_METADATA_PAYLOAD_TYPES = frozenset({112})
+IDMX_AAC_SAMPLES_PER_FRAME = 1024
+IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE = 2
+IDMX_AAC_ADTS_HEADER_SIZE = 7
+IDMX_AAC_ADTS_MAX_FRAME_LENGTH = 0x1FFF
+IDMX_AUDIO_EXTENSION_VERSION = b"\x00\x01"
+IDMX_AAC_SAMPLE_RATES = (
+    96_000,
+    88_200,
+    64_000,
+    48_000,
+    44_100,
+    32_000,
+    24_000,
+    22_050,
+    16_000,
+    12_000,
+    11_025,
+    8_000,
+    7_350,
+)
+
+# IDMX uses this fixed wire marker instead of a distinct RTP source ID.
+# Its video, audio, and metadata routes carry independent sequence counters.
+IDMX_RTP_SOURCE_MARKER = 0x55667788
+RtpSequenceKey = tuple[int, int | None]
+
+
+RtpMediaKind = Literal["video", "audio", "metadata", "unknown"]
+RtpVideoCodec = Literal["h264", "hevc"]
+RtpCodec = Literal[
+    "unknown",
+    "h264",
+    "hevc",
+    "mpeg2video",
+    "mpeg4video",
+    "mjpeg",
+    "svac",
+    "private-video",
+    "mpeg-audio",
+    "aac",
+    "aac-ld",
+    "pcm",
+    "g711-alaw",
+    "g711-mulaw",
+    "g722",
+    "g723",
+    "g726",
+    "g729",
+    "opus",
+]
+
+# Extracted from the official EZVIZ Android app's
+# rtp_pack_stream_type_to_codec_type() and CodecTypeToMediaType() mappings.
+_IDMX_RTP_STREAM_TYPES: dict[int, tuple[RtpCodec, RtpMediaKind]] = {
+    0x02: ("mpeg2video", "video"),
+    0x03: ("mpeg-audio", "audio"),
+    0x04: ("mpeg-audio", "audio"),
+    0x0F: ("aac", "audio"),
+    0x10: ("mpeg4video", "video"),
+    0x1B: ("h264", "video"),
+    0x24: ("hevc", "video"),
+    0x80: ("svac", "video"),
+    0x90: ("g711-alaw", "audio"),
+    0x91: ("g711-mulaw", "audio"),
+    0x92: ("g722", "audio"),
+    0x93: ("g723", "audio"),
+    0x96: ("g726", "audio"),
+    0x98: ("g726", "audio"),
+    0x99: ("g729", "audio"),
+    0x9C: ("pcm", "audio"),
+    0x9D: ("pcm", "audio"),
+    0x9E: ("private-video", "video"),
+    0xA6: ("aac-ld", "audio"),
+    0xB0: ("h264", "video"),
+    0xB1: ("mjpeg", "video"),
+    0xB2: ("hevc", "video"),
+}
+_IDMX_STATIC_VIDEO_PAYLOAD_CODECS: dict[int, RtpCodec] = {
+    26: "mjpeg",
+    32: "mpeg2video",
+    99: "svac",
+}
+
+# RFC 3551 static audio assignments whose codec identity is unambiguous.  The
+# vendor's PT 115 mapping proves Opus ownership, but not its negotiated clock or
+# channel count.  Dynamic/private assignments deliberately remain unknown.
+_STATIC_AUDIO_PROFILES: dict[int, tuple[RtpCodec, int | None, int | None]] = {
+    0: ("g711-mulaw", 8_000, 1),
+    4: ("g723", 8_000, 1),
+    8: ("g711-alaw", 8_000, 1),
+    11: ("pcm", 44_100, 1),
+    14: ("mpeg-audio", None, None),
+    18: ("g729", 8_000, 1),
+    115: ("opus", None, None),
+}
+
+
+@dataclass(frozen=True)
+class RtpPacket:
+    """One parsed RTP packet with its payload separated from framing."""
+
+    payload: bytes
+    payload_type: int
+    sequence: int
+    timestamp: int
+    ssrc: int
+    marker: bool
+    extension_profile: int | None = None
+    extension_data: bytes = b""
+    idmx: bool = False
+
+
+@dataclass
+class RtpContinuityStats:
+    """Observable discontinuities rejected by an RTP video depacketizer."""
+
+    duplicates: int = 0
+    sequence_conflicts: int = 0
+    reordered: int = 0
+    sequence_gaps: int = 0
+    timestamp_changes: int = 0
+    discarded_fragments: int = 0
+
+
+@dataclass(frozen=True)
+class RtpAacStream:
+    """Decrypted RFC 3640 AAC access units framed as ADTS."""
+
+    adts: bytes
+    sample_rate: int
+    channels: int
+    frame_count: int
+    # Contiguous ADTS blocks with sample offsets from the first received AU.
+    timed_segments: tuple[tuple[int, bytes], ...] = ()
+    # Raw source clock of the first accepted AU; absent for synthesized audio.
+    origin_timestamp: int | None = None
+    # Accepted source clocks only; never metadata or rejected payloads.
+    source_keys: tuple[RtpSequenceKey, ...] = ()
+
+
+@dataclass(frozen=True)
+class RtpStreamDescriptor:
+    """Codec routing advertised by native IDMX RTP descriptor ``0x45``."""
+
+    stream_type: int
+    payload_type: int
+    codec: RtpCodec
+    media_kind: RtpMediaKind
+
+
+class RtpRouteProfile:
+    """Evolving authoritative RTP route state for one IDMX stream.
+
+    Descriptor discovery may be delayed during startup.  Once a media packet is
+    handed to a consumer, however, changing payload ownership or codec would
+    make the already-created depacketizer/remux inputs unsafe, so it is rejected.
+    """
+
+    def __init__(self) -> None:
+        self._descriptors: dict[int, RtpStreamDescriptor] = {}
+        self._selected_fallbacks: dict[int, tuple[RtpCodec, RtpMediaKind]] = {}
+        self._observed_ssrcs: dict[int, set[int]] = {}
+        self._active_video_codecs: set[RtpCodec] = set()
+        self._audio_metadata: tuple[int, int] | None = None
+        self._media_started = False
+        self._audio_media_started = False
+
+    @property
+    def descriptors(self) -> tuple[RtpStreamDescriptor, ...]:
+        """Return current descriptor routes in payload order."""
+
+        return tuple(self._descriptors[key] for key in sorted(self._descriptors))
+
+    @property
+    def audio_metadata(self) -> tuple[int, int] | None:
+        """Return authoritative sample rate and channel count when advertised."""
+
+        return self._audio_metadata
+
+    def deactivate_audio(self) -> None:
+        """Stop enforcing the audio profile after its consumer is disabled."""
+
+        self._audio_media_started = False
+        for payload_type in tuple(self._observed_ssrcs):
+            descriptor = self._descriptors.get(payload_type)
+            media_kind = (
+                descriptor.media_kind
+                if descriptor is not None
+                else _static_media_kind(payload_type)
+            )
+            if media_kind == "audio":
+                del self._observed_ssrcs[payload_type]
+
+    def absorb(self, packet: RtpPacket) -> None:
+        """Absorb descriptors carried by one packet without dispatching media."""
+
+        metadata = idmx_aac_descriptor((packet,))
+        if metadata is not None:
+            if (
+                self._audio_media_started
+                and self._audio_metadata is not None
+                and metadata != self._audio_metadata
+            ):
+                raise PyEzvizError("RTP audio profile mutation after media began")
+            self._audio_metadata = metadata
+        for descriptor in idmx_rtp_stream_descriptors((packet,)):
+            current = self._descriptors.get(descriptor.payload_type)
+            selected_fallback = self._selected_fallbacks.get(descriptor.payload_type)
+            changes_dispatched_route = (
+                current is None
+                and selected_fallback != (descriptor.codec, descriptor.media_kind)
+            ) or (
+                current is not None
+                and (
+                    current.codec != descriptor.codec
+                    or current.media_kind != descriptor.media_kind
+                )
+            )
+            conflicts_with_video_consumer = (
+                descriptor.media_kind == "video"
+                and bool(self._active_video_codecs)
+                and descriptor.codec not in self._active_video_codecs
+            )
+            if (
+                descriptor.payload_type in self._observed_ssrcs
+                and changes_dispatched_route
+            ) or conflicts_with_video_consumer:
+                raise PyEzvizError(
+                    "RTP route mutation after media began: descriptor changes "
+                    f"payload type {descriptor.payload_type} ownership or codec"
+                )
+            self._descriptors[descriptor.payload_type] = descriptor
+
+    def select_video_fallback(
+        self,
+        payload_type: int,
+        codec: RtpVideoCodec,
+    ) -> None:
+        """Record a probed descriptor-free route before media dispatch.
+
+        A later descriptor may confirm this exact route, but cannot change its
+        ownership or codec once packets have reached the consumer.
+        """
+
+        self._select_fallback(payload_type, codec, "video")
+
+    def select_audio_fallback(self, payload_type: int, codec: RtpCodec) -> None:
+        """Record a decrypted descriptor-free audio route before dispatch."""
+
+        self._select_fallback(payload_type, codec, "audio")
+
+    def _select_fallback(
+        self,
+        payload_type: int,
+        codec: RtpCodec,
+        media_kind: RtpMediaKind,
+    ) -> None:
+        current = self._descriptors.get(payload_type)
+        if self._media_started:
+            raise PyEzvizError("Cannot select RTP fallback after media began")
+        if current is not None:
+            if current.codec != codec or current.media_kind != media_kind:
+                raise PyEzvizError("Selected RTP fallback conflicts with its descriptor")
+            return
+        self._selected_fallbacks[payload_type] = (codec, media_kind)
+
+    def media_kind(self, packet: RtpPacket) -> RtpMediaKind:
+        """Classify a packet using current authoritative ownership."""
+
+        if packet.payload_type not in self._descriptors:
+            fallback = self._selected_fallbacks.get(packet.payload_type)
+            if fallback is not None:
+                return fallback[1]
+        return rtp_media_kind(packet, stream_descriptors=self.descriptors)
+
+    def codec_payload_types(
+        self,
+        codec: RtpCodec,
+        *,
+        fallback_payload_types: frozenset[int] = frozenset(),
+    ) -> frozenset[int]:
+        """Return current payload ownership for one codec."""
+
+        return rtp_codec_payload_types(
+            self.descriptors,
+            codec,
+            fallback_payload_types=fallback_payload_types,
+        )
+
+    def descriptor_for(self, packet: RtpPacket) -> RtpStreamDescriptor | None:
+        """Return the active descriptor for one packet's payload route."""
+
+        return self._descriptors.get(packet.payload_type)
+
+    def mark_media(self, packet: RtpPacket, *, absorb: bool = True) -> None:
+        """Record a packet immediately before it is dispatched as media.
+
+        Set ``absorb`` false when the packet was already absorbed during startup
+        buffering or immediately before classification.
+        """
+
+        if absorb:
+            self.absorb(packet)
+        kind = self.media_kind(packet)
+        if kind not in {"video", "audio"}:
+            return
+        self._media_started = True
+        if kind == "audio":
+            self._audio_media_started = True
+        elif kind == "video":
+            descriptor = self._descriptors.get(packet.payload_type)
+            selected_fallback = self._selected_fallbacks.get(packet.payload_type)
+            codec = (
+                descriptor.codec
+                if descriptor is not None
+                else selected_fallback[0]
+                if selected_fallback is not None
+                else _IDMX_STATIC_VIDEO_PAYLOAD_CODECS.get(
+                    packet.payload_type,
+                    "unknown",
+                )
+            )
+            if codec != "unknown":
+                self._active_video_codecs.add(codec)
+        self._observed_ssrcs.setdefault(packet.payload_type, set()).add(packet.ssrc)
+
+    def streams(self) -> tuple[dict[str, object], ...]:
+        """Return byte-free route/profile records suitable for diagnostics."""
+
+        payload_types = set(self._descriptors) | set(self._observed_ssrcs)
+        records: list[dict[str, object]] = []
+        for payload_type in sorted(payload_types):
+            descriptor = self._descriptors.get(payload_type)
+            kind = descriptor.media_kind if descriptor else _static_media_kind(payload_type)
+            codec, sample_rate, channels = _profile_codec_fields(
+                payload_type,
+                descriptor,
+                self._audio_metadata,
+            )
+            observed_ssrcs = self._observed_ssrcs.get(payload_type)
+            ssrcs: tuple[int | None, ...] = (
+                tuple(sorted(observed_ssrcs)) if observed_ssrcs else (None,)
+            )
+            for ssrc in ssrcs:
+                records.append(
+                    {
+                        "codec": codec,
+                        "media_kind": kind,
+                        "payload_type": payload_type,
+                        "ssrc": ssrc,
+                        "sample_rate": sample_rate,
+                        "channels": channels,
+                        "authoritative": descriptor is not None,
+                    }
+                )
+        return tuple(records)
+
+    def diagnostics(self) -> dict[str, object]:
+        """Return sanitized route state containing no media or secrets."""
+
+        return {"media_started": self._media_started, "streams": list(self.streams())}
+
+
+def _static_media_kind(payload_type: int) -> RtpMediaKind:
+    if payload_type in KNOWN_VIDEO_PAYLOAD_TYPES:
+        return "video"
+    if payload_type in KNOWN_AUDIO_PAYLOAD_TYPES:
+        return "audio"
+    if payload_type in DEFAULT_METADATA_PAYLOAD_TYPES:
+        return "metadata"
+    return "unknown"
+
+
+def _profile_codec_fields(
+    payload_type: int,
+    descriptor: RtpStreamDescriptor | None,
+    audio_metadata: tuple[int, int] | None,
+) -> tuple[RtpCodec, int | None, int | None]:
+    codec = descriptor.codec if descriptor else "unknown"
+    sample_rate: int | None = None
+    channels: int | None = None
+    if descriptor is None and payload_type in _STATIC_AUDIO_PROFILES:
+        codec, sample_rate, channels = _STATIC_AUDIO_PROFILES[payload_type]
+    elif descriptor is None and payload_type in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS:
+        codec = _IDMX_STATIC_VIDEO_PAYLOAD_CODECS[payload_type]
+    elif descriptor is not None and descriptor.codec == "aac" and audio_metadata:
+        sample_rate, channels = audio_metadata
+    return codec, sample_rate, channels
+
+
+@dataclass
+class _FragmentedNal:
+    data: bytearray
+    last_sequence: int
+    timestamp: int
+
+
+def parse_rtp_packet(data: bytes, *, idmx: bool = False) -> RtpPacket:
+    """Parse RTP v2; only native transport callers may assert IDMX provenance."""
+
+    if len(data) < 12:
+        raise PyEzvizError("RTP packet is too short")
+    if data[0] >> 6 != 2:
+        raise EzvizUnsupportedMediaError(
+            "Unsupported RTP version: source did not provide RTP v2 media",
+            source="rtp",
+            reason="invalid_rtp_version",
+        )
+
+    has_padding = bool(data[0] & 0x20)
+    has_extension = bool(data[0] & 0x10)
+    offset = 12 + ((data[0] & 0x0F) * 4)
+    if len(data) < offset:
+        raise PyEzvizError("RTP CSRC header exceeds packet length")
+
+    extension_profile: int | None = None
+    extension_data = b""
+    if has_extension:
+        if len(data) < offset + 4:
+            raise PyEzvizError("RTP extension header exceeds packet length")
+        extension_profile = int.from_bytes(data[offset : offset + 2], "big")
+        extension_length = int.from_bytes(data[offset + 2 : offset + 4], "big") * 4
+        extension_start = offset + 4
+        offset = extension_start + extension_length
+        if len(data) < offset:
+            raise PyEzvizError("RTP extension payload exceeds packet length")
+        extension_data = data[extension_start:offset]
+
+    payload = data[offset:]
+    if has_padding:
+        if not payload:
+            raise PyEzvizError("RTP padding set without payload")
+        padding_length = payload[-1]
+        if padding_length == 0 or padding_length > len(payload):
+            raise PyEzvizError("Invalid RTP padding length")
+        payload = payload[:-padding_length]
+
+    return RtpPacket(
+        payload=payload,
+        payload_type=data[1] & 0x7F,
+        sequence=int.from_bytes(data[2:4], "big"),
+        timestamp=int.from_bytes(data[4:8], "big"),
+        ssrc=int.from_bytes(data[8:12], "big"),
+        marker=bool(data[1] & 0x80),
+        extension_profile=extension_profile,
+        extension_data=extension_data,
+        idmx=idmx,
+    )
+
+
+def rtp_payload(data: bytes) -> bytes:
+    """Return an RTP payload after all variable framing fields."""
+
+    return parse_rtp_packet(data).payload
+
+
+def rtp_media_kind(
+    packet: RtpPacket,
+    *,
+    video_payload_types: frozenset[int] = KNOWN_VIDEO_PAYLOAD_TYPES,
+    audio_payload_types: frozenset[int] = KNOWN_AUDIO_PAYLOAD_TYPES,
+    metadata_payload_types: frozenset[int] = DEFAULT_METADATA_PAYLOAD_TYPES,
+    stream_descriptors: Iterable[RtpStreamDescriptor] = (),
+) -> RtpMediaKind:
+    """Classify one RTP packet using the EZVIZ dynamic payload mapping."""
+
+    descriptor_tuple = tuple(stream_descriptors)
+    for descriptor in descriptor_tuple:
+        if descriptor.payload_type == packet.payload_type:
+            return descriptor.media_kind
+    if packet.payload_type == 96 and any(
+        descriptor.media_kind == "video" for descriptor in descriptor_tuple
+    ):
+        return "unknown"
+    if packet.payload_type in video_payload_types:
+        return "video"
+    if packet.payload_type in audio_payload_types:
+        return "audio"
+    if packet.payload_type in metadata_payload_types:
+        return "metadata"
+    return "unknown"
+
+
+def idmx_rtp_stream_descriptors(
+    packets: Iterable[RtpPacket],
+) -> tuple[RtpStreamDescriptor, ...]:
+    """Return native IDMX codec routes from stream descriptor ``0x45``.
+
+    The official app reads the stream type and RTP payload type from bytes two
+    and three of this descriptor, then maps the stream type to a codec before
+    inspecting media payloads. Unknown stream types retain ownership of their
+    payload type so future/private codecs cannot fall through to a conflicting
+    static or default route.
+    """
+
+    descriptors: list[RtpStreamDescriptor] = []
+    seen: set[RtpStreamDescriptor] = set()
+    for packet in packets:
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            descriptor_length = data[offset + 1]
+            descriptor_end = offset + descriptor_length + 2
+            if descriptor_end > len(data):
+                break
+            if data[offset] == 0x45 and descriptor_length >= 2:
+                stream_type = data[offset + 2]
+                codec_info = _IDMX_RTP_STREAM_TYPES.get(stream_type)
+                codec, media_kind = codec_info or ("unknown", "unknown")
+                descriptor = RtpStreamDescriptor(
+                    stream_type=stream_type,
+                    payload_type=data[offset + 3] & 0x7F,
+                    codec=codec,
+                    media_kind=media_kind,
+                )
+                if descriptor not in seen:
+                    descriptors.append(descriptor)
+                    seen.add(descriptor)
+            offset = descriptor_end
+    return tuple(descriptors)
+
+
+def rtp_codec_payload_types(
+    descriptors: Iterable[RtpStreamDescriptor],
+    codec: RtpCodec,
+    *,
+    fallback_payload_types: frozenset[int] = frozenset(),
+) -> frozenset[int]:
+    """Return payload types for one codec with descriptor routes taking priority."""
+
+    descriptor_tuple = tuple(descriptors)
+    assigned_payload_types = frozenset(
+        descriptor.payload_type for descriptor in descriptor_tuple
+    )
+    codec_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in descriptor_tuple
+        if descriptor.codec == codec
+    )
+    if codec_payload_types:
+        return codec_payload_types
+    return fallback_payload_types - assigned_payload_types
+
+
+def idmx_video_frame_rate(packets: Iterable[RtpPacket]) -> str | None:
+    """Read the native 0x42 descriptor's 90 kHz frame-period field.
+
+    PlayCtrl rtp_parse_hik_video_descriptor packs bytes 13..15 into a
+    23-bit period and divides 90000 by it. Reserved/invalid periods do
+    not establish timing; never invent the native parser's 25 fps default.
+    """
+
+    selected: Fraction | None = None
+    for packet in packets:
+        if not packet.idmx:
+            continue
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            end = offset + data[offset + 1] + 2
+            if end > len(data):
+                break
+            if data[offset] == 0x42 and data[offset + 1] >= 14:
+                descriptor = data[offset:end]
+                period = (descriptor[13] << 15) | (descriptor[14] << 7) | (descriptor[15] >> 1)
+                if 186 < period <= 1_530_000:
+                    rate = Fraction(90000, period)
+                    # Startup metadata can advertise a placeholder period;
+                    # subsequent native metadata corrects it (as for AAC).
+                    selected = rate
+            offset = end
+    return str(selected) if selected is not None else None
+
+
+def idmx_aac_descriptor(packets: Iterable[RtpPacket]) -> tuple[int, int] | None:
+    """Return authoritative sample-rate/channel metadata from descriptor ``0x43``."""
+
+    for packet in packets:
+        data = packet.extension_data
+        offset = 0
+        while offset + 2 <= len(data):
+            descriptor_length = data[offset + 1]
+            descriptor_end = offset + descriptor_length + 2
+            if descriptor_end > len(data):
+                break
+            if data[offset] == 0x43 and descriptor_length >= 10:
+                channels = (data[offset + 4] & 0x01) + 1
+                sample_rate = (
+                    (data[offset + 5] << 14)
+                    | (data[offset + 6] << 6)
+                    | (data[offset + 7] >> 2)
+                )
+                if sample_rate in IDMX_AAC_SAMPLE_RATES and channels in (1, 2):
+                    return sample_rate, channels
+            offset = descriptor_end
+    return None
+
+
+def _idmx_audio_extension_is_aac(packet: RtpPacket) -> bool:
+    data = packet.extension_data
+    return (
+        packet.extension_profile == 0x4000
+        and len(data) >= 8
+        and data[0] == 0x80
+        and data[1] >= 6
+        and data[2:4] == IDMX_AUDIO_EXTENSION_VERSION
+        and data[4] & 0xF0 == 0x20
+    )
+
+
+def rtp_packet_is_idmx_aac(packet: RtpPacket) -> bool:
+    """Return whether native RTP extension metadata identifies IDMX AAC."""
+
+    return _idmx_audio_extension_is_aac(packet)
+
+
+def _idmx_aac_access_unit(payload: bytes) -> bytes | None:
+    """Parse one RFC 3640 MPEG4-GENERIC access unit from an RTP payload."""
+
+    if len(payload) < 4 or int.from_bytes(payload[:2], "big") != 16:
+        return None
+    access_unit_header = int.from_bytes(payload[2:4], "big")
+    access_unit_size = access_unit_header >> 3
+    if access_unit_header & 0x07 or access_unit_size != len(payload) - 4:
+        return None
+    return payload[4:]
+
+
+def rtp_packet_has_valid_idmx_aac_frame(packet: RtpPacket) -> bool:
+    """Return whether one RTP packet carries a safely framed IDMX AAC unit."""
+
+    access_unit = _idmx_aac_access_unit(packet.payload)
+    return (
+        _idmx_audio_extension_is_aac(packet)
+        and access_unit is not None
+        and len(access_unit) + IDMX_AAC_ADTS_HEADER_SIZE
+        <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+    )
+
+
+def _rtp_media_aes_key(media_key: str | bytes) -> bytes:
+    key_bytes = media_key.encode() if isinstance(media_key, str) else media_key
+    return key_bytes.ljust(16, b"\0")[:16]
+
+
+def _decrypt_idmx_aac_access_unit(access_unit: bytes, aes_key: bytes) -> bytes:
+    decrypt_length = len(access_unit) - len(access_unit) % AES.block_size
+    if decrypt_length == 0:
+        return access_unit
+    cipher = AES.new(aes_key, AES.MODE_ECB)  # codeql[py/weak-cryptographic-algorithm]
+    decrypted_prefix = cipher.decrypt(access_unit[:decrypt_length])  # codeql[py/weak-cryptographic-algorithm] lgtm[py/weak-cryptographic-algorithm]
+    return decrypted_prefix + access_unit[decrypt_length:]
+
+
+def _aac_adts_header(payload_length: int, sample_rate: int, channels: int) -> bytes:
+    try:
+        sample_rate_index = IDMX_AAC_SAMPLE_RATES.index(sample_rate)
+    except ValueError as err:
+        raise PyEzvizError(f"Unsupported IDMX AAC sample rate: {sample_rate}") from err
+    frame_length = payload_length + IDMX_AAC_ADTS_HEADER_SIZE
+    if frame_length > IDMX_AAC_ADTS_MAX_FRAME_LENGTH:
+        raise PyEzvizError("IDMX AAC access unit exceeds the ADTS frame limit")
+    profile = IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE - 1
+    return bytes(
+        (
+            0xFF,
+            0xF1,
+            (profile << 6) | (sample_rate_index << 2) | (channels >> 2),
+            ((channels & 0x03) << 6) | (frame_length >> 11),
+            (frame_length >> 3) & 0xFF,
+            ((frame_length & 0x07) << 5) | 0x1F,
+            0xFC,
+        )
+    )
+
+
+def decrypt_idmx_aac_packets(
+    packets: Iterable[RtpPacket],
+    media_key: str | bytes,
+    *,
+    audio_metadata: tuple[int, int] | None = None,
+    audio_payload_types: frozenset[int] | None = None,
+    require_contiguous: bool = True,
+    decrypt_audio: bool = True,
+    allow_timestamp_jitter: bool = False,
+    preserve_clear_timestamps: bool = False,
+) -> RtpAacStream | None:
+    """Return descriptor-backed IDMX AAC as ADTS; explicitly bypass AES for clear input.
+
+    ``preserve_clear_timestamps`` retains any forward received AAC sample-clock
+    spacing for explicitly clear, fully framed, descriptor-backed input. It
+    neither rounds timestamps nor relaxes encrypted-IDMX eligibility.
+    """
+
+    packet_list = list(packets)
+    route_profile, route_epochs = _rtp_route_epochs(packet_list)
+    descriptors = route_profile.descriptors
+    selected_audio_payload_types = audio_payload_types
+    if selected_audio_payload_types is None:
+        selected_audio_payload_types = rtp_codec_payload_types(
+            descriptors,
+            "aac",
+            fallback_payload_types=DEFAULT_AAC_PAYLOAD_TYPES,
+        )
+    encrypted_access_units: list[bytes] = []
+    timestamps: list[int] = []
+    source_keys: dict[RtpSequenceKey, None] = {}
+    for packet, route_epoch in zip(packet_list, route_epochs, strict=True):
+        if packet.payload_type not in selected_audio_payload_types:
+            continue
+        if route_epoch is not None and route_epoch.codec != "aac":
+            continue
+        clear_access_unit = _idmx_aac_access_unit(packet.payload) if not decrypt_audio else None
+        clear_routed_aac = (
+            not decrypt_audio and (
+                route_epoch.codec == "aac" if route_epoch is not None else route_profile.audio_metadata is not None
+            )
+            and clear_access_unit is not None
+            and len(clear_access_unit) + IDMX_AAC_ADTS_HEADER_SIZE <= IDMX_AAC_ADTS_MAX_FRAME_LENGTH
+        )
+        if not (clear_routed_aac or rtp_packet_has_valid_idmx_aac_frame(packet)):
+            if route_epoch is None:
+                continue
+            return None
+        access_unit = _idmx_aac_access_unit(packet.payload)
+        assert access_unit is not None
+        timestamps.append(packet.timestamp)
+        source_keys[_rtp_sequence_key(packet)] = None
+        encrypted_access_units.append(access_unit)
+    if not encrypted_access_units:
+        return None
+    deltas = [
+        (current - previous) & 0xFFFFFFFF
+        for previous, current in pairwise(timestamps)
+    ]
+    descriptor = route_profile.audio_metadata or audio_metadata
+    if descriptor is None:
+        return None
+    sample_rate, channels = descriptor
+    clear_forward_clock = preserve_clear_timestamps and not decrypt_audio
+    if any(
+        not (0 < delta < 0x80000000) if clear_forward_clock
+        else not _aac_timestamp_delta_is_supported(delta, sample_rate, allow_timestamp_jitter)
+        for delta in deltas
+    ):
+        return None
+    if require_contiguous and any(delta != IDMX_AAC_SAMPLES_PER_FRAME for delta in deltas):
+        return None
+    aes_key = _rtp_media_aes_key(media_key)
+    access_units = [
+        _decrypt_idmx_aac_access_unit(access_unit, aes_key) if decrypt_audio else access_unit
+        for access_unit in encrypted_access_units
+    ]
+    adts_frames = [
+        _aac_adts_header(len(access_unit), sample_rate, channels) + access_unit
+        for access_unit in access_units
+    ]
+    return RtpAacStream(
+        adts=b"".join(adts_frames),
+        sample_rate=sample_rate,
+        channels=channels,
+        frame_count=len(access_units),
+        timed_segments=_aac_timed_segments(adts_frames, deltas),
+        origin_timestamp=timestamps[0],
+        source_keys=tuple(source_keys),
+    )
+
+
+
+def _aac_timestamp_delta_is_supported(delta: int, sample_rate: int, allow_jitter: bool) -> bool:
+    """Accept whole AUs or explicitly enabled native one-millisecond clock jitter."""
+
+    jitter = sample_rate // 1000 if allow_jitter else 0
+    remainder = delta % IDMX_AAC_SAMPLES_PER_FRAME
+    return (IDMX_AAC_SAMPLES_PER_FRAME - jitter <= delta < 0x80000000
+            and min(remainder, IDMX_AAC_SAMPLES_PER_FRAME - remainder) <= jitter)
+
+def _aac_timed_segments(adts_frames: list[bytes], deltas: list[int]) -> tuple[tuple[int, bytes], ...]:
+    """Split received ADTS only at missing-AU boundaries."""
+
+    segments: list[tuple[int, bytes]] = []
+    segment_start = 0
+    segment_offset = 0
+    sample_offset = 0
+    for index, delta in enumerate(deltas, start=1):
+        sample_offset += delta
+        if delta != IDMX_AAC_SAMPLES_PER_FRAME:
+            segments.append((segment_offset, b"".join(adts_frames[segment_start:index])))
+            segment_start = index
+            segment_offset = sample_offset
+    if segments:
+        segments.append((segment_offset, b"".join(adts_frames[segment_start:])))
+    return tuple(segments)
+
+
+def rtp_payload_video_codec(payload: bytes) -> RtpVideoCodec | None:
+    """Best-effort codec detection for an EZVIZ RTP video payload."""
+
+    if len(payload) < 2:
+        return None
+    h264_type = payload[0] & 0x1F
+    hevc_type = (payload[0] >> 1) & 0x3F
+    if hevc_type in {48, 49} and _is_plausible_hevc_header(payload):
+        codec: RtpVideoCodec | None = "hevc"
+    elif _is_ambiguous_h264_hevc_payload(payload):
+        codec = None
+    elif 1 <= h264_type <= 5:
+        codec = "h264"
+    elif hevc_type in {32, 33, 34, 39, 40}:
+        codec = "hevc"
+    elif h264_type in {7, 8, 24, 28}:
+        codec = "h264"
+    else:
+        codec = None
+    return codec
+
+
+def _rtp_payload_unsupported_video_codec(payload: bytes) -> RtpCodec | None:
+    if len(payload) < 4 or payload[:3] != MPEG_VIDEO_START_CODE_PREFIX:
+        return None
+    start_code = payload[3]
+    if start_code in {0xB3, 0xB8}:
+        return "mpeg2video"
+    if start_code <= 0x2F or start_code in {0xB0, 0xB5, 0xB6}:
+        return "mpeg4video"
+    return None
+
+
+def _advertised_rtp_video_codec(
+    descriptors: Iterable[RtpStreamDescriptor],
+) -> RtpVideoCodec | None:
+    advertised_codecs = {
+        descriptor.codec
+        for descriptor in descriptors
+        if descriptor.media_kind == "video"
+    }
+    if not advertised_codecs:
+        return None
+    if len(advertised_codecs) > 1:
+        codecs = ", ".join(sorted(advertised_codecs))
+        raise PyEzvizError(
+            f"Conflicting RTP video codecs advertised by IDMX metadata: {codecs}"
+        )
+    advertised_codec = next(iter(advertised_codecs))
+    if advertised_codec == "h264":
+        return "h264"
+    if advertised_codec == "hevc":
+        return "hevc"
+    raise UnsupportedRtpVideoCodecError(
+        "Unsupported RTP video codec advertised by IDMX metadata: "
+        f"{advertised_codec}"
+    )
+
+
+def detect_rtp_video_codec(  # noqa: PLR0912
+    packets: Iterable[RtpPacket],
+    *,
+    video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    allow_fallback: bool = True,
+    stream_descriptors: Iterable[RtpStreamDescriptor] | None = None,
+    video_payload_transform: Callable[[bytes], bytes] | None = None,
+    allow_ezviz_headerless_hevc_fu: bool = False,
+) -> RtpVideoCodec:
+    """Detect H.264 or HEVC from routed RTP video packets."""
+
+    packet_list = list(packets)
+    descriptors = tuple(stream_descriptors) if stream_descriptors is not None else (
+        _rtp_route_epochs(packet_list)[0].descriptors
+    )
+    advertised_codec = _advertised_rtp_video_codec(descriptors)
+    if advertised_codec is not None:
+        return advertised_codec
+    if video_payload_transform is not None:
+        # A valid FU carries clear framing around ciphertext. Probe assembled
+        # NALs before interpreting individual encrypted fragments as codecs.
+        supported_codecs: tuple[RtpVideoCodec, RtpVideoCodec] = ("h264", "hevc")
+        decrypted_codecs: list[RtpVideoCodec] = []
+        for probe_codec in supported_codecs:
+            try:
+                nal_units = rtp_packets_to_nal_units(
+                    packet_list,
+                    codec=probe_codec,
+                    video_payload_types=video_payload_types,
+                    completed_access_units_only=True,
+                    packet_nal_transform=video_payload_transform,
+                    allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+                )
+            except EzvizUnsupportedMediaError:
+                # A competing codec probe can misread HEVC as H.264 data
+                # partitions; the selected codec still reports this error.
+                continue
+            if rtp_nal_units_have_vcl(nal_units, codec=probe_codec):
+                decrypted_codecs.append(probe_codec)
+        if len(decrypted_codecs) == 1:
+            return decrypted_codecs[0]
+    assigned_payload_types = frozenset(
+        descriptor.payload_type for descriptor in descriptors
+    )
+    routed_video_payload_types = (
+        video_payload_types - assigned_payload_types
+    ) | frozenset(
+        descriptor.payload_type
+        for descriptor in descriptors
+        if descriptor.media_kind == "video"
+    )
+    if video_payload_transform is not None:
+        # An unfinished FU has no complete NAL to probe. Its RTP indicator is
+        # clear framing, not ciphertext, and still identifies the video codec.
+        fu_codecs: set[RtpVideoCodec] = {
+            codec
+            for packet in packet_list
+            if packet.payload_type in routed_video_payload_types
+            and not packet.marker
+            for codec in supported_codecs
+            if (signature := _fu_signature(packet.payload, codec)) is not None
+            and signature[2]
+            and not signature[3]
+        }
+        if len(fu_codecs) == 1:
+            return next(iter(fu_codecs))
+    non_video_descriptor_payload_types = frozenset(
+        descriptor.payload_type
+        for descriptor in descriptors
+        if descriptor.media_kind != "video"
+    )
+    unsupported_static_codecs = {
+        _IDMX_STATIC_VIDEO_PAYLOAD_CODECS[packet.payload_type]
+        for packet in packet_list
+        if packet.payload_type in _IDMX_STATIC_VIDEO_PAYLOAD_CODECS
+        and packet.payload_type not in non_video_descriptor_payload_types
+        and packet.payload_type not in video_payload_types
+    }
+    if unsupported_static_codecs:
+        codecs = ", ".join(sorted(unsupported_static_codecs))
+        raise UnsupportedRtpVideoCodecError(
+            f"Unsupported RTP video codec: {codecs}"
+        )
+    fallback: RtpVideoCodec | None = None
+    for packet in packet_list:
+        if packet.payload_type not in routed_video_payload_types:
+            continue
+        payload = (
+            video_payload_transform(packet.payload)
+            if video_payload_transform is not None
+            else packet.payload
+        )
+        unsupported_codec = _rtp_payload_unsupported_video_codec(payload)
+        if unsupported_codec is not None:
+            raise UnsupportedRtpVideoCodecError(
+                f"Unsupported RTP video codec: {unsupported_codec}"
+            )
+        codec = rtp_payload_video_codec(payload)
+        if codec is not None:
+            return codec
+        if _is_ambiguous_h264_hevc_payload(payload):
+            continue
+        if len(payload) >= 2 and fallback is None:
+            hevc_type = (payload[0] >> 1) & 0x3F
+            h264_type = payload[0] & 0x1F
+            if 0 <= hevc_type <= 50:
+                fallback = "hevc"
+            elif 1 <= h264_type <= 23:
+                fallback = "h264"
+    if fallback is not None and allow_fallback:
+        return fallback
+    raise PyEzvizError("Could not detect RTP video codec")
+
+
+def _rtp_sequence_key(packet: RtpPacket) -> RtpSequenceKey:
+    """Keep real RTP SSRC counters shared; separate IDMX placeholder routes."""
+
+    return (
+        packet.ssrc,
+        packet.payload_type if packet.idmx and packet.ssrc == IDMX_RTP_SOURCE_MARKER else None,
+    )
+
+
+class RtpVideoDepacketizer:
+    """Reassemble H.264 or HEVC NAL units while enforcing RTP continuity.
+
+    ``allow_ezviz_headerless_hevc_fu`` accepts the non-standard continuation
+    layout observed on local IDMX streams. Keep the strict default for ordinary
+    RTP sources, where a changed FU NAL type invalidates the active fragment.
+    """
+
+    def __init__(
+        self,
+        codec: RtpVideoCodec,
+        *,
+        allow_ezviz_headerless_hevc_fu: bool = False,
+    ) -> None:
+        self.codec = codec
+        self.allow_ezviz_headerless_hevc_fu = allow_ezviz_headerless_hevc_fu
+        self.stats = RtpContinuityStats()
+        self._last_sequence_by_ssrc: dict[RtpSequenceKey, int] = {}
+        self._last_identity_by_ssrc: dict[RtpSequenceKey, tuple[int, int, bool, bytes]] = {}
+        self._fragment_by_ssrc: dict[RtpSequenceKey, _FragmentedNal] = {}
+
+    def push(self, packet: RtpPacket) -> tuple[bytes, ...]:
+        """Consume one routed video packet and return complete NAL units."""
+
+        sequence_key = _rtp_sequence_key(packet)
+        continuity = self._continuity(packet)
+        if continuity in {"duplicate", "reordered"}:
+            return ()
+        if continuity == "conflict":
+            self._discard_fragment(sequence_key)
+            return ()
+        if continuity == "gap":
+            self._discard_fragment(sequence_key)
+
+        fragment = self._fragment_by_ssrc.get(sequence_key)
+        if fragment is not None and fragment.timestamp != packet.timestamp:
+            self.stats.timestamp_changes += 1
+            self._discard_fragment(sequence_key)
+
+        if self.codec == "h264":
+            return self._push_h264(packet)
+        if self.codec == "hevc":
+            return self._push_hevc(packet)
+        raise PyEzvizError(f"Unsupported RTP video codec: {self.codec}")
+
+    def observe_nonvideo_packet(self, packet: RtpPacket) -> None:
+        """Advance a shared SSRC sequence without interpreting its payload."""
+
+        sequence_key = _rtp_sequence_key(packet)
+        continuity = self._continuity(packet)
+        if continuity in {"gap", "conflict"}:
+            self._discard_fragment(sequence_key)
+
+    def has_incomplete_nal(self, ssrc: int, *, payload_type: int | None = None) -> bool:
+        """Report an unfinished NAL, optionally scoped to an IDMX route."""
+
+        if payload_type is None:
+            return any(key[0] == ssrc for key in self._fragment_by_ssrc)
+        return (ssrc, None) in self._fragment_by_ssrc or (ssrc, payload_type) in self._fragment_by_ssrc
+
+    def _continuity(self, packet: RtpPacket) -> str:
+        sequence_key = _rtp_sequence_key(packet)
+        previous = self._last_sequence_by_ssrc.get(sequence_key)
+        identity = (packet.sequence, packet.timestamp, packet.marker, packet.payload)
+        if previous is None:
+            self._last_sequence_by_ssrc[sequence_key] = packet.sequence
+            self._last_identity_by_ssrc[sequence_key] = identity
+            return "first"
+        delta = (packet.sequence - previous) & 0xFFFF
+        if delta == 0:
+            if self._last_identity_by_ssrc.get(sequence_key) == identity:
+                self.stats.duplicates += 1
+                return "duplicate"
+            self.stats.sequence_conflicts += 1
+            return "conflict"
+        if delta >= 0x8000:
+            self.stats.reordered += 1
+            return "reordered"
+        self._last_sequence_by_ssrc[sequence_key] = packet.sequence
+        self._last_identity_by_ssrc[sequence_key] = identity
+        if delta > 1:
+            self.stats.sequence_gaps += 1
+            return "gap"
+        return "next"
+
+    def _discard_fragment(self, ssrc: RtpSequenceKey) -> None:
+        if self._fragment_by_ssrc.pop(ssrc, None) is not None:
+            self.stats.discarded_fragments += 1
+
+    def _push_h264(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
+        sequence_key = _rtp_sequence_key(packet)
+        payload = packet.payload
+        if not payload:
+            self._discard_fragment(sequence_key)
+            return ()
+        nal_type = payload[0] & 0x1F
+        if 1 <= nal_type <= 23:
+            self._discard_fragment(sequence_key)
+            return (payload,)
+        if nal_type == 24:
+            self._discard_fragment(sequence_key)
+            return _aggregation_units(payload, header_size=1)
+        if nal_type != 28:
+            self._discard_fragment(sequence_key)
+            return ()
+        if len(payload) < 2:
+            self._discard_fragment(sequence_key)
+            return ()
+
+        fu_header = payload[1]
+        is_start = bool(fu_header & 0x80)
+        is_end = bool(fu_header & 0x40)
+        if is_start and is_end:
+            self._discard_fragment(sequence_key)
+            return ()
+        if is_start:
+            self._discard_fragment(sequence_key)
+            self._fragment_by_ssrc[sequence_key] = _FragmentedNal(
+                data=bytearray([(payload[0] & 0xE0) | (fu_header & 0x1F)]) + payload[2:],
+                last_sequence=packet.sequence,
+                timestamp=packet.timestamp,
+            )
+        else:
+            fragment = self._fragment_by_ssrc.get(sequence_key)
+            if fragment is None:
+                self.stats.discarded_fragments += 1
+                return ()
+            reconstructed_header = (payload[0] & 0xE0) | (fu_header & 0x1F)
+            if reconstructed_header != fragment.data[0]:
+                self._discard_fragment(sequence_key)
+                return ()
+            fragment.data.extend(payload[2:])
+            fragment.last_sequence = packet.sequence
+        if not is_end:
+            return ()
+        fragment = self._fragment_by_ssrc.pop(sequence_key, None)
+        return (bytes(fragment.data),) if fragment is not None else ()
+
+    def _push_hevc(self, packet: RtpPacket) -> tuple[bytes, ...]:  # noqa: PLR0911
+        sequence_key = _rtp_sequence_key(packet)
+        payload = packet.payload
+        if not payload:
+            self._discard_fragment(sequence_key)
+            return ()
+        nal_type = (payload[0] >> 1) & 0x3F
+        if nal_type == 49 and len(payload) < 3:
+            self._discard_fragment(sequence_key)
+            return ()
+        if len(payload) < 2:
+            self._discard_fragment(sequence_key)
+            return ()
+        if nal_type == 48:
+            self._discard_fragment(sequence_key)
+            return _aggregation_units(payload, header_size=2)
+        if nal_type != 49:
+            self._discard_fragment(sequence_key)
+            return (payload,)
+        fu_header = payload[2]
+        is_start = bool(fu_header & 0x80)
+        is_end = bool(fu_header & 0x40)
+        if is_start and is_end:
+            self._discard_fragment(sequence_key)
+            return ()
+        if is_start:
+            self._discard_fragment(sequence_key)
+            original_type = fu_header & 0x3F
+            self._fragment_by_ssrc[sequence_key] = _FragmentedNal(
+                data=bytearray([(payload[0] & 0x81) | (original_type << 1), payload[1]])
+                + payload[3:],
+                last_sequence=packet.sequence,
+                timestamp=packet.timestamp,
+            )
+        else:
+            fragment = self._fragment_by_ssrc.get(sequence_key)
+            if fragment is None:
+                self.stats.discarded_fragments += 1
+                return ()
+            if payload[0] & 0x81 != fragment.data[0] & 0x81 or payload[1] != fragment.data[1]:
+                self._discard_fragment(sequence_key)
+                return ()
+            original_type = fu_header & 0x3F
+            active_type = (fragment.data[0] >> 1) & 0x3F
+            active_header0 = fragment.data[0]
+            has_pseudo_header = self.allow_ezviz_headerless_hevc_fu and fu_header in {
+                active_header0,
+                active_header0 | 0x40,
+            }
+            has_fu_header = original_type == active_type or has_pseudo_header
+            if not has_fu_header and not self.allow_ezviz_headerless_hevc_fu:
+                self._discard_fragment(sequence_key)
+                return ()
+            fragment.data.extend(payload[3:] if has_fu_header else payload[2:])
+            fragment.last_sequence = packet.sequence
+            is_end = is_end if has_fu_header else packet.marker
+        if not is_end:
+            return ()
+        fragment = self._fragment_by_ssrc.pop(sequence_key, None)
+        return (bytes(fragment.data),) if fragment is not None else ()
+
+
+def rtp_packets_to_annexb(
+    packets: Iterable[RtpPacket],
+    *,
+    codec: RtpVideoCodec,
+    video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    allow_ezviz_headerless_hevc_fu: bool = False,
+) -> bytes:
+    """Route RTP video packets and return continuity-checked Annex-B bytes."""
+
+    return b"".join(
+        ANNEX_B_START_CODE + nal
+        for nal in rtp_packets_to_nal_units(
+            packets,
+            codec=codec,
+            video_payload_types=video_payload_types,
+            allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+        )
+    )
+
+
+def rtp_nal_units_have_vcl(nal_units: Iterable[bytes], *, codec: RtpVideoCodec) -> bool:
+    """Return whether complete RTP NALs contain a decodable video slice.
+
+    Parameter sets alone are not video: they can arrive before a large first
+    fragmented frame that does not finish within a short capture bound.
+    """
+
+    if codec == "hevc":
+        return any(
+            _valid_rtp_nal_header(nal, codec=codec)
+            and ((nal[0] >> 1) & 0x3F) < 32
+            for nal in nal_units
+        )
+    return any(
+        _valid_rtp_nal_header(nal, codec=codec)
+        and (nal[0] & 0x1F) in {1, 2, 3, 4, 5, 19, 20, 21}
+        for nal in nal_units
+    )
+
+
+def _fu_signature(
+    payload: bytes, codec: RtpVideoCodec
+) -> tuple[bytes, int, bool, bool] | None:
+    """Identify clear FU framing without interpreting its encrypted NAL body."""
+
+    if codec == "h264":
+        if len(payload) < 3 or payload[0] & 0x80 or payload[0] & 0x1F != 28:
+            return None
+        header, fu_header = payload[:2]
+        return bytes((header & 0xE0,)), fu_header & 0x1F, bool(
+            fu_header & 0x80
+        ), bool(fu_header & 0x40)
+    if (
+        len(payload) < 3
+        or (payload[0] >> 1) & 0x3F != 49
+        or payload[0] & 0x80
+        or not payload[1] & 0x07
+    ):
+        return None
+    fu_header = payload[2]
+    return bytes((payload[0] & 0x81, payload[1])), fu_header & 0x3F, bool(
+        fu_header & 0x80
+    ), bool(fu_header & 0x40)
+
+
+def _encrypted_fu_chain_is_fragmented_nal(
+    packets: list[RtpPacket],
+    chain: list[int],
+    codec: RtpVideoCodec,
+    transform: Callable[[bytes], bytes],
+    allow_ezviz_headerless_hevc_fu: bool,
+) -> bool:
+    """Disambiguate real FU framing from coincidental ciphertext prefixes."""
+
+    depacketizer = RtpVideoDepacketizer(
+        codec,
+        allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+    )
+    chain_indexes = set(chain)
+    sequence_key = _rtp_sequence_key(packets[chain[0]])
+    assembled: list[bytes] = []
+    for index in range(chain[0], chain[-1] + 1):
+        packet = packets[index]
+        if _rtp_sequence_key(packet) != sequence_key:
+            continue
+        if index in chain_indexes:
+            assembled.extend(depacketizer.push(packet))
+        else:
+            depacketizer.observe_nonvideo_packet(packet)
+    clear_assembled = transform(assembled[0]) if len(assembled) == 1 else b""
+    unique_packets = {
+        packets[index].sequence: packets[index] for index in chain
+    }
+    clear_singles = tuple(
+        transform(packet.payload) for packet in unique_packets.values()
+    )
+    assembled_valid = _valid_rtp_nal_header(clear_assembled, codec=codec)
+    singles_valid = all(
+        _valid_rtp_nal_header(nal, codec=codec) for nal in clear_singles
+    )
+    assembled_vcl = rtp_nal_units_have_vcl((clear_assembled,), codec=codec)
+    singles_vcl = rtp_nal_units_have_vcl(clear_singles, codec=codec)
+    if assembled_vcl != singles_vcl:
+        return assembled_vcl
+    if assembled_valid and singles_valid:
+        raise EzvizUnsupportedMediaError(
+            "Encrypted RTP payload is ambiguous between fragmented and "
+            "single NAL units; use another stream source",
+            source="rtp",
+            reason="ambiguous_encrypted_fu",
+        )
+    return assembled_valid or not singles_valid
+
+
+def _complete_fu_chain_indexes(  # noqa: PLR0912
+    packets: list[RtpPacket],
+    codec: RtpVideoCodec,
+    route_epochs: tuple[RtpStreamDescriptor | None, ...],
+    video_payload_types: frozenset[int],
+    allow_ezviz_headerless_hevc_fu: bool,
+    transform: Callable[[bytes], bytes],
+) -> frozenset[int]:
+    """Avoid mistaking an isolated ciphertext FU lookalike for real framing."""
+
+    indexes: set[int] = set()
+    for start_index, packet in enumerate(packets):
+        route_epoch = route_epochs[start_index]
+        if packet.payload_type not in video_payload_types or (
+            route_epoch is not None and route_epoch.media_kind != "video"
+        ):
+            continue
+        start = _fu_signature(packet.payload, codec)
+        if start is None or not start[2] or start[3] or packet.marker:
+            continue
+        chain = [start_index]
+        previous = packet
+        previous_index = start_index
+        for index in range(start_index + 1, len(packets)):
+            current = packets[index]
+            if _rtp_sequence_key(current) != _rtp_sequence_key(packet):
+                continue
+            if (
+                current.sequence == previous.sequence
+                and current.timestamp == previous.timestamp
+                and current.payload_type == previous.payload_type
+                and current.marker == previous.marker
+                and current.payload == previous.payload
+            ):
+                if previous_index in chain:
+                    chain.append(index)
+                continue
+            if current.sequence != (previous.sequence + 1) & 0xFFFF:
+                break
+            previous = current
+            previous_index = index
+            route_epoch = route_epochs[index]
+            if current.payload_type not in video_payload_types or (
+                route_epoch is not None and route_epoch.media_kind != "video"
+            ):
+                # Other media can share the video SSRC and sequence counter.
+                continue
+            if (
+                current.timestamp != packet.timestamp
+                or current.payload_type != packet.payload_type
+            ):
+                break
+            fragment = _fu_signature(current.payload, codec)
+            if fragment is None or fragment[0] != start[0] or fragment[2]:
+                break
+            is_end = fragment[3]
+            if fragment[1] != start[1]:
+                if codec != "hevc" or not allow_ezviz_headerless_hevc_fu:
+                    break
+                reconstructed_header = (
+                    packet.payload[0] & 0x81
+                ) | (start[1] << 1)
+                pseudo_header = current.payload[2] in {
+                    reconstructed_header,
+                    reconstructed_header | 0x40,
+                }
+                if not pseudo_header:
+                    # Ezviz may omit the FU header on continuation packets.
+                    is_end = current.marker
+            chain.append(index)
+            if is_end:
+                if _encrypted_fu_chain_is_fragmented_nal(
+                    packets,
+                    chain,
+                    codec,
+                    transform,
+                    allow_ezviz_headerless_hevc_fu,
+                ):
+                    indexes.update(chain)
+                break
+            if current.marker:
+                break
+    return frozenset(indexes)
+
+
+def _is_complete_aggregation_packet(payload: bytes, codec: RtpVideoCodec) -> bool:
+    """Recognize clear aggregation framing without decrypting its length fields."""
+
+    if codec == "h264":
+        return bool(
+            payload and not payload[0] & 0x80 and payload[0] & 0x1F == 24
+            and _aggregation_units(payload, header_size=1)
+        )
+    return bool(
+        len(payload) >= 2
+        and not payload[0] & 0x80
+        and payload[1] & 0x07
+        and (payload[0] >> 1) & 0x3F == 48
+        and _aggregation_units(payload, header_size=2)
+    )
+
+
+def _encrypted_aggregation_packet(
+    payload: bytes,
+    codec: RtpVideoCodec,
+    transform: Callable[[bytes], bytes],
+) -> bool:
+    """Resolve a clear AP wrapper versus ciphertext that only resembles one."""
+
+    if not _is_complete_aggregation_packet(payload, codec):
+        return False
+    header_size = 1 if codec == "h264" else 2
+    clear_single = transform(payload)
+    clear_units = tuple(
+        transform(unit)
+        for unit in _aggregation_units(payload, header_size=header_size)
+    )
+    single_valid = _valid_rtp_nal_header(clear_single, codec=codec)
+    aggregate_valid = all(
+        _valid_rtp_nal_header(unit, codec=codec) for unit in clear_units
+    )
+    if single_valid and aggregate_valid:
+        single_vcl = rtp_nal_units_have_vcl((clear_single,), codec=codec)
+        aggregate_vcl = rtp_nal_units_have_vcl(clear_units, codec=codec)
+        if single_vcl == aggregate_vcl:
+            raise EzvizUnsupportedMediaError(
+                "Encrypted RTP payload is ambiguous between one NAL and "
+                "an aggregation packet; use another stream source",
+                source="rtp",
+                reason="ambiguous_encrypted_aggregation",
+            )
+        return aggregate_vcl
+    return aggregate_valid or not single_valid
+
+
+def rtp_packets_to_nal_units(  # noqa: PLR0912,PLR0915
+    packets: Iterable[RtpPacket],
+    *,
+    codec: RtpVideoCodec,
+    video_payload_types: frozenset[int] = DEFAULT_VIDEO_PAYLOAD_TYPES,
+    allow_ezviz_headerless_hevc_fu: bool = False,
+    completed_access_units_only: bool = False,
+    first_slice_transform: Callable[[bytes], bytes] | None = None,
+    packet_nal_transform: Callable[[bytes], bytes] | None = None,
+    nal_timestamps: list[int] | None = None,
+    nal_source_keys: list[RtpSequenceKey] | None = None,
+    boundary_only_packet_index: int | None = None,
+) -> tuple[bytes, ...]:
+    """Route RTP video and optionally discard an unfinished trailing picture.
+
+    A marker or the next video RTP timestamp closes an access unit. A bounded
+    capture ending after one slice but before the picture boundary is not a
+    playable frame, even when that slice is a complete NAL unit.
+    Optional ``nal_timestamps`` and ``nal_source_keys`` are aligned with the
+    returned NAL units, including when incomplete pictures are filtered out.
+    ``boundary_only_packet_index`` consumes only observed sequence/timestamp
+    continuity from that successor packet, never its unselected media payload.
+    """
+
+    packet_list = list(packets)
+    if boundary_only_packet_index is not None and (
+        not isinstance(boundary_only_packet_index, int)
+        or isinstance(boundary_only_packet_index, bool)
+        or not 0 <= boundary_only_packet_index < len(packet_list)
+    ):
+        raise PyEzvizError("RTP boundary packet index is outside the capture")
+    route_profile, route_epochs = _rtp_route_epochs(packet_list)
+    descriptors = route_profile.descriptors
+    routed_video_payload_types = rtp_codec_payload_types(
+        descriptors,
+        codec,
+        fallback_payload_types=video_payload_types,
+    )
+    if not any(packet.payload_type in routed_video_payload_types for packet in packet_list):
+        # Some cameras advertise a video payload type in IDMX metadata that
+        # never appears on the wire (observed: HEVC PT 15, packets on PT 96).
+        # Fall back only when the advertised route is entirely absent; an
+        # active descriptor must continue to take precedence over legacy PTs.
+        assigned_payload_types = {item.payload_type for item in descriptors}
+        routed_video_payload_types = frozenset(
+            payload_type
+            for payload_type in video_payload_types
+            if payload_type not in assigned_payload_types
+        )
+    encrypted_fu_indexes = (
+        _complete_fu_chain_indexes(
+            packet_list,
+            codec,
+            route_epochs,
+            routed_video_payload_types,
+            allow_ezviz_headerless_hevc_fu,
+            packet_nal_transform,
+        )
+        if packet_nal_transform is not None
+        else frozenset()
+    )
+    encrypted_aggregation_indexes = (
+        frozenset(
+            index
+            for index, (packet, route_epoch) in enumerate(
+                zip(packet_list, route_epochs, strict=True)
+            )
+            if packet.payload_type in routed_video_payload_types
+            and (route_epoch is None or route_epoch.media_kind == "video")
+            and _encrypted_aggregation_packet(packet.payload, codec, packet_nal_transform)
+        )
+        if packet_nal_transform is not None
+        else frozenset()
+    )
+    encrypted_framing_indexes = encrypted_fu_indexes | encrypted_aggregation_indexes
+    depacketizer = RtpVideoDepacketizer(
+        codec,
+        allow_ezviz_headerless_hevc_fu=allow_ezviz_headerless_hevc_fu,
+    )
+    output: list[bytes] = []
+    output_timestamps: list[int] = []
+    output_source_keys: list[RtpSequenceKey] = []
+    output_is_vcl: list[bool] = []
+    accepted: list[bool] = []
+    pending_indexes: dict[RtpSequenceKey, list[int]] = {}
+    active_timestamps: dict[RtpSequenceKey, int] = {}
+    active_sequences: dict[RtpSequenceKey, int] = {}
+    pending_vcl: dict[RtpSequenceKey, bool] = {}
+    pending_gap: dict[RtpSequenceKey, bool] = {}
+    gap_timestamp: dict[RtpSequenceKey, int] = {}
+    unassigned_gap: dict[RtpSequenceKey, bool] = {}
+    pending_corrupt: dict[RtpSequenceKey, bool] = {}
+    predescriptor_codec_mismatch: dict[RtpSequenceKey, bool] = {}
+    first_vcl_au_pending: dict[RtpSequenceKey, bool] = {}
+    first_slice_seen: dict[RtpSequenceKey, bool] = {}
+    new_timestamp_au: dict[RtpSequenceKey, bool] = {}
+
+    def finish_access_unit(ssrc: RtpSequenceKey, *, complete: bool) -> None:
+        if pending_vcl.get(ssrc) and first_vcl_au_pending.get(ssrc, True):
+            complete = complete and first_slice_seen.get(ssrc, False)
+            first_vcl_au_pending[ssrc] = False
+        # Keep non-VCL metadata from a damaged or unfinished picture, but
+        # never carry its VCL slices into a later healthy access unit.
+        for index in pending_indexes.pop(ssrc, []):
+            if complete or not output_is_vcl[index]:
+                accepted[index] = True
+
+    for packet_index, (packet, route_epoch) in enumerate(
+        zip(packet_list, route_epochs, strict=True)
+    ):
+        sequence_key = _rtp_sequence_key(packet)
+        if packet_index == boundary_only_packet_index:
+            if packet.payload_type not in routed_video_payload_types:
+                raise PyEzvizError("RTP boundary packet is not on the selected video route")
+            previous = active_sequences.get(sequence_key)
+            finish_access_unit(sequence_key, complete=bool(
+                previous is not None and ((packet.sequence - previous) & 0xFFFF) == 1
+                and active_timestamps.get(sequence_key) != packet.timestamp
+                and pending_vcl.get(sequence_key) and not pending_gap.get(sequence_key)
+                and not depacketizer.has_incomplete_nal(packet.ssrc, payload_type=packet.payload_type)
+            ))
+            break
+        candidate_video = packet.payload_type in routed_video_payload_types
+        routed_packet = (
+            replace(packet, payload=packet_nal_transform(packet.payload))
+            if candidate_video
+            and packet_nal_transform is not None
+            and packet_index not in encrypted_framing_indexes
+            and (route_epoch is None or route_epoch.media_kind == "video")
+            else packet
+        )
+        is_video = candidate_video and _rtp_packet_matches_codec_epoch(
+            routed_packet, route_epoch, codec
+        )
+        if (
+            is_video
+            and route_epoch is not None
+            and predescriptor_codec_mismatch.pop(sequence_key, False)
+        ):
+            # A newly advertised video route supersedes a conflicting packet
+            # observed before its descriptor; do not poison the new epoch.
+            finish_access_unit(sequence_key, complete=False)
+            pending_vcl[sequence_key] = False
+            pending_gap[sequence_key] = False
+            gap_timestamp.pop(sequence_key, None)
+            unassigned_gap.pop(sequence_key, None)
+            pending_corrupt[sequence_key] = False
+        previous_sequence = active_sequences.get(sequence_key)
+        sequence_delta = (
+            (packet.sequence - previous_sequence) & 0xFFFF if previous_sequence is not None else 1
+        )
+        if sequence_delta == 0 or sequence_delta >= 0x8000:
+            conflicts_before = depacketizer.stats.sequence_conflicts
+            if is_video:
+                depacketizer.push(routed_packet)
+            else:
+                depacketizer.observe_nonvideo_packet(packet)
+            if depacketizer.stats.sequence_conflicts > conflicts_before:
+                pending_gap[sequence_key] = True
+                if is_video:
+                    gap_timestamp[sequence_key] = packet.timestamp
+                else:
+                    unassigned_gap[sequence_key] = True
+                pending_corrupt[sequence_key] = True
+            continue
+        active_sequences[sequence_key] = packet.sequence
+        contiguous = sequence_delta == 1
+        if not is_video:
+            depacketizer.observe_nonvideo_packet(packet)
+            codec_mismatch = candidate_video and (
+                route_epoch is None or route_epoch.media_kind == "video"
+            )
+            if codec_mismatch:
+                # A packet on the selected video route cannot silently turn
+                # into other media when its codec header is damaged.
+                pending_gap[sequence_key] = True
+                gap_timestamp[sequence_key] = packet.timestamp
+                pending_corrupt[sequence_key] = True
+                if route_epoch is None:
+                    predescriptor_codec_mismatch[sequence_key] = True
+            elif not contiguous:
+                pending_gap[sequence_key] = True
+                unassigned_gap[sequence_key] = True
+            continue
+        previous_timestamp = active_timestamps.get(sequence_key)
+        if previous_timestamp is not None and packet.timestamp != previous_timestamp:
+            finish_access_unit(
+                sequence_key,
+                complete=bool(
+                    pending_vcl.get(sequence_key)
+                    and contiguous
+                    and not pending_gap.get(sequence_key)
+                    and not depacketizer.has_incomplete_nal(
+                        packet.ssrc, payload_type=packet.payload_type
+                    )
+                ),
+            )
+            pending_vcl[sequence_key] = False
+            pending_corrupt[sequence_key] = False
+            pending_gap[sequence_key] = not contiguous or (
+                pending_gap.get(sequence_key, False)
+                and (
+                    unassigned_gap.get(sequence_key, False)
+                    or gap_timestamp.get(sequence_key) == packet.timestamp
+                )
+            )
+            if pending_gap[sequence_key]:
+                gap_timestamp[sequence_key] = packet.timestamp
+            else:
+                gap_timestamp.pop(sequence_key, None)
+                unassigned_gap.pop(sequence_key, None)
+            new_timestamp_au[sequence_key] = True
+        elif not contiguous:
+            pending_gap[sequence_key] = True
+            gap_timestamp[sequence_key] = packet.timestamp
+        active_timestamps[sequence_key] = packet.timestamp
+        prior_fragment_open = depacketizer.has_incomplete_nal(
+            packet.ssrc, payload_type=packet.payload_type
+        )
+        discarded_before = depacketizer.stats.discarded_fragments
+        packet_nals = depacketizer.push(routed_packet)
+        if not packet_nals and not depacketizer.has_incomplete_nal(
+            packet.ssrc, payload_type=packet.payload_type
+        ):
+            # A rejected video payload may represent a missing slice even when
+            # no active fragmented NAL existed to increment discard stats.
+            pending_gap[sequence_key] = True
+            gap_timestamp[sequence_key] = packet.timestamp
+            pending_corrupt[sequence_key] = True
+        if depacketizer.stats.discarded_fragments > discarded_before and not (
+            previous_timestamp != packet.timestamp and prior_fragment_open
+        ):
+            pending_gap[sequence_key] = True
+            gap_timestamp[sequence_key] = packet.timestamp
+            pending_corrupt[sequence_key] = True
+        for nal in packet_nals:
+            if nal:
+                # FU/AP framing is clear, but each resulting NAL is encrypted.
+                output_nal = (
+                    packet_nal_transform(nal)
+                    if packet_index in encrypted_framing_indexes
+                    and packet_nal_transform is not None
+                    else nal
+                )
+                classified_nal = (
+                    first_slice_transform(output_nal)
+                    if first_slice_transform is not None
+                    else output_nal
+                )
+                if completed_access_units_only and not _valid_rtp_nal_header(
+                    classified_nal, codec=codec
+                ):
+                    pending_gap[sequence_key] = True
+                    gap_timestamp[sequence_key] = packet.timestamp
+                    pending_corrupt[sequence_key] = True
+                    continue
+                if (
+                    completed_access_units_only
+                    and codec == "h264"
+                    and classified_nal
+                    and (classified_nal[0] & 0x1F) in {2, 3, 4}
+                ):
+                    raise EzvizUnsupportedMediaError(
+                        "H.264 RTP data partitions cannot be verified as complete "
+                        "in a bounded capture; use another stream source",
+                        source="rtp",
+                        reason="unsupported_h264_data_partition",
+                    )
+                pending_indexes.setdefault(sequence_key, []).append(len(output))
+                output.append(output_nal)
+                output_timestamps.append(packet.timestamp)
+                output_source_keys.append(sequence_key)
+                is_vcl = rtp_nal_units_have_vcl((classified_nal,), codec=codec)
+                output_is_vcl.append(is_vcl)
+                accepted.append(False)
+                if is_vcl:
+                    starts_picture = _rtp_nal_starts_picture(classified_nal, codec=codec)
+                    if not pending_vcl.get(sequence_key):
+                        first_slice_seen[sequence_key] = starts_picture
+                        if (
+                            (
+                                new_timestamp_au.get(sequence_key)
+                                or first_vcl_au_pending.get(sequence_key, True)
+                            )
+                            and starts_picture
+                            and codec == "hevc"
+                            and not pending_corrupt.get(sequence_key, False)
+                        ):
+                            # HEVC's first-slice flag establishes a new picture.
+                            # H.264 macroblock zero can arrive later under ASO/FMO.
+                            pending_gap[sequence_key] = False
+                            gap_timestamp.pop(sequence_key, None)
+                            unassigned_gap.pop(sequence_key, None)
+                    elif codec == "h264" and starts_picture:
+                        # ASO/FMO may transmit macroblock zero after another
+                        # slice of the same access unit.
+                        first_slice_seen[sequence_key] = True
+                    pending_vcl[sequence_key] = True
+        if packet.marker:
+            finish_access_unit(
+                sequence_key,
+                complete=bool(
+                    packet_nals
+                    and pending_vcl.get(sequence_key)
+                    and not pending_gap.get(sequence_key)
+                    and not depacketizer.has_incomplete_nal(
+                        packet.ssrc, payload_type=packet.payload_type
+                    )
+                ),
+            )
+            pending_vcl[sequence_key] = False
+            pending_gap[sequence_key] = False
+            gap_timestamp.pop(sequence_key, None)
+            unassigned_gap.pop(sequence_key, None)
+            pending_corrupt[sequence_key] = False
+            new_timestamp_au[sequence_key] = False
+    if completed_access_units_only:
+        for ssrc in tuple(pending_indexes):
+            finish_access_unit(ssrc, complete=False)
+        if nal_timestamps is not None:
+            nal_timestamps.extend(timestamp for timestamp, keep in zip(output_timestamps, accepted, strict=True) if keep)
+        if nal_source_keys is not None:
+            nal_source_keys.extend(source for source, keep in zip(output_source_keys, accepted, strict=True) if keep)
+        return tuple(nal for nal, keep in zip(output, accepted, strict=True) if keep)
+    if nal_source_keys is not None:
+        nal_source_keys.extend(output_source_keys)
+    if nal_timestamps is not None:
+        nal_timestamps.extend(output_timestamps)
+    return tuple(output)
+
+
+def _rtp_route_epochs(
+    packets: Iterable[RtpPacket],
+) -> tuple[RtpRouteProfile, tuple[RtpStreamDescriptor | None, ...]]:
+    """Return final routing plus the active descriptor for every packet."""
+
+    profile = RtpRouteProfile()
+    epochs: list[RtpStreamDescriptor | None] = []
+    for packet in packets:
+        profile.absorb(packet)
+        epochs.append(profile.descriptor_for(packet))
+    return profile, tuple(epochs)
+
+
+def _rtp_packet_matches_codec_epoch(
+    packet: RtpPacket,
+    route_epoch: RtpStreamDescriptor | None,
+    codec: RtpVideoCodec,
+) -> bool:
+    """Return whether a packet belongs to the selected video codec epoch."""
+
+    if route_epoch is not None:
+        return route_epoch.media_kind == "video" and route_epoch.codec == codec
+    if _rtp_payload_matches_video_codec(packet.payload, codec):
+        return True
+    detected_codec = rtp_payload_video_codec(packet.payload)
+    return detected_codec is None or detected_codec == codec
+
+
+def _rtp_payload_matches_video_codec(
+    payload: bytes,
+    codec: RtpVideoCodec,
+) -> bool:
+    """Return whether a descriptor-free payload is valid for the selected codec."""
+
+    if not payload:
+        return False
+    if codec == "h264":
+        nal_type = payload[0] & 0x1F
+        return 1 <= nal_type <= 24 or (nal_type == 28 and len(payload) >= 2)
+    return (
+        len(payload) >= 2
+        and not (payload[0] & 0x80)
+        and bool(payload[1] & 0x07)
+        and ((payload[0] >> 1) & 0x3F) <= 49
+    )
+
+
+def _aggregation_units(payload: bytes, *, header_size: int) -> tuple[bytes, ...]:
+    units: list[bytes] = []
+    offset = header_size
+    while offset < len(payload):
+        if offset + 2 > len(payload):
+            return ()
+        unit_size = int.from_bytes(payload[offset : offset + 2], "big")
+        offset += 2
+        if unit_size <= 0 or offset + unit_size > len(payload):
+            return ()
+        units.append(payload[offset : offset + unit_size])
+        offset += unit_size
+    return tuple(units)
+
+
+def _rtp_nal_starts_picture(nal: bytes, *, codec: RtpVideoCodec) -> bool:
+    """Read the first-slice flag needed to trust a capture's initial picture."""
+
+    if codec == "hevc":
+        # first_slice_segment_in_pic_flag follows the two-byte NAL header.
+        return len(nal) > 2 and bool(nal[2] & 0x80)
+    # Data partitions B/C begin with slice_id, not first_mb_in_slice.
+    if nal and (nal[0] & 0x1F) in {3, 4}:
+        return False
+    header_size = _h264_slice_header_offset(nal)
+    return len(nal) > header_size and bool(nal[header_size] & 0x80)
+
+
+def _h264_slice_header_offset(nal: bytes) -> int:
+    nal_type = nal[0] & 0x1F if nal else 0
+    # first_mb_in_slice uses Exp-Golomb coding: zero has a leading 1 bit.
+    # Type 20 uses a three-byte extension. Type 21 uses only two bytes when
+    # avc_3d_extension_flag (the first extension bit) is set.
+    header_size = 4 if nal_type in {20, 21} else 1
+    if nal_type == 21 and len(nal) > 1 and nal[1] & 0x80:
+        header_size = 3
+    return header_size
+
+
+def _h264_slice_header_complete(nal: bytes) -> bool:
+    """Require first macroblock, slice type, and PPS identifier fields."""
+
+    offset_bits = _h264_slice_header_offset(nal) * 8
+    for _ in range(3):
+        end_bits = _exp_golomb_code_end(nal, offset_bits)
+        if end_bits is None:
+            return False
+        offset_bits = end_bits
+    return True
+
+
+def _exp_golomb_code_complete(nal: bytes, offset_bits: int) -> bool:
+    return _exp_golomb_code_end(nal, offset_bits) is not None
+
+
+def _exp_golomb_code_end(nal: bytes, offset_bits: int) -> int | None:
+    for leading_zeros, bit_index in enumerate(range(offset_bits, len(nal) * 8)):
+        bit = nal[bit_index // 8] & (0x80 >> (bit_index % 8))
+        if bit:
+            end_bits = bit_index + leading_zeros + 1
+            return end_bits if end_bits <= len(nal) * 8 else None
+    return None
+
+
+def _valid_rtp_nal_header(nal: bytes, *, codec: RtpVideoCodec) -> bool:
+    if codec == "hevc":
+        valid_header = (
+            len(nal) >= 2
+            and not (nal[0] & 0x80)
+            and bool(nal[1] & 0x07)
+            and ((nal[0] >> 1) & 0x3F) <= 49
+        )
+        if not valid_header:
+            return False
+        nal_type = (nal[0] >> 1) & 0x3F
+        if nal_type >= 32:
+            return True
+        # first_slice_segment_in_pic_flag and (for IRAP) the no-output flag
+        # precede the mandatory Exp-Golomb slice-PPS identifier.
+        return len(nal) > 2 and _exp_golomb_code_complete(
+            nal, 17 + int(16 <= nal_type <= 23)
+        )
+    if not nal or nal[0] & 0x80 or not 1 <= (nal[0] & 0x1F) <= 23:
+        return False
+    nal_type = nal[0] & 0x1F
+    return nal_type not in {1, 2, 3, 4, 5, 19, 20, 21} or (
+        _h264_slice_header_complete(nal)
+    )
+
+
+def _is_plausible_hevc_header(payload: bytes) -> bool:
+    forbidden_zero = payload[0] & 0x80 == 0
+    layer_id = ((payload[0] & 0x01) << 5) | (payload[1] >> 3)
+    temporal_id_plus1 = payload[1] & 0x07
+    nal_type = (payload[0] >> 1) & 0x3F
+    return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 49
+
+
+def _is_ambiguous_h264_hevc_payload(payload: bytes) -> bool:
+    if len(payload) < 2 or not _is_plausible_hevc_header(payload):
+        return False
+    h264_type = payload[0] & 0x1F
+    hevc_type = (payload[0] >> 1) & 0x3F
+    return 1 <= h264_type <= 5 and 0 <= hevc_type <= 40

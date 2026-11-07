@@ -1,48 +1,25 @@
-"""Helpers for constructing Ezviz device wrapper status objects."""
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.devices.factory`.
 
-from __future__ import annotations
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
-from typing import Any, cast
+from pyezvizapi.devices import factory as _implementation
 
-from pyezvizapi.camera import EzvizCamera
-from pyezvizapi.light_bulb import EzvizLightBulb
-from pyezvizapi.smart_plug import EzvizSmartPlug
-
-
-def camera_status(
-    client: object,
-    serial: str,
-    device_obj: dict[str, Any],
-    *,
-    refresh: bool,
-    latest_alarm: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Build a camera wrapper and return its status mapping."""
-
-    return cast(
-        dict[str, Any],
-        EzvizCamera(client, serial, device_obj).status(
-            refresh=refresh,
-            latest_alarm=latest_alarm,
-        ),
+if TYPE_CHECKING:
+    from pyezvizapi.devices.factory import (
+    Any as Any,
+    EzvizCamera as EzvizCamera,
+    EzvizLightBulb as EzvizLightBulb,
+    EzvizSmartPlug as EzvizSmartPlug,
+    annotations as annotations,
+    camera_status as camera_status,
+    cast as cast,
+    light_bulb_status as light_bulb_status,
+    smart_plug_status as smart_plug_status,
     )
 
-
-def light_bulb_status(
-    client: object,
-    serial: str,
-    device_obj: dict[str, Any],
-) -> dict[str, Any]:
-    """Build a light bulb wrapper and return its status mapping."""
-
-    return EzvizLightBulb(client, serial, device_obj).status()
-
-
-def smart_plug_status(
-    client: object,
-    serial: str,
-    device_obj: dict[str, Any],
-) -> dict[str, Any]:
-    """Build a smart plug wrapper and return its status mapping."""
-
-    return EzvizSmartPlug(client, serial, device_obj).status()
+sys.modules[__name__] = _implementation

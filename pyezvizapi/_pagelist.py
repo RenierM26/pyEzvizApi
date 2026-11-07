@@ -1,63 +1,26 @@
-"""Bounded iterative pagelist collection; HTTP and token ownership stay outside."""
-from __future__ import annotations
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.pagination`.
 
-from collections.abc import Callable, Mapping
-from hashlib import sha256
-import json
-from typing import Any
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
-from pyezvizapi.exceptions import PyEzvizError
-from pyezvizapi.utils import deep_merge
+from pyezvizapi.cloud import pagination as _implementation
 
-MAX_PAGELIST_PAGES = 1000
+if TYPE_CHECKING:
+    from pyezvizapi.cloud.pagination import (
+    Any as Any,
+    Callable as Callable,
+    MAX_PAGELIST_PAGES as MAX_PAGELIST_PAGES,
+    Mapping as Mapping,
+    PyEzvizError as PyEzvizError,
+    annotations as annotations,
+    collect_pagelist as collect_pagelist,
+    deep_merge as deep_merge,
+    json as json,
+    sha256 as sha256,
+    )
 
-
-def collect_pagelist(
-    fetch: Callable[[int], dict[str, Any]],
-    *,
-    json_key: str | None,
-    limit: int,
-    offset: int,
-) -> Any:
-    """Collect at most 1000 progressing pages and retain right-fold merge rules."""
-    pages: list[Any] = []
-    seen: set[bytes] = set()
-    for _ in range(MAX_PAGELIST_PAGES):
-        payload = fetch(offset)
-        page = payload.get("page")
-        if page is None:
-            page = {}
-        if not isinstance(page, Mapping):
-            raise PyEzvizError("Invalid pagelist page metadata")
-        flag = page.get("hasNext", False)
-        if not isinstance(flag, (bool, int)) or flag not in (False, True):
-            raise PyEzvizError("Invalid pagelist hasNext flag")
-        if json_key is not None and json_key not in payload:
-            raise PyEzvizError("Pagelist response is missing the requested section")
-        data = payload[json_key] if json_key else payload
-        if not isinstance(data, (dict, list)):
-            raise PyEzvizError("Invalid pagelist data section")
-        progress = data if json_key else {
-            key: value for key, value in payload.items() if key not in {"page", "meta"}
-        }
-        if flag and not progress:
-            raise PyEzvizError("Pagelist returned an empty non-final page")
-        if flag and isinstance(progress, dict) and not any(progress.values()):
-            raise PyEzvizError("Pagelist returned an empty non-final page")
-        try:
-            fingerprint = sha256(json.dumps(progress, sort_keys=True, separators=(",", ":")).encode()).digest()
-        except (TypeError, ValueError) as err:
-            raise PyEzvizError("Invalid pagelist data") from err
-        if fingerprint in seen:
-            raise PyEzvizError("Pagelist repeated a page without progress")
-        seen.add(fingerprint)
-        pages.append(data)
-        if not flag:
-            # deep_merge is not associative for mixed nested value shapes.
-            # Match the historical recursive right fold without stack growth.
-            result = pages[-1]
-            for previous in reversed(pages[:-1]):
-                result = deep_merge(previous, result)
-            return result
-        offset += limit
-    raise PyEzvizError("Pagelist exceeded its maximum page count")
+sys.modules[__name__] = _implementation

@@ -1,13 +1,18 @@
-"""Narrow compatibility boundary for the supported Paho MQTT 2.x client."""
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.push.paho`.
 
-from paho.mqtt.client import Client
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.push import paho as _implementation
 
-def set_keepalive(client: Client, interval: int) -> None:
-    """Apply EZVIZ's negotiated interval without reconnecting with stale keys.
+if TYPE_CHECKING:
+    from pyezvizapi.push.paho import (
+    Client as Client,
+    set_keepalive as set_keepalive,
+    )
 
-    Paho 2.x exposes keepalive only at connect(), not as a runtime setter.
-    Its loop reads this field for ping scheduling. Keep this dependency here
-    and test it when upgrading Paho; automatic Paho reconnect cannot renew LBS.
-    """
-    client._keepalive = interval  # noqa: SLF001 - no public runtime setter
+sys.modules[__name__] = _implementation

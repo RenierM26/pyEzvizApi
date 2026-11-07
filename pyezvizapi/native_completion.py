@@ -1,40 +1,20 @@
-"""Immutable selected-access-unit completion metadata; no host/transport policy."""
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.streaming.media.completion`.
 
-from dataclasses import dataclass
-from typing import Literal
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.streaming.media import completion as _implementation
 
-@dataclass(frozen=True, slots=True)
-class NativeTrackCompletion:
-    """One admitted encoded track, counted after successful mux acceptance."""
+if TYPE_CHECKING:
+    from pyezvizapi.streaming.media.completion import (
+    Literal as Literal,
+    NativeMediaCompletion as NativeMediaCompletion,
+    NativeTrackCompletion as NativeTrackCompletion,
+    dataclass as dataclass,
+    )
 
-    track_id: int
-    index: int
-    kind: Literal["video", "audio"]
-    codec: str
-    access_units: int
-
-
-@dataclass(frozen=True, slots=True)
-class NativeMediaCompletion:
-    """Verified finite, joined, fully read output of one source/subscription.
-
-    Source generation is opaque and owner-local, not camera identity or capture
-    UTC. Track units describe original selected access units, not TS chunks or
-    proprietary transport packets. A consumer must establish one-to-one unit
-    correspondence through its container/relay before using these as host counts.
-    """
-
-    source_generation: str
-    subscription_generation: int
-    tracks: tuple[NativeTrackCompletion, ...]
-
-    @property
-    def video_units(self) -> int:
-        """Return the selected video's accepted unit count."""
-        return sum(track.access_units for track in self.tracks if track.kind == "video")
-
-    @property
-    def audio_units(self) -> int:
-        """Return selected audio units, or zero for explicit video-only output."""
-        return sum(track.access_units for track in self.tracks if track.kind == "audio")
+sys.modules[__name__] = _implementation

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
-from pyezvizapi._device_payload import switch_values
+from pyezvizapi.devices.payload import switch_values
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

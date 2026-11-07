@@ -1,58 +1,23 @@
-"""Tolerant API scalar and JSON conversion helpers."""
+"""Compatibility alias. Implementation: :mod:`pyezvizapi._shared.coercion`.
 
-from __future__ import annotations
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
-import json
-from typing import Any
+from pyezvizapi._shared import coercion as _implementation
 
+if TYPE_CHECKING:
+    from pyezvizapi._shared.coercion import (
+    Any as Any,
+    annotations as annotations,
+    coerce_int as coerce_int,
+    convert_to_dict as convert_to_dict,
+    decode_json as decode_json,
+    json as json,
+    string_to_list as string_to_list,
+    )
 
-def coerce_int(value: Any) -> int | None:
-    """Best-effort coercion to int for mixed payloads."""
-
-    if isinstance(value, bool):
-        return int(value)
-
-    try:
-        if isinstance(value, (int, float)):
-            return int(value)
-        return int(str(value))
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
-
-def decode_json(value: Any) -> Any:
-    """Decode strings (invalid JSON becomes None); leave non-strings unchanged."""
-
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except (TypeError, ValueError):
-            return None
-    return value
-
-
-
-def convert_to_dict(data: Any) -> Any:
-    """Decode top-level string values of a dict in place; leave nested objects alone."""
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if isinstance(value, str):
-                try:
-                    # Attempt to convert the string back into a dictionary
-                    data[key] = json.loads(value)
-
-                except ValueError:
-                    continue
-            continue
-
-    return data
-
-
-
-def string_to_list(data: Any, separator: str = ",") -> Any:
-    """Convert a string representation of a list to a list."""
-    if isinstance(data, str) and separator in data:
-        return data.split(separator)
-
-    return data
+sys.modules[__name__] = _implementation

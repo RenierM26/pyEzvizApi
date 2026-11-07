@@ -1,22 +1,22 @@
-"""Copy request state while borrowing caller-owned transport adapters."""
-from collections import OrderedDict
-from copy import copy, deepcopy
+"""Compatibility alias. Implementation: :mod:`pyezvizapi.cloud.transport`.
 
-import requests
-from requests.structures import CaseInsensitiveDict
+New development belongs in the domain package; legacy module identity and
+patch hooks are preserved. This module contains no implementation.
+"""
+# ruff: noqa: F401, I001, SLF001 -- explicit legacy typing/export surface.
+import sys
+from typing import TYPE_CHECKING
 
+from pyezvizapi.cloud import transport as _implementation
 
-def isolated_session(source: requests.Session) -> requests.Session:
-    """Copy request state, borrowing transport adapters owned by the caller.
+if TYPE_CHECKING:
+    from pyezvizapi.cloud.transport import (
+    CaseInsensitiveDict as CaseInsensitiveDict,
+    OrderedDict as OrderedDict,
+    copy as copy,
+    deepcopy as deepcopy,
+    isolated_session as isolated_session,
+    requests as requests,
+    )
 
-    No transport pools are created here. Do not close this copy: adapter/pool
-    lifetime remains with the supplied session, including custom TLS adapters.
-    """
-    session = copy(source)
-    session.headers = CaseInsensitiveDict(source.headers)
-    session.cookies = source.cookies.copy()
-    session.params = deepcopy(source.params)
-    session.proxies = dict(source.proxies)
-    session.hooks = {name: list(hooks) for name, hooks in source.hooks.items()}
-    session.adapters = OrderedDict(source.adapters)
-    return session
+sys.modules[__name__] = _implementation

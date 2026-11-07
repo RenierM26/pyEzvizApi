@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.push.longlink import codec as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.push.longlink.codec as _compat_module_0
+
     IV = _compat_module_0.IV
     Any = _compat_module_0.Any
     AuthenticationRejected = _compat_module_0.AuthenticationRejected

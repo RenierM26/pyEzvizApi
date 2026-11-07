@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,15 +16,20 @@ from pyezvizapi.streaming.local.hcnetsdk import api as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
     import Crypto.Cipher.PKCS1_v1_5 as _compat_typed_PKCS1_v1_5
+
     PKCS1_v1_5 = _compat_typed_PKCS1_v1_5
     import Crypto.PublicKey.RSA as _compat_typed_RSA
+
     RSA = _compat_typed_RSA
     import Crypto.Util.asn1 as _compat_module_2
+
     DerSequence = _compat_module_2.DerSequence
 
     import pyezvizapi.streaming.local.hcnetsdk.api as _compat_module_3
+
     _AES_RCON = _compat_module_3._AES_RCON
     _AES_SBOX = _compat_module_3._AES_SBOX
     _WINDOWS_EXCLUSIVE_SOURCE_BIND = _compat_module_3._WINDOWS_EXCLUSIVE_SOURCE_BIND
@@ -72,7 +78,9 @@ if TYPE_CHECKING:
     EZVIZ_PLAYER_LAN_FLAG_EZLINK = _compat_module_3.EZVIZ_PLAYER_LAN_FLAG_EZLINK
     EZVIZ_PLAYER_LAN_FLAG_HCNETSDK = _compat_module_3.EZVIZ_PLAYER_LAN_FLAG_HCNETSDK
     EZVIZ_PREPLAY_SPS_TYPE = _compat_module_3.EZVIZ_PREPLAY_SPS_TYPE
-    EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY = _compat_module_3.EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY
+    EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY = (
+        _compat_module_3.EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY
+    )
     EZVIZ_RTP_INTERLEAVED_MAGIC = _compat_module_3.EZVIZ_RTP_INTERLEAVED_MAGIC
     EZVIZ_STREAM_INHIBIT_LAN = _compat_module_3.EZVIZ_STREAM_INHIBIT_LAN
     EZVIZ_STREAM_SOURCE_LIVE_MINE = _compat_module_3.EZVIZ_STREAM_SOURCE_LIVE_MINE
@@ -81,71 +89,129 @@ if TYPE_CHECKING:
     EZVIZ_XML_START_BYTE = _compat_module_3.EZVIZ_XML_START_BYTE
     HCNETSDK_AUDIO_INPUT_PARAM_SIZE = _compat_module_3.HCNETSDK_AUDIO_INPUT_PARAM_SIZE
     HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE = _compat_module_3.HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE
-    HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET = _compat_module_3.HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET
-    HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET = _compat_module_3.HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET
+    HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET = (
+        _compat_module_3.HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET
+    )
+    HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET = (
+        _compat_module_3.HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET
+    )
     HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE = _compat_module_3.HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE
     HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET = _compat_module_3.HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET
     HCNETSDK_CLEANUP = _compat_module_3.HCNETSDK_CLEANUP
     HCNETSDK_CLOSE_ALARM_CHAN_V30 = _compat_module_3.HCNETSDK_CLOSE_ALARM_CHAN_V30
     HCNETSDK_CLOSE_FORMAT_HANDLE = _compat_module_3.HCNETSDK_CLOSE_FORMAT_HANDLE
     HCNETSDK_COMMAND_CANDIDATE_CONTROL = _compat_module_3.HCNETSDK_COMMAND_CANDIDATE_CONTROL
-    HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN = _compat_module_3.HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN
+    HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN = (
+        _compat_module_3.HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN
+    )
     HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH
     HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
     HCNETSDK_COMMAND_PORT_CONTROL_FAMILY = _compat_module_3.HCNETSDK_COMMAND_PORT_CONTROL_FAMILY
     HCNETSDK_COMMAND_PORT_EMPTY_SESSION_ID = _compat_module_3.HCNETSDK_COMMAND_PORT_EMPTY_SESSION_ID
     HCNETSDK_COMMAND_PORT_LOGIN_FAMILY = _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_FAMILY
-    HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12 = _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12
-    HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX = _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX
-    HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX = _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX
-    HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH
-    HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM = _compat_module_3.HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
-    HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH
+    HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12 = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_HEADER_FIELD_12
+    )
+    HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_SEED_PREFIX
+    )
+    HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_LOGIN_SEED_SUFFIX
+    )
+    HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_PASSWORD_SEED_LENGTH
+    )
+    HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
+    )
+    HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_PRIMARY_PROOF_LENGTH
+    )
     HCNETSDK_COMMAND_PORT_RSA_BITS = _compat_module_3.HCNETSDK_COMMAND_PORT_RSA_BITS
     HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_RSA_BLOCK_LENGTH
-    HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH
+    HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH = (
+        _compat_module_3.HCNETSDK_COMMAND_PORT_SECONDARY_PROOF_LENGTH
+    )
     HCNETSDK_COMMAND_PORT_USERNAME_LENGTH = _compat_module_3.HCNETSDK_COMMAND_PORT_USERNAME_LENGTH
     HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET = _compat_module_3.HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET
     HCNETSDK_COMPRESSION_CFG_MIN_SIZE = _compat_module_3.HCNETSDK_COMPRESSION_CFG_MIN_SIZE
-    HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET = _compat_module_3.HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET
+    HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET = (
+        _compat_module_3.HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET
+    )
     HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET = _compat_module_3.HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET
-    HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET = _compat_module_3.HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET
+    HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET = (
+        _compat_module_3.HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET
+    )
     HCNETSDK_COMPRESSION_INFO_V30_SIZE = _compat_module_3.HCNETSDK_COMPRESSION_INFO_V30_SIZE
     HCNETSDK_DEFAULT_RTSP_PORT = _compat_module_3.HCNETSDK_DEFAULT_RTSP_PORT
     HCNETSDK_DEFAULT_SERVER_PORT = _compat_module_3.HCNETSDK_DEFAULT_SERVER_PORT
     HCNETSDK_DEFAULT_TLS_PORT = _compat_module_3.HCNETSDK_DEFAULT_TLS_PORT
-    HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR = _compat_module_3.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR
-    HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE = _compat_module_3.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
-    HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE = _compat_module_3.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
-    HCNETSDK_DEVICE_ABILITY_RN_OUTPUT_BUFFER_SIZE = _compat_module_3.HCNETSDK_DEVICE_ABILITY_RN_OUTPUT_BUFFER_SIZE
+    HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR = (
+        _compat_module_3.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR
+    )
+    HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE = (
+        _compat_module_3.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
+    )
+    HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE = (
+        _compat_module_3.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
+    )
+    HCNETSDK_DEVICE_ABILITY_RN_OUTPUT_BUFFER_SIZE = (
+        _compat_module_3.HCNETSDK_DEVICE_ABILITY_RN_OUTPUT_BUFFER_SIZE
+    )
     HCNETSDK_DEVICE_CFG_V40_MIN_SIZE = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_MIN_SIZE
     HCNETSDK_DEVICE_CFG_V40_NAME_OFFSET = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_NAME_OFFSET
     HCNETSDK_DEVICE_CFG_V40_NAME_SIZE = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_NAME_SIZE
     HCNETSDK_DEVICE_CFG_V40_SERIAL_OFFSET = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_SERIAL_OFFSET
     HCNETSDK_DEVICE_CFG_V40_SERIAL_SIZE = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_SERIAL_SIZE
-    HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET
+    HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET = (
+        _compat_module_3.HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET
+    )
     HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_SIZE = _compat_module_3.HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_SIZE
-    HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS = _compat_module_3.HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS
-    HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS = _compat_module_3.HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS
-    HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET
-    HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET
-    HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET
+    HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS = (
+        _compat_module_3.HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS
+    )
+    HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS = (
+        _compat_module_3.HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS
+    )
+    HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET
+    )
+    HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET
+    )
+    HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET
+    )
     HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_SIZE = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_SIZE
-    HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET
-    HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET
+    HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET
+    )
+    HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET
+    )
     HCNETSDK_EZVIZ_ACCESS_CFG_SIZE = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_SIZE
-    HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET
-    HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE = _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE
+    HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET
+    )
+    HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE = (
+        _compat_module_3.HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE
+    )
     HCNETSDK_EZVIZ_CONNECT_MODE_PUT = _compat_module_3.HCNETSDK_EZVIZ_CONNECT_MODE_PUT
     HCNETSDK_EZVIZ_DEFAULT_USERNAME = _compat_module_3.HCNETSDK_EZVIZ_DEFAULT_USERNAME
     HCNETSDK_EZVIZ_LAN_PASSWORD_KEY_PREFIX = _compat_module_3.HCNETSDK_EZVIZ_LAN_PASSWORD_KEY_PREFIX
-    HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX = _compat_module_3.HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX
+    HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX = (
+        _compat_module_3.HCNETSDK_EZVIZ_LAN_PASSWORD_PREF_SUFFIX
+    )
     HCNETSDK_EZVIZ_LOCAL_USERNAME = _compat_module_3.HCNETSDK_EZVIZ_LOCAL_USERNAME
     HCNETSDK_EZVIZ_NET_CONFIG_UPLOAD_PUT = _compat_module_3.HCNETSDK_EZVIZ_NET_CONFIG_UPLOAD_PUT
     HCNETSDK_EZVIZ_SERVICES_SWITCH_GET = _compat_module_3.HCNETSDK_EZVIZ_SERVICES_SWITCH_GET
     HCNETSDK_EZVIZ_SERVICES_SWITCH_PUT = _compat_module_3.HCNETSDK_EZVIZ_SERVICES_SWITCH_PUT
-    HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR = _compat_module_3.HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR
-    HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_LOCKED_ERROR = _compat_module_3.HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_LOCKED_ERROR
+    HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR = (
+        _compat_module_3.HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_ERROR
+    )
+    HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_LOCKED_ERROR = (
+        _compat_module_3.HCNETSDK_EZVIZ_SETTINGS_ACCOUNT_PASSWORD_LOCKED_ERROR
+    )
     HCNETSDK_EZVIZ_SETTINGS_ERROR_BASE = _compat_module_3.HCNETSDK_EZVIZ_SETTINGS_ERROR_BASE
     HCNETSDK_FILECOND_FIELD_ORDER = _compat_module_3.HCNETSDK_FILECOND_FIELD_ORDER
     HCNETSDK_FIND_CLOSE_V30 = _compat_module_3.HCNETSDK_FIND_CLOSE_V30
@@ -174,23 +240,31 @@ if TYPE_CHECKING:
     HCNETSDK_HD_CFG_DISK_CAPACITY_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_CAPACITY_OFFSET
     HCNETSDK_HD_CFG_DISK_COUNT = _compat_module_3.HCNETSDK_HD_CFG_DISK_COUNT
     HCNETSDK_HD_CFG_DISK_DRIVER_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_DRIVER_OFFSET
-    HCNETSDK_HD_CFG_DISK_FREE_PICTURE_SPACE_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_FREE_PICTURE_SPACE_OFFSET
+    HCNETSDK_HD_CFG_DISK_FREE_PICTURE_SPACE_OFFSET = (
+        _compat_module_3.HCNETSDK_HD_CFG_DISK_FREE_PICTURE_SPACE_OFFSET
+    )
     HCNETSDK_HD_CFG_DISK_FREE_SPACE_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_FREE_SPACE_OFFSET
     HCNETSDK_HD_CFG_DISK_GROUP_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_GROUP_OFFSET
     HCNETSDK_HD_CFG_DISK_HD_NO_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_HD_NO_OFFSET
     HCNETSDK_HD_CFG_DISK_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_OFFSET
-    HCNETSDK_HD_CFG_DISK_PICTURE_CAPACITY_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_PICTURE_CAPACITY_OFFSET
+    HCNETSDK_HD_CFG_DISK_PICTURE_CAPACITY_OFFSET = (
+        _compat_module_3.HCNETSDK_HD_CFG_DISK_PICTURE_CAPACITY_OFFSET
+    )
     HCNETSDK_HD_CFG_DISK_RECYCLING_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_RECYCLING_OFFSET
     HCNETSDK_HD_CFG_DISK_SIZE = _compat_module_3.HCNETSDK_HD_CFG_DISK_SIZE
     HCNETSDK_HD_CFG_DISK_STATUS_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_STATUS_OFFSET
-    HCNETSDK_HD_CFG_DISK_STORAGE_TYPE_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_STORAGE_TYPE_OFFSET
+    HCNETSDK_HD_CFG_DISK_STORAGE_TYPE_OFFSET = (
+        _compat_module_3.HCNETSDK_HD_CFG_DISK_STORAGE_TYPE_OFFSET
+    )
     HCNETSDK_HD_CFG_DISK_TYPE_OFFSET = _compat_module_3.HCNETSDK_HD_CFG_DISK_TYPE_OFFSET
     HCNETSDK_HD_CFG_HEADER_SIZE = _compat_module_3.HCNETSDK_HD_CFG_HEADER_SIZE
     HCNETSDK_HD_CFG_MIN_SIZE = _compat_module_3.HCNETSDK_HD_CFG_MIN_SIZE
     HCNETSDK_HIK_PRIVATE_PREFIX = _compat_module_3.HCNETSDK_HIK_PRIVATE_PREFIX
     HCNETSDK_HKMI_PREFIX = _compat_module_3.HCNETSDK_HKMI_PREFIX
     HCNETSDK_INIT = _compat_module_3.HCNETSDK_INIT
-    HCNETSDK_LOCAL_ABILITY_PARSE_CFG_FIELD_ORDER = _compat_module_3.HCNETSDK_LOCAL_ABILITY_PARSE_CFG_FIELD_ORDER
+    HCNETSDK_LOCAL_ABILITY_PARSE_CFG_FIELD_ORDER = (
+        _compat_module_3.HCNETSDK_LOCAL_ABILITY_PARSE_CFG_FIELD_ORDER
+    )
     HCNETSDK_LOCAL_PTZ_CFG_FIELD_ORDER = _compat_module_3.HCNETSDK_LOCAL_PTZ_CFG_FIELD_ORDER
     HCNETSDK_LOGIN_V40 = _compat_module_3.HCNETSDK_LOGIN_V40
     HCNETSDK_LOGOUT_V30 = _compat_module_3.HCNETSDK_LOGOUT_V30
@@ -200,27 +274,45 @@ if TYPE_CHECKING:
     HCNETSDK_MPEG_START_CODE_PREFIX = _compat_module_3.HCNETSDK_MPEG_START_CODE_PREFIX
     HCNETSDK_MPEG_TS_SYNC_BYTE = _compat_module_3.HCNETSDK_MPEG_TS_SYNC_BYTE
     HCNETSDK_NETCFG_V30_ETHERNET_COUNT = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_COUNT
-    HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET
-    HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET
-    HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET
+    HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET
+    )
+    HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET
+    )
+    HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET
+    )
     HCNETSDK_NETCFG_V30_ETHERNET_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_OFFSET
-    HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET
+    HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET
+    )
     HCNETSDK_NETCFG_V30_ETHERNET_SIZE = _compat_module_3.HCNETSDK_NETCFG_V30_ETHERNET_SIZE
     HCNETSDK_NETCFG_V30_GATEWAY_IP_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_GATEWAY_IP_OFFSET
     HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET
     HCNETSDK_NETCFG_V30_IP_SIZE = _compat_module_3.HCNETSDK_NETCFG_V30_IP_SIZE
-    HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET
-    HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET
+    HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET
+    )
+    HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET
+    )
     HCNETSDK_NETCFG_V30_MIN_SIZE = _compat_module_3.HCNETSDK_NETCFG_V30_MIN_SIZE
-    HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET
+    HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET = (
+        _compat_module_3.HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET
+    )
     HCNETSDK_NETCFG_V30_NFS_IP_OFFSET = _compat_module_3.HCNETSDK_NETCFG_V30_NFS_IP_OFFSET
     HCNETSDK_NTP_CFG_SIZE = _compat_module_3.HCNETSDK_NTP_CFG_SIZE
     HCNETSDK_NTP_ENABLE_OFFSET = _compat_module_3.HCNETSDK_NTP_ENABLE_OFFSET
     HCNETSDK_NTP_INTERVAL_OFFSET = _compat_module_3.HCNETSDK_NTP_INTERVAL_OFFSET
     HCNETSDK_NTP_PORT_OFFSET = _compat_module_3.HCNETSDK_NTP_PORT_OFFSET
     HCNETSDK_NTP_SERVER_SIZE = _compat_module_3.HCNETSDK_NTP_SERVER_SIZE
-    HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET = _compat_module_3.HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET
-    HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET = _compat_module_3.HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET
+    HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET = (
+        _compat_module_3.HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET
+    )
+    HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET = (
+        _compat_module_3.HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET
+    )
     HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET
     HCNETSDK_PIC_CFG_CHANNEL_NAME_SIZE = _compat_module_3.HCNETSDK_PIC_CFG_CHANNEL_NAME_SIZE
     HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET
@@ -228,7 +320,9 @@ if TYPE_CHECKING:
     HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET
     HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET
     HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET
-    HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET
+    HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET = (
+        _compat_module_3.HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET
+    )
     HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET
     HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET = _compat_module_3.HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET
     HCNETSDK_PLAY_CONVERT = _compat_module_3.HCNETSDK_PLAY_CONVERT
@@ -254,9 +348,13 @@ if TYPE_CHECKING:
     HCNETSDK_RECORD_CFG_V30_ALL_DAY_OFFSET = _compat_module_3.HCNETSDK_RECORD_CFG_V30_ALL_DAY_OFFSET
     HCNETSDK_RECORD_CFG_V30_ALL_DAY_SIZE = _compat_module_3.HCNETSDK_RECORD_CFG_V30_ALL_DAY_SIZE
     HCNETSDK_RECORD_CFG_V30_DAY_COUNT = _compat_module_3.HCNETSDK_RECORD_CFG_V30_DAY_COUNT
-    HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET = _compat_module_3.HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET
+    HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET = (
+        _compat_module_3.HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET
+    )
     HCNETSDK_RECORD_CFG_V30_SCHEDULE_SIZE = _compat_module_3.HCNETSDK_RECORD_CFG_V30_SCHEDULE_SIZE
-    HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY = _compat_module_3.HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY
+    HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY = (
+        _compat_module_3.HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY
+    )
     HCNETSDK_RECORD_CFG_V30_SIZE = _compat_module_3.HCNETSDK_RECORD_CFG_V30_SIZE
     HCNETSDK_RECORD_CFG_V30_TRAILER_OFFSET = _compat_module_3.HCNETSDK_RECORD_CFG_V30_TRAILER_OFFSET
     HCNETSDK_SECRET_KEY_TYPE_AES = _compat_module_3.HCNETSDK_SECRET_KEY_TYPE_AES
@@ -265,7 +363,9 @@ if TYPE_CHECKING:
     HCNETSDK_SET_PLAY_DATA_CALLBACK = _compat_module_3.HCNETSDK_SET_PLAY_DATA_CALLBACK
     HCNETSDK_SET_PLAY_DATA_CALLBACK_V40 = _compat_module_3.HCNETSDK_SET_PLAY_DATA_CALLBACK_V40
     HCNETSDK_SET_PLAYBACK_ES_CALLBACK = _compat_module_3.HCNETSDK_SET_PLAYBACK_ES_CALLBACK
-    HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK = _compat_module_3.HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
+    HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK = (
+        _compat_module_3.HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
+    )
     HCNETSDK_SET_PLAYBACK_SECRET_KEY = _compat_module_3.HCNETSDK_SET_PLAYBACK_SECRET_KEY
     HCNETSDK_SET_SDK_LOCAL_CFG = _compat_module_3.HCNETSDK_SET_SDK_LOCAL_CFG
     HCNETSDK_SET_TRANS_TYPE = _compat_module_3.HCNETSDK_SET_TRANS_TYPE
@@ -273,14 +373,26 @@ if TYPE_CHECKING:
     HCNETSDK_SETUP_ALARM_CHAN_V41 = _compat_module_3.HCNETSDK_SETUP_ALARM_CHAN_V41
     HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER = _compat_module_3.HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER
     HCNETSDK_SHIFTED_SIZE_ZERO_SUFFIX = _compat_module_3.HCNETSDK_SHIFTED_SIZE_ZERO_SUFFIX
-    HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE = _compat_module_3.HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE
-    HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID = _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID
-    HCNETSDK_STDXML_COMMAND_PORT_EXTRA_RESERVED_SIZE = _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_EXTRA_RESERVED_SIZE
+    HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE = (
+        _compat_module_3.HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE
+    )
+    HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID = (
+        _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID
+    )
+    HCNETSDK_STDXML_COMMAND_PORT_EXTRA_RESERVED_SIZE = (
+        _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_EXTRA_RESERVED_SIZE
+    )
     HCNETSDK_STDXML_COMMAND_PORT_FLAGS = _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_FLAGS
-    HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE = _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE
+    HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE = (
+        _compat_module_3.HCNETSDK_STDXML_COMMAND_PORT_PREFIX_SIZE
+    )
     HCNETSDK_STDXML_CONFIG = _compat_module_3.HCNETSDK_STDXML_CONFIG
-    HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE = _compat_module_3.HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE
-    HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE = _compat_module_3.HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE
+    HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE = (
+        _compat_module_3.HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE
+    )
+    HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE = (
+        _compat_module_3.HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE
+    )
     HCNETSDK_STDXML_INPUT_FIELD_ORDER = _compat_module_3.HCNETSDK_STDXML_INPUT_FIELD_ORDER
     HCNETSDK_STDXML_OUTPUT_FIELD_ORDER = _compat_module_3.HCNETSDK_STDXML_OUTPUT_FIELD_ORDER
     HCNETSDK_STOP_GET_FILE = _compat_module_3.HCNETSDK_STOP_GET_FILE
@@ -289,14 +401,18 @@ if TYPE_CHECKING:
     HCNETSDK_TCP_HEADER_LENGTH = _compat_module_3.HCNETSDK_TCP_HEADER_LENGTH
     HCNETSDK_TIME_CFG_SIZE = _compat_module_3.HCNETSDK_TIME_CFG_SIZE
     HCNETSDK_TIME_FIELD_ORDER = _compat_module_3.HCNETSDK_TIME_FIELD_ORDER
-    HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE
+    HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE = (
+        _compat_module_3.HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE
+    )
     HCNETSDK_USER_CFG_V30_ENTRY_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_ENTRY_SIZE
     HCNETSDK_USER_CFG_V30_LOCAL_RIGHT_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_LOCAL_RIGHT_SIZE
     HCNETSDK_USER_CFG_V30_MAC_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_MAC_SIZE
     HCNETSDK_USER_CFG_V30_MAX_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_MAX_SIZE
     HCNETSDK_USER_CFG_V30_MIN_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_MIN_SIZE
     HCNETSDK_USER_CFG_V30_PASSWORD_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_PASSWORD_SIZE
-    HCNETSDK_USER_CFG_V30_REMOTE_RIGHT_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_REMOTE_RIGHT_SIZE
+    HCNETSDK_USER_CFG_V30_REMOTE_RIGHT_SIZE = (
+        _compat_module_3.HCNETSDK_USER_CFG_V30_REMOTE_RIGHT_SIZE
+    )
     HCNETSDK_USER_CFG_V30_RESERVED_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_RESERVED_SIZE
     HCNETSDK_USER_CFG_V30_USER_COUNT = _compat_module_3.HCNETSDK_USER_CFG_V30_USER_COUNT
     HCNETSDK_USER_CFG_V30_USER_IP_V4_SIZE = _compat_module_3.HCNETSDK_USER_CFG_V30_USER_IP_V4_SIZE
@@ -339,7 +455,9 @@ if TYPE_CHECKING:
     EzvizLanAudioVideoCompressInfo = _compat_module_3.EzvizLanAudioVideoCompressInfo
     EzvizLanAudioVideoCompressStream = _compat_module_3.EzvizLanAudioVideoCompressStream
     EzvizLanAudioVideoCompressVideoChannel = _compat_module_3.EzvizLanAudioVideoCompressVideoChannel
-    EzvizLanAudioVideoCompressVoiceTalkChannel = _compat_module_3.EzvizLanAudioVideoCompressVoiceTalkChannel
+    EzvizLanAudioVideoCompressVoiceTalkChannel = (
+        _compat_module_3.EzvizLanAudioVideoCompressVoiceTalkChannel
+    )
     EzvizLanCameraParamConfig = _compat_module_3.EzvizLanCameraParamConfig
     EzvizLanCompressionConfig = _compat_module_3.EzvizLanCompressionConfig
     EzvizLanCompressionInfoV30 = _compat_module_3.EzvizLanCompressionInfoV30
@@ -492,7 +610,9 @@ if TYPE_CHECKING:
     _audio_video_compress_audio_channels = _compat_module_3._audio_video_compress_audio_channels
     _audio_video_compress_stream = _compat_module_3._audio_video_compress_stream
     _audio_video_compress_video_channels = _compat_module_3._audio_video_compress_video_channels
-    _audio_video_compress_voice_talk_channels = _compat_module_3._audio_video_compress_voice_talk_channels
+    _audio_video_compress_voice_talk_channels = (
+        _compat_module_3._audio_video_compress_voice_talk_channels
+    )
     _bounded_bytes = _compat_module_3._bounded_bytes
     _build_local_sdk_request_xml = _compat_module_3._build_local_sdk_request_xml
     _byte_tuple = _compat_module_3._byte_tuple
@@ -606,15 +726,23 @@ if TYPE_CHECKING:
     base64 = _compat_module_3.base64
     binascii = _compat_module_3.binascii
     build_encrypted_ezviz_local_sdk_frame = _compat_module_3.build_encrypted_ezviz_local_sdk_frame
-    build_ezviz_cas_encrypted_local_sdk_frame = _compat_module_3.build_ezviz_cas_encrypted_local_sdk_frame
+    build_ezviz_cas_encrypted_local_sdk_frame = (
+        _compat_module_3.build_ezviz_cas_encrypted_local_sdk_frame
+    )
     build_ezviz_cas_ssl_local_sdk_frame = _compat_module_3.build_ezviz_cas_ssl_local_sdk_frame
-    build_ezviz_interleaved_rtp_frame_header = _compat_module_3.build_ezviz_interleaved_rtp_frame_header
+    build_ezviz_interleaved_rtp_frame_header = (
+        _compat_module_3.build_ezviz_interleaved_rtp_frame_header
+    )
     build_ezviz_local_preview_request_body = _compat_module_3.build_ezviz_local_preview_request_body
     build_ezviz_local_sdk_frame = _compat_module_3.build_ezviz_local_sdk_frame
     build_ezviz_local_sdk_frame_header = _compat_module_3.build_ezviz_local_sdk_frame_header
     build_ezviz_local_sdk_ssl_frame = _compat_module_3.build_ezviz_local_sdk_ssl_frame
-    build_ezviz_local_stop_preview_request_body = _compat_module_3.build_ezviz_local_stop_preview_request_body
-    build_ezviz_local_stream_setup_request_body = _compat_module_3.build_ezviz_local_stream_setup_request_body
+    build_ezviz_local_stop_preview_request_body = (
+        _compat_module_3.build_ezviz_local_stop_preview_request_body
+    )
+    build_ezviz_local_stream_setup_request_body = (
+        _compat_module_3.build_ezviz_local_stream_setup_request_body
+    )
     build_hcnetsdk_tcp_frame = _compat_module_3.build_hcnetsdk_tcp_frame
     cast = _compat_module_3.cast
     classify_ezviz_local_sdk_body = _compat_module_3.classify_ezviz_local_sdk_body
@@ -625,27 +753,49 @@ if TYPE_CHECKING:
     dataclass = _compat_module_3.dataclass
     date = _compat_module_3.date
     datetime = _compat_module_3.datetime
-    decode_hcnetsdk_command_port_login_challenge = _compat_module_3.decode_hcnetsdk_command_port_login_challenge
+    decode_hcnetsdk_command_port_login_challenge = (
+        _compat_module_3.decode_hcnetsdk_command_port_login_challenge
+    )
     decrypt_ezviz_local_sdk_body_aes_cbc = _compat_module_3.decrypt_ezviz_local_sdk_body_aes_cbc
     discover_hcnetsdk_stream_details = _compat_module_3.discover_hcnetsdk_stream_details
-    discover_hcnetsdk_stream_details_for_login = _compat_module_3.discover_hcnetsdk_stream_details_for_login
+    discover_hcnetsdk_stream_details_for_login = (
+        _compat_module_3.discover_hcnetsdk_stream_details_for_login
+    )
     encrypt_ezviz_local_sdk_body_aes_cbc = _compat_module_3.encrypt_ezviz_local_sdk_body_aes_cbc
     errno = _compat_module_3.errno
     ezviz_cas_ptz_command = _compat_module_3.ezviz_cas_ptz_command
-    ezviz_hcnetsdk_local_ability_parse_request = _compat_module_3.ezviz_hcnetsdk_local_ability_parse_request
-    ezviz_hcnetsdk_local_ptz_without_recv_request = _compat_module_3.ezviz_hcnetsdk_local_ptz_without_recv_request
+    ezviz_hcnetsdk_local_ability_parse_request = (
+        _compat_module_3.ezviz_hcnetsdk_local_ability_parse_request
+    )
+    ezviz_hcnetsdk_local_ptz_without_recv_request = (
+        _compat_module_3.ezviz_hcnetsdk_local_ptz_without_recv_request
+    )
     ezviz_lan_access_protocol_ability = _compat_module_3.ezviz_lan_access_protocol_ability
-    ezviz_lan_access_protocol_ability_input = _compat_module_3.ezviz_lan_access_protocol_ability_input
-    ezviz_lan_access_protocol_ability_request = _compat_module_3.ezviz_lan_access_protocol_ability_request
-    ezviz_lan_audio_input_get_config_request = _compat_module_3.ezviz_lan_audio_input_get_config_request
+    ezviz_lan_access_protocol_ability_input = (
+        _compat_module_3.ezviz_lan_access_protocol_ability_input
+    )
+    ezviz_lan_access_protocol_ability_request = (
+        _compat_module_3.ezviz_lan_access_protocol_ability_request
+    )
+    ezviz_lan_audio_input_get_config_request = (
+        _compat_module_3.ezviz_lan_audio_input_get_config_request
+    )
     ezviz_lan_audio_input_param = _compat_module_3.ezviz_lan_audio_input_param
     ezviz_lan_audio_output_volume = _compat_module_3.ezviz_lan_audio_output_volume
     ezviz_lan_audio_video_compress_info = _compat_module_3.ezviz_lan_audio_video_compress_info
-    ezviz_lan_audio_video_compress_info_ability_request = _compat_module_3.ezviz_lan_audio_video_compress_info_ability_request
-    ezviz_lan_audio_video_compress_info_input = _compat_module_3.ezviz_lan_audio_video_compress_info_input
+    ezviz_lan_audio_video_compress_info_ability_request = (
+        _compat_module_3.ezviz_lan_audio_video_compress_info_ability_request
+    )
+    ezviz_lan_audio_video_compress_info_input = (
+        _compat_module_3.ezviz_lan_audio_video_compress_info_input
+    )
     ezviz_lan_audio_volume_update_requests = _compat_module_3.ezviz_lan_audio_volume_update_requests
-    ezviz_lan_audioout_volume_get_config_request = _compat_module_3.ezviz_lan_audioout_volume_get_config_request
-    ezviz_lan_backlight_wdr_get_config_request = _compat_module_3.ezviz_lan_backlight_wdr_get_config_request
+    ezviz_lan_audioout_volume_get_config_request = (
+        _compat_module_3.ezviz_lan_audioout_volume_get_config_request
+    )
+    ezviz_lan_backlight_wdr_get_config_request = (
+        _compat_module_3.ezviz_lan_backlight_wdr_get_config_request
+    )
     ezviz_lan_backlight_wdr_update_request = _compat_module_3.ezviz_lan_backlight_wdr_update_request
     ezviz_lan_camera_param_config = _compat_module_3.ezviz_lan_camera_param_config
     ezviz_lan_complete_playback_path = _compat_module_3.ezviz_lan_complete_playback_path
@@ -660,22 +810,42 @@ if TYPE_CHECKING:
     ezviz_lan_dvr_config_summary = _compat_module_3.ezviz_lan_dvr_config_summary
     ezviz_lan_ezviz_access_config = _compat_module_3.ezviz_lan_ezviz_access_config
     ezviz_lan_ezviz_access_config_summary = _compat_module_3.ezviz_lan_ezviz_access_config_summary
-    ezviz_lan_ezviz_access_get_config_request = _compat_module_3.ezviz_lan_ezviz_access_get_config_request
-    ezviz_lan_ezviz_access_replacement_domain = _compat_module_3.ezviz_lan_ezviz_access_replacement_domain
-    ezviz_lan_ezviz_access_replacement_domain_request = _compat_module_3.ezviz_lan_ezviz_access_replacement_domain_request
-    ezviz_lan_ezviz_access_set_domain_request = _compat_module_3.ezviz_lan_ezviz_access_set_domain_request
+    ezviz_lan_ezviz_access_get_config_request = (
+        _compat_module_3.ezviz_lan_ezviz_access_get_config_request
+    )
+    ezviz_lan_ezviz_access_replacement_domain = (
+        _compat_module_3.ezviz_lan_ezviz_access_replacement_domain
+    )
+    ezviz_lan_ezviz_access_replacement_domain_request = (
+        _compat_module_3.ezviz_lan_ezviz_access_replacement_domain_request
+    )
+    ezviz_lan_ezviz_access_set_domain_request = (
+        _compat_module_3.ezviz_lan_ezviz_access_set_domain_request
+    )
     ezviz_lan_hd_config = _compat_module_3.ezviz_lan_hd_config
     ezviz_lan_hd_config_request = _compat_module_3.ezviz_lan_hd_config_request
-    ezviz_lan_image_display_param_ability_input = _compat_module_3.ezviz_lan_image_display_param_ability_input
-    ezviz_lan_image_display_param_ability_request = _compat_module_3.ezviz_lan_image_display_param_ability_request
+    ezviz_lan_image_display_param_ability_input = (
+        _compat_module_3.ezviz_lan_image_display_param_ability_input
+    )
+    ezviz_lan_image_display_param_ability_request = (
+        _compat_module_3.ezviz_lan_image_display_param_ability_request
+    )
     ezviz_lan_ipc_front_parameter_ability = _compat_module_3.ezviz_lan_ipc_front_parameter_ability
-    ezviz_lan_ipc_front_parameter_ability_request = _compat_module_3.ezviz_lan_ipc_front_parameter_ability_request
+    ezviz_lan_ipc_front_parameter_ability_request = (
+        _compat_module_3.ezviz_lan_ipc_front_parameter_ability_request
+    )
     ezviz_lan_live_view_params = _compat_module_3.ezviz_lan_live_view_params
     ezviz_lan_local_user_password = _compat_module_3.ezviz_lan_local_user_password
     ezviz_lan_login_candidates = _compat_module_3.ezviz_lan_login_candidates
-    ezviz_lan_net_config_and_voice_upload_payload = _compat_module_3.ezviz_lan_net_config_and_voice_upload_payload
-    ezviz_lan_net_config_and_voice_upload_put_config = _compat_module_3.ezviz_lan_net_config_and_voice_upload_put_config
-    ezviz_lan_net_config_and_voice_upload_put_request = _compat_module_3.ezviz_lan_net_config_and_voice_upload_put_request
+    ezviz_lan_net_config_and_voice_upload_payload = (
+        _compat_module_3.ezviz_lan_net_config_and_voice_upload_payload
+    )
+    ezviz_lan_net_config_and_voice_upload_put_config = (
+        _compat_module_3.ezviz_lan_net_config_and_voice_upload_put_config
+    )
+    ezviz_lan_net_config_and_voice_upload_put_request = (
+        _compat_module_3.ezviz_lan_net_config_and_voice_upload_put_request
+    )
     ezviz_lan_net_config_v30 = _compat_module_3.ezviz_lan_net_config_v30
     ezviz_lan_net_config_v30_request = _compat_module_3.ezviz_lan_net_config_v30_request
     ezviz_lan_ntp_config = _compat_module_3.ezviz_lan_ntp_config
@@ -690,7 +860,9 @@ if TYPE_CHECKING:
     ezviz_lan_play_device_login_succeeded = _compat_module_3.ezviz_lan_play_device_login_succeeded
     ezviz_lan_playback_condition = _compat_module_3.ezviz_lan_playback_condition
     ezviz_lan_playback_convert_ability = _compat_module_3.ezviz_lan_playback_convert_ability
-    ezviz_lan_playback_file_search_condition = _compat_module_3.ezviz_lan_playback_file_search_condition
+    ezviz_lan_playback_file_search_condition = (
+        _compat_module_3.ezviz_lan_playback_file_search_condition
+    )
     ezviz_lan_playback_intent = _compat_module_3.ezviz_lan_playback_intent
     ezviz_lan_playback_video_type = _compat_module_3.ezviz_lan_playback_video_type
     ezviz_lan_preview_plan = _compat_module_3.ezviz_lan_preview_plan
@@ -708,41 +880,63 @@ if TYPE_CHECKING:
     ezviz_lan_record_config_v30_request = _compat_module_3.ezviz_lan_record_config_v30_request
     ezviz_lan_rn_device_ability_request = _compat_module_3.ezviz_lan_rn_device_ability_request
     ezviz_lan_sadp_activate_batch_result = _compat_module_3.ezviz_lan_sadp_activate_batch_result
-    ezviz_lan_sadp_edit_net_param_batch_result = _compat_module_3.ezviz_lan_sadp_edit_net_param_batch_result
+    ezviz_lan_sadp_edit_net_param_batch_result = (
+        _compat_module_3.ezviz_lan_sadp_edit_net_param_batch_result
+    )
     ezviz_lan_sd_format_close_request = _compat_module_3.ezviz_lan_sd_format_close_request
     ezviz_lan_sd_format_progress_request = _compat_module_3.ezviz_lan_sd_format_progress_request
     ezviz_lan_sd_format_progress_result = _compat_module_3.ezviz_lan_sd_format_progress_result
     ezviz_lan_sd_format_start_request = _compat_module_3.ezviz_lan_sd_format_start_request
-    ezviz_lan_services_switch_get_command_port = _compat_module_3.ezviz_lan_services_switch_get_command_port
+    ezviz_lan_services_switch_get_command_port = (
+        _compat_module_3.ezviz_lan_services_switch_get_command_port
+    )
     ezviz_lan_services_switch_get_config = _compat_module_3.ezviz_lan_services_switch_get_config
     ezviz_lan_services_switch_get_request = _compat_module_3.ezviz_lan_services_switch_get_request
     ezviz_lan_services_switch_payload = _compat_module_3.ezviz_lan_services_switch_payload
     ezviz_lan_services_switch_put_config = _compat_module_3.ezviz_lan_services_switch_put_config
     ezviz_lan_services_switch_put_request = _compat_module_3.ezviz_lan_services_switch_put_request
-    ezviz_lan_services_switch_set_command_port = _compat_module_3.ezviz_lan_services_switch_set_command_port
+    ezviz_lan_services_switch_set_command_port = (
+        _compat_module_3.ezviz_lan_services_switch_set_command_port
+    )
     ezviz_lan_services_switch_set_config = _compat_module_3.ezviz_lan_services_switch_set_config
     ezviz_lan_services_switch_set_payload = _compat_module_3.ezviz_lan_services_switch_set_payload
     ezviz_lan_services_switch_state = _compat_module_3.ezviz_lan_services_switch_state
-    ezviz_lan_services_switch_state_command_port = _compat_module_3.ezviz_lan_services_switch_state_command_port
+    ezviz_lan_services_switch_state_command_port = (
+        _compat_module_3.ezviz_lan_services_switch_state_command_port
+    )
     ezviz_lan_services_switch_succeeded = _compat_module_3.ezviz_lan_services_switch_succeeded
-    ezviz_lan_services_switch_update_config = _compat_module_3.ezviz_lan_services_switch_update_config
+    ezviz_lan_services_switch_update_config = (
+        _compat_module_3.ezviz_lan_services_switch_update_config
+    )
     ezviz_lan_settings_channel_number = _compat_module_3.ezviz_lan_settings_channel_number
-    ezviz_lan_settings_error_clears_password = _compat_module_3.ezviz_lan_settings_error_clears_password
+    ezviz_lan_settings_error_clears_password = (
+        _compat_module_3.ezviz_lan_settings_error_clears_password
+    )
     ezviz_lan_settings_error_code = _compat_module_3.ezviz_lan_settings_error_code
     ezviz_lan_settings_login_candidates = _compat_module_3.ezviz_lan_settings_login_candidates
     ezviz_lan_settings_login_succeeded = _compat_module_3.ezviz_lan_settings_login_succeeded
-    ezviz_lan_settings_updates_services_switch = _compat_module_3.ezviz_lan_settings_updates_services_switch
+    ezviz_lan_settings_updates_services_switch = (
+        _compat_module_3.ezviz_lan_settings_updates_services_switch
+    )
     ezviz_lan_soft_hardware_ability = _compat_module_3.ezviz_lan_soft_hardware_ability
-    ezviz_lan_soft_hardware_ability_request = _compat_module_3.ezviz_lan_soft_hardware_ability_request
+    ezviz_lan_soft_hardware_ability_request = (
+        _compat_module_3.ezviz_lan_soft_hardware_ability_request
+    )
     ezviz_lan_time_config = _compat_module_3.ezviz_lan_time_config
     ezviz_lan_time_get_config_request = _compat_module_3.ezviz_lan_time_get_config_request
     ezviz_lan_user_config_v30 = _compat_module_3.ezviz_lan_user_config_v30
     ezviz_lan_user_config_v30_summary = _compat_module_3.ezviz_lan_user_config_v30_summary
-    ezviz_lan_user_password_get_config_request = _compat_module_3.ezviz_lan_user_password_get_config_request
+    ezviz_lan_user_password_get_config_request = (
+        _compat_module_3.ezviz_lan_user_password_get_config_request
+    )
     ezviz_lan_user_password_update_request = _compat_module_3.ezviz_lan_user_password_update_request
-    ezviz_lan_video_coding_get_config_request = _compat_module_3.ezviz_lan_video_coding_get_config_request
+    ezviz_lan_video_coding_get_config_request = (
+        _compat_module_3.ezviz_lan_video_coding_get_config_request
+    )
     ezviz_lan_video_coding_update_request = _compat_module_3.ezviz_lan_video_coding_update_request
-    ezviz_lan_video_effect_get_config_request = _compat_module_3.ezviz_lan_video_effect_get_config_request
+    ezviz_lan_video_effect_get_config_request = (
+        _compat_module_3.ezviz_lan_video_effect_get_config_request
+    )
     ezviz_lan_video_effect_update_request = _compat_module_3.ezviz_lan_video_effect_update_request
     ezviz_lan_video_level_for_stream_type = _compat_module_3.ezviz_lan_video_level_for_stream_type
     ezviz_lan_video_pic_ability = _compat_module_3.ezviz_lan_video_pic_ability
@@ -757,7 +951,9 @@ if TYPE_CHECKING:
     ezviz_lan_wifi_get_config_request = _compat_module_3.ezviz_lan_wifi_get_config_request
     ezviz_lan_wifi_set_config_request = _compat_module_3.ezviz_lan_wifi_set_config_request
     ezviz_lan_wifi_station_patch = _compat_module_3.ezviz_lan_wifi_station_patch
-    ezviz_lan_wifi_work_mode_update_request = _compat_module_3.ezviz_lan_wifi_work_mode_update_request
+    ezviz_lan_wifi_work_mode_update_request = (
+        _compat_module_3.ezviz_lan_wifi_work_mode_update_request
+    )
     ezviz_local_sdk_iv = _compat_module_3.ezviz_local_sdk_iv
     ezviz_local_sdk_ssl_iv = _compat_module_3.ezviz_local_sdk_ssl_iv
     ezviz_native_video_level = _compat_module_3.ezviz_native_video_level
@@ -768,22 +964,38 @@ if TYPE_CHECKING:
     hcnetsdk_command_candidate_role = _compat_module_3.hcnetsdk_command_candidate_role
     hcnetsdk_command_port_auth_word = _compat_module_3.hcnetsdk_command_port_auth_word
     hcnetsdk_command_port_control_frame = _compat_module_3.hcnetsdk_command_port_control_frame
-    hcnetsdk_command_port_control_template_from_frame = _compat_module_3.hcnetsdk_command_port_control_template_from_frame
+    hcnetsdk_command_port_control_template_from_frame = (
+        _compat_module_3.hcnetsdk_command_port_control_template_from_frame
+    )
     hcnetsdk_command_port_execute_template = _compat_module_3.hcnetsdk_command_port_execute_template
     hcnetsdk_command_port_login_proof = _compat_module_3.hcnetsdk_command_port_login_proof
-    hcnetsdk_command_port_login_proof_frame = _compat_module_3.hcnetsdk_command_port_login_proof_frame
-    hcnetsdk_command_port_login_request_frame = _compat_module_3.hcnetsdk_command_port_login_request_frame
+    hcnetsdk_command_port_login_proof_frame = (
+        _compat_module_3.hcnetsdk_command_port_login_proof_frame
+    )
+    hcnetsdk_command_port_login_request_frame = (
+        _compat_module_3.hcnetsdk_command_port_login_request_frame
+    )
     hcnetsdk_command_port_password_digest = _compat_module_3.hcnetsdk_command_port_password_digest
-    hcnetsdk_command_port_play_login_body_tail_for_today = _compat_module_3.hcnetsdk_command_port_play_login_body_tail_for_today
+    hcnetsdk_command_port_play_login_body_tail_for_today = (
+        _compat_module_3.hcnetsdk_command_port_play_login_body_tail_for_today
+    )
     hcnetsdk_command_port_public_key_der = _compat_module_3.hcnetsdk_command_port_public_key_der
     hcnetsdk_command_port_response_payload = _compat_module_3.hcnetsdk_command_port_response_payload
     hcnetsdk_command_port_rsa_key = _compat_module_3.hcnetsdk_command_port_rsa_key
-    hcnetsdk_device_ability_command_port_body_tail = _compat_module_3.hcnetsdk_device_ability_command_port_body_tail
-    hcnetsdk_device_ability_command_port_template = _compat_module_3.hcnetsdk_device_ability_command_port_template
+    hcnetsdk_device_ability_command_port_body_tail = (
+        _compat_module_3.hcnetsdk_device_ability_command_port_body_tail
+    )
+    hcnetsdk_device_ability_command_port_template = (
+        _compat_module_3.hcnetsdk_device_ability_command_port_template
+    )
     hcnetsdk_device_ability_request = _compat_module_3.hcnetsdk_device_ability_request
     hcnetsdk_device_ability_xml = _compat_module_3.hcnetsdk_device_ability_xml
-    hcnetsdk_dvr_config_command_port_body_tail = _compat_module_3.hcnetsdk_dvr_config_command_port_body_tail
-    hcnetsdk_dvr_config_command_port_template = _compat_module_3.hcnetsdk_dvr_config_command_port_template
+    hcnetsdk_dvr_config_command_port_body_tail = (
+        _compat_module_3.hcnetsdk_dvr_config_command_port_body_tail
+    )
+    hcnetsdk_dvr_config_command_port_template = (
+        _compat_module_3.hcnetsdk_dvr_config_command_port_template
+    )
     hcnetsdk_dvr_config_get_request = _compat_module_3.hcnetsdk_dvr_config_get_request
     hcnetsdk_dvr_config_set_request = _compat_module_3.hcnetsdk_dvr_config_set_request
     hcnetsdk_file_search_condition = _compat_module_3.hcnetsdk_file_search_condition
@@ -791,7 +1003,9 @@ if TYPE_CHECKING:
     hcnetsdk_find_file_v30_request = _compat_module_3.hcnetsdk_find_file_v30_request
     hcnetsdk_find_next_file_status = _compat_module_3.hcnetsdk_find_next_file_status
     hcnetsdk_find_next_file_v30_request = _compat_module_3.hcnetsdk_find_next_file_v30_request
-    hcnetsdk_get_device_ability_command_port = _compat_module_3.hcnetsdk_get_device_ability_command_port
+    hcnetsdk_get_device_ability_command_port = (
+        _compat_module_3.hcnetsdk_get_device_ability_command_port
+    )
     hcnetsdk_get_download_pos_request = _compat_module_3.hcnetsdk_get_download_pos_request
     hcnetsdk_get_dvr_config_command_port = _compat_module_3.hcnetsdk_get_dvr_config_command_port
     hcnetsdk_get_error_msg_request = _compat_module_3.hcnetsdk_get_error_msg_request
@@ -811,18 +1025,34 @@ if TYPE_CHECKING:
     hcnetsdk_real_data_type_is_media = _compat_module_3.hcnetsdk_real_data_type_is_media
     hcnetsdk_real_play_request = _compat_module_3.hcnetsdk_real_play_request
     hcnetsdk_set_connect_time_request = _compat_module_3.hcnetsdk_set_connect_time_request
-    hcnetsdk_set_play_data_callback_request = _compat_module_3.hcnetsdk_set_play_data_callback_request
-    hcnetsdk_set_play_data_callback_v40_request = _compat_module_3.hcnetsdk_set_play_data_callback_v40_request
-    hcnetsdk_set_playback_es_callback_request = _compat_module_3.hcnetsdk_set_playback_es_callback_request
-    hcnetsdk_set_playback_response_callback_request = _compat_module_3.hcnetsdk_set_playback_response_callback_request
-    hcnetsdk_set_playback_secret_key_request = _compat_module_3.hcnetsdk_set_playback_secret_key_request
+    hcnetsdk_set_play_data_callback_request = (
+        _compat_module_3.hcnetsdk_set_play_data_callback_request
+    )
+    hcnetsdk_set_play_data_callback_v40_request = (
+        _compat_module_3.hcnetsdk_set_play_data_callback_v40_request
+    )
+    hcnetsdk_set_playback_es_callback_request = (
+        _compat_module_3.hcnetsdk_set_playback_es_callback_request
+    )
+    hcnetsdk_set_playback_response_callback_request = (
+        _compat_module_3.hcnetsdk_set_playback_response_callback_request
+    )
+    hcnetsdk_set_playback_secret_key_request = (
+        _compat_module_3.hcnetsdk_set_playback_secret_key_request
+    )
     hcnetsdk_set_sdk_local_cfg_request = _compat_module_3.hcnetsdk_set_sdk_local_cfg_request
     hcnetsdk_setup_alarm_v30_request = _compat_module_3.hcnetsdk_setup_alarm_v30_request
     hcnetsdk_setup_alarm_v41_request = _compat_module_3.hcnetsdk_setup_alarm_v41_request
     hcnetsdk_stdxml_config_command_port = _compat_module_3.hcnetsdk_stdxml_config_command_port
-    hcnetsdk_stdxml_config_command_port_body_tail = _compat_module_3.hcnetsdk_stdxml_config_command_port_body_tail
-    hcnetsdk_stdxml_config_command_port_from_trace = _compat_module_3.hcnetsdk_stdxml_config_command_port_from_trace
-    hcnetsdk_stdxml_config_command_port_template = _compat_module_3.hcnetsdk_stdxml_config_command_port_template
+    hcnetsdk_stdxml_config_command_port_body_tail = (
+        _compat_module_3.hcnetsdk_stdxml_config_command_port_body_tail
+    )
+    hcnetsdk_stdxml_config_command_port_from_trace = (
+        _compat_module_3.hcnetsdk_stdxml_config_command_port_from_trace
+    )
+    hcnetsdk_stdxml_config_command_port_template = (
+        _compat_module_3.hcnetsdk_stdxml_config_command_port_template
+    )
     hcnetsdk_stdxml_config_request = _compat_module_3.hcnetsdk_stdxml_config_request
     hcnetsdk_stdxml_isapi_command_port = _compat_module_3.hcnetsdk_stdxml_isapi_command_port
     hcnetsdk_stdxml_isapi_request = _compat_module_3.hcnetsdk_stdxml_isapi_request
@@ -838,12 +1068,16 @@ if TYPE_CHECKING:
     json = _compat_module_3.json
     math = _compat_module_3.math
     normalize_hcnetsdk_parameters = _compat_module_3.normalize_hcnetsdk_parameters
-    parse_ezviz_interleaved_rtp_frame_header = _compat_module_3.parse_ezviz_interleaved_rtp_frame_header
+    parse_ezviz_interleaved_rtp_frame_header = (
+        _compat_module_3.parse_ezviz_interleaved_rtp_frame_header
+    )
     parse_ezviz_local_device = _compat_module_3.parse_ezviz_local_device
     parse_ezviz_local_sdk_frame = _compat_module_3.parse_ezviz_local_sdk_frame
     parse_ezviz_local_sdk_frame_header = _compat_module_3.parse_ezviz_local_sdk_frame_header
     parse_ezviz_local_sdk_xml_fields = _compat_module_3.parse_ezviz_local_sdk_xml_fields
-    parse_hcnetsdk_command_port_login_session = _compat_module_3.parse_hcnetsdk_command_port_login_session
+    parse_hcnetsdk_command_port_login_session = (
+        _compat_module_3.parse_hcnetsdk_command_port_login_session
+    )
     parse_hcnetsdk_semantic_log_line = _compat_module_3.parse_hcnetsdk_semantic_log_line
     parse_hcnetsdk_tcp_frame = _compat_module_3.parse_hcnetsdk_tcp_frame
     parse_hcnetsdk_tcp_frame_header = _compat_module_3.parse_hcnetsdk_tcp_frame_header
@@ -851,9 +1085,13 @@ if TYPE_CHECKING:
     parse_sadp_response = _compat_module_3.parse_sadp_response
     re = _compat_module_3.re
     read_ezviz_interleaved_rtp_frame = _compat_module_3.read_ezviz_interleaved_rtp_frame
-    read_ezviz_interleaved_rtp_frame_after_prefix = _compat_module_3.read_ezviz_interleaved_rtp_frame_after_prefix
+    read_ezviz_interleaved_rtp_frame_after_prefix = (
+        _compat_module_3.read_ezviz_interleaved_rtp_frame_after_prefix
+    )
     read_ezviz_local_sdk_frame = _compat_module_3.read_ezviz_local_sdk_frame
-    read_hcnetsdk_command_port_interleaved_frame_after_prefix = _compat_module_3.read_hcnetsdk_command_port_interleaved_frame_after_prefix
+    read_hcnetsdk_command_port_interleaved_frame_after_prefix = (
+        _compat_module_3.read_hcnetsdk_command_port_interleaved_frame_after_prefix
+    )
     read_hcnetsdk_tcp_frame = _compat_module_3.read_hcnetsdk_tcp_frame
     replace = _compat_module_3.replace
     sadp_activate_device_request = _compat_module_3.sadp_activate_device_request
@@ -862,7 +1100,9 @@ if TYPE_CHECKING:
     sadp_get_last_error_request = _compat_module_3.sadp_get_last_error_request
     sadp_get_sadp_version_request = _compat_module_3.sadp_get_sadp_version_request
     sadp_modify_device_net_param_request = _compat_module_3.sadp_modify_device_net_param_request
-    sadp_modify_device_net_param_v40_request = _compat_module_3.sadp_modify_device_net_param_v40_request
+    sadp_modify_device_net_param_v40_request = (
+        _compat_module_3.sadp_modify_device_net_param_v40_request
+    )
     sadp_send_inquiry_request = _compat_module_3.sadp_send_inquiry_request
     sadp_set_log_to_file_request = _compat_module_3.sadp_set_log_to_file_request
     sadp_start_v30_request = _compat_module_3.sadp_start_v30_request

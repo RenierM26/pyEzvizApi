@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming.media import header as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.media.header as _compat_module_0
+
     _AUDIO_CODECS = _compat_module_0._AUDIO_CODECS
     _STREAM_HEADER_MAGIC = _compat_module_0._STREAM_HEADER_MAGIC
     _VIDEO_CODECS = _compat_module_0._VIDEO_CODECS

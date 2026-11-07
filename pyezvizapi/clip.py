@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming import capture as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.capture as _compat_module_0
+
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT = _compat_module_0.LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
     MAX_RETRIES = _compat_module_0.MAX_RETRIES
     Any = _compat_module_0.Any
@@ -28,7 +30,9 @@ if TYPE_CHECKING:
     CloudClipSource = _compat_module_0.CloudClipSource
     EzvizLocalSdkCredentials = _compat_module_0.EzvizLocalSdkCredentials
     HcNetSdkCommandPortClipSource = _compat_module_0.HcNetSdkCommandPortClipSource
-    HcNetSdkCommandPortGeneratedMultiSocketPlan = _compat_module_0.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    HcNetSdkCommandPortGeneratedMultiSocketPlan = (
+        _compat_module_0.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    )
     HcNetSdkCommandPortMultiSocketPlan = _compat_module_0.HcNetSdkCommandPortMultiSocketPlan
     Iterable = _compat_module_0.Iterable
     Literal = _compat_module_0.Literal

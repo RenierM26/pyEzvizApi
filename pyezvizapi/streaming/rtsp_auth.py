@@ -83,7 +83,11 @@ class TestRTSPAuth:
         timeout: float = 25.0,
     ) -> None:
         """Initialize RTSP credential test."""
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not is_positive_finite_duration_bound(timeout):
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not is_positive_finite_duration_bound(timeout)
+        ):
             raise ValueError("RTSP timeout must be a positive finite number")
         self._timeout = timeout
         self._rtsp_details = RTSPDetails(
@@ -96,9 +100,7 @@ class TestRTSPAuth:
             defaultPassword=password,
         )
 
-    def generate_auth_string(
-        self, realm: bytes, method: str, uri: str, nonce: bytes
-    ) -> str:
+    def generate_auth_string(self, realm: bytes, method: str, uri: str, nonce: bytes) -> str:
         """Generate the HTTP Digest Authorization header value."""
         # Legacy RTSP Digest requires MD5 on the wire (RFC 2069); this is not
         # password storage and cannot be replaced with a different KDF locally.
@@ -183,15 +185,26 @@ class TestRTSPAuth:
         try:
             self._set_remaining_timeout(session, deadline)
             try:
-                session.connect((self._rtsp_details["defaultServerIp"], self._rtsp_details["defaultServerPort"]))
+                session.connect(
+                    (self._rtsp_details["defaultServerIp"], self._rtsp_details["defaultServerPort"])
+                )
             except TimeoutError as err:
                 raise AuthTestResultFailed("Invalid ip or camera hibernating") from err
             except (socket.gaierror, ConnectionRefusedError) as err:
                 raise InvalidHost("Invalid IP or Hostname") from err
-            url = "rtsp://" + self._rtsp_details["defaultServerIp"] + self._rtsp_details["defaultTestUri"]
-            auth = "Basic " + base64.b64encode(
-                f"{self._rtsp_details['defaultUsername']}:{self._rtsp_details['defaultPassword']}".encode("ascii")
-            ).decode()
+            url = (
+                "rtsp://"
+                + self._rtsp_details["defaultServerIp"]
+                + self._rtsp_details["defaultTestUri"]
+            )
+            auth = (
+                "Basic "
+                + base64.b64encode(
+                    f"{self._rtsp_details['defaultUsername']}:{self._rtsp_details['defaultPassword']}".encode(
+                        "ascii"
+                    )
+                ).decode()
+            )
             for seq in (1, 2):
                 describe = genmsg_describe(url, seq, self._rtsp_details["defaultUserAgent"], auth)
                 self._set_remaining_timeout(session, deadline)
@@ -204,12 +217,24 @@ class TestRTSPAuth:
                     break
                 if seq == 2:
                     raise AuthTestResultFailed("Credentials not valid!!")
-                challenge = next((value[7:] for value in headers.get("www-authenticate", []) if value.lower().startswith("digest ")), None)
+                challenge = next(
+                    (
+                        value[7:]
+                        for value in headers.get("www-authenticate", [])
+                        if value.lower().startswith("digest ")
+                    ),
+                    None,
+                )
                 values = parse_dict_header(challenge) if challenge is not None else {}
                 realm, nonce = values.get("realm"), values.get("nonce")
                 if realm is None or not nonce:
                     raise AuthTestResultFailed("Invalid RTSP Digest challenge")
-                auth = self.generate_auth_string(realm.encode("latin-1"), "DESCRIBE", self._rtsp_details["defaultTestUri"], nonce.encode("latin-1"))
+                auth = self.generate_auth_string(
+                    realm.encode("latin-1"),
+                    "DESCRIBE",
+                    self._rtsp_details["defaultTestUri"],
+                    nonce.encode("latin-1"),
+                )
             raise AuthTestResultFailed("RTSP DESCRIBE did not return 200 OK")
         except (TimeoutError, ConnectionError) as err:
             raise AuthTestResultFailed("RTSP authentication I/O failed or timed out") from err

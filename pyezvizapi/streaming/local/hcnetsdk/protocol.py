@@ -3,8 +3,10 @@
 Pure model/codec implementations live under protocol_types. This module retains
 legacy named/wildcard imports without any implementation importing it back.
 """
+
 from __future__ import annotations
 import pyezvizapi.streaming.local.hcnetsdk.constants as _constants
+
 base64 = _constants.base64
 binascii = _constants.binascii
 Iterable = _constants.Iterable
@@ -79,9 +81,15 @@ HCNETSDK_SETUP_ALARM_CHAN_V41 = _constants.HCNETSDK_SETUP_ALARM_CHAN_V41
 HCNETSDK_CLOSE_ALARM_CHAN_V30 = _constants.HCNETSDK_CLOSE_ALARM_CHAN_V30
 HCNETSDK_SET_SDK_LOCAL_CFG = _constants.HCNETSDK_SET_SDK_LOCAL_CFG
 HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER = _constants.HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER
-HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE = _constants.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
-HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE = _constants.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
-HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR = _constants.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR
+HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE = (
+    _constants.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
+)
+HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE = (
+    _constants.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
+)
+HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR = (
+    _constants.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR
+)
 HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER = _constants.HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
 HCNETSDK_PTZ_PRESET_OTHER = _constants.HCNETSDK_PTZ_PRESET_OTHER
 SADP_ACTIVATE_DEVICE = _constants.SADP_ACTIVATE_DEVICE
@@ -133,7 +141,9 @@ HCNETSDK_COMMAND_CANDIDATE_CONTROL = _constants.HCNETSDK_COMMAND_CANDIDATE_CONTR
 HCNETSDK_COMMAND_PORT_CONTROL_FAMILY = _constants.HCNETSDK_COMMAND_PORT_CONTROL_FAMILY
 HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH = _constants.HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH
 HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH = _constants.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
-HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM = _constants.HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
+HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM = (
+    _constants.HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
+)
 _AES_SBOX = _constants._AES_SBOX
 _AES_RCON = _constants._AES_RCON
 HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET = _constants.HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET
@@ -154,6 +164,7 @@ HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET = _constants.HCNETSDK_PIC_CFG_OSD_POSITION_
 HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET = _constants.HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import framing as _framing
+
 HcNetSdkRealDataType = _framing.HcNetSdkRealDataType
 HcNetSdkRealDataPacket = _framing.HcNetSdkRealDataPacket
 HcNetSdkTcpPayloadShape = _framing.HcNetSdkTcpPayloadShape
@@ -174,10 +185,13 @@ hcnetsdk_real_data_type_is_media = _framing.hcnetsdk_real_data_type_is_media
 classify_hcnetsdk_real_data_payload = _framing.classify_hcnetsdk_real_data_payload
 build_hcnetsdk_tcp_frame = _framing.build_hcnetsdk_tcp_frame
 hcnetsdk_command_port_control_frame = _framing.hcnetsdk_command_port_control_frame
-hcnetsdk_command_port_play_login_body_tail_for_today = _framing.hcnetsdk_command_port_play_login_body_tail_for_today
+hcnetsdk_command_port_play_login_body_tail_for_today = (
+    _framing.hcnetsdk_command_port_play_login_body_tail_for_today
+)
 hcnetsdk_command_port_response_payload = _framing.hcnetsdk_command_port_response_payload
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import values as _values
+
 _mapping_str = _values._mapping_str
 _mapping_int = _values._mapping_int
 _stdxml_bytes = _values._stdxml_bytes
@@ -198,11 +212,13 @@ _device_ability_bytes = _values._device_ability_bytes
 _ability_option_tuple = _values._ability_option_tuple
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import endpoints as _endpoints
+
 HcNetSdkLanEndpoint = _endpoints.HcNetSdkLanEndpoint
 HcNetSdkLoginCandidate = _endpoints.HcNetSdkLoginCandidate
 HcNetSdkPortProbe = _endpoints.HcNetSdkPortProbe
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import configuration as _configuration
+
 HcNetSdkStdXmlConfigRequest = _configuration.HcNetSdkStdXmlConfigRequest
 HcNetSdkStdXmlConfigResponse = _configuration.HcNetSdkStdXmlConfigResponse
 EzvizLanServicesSwitchState = _configuration.EzvizLanServicesSwitchState
@@ -240,7 +256,9 @@ EzvizLanVideoResolution = _configuration.EzvizLanVideoResolution
 EzvizLanAudioVideoCompressStream = _configuration.EzvizLanAudioVideoCompressStream
 EzvizLanAudioVideoCompressVideoChannel = _configuration.EzvizLanAudioVideoCompressVideoChannel
 EzvizLanAudioVideoCompressAudioChannel = _configuration.EzvizLanAudioVideoCompressAudioChannel
-EzvizLanAudioVideoCompressVoiceTalkChannel = _configuration.EzvizLanAudioVideoCompressVoiceTalkChannel
+EzvizLanAudioVideoCompressVoiceTalkChannel = (
+    _configuration.EzvizLanAudioVideoCompressVoiceTalkChannel
+)
 EzvizLanAudioVideoCompressInfo = _configuration.EzvizLanAudioVideoCompressInfo
 HcNetSdkStreamDetails = _configuration.HcNetSdkStreamDetails
 EzvizLanDeviceSoftHardwareAbility = _configuration.EzvizLanDeviceSoftHardwareAbility
@@ -249,6 +267,7 @@ hcnetsdk_stdxml_response_json = _configuration.hcnetsdk_stdxml_response_json
 _hcnetsdk_compression_info_v30 = _configuration._hcnetsdk_compression_info_v30
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import sdk_requests as _sdk_requests
+
 HcNetSdkSetupAlarmParam = _sdk_requests.HcNetSdkSetupAlarmParam
 HcNetSdkSetupAlarmRequest = _sdk_requests.HcNetSdkSetupAlarmRequest
 HcNetSdkCloseAlarmRequest = _sdk_requests.HcNetSdkCloseAlarmRequest
@@ -265,6 +284,7 @@ hcnetsdk_command_candidate_role = _sdk_requests.hcnetsdk_command_candidate_role
 ezviz_local_sdk_iv = _sdk_requests.ezviz_local_sdk_iv
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import preview as _preview
+
 HcNetSdkSetSdkLocalCfgRequest = _preview.HcNetSdkSetSdkLocalCfgRequest
 EzvizLanLiveViewParams = _preview.EzvizLanLiveViewParams
 EzvizLanKeyframeRequest = _preview.EzvizLanKeyframeRequest
@@ -292,11 +312,13 @@ _xml_escape = _preview._xml_escape
 _xml_attrs = _preview._xml_attrs
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import controls as _controls
+
 EzvizLanPtzAbility = _controls.EzvizLanPtzAbility
 HcNetSdkPtzControlRequest = _controls.HcNetSdkPtzControlRequest
 HcNetSdkPtzPresetRequest = _controls.HcNetSdkPtzPresetRequest
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import playback as _playback
+
 EzvizLanPlaybackConvertResolution = _playback.EzvizLanPlaybackConvertResolution
 EzvizLanPlaybackIntent = _playback.EzvizLanPlaybackIntent
 EzvizLanPlaybackPath = _playback.EzvizLanPlaybackPath
@@ -320,6 +342,7 @@ HcNetSdkStopGetFileRequest = _playback.HcNetSdkStopGetFileRequest
 HcNetSdkGetDownloadPosRequest = _playback.HcNetSdkGetDownloadPosRequest
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import wire_crypto as _wire_crypto
+
 hcnetsdk_command_port_auth_word = _wire_crypto.hcnetsdk_command_port_auth_word
 _hcnetsdk_command_port_local_ip_word = _wire_crypto._hcnetsdk_command_port_local_ip_word
 _hcnetsdk_command_port_auth_mask = _wire_crypto._hcnetsdk_command_port_auth_mask
@@ -332,11 +355,15 @@ _hcnetsdk_aes_xtime = _wire_crypto._hcnetsdk_aes_xtime
 _hcnetsdk_aes_mix_columns = _wire_crypto._hcnetsdk_aes_mix_columns
 _local_sdk_aes_bytes = _wire_crypto._local_sdk_aes_bytes
 
-from pyezvizapi.streaming.local.hcnetsdk.protocol_types import preview_bootstrap as _preview_bootstrap
+from pyezvizapi.streaming.local.hcnetsdk.protocol_types import (
+    preview_bootstrap as _preview_bootstrap,
+)
+
 EzvizCasDeviceInfo = _preview_bootstrap.EzvizCasDeviceInfo
 EzvizLocalSdkStreamBootstrap = _preview_bootstrap.EzvizLocalSdkStreamBootstrap
 
 from pyezvizapi.streaming.local.hcnetsdk.protocol_types import discovery as _discovery
+
 SadpDeviceInfo = _discovery.SadpDeviceInfo
 SadpActivateDeviceRequest = _discovery.SadpActivateDeviceRequest
 SadpDeviceNetParam = _discovery.SadpDeviceNetParam
@@ -349,43 +376,331 @@ SadpSetLogToFileRequest = _discovery.SadpSetLogToFileRequest
 SadpBatchResult = _discovery.SadpBatchResult
 _sadp_string_bytes = _discovery._sadp_string_bytes
 
-__all__ = ['EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE', 'EZVIZ_HCNETUTIL_LOGIN_V40', 'EZVIZ_LAN_ACTIVITY_CHANNEL_HANDOFF', 'EZVIZ_LAN_MAIN_VIDEO_LEVEL', 'EZVIZ_LAN_PTZ_SPEED_DEFAULT', 'EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE', 'EZVIZ_NATIVE_CREATE_CLIENT', 'EZVIZ_NATIVE_START_PREVIEW', 'EZVIZ_PLAYER_EXTRA_CHANNEL_NO', 'EZVIZ_PLAYER_EXTRA_DEVICE_ID', 'EZVIZ_PLAYER_EXTRA_LAN_FLAG', 'EZVIZ_PLAYER_EXTRA_LAN_USERID', 'EZVIZ_PLAYER_EXTRA_WIFI_SSID', 'EZVIZ_PLAYER_LAN_FLAG_HCNETSDK', 'EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE', 'EZVIZ_PREPLAY_SPS_TYPE', 'EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY', 'EZVIZ_STREAM_INHIBIT_LAN', 'EZVIZ_STREAM_SOURCE_LIVE_MINE', 'EZVIZ_STREAM_TIMEOUT_MS', 'HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET', 'HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET', 'HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET', 'HCNETSDK_CLEANUP', 'HCNETSDK_CLOSE_ALARM_CHAN_V30', 'HCNETSDK_CLOSE_FORMAT_HANDLE', 'HCNETSDK_COMMAND_CANDIDATE_CONTROL', 'HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN', 'HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH', 'HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH', 'HCNETSDK_COMMAND_PORT_CONTROL_FAMILY', 'HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM', 'HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET', 'HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET', 'HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET', 'HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET', 'HCNETSDK_COMPRESSION_INFO_V30_SIZE', 'HCNETSDK_DEFAULT_RTSP_PORT', 'HCNETSDK_DEFAULT_SERVER_PORT', 'HCNETSDK_DEFAULT_TLS_PORT', 'HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR', 'HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE', 'HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE', 'HCNETSDK_FILECOND_FIELD_ORDER', 'HCNETSDK_FINDDATA_V30_FIELD_ORDER', 'HCNETSDK_FIND_CLOSE_V30', 'HCNETSDK_FIND_FILE_FAILED', 'HCNETSDK_FIND_FILE_V30', 'HCNETSDK_FIND_NEXT_FILE_V30', 'HCNETSDK_FORMAT_DISK', 'HCNETSDK_GET_DEVICE_ABILITY', 'HCNETSDK_GET_DOWNLOAD_POS', 'HCNETSDK_GET_DVR_CONFIG', 'HCNETSDK_GET_ERROR_MSG', 'HCNETSDK_GET_FILE_BY_NAME', 'HCNETSDK_GET_FILE_BY_TIME', 'HCNETSDK_GET_FILE_FAILED', 'HCNETSDK_GET_FORMAT_PROGRESS', 'HCNETSDK_GET_LAST_ERROR', 'HCNETSDK_GET_SDK_BUILD_VERSION', 'HCNETSDK_GET_SDK_VERSION', 'HCNETSDK_HIK_PRIVATE_PREFIX', 'HCNETSDK_HKMI_PREFIX', 'HCNETSDK_INIT', 'HCNETSDK_LOGOUT_V30', 'HCNETSDK_MAKE_KEYFRAME_MAIN', 'HCNETSDK_MAKE_KEYFRAME_SUB', 'HCNETSDK_MPEG_PS_PACK_HEADER', 'HCNETSDK_MPEG_START_CODE_PREFIX', 'HCNETSDK_MPEG_TS_SYNC_BYTE', 'HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET', 'HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET', 'HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET', 'HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET', 'HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET', 'HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET', 'HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET', 'HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET', 'HCNETSDK_PLAYBACK_BY_TIME_V40', 'HCNETSDK_PLAYBACK_CAPTURE_FILE', 'HCNETSDK_PLAYBACK_CONTROL_V40', 'HCNETSDK_PLAYBACK_FAILED', 'HCNETSDK_PLAYBACK_FILE_TYPE_ALL', 'HCNETSDK_PLAYBACK_LOCK_STATE_ALL', 'HCNETSDK_PLAYCOND_FIELD_ORDER', 'HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER', 'HCNETSDK_PTZ_PRESET_OTHER', 'HCNETSDK_REALDATA_CALLBACK_V30', 'HCNETSDK_REALPLAY_V30', 'HCNETSDK_SECRET_KEY_TYPE_AES', 'HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER', 'HCNETSDK_SETUP_ALARM_CHAN_V30', 'HCNETSDK_SETUP_ALARM_CHAN_V41', 'HCNETSDK_SET_CONNECT_TIME', 'HCNETSDK_SET_DVR_CONFIG', 'HCNETSDK_SET_PLAYBACK_ES_CALLBACK', 'HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK', 'HCNETSDK_SET_PLAYBACK_SECRET_KEY', 'HCNETSDK_SET_PLAY_DATA_CALLBACK', 'HCNETSDK_SET_PLAY_DATA_CALLBACK_V40', 'HCNETSDK_SET_SDK_LOCAL_CFG', 'HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE', 'HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE', 'HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE', 'HCNETSDK_STDXML_INPUT_FIELD_ORDER', 'HCNETSDK_STDXML_OUTPUT_FIELD_ORDER', 'HCNETSDK_STOP_GET_FILE', 'HCNETSDK_STOP_PLAYBACK', 'HCNETSDK_TCP_HEADER_LENGTH', 'HCNETSDK_TIME_FIELD_ORDER', 'HCNETSDK_XML_MARKER', 'SADP_ACTIVATE_DEVICE', 'SADP_CLEARUP', 'SADP_DEV_NET_PARAM_ANDROID_FIELDS', 'SADP_DEV_NET_PARAM_JNA_FIELD_ORDER', 'SADP_DEV_RET_NET_PARAM_BUFFER_SIZE', 'SADP_DEV_RET_NET_PARAM_FIELD_ORDER', 'SADP_GET_LAST_ERROR', 'SADP_GET_VERSION', 'SADP_MODIFY_DEVICE_NET_PARAM', 'SADP_MODIFY_DEVICE_NET_PARAM_V40', 'SADP_NUL_BYTE', 'SADP_SEND_INQUIRY', 'SADP_SET_LOG_TO_FILE', 'SADP_START_V30', 'SADP_START_V40', 'SADP_STOP', 'Any', 'EzvizCasDeviceInfo', 'EzvizInterleavedRtpFrame', 'EzvizInterleavedRtpFrameHeader', 'EzvizInterleavedRtpFrameWithPrefix', 'EzvizLanAccessProtocolAbility', 'EzvizLanAudioInputParam', 'EzvizLanAudioOutputVolume', 'EzvizLanAudioVideoCompressAudioChannel', 'EzvizLanAudioVideoCompressInfo', 'EzvizLanAudioVideoCompressStream', 'EzvizLanAudioVideoCompressVideoChannel', 'EzvizLanAudioVideoCompressVoiceTalkChannel', 'EzvizLanCameraParamConfig', 'EzvizLanCompressionConfig', 'EzvizLanCompressionInfoV30', 'EzvizLanDeviceConfigV40', 'EzvizLanDeviceSoftHardwareAbility', 'EzvizLanDvrConfigSummary', 'EzvizLanEzvizAccessConfig', 'EzvizLanHdConfig', 'EzvizLanHdDiskConfig', 'EzvizLanIpcFrontParameterAbility', 'EzvizLanIpcFrontParameterRange', 'EzvizLanKeyframeRequest', 'EzvizLanLiveViewParams', 'EzvizLanNetConfigV30', 'EzvizLanNetInterfaceConfig', 'EzvizLanNtpConfig', 'EzvizLanPictureConfig', 'EzvizLanPlayDeviceLogin', 'EzvizLanPlaybackConvertAbility', 'EzvizLanPlaybackConvertResolution', 'EzvizLanPlaybackIntent', 'EzvizLanPlaybackPath', 'EzvizLanPreviewPlan', 'EzvizLanPtzAbility', 'EzvizLanRecordConfigV30', 'EzvizLanRecordDayConfig', 'EzvizLanRecordScheduleSegment', 'EzvizLanSdFormatProgress', 'EzvizLanServicesSwitchState', 'EzvizLanUserConfigV30', 'EzvizLanUserConfigV30Entry', 'EzvizLanVideoPicAbility', 'EzvizLanVideoQuality', 'EzvizLanVideoResolution', 'EzvizLanWifiApInfo', 'EzvizLanWifiConnectStatus', 'EzvizLocalAuthenticationAttrs', 'EzvizLocalDevice', 'EzvizLocalDeviceContent', 'EzvizLocalPreviewRequest', 'EzvizLocalReceiverInfo', 'EzvizLocalReceiverInfoAttrs', 'EzvizLocalReceiverInfoEx', 'EzvizLocalReceiverInfoExAttrs', 'EzvizLocalSdkBodyShape', 'EzvizLocalSdkExchange', 'EzvizLocalSdkFrame', 'EzvizLocalSdkFrameHeader', 'EzvizLocalSdkStreamBootstrap', 'EzvizStreamHeader', 'HcNetSdkClientInfo', 'HcNetSdkCloseAlarmRequest', 'HcNetSdkCloseFormatHandleRequest', 'HcNetSdkCommandPortControlResponse', 'HcNetSdkCommandPortControlTemplate', 'HcNetSdkCommandPortExchange', 'HcNetSdkCommandPortLoginChallenge', 'HcNetSdkCommandPortLoginSession', 'HcNetSdkCommandPortStreamBootstrap', 'HcNetSdkCommandTraceSummary', 'HcNetSdkConfiguredMedia', 'HcNetSdkDeviceAbilityRequest', 'HcNetSdkDvrConfigRequest', 'HcNetSdkFileCond', 'HcNetSdkFindCloseRequest', 'HcNetSdkFindDataV30', 'HcNetSdkFindFileRequest', 'HcNetSdkFindNextFileRequest', 'HcNetSdkFormatDiskRequest', 'HcNetSdkFormatProgressRequest', 'HcNetSdkGetDownloadPosRequest', 'HcNetSdkGetErrorMsgRequest', 'HcNetSdkGetFileByNameRequest', 'HcNetSdkGetFileByTimeRequest', 'HcNetSdkInitRequest', 'HcNetSdkLanEndpoint', 'HcNetSdkLoginCandidate', 'HcNetSdkLogoutRequest', 'HcNetSdkNoArgRequest', 'HcNetSdkPlayBackByTimeRequest', 'HcNetSdkPlayBackCaptureFileRequest', 'HcNetSdkPlayBackControlRequest', 'HcNetSdkPlayBackSecretKeyRequest', 'HcNetSdkPlayCond', 'HcNetSdkPlayDataCallbackRequest', 'HcNetSdkPlaybackCallbackRequest', 'HcNetSdkPortProbe', 'HcNetSdkPtzControlRequest', 'HcNetSdkPtzPresetRequest', 'HcNetSdkRealDataPacket', 'HcNetSdkRealDataType', 'HcNetSdkRealPlayRequest', 'HcNetSdkSemanticLogEvent', 'HcNetSdkSetConnectTimeRequest', 'HcNetSdkSetSdkLocalCfgRequest', 'HcNetSdkSetupAlarmParam', 'HcNetSdkSetupAlarmRequest', 'HcNetSdkStdXmlConfigRequest', 'HcNetSdkStdXmlConfigResponse', 'HcNetSdkStopGetFileRequest', 'HcNetSdkStopPlayBackRequest', 'HcNetSdkStreamDetails', 'HcNetSdkTcpFrame', 'HcNetSdkTcpFrameHeader', 'HcNetSdkTcpFrameShape', 'HcNetSdkTcpPayloadShape', 'HcNetSdkTcpShapeLogRecord', 'HcNetSdkTime', 'IntEnum', 'Iterable', 'Mapping', 'PyEzvizError', 'SadpActivateDeviceRequest', 'SadpBatchResult', 'SadpDeviceInfo', 'SadpDeviceNetParam', 'SadpDeviceRetNetParam', 'SadpModifyDeviceNetParamRequest', 'SadpModifyDeviceNetParamV40Request', 'SadpNoArgRequest', 'SadpSetLogToFileRequest', 'SadpStartRequest', 'annotations', 'asdict', 'base64', 'binascii', 'build_ezviz_local_preview_request_body', 'build_hcnetsdk_tcp_frame', 'classify_hcnetsdk_real_data_payload', 'dataclass', 'date', 'datetime', 'ezviz_local_sdk_iv', 'ezviz_native_video_level', 'field', 'hcnetsdk_command_candidate_role', 'hcnetsdk_command_port_auth_word', 'hcnetsdk_command_port_control_frame', 'hcnetsdk_command_port_play_login_body_tail_for_today', 'hcnetsdk_command_port_response_payload', 'hcnetsdk_real_data_type_is_media', 'hcnetsdk_real_play_request', 'hcnetsdk_stdxml_response_json', 'ipaddress', 'json', 'normalize_hcnetsdk_parameters', 'stream_header_from_preview']
+__all__ = [
+    "EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE",
+    "EZVIZ_HCNETUTIL_LOGIN_V40",
+    "EZVIZ_LAN_ACTIVITY_CHANNEL_HANDOFF",
+    "EZVIZ_LAN_MAIN_VIDEO_LEVEL",
+    "EZVIZ_LAN_PTZ_SPEED_DEFAULT",
+    "EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE",
+    "EZVIZ_NATIVE_CREATE_CLIENT",
+    "EZVIZ_NATIVE_START_PREVIEW",
+    "EZVIZ_PLAYER_EXTRA_CHANNEL_NO",
+    "EZVIZ_PLAYER_EXTRA_DEVICE_ID",
+    "EZVIZ_PLAYER_EXTRA_LAN_FLAG",
+    "EZVIZ_PLAYER_EXTRA_LAN_USERID",
+    "EZVIZ_PLAYER_EXTRA_WIFI_SSID",
+    "EZVIZ_PLAYER_LAN_FLAG_HCNETSDK",
+    "EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE",
+    "EZVIZ_PREPLAY_SPS_TYPE",
+    "EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY",
+    "EZVIZ_STREAM_INHIBIT_LAN",
+    "EZVIZ_STREAM_SOURCE_LIVE_MINE",
+    "EZVIZ_STREAM_TIMEOUT_MS",
+    "HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET",
+    "HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET",
+    "HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET",
+    "HCNETSDK_CLEANUP",
+    "HCNETSDK_CLOSE_ALARM_CHAN_V30",
+    "HCNETSDK_CLOSE_FORMAT_HANDLE",
+    "HCNETSDK_COMMAND_CANDIDATE_CONTROL",
+    "HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN",
+    "HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH",
+    "HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH",
+    "HCNETSDK_COMMAND_PORT_CONTROL_FAMILY",
+    "HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM",
+    "HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET",
+    "HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET",
+    "HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET",
+    "HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET",
+    "HCNETSDK_COMPRESSION_INFO_V30_SIZE",
+    "HCNETSDK_DEFAULT_RTSP_PORT",
+    "HCNETSDK_DEFAULT_SERVER_PORT",
+    "HCNETSDK_DEFAULT_TLS_PORT",
+    "HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR",
+    "HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE",
+    "HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE",
+    "HCNETSDK_FILECOND_FIELD_ORDER",
+    "HCNETSDK_FINDDATA_V30_FIELD_ORDER",
+    "HCNETSDK_FIND_CLOSE_V30",
+    "HCNETSDK_FIND_FILE_FAILED",
+    "HCNETSDK_FIND_FILE_V30",
+    "HCNETSDK_FIND_NEXT_FILE_V30",
+    "HCNETSDK_FORMAT_DISK",
+    "HCNETSDK_GET_DEVICE_ABILITY",
+    "HCNETSDK_GET_DOWNLOAD_POS",
+    "HCNETSDK_GET_DVR_CONFIG",
+    "HCNETSDK_GET_ERROR_MSG",
+    "HCNETSDK_GET_FILE_BY_NAME",
+    "HCNETSDK_GET_FILE_BY_TIME",
+    "HCNETSDK_GET_FILE_FAILED",
+    "HCNETSDK_GET_FORMAT_PROGRESS",
+    "HCNETSDK_GET_LAST_ERROR",
+    "HCNETSDK_GET_SDK_BUILD_VERSION",
+    "HCNETSDK_GET_SDK_VERSION",
+    "HCNETSDK_HIK_PRIVATE_PREFIX",
+    "HCNETSDK_HKMI_PREFIX",
+    "HCNETSDK_INIT",
+    "HCNETSDK_LOGOUT_V30",
+    "HCNETSDK_MAKE_KEYFRAME_MAIN",
+    "HCNETSDK_MAKE_KEYFRAME_SUB",
+    "HCNETSDK_MPEG_PS_PACK_HEADER",
+    "HCNETSDK_MPEG_START_CODE_PREFIX",
+    "HCNETSDK_MPEG_TS_SYNC_BYTE",
+    "HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET",
+    "HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET",
+    "HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET",
+    "HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET",
+    "HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET",
+    "HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET",
+    "HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET",
+    "HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET",
+    "HCNETSDK_PLAYBACK_BY_TIME_V40",
+    "HCNETSDK_PLAYBACK_CAPTURE_FILE",
+    "HCNETSDK_PLAYBACK_CONTROL_V40",
+    "HCNETSDK_PLAYBACK_FAILED",
+    "HCNETSDK_PLAYBACK_FILE_TYPE_ALL",
+    "HCNETSDK_PLAYBACK_LOCK_STATE_ALL",
+    "HCNETSDK_PLAYCOND_FIELD_ORDER",
+    "HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER",
+    "HCNETSDK_PTZ_PRESET_OTHER",
+    "HCNETSDK_REALDATA_CALLBACK_V30",
+    "HCNETSDK_REALPLAY_V30",
+    "HCNETSDK_SECRET_KEY_TYPE_AES",
+    "HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER",
+    "HCNETSDK_SETUP_ALARM_CHAN_V30",
+    "HCNETSDK_SETUP_ALARM_CHAN_V41",
+    "HCNETSDK_SET_CONNECT_TIME",
+    "HCNETSDK_SET_DVR_CONFIG",
+    "HCNETSDK_SET_PLAYBACK_ES_CALLBACK",
+    "HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK",
+    "HCNETSDK_SET_PLAYBACK_SECRET_KEY",
+    "HCNETSDK_SET_PLAY_DATA_CALLBACK",
+    "HCNETSDK_SET_PLAY_DATA_CALLBACK_V40",
+    "HCNETSDK_SET_SDK_LOCAL_CFG",
+    "HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE",
+    "HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE",
+    "HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE",
+    "HCNETSDK_STDXML_INPUT_FIELD_ORDER",
+    "HCNETSDK_STDXML_OUTPUT_FIELD_ORDER",
+    "HCNETSDK_STOP_GET_FILE",
+    "HCNETSDK_STOP_PLAYBACK",
+    "HCNETSDK_TCP_HEADER_LENGTH",
+    "HCNETSDK_TIME_FIELD_ORDER",
+    "HCNETSDK_XML_MARKER",
+    "SADP_ACTIVATE_DEVICE",
+    "SADP_CLEARUP",
+    "SADP_DEV_NET_PARAM_ANDROID_FIELDS",
+    "SADP_DEV_NET_PARAM_JNA_FIELD_ORDER",
+    "SADP_DEV_RET_NET_PARAM_BUFFER_SIZE",
+    "SADP_DEV_RET_NET_PARAM_FIELD_ORDER",
+    "SADP_GET_LAST_ERROR",
+    "SADP_GET_VERSION",
+    "SADP_MODIFY_DEVICE_NET_PARAM",
+    "SADP_MODIFY_DEVICE_NET_PARAM_V40",
+    "SADP_NUL_BYTE",
+    "SADP_SEND_INQUIRY",
+    "SADP_SET_LOG_TO_FILE",
+    "SADP_START_V30",
+    "SADP_START_V40",
+    "SADP_STOP",
+    "Any",
+    "EzvizCasDeviceInfo",
+    "EzvizInterleavedRtpFrame",
+    "EzvizInterleavedRtpFrameHeader",
+    "EzvizInterleavedRtpFrameWithPrefix",
+    "EzvizLanAccessProtocolAbility",
+    "EzvizLanAudioInputParam",
+    "EzvizLanAudioOutputVolume",
+    "EzvizLanAudioVideoCompressAudioChannel",
+    "EzvizLanAudioVideoCompressInfo",
+    "EzvizLanAudioVideoCompressStream",
+    "EzvizLanAudioVideoCompressVideoChannel",
+    "EzvizLanAudioVideoCompressVoiceTalkChannel",
+    "EzvizLanCameraParamConfig",
+    "EzvizLanCompressionConfig",
+    "EzvizLanCompressionInfoV30",
+    "EzvizLanDeviceConfigV40",
+    "EzvizLanDeviceSoftHardwareAbility",
+    "EzvizLanDvrConfigSummary",
+    "EzvizLanEzvizAccessConfig",
+    "EzvizLanHdConfig",
+    "EzvizLanHdDiskConfig",
+    "EzvizLanIpcFrontParameterAbility",
+    "EzvizLanIpcFrontParameterRange",
+    "EzvizLanKeyframeRequest",
+    "EzvizLanLiveViewParams",
+    "EzvizLanNetConfigV30",
+    "EzvizLanNetInterfaceConfig",
+    "EzvizLanNtpConfig",
+    "EzvizLanPictureConfig",
+    "EzvizLanPlayDeviceLogin",
+    "EzvizLanPlaybackConvertAbility",
+    "EzvizLanPlaybackConvertResolution",
+    "EzvizLanPlaybackIntent",
+    "EzvizLanPlaybackPath",
+    "EzvizLanPreviewPlan",
+    "EzvizLanPtzAbility",
+    "EzvizLanRecordConfigV30",
+    "EzvizLanRecordDayConfig",
+    "EzvizLanRecordScheduleSegment",
+    "EzvizLanSdFormatProgress",
+    "EzvizLanServicesSwitchState",
+    "EzvizLanUserConfigV30",
+    "EzvizLanUserConfigV30Entry",
+    "EzvizLanVideoPicAbility",
+    "EzvizLanVideoQuality",
+    "EzvizLanVideoResolution",
+    "EzvizLanWifiApInfo",
+    "EzvizLanWifiConnectStatus",
+    "EzvizLocalAuthenticationAttrs",
+    "EzvizLocalDevice",
+    "EzvizLocalDeviceContent",
+    "EzvizLocalPreviewRequest",
+    "EzvizLocalReceiverInfo",
+    "EzvizLocalReceiverInfoAttrs",
+    "EzvizLocalReceiverInfoEx",
+    "EzvizLocalReceiverInfoExAttrs",
+    "EzvizLocalSdkBodyShape",
+    "EzvizLocalSdkExchange",
+    "EzvizLocalSdkFrame",
+    "EzvizLocalSdkFrameHeader",
+    "EzvizLocalSdkStreamBootstrap",
+    "EzvizStreamHeader",
+    "HcNetSdkClientInfo",
+    "HcNetSdkCloseAlarmRequest",
+    "HcNetSdkCloseFormatHandleRequest",
+    "HcNetSdkCommandPortControlResponse",
+    "HcNetSdkCommandPortControlTemplate",
+    "HcNetSdkCommandPortExchange",
+    "HcNetSdkCommandPortLoginChallenge",
+    "HcNetSdkCommandPortLoginSession",
+    "HcNetSdkCommandPortStreamBootstrap",
+    "HcNetSdkCommandTraceSummary",
+    "HcNetSdkConfiguredMedia",
+    "HcNetSdkDeviceAbilityRequest",
+    "HcNetSdkDvrConfigRequest",
+    "HcNetSdkFileCond",
+    "HcNetSdkFindCloseRequest",
+    "HcNetSdkFindDataV30",
+    "HcNetSdkFindFileRequest",
+    "HcNetSdkFindNextFileRequest",
+    "HcNetSdkFormatDiskRequest",
+    "HcNetSdkFormatProgressRequest",
+    "HcNetSdkGetDownloadPosRequest",
+    "HcNetSdkGetErrorMsgRequest",
+    "HcNetSdkGetFileByNameRequest",
+    "HcNetSdkGetFileByTimeRequest",
+    "HcNetSdkInitRequest",
+    "HcNetSdkLanEndpoint",
+    "HcNetSdkLoginCandidate",
+    "HcNetSdkLogoutRequest",
+    "HcNetSdkNoArgRequest",
+    "HcNetSdkPlayBackByTimeRequest",
+    "HcNetSdkPlayBackCaptureFileRequest",
+    "HcNetSdkPlayBackControlRequest",
+    "HcNetSdkPlayBackSecretKeyRequest",
+    "HcNetSdkPlayCond",
+    "HcNetSdkPlayDataCallbackRequest",
+    "HcNetSdkPlaybackCallbackRequest",
+    "HcNetSdkPortProbe",
+    "HcNetSdkPtzControlRequest",
+    "HcNetSdkPtzPresetRequest",
+    "HcNetSdkRealDataPacket",
+    "HcNetSdkRealDataType",
+    "HcNetSdkRealPlayRequest",
+    "HcNetSdkSemanticLogEvent",
+    "HcNetSdkSetConnectTimeRequest",
+    "HcNetSdkSetSdkLocalCfgRequest",
+    "HcNetSdkSetupAlarmParam",
+    "HcNetSdkSetupAlarmRequest",
+    "HcNetSdkStdXmlConfigRequest",
+    "HcNetSdkStdXmlConfigResponse",
+    "HcNetSdkStopGetFileRequest",
+    "HcNetSdkStopPlayBackRequest",
+    "HcNetSdkStreamDetails",
+    "HcNetSdkTcpFrame",
+    "HcNetSdkTcpFrameHeader",
+    "HcNetSdkTcpFrameShape",
+    "HcNetSdkTcpPayloadShape",
+    "HcNetSdkTcpShapeLogRecord",
+    "HcNetSdkTime",
+    "IntEnum",
+    "Iterable",
+    "Mapping",
+    "PyEzvizError",
+    "SadpActivateDeviceRequest",
+    "SadpBatchResult",
+    "SadpDeviceInfo",
+    "SadpDeviceNetParam",
+    "SadpDeviceRetNetParam",
+    "SadpModifyDeviceNetParamRequest",
+    "SadpModifyDeviceNetParamV40Request",
+    "SadpNoArgRequest",
+    "SadpSetLogToFileRequest",
+    "SadpStartRequest",
+    "annotations",
+    "asdict",
+    "base64",
+    "binascii",
+    "build_ezviz_local_preview_request_body",
+    "build_hcnetsdk_tcp_frame",
+    "classify_hcnetsdk_real_data_payload",
+    "dataclass",
+    "date",
+    "datetime",
+    "ezviz_local_sdk_iv",
+    "ezviz_native_video_level",
+    "field",
+    "hcnetsdk_command_candidate_role",
+    "hcnetsdk_command_port_auth_word",
+    "hcnetsdk_command_port_control_frame",
+    "hcnetsdk_command_port_play_login_body_tail_for_today",
+    "hcnetsdk_command_port_response_payload",
+    "hcnetsdk_real_data_type_is_media",
+    "hcnetsdk_real_play_request",
+    "hcnetsdk_stdxml_response_json",
+    "ipaddress",
+    "json",
+    "normalize_hcnetsdk_parameters",
+    "stream_header_from_preview",
+]
 
 # Retained named legacy exports; not additions to the wildcard API.
 __compatibility_exports__ = {
-    '_AES_SBOX': _AES_SBOX,
-    '_AES_RCON': _AES_RCON,
-    '_mapping_str': _mapping_str,
-    '_mapping_int': _mapping_int,
-    '_stdxml_bytes': _stdxml_bytes,
-    '_optional_native_bytes': _optional_native_bytes,
-    '_native_secret_key_bytes': _native_secret_key_bytes,
-    '_native_path_value': _native_path_value,
-    '_bounded_bytes': _bounded_bytes,
-    '_optional_raw_byte': _optional_raw_byte,
-    '_optional_raw_u16_be': _optional_raw_u16_be,
-    '_optional_raw_u32_be': _optional_raw_u32_be,
-    '_optional_raw_u16_be_pair': _optional_raw_u16_be_pair,
-    '_optional_raw_byte_triplet': _optional_raw_byte_triplet,
-    '_byte_value': _byte_value,
-    '_word_value': _word_value,
-    '_port_value': _port_value,
-    '_nul_stripped_text': _nul_stripped_text,
-    '_device_ability_bytes': _device_ability_bytes,
-    '_ability_option_tuple': _ability_option_tuple,
-    '_hcnetsdk_compression_info_v30': _hcnetsdk_compression_info_v30,
-    '_build_local_sdk_request_xml': _build_local_sdk_request_xml,
-    '_xml_escape': _xml_escape,
-    '_xml_attrs': _xml_attrs,
-    '_hcnetsdk_command_port_local_ip_word': _hcnetsdk_command_port_local_ip_word,
-    '_hcnetsdk_command_port_auth_mask': _hcnetsdk_command_port_auth_mask,
-    '_hcnetsdk_command_port_four_round_aes': _hcnetsdk_command_port_four_round_aes,
-    '_hcnetsdk_aes128_round_keys': _hcnetsdk_aes128_round_keys,
-    '_hcnetsdk_aes_add_round_key': _hcnetsdk_aes_add_round_key,
-    '_hcnetsdk_aes_sub_bytes': _hcnetsdk_aes_sub_bytes,
-    '_hcnetsdk_aes_shift_rows': _hcnetsdk_aes_shift_rows,
-    '_hcnetsdk_aes_xtime': _hcnetsdk_aes_xtime,
-    '_hcnetsdk_aes_mix_columns': _hcnetsdk_aes_mix_columns,
-    '_local_sdk_aes_bytes': _local_sdk_aes_bytes,
-    '_sadp_string_bytes': _sadp_string_bytes,
+    "_AES_SBOX": _AES_SBOX,
+    "_AES_RCON": _AES_RCON,
+    "_mapping_str": _mapping_str,
+    "_mapping_int": _mapping_int,
+    "_stdxml_bytes": _stdxml_bytes,
+    "_optional_native_bytes": _optional_native_bytes,
+    "_native_secret_key_bytes": _native_secret_key_bytes,
+    "_native_path_value": _native_path_value,
+    "_bounded_bytes": _bounded_bytes,
+    "_optional_raw_byte": _optional_raw_byte,
+    "_optional_raw_u16_be": _optional_raw_u16_be,
+    "_optional_raw_u32_be": _optional_raw_u32_be,
+    "_optional_raw_u16_be_pair": _optional_raw_u16_be_pair,
+    "_optional_raw_byte_triplet": _optional_raw_byte_triplet,
+    "_byte_value": _byte_value,
+    "_word_value": _word_value,
+    "_port_value": _port_value,
+    "_nul_stripped_text": _nul_stripped_text,
+    "_device_ability_bytes": _device_ability_bytes,
+    "_ability_option_tuple": _ability_option_tuple,
+    "_hcnetsdk_compression_info_v30": _hcnetsdk_compression_info_v30,
+    "_build_local_sdk_request_xml": _build_local_sdk_request_xml,
+    "_xml_escape": _xml_escape,
+    "_xml_attrs": _xml_attrs,
+    "_hcnetsdk_command_port_local_ip_word": _hcnetsdk_command_port_local_ip_word,
+    "_hcnetsdk_command_port_auth_mask": _hcnetsdk_command_port_auth_mask,
+    "_hcnetsdk_command_port_four_round_aes": _hcnetsdk_command_port_four_round_aes,
+    "_hcnetsdk_aes128_round_keys": _hcnetsdk_aes128_round_keys,
+    "_hcnetsdk_aes_add_round_key": _hcnetsdk_aes_add_round_key,
+    "_hcnetsdk_aes_sub_bytes": _hcnetsdk_aes_sub_bytes,
+    "_hcnetsdk_aes_shift_rows": _hcnetsdk_aes_shift_rows,
+    "_hcnetsdk_aes_xtime": _hcnetsdk_aes_xtime,
+    "_hcnetsdk_aes_mix_columns": _hcnetsdk_aes_mix_columns,
+    "_local_sdk_aes_bytes": _local_sdk_aes_bytes,
+    "_sadp_string_bytes": _sadp_string_bytes,
 }

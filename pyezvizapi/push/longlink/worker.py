@@ -18,6 +18,7 @@ class PushSession(Protocol):
     def run(self, stopped: Event) -> None:
         """Run until disconnected or cancelled."""
         raise NotImplementedError
+
     def close(self) -> None:
         """Interrupt and release the session."""
         raise NotImplementedError
@@ -131,7 +132,9 @@ class PushWorker:
                     self._last_error_type = type(error).__name__
                     self._state = "fatal"
                     self._stopped.set()
-                _LOGGER.error("Channel-99 stopped; caller intervention required (%s)", type(error).__name__)
+                _LOGGER.error(
+                    "Channel-99 stopped; caller intervention required (%s)", type(error).__name__
+                )
             except Exception as error:
                 if not self._stopped.is_set():
                     with self._lock:

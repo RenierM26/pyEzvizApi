@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.devices import payload as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.devices.payload as _compat_module_0
+
     Any = _compat_module_0.Any
     Mapping = _compat_module_0.Mapping
     local_ip_address = _compat_module_0.local_ip_address

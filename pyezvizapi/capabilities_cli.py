@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.cli import capabilities as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.cli.capabilities as _compat_module_0
+
     MAX_FLEET_SAMPLE_BYTES = _compat_module_0.MAX_FLEET_SAMPLE_BYTES
     MAX_FLEET_TARGETS = _compat_module_0.MAX_FLEET_TARGETS
     MAX_SAMPLE_BYTES = _compat_module_0.MAX_SAMPLE_BYTES

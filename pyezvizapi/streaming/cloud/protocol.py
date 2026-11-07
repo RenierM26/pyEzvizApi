@@ -47,7 +47,7 @@ CLOUD_REPLAY_OPEN_CMD = 0x5003
 CLOUD_REPLAY_HEARTBEAT_CMD = 0x5010
 CLOUD_REPLAY_HEADER_SIZE = 32
 XML_PREFIX = b"<?xml"
-_XML_END_RE = re.compile(br"</(Request|Response)>")
+_XML_END_RE = re.compile(rb"</(Request|Response)>")
 
 
 def rtp_payload(data: bytes) -> bytes:
@@ -286,9 +286,7 @@ class VtmStreamClient:
             if remaining <= 0:
                 raise _VtmReadDeadlineExpired
             connect_timeout = (
-                remaining
-                if connect_timeout is None
-                else min(connect_timeout, remaining)
+                remaining if connect_timeout is None else min(connect_timeout, remaining)
             )
         sock = self._socket_factory((host, port), connect_timeout)
         sock.settimeout(self.timeout)
@@ -333,13 +331,9 @@ class VtmStreamClient:
             if remaining <= 0:
                 raise _VtmReadDeadlineExpired
             effective_timeout = (
-                remaining
-                if configured_timeout is None
-                else min(configured_timeout, remaining)
+                remaining if configured_timeout is None else min(configured_timeout, remaining)
             )
-            deadline_limits_write = (
-                configured_timeout is None or remaining <= configured_timeout
-            )
+            deadline_limits_write = configured_timeout is None or remaining <= configured_timeout
             sock.settimeout(effective_timeout)
             try:
                 sock.sendall(packet)
@@ -508,9 +502,7 @@ class VtmStreamClient:
             else None
         )
         relative_first_packet_deadline = (
-            None
-            if first_packet_timeout is None
-            else started_at + first_packet_timeout
+            None if first_packet_timeout is None else started_at + first_packet_timeout
         )
         if relative_first_packet_deadline is not None:
             first_packet_deadline = (
@@ -518,9 +510,7 @@ class VtmStreamClient:
                 if first_packet_deadline is None
                 else min(first_packet_deadline, relative_first_packet_deadline)
             )
-        next_keepalive = (
-            None if keepalive_interval is None else started_at + keepalive_interval
-        )
+        next_keepalive = None if keepalive_interval is None else started_at + keepalive_interval
         next_stream_packet_deadline = (
             None
             if stream_packet_timeout_seconds is None
@@ -534,10 +524,7 @@ class VtmStreamClient:
             if first_packet_deadline is not None and now >= first_packet_deadline:
                 self._read_inactivity_deadline = None
                 break
-            if (
-                next_stream_packet_deadline is not None
-                and now >= next_stream_packet_deadline
-            ):
+            if next_stream_packet_deadline is not None and now >= next_stream_packet_deadline:
                 self._read_inactivity_deadline = None
                 break
             active_stream_deadlines = [
@@ -549,9 +536,7 @@ class VtmStreamClient:
                 )
                 if deadline is not None
             ]
-            keepalive_deadline = (
-                min(active_stream_deadlines) if active_stream_deadlines else None
-            )
+            keepalive_deadline = min(active_stream_deadlines) if active_stream_deadlines else None
             if next_keepalive is not None and now >= next_keepalive:
                 assert keepalive_interval is not None
                 if self.stream_info is not None and self.stream_info.streamssn:
@@ -707,15 +692,10 @@ class VtmStreamClient:
         while len(self._recv_buffer) < length:
             gettimeout = getattr(sock, "gettimeout", None)
             configured_timeout = (
-                cast("float | None", gettimeout())
-                if callable(gettimeout)
-                else self.timeout
+                cast("float | None", gettimeout()) if callable(gettimeout) else self.timeout
             )
             now = monotonic()
-            if (
-                self._read_inactivity_deadline is None
-                and configured_timeout is not None
-            ):
+            if self._read_inactivity_deadline is None and configured_timeout is not None:
                 self._read_inactivity_deadline = now + configured_timeout
             inactivity_remaining = (
                 None
@@ -744,8 +724,7 @@ class VtmStreamClient:
             ]
             effective_timeout = min(timeout_candidates) if timeout_candidates else None
             caller_limited = caller_remaining is not None and (
-                inactivity_remaining is None
-                or caller_remaining < inactivity_remaining
+                inactivity_remaining is None or caller_remaining < inactivity_remaining
             )
 
             timeout_changed = effective_timeout != configured_timeout
@@ -822,9 +801,7 @@ def decode_vtm_packet(packet: bytes) -> VtmPacket:
     header = decode_vtm_header(packet[:VTM_HEADER_SIZE])
     body = packet[VTM_HEADER_SIZE:]
     if len(body) != header.length:
-        raise PyEzvizError(
-            f"VTM packet length mismatch: header={header.length} body={len(body)}"
-        )
+        raise PyEzvizError(f"VTM packet length mismatch: header={header.length} body={len(body)}")
     return VtmPacket(
         channel=header.channel,
         length=header.length,
@@ -1135,9 +1112,7 @@ def _has_non_video_pes_packet(data: bytes, start: int, end: int) -> bool:
         if _is_mpeg_ps_metadata_stream_id(stream_id):
             i += 4
             continue
-        if _is_mpeg_ps_packet_start_id(stream_id) and not _is_video_pes_stream_id(
-            stream_id
-        ):
+        if _is_mpeg_ps_packet_start_id(stream_id) and not _is_video_pes_stream_id(stream_id):
             return True
         i += 4
     return False
@@ -1311,9 +1286,7 @@ def _mpeg_ps_video_decrypt_ranges(data: bytes) -> list[_MpegPsPacketRange]:
             # Resume the authoritative walker at that packet so its body is
             # bounded independently, including zero-length video PES packets.
             recovery_end = _mpeg_ps_anchored_recovery_start(data, parsed_end, next_pack)
-            ranges[-1] = _MpegPsPacketRange(
-                previous.start, recovery_end, previous.stream_id
-            )
+            ranges[-1] = _MpegPsPacketRange(previous.start, recovery_end, previous.stream_id)
             offset = recovery_end
             continue
         offset = next_pack
@@ -1330,12 +1303,12 @@ def _mpeg_ps_packet_pts(data: bytes, start: int, end: int) -> int | None:
     flags = data[start + 7] & 0xC0
     if flags not in (0x80, 0xC0) or (flags == 0xC0 and data[start + 8] < 10):
         return None
-    encoded = data[start + 9:start + 14]
+    encoded = data[start + 9 : start + 14]
     prefix = 0x20 if flags == 0x80 else 0x30
     if (encoded[0] & 0xF0) != prefix or not all(encoded[index] & 1 for index in (0, 2, 4)):
         return None
     if flags == 0xC0:
-        dts = data[start + 14:start + 19]
+        dts = data[start + 14 : start + 19]
         if (dts[0] & 0xF0) != 0x10 or not all(dts[index] & 1 for index in (0, 2, 4)):
             return None
     return (
@@ -1373,10 +1346,7 @@ def mpeg_ps_video_pts_span_seconds(
     wraps = 0
     for previous, current in pairwise(timestamps):
         if current >= previous:
-            if (
-                max_gap_seconds is not None
-                and current - previous > max_gap_seconds * 90_000
-            ):
+            if max_gap_seconds is not None and current - previous > max_gap_seconds * 90_000:
                 # Sparse or discontinuous PES timing cannot prove coverage.
                 return None
             continue
@@ -1412,9 +1382,7 @@ def _mpeg_ps_packet_end(data: bytes, start: int) -> int | None:
             packet_length = int.from_bytes(data[start + 4 : start + 6], "big")
             candidate_end = start + 6 + packet_length
             if packet_length and candidate_end <= len(data):
-                if _is_video_pes_stream_id(stream_id) or (
-                    stream_id == _PRIVATE_STREAM_1_ID
-                ):
+                if _is_video_pes_stream_id(stream_id) or (stream_id == _PRIVATE_STREAM_1_ID):
                     payload_start = _pes_payload_start(data, start)
                 elif 0xC0 <= stream_id <= 0xDF:
                     payload_start = _pes_payload_start(data, start) or start + 6
@@ -1527,17 +1495,13 @@ def _next_mpeg_ps_packet_start(data: bytes, start: int) -> int | None:
 
     i = start
     while i < len(data) - 3:
-        if data[i : i + 3] == MPEG_START_CODE_PREFIX and _is_mpeg_ps_packet_start_id(
-            data[i + 3]
-        ):
+        if data[i : i + 3] == MPEG_START_CODE_PREFIX and _is_mpeg_ps_packet_start_id(data[i + 3]):
             return i
         i += 1
     return None
 
 
-def _find_nal_start_codes(
-    data: bytes, start: int, end: int
-) -> list[tuple[int, int]]:
+def _find_nal_start_codes(data: bytes, start: int, end: int) -> list[tuple[int, int]]:
     """Find Annex B NAL start codes in ``data[start:end]``."""
 
     positions: list[tuple[int, int]] = []
@@ -1683,19 +1647,14 @@ def detect_hikvision_ps_video_nalu_header_size(
         and scores["hevc-encrypted-header"] >= scores["h264-clear-header"]
     ):
         return 0
-    if (
-        scores["h264"] > scores["hevc"]
-        and scores["h264"] > scores["h264-clear-header"]
-    ):
+    if scores["h264"] > scores["hevc"] and scores["h264"] > scores["h264-clear-header"]:
         return 0
     if scores["h264-clear-header"] > scores["hevc"]:
         return 1
     return 2
 
 
-def _find_hevc_nal_start_codes(
-    data: bytes, start: int, end: int
-) -> list[tuple[int, int]]:
+def _find_hevc_nal_start_codes(data: bytes, start: int, end: int) -> list[tuple[int, int]]:
     """Find plausible HEVC Annex B NAL start codes.
 
     Encrypted NAL payloads can contain accidental ``00 00 01`` byte sequences.
@@ -1706,8 +1665,7 @@ def _find_hevc_nal_start_codes(
     return [
         (pos, length)
         for pos, length in _find_nal_start_codes(data, start, end)
-        if (nal_type := _hevc_nal_type(data, pos, length)) is not None
-        and nal_type <= 40
+        if (nal_type := _hevc_nal_type(data, pos, length)) is not None and nal_type <= 40
     ]
 
 
@@ -1723,16 +1681,13 @@ def _is_plausible_hevc_header_bytes(header: bytes) -> bool:
     return forbidden_zero and layer_id == 0 and temporal_id_plus1 > 0 and nal_type <= 40
 
 
-def _find_h264_nal_start_codes(
-    data: bytes, start: int, end: int
-) -> list[tuple[int, int]]:
+def _find_h264_nal_start_codes(data: bytes, start: int, end: int) -> list[tuple[int, int]]:
     """Find plausible H.264 Annex B NAL start codes."""
 
     return [
         (pos, length)
         for pos, length in _find_nal_start_codes(data, start, end)
-        if (nal_type := _h264_nal_type(data, pos, length)) is not None
-        and 1 <= nal_type <= 23
+        if (nal_type := _h264_nal_type(data, pos, length)) is not None and 1 <= nal_type <= 23
     ]
 
 
@@ -1752,8 +1707,9 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
     every byte at/after the earliest pending AES position until it is resolved;
     whole-buffer callers use zero offsets and the identical state machine.
     """
-    find_nal_start_codes = (_find_h264_nal_start_codes if nalu_header_size == 1
-                           else _find_hevc_nal_start_codes)
+    find_nal_start_codes = (
+        _find_h264_nal_start_codes if nalu_header_size == 1 else _find_hevc_nal_start_codes
+    )
 
     def decrypt_nal_body_segment(state: _MpegPsVideoDecryptState, start: int, end: int) -> None:
         if end <= start:
@@ -1819,16 +1775,13 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
             continue
 
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
-            decrypt_end = (
-                nal_starts[idx + 1][0]
-                if idx + 1 < len(nal_starts)
-                else payload_end
-            )
+            decrypt_end = nal_starts[idx + 1][0] if idx + 1 < len(nal_starts) else payload_end
             # PTS alone does not locate an AU within a PES that may start
             # with an older NAL's tail. Only an explicitly aligned payload
             # start may promote a post-prefix non-VCL candidate here.
             aligned_picture_start = (
-                new_picture and bool(data[packet_range.start + 6] & 0x04)
+                new_picture
+                and bool(data[packet_range.start + 6] & 0x04)
                 and start_code_pos == payload_start
             )
             if (
@@ -1854,8 +1807,7 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
                     start_code_pos - segment_start,
                 )
                 if (
-                    candidate_decrypted
-                    < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                    candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                     and candidate_decrypted == 0
                 ):
                     continue
@@ -1869,7 +1821,6 @@ def _decrypt_hikvision_ps_video_packets(  # noqa: PLR0912, PLR0915
             segment_start = decrypt_end
         if state.active_nal and segment_start < payload_end:
             decrypt_nal_body_segment(state, segment_start, payload_end)
-
 
 
 def decrypt_hikvision_ps_video(  # noqa: PLR0915
@@ -1897,6 +1848,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
 
     key_bytes = key.encode() if isinstance(key, str) else key
     aes_key = key_bytes.ljust(16, b"\0")[:16]
+
     def is_short_clear_h264_pps(
         payload: bytes,
         start_code_pos: int,
@@ -1919,9 +1871,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
         for index, (start_code_pos, start_code_len) in enumerate(candidates):
             encrypted_header = start_code_pos + start_code_len
             nal_end = candidates[index + 1][0] if index + 1 < len(candidates) else end
-            if is_short_clear_h264_pps(
-                data, start_code_pos, start_code_len, nal_end
-            ):
+            if is_short_clear_h264_pps(data, start_code_pos, start_code_len, nal_end):
                 starts.append((start_code_pos, start_code_len))
                 continue
             if encrypted_header + AES.block_size > end:
@@ -1951,7 +1901,11 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
     if nalu_header_size != 0:
         output = bytearray(data)
         _decrypt_hikvision_ps_video_packets(
-            data, output, aes_key=aes_key, nalu_header_size=nalu_header_size, states={},
+            data,
+            output,
+            aes_key=aes_key,
+            nalu_header_size=nalu_header_size,
+            states={},
         )
         return bytes(output)
 
@@ -2025,11 +1979,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
         nal_starts = find_nal_start_codes(payload, 0, len(payload))
         segment_start = 0
         for idx, (start_code_pos, start_code_len) in enumerate(nal_starts):
-            decrypt_end = (
-                nal_starts[idx + 1][0]
-                if idx + 1 < len(nal_starts)
-                else len(payload)
-            )
+            decrypt_end = nal_starts[idx + 1][0] if idx + 1 < len(nal_starts) else len(payload)
             clear_short_pps = nalu_header_size == 0 and is_short_clear_h264_pps(
                 payload, start_code_pos, start_code_len, decrypt_end
             )
@@ -2039,11 +1989,15 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
                     start_code_pos - segment_start,
                 )
                 if candidate_decrypted < HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH:
-                    if nalu_header_size == 0 and not clear_short_pps and (
-                        candidate_decrypted == 0
-                        or not starts_plausible_encrypted_nal(
-                            start_code_pos + start_code_len,
-                            decrypt_end,
+                    if (
+                        nalu_header_size == 0
+                        and not clear_short_pps
+                        and (
+                            candidate_decrypted == 0
+                            or not starts_plausible_encrypted_nal(
+                                start_code_pos + start_code_len,
+                                decrypt_end,
+                            )
                         )
                     ):
                         continue
@@ -2052,8 +2006,7 @@ def decrypt_hikvision_ps_video(  # noqa: PLR0915
             if (
                 active_nal
                 and active_nal_decrypted >= HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
-                and start_code_pos
-                > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
+                and start_code_pos > active_nal_body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
                 and (
                     (
                         nalu_header_size == 0
@@ -2165,47 +2118,47 @@ def download_ezviz_cloud_replay(  # noqa: PLR0913
         socket.create_connection((host, port), timeout=timeout) as raw_socket,
         context.wrap_socket(raw_socket, server_hostname=host) as tls_socket,
     ):
-            tls_socket.settimeout(timeout)
-            tls_socket.sendall(
-                _cloud_replay_frame(
-                    request_xml,
-                    sequence=sequence,
-                    command=CLOUD_REPLAY_OPEN_CMD,
-                )
+        tls_socket.settimeout(timeout)
+        tls_socket.sendall(
+            _cloud_replay_frame(
+                request_xml,
+                sequence=sequence,
+                command=CLOUD_REPLAY_OPEN_CMD,
             )
-            sequence += 1
+        )
+        sequence += 1
 
-            while True:
-                message, buffer = _read_cloud_replay_message(tls_socket, buffer)
-                if not message.md5_ok:
-                    raise PyEzvizError("Cloud replay packet failed MD5 validation")
-                if message.result not in (None, 0):
-                    raise PyEzvizError(f"Cloud replay returned error result {message.result}")
-                if message.err_code not in (None, 0):
-                    raise PyEzvizError(f"Cloud replay returned packet error {message.err_code}")
+        while True:
+            message, buffer = _read_cloud_replay_message(tls_socket, buffer)
+            if not message.md5_ok:
+                raise PyEzvizError("Cloud replay packet failed MD5 validation")
+            if message.result not in (None, 0):
+                raise PyEzvizError(f"Cloud replay returned error result {message.result}")
+            if message.err_code not in (None, 0):
+                raise PyEzvizError(f"Cloud replay returned packet error {message.err_code}")
 
-                if message.data_type in (0, 1, 2) and message.data:
-                    output.extend(message.data)
-                    if file_size is not None and len(output) >= file_size:
-                        return bytes(output[:file_size])
-                elif message.data_type == 100:
-                    if file_size is not None and len(output) < file_size:
-                        raise PyEzvizError(
-                            "Cloud replay ended before expected file size: "
-                            f"{len(output)}/{file_size} bytes"
-                        )
-                    return bytes(output)
-
-                if time.monotonic() - last_heartbeat >= 5:
-                    tls_socket.sendall(
-                        _cloud_replay_frame(
-                            _cloud_replay_heartbeat_xml(),
-                            sequence=sequence,
-                            command=CLOUD_REPLAY_HEARTBEAT_CMD,
-                        )
+            if message.data_type in (0, 1, 2) and message.data:
+                output.extend(message.data)
+                if file_size is not None and len(output) >= file_size:
+                    return bytes(output[:file_size])
+            elif message.data_type == 100:
+                if file_size is not None and len(output) < file_size:
+                    raise PyEzvizError(
+                        "Cloud replay ended before expected file size: "
+                        f"{len(output)}/{file_size} bytes"
                     )
-                    sequence += 1
-                    last_heartbeat = time.monotonic()
+                return bytes(output)
+
+            if time.monotonic() - last_heartbeat >= 5:
+                tls_socket.sendall(
+                    _cloud_replay_frame(
+                        _cloud_replay_heartbeat_xml(),
+                        sequence=sequence,
+                        command=CLOUD_REPLAY_HEARTBEAT_CMD,
+                    )
+                )
+                sequence += 1
+                last_heartbeat = time.monotonic()
 
 
 @dataclass(frozen=True)
@@ -2414,9 +2367,7 @@ def _read_proto_fields(data: bytes, message_name: str) -> dict[int, list[ProtoVa
         if wire_type == 2:
             length, pos = _read_varint(data, pos)
             if pos + length > len(data):
-                raise PyEzvizError(
-                    f"{message_name} length-delimited field exceeds payload"
-                )
+                raise PyEzvizError(f"{message_name} length-delimited field exceeds payload")
             values.setdefault(field, []).append(data[pos : pos + length])
             pos += length
             continue

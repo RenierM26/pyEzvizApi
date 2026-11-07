@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.push import mqtt as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.push.mqtt as _compat_module_0
+
     _LOGGER = _compat_module_0._LOGGER
     ANDROID_PROFILE = _compat_module_0.ANDROID_PROFILE
     DEFAULT_TIMEOUT = _compat_module_0.DEFAULT_TIMEOUT

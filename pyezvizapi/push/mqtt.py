@@ -247,7 +247,9 @@ class MQTTClient:
             try:
                 self._on_token_updated(snapshot)
             except Exception as error:
-                raise EzvizTokenPersistenceError("Failed to persist channel-99 credentials") from error
+                raise EzvizTokenPersistenceError(
+                    "Failed to persist channel-99 credentials"
+                ) from error
 
         def new_session() -> Channel99Session:
             # Logins may replace discovery or the user; bind each attempt to one
@@ -378,16 +380,26 @@ class MQTTClient:
                         save_token(deepcopy(token))
 
                     refresh_credentials(
-                        session, token, self._timeout, notify,
+                        session,
+                        token,
+                        self._timeout,
+                        notify,
                         lambda: discover_services(session, token, self._timeout),
                     )
             except EzvizAuthTokenExpired as error:
-                raise EzvizPushFatalError("Channel-99 session expired; reauthentication required") from error
+                raise EzvizPushFatalError(
+                    "Channel-99 session expired; reauthentication required"
+                ) from error
             except HTTPError as error:
                 cause = error.__cause__
-                if (isinstance(cause, requests.HTTPError) and cause.response is not None
-                        and cause.response.status_code in (401, 403)):
-                    raise EzvizPushFatalError("Channel-99 refresh rejected; reauthentication required") from error
+                if (
+                    isinstance(cause, requests.HTTPError)
+                    and cause.response is not None
+                    and cause.response.status_code in (401, 403)
+                ):
+                    raise EzvizPushFatalError(
+                        "Channel-99 refresh rejected; reauthentication required"
+                    ) from error
                 raise
 
     # ------------------------------------------------------------------

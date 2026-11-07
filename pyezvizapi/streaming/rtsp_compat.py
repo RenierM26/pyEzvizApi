@@ -1,4 +1,5 @@
 """Compatibility imports for the RTSP authentication probe (not a test suite)."""
+
 from pyezvizapi.streaming.rtsp_auth import (
     RTSPDetails,
     TestRTSPAuth,

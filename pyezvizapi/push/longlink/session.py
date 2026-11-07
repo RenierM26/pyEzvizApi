@@ -67,11 +67,7 @@ class Channel99Session:
         """Return a credential-free snapshot of this connection attempt."""
         with self._lock:
             transport = (
-                "mqtt"
-                if self._mqtt is not None
-                else "lbs"
-                if self._lbs is not None
-                else "idle"
+                "mqtt" if self._mqtt is not None else "lbs" if self._lbs is not None else "idle"
             )
         return {
             "transport": transport,

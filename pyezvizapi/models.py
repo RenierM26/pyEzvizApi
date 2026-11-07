@@ -180,8 +180,10 @@ class EzvizDeviceRecord:
         return cls(
             serial=serial,
             name=device_infos.get("name"),
-            device_category=device_infos.get("deviceCategory") or device_infos.get("device_category"),
-            device_sub_category=device_infos.get("deviceSubCategory") or device_infos.get("device_sub_category"),
+            device_category=device_infos.get("deviceCategory")
+            or device_infos.get("device_category"),
+            device_sub_category=device_infos.get("deviceSubCategory")
+            or device_infos.get("device_sub_category"),
             version=device_infos.get("version"),
             status=device_status,
             support_ext=_optional_mapping(device_infos.get("supportExt")),

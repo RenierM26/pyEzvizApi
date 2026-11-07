@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming import native_stream as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.native_stream as _compat_module_0
+
     _POLL_SECONDS = _compat_module_0._POLL_SECONDS
     IO_CHUNK_BYTES = _compat_module_0.IO_CHUNK_BYTES
     MAX_PENDING_PS_BYTES = _compat_module_0.MAX_PENDING_PS_BYTES

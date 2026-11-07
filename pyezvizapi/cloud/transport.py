@@ -1,4 +1,5 @@
 """Copy request state while borrowing caller-owned transport adapters."""
+
 from collections import OrderedDict
 from copy import copy, deepcopy
 

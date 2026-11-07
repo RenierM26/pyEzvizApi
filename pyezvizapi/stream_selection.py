@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming import selection as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.selection as _compat_module_0
+
     Any = _compat_module_0.Any
     AutoClipSource = _compat_module_0.AutoClipSource
     AutoMediaStream = _compat_module_0.AutoMediaStream
@@ -48,7 +50,9 @@ if TYPE_CHECKING:
     errno = _compat_module_0.errno
     fallback_stream_source = _compat_module_0.fallback_stream_source
     fresh_receiver_port = _compat_module_0.fresh_receiver_port
-    get_local_sdk_stream_credentials_from_client = _compat_module_0.get_local_sdk_stream_credentials_from_client
+    get_local_sdk_stream_credentials_from_client = (
+        _compat_module_0.get_local_sdk_stream_credentials_from_client
+    )
     hashlib = _compat_module_0.hashlib
     json = _compat_module_0.json
     local_ecdh_media_packet_source = _compat_module_0.local_ecdh_media_packet_source

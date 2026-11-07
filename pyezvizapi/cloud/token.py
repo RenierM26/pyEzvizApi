@@ -3,6 +3,7 @@
 Tokens are partial during login. Validate the fields required by each operation
 at its boundary; a TypedDict alone is not runtime validation.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -108,7 +109,10 @@ def validate_push_token(token: dict[str, Any]) -> None:
     _push_serial(token["user_id"])
     if ":" in _hostname(token["api_url"]):
         raise PyEzvizError("IPv6 API hosts are not supported")
-    if not isinstance(token["session_id"], str) or re.fullmatch(r"[!-~]+", token["session_id"]) is None:
+    if (
+        not isinstance(token["session_id"], str)
+        or re.fullmatch(r"[!-~]+", token["session_id"]) is None
+    ):
         raise PyEzvizError("Invalid channel-99 session ID")
     if not isinstance(token.get("push_state", {}), dict):
         raise PyEzvizError("Invalid saved push state")

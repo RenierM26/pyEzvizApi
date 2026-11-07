@@ -163,9 +163,7 @@ def iter_channel_algorithm_entries(
             yield entry
 
 
-def get_algorithm_value(
-    camera_data: Mapping[str, Any], subtype: str, channel: int
-) -> int | None:
+def get_algorithm_value(camera_data: Mapping[str, Any], subtype: str, channel: int) -> int | None:
     """Return AlgorithmInfo value for provided subtype/channel."""
 
     for entry in iter_channel_algorithm_entries(camera_data, channel):
@@ -175,9 +173,7 @@ def get_algorithm_value(
     return None
 
 
-def has_algorithm_subtype(
-    camera_data: Mapping[str, Any], subtype: str, channel: int = 1
-) -> bool:
+def has_algorithm_subtype(camera_data: Mapping[str, Any], subtype: str, channel: int = 1) -> bool:
     """Return True when AlgorithmInfo contains subtype for channel."""
 
     return get_algorithm_value(camera_data, subtype, channel) is not None
@@ -227,11 +223,7 @@ def normalize_port_security(payload: Any) -> dict[str, Any]:
     def _apply_hint(
         candidate: dict[str, Any] | None, hint_value: bool | None
     ) -> dict[str, Any] | None:
-        if (
-            candidate is not None
-            and "enabled" not in candidate
-            and isinstance(hint_value, bool)
-        ):
+        if candidate is not None and "enabled" not in candidate and isinstance(hint_value, bool):
             candidate["enabled"] = hint_value
         return candidate
 
@@ -320,8 +312,7 @@ def port_security_has_port(camera_data: Mapping[str, Any], port: int) -> bool:
     if not isinstance(ports, Iterable):
         return False
     return any(
-        isinstance(entry, Mapping) and coerce_int(entry.get("portNo")) == port
-        for entry in ports
+        isinstance(entry, Mapping) and coerce_int(entry.get("portNo")) == port for entry in ports
     )
 
 
@@ -344,9 +335,7 @@ def display_mode_value(camera_data: Mapping[str, Any]) -> int:
     display_mode = optionals.get("display_mode")
     display_mode = decode_json(display_mode)
 
-    mode = (
-        display_mode.get("mode") if isinstance(display_mode, Mapping) else display_mode
-    )
+    mode = display_mode.get("mode") if isinstance(display_mode, Mapping) else display_mode
 
     if isinstance(mode, int) and mode in (1, 2, 3):
         return mode

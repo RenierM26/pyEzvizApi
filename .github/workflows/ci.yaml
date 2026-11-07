@@ -71,6 +71,10 @@ jobs:
       - name: Ruff
         run: ruff check .
 
+      - name: Package formatting
+        if: matrix.python-version == '3.12'
+        run: ruff format --check pyezvizapi
+
       - name: Codespell
         if: matrix.python-version == '3.12'
         run: codespell pyezvizapi tests README.md pyproject.toml .github --skip tests/fixtures/page_list_response.json

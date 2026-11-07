@@ -105,7 +105,9 @@ def ffmpeg_mpegts_command(
     return command
 
 
-def write_aac_remux_input(audio: RtpAacStream, directory: Path) -> tuple[Path, Literal["aac", "concat"]]:
+def write_aac_remux_input(
+    audio: RtpAacStream, directory: Path
+) -> tuple[Path, Literal["aac", "concat"]]:
     """Stage ADTS or a local concat timeline preserving observed RTP gaps.
 
     Duration to the next block is its sample-offset difference, including

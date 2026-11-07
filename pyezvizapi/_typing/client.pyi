@@ -1,4 +1,5 @@
 """Nominal types re-exported for implementation annotations only."""
+
 from pyezvizapi.client import (
     Any as Any,
     AutoClipSource as AutoClipSource,

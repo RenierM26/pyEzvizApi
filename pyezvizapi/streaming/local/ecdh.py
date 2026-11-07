@@ -752,8 +752,11 @@ class _BoundedEcdhMediaStream:
         del duration_from_start, monotonic
         selected_duration = self.duration_seconds
         if duration_seconds is not None:
-            selected_duration = (duration_seconds if selected_duration is None
-                                 else min(selected_duration, duration_seconds))
+            selected_duration = (
+                duration_seconds
+                if selected_duration is None
+                else min(selected_duration, duration_seconds)
+            )
         return self.stream.iter_packets(
             max_packets=max_packets,
             max_frames=self.max_frames,
@@ -980,10 +983,14 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0912, PLR0913
     # rate 0. Retry only a premature socket close, before any output was
     # published; never hide a media/decryption/authentication failure.
     credentials = get_local_sdk_stream_credentials_from_client(
-        client, serial, credentials=credentials, cas_serial=cas_serial,
+        client,
+        serial,
+        credentials=credentials,
+        cas_serial=cas_serial,
         register_p2p_session=register_p2p_session,
         p2p_register_max_retries=p2p_register_max_retries,
-        fetch_media_key=decrypt_video and media_key is None, smscode=smscode,
+        fetch_media_key=decrypt_video and media_key is None,
+        smscode=smscode,
     )
     stream_rates = (stream_rate, 0) if stream_rate == 1 else (stream_rate,)
     capture_deadline: float | None = None
@@ -1027,7 +1034,9 @@ def copy_local_sdk_ecdh_stream_from_client(  # noqa: PLR0912, PLR0913
                     else:
                         remaining_duration = capture_deadline - monotonic()
                         if remaining_duration <= 0:
-                            raise EzvizLocalSdkDeadlineExpired("Local ECDH retry exhausted capture deadline")
+                            raise EzvizLocalSdkDeadlineExpired(
+                                "Local ECDH retry exhausted capture deadline"
+                            )
                 selected_media_key = media_key
                 if decrypt_video and selected_media_key is None:
                     selected_media_key = stream.media_key

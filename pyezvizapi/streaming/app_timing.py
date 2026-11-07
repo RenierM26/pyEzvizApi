@@ -58,12 +58,16 @@ class AppPlaybackClock:
     """
 
     def __init__(
-        self, *, mode: Literal["live", "playback"] = "live",
+        self,
+        *,
+        mode: Literal["live", "playback"] = "live",
         max_interval_ms: int | None = None,
     ) -> None:
         if mode not in ("live", "playback"):
             raise PyEzvizError("App timing mode must be live or playback")
-        limit = (17_000 if mode == "live" else 1_500) if max_interval_ms is None else max_interval_ms
+        limit = (
+            (17_000 if mode == "live" else 1_500) if max_interval_ms is None else max_interval_ms
+        )
         if type(limit) is not int or limit <= 0:
             raise PyEzvizError("App timing maximum interval must be a positive integer")
         self.max_interval_ms = limit
@@ -106,7 +110,9 @@ class AppPlaybackClock:
 
 
 def _validate_frame(frame: AppTimedFrame) -> None:
-    if type(frame.stream_id) is not int or not (0xC0 <= frame.stream_id <= 0xDF or 0xE0 <= frame.stream_id <= 0xEF):
+    if type(frame.stream_id) is not int or not (
+        0xC0 <= frame.stream_id <= 0xDF or 0xE0 <= frame.stream_id <= 0xEF
+    ):
         raise PyEzvizError("App timing requires an audio or video PES stream ID")
     if not isinstance(frame.clock_id, str) or not frame.clock_id:
         raise PyEzvizError("App timing requires an explicit clock identity")
@@ -123,11 +129,15 @@ def _validate_frame(frame: AppTimedFrame) -> None:
 
 
 def _stream_map(video_stream_ids: tuple[int, ...], audio_stream_id: int | None) -> bytes:
-    if not video_stream_ids or len(set(video_stream_ids)) != len(video_stream_ids) or any(
-        type(sid) is not int or not 0xE0 <= sid <= 0xEF for sid in video_stream_ids
+    if (
+        not video_stream_ids
+        or len(set(video_stream_ids)) != len(video_stream_ids)
+        or any(type(sid) is not int or not 0xE0 <= sid <= 0xEF for sid in video_stream_ids)
     ):
         raise PyEzvizError("App mux requires unique HEVC video PES stream IDs")
-    if audio_stream_id is not None and (type(audio_stream_id) is not int or not 0xC0 <= audio_stream_id <= 0xDF):
+    if audio_stream_id is not None and (
+        type(audio_stream_id) is not int or not 0xC0 <= audio_stream_id <= 0xDF
+    ):
         raise PyEzvizError("App mux requires an AAC PES stream ID")
     entries = b"".join(bytes((0x24, sid, 0, 0)) for sid in video_stream_ids)
     if audio_stream_id is not None:
@@ -138,8 +148,11 @@ def _stream_map(video_stream_ids: tuple[int, ...], audio_stream_id: int | None) 
 
 
 def app_timed_mpegps_payloads(
-    frames: Iterable[AppTimedFrame], *, clock: AppPlaybackClock,
-    video_stream_ids: tuple[int, ...] = (0xE0,), audio_stream_id: int | None = 0xC0,
+    frames: Iterable[AppTimedFrame],
+    *,
+    clock: AppPlaybackClock,
+    video_stream_ids: tuple[int, ...] = (0xE0,),
+    audio_stream_id: int | None = 0xC0,
 ) -> Iterator[bytes]:
     """Frame clear HEVC/ADTS access units as PS using an explicit playback clock.
 
@@ -157,14 +170,24 @@ def app_timed_mpegps_payloads(
         timestamp = clock.timestamp_ms(frame) * _TICKS_PER_MS
         scr = max(scr, timestamp)
         for offset in range(0, len(frame.data), _PES_CHUNK_BYTES):
-            yield _pack_header(scr) + stream_map + _pes(
-                timestamp, frame.stream_id, frame.data[offset:offset + _PES_CHUNK_BYTES],
+            yield (
+                _pack_header(scr)
+                + stream_map
+                + _pes(
+                    timestamp,
+                    frame.stream_id,
+                    frame.data[offset : offset + _PES_CHUNK_BYTES],
+                )
             )
 
 
 def copy_app_timed_frames_to_mpegts(
-    frames: Iterable[AppTimedFrame], output: BinaryIO, *, clock: AppPlaybackClock,
-    video_stream_ids: tuple[int, ...] = (0xE0,), audio_stream_id: int | None = 0xC0,
+    frames: Iterable[AppTimedFrame],
+    output: BinaryIO,
+    *,
+    clock: AppPlaybackClock,
+    video_stream_ids: tuple[int, ...] = (0xE0,),
+    audio_stream_id: int | None = 0xC0,
     ffmpeg_path: str = "ffmpeg",
 ) -> None:
     """Stream-copy selected clear frames to TS without changing capture defaults.
@@ -174,13 +197,20 @@ def copy_app_timed_frames_to_mpegts(
     a later clip. FFmpeg is responsible for container framing, not clock repair.
     """
     payloads = app_timed_mpegps_payloads(
-        frames, clock=clock, video_stream_ids=video_stream_ids, audio_stream_id=audio_stream_id,
+        frames,
+        clock=clock,
+        video_stream_ids=video_stream_ids,
+        audio_stream_id=audio_stream_id,
     )
     first = next(payloads, None)
     if first is None:
         raise PyEzvizError("App timing requires at least one encoded frame")
     process = open_mpegts_remux_process(
-        ffmpeg_path, input_format="mpeg", preserve_timestamps=True, map_all_streams=True, popen=subprocess.Popen,
+        ffmpeg_path,
+        input_format="mpeg",
+        preserve_timestamps=True,
+        map_all_streams=True,
+        popen=subprocess.Popen,
     )
 
     def write_input(stdin: BinaryIO) -> None:

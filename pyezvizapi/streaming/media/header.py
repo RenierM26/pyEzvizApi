@@ -18,13 +18,24 @@ from pyezvizapi.exceptions import PyEzvizError
 _STREAM_HEADER_MAGIC = b"IMKH"
 
 _VIDEO_CODECS = {
-    1: "h264", 0x100: "h264", 2: "mpeg2video", 3: "mpeg4video",
-    4: "mjpeg", 5: "hevc", 6: "svac",
+    1: "h264",
+    0x100: "h264",
+    2: "mpeg2video",
+    3: "mpeg4video",
+    4: "mjpeg",
+    5: "hevc",
+    6: "svac",
 }
 _AUDIO_CODECS = {
-    0x2000: "mp2", 0x2001: "aac", 0x2002: "aac-ld", 0x3002: "opus",
-    0x7000: "pcm", 0x7001: "pcm", 0x7110: "pcm_mulaw",
-    0x7111: "pcm_alaw", 0x7221: "g722",
+    0x2000: "mp2",
+    0x2001: "aac",
+    0x2002: "aac-ld",
+    0x3002: "opus",
+    0x7000: "pcm",
+    0x7001: "pcm",
+    0x7110: "pcm_mulaw",
+    0x7111: "pcm_alaw",
+    0x7221: "g722",
 }
 
 
@@ -48,17 +59,20 @@ def parse_ezviz_stream_header(data: bytes) -> EzvizStreamHeader:
     """Parse the evidenced 40-byte IMKH v1.1 layout without guessing variants."""
     if len(data) != 40 or data[:4] != _STREAM_HEADER_MAGIC:
         raise PyEzvizError("Unsupported EZVIZ stream header layout")
-    version, = struct.unpack_from("<I", data, 4)
+    (version,) = struct.unpack_from("<I", data, 4)
     if version != 0x101:
         raise PyEzvizError("Unsupported EZVIZ stream header version")
-    system, video, audio, channels, bits, rate, bitrate = struct.unpack_from(
-        "<HHHBBII", data, 8
-    )
+    system, video, audio, channels, bits, rate, bitrate = struct.unpack_from("<HHHBBII", data, 8)
     return EzvizStreamHeader(
-        version=version, system_format_code=system, video_codec_code=video,
-        audio_codec_code=audio, video_codec=_VIDEO_CODECS.get(video),
-        audio_codec=_AUDIO_CODECS.get(audio), audio_channels=channels or None,
-        audio_bits_per_sample=bits or None, audio_sample_rate=rate or None,
+        version=version,
+        system_format_code=system,
+        video_codec_code=video,
+        audio_codec_code=audio,
+        video_codec=_VIDEO_CODECS.get(video),
+        audio_codec=_AUDIO_CODECS.get(audio),
+        audio_channels=channels or None,
+        audio_bits_per_sample=bits or None,
+        audio_sample_rate=rate or None,
         audio_bitrate_bps=bitrate or None,
     )
 

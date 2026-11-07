@@ -23,10 +23,10 @@ class EzvizSmartPlug:
     """
 
     def __init__(
-            self,
-            client: Any,
-            serial: str,
-            device_obj: EzvizDeviceRecord | dict | None = None,
+        self,
+        client: Any,
+        serial: str,
+        device_obj: EzvizDeviceRecord | dict | None = None,
     ) -> None:
         """Initialize the smart plug object.
 
@@ -62,16 +62,12 @@ class EzvizSmartPlug:
             "serial": self._serial,
             "name": self.fetch_key(["deviceInfos", "name"]),
             "version": self.fetch_key(["deviceInfos", "version"]),
-            "upgrade_available": bool(
-                self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3
-            ),
+            "upgrade_available": bool(self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3),
             "status": self.fetch_key(["deviceInfos", "status"]),
             "device_category": self.fetch_key(["deviceInfos", "deviceCategory"]),
             "device_sub_category": self.fetch_key(["deviceInfos", "deviceSubCategory"]),
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
-            "upgrade_in_progress": bool(
-                self.fetch_key(["STATUS", "upgradeStatus"]) == 0
-            ),
+            "upgrade_in_progress": bool(self.fetch_key(["STATUS", "upgradeStatus"]) == 0),
             "latest_firmware_info": self.fetch_key(["UPGRADE", "upgradePackageInfo"]),
             "local_ip": self._local_ip(),
             "wan_ip": self.fetch_key(["CONNECTION", "netIp"]),
@@ -96,11 +92,7 @@ class EzvizSmartPlug:
             InvalidURL: If the API endpoint/connection is invalid.
             HTTPError: If the API returns a non-success HTTP status.
         """
-        self._client.set_switch(
-            self._serial,
-            DeviceSwitchType.PLUG.value,
-            state
-            )
+        self._client.set_switch(self._serial, DeviceSwitchType.PLUG.value, state)
         return True
 
     def power_on(self) -> bool:

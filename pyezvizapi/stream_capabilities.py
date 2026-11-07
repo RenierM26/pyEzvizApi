@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming import capabilities as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.capabilities as _compat_module_0
+
     MAX_FLEET_SAMPLE_BYTES = _compat_module_0.MAX_FLEET_SAMPLE_BYTES
     MAX_FLEET_TARGETS = _compat_module_0.MAX_FLEET_TARGETS
     UTC = _compat_module_0.UTC
@@ -30,7 +32,9 @@ if TYPE_CHECKING:
     annotations = _compat_module_0.annotations
     dataclass = _compat_module_0.dataclass
     datetime = _compat_module_0.datetime
-    discover_hcnetsdk_stream_details_for_login = _compat_module_0.discover_hcnetsdk_stream_details_for_login
+    discover_hcnetsdk_stream_details_for_login = (
+        _compat_module_0.discover_hcnetsdk_stream_details_for_login
+    )
     field = _compat_module_0.field
     inspect_media_sample = _compat_module_0.inspect_media_sample
     math = _compat_module_0.math

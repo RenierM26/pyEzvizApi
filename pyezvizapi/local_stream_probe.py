@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.streaming.local import probe as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.local.probe as _compat_module_0
+
     Any = _compat_module_0.Any
     EzvizLocalSdkDeadlineExpired = _compat_module_0.EzvizLocalSdkDeadlineExpired
     Literal = _compat_module_0.Literal

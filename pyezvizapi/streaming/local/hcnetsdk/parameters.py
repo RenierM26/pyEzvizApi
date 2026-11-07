@@ -10,19 +10,102 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-_FRAME_RATES = (None, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 6, 8, 10, 12,
-                16, 20, 15, 18, 22, 25, 30, 35, 40, 45, 50, 55, 60, 3, 5, 7,
-                9, 100, 120, 24, 48, 8.3)
-_VIDEO_BITRATES = (0, 16, 32, 48, 64, 80, 96, 128, 160, 192, 224, 256,
-                   320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792,
-                   2048, 3072, 4096, 8192, 16384)
-_VIDEO_ENCODINGS = {0: "private_h264", 1: "h264", 2: "mpeg4", 7: "mjpeg",
-                    8: "mpeg2", 9: "svac", 10: "hevc"}
-_AUDIO_ENCODINGS = {0: "g722", 1: "pcm_mulaw", 2: "pcm_alaw", 5: "mp2",
-                    6: "g726", 7: "aac", 8: "pcm"}
+_FRAME_RATES = (
+    None,
+    1 / 16,
+    1 / 8,
+    1 / 4,
+    1 / 2,
+    1,
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    16,
+    20,
+    15,
+    18,
+    22,
+    25,
+    30,
+    35,
+    40,
+    45,
+    50,
+    55,
+    60,
+    3,
+    5,
+    7,
+    9,
+    100,
+    120,
+    24,
+    48,
+    8.3,
+)
+_VIDEO_BITRATES = (
+    0,
+    16,
+    32,
+    48,
+    64,
+    80,
+    96,
+    128,
+    160,
+    192,
+    224,
+    256,
+    320,
+    384,
+    448,
+    512,
+    640,
+    768,
+    896,
+    1024,
+    1280,
+    1536,
+    1792,
+    2048,
+    3072,
+    4096,
+    8192,
+    16384,
+)
+_VIDEO_ENCODINGS = {
+    0: "private_h264",
+    1: "h264",
+    2: "mpeg4",
+    7: "mjpeg",
+    8: "mpeg2",
+    9: "svac",
+    10: "hevc",
+}
+_AUDIO_ENCODINGS = {
+    0: "g722",
+    1: "pcm_mulaw",
+    2: "pcm_alaw",
+    5: "mp2",
+    6: "g726",
+    7: "aac",
+    8: "pcm",
+}
 _AUDIO_SAMPLE_RATES = {1: 16000, 2: 32000, 3: 48000, 4: 44100, 5: 8000}
-_FORMATS = {1: "elementary", 2: "rtp", 3: "mpegps", 4: "mpegts", 5: "private",
-            6: "flv", 7: "asf", 8: "3gp", 9: "rtp_mpegps"}
+_FORMATS = {
+    1: "elementary",
+    2: "rtp",
+    3: "mpegps",
+    4: "mpegts",
+    5: "private",
+    6: "flv",
+    7: "asf",
+    8: "3gp",
+    9: "rtp_mpegps",
+}
 
 
 @dataclass(frozen=True)
@@ -45,9 +128,15 @@ class HcNetSdkConfiguredMedia:
 
 
 def normalize_hcnetsdk_parameters(
-    *, video_encoding_type: int, audio_encoding_type: int, video_frame_rate: int,
-    video_bitrate: int, audio_sampling_rate: int, format_type: int,
-    width: int | None = None, height: int | None = None,
+    *,
+    video_encoding_type: int,
+    audio_encoding_type: int,
+    video_frame_rate: int,
+    video_bitrate: int,
+    audio_sampling_rate: int,
+    format_type: int,
+    width: int | None = None,
+    height: int | None = None,
 ) -> HcNetSdkConfiguredMedia:
     """Interpret each SDK namespace separately; preserve unknowns as None."""
     rate_mode: Literal["specified", "full", "auto", "unknown"]
@@ -67,7 +156,11 @@ def normalize_hcnetsdk_parameters(
     return HcNetSdkConfiguredMedia(
         video_codec=_VIDEO_ENCODINGS.get(video_encoding_type),
         audio_codec=_AUDIO_ENCODINGS.get(audio_encoding_type),
-        frame_rate=rate, frame_rate_mode=rate_mode,
-        video_bitrate_bps=bitrate, audio_sample_rate=_AUDIO_SAMPLE_RATES.get(audio_sampling_rate),
-        container=_FORMATS.get(format_type), width=width, height=height,
+        frame_rate=rate,
+        frame_rate_mode=rate_mode,
+        video_bitrate_bps=bitrate,
+        audio_sample_rate=_AUDIO_SAMPLE_RATES.get(audio_sampling_rate),
+        container=_FORMATS.get(format_type),
+        width=width,
+        height=height,
     )

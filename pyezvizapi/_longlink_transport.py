@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.push.longlink import transport as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.push.longlink.transport as _compat_module_0
+
     MAX_LENGTH_BYTES = _compat_module_0.MAX_LENGTH_BYTES
     MAX_PAYLOAD = _compat_module_0.MAX_PAYLOAD
     Callable = _compat_module_0.Callable

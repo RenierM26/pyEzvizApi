@@ -3,6 +3,7 @@
 Callers own the token lock and transport lifetime. A successful rotation is
 persisted before discovery; storage failures must propagate to the caller.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -23,10 +24,13 @@ from pyezvizapi.push.longlink.profile import profile_for_token, synchronize_http
 isolated_session = _http_transport.isolated_session
 
 
-def discover_services(session: requests.Session, token: dict[str, Any], timeout: int) -> dict[str, Any]:
+def discover_services(
+    session: requests.Session, token: dict[str, Any], timeout: int
+) -> dict[str, Any]:
     """Discover endpoints using the just-refreshed isolated HTTP session."""
     response = session.get(
-        f"https://{token['api_url']}{API_ENDPOINT_SERVER_INFO}", timeout=timeout,
+        f"https://{token['api_url']}{API_ENDPOINT_SERVER_INFO}",
+        timeout=timeout,
         allow_redirects=False,
     )
     try:
@@ -51,11 +55,17 @@ def refresh_credentials(
     """Rotate an existing login; account/password fallback belongs to the caller."""
     validate_feature_code(token)
     try:
-        response = budgeted_http_call(session, "put",
+        response = budgeted_http_call(
+            session,
+            "put",
             url=f"https://{token['api_url']}{API_ENDPOINT_REFRESH_SESSION_ID}",
-            data={"refreshSessionId": token["rf_session_id"], "featureCode": FEATURE_CODE,
-                  **profile_for_token(token).registration},
-            allow_redirects=False, timeout=timeout,
+            data={
+                "refreshSessionId": token["rf_session_id"],
+                "featureCode": FEATURE_CODE,
+                **profile_for_token(token).registration,
+            },
+            allow_redirects=False,
+            timeout=timeout,
         )
         response.raise_for_status()
     except requests.HTTPError as error:
@@ -71,7 +81,12 @@ def refresh_credentials(
         raise PyEzvizError(f"Error renewing login token: {response_summary(result)}")
     info = object_section(result, "sessionInfo", required=True)
     session_id, refresh_id = info.get("sessionId"), info.get("refreshSessionId")
-    if not isinstance(session_id, str) or not session_id or not isinstance(refresh_id, str) or not refresh_id:
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or not isinstance(refresh_id, str)
+        or not refresh_id
+    ):
         raise PyEzvizError("Invalid refresh credential fields")
     token.update(session_id=session_id, rf_session_id=refresh_id)
     token["feature_code"] = FEATURE_CODE

@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.push.longlink import profile as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.push.longlink.profile as _compat_module_0
+
     ANDROID_PROFILE = _compat_module_0.ANDROID_PROFILE
     WEB_PROFILE = _compat_module_0.WEB_PROFILE
     Any = _compat_module_0.Any

@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming.media import native_ps as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.media.native_ps as _compat_module_0
+
     _PS_START = _compat_module_0._PS_START
     MAX_PENDING_PS_BYTES = _compat_module_0.MAX_PENDING_PS_BYTES
     NativePsTransform = _compat_module_0.NativePsTransform

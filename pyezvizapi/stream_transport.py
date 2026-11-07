@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.streaming.cloud import transport as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.cloud.transport as _compat_module_0
+
     CLOUD_REPLAY_HEADER_SIZE = _compat_module_0.CLOUD_REPLAY_HEADER_SIZE
     CLOUD_REPLAY_HEARTBEAT_CMD = _compat_module_0.CLOUD_REPLAY_HEARTBEAT_CMD
     CLOUD_REPLAY_MAGIC = _compat_module_0.CLOUD_REPLAY_MAGIC

@@ -1,4 +1,5 @@
 """Bounded iterative pagelist collection; HTTP and token ownership stay outside."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -37,15 +38,19 @@ def collect_pagelist(
         data = payload[json_key] if json_key else payload
         if not isinstance(data, (dict, list)):
             raise PyEzvizError("Invalid pagelist data section")
-        progress = data if json_key else {
-            key: value for key, value in payload.items() if key not in {"page", "meta"}
-        }
+        progress = (
+            data
+            if json_key
+            else {key: value for key, value in payload.items() if key not in {"page", "meta"}}
+        )
         if flag and not progress:
             raise PyEzvizError("Pagelist returned an empty non-final page")
         if flag and isinstance(progress, dict) and not any(progress.values()):
             raise PyEzvizError("Pagelist returned an empty non-final page")
         try:
-            fingerprint = sha256(json.dumps(progress, sort_keys=True, separators=(",", ":")).encode()).digest()
+            fingerprint = sha256(
+                json.dumps(progress, sort_keys=True, separators=(",", ":")).encode()
+            ).digest()
         except (TypeError, ValueError) as err:
             raise PyEzvizError("Invalid pagelist data") from err
         if fingerprint in seen:

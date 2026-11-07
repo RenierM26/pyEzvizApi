@@ -3,6 +3,7 @@
 Not a decoder or full parameter-set validator. Only same-access-unit dependencies
 are accepted; no cached media/parameters are inserted into an output.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -56,10 +57,10 @@ def _units(data: bytes) -> Iterator[memoryview]:
     view = memoryview(data)
     for start in _START.finditer(data):
         if previous is None:
-            if any(view[:start.start()]):
+            if any(view[: start.start()]):
                 raise ValueError("Not Annex B")
         else:
-            yield view[previous:start.start()]
+            yield view[previous : start.start()]
         previous = start.end()
     if previous is not None:
         yield view[previous:]
@@ -124,7 +125,11 @@ def _check_idr(data: bytes, codec: str) -> bool:  # noqa: PLR0911, PLR0912
                     return False
                 pps[key] = parent
             elif kind == 5:
-                first, slice_type, key = reader.unsigned_golomb(65535), reader.unsigned_golomb(9), reader.unsigned_golomb(255)
+                first, slice_type, key = (
+                    reader.unsigned_golomb(65535),
+                    reader.unsigned_golomb(9),
+                    reader.unsigned_golomb(255),
+                )
                 if (first == 0) != (slices == 0) or slice_type not in {2, 7} or key not in pps:
                     return False
                 slices += 1

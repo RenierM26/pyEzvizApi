@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming.media import models as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.media.models as _compat_module_0
+
     _ITERATOR_CLOSE_TIMEOUT_SECONDS = _compat_module_0._ITERATOR_CLOSE_TIMEOUT_SECONDS
     _ITERATOR_STOPPED = _compat_module_0._ITERATOR_STOPPED
     _ITERATOR_TIMED_OUT = _compat_module_0._ITERATOR_TIMED_OUT

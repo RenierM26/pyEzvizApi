@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi._shared import mapping as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi._shared.mapping as _compat_module_0
+
     _MISSING = _compat_module_0._MISSING
     WILDCARD_STEP = _compat_module_0.WILDCARD_STEP
     Any = _compat_module_0.Any

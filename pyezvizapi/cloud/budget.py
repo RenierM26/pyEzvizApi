@@ -3,6 +3,7 @@
 One lazy worker and one queued job are shared process-wide. Timed-out calls do
 not create replacement workers. Ordinary HTTP remains synchronous and unchanged.
 """
+
 from __future__ import annotations
 
 from contextlib import suppress
@@ -92,7 +93,9 @@ class _HttpJob:
                     self.abort()
                     raise TimeoutError("Cloud bootstrap HTTP job cancelled")
                 if self.wire is None and getattr(response.raw, "length_remaining", None) != 0:
-                    raise PyEzvizError("Scoped bootstrap requires an interruptible HTTP response transport")
+                    raise PyEzvizError(
+                        "Scoped bootstrap requires an interruptible HTTP response transport"
+                    )
                 parts: list[bytes] = []
                 size = 0
                 for chunk in response.iter_content(chunk_size=16384):
@@ -163,7 +166,9 @@ class _HttpWorker:
 _WORKER = _HttpWorker()
 
 
-def budgeted_http_call(session: requests.Session, operation: str, **kwargs: Any) -> requests.Response:
+def budgeted_http_call(
+    session: requests.Session, operation: str, **kwargs: Any
+) -> requests.Response:
     """Bound the caller even if system DNS or server reads ignore socket totals.
 
     Borrow a detached session state, never mutate shared headers/cookies from a

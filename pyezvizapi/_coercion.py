@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi._shared import coercion as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi._shared.coercion as _compat_module_0
+
     Any = _compat_module_0.Any
     annotations = _compat_module_0.annotations
     coerce_int = _compat_module_0.coerce_int

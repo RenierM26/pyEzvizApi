@@ -30,8 +30,13 @@ class LocalStreamDiscoveryCache:
     A hit is a startup hint, not an authentication bypass or media decode proof.
     """
 
-    def __init__(self, *, ttl: float = 300.0, max_entries: int = 32,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        *,
+        ttl: float = 300.0,
+        max_entries: int = 32,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         if not math.isfinite(ttl) or ttl <= 0:
             raise PyEzvizError("Discovery cache TTL must be positive and finite")
         if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries <= 0:

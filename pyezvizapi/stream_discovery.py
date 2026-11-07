@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.streaming import discovery as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.discovery as _compat_module_0
+
     Callable = _compat_module_0.Callable
     EzvizStreamHeader = _compat_module_0.EzvizStreamHeader
     Literal = _compat_module_0.Literal

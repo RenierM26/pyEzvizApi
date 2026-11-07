@@ -87,7 +87,9 @@ def main(argv: list[str] | None = None) -> int:
     password = args.password
 
     # If no token and missing username/password, prompt interactively
-    if (not token or token.get("push_profile") != "android-channel99") and (not username or not password):
+    if (not token or token.get("push_profile") != "android-channel99") and (
+        not username or not password
+    ):
         _LOGGER.info("No token found. Please enter Ezviz credentials")
         username = username or input("Username: ")
         password = password or getpass("Password: ")
@@ -97,7 +99,10 @@ def main(argv: list[str] | None = None) -> int:
     shutdown_failed = False
     try:
         client = EzvizClient(
-            username, password, args.region, token=token,
+            username,
+            password,
+            args.region,
+            token=token,
             on_token_updated=lambda snapshot: _save_token_file(args.token_file, snapshot),
         )
         try:

@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,18 +16,36 @@ from pyezvizapi.streaming.local import session as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
 
     import pyezvizapi.streaming.local.session as _compat_module_1
+
     _CLEAN_WINDOW_PROBE_PACKET_INTERVAL = _compat_module_1._CLEAN_WINDOW_PROBE_PACKET_INTERVAL
-    _CLEAN_WINDOW_PROBE_THROTTLE_AFTER_PACKETS = _compat_module_1._CLEAN_WINDOW_PROBE_THROTTLE_AFTER_PACKETS
-    _CLEAN_WINDOW_SUFFIX_PROBE_MAX_CANDIDATES = _compat_module_1._CLEAN_WINDOW_SUFFIX_PROBE_MAX_CANDIDATES
-    _CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL = _compat_module_1._CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL
-    _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS = _compat_module_1._COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS
-    _FFMPEG_VIDEO_DECODE_PROBE_BYTES_PER_EXTRA_SECOND = _compat_module_1._FFMPEG_VIDEO_DECODE_PROBE_BYTES_PER_EXTRA_SECOND
-    _FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS = _compat_module_1._FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS
-    _FFMPEG_VIDEO_DECODE_PROBE_TIMEOUT_SECONDS = _compat_module_1._FFMPEG_VIDEO_DECODE_PROBE_TIMEOUT_SECONDS
-    _HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL = _compat_module_1._HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL
+    _CLEAN_WINDOW_PROBE_THROTTLE_AFTER_PACKETS = (
+        _compat_module_1._CLEAN_WINDOW_PROBE_THROTTLE_AFTER_PACKETS
+    )
+    _CLEAN_WINDOW_SUFFIX_PROBE_MAX_CANDIDATES = (
+        _compat_module_1._CLEAN_WINDOW_SUFFIX_PROBE_MAX_CANDIDATES
+    )
+    _CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL = (
+        _compat_module_1._CLEAN_WINDOW_SUFFIX_PROBE_PACKET_INTERVAL
+    )
+    _COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS = (
+        _compat_module_1._COMMAND_PORT_RTP_UNWRAP_FALLBACK_ERRORS
+    )
+    _FFMPEG_VIDEO_DECODE_PROBE_BYTES_PER_EXTRA_SECOND = (
+        _compat_module_1._FFMPEG_VIDEO_DECODE_PROBE_BYTES_PER_EXTRA_SECOND
+    )
+    _FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS = (
+        _compat_module_1._FFMPEG_VIDEO_DECODE_PROBE_MAX_TIMEOUT_SECONDS
+    )
+    _FFMPEG_VIDEO_DECODE_PROBE_TIMEOUT_SECONDS = (
+        _compat_module_1._FFMPEG_VIDEO_DECODE_PROBE_TIMEOUT_SECONDS
+    )
+    _HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL = (
+        _compat_module_1._HCNETSDK_APP_LAN_AUDIO_VIDEO_COMPRESS_INFO_TAIL
+    )
     _HCNETSDK_APP_LAN_PLAY_LOGIN_TAIL = _compat_module_1._HCNETSDK_APP_LAN_PLAY_LOGIN_TAIL
     _INTERRUPTED_LOCAL_STREAM_MESSAGE = _compat_module_1._INTERRUPTED_LOCAL_STREAM_MESSAGE
     ANNEX_B_LONG_START_CODE = _compat_module_1.ANNEX_B_LONG_START_CODE
@@ -34,13 +53,17 @@ if TYPE_CHECKING:
     DEFAULT_VIDEO_PAYLOAD_TYPES = _compat_module_1.DEFAULT_VIDEO_PAYLOAD_TYPES
     H264_FU_A_NAL_TYPE = _compat_module_1.H264_FU_A_NAL_TYPE
     H264_NAL_HEADER_SIZE = _compat_module_1.H264_NAL_HEADER_SIZE
-    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = _compat_module_1.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = (
+        _compat_module_1.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+    )
     HCNETSDK_HRUDP_FRAME_HEADER_SIZE = _compat_module_1.HCNETSDK_HRUDP_FRAME_HEADER_SIZE
     HCNETSDK_HRUDP_VIDEO_FRAME_TYPE = _compat_module_1.HCNETSDK_HRUDP_VIDEO_FRAME_TYPE
     HEVC_NAL_HEADER_SIZE = _compat_module_1.HEVC_NAL_HEADER_SIZE
     HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH = _compat_module_1.HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH
     IDMX_AAC_RTP_PAYLOAD_TYPE = _compat_module_1.IDMX_AAC_RTP_PAYLOAD_TYPE
-    IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = _compat_module_1.IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX
+    IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = (
+        _compat_module_1.IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX
+    )
     IDMX_DEFAULT_VIDEO_FRAME_RATE = _compat_module_1.IDMX_DEFAULT_VIDEO_FRAME_RATE
     IDMX_H264_RTP_PAYLOAD_TYPE = _compat_module_1.IDMX_H264_RTP_PAYLOAD_TYPE
     IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = _compat_module_1.IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET
@@ -76,13 +99,19 @@ if TYPE_CHECKING:
     HcNetSdkCommandPortClient = _compat_module_1.HcNetSdkCommandPortClient
     HcNetSdkCommandPortControlTemplate = _compat_module_1.HcNetSdkCommandPortControlTemplate
     HcNetSdkCommandPortExchange = _compat_module_1.HcNetSdkCommandPortExchange
-    HcNetSdkCommandPortGeneratedMultiSocketMediaStream = _compat_module_1.HcNetSdkCommandPortGeneratedMultiSocketMediaStream
-    HcNetSdkCommandPortGeneratedMultiSocketPlan = _compat_module_1.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    HcNetSdkCommandPortGeneratedMultiSocketMediaStream = (
+        _compat_module_1.HcNetSdkCommandPortGeneratedMultiSocketMediaStream
+    )
+    HcNetSdkCommandPortGeneratedMultiSocketPlan = (
+        _compat_module_1.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    )
     HcNetSdkCommandPortGeneratedSocketStep = _compat_module_1.HcNetSdkCommandPortGeneratedSocketStep
     HcNetSdkCommandPortKeepaliveEvent = _compat_module_1.HcNetSdkCommandPortKeepaliveEvent
     HcNetSdkCommandPortLoginSession = _compat_module_1.HcNetSdkCommandPortLoginSession
     HcNetSdkCommandPortMediaStream = _compat_module_1.HcNetSdkCommandPortMediaStream
-    HcNetSdkCommandPortMultiSocketMediaStream = _compat_module_1.HcNetSdkCommandPortMultiSocketMediaStream
+    HcNetSdkCommandPortMultiSocketMediaStream = (
+        _compat_module_1.HcNetSdkCommandPortMultiSocketMediaStream
+    )
     HcNetSdkCommandPortMultiSocketPlan = _compat_module_1.HcNetSdkCommandPortMultiSocketPlan
     HcNetSdkCommandPortSocketStep = _compat_module_1.HcNetSdkCommandPortSocketStep
     HcNetSdkCommandPortStreamBootstrap = _compat_module_1.HcNetSdkCommandPortStreamBootstrap
@@ -123,7 +152,9 @@ if TYPE_CHECKING:
     _append_idmx_h264_nal_unit_sample = _compat_module_1._append_idmx_h264_nal_unit_sample
     _append_idmx_hevc_media_payload = _compat_module_1._append_idmx_hevc_media_payload
     _checked_h264_duration_sum = _compat_module_1._checked_h264_duration_sum
-    _clear_native_rtp_packets_with_legacy_indices = _compat_module_1._clear_native_rtp_packets_with_legacy_indices
+    _clear_native_rtp_packets_with_legacy_indices = (
+        _compat_module_1._clear_native_rtp_packets_with_legacy_indices
+    )
     _clear_native_selected_timeline = _compat_module_1._clear_native_selected_timeline
     _copy_clear_native_idmx_timed_av = _compat_module_1._copy_clear_native_idmx_timed_av
     _copy_decrypted_native_idmx_timed_av = _compat_module_1._copy_decrypted_native_idmx_timed_av
@@ -131,16 +162,26 @@ if TYPE_CHECKING:
     _copy_mpegps_payloads_to_mpegts = _compat_module_1._copy_mpegps_payloads_to_mpegts
     _decrypt_h264_nal_prefix = _compat_module_1._decrypt_h264_nal_prefix
     _decrypt_hevc_nal_prefix = _compat_module_1._decrypt_hevc_nal_prefix
-    _decrypt_idmx_local_packets_to_adts_aac = _compat_module_1._decrypt_idmx_local_packets_to_adts_aac
+    _decrypt_idmx_local_packets_to_adts_aac = (
+        _compat_module_1._decrypt_idmx_local_packets_to_adts_aac
+    )
     _decrypt_idmx_local_packets_to_annexb = _compat_module_1._decrypt_idmx_local_packets_to_annexb
-    _decrypt_idmx_local_packets_to_annexb_with_codec = _compat_module_1._decrypt_idmx_local_packets_to_annexb_with_codec
-    _decrypted_h264_annexb_packet_index_for_offset = _compat_module_1._decrypted_h264_annexb_packet_index_for_offset
-    _decrypted_hevc_annexb_packet_index_for_offset = _compat_module_1._decrypted_hevc_annexb_packet_index_for_offset
+    _decrypt_idmx_local_packets_to_annexb_with_codec = (
+        _compat_module_1._decrypt_idmx_local_packets_to_annexb_with_codec
+    )
+    _decrypted_h264_annexb_packet_index_for_offset = (
+        _compat_module_1._decrypted_h264_annexb_packet_index_for_offset
+    )
+    _decrypted_hevc_annexb_packet_index_for_offset = (
+        _compat_module_1._decrypted_hevc_annexb_packet_index_for_offset
+    )
     _ffmpeg_h264_decode_errors = _compat_module_1._ffmpeg_h264_decode_errors
     _ffmpeg_hevc_decode_errors = _compat_module_1._ffmpeg_hevc_decode_errors
     _ffmpeg_stderr_tail = _compat_module_1._ffmpeg_stderr_tail
     _ffmpeg_video_decode_errors = _compat_module_1._ffmpeg_video_decode_errors
-    _ffmpeg_video_decode_probe_timeout_seconds = _compat_module_1._ffmpeg_video_decode_probe_timeout_seconds
+    _ffmpeg_video_decode_probe_timeout_seconds = (
+        _compat_module_1._ffmpeg_video_decode_probe_timeout_seconds
+    )
     _find_h264_annexb_start_code = _compat_module_1._find_h264_annexb_start_code
     _h264_annexb_idr_window_start_index = _compat_module_1._h264_annexb_idr_window_start_index
     _h264_annexb_nal_spans = _compat_module_1._h264_annexb_nal_spans
@@ -149,7 +190,9 @@ if TYPE_CHECKING:
     _h264_clean_idr_timeout_suffix = _compat_module_1._h264_clean_idr_timeout_suffix
     _h264_nal_type = _compat_module_1._h264_nal_type
     _H264CleanIdrProbeResult = _compat_module_1._H264CleanIdrProbeResult
-    _hcnetsdk_command_port_frame_with_client_ip = _compat_module_1._hcnetsdk_command_port_frame_with_client_ip
+    _hcnetsdk_command_port_frame_with_client_ip = (
+        _compat_module_1._hcnetsdk_command_port_frame_with_client_ip
+    )
     _hcnetsdk_command_port_media_packet = _compat_module_1._hcnetsdk_command_port_media_packet
     _hcnetsdk_command_port_media_payload = _compat_module_1._hcnetsdk_command_port_media_payload
     _hcnetsdk_command_port_step_context = _compat_module_1._hcnetsdk_command_port_step_context
@@ -160,10 +203,14 @@ if TYPE_CHECKING:
     _hevc_annexb_irap_window_start_index = _compat_module_1._hevc_annexb_irap_window_start_index
     _hevc_annexb_packet_end_offsets = _compat_module_1._hevc_annexb_packet_end_offsets
     _hevc_annexb_packet_index_for_offset = _compat_module_1._hevc_annexb_packet_index_for_offset
-    _hevc_annexb_parameter_prefix_for_suffix = _compat_module_1._hevc_annexb_parameter_prefix_for_suffix
+    _hevc_annexb_parameter_prefix_for_suffix = (
+        _compat_module_1._hevc_annexb_parameter_prefix_for_suffix
+    )
     _hevc_nal_type = _compat_module_1._hevc_nal_type
     _hevc_parameter_options = _compat_module_1._hevc_parameter_options
-    _hevc_prefixed_suffix_accept_start_offset = _compat_module_1._hevc_prefixed_suffix_accept_start_offset
+    _hevc_prefixed_suffix_accept_start_offset = (
+        _compat_module_1._hevc_prefixed_suffix_accept_start_offset
+    )
     _hikvision_aes_ecb_cipher = _compat_module_1._hikvision_aes_ecb_cipher
     _idmx_annexb_packet_index_for_offset = _compat_module_1._idmx_annexb_packet_index_for_offset
     _idmx_audio_descriptor = _compat_module_1._idmx_audio_descriptor
@@ -171,7 +218,9 @@ if TYPE_CHECKING:
     _idmx_audio_payload_types = _compat_module_1._idmx_audio_payload_types
     _idmx_frame_end_before_next_prefix = _compat_module_1._idmx_frame_end_before_next_prefix
     _idmx_h264_annexb_packet_spans = _compat_module_1._idmx_h264_annexb_packet_spans
-    _idmx_h264_packets_from_selected_annexb = _compat_module_1._idmx_h264_packets_from_selected_annexb
+    _idmx_h264_packets_from_selected_annexb = (
+        _compat_module_1._idmx_h264_packets_from_selected_annexb
+    )
     _idmx_hevc_annexb_packet_spans = _compat_module_1._idmx_hevc_annexb_packet_spans
     _idmx_hevc_direct_frame_matches_route = _compat_module_1._idmx_hevc_direct_frame_matches_route
     _idmx_local_frame_contains_media = _compat_module_1._idmx_local_frame_contains_media
@@ -184,20 +233,36 @@ if TYPE_CHECKING:
     _idmx_local_frame_rtp_timestamp = _compat_module_1._idmx_local_frame_rtp_timestamp
     _idmx_local_frame_sequence_number = _compat_module_1._idmx_local_frame_sequence_number
     _idmx_local_frame_transport_fields = _compat_module_1._idmx_local_frame_transport_fields
-    _idmx_local_frames_contain_routed_media = _compat_module_1._idmx_local_frames_contain_routed_media
-    _idmx_local_packet_contains_aggregate_descriptors = _compat_module_1._idmx_local_packet_contains_aggregate_descriptors
-    _idmx_local_packet_contains_aggregate_media_frame = _compat_module_1._idmx_local_packet_contains_aggregate_media_frame
-    _idmx_local_packet_frame_sequence_number = _compat_module_1._idmx_local_packet_frame_sequence_number
+    _idmx_local_frames_contain_routed_media = (
+        _compat_module_1._idmx_local_frames_contain_routed_media
+    )
+    _idmx_local_packet_contains_aggregate_descriptors = (
+        _compat_module_1._idmx_local_packet_contains_aggregate_descriptors
+    )
+    _idmx_local_packet_contains_aggregate_media_frame = (
+        _compat_module_1._idmx_local_packet_contains_aggregate_media_frame
+    )
+    _idmx_local_packet_frame_sequence_number = (
+        _compat_module_1._idmx_local_packet_frame_sequence_number
+    )
     _idmx_local_packets_have_aac = _compat_module_1._idmx_local_packets_have_aac
-    _idmx_local_packets_have_direct_hevc_media = _compat_module_1._idmx_local_packets_have_direct_hevc_media
+    _idmx_local_packets_have_direct_hevc_media = (
+        _compat_module_1._idmx_local_packets_have_direct_hevc_media
+    )
     _idmx_local_packets_to_annexb = _compat_module_1._idmx_local_packets_to_annexb
-    _idmx_local_packets_to_annexb_with_codec = _compat_module_1._idmx_local_packets_to_annexb_with_codec
+    _idmx_local_packets_to_annexb_with_codec = (
+        _compat_module_1._idmx_local_packets_to_annexb_with_codec
+    )
     _idmx_local_packets_to_h264_annexb = _compat_module_1._idmx_local_packets_to_h264_annexb
-    _idmx_local_packets_to_h264_annexb_with_codec = _compat_module_1._idmx_local_packets_to_h264_annexb_with_codec
+    _idmx_local_packets_to_h264_annexb_with_codec = (
+        _compat_module_1._idmx_local_packets_to_h264_annexb_with_codec
+    )
     _idmx_local_packets_to_hevc_annexb = _compat_module_1._idmx_local_packets_to_hevc_annexb
     _idmx_local_route_profile = _compat_module_1._idmx_local_route_profile
     _idmx_local_rtp_frame = _compat_module_1._idmx_local_rtp_frame
-    _idmx_local_supported_video_payload_types = _compat_module_1._idmx_local_supported_video_payload_types
+    _idmx_local_supported_video_payload_types = (
+        _compat_module_1._idmx_local_supported_video_payload_types
+    )
     _idmx_local_video_frame_rate = _compat_module_1._idmx_local_video_frame_rate
     _idmx_local_video_payload_types = _compat_module_1._idmx_local_video_payload_types
     _idmx_packet_frame_slice = _compat_module_1._idmx_packet_frame_slice
@@ -221,10 +286,14 @@ if TYPE_CHECKING:
     _local_media_aes_key = _compat_module_1._local_media_aes_key
     _local_media_packet = _compat_module_1._local_media_packet
     _local_sdk_endpoint_from_client = _compat_module_1._local_sdk_endpoint_from_client
-    _local_sdk_preview_request_from_credentials = _compat_module_1._local_sdk_preview_request_from_credentials
+    _local_sdk_preview_request_from_credentials = (
+        _compat_module_1._local_sdk_preview_request_from_credentials
+    )
     _local_stream_packets = _compat_module_1._local_stream_packets
     _local_stream_packets_are_idmx = _compat_module_1._local_stream_packets_are_idmx
-    _looks_like_hcnetsdk_wrapped_media_payload = _compat_module_1._looks_like_hcnetsdk_wrapped_media_payload
+    _looks_like_hcnetsdk_wrapped_media_payload = (
+        _compat_module_1._looks_like_hcnetsdk_wrapped_media_payload
+    )
     _looks_like_idmx_h264_clear_nal = _compat_module_1._looks_like_idmx_h264_clear_nal
     _looks_like_idmx_h264_fu_a_frame = _compat_module_1._looks_like_idmx_h264_fu_a_frame
     _looks_like_idmx_hevc_direct_frame = _compat_module_1._looks_like_idmx_hevc_direct_frame
@@ -232,7 +301,9 @@ if TYPE_CHECKING:
     _looks_like_idmx_hevc_media_frame = _compat_module_1._looks_like_idmx_hevc_media_frame
     _looks_like_idmx_hevc_parameter_frame = _compat_module_1._looks_like_idmx_hevc_parameter_frame
     _looks_like_idmx_local_payload = _compat_module_1._looks_like_idmx_local_payload
-    _looks_like_length_prefixed_idmx_local_payload = _compat_module_1._looks_like_length_prefixed_idmx_local_payload
+    _looks_like_length_prefixed_idmx_local_payload = (
+        _compat_module_1._looks_like_length_prefixed_idmx_local_payload
+    )
     _merge_idmx_h264_frame_summary = _compat_module_1._merge_idmx_h264_frame_summary
     _native_decrypted_picture_timeline = _compat_module_1._native_decrypted_picture_timeline
     _native_decrypted_rtp_timeline = _compat_module_1._native_decrypted_rtp_timeline
@@ -240,7 +311,9 @@ if TYPE_CHECKING:
     _NonemptyLocalMediaStream = _compat_module_1._NonemptyLocalMediaStream
     _open_local_h264_mpegts_remux_process = _compat_module_1._open_local_h264_mpegts_remux_process
     _open_local_hevc_mpegts_remux_process = _compat_module_1._open_local_hevc_mpegts_remux_process
-    _open_local_idmx_audio_video_mpegts_remux_process = _compat_module_1._open_local_idmx_audio_video_mpegts_remux_process
+    _open_local_idmx_audio_video_mpegts_remux_process = (
+        _compat_module_1._open_local_idmx_audio_video_mpegts_remux_process
+    )
     _open_local_mpegts_remux_process = _compat_module_1._open_local_mpegts_remux_process
     _possible_hcnetsdk_hrudp_packet_shape = _compat_module_1._possible_hcnetsdk_hrudp_packet_shape
     _probe_first_clean_idmx_video_window = _compat_module_1._probe_first_clean_idmx_video_window
@@ -248,9 +321,15 @@ if TYPE_CHECKING:
     _record_idmx_h264_nal_unit_summary = _compat_module_1._record_idmx_h264_nal_unit_summary
     _register_p2p_session_for_client = _compat_module_1._register_p2p_session_for_client
     _remaining_capture_timeout = _compat_module_1._remaining_capture_timeout
-    _requested_duration_decrypted_h264_suffix_predicate = _compat_module_1._requested_duration_decrypted_h264_suffix_predicate
-    _requested_duration_h264_suffix_predicate = _compat_module_1._requested_duration_h264_suffix_predicate
-    _requested_duration_idmx_suffix_predicate = _compat_module_1._requested_duration_idmx_suffix_predicate
+    _requested_duration_decrypted_h264_suffix_predicate = (
+        _compat_module_1._requested_duration_decrypted_h264_suffix_predicate
+    )
+    _requested_duration_h264_suffix_predicate = (
+        _compat_module_1._requested_duration_h264_suffix_predicate
+    )
+    _requested_duration_idmx_suffix_predicate = (
+        _compat_module_1._requested_duration_idmx_suffix_predicate
+    )
     _require_bounded_decrypt_capture = _compat_module_1._require_bounded_decrypt_capture
     _require_bounded_idmx_capture = _compat_module_1._require_bounded_idmx_capture
     _rtp_fragment_continues = _compat_module_1._rtp_fragment_continues
@@ -261,8 +340,12 @@ if TYPE_CHECKING:
     _RtpFragmentedNal = _compat_module_1._RtpFragmentedNal
     _should_probe_clean_window = _compat_module_1._should_probe_clean_window
     _start_ffmpeg_stderr_drain = _compat_module_1._start_ffmpeg_stderr_drain
-    _strip_hcnetsdk_command_port_media_payload_header = _compat_module_1._strip_hcnetsdk_command_port_media_payload_header
-    _strip_idmx_command_h264_record_trailer = _compat_module_1._strip_idmx_command_h264_record_trailer
+    _strip_hcnetsdk_command_port_media_payload_header = (
+        _compat_module_1._strip_hcnetsdk_command_port_media_payload_header
+    )
+    _strip_idmx_command_h264_record_trailer = (
+        _compat_module_1._strip_idmx_command_h264_record_trailer
+    )
     _strip_legacy_idmx_video_wrapper = _compat_module_1._strip_legacy_idmx_video_wrapper
     _strip_local_sdk_payload_header = _compat_module_1._strip_local_sdk_payload_header
     _summarize_idmx_h264_local_frame = _compat_module_1._summarize_idmx_h264_local_frame
@@ -270,19 +353,33 @@ if TYPE_CHECKING:
     _summarize_idmx_packet_shapes = _compat_module_1._summarize_idmx_packet_shapes
     _trim_trailing_h264_non_vcl_nals = _compat_module_1._trim_trailing_h264_non_vcl_nals
     _trim_trailing_hevc_non_vcl_nals = _compat_module_1._trim_trailing_hevc_non_vcl_nals
-    _try_first_clean_decrypted_h264_annexb_idr_window_offset = _compat_module_1._try_first_clean_decrypted_h264_annexb_idr_window_offset
-    _try_first_clean_h264_annexb_idr_window_offset = _compat_module_1._try_first_clean_h264_annexb_idr_window_offset
-    _try_first_clean_h264_annexb_idr_window_offset_from_annexb = _compat_module_1._try_first_clean_h264_annexb_idr_window_offset_from_annexb
-    _try_first_clean_hevc_annexb_irap_window_offset = _compat_module_1._try_first_clean_hevc_annexb_irap_window_offset
+    _try_first_clean_decrypted_h264_annexb_idr_window_offset = (
+        _compat_module_1._try_first_clean_decrypted_h264_annexb_idr_window_offset
+    )
+    _try_first_clean_h264_annexb_idr_window_offset = (
+        _compat_module_1._try_first_clean_h264_annexb_idr_window_offset
+    )
+    _try_first_clean_h264_annexb_idr_window_offset_from_annexb = (
+        _compat_module_1._try_first_clean_h264_annexb_idr_window_offset_from_annexb
+    )
+    _try_first_clean_hevc_annexb_irap_window_offset = (
+        _compat_module_1._try_first_clean_hevc_annexb_irap_window_offset
+    )
     _unsupported_idmx_local_payload_error = _compat_module_1._unsupported_idmx_local_payload_error
     _write_local_stream_payloads = _compat_module_1._write_local_stream_payloads
     annotations = _compat_module_1.annotations
     bisect = _compat_module_1.bisect
     cast = _compat_module_1.cast
     chain = _compat_module_1.chain
-    collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window = _compat_module_1.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window
-    collect_h264_idmx_annexb_after_first_clean_idr_window = _compat_module_1.collect_h264_idmx_annexb_after_first_clean_idr_window
-    collect_idmx_annexb_after_first_clean_video_window = _compat_module_1.collect_idmx_annexb_after_first_clean_video_window
+    collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window = (
+        _compat_module_1.collect_decrypted_h264_idmx_annexb_after_first_clean_idr_window
+    )
+    collect_h264_idmx_annexb_after_first_clean_idr_window = (
+        _compat_module_1.collect_h264_idmx_annexb_after_first_clean_idr_window
+    )
+    collect_idmx_annexb_after_first_clean_video_window = (
+        _compat_module_1.collect_idmx_annexb_after_first_clean_video_window
+    )
     collect_local_stream_media_packets = _compat_module_1.collect_local_stream_media_packets
     collect_local_stream_mpegps = _compat_module_1.collect_local_stream_mpegps
     copy_hcnetsdk_real_data_to_mpegts = _compat_module_1.copy_hcnetsdk_real_data_to_mpegts
@@ -297,13 +394,21 @@ if TYPE_CHECKING:
     decrypt_idmx_aac_packets = _compat_module_1.decrypt_idmx_aac_packets
     detect_rtp_video_codec = _compat_module_1.detect_rtp_video_codec
     field = _compat_module_1.field
-    get_local_sdk_stream_credentials_from_client = _compat_module_1.get_local_sdk_stream_credentials_from_client
+    get_local_sdk_stream_credentials_from_client = (
+        _compat_module_1.get_local_sdk_stream_credentials_from_client
+    )
     h264_clean_idr_capture_budgets = _compat_module_1.h264_clean_idr_capture_budgets
     has_positive_finite_capture_bound = _compat_module_1.has_positive_finite_capture_bound
     hashlib = _compat_module_1.hashlib
-    hcnetsdk_command_port_control_template_from_frame = _compat_module_1.hcnetsdk_command_port_control_template_from_frame
-    hcnetsdk_command_port_generated_plan_from_socket_plan = _compat_module_1.hcnetsdk_command_port_generated_plan_from_socket_plan
-    hcnetsdk_command_port_native_lan_live_view_plan = _compat_module_1.hcnetsdk_command_port_native_lan_live_view_plan
+    hcnetsdk_command_port_control_template_from_frame = (
+        _compat_module_1.hcnetsdk_command_port_control_template_from_frame
+    )
+    hcnetsdk_command_port_generated_plan_from_socket_plan = (
+        _compat_module_1.hcnetsdk_command_port_generated_plan_from_socket_plan
+    )
+    hcnetsdk_command_port_native_lan_live_view_plan = (
+        _compat_module_1.hcnetsdk_command_port_native_lan_live_view_plan
+    )
     hcnetsdk_command_port_rsa_key = _compat_module_1.hcnetsdk_command_port_rsa_key
     idmx_rtp_stream_descriptors = _compat_module_1.idmx_rtp_stream_descriptors
     idmx_video_frame_rate = _compat_module_1.idmx_video_frame_rate
@@ -313,8 +418,12 @@ if TYPE_CHECKING:
     local_media_packet_source = _compat_module_1.local_media_packet_source
     local_stream_packet_to_media_packet = _compat_module_1.local_stream_packet_to_media_packet
     native_app_timed_payloads = _compat_module_1.native_app_timed_payloads
-    open_hcnetsdk_command_port_generated_multi_socket_stream = _compat_module_1.open_hcnetsdk_command_port_generated_multi_socket_stream
-    open_hcnetsdk_command_port_multi_socket_stream = _compat_module_1.open_hcnetsdk_command_port_multi_socket_stream
+    open_hcnetsdk_command_port_generated_multi_socket_stream = (
+        _compat_module_1.open_hcnetsdk_command_port_generated_multi_socket_stream
+    )
+    open_hcnetsdk_command_port_multi_socket_stream = (
+        _compat_module_1.open_hcnetsdk_command_port_multi_socket_stream
+    )
     open_hcnetsdk_command_port_stream = _compat_module_1.open_hcnetsdk_command_port_stream
     open_local_sdk_stream = _compat_module_1.open_local_sdk_stream
     open_local_sdk_stream_from_client = _compat_module_1.open_local_sdk_stream_from_client
@@ -340,10 +449,18 @@ if TYPE_CHECKING:
     tempfile = _compat_module_1.tempfile
     time = _compat_module_1.time
     timed_rtp_mpegps_payloads = _compat_module_1.timed_rtp_mpegps_payloads
-    trim_h264_annexb_to_first_clean_idr_window = _compat_module_1.trim_h264_annexb_to_first_clean_idr_window
-    trim_h264_annexb_to_first_error_free_suffix = _compat_module_1.trim_h264_annexb_to_first_error_free_suffix
-    trim_hevc_annexb_to_first_clean_irap_window = _compat_module_1.trim_hevc_annexb_to_first_clean_irap_window
-    trim_hevc_annexb_to_first_error_free_suffix = _compat_module_1.trim_hevc_annexb_to_first_error_free_suffix
+    trim_h264_annexb_to_first_clean_idr_window = (
+        _compat_module_1.trim_h264_annexb_to_first_clean_idr_window
+    )
+    trim_h264_annexb_to_first_error_free_suffix = (
+        _compat_module_1.trim_h264_annexb_to_first_error_free_suffix
+    )
+    trim_hevc_annexb_to_first_clean_irap_window = (
+        _compat_module_1.trim_hevc_annexb_to_first_clean_irap_window
+    )
+    trim_hevc_annexb_to_first_error_free_suffix = (
+        _compat_module_1.trim_hevc_annexb_to_first_error_free_suffix
+    )
     write_aac_remux_input = _compat_module_1.write_aac_remux_input
 
     def _declare_compatibility_exports(*exports: object) -> None:

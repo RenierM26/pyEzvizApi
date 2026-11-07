@@ -8,6 +8,7 @@ four-chunk credits. Optional late activation waits for original self-contained
 IDR dependencies. Explicit replacement retires the previous mux on its worker,
 without media replay. A stalled output fails, never drops packets while succeeding.
 """
+
 # The physical owner and its private output handles share lifecycle state.
 from __future__ import annotations
 
@@ -41,10 +42,12 @@ def _no_source() -> NativePacketStream:
 
 
 class _SessionOutput(NativeMpegTsStream):
-    def __init__(self, session: NativeMpegTsSession, options: NativeStreamOptions,
-                 generation: int = 0) -> None:
-        super().__init__(_no_source, options,
-                         _completion_identity=(session.source_generation, generation))
+    def __init__(
+        self, session: NativeMpegTsSession, options: NativeStreamOptions, generation: int = 0
+    ) -> None:
+        super().__init__(
+            _no_source, options, _completion_identity=(session.source_generation, generation)
+        )
         self.session = session
         self._requested = Event()
         self._retired = Event()
@@ -59,8 +62,11 @@ class _SessionOutput(NativeMpegTsStream):
 
     @property
     def source_clock(self) -> NativeSourceClock | None:
-        return (self.join_clock if self.session.late_join and not self.cold
-                else self.session.source_clock)
+        return (
+            self.join_clock
+            if self.session.late_join and not self.cold
+            else self.session.source_clock
+        )
 
     @property
     def accepting(self) -> bool:
@@ -75,7 +81,9 @@ class _SessionOutput(NativeMpegTsStream):
 
     def _reserve_output_slot(self) -> None:
         deadline = time.monotonic() + self.session.output_timeout
-        while not self._output_slots.acquire(timeout=min(_POLL_SECONDS, self.session.output_timeout)):
+        while not self._output_slots.acquire(
+            timeout=min(_POLL_SECONDS, self.session.output_timeout)
+        ):
             self._check_stop()
             if self.session.stop_requested:
                 raise _Cancelled
@@ -97,8 +105,9 @@ class _SessionOutput(NativeMpegTsStream):
         if self._failure is None:
             self._failure = error
 
-    def source_finished(self, *, completed: bool, failure: BaseException | None,
-                        cleanup_errors: list[str]) -> None:
+    def source_finished(
+        self, *, completed: bool, failure: BaseException | None, cleanup_errors: list[str]
+    ) -> None:
         if self.session.late_join and not self.cold and self.join_pts is None:
             completed = False
             if self.requested and not self._closed and failure is None:
@@ -106,8 +115,9 @@ class _SessionOutput(NativeMpegTsStream):
         if self._failure is None:
             self._failure = failure
         self._cleanup_errors = list(cleanup_errors)
-        self._completed = (completed and not self._closed
-                           and self._failure is None and not cleanup_errors)
+        self._completed = (
+            completed and not self._closed and self._failure is None and not cleanup_errors
+        )
         self._finished.set()
 
     @property
@@ -164,34 +174,52 @@ class NativeMpegTsSession(NativeMpegTsStream):
     this authoritative physical owner, including close failure.
     """
 
-    def __init__(self, source_factory: Callable[[], NativePacketStream],
-                 outputs: tuple[NativeStreamOptions, ...], *,
-                 media_key: str | bytes | None = None,
-                 nalu_header_size: int | None = None, output_timeout: float = 0.1,
-                 late_join: bool = False) -> None:
-        if (not isinstance(outputs, tuple) or not 1 <= len(outputs) <= 4
-                or not all(isinstance(option, NativeStreamOptions) for option in outputs)):
+    def __init__(
+        self,
+        source_factory: Callable[[], NativePacketStream],
+        outputs: tuple[NativeStreamOptions, ...],
+        *,
+        media_key: str | bytes | None = None,
+        nalu_header_size: int | None = None,
+        output_timeout: float = 0.1,
+        late_join: bool = False,
+    ) -> None:
+        if (
+            not isinstance(outputs, tuple)
+            or not 1 <= len(outputs) <= 4
+            or not all(isinstance(option, NativeStreamOptions) for option in outputs)
+        ):
             raise ValueError("Declare one to four native output options")
         if len({option.selection for option in outputs}) != len(outputs):
             raise ValueError("Session outputs must have distinct selections")
         first = outputs[0]
         if any(replace(option, selection=first.selection) != first for option in outputs):
             raise ValueError("Session outputs require common codec, timeouts and EOF policy")
-        if (isinstance(output_timeout, bool) or not isinstance(output_timeout, int | float)
-                or not math.isfinite(output_timeout) or not 0 < output_timeout <= 1):
+        if (
+            isinstance(output_timeout, bool)
+            or not isinstance(output_timeout, int | float)
+            or not math.isfinite(output_timeout)
+            or not 0 < output_timeout <= 1
+        ):
             raise ValueError("Output backpressure grace must be finite and at most one second")
         if not isinstance(late_join, bool):
             raise ValueError("Late subscription mode must be explicit boolean")
-        super().__init__(source_factory, first, media_key=media_key,
-                         nalu_header_size=nalu_header_size)
+        super().__init__(
+            source_factory, first, media_key=media_key, nalu_header_size=nalu_header_size
+        )
         self.late_join = late_join
         self.output_timeout = float(output_timeout)
         self.outputs = tuple(_SessionOutput(self, option) for option in outputs)
         self._session_close_lock = Lock()
         self._retired_count = self._retired_failed = self._retired_partial = 0
-        self._retired_bytes = {key: 0 for key in (
-            "output_bytes", "read_output_bytes", "discarded_output_bytes",
-        )}
+        self._retired_bytes = {
+            key: 0
+            for key in (
+                "output_bytes",
+                "read_output_bytes",
+                "discarded_output_bytes",
+            )
+        }
 
     def _start_output(self, output: _SessionOutput) -> None:
         with self._session_close_lock:
@@ -212,14 +240,23 @@ class NativeMpegTsSession(NativeMpegTsStream):
         The returned handle remains lazy until read/start and always joins at a
         new original IDR. No histories, muxers or queues accumulate per renewal.
         """
+
         def eligible() -> bool:
-            return (self.late_join and previous in self.outputs
-                    and previous._closed and not previous._read_lock.locked()
-                    and not self.stop_requested and not self.source_finished
-                    and self._failure is None and not self._cleanup_errors
-                    and self._worker is not None and self._worker.is_alive()
-                    and any(out is not previous and out.requested and out.accepting
-                            for out in self.outputs))
+            return (
+                self.late_join
+                and previous in self.outputs
+                and previous._closed
+                and not previous._read_lock.locked()
+                and not self.stop_requested
+                and not self.source_finished
+                and self._failure is None
+                and not self._cleanup_errors
+                and self._worker is not None
+                and self._worker.is_alive()
+                and any(
+                    out is not previous and out.requested and out.accepting for out in self.outputs
+                )
+            )
 
         with self._session_close_lock:
             if not eligible():
@@ -233,8 +270,12 @@ class NativeMpegTsSession(NativeMpegTsStream):
             output = _SessionOutput(self, previous.options, previous.generation + 1)
             receipt = previous.receipt
             self._retired_count += 1
-            self._retired_failed += receipt["subscription_requested"] and receipt["status"] == "failed"
-            self._retired_partial += receipt["subscription_requested"] and receipt["status"] != "completed"
+            self._retired_failed += (
+                receipt["subscription_requested"] and receipt["status"] == "failed"
+            )
+            self._retired_partial += (
+                receipt["subscription_requested"] and receipt["status"] != "completed"
+            )
             for key in self._retired_bytes:
                 self._retired_bytes[key] += receipt[key]
             self.outputs = tuple(output if out is previous else out for out in self.outputs)
@@ -281,8 +322,11 @@ class NativeMpegTsSession(NativeMpegTsStream):
             super()._run()
         finally:
             for output in self.outputs:
-                output.source_finished(completed=self._completed, failure=self._failure,
-                                       cleanup_errors=self._cleanup_errors)
+                output.source_finished(
+                    completed=self._completed,
+                    failure=self._failure,
+                    cleanup_errors=self._cleanup_errors,
+                )
 
     def _mux_selected(self, av: Any, incoming: Any, reader: _PsInput) -> None:
         with ExitStack() as stack:
@@ -295,12 +339,21 @@ class NativeMpegTsSession(NativeMpegTsStream):
                 # existing complete cold prefix, including early-demuxed AAC.
                 output.cold = self.late_join and output.requested and output.generation == 0
                 context = stack.enter_context(ExitStack())
-                outgoing, mapping = (None, {}) if self.late_join and not output.cold else self._open_output(
-                    av, context, output, tracks,
+                outgoing, mapping = (
+                    (None, {})
+                    if self.late_join and not output.cold
+                    else self._open_output(
+                        av,
+                        context,
+                        output,
+                        tracks,
+                    )
                 )
                 bindings.append(_Binding(output, tracks, outgoing, mapping, context))
-            self._tracks = [dict(id=s.id, index=s.index, kind=s.type, codec=s.codec_context.name)
-                            for s in selected.values()]
+            self._tracks = [
+                dict(id=s.id, index=s.index, kind=s.type, codec=s.codec_context.name)
+                for s in selected.values()
+            ]
             identities = {s.index: (s.id, s.codec_context.name) for s in selected.values()}
             count = 0
             last_dts: dict[int, Fraction] = {}
@@ -317,7 +370,9 @@ class NativeMpegTsSession(NativeMpegTsStream):
                     raise PyEzvizError("Session source track identity or codec changed")
                 stamp = Fraction(packet.dts) * packet.time_base
                 if index in last_dts and stamp <= last_dts[index]:
-                    raise PyEzvizError("Session source decode timestamp repeated or moved backwards")
+                    raise PyEzvizError(
+                        "Session source decode timestamp repeated or moved backwards"
+                    )
                 last_dts[index] = stamp
                 for position, binding in enumerate(bindings):
                     if binding.output._closed and not binding.output._retired.is_set():
@@ -335,10 +390,15 @@ class NativeMpegTsSession(NativeMpegTsStream):
         for binding in bindings:
             binding.output._retired.set()  # ExitStack verified every mux close.
 
-    def _deliver_packet(self, av: Any, stack: ExitStack | None, binding: _Binding,
-                        packet: Any) -> None:
-        output, outgoing, mapping, tracks = (binding.output, binding.muxer,
-                                             binding.mapping, binding.tracks)
+    def _deliver_packet(
+        self, av: Any, stack: ExitStack | None, binding: _Binding, packet: Any
+    ) -> None:
+        output, outgoing, mapping, tracks = (
+            binding.output,
+            binding.muxer,
+            binding.mapping,
+            binding.tracks,
+        )
         index = packet.stream.index
         if not output.requested or not output.accepting:
             return
@@ -354,8 +414,12 @@ class NativeMpegTsSession(NativeMpegTsStream):
             binding.muxer, binding.mapping = outgoing, mapping
         if index not in mapping:
             return
-        if (self.late_join and not output.cold and output.join_pts is not None
-                and Fraction(packet.pts) * packet.time_base < output.join_pts):
+        if (
+            self.late_join
+            and not output.cold
+            and output.join_pts is not None
+            and Fraction(packet.pts) * packet.time_base < output.join_pts
+        ):
             if packet.stream.type == "video":
                 output.fail_output(PyEzvizError("Unsupported leading picture after IDR"))
             return  # Never backfill AAC preceding this original RAP.
@@ -377,24 +441,42 @@ class NativeMpegTsSession(NativeMpegTsStream):
         except Exception as error:
             output.fail_output(error)
 
-    def _open_output(self, av: Any, stack: ExitStack, output: _SessionOutput,
-                     tracks: list[Any]) -> tuple[Any, dict[int, Any]]:
+    def _open_output(
+        self, av: Any, stack: ExitStack, output: _SessionOutput, tracks: list[Any]
+    ) -> tuple[Any, dict[int, Any]]:
         with output._lock:
-            output._tracks = [dict(id=track.id, index=track.index, kind=track.type,
-                                   codec=track.codec_context.name) for track in tracks]
-        outgoing = stack.enter_context(av.open(
-            _TsOutput(output.publish), mode="w", format="mpegts",
-            options={"mpegts_copyts": "1", "max_delay": "0", "flush_packets": "1",
-                     "max_interleave_delta": "1", "avoid_negative_ts": "disabled",
-                     "omit_video_pes_length": "0"},
-        ))
-        return outgoing, {stream.index: outgoing.add_stream_from_template(stream)
-                          for stream in tracks}
+            output._tracks = [
+                dict(
+                    id=track.id, index=track.index, kind=track.type, codec=track.codec_context.name
+                )
+                for track in tracks
+            ]
+        outgoing = stack.enter_context(
+            av.open(
+                _TsOutput(output.publish),
+                mode="w",
+                format="mpegts",
+                options={
+                    "mpegts_copyts": "1",
+                    "max_delay": "0",
+                    "flush_packets": "1",
+                    "max_interleave_delta": "1",
+                    "avoid_negative_ts": "disabled",
+                    "omit_video_pes_length": "0",
+                },
+            )
+        )
+        return outgoing, {
+            stream.index: outgoing.add_stream_from_template(stream) for stream in tracks
+        }
 
     def _admit_idr(self, output: _SessionOutput, packet: Any) -> bool:
-        if (packet.stream.id != output.options.selection.video_id or not packet.is_keyframe
-                or packet.is_corrupt
-                or not self_contained_idr(bytes(packet), output.options.video_codec)):
+        if (
+            packet.stream.id != output.options.selection.video_id
+            or not packet.is_keyframe
+            or packet.is_corrupt
+            or not self_contained_idr(bytes(packet), output.options.video_codec)
+        ):
             return False
         origin = Fraction(packet.pts) * packet.time_base * 90000
         try:
@@ -420,8 +502,15 @@ class NativeMpegTsSession(NativeMpegTsStream):
     def receipt(self) -> dict[str, Any]:
         result = self.physical_receipt
         outputs = [output.receipt for output in self.outputs]
-        counters = ("queued_chunks", "owned_output_chunks", "output_bytes", "read_output_bytes",
-                    "discarded_output_bytes", "owned_output_bytes", "queue_capacity_bytes")
+        counters = (
+            "queued_chunks",
+            "owned_output_chunks",
+            "output_bytes",
+            "read_output_bytes",
+            "discarded_output_bytes",
+            "owned_output_bytes",
+            "queue_capacity_bytes",
+        )
         result["output_totals"] = {key: sum(row[key] for row in outputs) for key in counters}
         for key in (*counters, "peak_owned_output_chunks", "peak_owned_output_bytes"):
             result.pop(key)
@@ -433,9 +522,9 @@ class NativeMpegTsSession(NativeMpegTsStream):
         considered = [row for row in outputs if row.get("subscription_requested", True)]
         if self._retired_failed or any(row["status"] == "failed" for row in considered):
             result["status"] = "failed"
-        elif result["status"] == "completed" and (self._retired_partial or any(
-            row["status"] != "completed" for row in considered
-        )):
+        elif result["status"] == "completed" and (
+            self._retired_partial or any(row["status"] != "completed" for row in considered)
+        ):
             result["status"] = "partial"
         result["outputs"] = outputs
         result["all_outputs_completed"] = not self._retired_partial and all(

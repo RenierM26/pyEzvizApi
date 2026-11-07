@@ -1,4 +1,5 @@
 """Nominal types re-exported for implementation annotations only."""
+
 from pyezvizapi.cli.main import (
     Any as Any,
     BaseHTTPRequestHandler as BaseHTTPRequestHandler,

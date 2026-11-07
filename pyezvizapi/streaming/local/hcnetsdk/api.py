@@ -43,13 +43,24 @@ from Crypto.Util.asn1 import DerSequence
 from pyezvizapi.streaming.local.hcnetsdk import protocol as _hcnetsdk_protocol
 from pyezvizapi._shared import resolver as _resolver
 from pyezvizapi._shared.resolver import DEFAULT_RESOLVER, BoundedResolver, ResolverBusy
-from pyezvizapi.exceptions import DeviceException, EzvizLocalSdkDeadlineExpired, EzvizLocalSdkStreamClosed, PyEzvizError
-from pyezvizapi.streaming.media.models import IterableMediaPacketSource, MediaPacket, MediaPacketMetadata
+from pyezvizapi.exceptions import (
+    DeviceException,
+    EzvizLocalSdkDeadlineExpired,
+    EzvizLocalSdkStreamClosed,
+    PyEzvizError,
+)
+from pyezvizapi.streaming.media.models import (
+    IterableMediaPacketSource,
+    MediaPacket,
+    MediaPacketMetadata,
+)
 
 # Explicit aliases retain historical public/private module attributes.
 _AES_RCON = _hcnetsdk_protocol._AES_RCON
 _AES_SBOX = _hcnetsdk_protocol._AES_SBOX
-EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE: str = _hcnetsdk_protocol.EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE
+EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE: str = (
+    _hcnetsdk_protocol.EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE
+)
 EZVIZ_HCNETUTIL_LOGIN_V40: str = _hcnetsdk_protocol.EZVIZ_HCNETUTIL_LOGIN_V40
 EZVIZ_LAN_ACTIVITY_CHANNEL_HANDOFF: str = _hcnetsdk_protocol.EZVIZ_LAN_ACTIVITY_CHANNEL_HANDOFF
 EZVIZ_LAN_MAIN_VIDEO_LEVEL: int = _hcnetsdk_protocol.EZVIZ_LAN_MAIN_VIDEO_LEVEL
@@ -57,7 +68,9 @@ EZVIZ_LAN_PTZ_SPEED_DEFAULT: int = _hcnetsdk_protocol.EZVIZ_LAN_PTZ_SPEED_DEFAUL
 EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE: int = _hcnetsdk_protocol.EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE
 EZVIZ_NATIVE_CREATE_CLIENT: str = _hcnetsdk_protocol.EZVIZ_NATIVE_CREATE_CLIENT
 EZVIZ_NATIVE_START_PREVIEW: str = _hcnetsdk_protocol.EZVIZ_NATIVE_START_PREVIEW
-EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE: str = _hcnetsdk_protocol.EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE
+EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE: str = (
+    _hcnetsdk_protocol.EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE
+)
 EZVIZ_PLAYER_EXTRA_CHANNEL_NO: str = _hcnetsdk_protocol.EZVIZ_PLAYER_EXTRA_CHANNEL_NO
 EZVIZ_PLAYER_EXTRA_DEVICE_ID: str = _hcnetsdk_protocol.EZVIZ_PLAYER_EXTRA_DEVICE_ID
 EZVIZ_PLAYER_EXTRA_LAN_FLAG: str = _hcnetsdk_protocol.EZVIZ_PLAYER_EXTRA_LAN_FLAG
@@ -65,33 +78,61 @@ EZVIZ_PLAYER_EXTRA_LAN_USERID: str = _hcnetsdk_protocol.EZVIZ_PLAYER_EXTRA_LAN_U
 EZVIZ_PLAYER_EXTRA_WIFI_SSID: str = _hcnetsdk_protocol.EZVIZ_PLAYER_EXTRA_WIFI_SSID
 EZVIZ_PLAYER_LAN_FLAG_HCNETSDK: int = _hcnetsdk_protocol.EZVIZ_PLAYER_LAN_FLAG_HCNETSDK
 EZVIZ_PREPLAY_SPS_TYPE: int = _hcnetsdk_protocol.EZVIZ_PREPLAY_SPS_TYPE
-EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY: str = _hcnetsdk_protocol.EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY
+EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY: str = (
+    _hcnetsdk_protocol.EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY
+)
 EZVIZ_STREAM_INHIBIT_LAN: int = _hcnetsdk_protocol.EZVIZ_STREAM_INHIBIT_LAN
 EZVIZ_STREAM_SOURCE_LIVE_MINE: int = _hcnetsdk_protocol.EZVIZ_STREAM_SOURCE_LIVE_MINE
 EZVIZ_STREAM_TIMEOUT_MS: int = _hcnetsdk_protocol.EZVIZ_STREAM_TIMEOUT_MS
-HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET
-HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET
+HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET
+)
+HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET
+)
 HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET
 HCNETSDK_CLEANUP: str = _hcnetsdk_protocol.HCNETSDK_CLEANUP
 HCNETSDK_CLOSE_ALARM_CHAN_V30: str = _hcnetsdk_protocol.HCNETSDK_CLOSE_ALARM_CHAN_V30
 HCNETSDK_CLOSE_FORMAT_HANDLE: str = _hcnetsdk_protocol.HCNETSDK_CLOSE_FORMAT_HANDLE
 HCNETSDK_COMMAND_CANDIDATE_CONTROL: int = _hcnetsdk_protocol.HCNETSDK_COMMAND_CANDIDATE_CONTROL
-HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN: int = _hcnetsdk_protocol.HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN
-HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH: int = _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH
-HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH: int = _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
+HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN
+)
+HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH
+)
+HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH
+)
 HCNETSDK_COMMAND_PORT_CONTROL_FAMILY: int = _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_CONTROL_FAMILY
-HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM: str = _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
-HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET
-HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET
-HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET
-HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET
+HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM: str = (
+    _hcnetsdk_protocol.HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM
+)
+HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET
+)
+HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET
+)
+HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET
+)
+HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET
+)
 HCNETSDK_COMPRESSION_INFO_V30_SIZE: int = _hcnetsdk_protocol.HCNETSDK_COMPRESSION_INFO_V30_SIZE
 HCNETSDK_DEFAULT_RTSP_PORT: int = _hcnetsdk_protocol.HCNETSDK_DEFAULT_RTSP_PORT
 HCNETSDK_DEFAULT_SERVER_PORT: int = _hcnetsdk_protocol.HCNETSDK_DEFAULT_SERVER_PORT
 HCNETSDK_DEFAULT_TLS_PORT: int = _hcnetsdk_protocol.HCNETSDK_DEFAULT_TLS_PORT
-HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR: int = _hcnetsdk_protocol.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR
-HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE: int = _hcnetsdk_protocol.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
-HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE: int = _hcnetsdk_protocol.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
+HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR: int = (
+    _hcnetsdk_protocol.HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR
+)
+HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE: int = (
+    _hcnetsdk_protocol.HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE
+)
+HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE: int = (
+    _hcnetsdk_protocol.HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE
+)
 HCNETSDK_FILECOND_FIELD_ORDER = _hcnetsdk_protocol.HCNETSDK_FILECOND_FIELD_ORDER
 HCNETSDK_FIND_CLOSE_V30: str = _hcnetsdk_protocol.HCNETSDK_FIND_CLOSE_V30
 HCNETSDK_FIND_FILE_FAILED = _hcnetsdk_protocol.HCNETSDK_FIND_FILE_FAILED
@@ -121,10 +162,14 @@ HCNETSDK_MPEG_START_CODE_PREFIX: bytes = _hcnetsdk_protocol.HCNETSDK_MPEG_START_
 HCNETSDK_MPEG_TS_SYNC_BYTE: int = _hcnetsdk_protocol.HCNETSDK_MPEG_TS_SYNC_BYTE
 HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET
 HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET
-HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET
+HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET
+)
 HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET
 HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET
-HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET
+HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET: int = (
+    _hcnetsdk_protocol.HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET
+)
 HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET
 HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET: int = _hcnetsdk_protocol.HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET
 HCNETSDK_PLAYBACK_BY_TIME_V40: str = _hcnetsdk_protocol.HCNETSDK_PLAYBACK_BY_TIME_V40
@@ -134,7 +179,9 @@ HCNETSDK_PLAYBACK_FAILED = _hcnetsdk_protocol.HCNETSDK_PLAYBACK_FAILED
 HCNETSDK_PLAYBACK_FILE_TYPE_ALL: int = _hcnetsdk_protocol.HCNETSDK_PLAYBACK_FILE_TYPE_ALL
 HCNETSDK_PLAYBACK_LOCK_STATE_ALL: int = _hcnetsdk_protocol.HCNETSDK_PLAYBACK_LOCK_STATE_ALL
 HCNETSDK_PLAYCOND_FIELD_ORDER = _hcnetsdk_protocol.HCNETSDK_PLAYCOND_FIELD_ORDER
-HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER: str = _hcnetsdk_protocol.HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
+HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER: str = (
+    _hcnetsdk_protocol.HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER
+)
 HCNETSDK_PTZ_PRESET_OTHER: str = _hcnetsdk_protocol.HCNETSDK_PTZ_PRESET_OTHER
 HCNETSDK_REALDATA_CALLBACK_V30: str = _hcnetsdk_protocol.HCNETSDK_REALDATA_CALLBACK_V30
 HCNETSDK_REALPLAY_V30: str = _hcnetsdk_protocol.HCNETSDK_REALPLAY_V30
@@ -144,15 +191,23 @@ HCNETSDK_SET_DVR_CONFIG: str = _hcnetsdk_protocol.HCNETSDK_SET_DVR_CONFIG
 HCNETSDK_SET_PLAY_DATA_CALLBACK: str = _hcnetsdk_protocol.HCNETSDK_SET_PLAY_DATA_CALLBACK
 HCNETSDK_SET_PLAY_DATA_CALLBACK_V40: str = _hcnetsdk_protocol.HCNETSDK_SET_PLAY_DATA_CALLBACK_V40
 HCNETSDK_SET_PLAYBACK_ES_CALLBACK: str = _hcnetsdk_protocol.HCNETSDK_SET_PLAYBACK_ES_CALLBACK
-HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK: str = _hcnetsdk_protocol.HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
+HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK: str = (
+    _hcnetsdk_protocol.HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK
+)
 HCNETSDK_SET_PLAYBACK_SECRET_KEY: str = _hcnetsdk_protocol.HCNETSDK_SET_PLAYBACK_SECRET_KEY
 HCNETSDK_SET_SDK_LOCAL_CFG: str = _hcnetsdk_protocol.HCNETSDK_SET_SDK_LOCAL_CFG
 HCNETSDK_SETUP_ALARM_CHAN_V30: str = _hcnetsdk_protocol.HCNETSDK_SETUP_ALARM_CHAN_V30
 HCNETSDK_SETUP_ALARM_CHAN_V41: str = _hcnetsdk_protocol.HCNETSDK_SETUP_ALARM_CHAN_V41
 HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER = _hcnetsdk_protocol.HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER
-HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE: int = _hcnetsdk_protocol.HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE
-HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE: int = _hcnetsdk_protocol.HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE
-HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE: int = _hcnetsdk_protocol.HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE
+HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE: int = (
+    _hcnetsdk_protocol.HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE
+)
+HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE: int = (
+    _hcnetsdk_protocol.HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE
+)
+HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE: int = (
+    _hcnetsdk_protocol.HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE
+)
 HCNETSDK_STDXML_INPUT_FIELD_ORDER = _hcnetsdk_protocol.HCNETSDK_STDXML_INPUT_FIELD_ORDER
 HCNETSDK_STDXML_OUTPUT_FIELD_ORDER = _hcnetsdk_protocol.HCNETSDK_STDXML_OUTPUT_FIELD_ORDER
 HCNETSDK_STOP_GET_FILE: str = _hcnetsdk_protocol.HCNETSDK_STOP_GET_FILE
@@ -187,7 +242,9 @@ EzvizLanAudioVideoCompressAudioChannel = _hcnetsdk_protocol.EzvizLanAudioVideoCo
 EzvizLanAudioVideoCompressInfo = _hcnetsdk_protocol.EzvizLanAudioVideoCompressInfo
 EzvizLanAudioVideoCompressStream = _hcnetsdk_protocol.EzvizLanAudioVideoCompressStream
 EzvizLanAudioVideoCompressVideoChannel = _hcnetsdk_protocol.EzvizLanAudioVideoCompressVideoChannel
-EzvizLanAudioVideoCompressVoiceTalkChannel = _hcnetsdk_protocol.EzvizLanAudioVideoCompressVoiceTalkChannel
+EzvizLanAudioVideoCompressVoiceTalkChannel = (
+    _hcnetsdk_protocol.EzvizLanAudioVideoCompressVoiceTalkChannel
+)
 EzvizLanCameraParamConfig = _hcnetsdk_protocol.EzvizLanCameraParamConfig
 EzvizLanCompressionConfig = _hcnetsdk_protocol.EzvizLanCompressionConfig
 EzvizLanCompressionInfoV30 = _hcnetsdk_protocol.EzvizLanCompressionInfoV30
@@ -345,7 +402,9 @@ ezviz_native_video_level = _hcnetsdk_protocol.ezviz_native_video_level
 hcnetsdk_command_candidate_role = _hcnetsdk_protocol.hcnetsdk_command_candidate_role
 hcnetsdk_command_port_auth_word = _hcnetsdk_protocol.hcnetsdk_command_port_auth_word
 hcnetsdk_command_port_control_frame = _hcnetsdk_protocol.hcnetsdk_command_port_control_frame
-hcnetsdk_command_port_play_login_body_tail_for_today = _hcnetsdk_protocol.hcnetsdk_command_port_play_login_body_tail_for_today
+hcnetsdk_command_port_play_login_body_tail_for_today = (
+    _hcnetsdk_protocol.hcnetsdk_command_port_play_login_body_tail_for_today
+)
 hcnetsdk_command_port_response_payload = _hcnetsdk_protocol.hcnetsdk_command_port_response_payload
 hcnetsdk_real_data_type_is_media = _hcnetsdk_protocol.hcnetsdk_real_data_type_is_media
 hcnetsdk_real_play_request = _hcnetsdk_protocol.hcnetsdk_real_play_request
@@ -520,6 +579,8 @@ class HcNetSdkDvrCommand(IntEnum):
     SET_EZVIZ_ACCESS_CFG = 3399
     GET_PIC_CFG_V40 = 6179
     SET_PIC_CFG_V40 = 6180
+
+
 HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS: Mapping[int, int] = {
     # Native trace: NET_DVR_GetDVRConfig(login, 1054, -1, NET_DVR_HDCFG)
     # dispatches through Core_SimpleCommandToDvr as an empty 0x111050 command.
@@ -636,9 +697,7 @@ HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET = (
 HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET = (
     HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET + HCNETSDK_NETCFG_V30_IP_SIZE
 )
-HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET = (
-    HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET + 4
-)
+HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET = HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET + 4
 HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET = (
     HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET + HCNETSDK_NETCFG_V30_IP_SIZE
 )
@@ -718,6 +777,8 @@ class HcNetSdkAbility(IntEnum):
     IPC_FRONT_PARAMETER = 5
     DEVICE_ABILITY_INFO = 17
     DEVICE_VIDEOPIC = 14
+
+
 class HcNetSdkLocalCfgType(IntEnum):
     """HCNetSDK ``NET_DVR_SetSDKLocalCfg`` enum values from the APK."""
 
@@ -740,6 +801,8 @@ class HcNetSdkLocalCfgType(IntEnum):
     STREAM_CALLBACK = 16
     GENERAL = 17
     PTZ = 18
+
+
 class HcNetSdkPlaybackControlCommand(IntEnum):
     """HCNetSDK playback-control IDs from ``PlaybackControlCommand``."""
 
@@ -753,6 +816,8 @@ class HcNetSdkPlaybackControlCommand(IntEnum):
     AUDIO_VOLUME = HCNETSDK_PLAYAUDIOVOLUME
     SET_TRANS_TYPE = HCNETSDK_SET_TRANS_TYPE
     PLAY_CONVERT = HCNETSDK_PLAY_CONVERT
+
+
 class EzvizPtzCommand(IntEnum):
     """EZVIZ app PTZ command IDs from ``PlayerConstants``/``PlayUtils``."""
 
@@ -775,6 +840,8 @@ class EzvizPtzCommand(IntEnum):
     UP_RIGHT = 15
     DOWN_RIGHT = 16
     ACTION_RESET = EZVIZ_LAN_PTZ_ACTION_RESET
+
+
 class HcNetSdkPtzCommand(IntEnum):
     """HCNetSDK PTZ command IDs from ``com.neutral.netsdk.PTZCommand``."""
 
@@ -803,6 +870,8 @@ class HcNetSdkPtzCommand(IntEnum):
     RUN_SEQ = 37
     STOP_SEQ = 38
     GOTO_PRESET = 39
+
+
 class HcNetSdkPtzPresetCommand(IntEnum):
     """HCNetSDK preset command IDs from ``PTZPresetCmd``."""
 
@@ -810,6 +879,8 @@ class HcNetSdkPtzPresetCommand(IntEnum):
     CLEAR_PRESET = 9
     CLE_PRESET = 9
     GOTO_PRESET = 39
+
+
 # Define socket value-type aliases before the operations that annotate them.
 SocketSourceAddress = tuple[str, int] | None
 SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
@@ -817,14 +888,19 @@ SocketFactory = Callable[[tuple[str, int], float | None], Any]
 
 from pyezvizapi.streaming.local.hcnetsdk import requests as _impl_requests
 
+
 def hcnetsdk_real_data_to_media_packet(packet: HcNetSdkRealDataPacket) -> MediaPacket:
     """Normalize an HCNetSDK callback packet without changing its SDK model."""
     return _impl_requests.hcnetsdk_real_data_to_media_packet(packet, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_media_packet_source(packets: Iterable[HcNetSdkRealDataPacket], *, cancel: Callable[[], None] | None=None) -> IterableMediaPacketSource[HcNetSdkRealDataPacket]:
+def hcnetsdk_media_packet_source(
+    packets: Iterable[HcNetSdkRealDataPacket], *, cancel: Callable[[], None] | None = None
+) -> IterableMediaPacketSource[HcNetSdkRealDataPacket]:
     """Adapt HCNetSDK callback media packets to the shared packet contract."""
-    return _impl_requests.hcnetsdk_media_packet_source(packets, cancel=cancel, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_media_packet_source(
+        packets, cancel=cancel, _owner=_sys.modules[__name__]
+    )
 
 
 SourceAddressSocketFactory = Callable[
@@ -836,7 +912,10 @@ LocalSdkIvFactory = Callable[[int], bytes]
 
 from pyezvizapi.streaming.local.hcnetsdk import authentication as _impl_authentication
 
-def ezviz_local_sdk_ssl_iv(size: int=EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE, *, seed: bytes=EZVIZ_LOCAL_SDK_SSL_IV_PREFIX) -> bytes:
+
+def ezviz_local_sdk_ssl_iv(
+    size: int = EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE, *, seed: bytes = EZVIZ_LOCAL_SDK_SSL_IV_PREFIX
+) -> bytes:
     """Return the app-shaped IV used for local SDK SSL-like frames.
 
     EZVIZ traces show the direct-local stack creates one IV per preview setup
@@ -845,17 +924,33 @@ def ezviz_local_sdk_ssl_iv(size: int=EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE, *, seed: by
     remaining AES block bytes are zero. The 32-byte frame trailer is a
     lowercase MD5 hex digest of the encrypted body.
     """
-    return _impl_authentication.ezviz_local_sdk_ssl_iv(size, seed=seed, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_local_sdk_ssl_iv(
+        size, seed=seed, _owner=_sys.modules[__name__]
+    )
 
 
 from pyezvizapi.streaming.local.hcnetsdk import discovery as _impl_discovery
 
-def classify_lan_ports(endpoint: HcNetSdkLanEndpoint, *, timeout: float | None=2.0, socket_factory: SocketFactory=socket.create_connection) -> list[HcNetSdkPortProbe]:
+
+def classify_lan_ports(
+    endpoint: HcNetSdkLanEndpoint,
+    *,
+    timeout: float | None = 2.0,
+    socket_factory: SocketFactory = socket.create_connection,
+) -> list[HcNetSdkPortProbe]:
     """Probe advertised LAN ports without authenticating or changing state."""
-    return _impl_discovery.classify_lan_ports(endpoint, timeout=timeout, socket_factory=socket_factory, _owner=_sys.modules[__name__])
+    return _impl_discovery.classify_lan_ports(
+        endpoint, timeout=timeout, socket_factory=socket_factory, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_login_candidates(verification_code: str, *, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, command_port: int=HCNETSDK_DEFAULT_SERVER_PORT, tls_port: int=HCNETSDK_DEFAULT_TLS_PORT) -> list[HcNetSdkLoginCandidate]:
+def ezviz_lan_login_candidates(
+    verification_code: str,
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    command_port: int = HCNETSDK_DEFAULT_SERVER_PORT,
+    tls_port: int = HCNETSDK_DEFAULT_TLS_PORT,
+) -> list[HcNetSdkLoginCandidate]:
     """Return EZVIZ app-style HCNetSDK LAN login attempts.
 
     APK inspection shows LAN login tries HCNetSDK V40 over HTTPS first, then
@@ -863,17 +958,27 @@ def ezviz_lan_login_candidates(verification_code: str, *, username: str=HCNETSDK
     plus the middle 16 hex characters of the MD5 hash of the same device
     verification/activation code.
     """
-    return _impl_authentication.ezviz_lan_login_candidates(verification_code, username=username, command_port=command_port, tls_port=tls_port, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_login_candidates(
+        verification_code,
+        username=username,
+        command_port=command_port,
+        tls_port=tls_port,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_local_user_password(password: str) -> str:
     """Return the EZ_LOCAL_USER password derived by AddMD5Util.a(...)."""
-    return _impl_authentication.ezviz_lan_local_user_password(password, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_local_user_password(
+        password, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_password_store_name(user_id: str) -> str:
     """Return the SharedPreferences name used for LAN Live View passwords."""
-    return _impl_authentication.ezviz_lan_password_store_name(user_id, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_password_store_name(
+        user_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_password_store_key(serial: str) -> str:
@@ -881,7 +986,14 @@ def ezviz_lan_password_store_key(serial: str) -> str:
     return _impl_authentication.ezviz_lan_password_store_key(serial, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_settings_login_candidates(verification_code: str, *, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, command_port: int=HCNETSDK_DEFAULT_SERVER_PORT, tls_port: int=HCNETSDK_DEFAULT_TLS_PORT, login_with_8443: bool | None=None) -> list[HcNetSdkLoginCandidate]:
+def ezviz_lan_settings_login_candidates(
+    verification_code: str,
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    command_port: int = HCNETSDK_DEFAULT_SERVER_PORT,
+    tls_port: int = HCNETSDK_DEFAULT_TLS_PORT,
+    login_with_8443: bool | None = None,
+) -> list[HcNetSdkLoginCandidate]:
     """Return the LAN Live View settings-screen login attempts.
 
     LanDeviceListPresenter.o(...) differs slightly from the older
@@ -898,12 +1010,26 @@ def ezviz_lan_settings_login_candidates(verification_code: str, *, username: str
     attempts use the V40 login wrapper. Only the 8443 attempt sets the native
     ``byHttps`` flag.
     """
-    return _impl_authentication.ezviz_lan_settings_login_candidates(verification_code, username=username, command_port=command_port, tls_port=tls_port, login_with_8443=login_with_8443, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_settings_login_candidates(
+        verification_code,
+        username=username,
+        command_port=command_port,
+        tls_port=tls_port,
+        login_with_8443=login_with_8443,
+        _owner=_sys.modules[__name__],
+    )
 
 
 from pyezvizapi.streaming.local.hcnetsdk import configuration as _impl_configuration
 
-def ezviz_lan_settings_updates_services_switch(*, login_with_8443: bool | None, login_port: int, open_8000: bool | None, tls_port: int=HCNETSDK_DEFAULT_TLS_PORT) -> bool:
+
+def ezviz_lan_settings_updates_services_switch(
+    *,
+    login_with_8443: bool | None,
+    login_port: int,
+    open_8000: bool | None,
+    tls_port: int = HCNETSDK_DEFAULT_TLS_PORT,
+) -> bool:
     """Return whether the settings presenter writes ``servicesSwitch``.
 
     Smali inspection shows the compatibility checkbox update runs only after a
@@ -911,12 +1037,22 @@ def ezviz_lan_settings_updates_services_switch(*, login_with_8443: bool | None, 
     the flow falls back to the command-port login, the app does not send the
     ``GET``/``PUT`` servicesSwitch requests.
     """
-    return _impl_configuration.ezviz_lan_settings_updates_services_switch(login_with_8443=login_with_8443, login_port=login_port, open_8000=open_8000, tls_port=tls_port, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_settings_updates_services_switch(
+        login_with_8443=login_with_8443,
+        login_port=login_port,
+        open_8000=open_8000,
+        tls_port=tls_port,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_time(year: int, month: int, day: int, *, hour: int=0, minute: int=0, second: int=0) -> HcNetSdkTime:
+def hcnetsdk_time(
+    year: int, month: int, day: int, *, hour: int = 0, minute: int = 0, second: int = 0
+) -> HcNetSdkTime:
     """Return a ``NET_DVR_TIME`` field model."""
-    return _impl_requests.hcnetsdk_time(year, month, day, hour=hour, minute=minute, second=second, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_time(
+        year, month, day, hour=hour, minute=minute, second=second, _owner=_sys.modules[__name__]
+    )
 
 
 def hcnetsdk_time_from_datetime(value: datetime) -> HcNetSdkTime:
@@ -924,27 +1060,75 @@ def hcnetsdk_time_from_datetime(value: datetime) -> HcNetSdkTime:
     return _impl_requests.hcnetsdk_time_from_datetime(value, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_file_search_condition(channel: int, start_time: HcNetSdkTime | datetime | date, stop_time: HcNetSdkTime | datetime | date, *, file_type: int=HCNETSDK_PLAYBACK_FILE_TYPE_ALL, is_locked: int=HCNETSDK_PLAYBACK_LOCK_STATE_ALL, use_card_no: int=0, card_number: str | bytes=b'') -> HcNetSdkFileCond:
+def hcnetsdk_file_search_condition(
+    channel: int,
+    start_time: HcNetSdkTime | datetime | date,
+    stop_time: HcNetSdkTime | datetime | date,
+    *,
+    file_type: int = HCNETSDK_PLAYBACK_FILE_TYPE_ALL,
+    is_locked: int = HCNETSDK_PLAYBACK_LOCK_STATE_ALL,
+    use_card_no: int = 0,
+    card_number: str | bytes = b"",
+) -> HcNetSdkFileCond:
     """Return a generic ``NET_DVR_FILECOND`` playback search condition."""
-    return _impl_requests.hcnetsdk_file_search_condition(channel, start_time, stop_time, file_type=file_type, is_locked=is_locked, use_card_no=use_card_no, card_number=card_number, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_file_search_condition(
+        channel,
+        start_time,
+        stop_time,
+        file_type=file_type,
+        is_locked=is_locked,
+        use_card_no=use_card_no,
+        card_number=card_number,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_playback_file_search_condition(channel: int, start_time: HcNetSdkTime | datetime | date, stop_time: HcNetSdkTime | datetime | date) -> HcNetSdkFileCond:
+def ezviz_lan_playback_file_search_condition(
+    channel: int,
+    start_time: HcNetSdkTime | datetime | date,
+    stop_time: HcNetSdkTime | datetime | date,
+) -> HcNetSdkFileCond:
     """Return the APK-observed LAN playback file-search condition."""
-    return _impl_requests.ezviz_lan_playback_file_search_condition(channel, start_time, stop_time, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_playback_file_search_condition(
+        channel, start_time, stop_time, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_playback_condition(channel: int, start_time: HcNetSdkTime | datetime | date, stop_time: HcNetSdkTime | datetime | date, *, draw_frame: int=0, stream_type: int=0, stream_id: str | bytes=b'') -> HcNetSdkPlayCond:
+def hcnetsdk_playback_condition(
+    channel: int,
+    start_time: HcNetSdkTime | datetime | date,
+    stop_time: HcNetSdkTime | datetime | date,
+    *,
+    draw_frame: int = 0,
+    stream_type: int = 0,
+    stream_id: str | bytes = b"",
+) -> HcNetSdkPlayCond:
     """Return a generic ``NET_DVR_PLAYCOND`` time-playback condition."""
-    return _impl_requests.hcnetsdk_playback_condition(channel, start_time, stop_time, draw_frame=draw_frame, stream_type=stream_type, stream_id=stream_id, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_playback_condition(
+        channel,
+        start_time,
+        stop_time,
+        draw_frame=draw_frame,
+        stream_type=stream_type,
+        stream_id=stream_id,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_playback_condition(channel: int, start_time: HcNetSdkTime | datetime | date, stop_time: HcNetSdkTime | datetime | date, *, stream_type: int=0) -> HcNetSdkPlayCond:
+def ezviz_lan_playback_condition(
+    channel: int,
+    start_time: HcNetSdkTime | datetime | date,
+    stop_time: HcNetSdkTime | datetime | date,
+    *,
+    stream_type: int = 0,
+) -> HcNetSdkPlayCond:
     """Return the APK-compatible LAN playback-by-time condition."""
-    return _impl_requests.ezviz_lan_playback_condition(channel, start_time, stop_time, stream_type=stream_type, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_playback_condition(
+        channel, start_time, stop_time, stream_type=stream_type, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_init_request(playctrl_library: str | None='libPlayCtrl.so') -> HcNetSdkInitRequest:
+def hcnetsdk_init_request(playctrl_library: str | None = "libPlayCtrl.so") -> HcNetSdkInitRequest:
     """Return the ``NET_DVR_Init`` request shape used before LAN SDK calls."""
     return _impl_requests.hcnetsdk_init_request(playctrl_library, _owner=_sys.modules[__name__])
 
@@ -954,9 +1138,13 @@ def hcnetsdk_cleanup_request() -> HcNetSdkNoArgRequest:
     return _impl_requests.hcnetsdk_cleanup_request(_owner=_sys.modules[__name__])
 
 
-def hcnetsdk_set_connect_time_request(connect_time_ms: int=5000, retry_count: int=3) -> HcNetSdkSetConnectTimeRequest:
+def hcnetsdk_set_connect_time_request(
+    connect_time_ms: int = 5000, retry_count: int = 3
+) -> HcNetSdkSetConnectTimeRequest:
     """Return the APK-style ``NET_DVR_SetConnectTime`` request shape."""
-    return _impl_requests.hcnetsdk_set_connect_time_request(connect_time_ms, retry_count, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_connect_time_request(
+        connect_time_ms, retry_count, _owner=_sys.modules[__name__]
+    )
 
 
 def hcnetsdk_get_last_error_request() -> HcNetSdkNoArgRequest:
@@ -964,7 +1152,7 @@ def hcnetsdk_get_last_error_request() -> HcNetSdkNoArgRequest:
     return _impl_requests.hcnetsdk_get_last_error_request(_owner=_sys.modules[__name__])
 
 
-def hcnetsdk_get_error_msg_request(error_code: int | None=None) -> HcNetSdkGetErrorMsgRequest:
+def hcnetsdk_get_error_msg_request(error_code: int | None = None) -> HcNetSdkGetErrorMsgRequest:
     """Return the ``NET_DVR_GetErrorMsg`` request shape."""
     return _impl_requests.hcnetsdk_get_error_msg_request(error_code, _owner=_sys.modules[__name__])
 
@@ -984,29 +1172,55 @@ def hcnetsdk_logout_v30_request(login_id: int) -> HcNetSdkLogoutRequest:
     return _impl_requests.hcnetsdk_logout_v30_request(login_id, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_find_file_v30_request(login_id: int, file_cond: HcNetSdkFileCond) -> HcNetSdkFindFileRequest:
+def hcnetsdk_find_file_v30_request(
+    login_id: int, file_cond: HcNetSdkFileCond
+) -> HcNetSdkFindFileRequest:
     """Return the ``NET_DVR_FindFile_V30`` request shape."""
-    return _impl_requests.hcnetsdk_find_file_v30_request(login_id, file_cond, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_find_file_v30_request(
+        login_id, file_cond, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_find_next_file_v30_request(find_handle: int, *, find_data: HcNetSdkFindDataV30 | None=None) -> HcNetSdkFindNextFileRequest:
+def hcnetsdk_find_next_file_v30_request(
+    find_handle: int, *, find_data: HcNetSdkFindDataV30 | None = None
+) -> HcNetSdkFindNextFileRequest:
     """Return the ``NET_DVR_FindNextFile_V30`` request shape."""
-    return _impl_requests.hcnetsdk_find_next_file_v30_request(find_handle, find_data=find_data, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_find_next_file_v30_request(
+        find_handle, find_data=find_data, _owner=_sys.modules[__name__]
+    )
 
 
 def hcnetsdk_find_close_v30_request(find_handle: int) -> HcNetSdkFindCloseRequest:
     """Return the ``NET_DVR_FindClose_V30`` request shape."""
-    return _impl_requests.hcnetsdk_find_close_v30_request(find_handle, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_find_close_v30_request(
+        find_handle, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_playback_by_time_v40_request(login_id: int, play_cond: HcNetSdkPlayCond) -> HcNetSdkPlayBackByTimeRequest:
+def hcnetsdk_playback_by_time_v40_request(
+    login_id: int, play_cond: HcNetSdkPlayCond
+) -> HcNetSdkPlayBackByTimeRequest:
     """Return the ``NET_DVR_PlayBackByTime_V40`` request shape."""
-    return _impl_requests.hcnetsdk_playback_by_time_v40_request(login_id, play_cond, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_playback_by_time_v40_request(
+        login_id, play_cond, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_playback_control_v40_request(play_handle: int, command: int | HcNetSdkPlaybackControlCommand, *, in_buffer: str | bytes | None=None, out_buffer_size: int=0) -> HcNetSdkPlayBackControlRequest:
+def hcnetsdk_playback_control_v40_request(
+    play_handle: int,
+    command: int | HcNetSdkPlaybackControlCommand,
+    *,
+    in_buffer: str | bytes | None = None,
+    out_buffer_size: int = 0,
+) -> HcNetSdkPlayBackControlRequest:
     """Return the ``NET_DVR_PlayBackControl_V40`` request shape."""
-    return _impl_requests.hcnetsdk_playback_control_v40_request(play_handle, command, in_buffer=in_buffer, out_buffer_size=out_buffer_size, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_playback_control_v40_request(
+        play_handle,
+        command,
+        in_buffer=in_buffer,
+        out_buffer_size=out_buffer_size,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def hcnetsdk_stop_playback_request(play_handle: int) -> HcNetSdkStopPlayBackRequest:
@@ -1014,44 +1228,83 @@ def hcnetsdk_stop_playback_request(play_handle: int) -> HcNetSdkStopPlayBackRequ
     return _impl_requests.hcnetsdk_stop_playback_request(play_handle, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_playback_capture_file_request(play_handle: int, saved_file_name: str | bytes) -> HcNetSdkPlayBackCaptureFileRequest:
+def hcnetsdk_playback_capture_file_request(
+    play_handle: int, saved_file_name: str | bytes
+) -> HcNetSdkPlayBackCaptureFileRequest:
     """Return the ``NET_DVR_PlayBackCaptureFile`` request shape."""
-    return _impl_requests.hcnetsdk_playback_capture_file_request(play_handle, saved_file_name, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_playback_capture_file_request(
+        play_handle, saved_file_name, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_set_play_data_callback_request(play_handle: int, *, callback: str | None=None, user_data: str | int | None=None) -> HcNetSdkPlayDataCallbackRequest:
+def hcnetsdk_set_play_data_callback_request(
+    play_handle: int, *, callback: str | None = None, user_data: str | int | None = None
+) -> HcNetSdkPlayDataCallbackRequest:
     """Return the ``NET_DVR_SetPlayDataCallBack`` request shape."""
-    return _impl_requests.hcnetsdk_set_play_data_callback_request(play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_play_data_callback_request(
+        play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_set_play_data_callback_v40_request(play_handle: int, *, callback: str | None=None, user_data: str | int | None=None) -> HcNetSdkPlayDataCallbackRequest:
+def hcnetsdk_set_play_data_callback_v40_request(
+    play_handle: int, *, callback: str | None = None, user_data: str | int | None = None
+) -> HcNetSdkPlayDataCallbackRequest:
     """Return the ``NET_DVR_SetPlayDataCallBack_V40`` request shape."""
-    return _impl_requests.hcnetsdk_set_play_data_callback_v40_request(play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_play_data_callback_v40_request(
+        play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_set_playback_response_callback_request(play_handle: int, *, callback: str | None=None, user_data: str | int | None=None) -> HcNetSdkPlaybackCallbackRequest:
+def hcnetsdk_set_playback_response_callback_request(
+    play_handle: int, *, callback: str | None = None, user_data: str | int | None = None
+) -> HcNetSdkPlaybackCallbackRequest:
     """Return the ``NET_DVR_SetPlaybackResponseCallBack`` request shape."""
-    return _impl_requests.hcnetsdk_set_playback_response_callback_request(play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_playback_response_callback_request(
+        play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_set_playback_es_callback_request(play_handle: int, *, callback: str | None=None, user_data: str | int | None=None) -> HcNetSdkPlaybackCallbackRequest:
+def hcnetsdk_set_playback_es_callback_request(
+    play_handle: int, *, callback: str | None = None, user_data: str | int | None = None
+) -> HcNetSdkPlaybackCallbackRequest:
     """Return the ``NET_DVR_SetPlayBackESCallBack`` request shape."""
-    return _impl_requests.hcnetsdk_set_playback_es_callback_request(play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_playback_es_callback_request(
+        play_handle, callback=callback, user_data=user_data, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_set_playback_secret_key_request(play_handle: int, secret_key: str | bytes, *, secret_key_type: int=HCNETSDK_SECRET_KEY_TYPE_AES) -> HcNetSdkPlayBackSecretKeyRequest:
+def hcnetsdk_set_playback_secret_key_request(
+    play_handle: int,
+    secret_key: str | bytes,
+    *,
+    secret_key_type: int = HCNETSDK_SECRET_KEY_TYPE_AES,
+) -> HcNetSdkPlayBackSecretKeyRequest:
     """Return the ``NET_DVR_SetPlayBackSecretKey`` request shape."""
-    return _impl_requests.hcnetsdk_set_playback_secret_key_request(play_handle, secret_key, secret_key_type=secret_key_type, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_playback_secret_key_request(
+        play_handle, secret_key, secret_key_type=secret_key_type, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_get_file_by_name_request(login_id: int, dvr_file_name: str | bytes, saved_file_name: str | bytes) -> HcNetSdkGetFileByNameRequest:
+def hcnetsdk_get_file_by_name_request(
+    login_id: int, dvr_file_name: str | bytes, saved_file_name: str | bytes
+) -> HcNetSdkGetFileByNameRequest:
     """Return the ``NET_DVR_GetFileByName`` request shape."""
-    return _impl_requests.hcnetsdk_get_file_by_name_request(login_id, dvr_file_name, saved_file_name, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_get_file_by_name_request(
+        login_id, dvr_file_name, saved_file_name, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_get_file_by_time_request(login_id: int, channel: int, start_time: HcNetSdkTime | datetime | date, stop_time: HcNetSdkTime | datetime | date, saved_file_name: str | bytes) -> HcNetSdkGetFileByTimeRequest:
+def hcnetsdk_get_file_by_time_request(
+    login_id: int,
+    channel: int,
+    start_time: HcNetSdkTime | datetime | date,
+    stop_time: HcNetSdkTime | datetime | date,
+    saved_file_name: str | bytes,
+) -> HcNetSdkGetFileByTimeRequest:
     """Return the ``NET_DVR_GetFileByTime`` request shape."""
-    return _impl_requests.hcnetsdk_get_file_by_time_request(login_id, channel, start_time, stop_time, saved_file_name, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_get_file_by_time_request(
+        login_id, channel, start_time, stop_time, saved_file_name, _owner=_sys.modules[__name__]
+    )
 
 
 def hcnetsdk_stop_get_file_request(file_handle: int) -> HcNetSdkStopGetFileRequest:
@@ -1061,37 +1314,79 @@ def hcnetsdk_stop_get_file_request(file_handle: int) -> HcNetSdkStopGetFileReque
 
 def hcnetsdk_get_download_pos_request(file_handle: int) -> HcNetSdkGetDownloadPosRequest:
     """Return the ``NET_DVR_GetDownloadPos`` request shape."""
-    return _impl_requests.hcnetsdk_get_download_pos_request(file_handle, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_get_download_pos_request(
+        file_handle, _owner=_sys.modules[__name__]
+    )
 
 
 def hcnetsdk_find_next_file_status(native_result: int) -> str:
     """Return the app-observed meaning of ``NET_DVR_FindNextFile_V30``."""
-    return _impl_requests.hcnetsdk_find_next_file_status(native_result, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_find_next_file_status(
+        native_result, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_playback_video_type(native_file_type: int) -> int:
     """Map native file type to the EZVIZ ``CloudFile.videoType`` value."""
-    return _impl_requests.ezviz_lan_playback_video_type(native_file_type, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_playback_video_type(
+        native_file_type, _owner=_sys.modules[__name__]
+    )
 
 
 def sadp_activate_device_request(serial: str, password: str) -> SadpActivateDeviceRequest:
     """Return the local SADP device activation request shape."""
-    return _impl_discovery.sadp_activate_device_request(serial, password, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_activate_device_request(
+        serial, password, _owner=_sys.modules[__name__]
+    )
 
 
-def sadp_device_net_param(*, ipv4_address: str, ipv4_subnet_mask: str, ipv4_gateway: str, dhcp_enabled: int | bool, http_port: int, command_port: int, ipv6_address: str='', ipv6_gateway: str='', ipv6_mask_len: int=0) -> SadpDeviceNetParam:
+def sadp_device_net_param(
+    *,
+    ipv4_address: str,
+    ipv4_subnet_mask: str,
+    ipv4_gateway: str,
+    dhcp_enabled: int | bool,
+    http_port: int,
+    command_port: int,
+    ipv6_address: str = "",
+    ipv6_gateway: str = "",
+    ipv6_mask_len: int = 0,
+) -> SadpDeviceNetParam:
     """Return the Android ``SADP_DEV_NET_PARAM`` field-update model."""
-    return _impl_discovery.sadp_device_net_param(ipv4_address=ipv4_address, ipv4_subnet_mask=ipv4_subnet_mask, ipv4_gateway=ipv4_gateway, dhcp_enabled=dhcp_enabled, http_port=http_port, command_port=command_port, ipv6_address=ipv6_address, ipv6_gateway=ipv6_gateway, ipv6_mask_len=ipv6_mask_len, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_device_net_param(
+        ipv4_address=ipv4_address,
+        ipv4_subnet_mask=ipv4_subnet_mask,
+        ipv4_gateway=ipv4_gateway,
+        dhcp_enabled=dhcp_enabled,
+        http_port=http_port,
+        command_port=command_port,
+        ipv6_address=ipv6_address,
+        ipv6_gateway=ipv6_gateway,
+        ipv6_mask_len=ipv6_mask_len,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def sadp_modify_device_net_param_request(mac: str, password: str, net_param: SadpDeviceNetParam) -> SadpModifyDeviceNetParamRequest:
+def sadp_modify_device_net_param_request(
+    mac: str, password: str, net_param: SadpDeviceNetParam
+) -> SadpModifyDeviceNetParamRequest:
     """Return the local SADP network-parameter update request shape."""
-    return _impl_discovery.sadp_modify_device_net_param_request(mac, password, net_param, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_modify_device_net_param_request(
+        mac, password, net_param, _owner=_sys.modules[__name__]
+    )
 
 
-def sadp_modify_device_net_param_v40_request(mac: str, password: str, net_param: SadpDeviceNetParam, *, ret_net_param: SadpDeviceRetNetParam | None=None) -> SadpModifyDeviceNetParamV40Request:
+def sadp_modify_device_net_param_v40_request(
+    mac: str,
+    password: str,
+    net_param: SadpDeviceNetParam,
+    *,
+    ret_net_param: SadpDeviceRetNetParam | None = None,
+) -> SadpModifyDeviceNetParamV40Request:
     """Return the local SADP V40 network-parameter update request shape."""
-    return _impl_discovery.sadp_modify_device_net_param_v40_request(mac, password, net_param, ret_net_param=ret_net_param, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_modify_device_net_param_v40_request(
+        mac, password, net_param, ret_net_param=ret_net_param, _owner=_sys.modules[__name__]
+    )
 
 
 def sadp_get_last_error_request() -> SadpNoArgRequest:
@@ -1104,19 +1399,37 @@ def sadp_get_sadp_version_request() -> SadpNoArgRequest:
     return _impl_discovery.sadp_get_sadp_version_request(_owner=_sys.modules[__name__])
 
 
-def sadp_set_log_to_file_request(log_level: int, log_dir: str | bytes, *, auto_delete: int | bool=True) -> SadpSetLogToFileRequest:
+def sadp_set_log_to_file_request(
+    log_level: int, log_dir: str | bytes, *, auto_delete: int | bool = True
+) -> SadpSetLogToFileRequest:
     """Return the ``SADP_SetLogToFile`` request shape."""
-    return _impl_discovery.sadp_set_log_to_file_request(log_level, log_dir, auto_delete=auto_delete, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_set_log_to_file_request(
+        log_level, log_dir, auto_delete=auto_delete, _owner=_sys.modules[__name__]
+    )
 
 
-def sadp_start_v30_request(*, install_npf: int | bool=0, callback: str | None=None, user_data: str | None=None) -> SadpStartRequest:
+def sadp_start_v30_request(
+    *, install_npf: int | bool = 0, callback: str | None = None, user_data: str | None = None
+) -> SadpStartRequest:
     """Return the ``SADP_Start_V30`` request shape."""
-    return _impl_discovery.sadp_start_v30_request(install_npf=install_npf, callback=callback, user_data=user_data, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_start_v30_request(
+        install_npf=install_npf,
+        callback=callback,
+        user_data=user_data,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def sadp_start_v40_request(*, install_npf: int | bool=0, callback: str | None=None, user_data: str | None=None) -> SadpStartRequest:
+def sadp_start_v40_request(
+    *, install_npf: int | bool = 0, callback: str | None = None, user_data: str | None = None
+) -> SadpStartRequest:
     """Return the ``SADP_Start_V40`` request shape."""
-    return _impl_discovery.sadp_start_v40_request(install_npf=install_npf, callback=callback, user_data=user_data, _owner=_sys.modules[__name__])
+    return _impl_discovery.sadp_start_v40_request(
+        install_npf=install_npf,
+        callback=callback,
+        user_data=user_data,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def sadp_stop_request() -> SadpNoArgRequest:
@@ -1134,24 +1447,54 @@ def sadp_send_inquiry_request() -> SadpNoArgRequest:
     return _impl_discovery.sadp_send_inquiry_request(_owner=_sys.modules[__name__])
 
 
-def ezviz_lan_sadp_activate_batch_result(serial: str, password: str, *, code: int, error: int) -> SadpBatchResult:
+def ezviz_lan_sadp_activate_batch_result(
+    serial: str, password: str, *, code: int, error: int
+) -> SadpBatchResult:
     """Return the RN-style result map model for batch SADP activation."""
-    return _impl_discovery.ezviz_lan_sadp_activate_batch_result(serial, password, code=code, error=error, _owner=_sys.modules[__name__])
+    return _impl_discovery.ezviz_lan_sadp_activate_batch_result(
+        serial, password, code=code, error=error, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_sadp_edit_net_param_batch_result(mac: str, password: str, *, code: int, error: int) -> SadpBatchResult:
+def ezviz_lan_sadp_edit_net_param_batch_result(
+    mac: str, password: str, *, code: int, error: int
+) -> SadpBatchResult:
     """Return the RN-style result map model for batch SADP network edits."""
-    return _impl_discovery.ezviz_lan_sadp_edit_net_param_batch_result(mac, password, code=code, error=error, _owner=_sys.modules[__name__])
+    return _impl_discovery.ezviz_lan_sadp_edit_net_param_batch_result(
+        mac, password, code=code, error=error, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_stdxml_config_request(request: str | bytes, *, in_buffer: str | bytes=b'', recv_timeout: int=0, force_encrypt: int=0, num_of_multi_part: int=0, output_buffer_size: int=HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE, status_buffer_size: int=HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE) -> HcNetSdkStdXmlConfigRequest:
+def hcnetsdk_stdxml_config_request(
+    request: str | bytes,
+    *,
+    in_buffer: str | bytes = b"",
+    recv_timeout: int = 0,
+    force_encrypt: int = 0,
+    num_of_multi_part: int = 0,
+    output_buffer_size: int = HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE,
+    status_buffer_size: int = HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE,
+) -> HcNetSdkStdXmlConfigRequest:
     """Return a ``NET_DVR_STDXMLConfig`` request model."""
-    return _impl_configuration.hcnetsdk_stdxml_config_request(request, in_buffer=in_buffer, recv_timeout=recv_timeout, force_encrypt=force_encrypt, num_of_multi_part=num_of_multi_part, output_buffer_size=output_buffer_size, status_buffer_size=status_buffer_size, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_stdxml_config_request(
+        request,
+        in_buffer=in_buffer,
+        recv_timeout=recv_timeout,
+        force_encrypt=force_encrypt,
+        num_of_multi_part=num_of_multi_part,
+        output_buffer_size=output_buffer_size,
+        status_buffer_size=status_buffer_size,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_stdxml_isapi_request(method: str, path: str, body: Mapping[str, Any] | str | bytes | None=None) -> str:
+def hcnetsdk_stdxml_isapi_request(
+    method: str, path: str, body: Mapping[str, Any] | str | bytes | None = None
+) -> str:
     """Return the ISAPI request text passed to ``NET_DVR_STDXMLConfig``."""
-    return _impl_requests.hcnetsdk_stdxml_isapi_request(method, path, body, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_stdxml_isapi_request(
+        method, path, body, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_services_switch_get_request() -> str:
@@ -1164,161 +1507,399 @@ def ezviz_lan_services_switch_get_config() -> HcNetSdkStdXmlConfigRequest:
     return _impl_configuration.ezviz_lan_services_switch_get_config(_owner=_sys.modules[__name__])
 
 
-def ezviz_lan_services_switch_payload(payload: Mapping[str, Any] | None, *, enabled: bool) -> dict[str, Any]:
+def ezviz_lan_services_switch_payload(
+    payload: Mapping[str, Any] | None, *, enabled: bool
+) -> dict[str, Any]:
     """Return the LAN settings servicesSwitch update payload.
 
     The APK reads GET /ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json,
     mutates servicesSwitch.hiksdk and servicesSwitch.web to the same checkbox
     value, then sends the whole JSON object back through HCNetSDK.
     """
-    return _impl_configuration.ezviz_lan_services_switch_payload(payload, enabled=enabled, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_payload(
+        payload, enabled=enabled, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_services_switch_set_payload(payload: Mapping[str, Any] | None, *, hiksdk: int | bool | None=None, web: int | bool | None=None, rtsp: int | bool | None=None, upnp: int | bool | None=None) -> dict[str, Any]:
+def ezviz_lan_services_switch_set_payload(
+    payload: Mapping[str, Any] | None,
+    *,
+    hiksdk: int | bool | None = None,
+    web: int | bool | None = None,
+    rtsp: int | bool | None = None,
+    upnp: int | bool | None = None,
+) -> dict[str, Any]:
     """Return a ``servicesSwitch`` payload with only named switches changed."""
-    return _impl_configuration.ezviz_lan_services_switch_set_payload(payload, hiksdk=hiksdk, web=web, rtsp=rtsp, upnp=upnp, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_set_payload(
+        payload, hiksdk=hiksdk, web=web, rtsp=rtsp, upnp=upnp, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_services_switch_put_request(payload: Mapping[str, Any]) -> str:
     """Return the raw ISAPI request string sent by HCNETUtil.c(...)."""
-    return _impl_configuration.ezviz_lan_services_switch_put_request(payload, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_put_request(
+        payload, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_services_switch_put_config(payload: Mapping[str, Any]) -> HcNetSdkStdXmlConfigRequest:
     """Return a STDXML request model for writing ``servicesSwitch``."""
-    return _impl_configuration.ezviz_lan_services_switch_put_config(payload, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_put_config(
+        payload, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_services_switch_update_config(payload: Mapping[str, Any] | None, *, enabled: bool) -> HcNetSdkStdXmlConfigRequest:
+def ezviz_lan_services_switch_update_config(
+    payload: Mapping[str, Any] | None, *, enabled: bool
+) -> HcNetSdkStdXmlConfigRequest:
     """Return a STDXML request model for the app's checkbox update."""
-    return _impl_configuration.ezviz_lan_services_switch_update_config(payload, enabled=enabled, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_update_config(
+        payload, enabled=enabled, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_services_switch_set_config(payload: Mapping[str, Any] | None, *, hiksdk: int | bool | None=None, web: int | bool | None=None, rtsp: int | bool | None=None, upnp: int | bool | None=None) -> HcNetSdkStdXmlConfigRequest:
+def ezviz_lan_services_switch_set_config(
+    payload: Mapping[str, Any] | None,
+    *,
+    hiksdk: int | bool | None = None,
+    web: int | bool | None = None,
+    rtsp: int | bool | None = None,
+    upnp: int | bool | None = None,
+) -> HcNetSdkStdXmlConfigRequest:
     """Return a STDXML request model for direct ``servicesSwitch`` updates."""
-    return _impl_configuration.ezviz_lan_services_switch_set_config(payload, hiksdk=hiksdk, web=web, rtsp=rtsp, upnp=upnp, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_set_config(
+        payload, hiksdk=hiksdk, web=web, rtsp=rtsp, upnp=upnp, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_services_switch_state(response: Mapping[str, Any] | str | bytes) -> EzvizLanServicesSwitchState:
+def ezviz_lan_services_switch_state(
+    response: Mapping[str, Any] | str | bytes,
+) -> EzvizLanServicesSwitchState:
     """Parse ``servicesSwitch`` values from a local ISAPI response."""
-    return _impl_configuration.ezviz_lan_services_switch_state(response, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_state(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_services_switch_succeeded(response: Mapping[str, Any] | str | bytes) -> bool:
     """Return whether HCNETUtil.c(...) would treat a servicesSwitch PUT as OK."""
-    return _impl_configuration.ezviz_lan_services_switch_succeeded(response, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_succeeded(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_services_switch_get_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, *, command_id: int=HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID, body_prefix: str | bytes | None=None, addend_delta: int | None=0, addend: int | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> HcNetSdkStdXmlConfigResponse:  # noqa: PLR0913
+def ezviz_lan_services_switch_get_command_port(  # noqa: PLR0913
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    *,
+    command_id: int = HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID,
+    body_prefix: str | bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> HcNetSdkStdXmlConfigResponse:
     """Read ``servicesSwitch`` through traced pure-Python command-port STDXML."""
-    return _impl_configuration.ezviz_lan_services_switch_get_command_port(endpoint, password, command_id=command_id, body_prefix=body_prefix, addend_delta=addend_delta, addend=addend, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_get_command_port(
+        endpoint,
+        password,
+        command_id=command_id,
+        body_prefix=body_prefix,
+        addend_delta=addend_delta,
+        addend=addend,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_services_switch_state_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, *, command_id: int=HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID, body_prefix: str | bytes | None=None, addend_delta: int | None=0, addend: int | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> EzvizLanServicesSwitchState:  # noqa: PLR0913
+def ezviz_lan_services_switch_state_command_port(  # noqa: PLR0913
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    *,
+    command_id: int = HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID,
+    body_prefix: str | bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> EzvizLanServicesSwitchState:
     """Read and parse ``servicesSwitch`` through pure command-port STDXML."""
-    return _impl_configuration.ezviz_lan_services_switch_state_command_port(endpoint, password, command_id=command_id, body_prefix=body_prefix, addend_delta=addend_delta, addend=addend, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_state_command_port(
+        endpoint,
+        password,
+        command_id=command_id,
+        body_prefix=body_prefix,
+        addend_delta=addend_delta,
+        addend=addend,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_services_switch_set_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, current_payload: Mapping[str, Any] | None=None, *, command_id: int=HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID, body_prefix: str | bytes | None=None, addend_delta: int | None=0, addend: int | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None, hiksdk: int | bool | None=None, web: int | bool | None=None, rtsp: int | bool | None=None, upnp: int | bool | None=None) -> HcNetSdkStdXmlConfigResponse:  # noqa: PLR0913
+def ezviz_lan_services_switch_set_command_port(  # noqa: PLR0913
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    current_payload: Mapping[str, Any] | None = None,
+    *,
+    command_id: int = HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID,
+    body_prefix: str | bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+    hiksdk: int | bool | None = None,
+    web: int | bool | None = None,
+    rtsp: int | bool | None = None,
+    upnp: int | bool | None = None,
+) -> HcNetSdkStdXmlConfigResponse:
     """Set named ``servicesSwitch`` values through pure command-port STDXML.
 
     When ``current_payload`` is omitted, the device is read first so unspecified
     switches are preserved before the PUT request is sent.
     """
-    return _impl_configuration.ezviz_lan_services_switch_set_command_port(endpoint, password, current_payload, command_id=command_id, body_prefix=body_prefix, addend_delta=addend_delta, addend=addend, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, hiksdk=hiksdk, web=web, rtsp=rtsp, upnp=upnp, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_services_switch_set_command_port(
+        endpoint,
+        password,
+        current_payload,
+        command_id=command_id,
+        body_prefix=body_prefix,
+        addend_delta=addend_delta,
+        addend=addend,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        hiksdk=hiksdk,
+        web=web,
+        rtsp=rtsp,
+        upnp=upnp,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_connect_mode_payload(mode: int=1) -> dict[str, Any]:
+def ezviz_lan_connect_mode_payload(mode: int = 1) -> dict[str, Any]:
     """Return the local ``connectMode`` payload used when leaving AP mode."""
     return _impl_requests.ezviz_lan_connect_mode_payload(mode, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_connect_mode_put_request(mode: int=1) -> str:
+def ezviz_lan_connect_mode_put_request(mode: int = 1) -> str:
     """Return the raw local ISAPI ``connectMode`` PUT request."""
     return _impl_requests.ezviz_lan_connect_mode_put_request(mode, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_connect_mode_put_config(mode: int=1) -> HcNetSdkStdXmlConfigRequest:
+def ezviz_lan_connect_mode_put_config(mode: int = 1) -> HcNetSdkStdXmlConfigRequest:
     """Return a STDXML request model for writing local ``connectMode``."""
-    return _impl_configuration.ezviz_lan_connect_mode_put_config(mode, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_connect_mode_put_config(
+        mode, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_net_config_and_voice_upload_payload(*, ip: str, port: int, bssid: str, ssid: str, passwd: str, security: int) -> dict[str, Any]:
+def ezviz_lan_net_config_and_voice_upload_payload(
+    *, ip: str, port: int, bssid: str, ssid: str, passwd: str, security: int
+) -> dict[str, Any]:
     """Return the local add-device Wi-Fi upload payload used by the APK."""
-    return _impl_configuration.ezviz_lan_net_config_and_voice_upload_payload(ip=ip, port=port, bssid=bssid, ssid=ssid, passwd=passwd, security=security, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_net_config_and_voice_upload_payload(
+        ip=ip,
+        port=port,
+        bssid=bssid,
+        ssid=ssid,
+        passwd=passwd,
+        security=security,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_net_config_and_voice_upload_put_request(*, ip: str, port: int, bssid: str, ssid: str, passwd: str, security: int) -> str:
+def ezviz_lan_net_config_and_voice_upload_put_request(
+    *, ip: str, port: int, bssid: str, ssid: str, passwd: str, security: int
+) -> str:
     """Return the raw local ISAPI net-config upload PUT request."""
-    return _impl_configuration.ezviz_lan_net_config_and_voice_upload_put_request(ip=ip, port=port, bssid=bssid, ssid=ssid, passwd=passwd, security=security, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_net_config_and_voice_upload_put_request(
+        ip=ip,
+        port=port,
+        bssid=bssid,
+        ssid=ssid,
+        passwd=passwd,
+        security=security,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_net_config_and_voice_upload_put_config(*, ip: str, port: int, bssid: str, ssid: str, passwd: str, security: int) -> HcNetSdkStdXmlConfigRequest:
+def ezviz_lan_net_config_and_voice_upload_put_config(
+    *, ip: str, port: int, bssid: str, ssid: str, passwd: str, security: int
+) -> HcNetSdkStdXmlConfigRequest:
     """Return a STDXML request model for local net-config upload."""
-    return _impl_configuration.ezviz_lan_net_config_and_voice_upload_put_config(ip=ip, port=port, bssid=bssid, ssid=ssid, passwd=passwd, security=security, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_net_config_and_voice_upload_put_config(
+        ip=ip,
+        port=port,
+        bssid=bssid,
+        ssid=ssid,
+        passwd=passwd,
+        security=security,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_dvr_config_get_request(login_id: int, command: int, *, channel: int=-1, structure: str, structure_size: int | None=None) -> HcNetSdkDvrConfigRequest:
+def hcnetsdk_dvr_config_get_request(
+    login_id: int,
+    command: int,
+    *,
+    channel: int = -1,
+    structure: str,
+    structure_size: int | None = None,
+) -> HcNetSdkDvrConfigRequest:
     """Return a ``NET_DVR_GetDVRConfig`` request model."""
-    return _impl_configuration.hcnetsdk_dvr_config_get_request(login_id, command, channel=channel, structure=structure, structure_size=structure_size, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_dvr_config_get_request(
+        login_id,
+        command,
+        channel=channel,
+        structure=structure,
+        structure_size=structure_size,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_dvr_config_set_request(login_id: int, command: int, *, channel: int=-1, structure: str, structure_size: int | None=None, field_updates: Mapping[str, Any] | None=None, read_before_write: bool=False) -> HcNetSdkDvrConfigRequest:
+def hcnetsdk_dvr_config_set_request(
+    login_id: int,
+    command: int,
+    *,
+    channel: int = -1,
+    structure: str,
+    structure_size: int | None = None,
+    field_updates: Mapping[str, Any] | None = None,
+    read_before_write: bool = False,
+) -> HcNetSdkDvrConfigRequest:
     """Return a ``NET_DVR_SetDVRConfig`` request model."""
-    return _impl_configuration.hcnetsdk_dvr_config_set_request(login_id, command, channel=channel, structure=structure, structure_size=structure_size, field_updates=field_updates, read_before_write=read_before_write, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_dvr_config_set_request(
+        login_id,
+        command,
+        channel=channel,
+        structure=structure,
+        structure_size=structure_size,
+        field_updates=field_updates,
+        read_before_write=read_before_write,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_wifi_station_patch(*, ssid: str | bytes, password: str | bytes=b'', mac: str | bytes | None=None, mode: int=0, security: int | None=None) -> dict[str, Any]:
+def ezviz_lan_wifi_station_patch(
+    *,
+    ssid: str | bytes,
+    password: str | bytes = b"",
+    mac: str | bytes | None = None,
+    mode: int = 0,
+    security: int | None = None,
+) -> dict[str, Any]:
     """Return APK-observed ``NET_DVR_WIFI_CFG`` field updates for station Wi-Fi."""
-    return _impl_configuration.ezviz_lan_wifi_station_patch(ssid=ssid, password=password, mac=mac, mode=mode, security=security, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_wifi_station_patch(
+        ssid=ssid,
+        password=password,
+        mac=mac,
+        mode=mode,
+        security=security,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_wifi_get_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the app's ``NET_DVR_WIFI_CFG`` read request."""
-    return _impl_configuration.ezviz_lan_wifi_get_config_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_wifi_get_config_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_wifi_set_config_request(login_id: int, *, ssid: str | bytes, password: str | bytes=b'', mac: str | bytes | None=None, mode: int=0, security: int | None=None) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_wifi_set_config_request(
+    login_id: int,
+    *,
+    ssid: str | bytes,
+    password: str | bytes = b"",
+    mac: str | bytes | None = None,
+    mode: int = 0,
+    security: int | None = None,
+) -> HcNetSdkDvrConfigRequest:
     """Return the APK-observed ``NET_DVR_WIFI_CFG`` station update request."""
-    return _impl_configuration.ezviz_lan_wifi_set_config_request(login_id, ssid=ssid, password=password, mac=mac, mode=mode, security=security, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_wifi_set_config_request(
+        login_id,
+        ssid=ssid,
+        password=password,
+        mac=mac,
+        mode=mode,
+        security=security,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_wifi_work_mode_update_request(login_id: int, mode: int) -> HcNetSdkDvrConfigRequest:
     """Return the RN LAN ``apiSetApWorkModeWithHandle`` request shape."""
-    return _impl_configuration.ezviz_lan_wifi_work_mode_update_request(login_id, mode, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_wifi_work_mode_update_request(
+        login_id, mode, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_wifi_ap_info_list_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local Wi-Fi scan ``NET_DVR_AP_INFO_LIST`` request shape."""
-    return _impl_configuration.ezviz_lan_wifi_ap_info_list_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_wifi_ap_info_list_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_time_get_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_TIME`` read request shape."""
-    return _impl_configuration.ezviz_lan_time_get_config_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_time_get_config_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_ntp_get_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_NTPPARA`` read request shape."""
-    return _impl_configuration.ezviz_lan_ntp_get_config_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ntp_get_config_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_device_config_v40_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_DEVICECFG_V40`` read request shape."""
-    return _impl_configuration.ezviz_lan_device_config_v40_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_device_config_v40_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_net_config_v30_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_NETCFG_V30`` read request shape."""
-    return _impl_configuration.ezviz_lan_net_config_v30_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_net_config_v30_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_record_config_v30_request(login_id: int, *, channel: int=1) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_record_config_v30_request(
+    login_id: int, *, channel: int = 1
+) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_RECORD_V30`` read request shape."""
-    return _impl_configuration.ezviz_lan_record_config_v30_request(login_id, channel=channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_record_config_v30_request(
+        login_id, channel=channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_wifi_ap_info_list(data: bytes | bytearray | memoryview) -> tuple[EzvizLanWifiApInfo, ...]:
+def ezviz_lan_wifi_ap_info_list(
+    data: bytes | bytearray | memoryview,
+) -> tuple[EzvizLanWifiApInfo, ...]:
     """Parse a ``NET_DVR_AP_INFO_LIST`` buffer returned by the command port."""
     return _impl_configuration.ezviz_lan_wifi_ap_info_list(data, _owner=_sys.modules[__name__])
 
@@ -1340,12 +1921,18 @@ def ezviz_lan_net_config_v30(data: bytes | bytearray | memoryview) -> EzvizLanNe
 
 def _hcnetsdk_config_declared_size(raw: bytes, label: str) -> tuple[int, int]:
     """Return declared/effective size for traced DVR config body variants."""
-    return _impl_configuration._hcnetsdk_config_declared_size(raw, label, _owner=_sys.modules[__name__])
+    return _impl_configuration._hcnetsdk_config_declared_size(
+        raw, label, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_dvr_config_summary(data: bytes | bytearray | memoryview, *, command: int, structure: str) -> EzvizLanDvrConfigSummary:
+def ezviz_lan_dvr_config_summary(
+    data: bytes | bytearray | memoryview, *, command: int, structure: str
+) -> EzvizLanDvrConfigSummary:
     """Return a non-secret summary for a binary DVR config response."""
-    return _impl_configuration.ezviz_lan_dvr_config_summary(data, command=command, structure=structure, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_dvr_config_summary(
+        data, command=command, structure=structure, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_wifi_config_summary(data: bytes | bytearray | memoryview) -> EzvizLanDvrConfigSummary:
@@ -1353,19 +1940,29 @@ def ezviz_lan_wifi_config_summary(data: bytes | bytearray | memoryview) -> Ezviz
     return _impl_configuration.ezviz_lan_wifi_config_summary(data, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_ezviz_access_config_summary(data: bytes | bytearray | memoryview) -> EzvizLanDvrConfigSummary:
+def ezviz_lan_ezviz_access_config_summary(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanDvrConfigSummary:
     """Return a non-secret summary of a traced ``NET_DVR_EZVIZ_ACCESS_CFG``."""
-    return _impl_configuration.ezviz_lan_ezviz_access_config_summary(data, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ezviz_access_config_summary(
+        data, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ezviz_access_config(data: bytes | bytearray | memoryview) -> EzvizLanEzvizAccessConfig:
+def ezviz_lan_ezviz_access_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanEzvizAccessConfig:
     """Parse redacted ``NET_DVR_EZVIZ_ACCESS_CFG`` fields from command output."""
     return _impl_configuration.ezviz_lan_ezviz_access_config(data, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_user_config_v30_summary(data: bytes | bytearray | memoryview) -> EzvizLanDvrConfigSummary:
+def ezviz_lan_user_config_v30_summary(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanDvrConfigSummary:
     """Return a non-secret summary of ``NET_DVR_USER_V30`` config output."""
-    return _impl_configuration.ezviz_lan_user_config_v30_summary(data, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_user_config_v30_summary(
+        data, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_user_config_v30(data: bytes | bytearray | memoryview) -> EzvizLanUserConfigV30:
@@ -1379,7 +1976,9 @@ def ezviz_lan_user_config_v30(data: bytes | bytearray | memoryview) -> EzvizLanU
 
 def _ezviz_lan_user_config_v30_entry(entry: bytes, index: int) -> EzvizLanUserConfigV30Entry:
     """Parse one fixed-size ``NET_DVR_USER_INFO_V30`` record."""
-    return _impl_configuration._ezviz_lan_user_config_v30_entry(entry, index, _owner=_sys.modules[__name__])
+    return _impl_configuration._ezviz_lan_user_config_v30_entry(
+        entry, index, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_device_config_v40(data: bytes | bytearray | memoryview) -> EzvizLanDeviceConfigV40:
@@ -1402,12 +2001,16 @@ def _ezviz_lan_hd_disk_config(entry: bytes) -> EzvizLanHdDiskConfig:
     return _impl_configuration._ezviz_lan_hd_disk_config(entry, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_camera_param_config(data: bytes | bytearray | memoryview) -> EzvizLanCameraParamConfig:
+def ezviz_lan_camera_param_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanCameraParamConfig:
     """Parse known ``NET_DVR_CAMERAPARAMCFG`` fields from command-port output."""
     return _impl_configuration.ezviz_lan_camera_param_config(data, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_wifi_connect_status(data: bytes | bytearray | memoryview) -> EzvizLanWifiConnectStatus:
+def ezviz_lan_wifi_connect_status(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanWifiConnectStatus:
     """Parse known ``NET_DVR_WIFI_CONNECT_STATUS`` fields from command output."""
     return _impl_configuration.ezviz_lan_wifi_connect_status(data, _owner=_sys.modules[__name__])
 
@@ -1417,7 +2020,9 @@ def ezviz_lan_audio_input_param(data: bytes | bytearray | memoryview) -> EzvizLa
     return _impl_requests.ezviz_lan_audio_input_param(data, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_audio_output_volume(data: bytes | bytearray | memoryview) -> EzvizLanAudioOutputVolume:
+def ezviz_lan_audio_output_volume(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanAudioOutputVolume:
     """Parse known ``NET_DVR_AUDIOOUT_VOLUME`` fields from command output."""
     return _impl_configuration.ezviz_lan_audio_output_volume(data, _owner=_sys.modules[__name__])
 
@@ -1432,69 +2037,137 @@ def ezviz_lan_picture_config(data: bytes | bytearray | memoryview) -> EzvizLanPi
     return _impl_configuration.ezviz_lan_picture_config(data, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_wifi_connect_status_request(login_id: int, *, channel: int=0) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_wifi_connect_status_request(
+    login_id: int, *, channel: int = 0
+) -> HcNetSdkDvrConfigRequest:
     """Return the local Wi-Fi connection status request shape."""
-    return _impl_configuration.ezviz_lan_wifi_connect_status_request(login_id, channel=channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_wifi_connect_status_request(
+        login_id, channel=channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ezviz_access_replacement_domain(domain: str | bytes | None, *, fallback: str='dev.ezvizru.com') -> str:
+def ezviz_lan_ezviz_access_replacement_domain(
+    domain: str | bytes | None, *, fallback: str = "dev.ezvizru.com"
+) -> str:
     """Return the domain rewrite performed by ``HCNETUtil.g``."""
-    return _impl_requests.ezviz_lan_ezviz_access_replacement_domain(domain, fallback=fallback, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_ezviz_access_replacement_domain(
+        domain, fallback=fallback, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_ezviz_access_get_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_EZVIZ_ACCESS_CFG`` read request shape."""
-    return _impl_configuration.ezviz_lan_ezviz_access_get_config_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ezviz_access_get_config_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ezviz_access_set_domain_request(login_id: int, domain: str | bytes) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_ezviz_access_set_domain_request(
+    login_id: int, domain: str | bytes
+) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_EZVIZ_ACCESS_CFG`` domain update shape."""
-    return _impl_requests.ezviz_lan_ezviz_access_set_domain_request(login_id, domain, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_ezviz_access_set_domain_request(
+        login_id, domain, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ezviz_access_replacement_domain_request(login_id: int, current_domain: str | bytes | None) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_ezviz_access_replacement_domain_request(
+    login_id: int, current_domain: str | bytes | None
+) -> HcNetSdkDvrConfigRequest:
     """Return the local-add domain rewrite request used on RU accounts."""
-    return _impl_requests.ezviz_lan_ezviz_access_replacement_domain_request(login_id, current_domain, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_ezviz_access_replacement_domain_request(
+        login_id, current_domain, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_audio_input_get_config_request(login_id: int, channel: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_audio_input_get_config_request(
+    login_id: int, channel: int
+) -> HcNetSdkDvrConfigRequest:
     """Return the local audio-input config read request shape."""
-    return _impl_configuration.ezviz_lan_audio_input_get_config_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_audio_input_get_config_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_audioout_volume_get_config_request(login_id: int, channel: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_audioout_volume_get_config_request(
+    login_id: int, channel: int
+) -> HcNetSdkDvrConfigRequest:
     """Return the local audio-output volume read request shape."""
-    return _impl_configuration.ezviz_lan_audioout_volume_get_config_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_audioout_volume_get_config_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_audio_volume_update_requests(login_id: int, channel: int, *, input_volume: int, output_volume: int) -> tuple[HcNetSdkDvrConfigRequest, HcNetSdkDvrConfigRequest]:
+def ezviz_lan_audio_volume_update_requests(
+    login_id: int, channel: int, *, input_volume: int, output_volume: int
+) -> tuple[HcNetSdkDvrConfigRequest, HcNetSdkDvrConfigRequest]:
     """Return the two local audio-volume set calls made by the RN wrapper."""
-    return _impl_configuration.ezviz_lan_audio_volume_update_requests(login_id, channel, input_volume=input_volume, output_volume=output_volume, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_audio_volume_update_requests(
+        login_id,
+        channel,
+        input_volume=input_volume,
+        output_volume=output_volume,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_video_coding_get_config_request(login_id: int, channel: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_video_coding_get_config_request(
+    login_id: int, channel: int
+) -> HcNetSdkDvrConfigRequest:
     """Return the local video-coding config read request shape."""
-    return _impl_configuration.ezviz_lan_video_coding_get_config_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_video_coding_get_config_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_video_coding_update_request(login_id: int, channel: int, *, video_encoding_type: int, video_frame_rate: int, video_bitrate: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_video_coding_update_request(
+    login_id: int,
+    channel: int,
+    *,
+    video_encoding_type: int,
+    video_frame_rate: int,
+    video_bitrate: int,
+) -> HcNetSdkDvrConfigRequest:
     """Return the RN LAN video-coding update request shape."""
-    return _impl_requests.ezviz_lan_video_coding_update_request(login_id, channel, video_encoding_type=video_encoding_type, video_frame_rate=video_frame_rate, video_bitrate=video_bitrate, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_video_coding_update_request(
+        login_id,
+        channel,
+        video_encoding_type=video_encoding_type,
+        video_frame_rate=video_frame_rate,
+        video_bitrate=video_bitrate,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_pic_config_get_request(login_id: int, channel: int) -> HcNetSdkDvrConfigRequest:
     """Return the local image/OSD config read request shape."""
-    return _impl_configuration.ezviz_lan_pic_config_get_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_pic_config_get_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_pic_config_v30_get_request(login_id: int, channel: int) -> HcNetSdkDvrConfigRequest:
     """Return the traced legacy ``NET_DVR_PICCFG_V30`` read request shape."""
-    return _impl_configuration.ezviz_lan_pic_config_v30_get_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_pic_config_v30_get_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_pic_config_update_request(login_id: int, channel: int, *, show_osd: int | None=None, channel_name: str | bytes | None=None) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_pic_config_update_request(
+    login_id: int,
+    channel: int,
+    *,
+    show_osd: int | None = None,
+    channel_name: str | bytes | None = None,
+) -> HcNetSdkDvrConfigRequest:
     """Return the RN LAN image/OSD update request shape."""
-    return _impl_configuration.ezviz_lan_pic_config_update_request(login_id, channel, show_osd=show_osd, channel_name=channel_name, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_pic_config_update_request(
+        login_id,
+        channel,
+        show_osd=show_osd,
+        channel_name=channel_name,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_hd_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
@@ -1504,22 +2177,42 @@ def ezviz_lan_hd_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
 
 def ezviz_lan_sd_format_start_request(login_id: int, disk_number: int) -> HcNetSdkFormatDiskRequest:
     """Return the local SD-card format start request shape."""
-    return _impl_configuration.ezviz_lan_sd_format_start_request(login_id, disk_number, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_sd_format_start_request(
+        login_id, disk_number, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_sd_format_progress_request(format_handle: int) -> HcNetSdkFormatProgressRequest:
     """Return the local SD-card format progress request shape."""
-    return _impl_configuration.ezviz_lan_sd_format_progress_request(format_handle, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_sd_format_progress_request(
+        format_handle, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_sd_format_close_request(format_handle: int) -> HcNetSdkCloseFormatHandleRequest:
     """Return the local SD-card format close request shape."""
-    return _impl_configuration.ezviz_lan_sd_format_close_request(format_handle, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_sd_format_close_request(
+        format_handle, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_sd_format_progress_result(*, native_succeeded: bool, current_disk: int=-1, current_disk_position: int=-1, status: int=-1, last_error: int=0) -> EzvizLanSdFormatProgress:
+def ezviz_lan_sd_format_progress_result(
+    *,
+    native_succeeded: bool,
+    current_disk: int = -1,
+    current_disk_position: int = -1,
+    status: int = -1,
+    last_error: int = 0,
+) -> EzvizLanSdFormatProgress:
     """Map native SD format progress references to the RN result semantics."""
-    return _impl_configuration.ezviz_lan_sd_format_progress_result(native_succeeded=native_succeeded, current_disk=current_disk, current_disk_position=current_disk_position, status=status, last_error=last_error, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_sd_format_progress_result(
+        native_succeeded=native_succeeded,
+        current_disk=current_disk,
+        current_disk_position=current_disk_position,
+        status=status,
+        last_error=last_error,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def hcnetsdk_setup_alarm_v30_request(login_id: int) -> HcNetSdkSetupAlarmRequest:
@@ -1527,9 +2220,33 @@ def hcnetsdk_setup_alarm_v30_request(login_id: int) -> HcNetSdkSetupAlarmRequest
     return _impl_requests.hcnetsdk_setup_alarm_v30_request(login_id, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_setup_alarm_v41_request(login_id: int, *, level: int=0, alarm_info_type: int=0, ret_alarm_type_v40: int=0, ret_dev_info_version: int=0, ret_vqd_alarm_type: int=0, face_alarm_detection: int=0, support: int=0, broken_net_http: int=0, task_no: int=0) -> HcNetSdkSetupAlarmRequest:
+def hcnetsdk_setup_alarm_v41_request(
+    login_id: int,
+    *,
+    level: int = 0,
+    alarm_info_type: int = 0,
+    ret_alarm_type_v40: int = 0,
+    ret_dev_info_version: int = 0,
+    ret_vqd_alarm_type: int = 0,
+    face_alarm_detection: int = 0,
+    support: int = 0,
+    broken_net_http: int = 0,
+    task_no: int = 0,
+) -> HcNetSdkSetupAlarmRequest:
     """Return a ``NET_DVR_SetupAlarmChan_V41`` request model."""
-    return _impl_requests.hcnetsdk_setup_alarm_v41_request(login_id, level=level, alarm_info_type=alarm_info_type, ret_alarm_type_v40=ret_alarm_type_v40, ret_dev_info_version=ret_dev_info_version, ret_vqd_alarm_type=ret_vqd_alarm_type, face_alarm_detection=face_alarm_detection, support=support, broken_net_http=broken_net_http, task_no=task_no, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_setup_alarm_v41_request(
+        login_id,
+        level=level,
+        alarm_info_type=alarm_info_type,
+        ret_alarm_type_v40=ret_alarm_type_v40,
+        ret_dev_info_version=ret_dev_info_version,
+        ret_vqd_alarm_type=ret_vqd_alarm_type,
+        face_alarm_detection=face_alarm_detection,
+        support=support,
+        broken_net_http=broken_net_http,
+        task_no=task_no,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def hcnetsdk_close_alarm_request(alarm_handle: int) -> HcNetSdkCloseAlarmRequest:
@@ -1537,69 +2254,171 @@ def hcnetsdk_close_alarm_request(alarm_handle: int) -> HcNetSdkCloseAlarmRequest
     return _impl_requests.hcnetsdk_close_alarm_request(alarm_handle, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_set_sdk_local_cfg_request(cfg_type: int, *, structure: str, field_updates: Mapping[str, Any] | None=None, field_order: tuple[str, ...] | None=None) -> HcNetSdkSetSdkLocalCfgRequest:
+def hcnetsdk_set_sdk_local_cfg_request(
+    cfg_type: int,
+    *,
+    structure: str,
+    field_updates: Mapping[str, Any] | None = None,
+    field_order: tuple[str, ...] | None = None,
+) -> HcNetSdkSetSdkLocalCfgRequest:
     """Return a generic ``NET_DVR_SetSDKLocalCfg`` request model."""
-    return _impl_requests.hcnetsdk_set_sdk_local_cfg_request(cfg_type, structure=structure, field_updates=field_updates, field_order=field_order, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_set_sdk_local_cfg_request(
+        cfg_type,
+        structure=structure,
+        field_updates=field_updates,
+        field_order=field_order,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_hcnetsdk_local_ability_parse_request(*, enabled: int | bool=True) -> HcNetSdkSetSdkLocalCfgRequest:
+def ezviz_hcnetsdk_local_ability_parse_request(
+    *, enabled: int | bool = True
+) -> HcNetSdkSetSdkLocalCfgRequest:
     """Return the SDK-local ability parser toggle exposed by the APK."""
-    return _impl_discovery.ezviz_hcnetsdk_local_ability_parse_request(enabled=enabled, _owner=_sys.modules[__name__])
+    return _impl_discovery.ezviz_hcnetsdk_local_ability_parse_request(
+        enabled=enabled, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_hcnetsdk_local_ptz_without_recv_request(*, without_recv: int | bool=True) -> HcNetSdkSetSdkLocalCfgRequest:
+def ezviz_hcnetsdk_local_ptz_without_recv_request(
+    *, without_recv: int | bool = True
+) -> HcNetSdkSetSdkLocalCfgRequest:
     """Return the SDK-local PTZ no-receive config exposed by the APK."""
-    return _impl_configuration.ezviz_hcnetsdk_local_ptz_without_recv_request(without_recv=without_recv, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_hcnetsdk_local_ptz_without_recv_request(
+        without_recv=without_recv, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_user_password_get_config_request(login_id: int) -> HcNetSdkDvrConfigRequest:
     """Return the local ``NET_DVR_USER_V30`` read request shape."""
-    return _impl_configuration.ezviz_lan_user_password_get_config_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_user_password_get_config_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_user_password_update_request(login_id: int, password: str | bytes) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_user_password_update_request(
+    login_id: int, password: str | bytes
+) -> HcNetSdkDvrConfigRequest:
     """Return the local admin-user password update request shape."""
-    return _impl_authentication.ezviz_lan_user_password_update_request(login_id, password, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_user_password_update_request(
+        login_id, password, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_video_effect_get_config_request(login_id: int, channel: int=1) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_video_effect_get_config_request(
+    login_id: int, channel: int = 1
+) -> HcNetSdkDvrConfigRequest:
     """Return the local camera video-effect config read request shape."""
-    return _impl_configuration.ezviz_lan_video_effect_get_config_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_video_effect_get_config_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_video_effect_update_request(login_id: int, *, brightness: int, contrast: int, saturation: int, sharpness: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_video_effect_update_request(
+    login_id: int, *, brightness: int, contrast: int, saturation: int, sharpness: int
+) -> HcNetSdkDvrConfigRequest:
     """Return the RN LAN camera video-effect update request shape."""
-    return _impl_requests.ezviz_lan_video_effect_update_request(login_id, brightness=brightness, contrast=contrast, saturation=saturation, sharpness=sharpness, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_video_effect_update_request(
+        login_id,
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        sharpness=sharpness,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_backlight_wdr_get_config_request(login_id: int, channel: int=1) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_backlight_wdr_get_config_request(
+    login_id: int, channel: int = 1
+) -> HcNetSdkDvrConfigRequest:
     """Return the local WDR/backlight config read request shape."""
-    return _impl_configuration.ezviz_lan_backlight_wdr_get_config_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_backlight_wdr_get_config_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_backlight_wdr_update_request(login_id: int, *, wdr_enabled: int, backlight_mode: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_backlight_wdr_update_request(
+    login_id: int, *, wdr_enabled: int, backlight_mode: int
+) -> HcNetSdkDvrConfigRequest:
     """Return the RN LAN WDR/backlight update request shape."""
-    return _impl_configuration.ezviz_lan_backlight_wdr_update_request(login_id, wdr_enabled=wdr_enabled, backlight_mode=backlight_mode, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_backlight_wdr_update_request(
+        login_id,
+        wdr_enabled=wdr_enabled,
+        backlight_mode=backlight_mode,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_day_night_get_config_request(login_id: int, channel: int=1) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_day_night_get_config_request(
+    login_id: int, channel: int = 1
+) -> HcNetSdkDvrConfigRequest:
     """Return the local day/night config read request shape."""
-    return _impl_configuration.ezviz_lan_day_night_get_config_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_day_night_get_config_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_day_night_update_request(login_id: int, *, day_night_filter_type: int, begin_time: int, begin_time_min: int, begin_time_sec: int, end_time: int, end_time_min: int, end_time_sec: int, night_to_day_filter_level: int) -> HcNetSdkDvrConfigRequest:
+def ezviz_lan_day_night_update_request(
+    login_id: int,
+    *,
+    day_night_filter_type: int,
+    begin_time: int,
+    begin_time_min: int,
+    begin_time_sec: int,
+    end_time: int,
+    end_time_min: int,
+    end_time_sec: int,
+    night_to_day_filter_level: int,
+) -> HcNetSdkDvrConfigRequest:
     """Return the RN LAN day/night update request shape."""
-    return _impl_configuration.ezviz_lan_day_night_update_request(login_id, day_night_filter_type=day_night_filter_type, begin_time=begin_time, begin_time_min=begin_time_min, begin_time_sec=begin_time_sec, end_time=end_time, end_time_min=end_time_min, end_time_sec=end_time_sec, night_to_day_filter_level=night_to_day_filter_level, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_day_night_update_request(
+        login_id,
+        day_night_filter_type=day_night_filter_type,
+        begin_time=begin_time,
+        begin_time_min=begin_time_min,
+        begin_time_sec=begin_time_sec,
+        end_time=end_time,
+        end_time_min=end_time_min,
+        end_time_sec=end_time_sec,
+        night_to_day_filter_level=night_to_day_filter_level,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_device_ability_xml(root: str, *, channel: int | str | None=None, channel_tag: str='channelNO', version: str | None='2.0') -> bytes:
+def hcnetsdk_device_ability_xml(
+    root: str,
+    *,
+    channel: int | str | None = None,
+    channel_tag: str = "channelNO",
+    version: str | None = "2.0",
+) -> bytes:
     """Return compact XML passed as ``NET_DVR_GetDeviceAbility`` input."""
-    return _impl_configuration.hcnetsdk_device_ability_xml(root, channel=channel, channel_tag=channel_tag, version=version, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_device_ability_xml(
+        root,
+        channel=channel,
+        channel_tag=channel_tag,
+        version=version,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_device_ability_request(login_id: int, ability_type: int, *, in_buffer: str | bytes | None=None, output_buffer_size: int=HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE, retry_output_buffer_size: int | None=HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE) -> HcNetSdkDeviceAbilityRequest:
+def hcnetsdk_device_ability_request(
+    login_id: int,
+    ability_type: int,
+    *,
+    in_buffer: str | bytes | None = None,
+    output_buffer_size: int = HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE,
+    retry_output_buffer_size: int | None = HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE,
+) -> HcNetSdkDeviceAbilityRequest:
     """Return a ``NET_DVR_GetDeviceAbility`` request model."""
-    return _impl_configuration.hcnetsdk_device_ability_request(login_id, ability_type, in_buffer=in_buffer, output_buffer_size=output_buffer_size, retry_output_buffer_size=retry_output_buffer_size, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_device_ability_request(
+        login_id,
+        ability_type,
+        in_buffer=in_buffer,
+        output_buffer_size=output_buffer_size,
+        retry_output_buffer_size=retry_output_buffer_size,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_record_ability_input() -> bytes:
@@ -1609,7 +2428,9 @@ def ezviz_lan_record_ability_input() -> bytes:
 
 def ezviz_lan_audio_video_compress_info_input(channel: int) -> bytes:
     """Return the stream-config video ability XML used by the APK."""
-    return _impl_requests.ezviz_lan_audio_video_compress_info_input(channel, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_audio_video_compress_info_input(
+        channel, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_ptz_ability_input(channel: int) -> bytes:
@@ -1623,66 +2444,100 @@ def ezviz_lan_image_display_param_ability_input(channel: int) -> bytes:
     Live devices may acknowledge this request with an empty body. The image
     parameter ranges used by the app are available through ``IPC_FRONT_PARAMETER``.
     """
-    return _impl_configuration.ezviz_lan_image_display_param_ability_input(channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_image_display_param_ability_input(
+        channel, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_video_pic_ability_input(channel: int) -> bytes:
     """Return the video-picture ability XML used by the RN LAN wrapper."""
-    return _impl_configuration.ezviz_lan_video_pic_ability_input(channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_video_pic_ability_input(
+        channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_access_protocol_ability_input(channel: int | str='0xff') -> bytes:
+def ezviz_lan_access_protocol_ability_input(channel: int | str = "0xff") -> bytes:
     """Return the access-protocol ability XML used by local-add setup."""
-    return _impl_configuration.ezviz_lan_access_protocol_ability_input(channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_access_protocol_ability_input(
+        channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_rn_device_ability_request(login_id: int, ability_type: int, *, in_buffer: str | bytes | None=None) -> HcNetSdkDeviceAbilityRequest:
+def ezviz_lan_rn_device_ability_request(
+    login_id: int, ability_type: int, *, in_buffer: str | bytes | None = None
+) -> HcNetSdkDeviceAbilityRequest:
     """Return the generic 2 MiB RN LAN ``NET_DVR_GetDeviceAbility`` shape."""
-    return _impl_configuration.ezviz_lan_rn_device_ability_request(login_id, ability_type, in_buffer=in_buffer, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_rn_device_ability_request(
+        login_id, ability_type, in_buffer=in_buffer, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_access_protocol_ability_request(login_id: int, channel: int | str='0xff') -> HcNetSdkDeviceAbilityRequest:
+def ezviz_lan_access_protocol_ability_request(
+    login_id: int, channel: int | str = "0xff"
+) -> HcNetSdkDeviceAbilityRequest:
     """Return the access-protocol ability request used by local-add setup."""
-    return _impl_configuration.ezviz_lan_access_protocol_ability_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_access_protocol_ability_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_image_display_param_ability_request(login_id: int, channel: int) -> HcNetSdkDeviceAbilityRequest:
+def ezviz_lan_image_display_param_ability_request(
+    login_id: int, channel: int
+) -> HcNetSdkDeviceAbilityRequest:
     """Return the RN LAN image-display ability request shape.
 
     Prefer ``ezviz_lan_ipc_front_parameter_ability_request`` for a live
     ``CAMERAPARA`` response containing image parameter ranges.
     """
-    return _impl_configuration.ezviz_lan_image_display_param_ability_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_image_display_param_ability_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_video_pic_ability_request(login_id: int, channel: int) -> HcNetSdkDeviceAbilityRequest:
+def ezviz_lan_video_pic_ability_request(
+    login_id: int, channel: int
+) -> HcNetSdkDeviceAbilityRequest:
     """Return the RN LAN video-picture ability request shape."""
-    return _impl_configuration.ezviz_lan_video_pic_ability_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_video_pic_ability_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_audio_video_compress_info_ability_request(login_id: int, channel: int) -> HcNetSdkDeviceAbilityRequest:
+def ezviz_lan_audio_video_compress_info_ability_request(
+    login_id: int, channel: int
+) -> HcNetSdkDeviceAbilityRequest:
     """Return the stream-config audio/video ability request shape."""
-    return _impl_configuration.ezviz_lan_audio_video_compress_info_ability_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_audio_video_compress_info_ability_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_soft_hardware_ability_request(login_id: int) -> HcNetSdkDeviceAbilityRequest:
     """Return the device software/hardware ability request shape."""
-    return _impl_configuration.ezviz_lan_soft_hardware_ability_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_soft_hardware_ability_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_record_ability_request(login_id: int) -> HcNetSdkDeviceAbilityRequest:
     """Return the record/playback conversion ability request shape."""
-    return _impl_configuration.ezviz_lan_record_ability_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_record_ability_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_ptz_ability_request(login_id: int, channel: int) -> HcNetSdkDeviceAbilityRequest:
     """Return the local PTZ ability request shape used by the Android app."""
-    return _impl_configuration.ezviz_lan_ptz_ability_request(login_id, channel, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ptz_ability_request(
+        login_id, channel, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_ipc_front_parameter_ability_request(login_id: int) -> HcNetSdkDeviceAbilityRequest:
     """Return the local IPC-front-parameter request used for mirror ability."""
-    return _impl_configuration.ezviz_lan_ipc_front_parameter_ability_request(login_id, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ipc_front_parameter_ability_request(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_ptz_ability(response: str | bytes) -> EzvizLanPtzAbility:
@@ -1692,7 +2547,9 @@ def ezviz_lan_ptz_ability(response: str | bytes) -> EzvizLanPtzAbility:
 
 def ezviz_lan_access_protocol_ability(response: str | bytes) -> EzvizLanAccessProtocolAbility:
     """Parse safe local-add fields from ``AccessProtocolAbility`` XML."""
-    return _impl_configuration.ezviz_lan_access_protocol_ability(response, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_access_protocol_ability(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_video_pic_ability(response: str | bytes) -> EzvizLanVideoPicAbility:
@@ -1700,24 +2557,34 @@ def ezviz_lan_video_pic_ability(response: str | bytes) -> EzvizLanVideoPicAbilit
     return _impl_configuration.ezviz_lan_video_pic_ability(response, _owner=_sys.modules[__name__])
 
 
-def ezviz_lan_ipc_front_parameter_ability(response: str | bytes) -> EzvizLanIpcFrontParameterAbility:
+def ezviz_lan_ipc_front_parameter_ability(
+    response: str | bytes,
+) -> EzvizLanIpcFrontParameterAbility:
     """Parse safe image/front-parameter ranges from ``CAMERAPARA`` XML."""
-    return _impl_configuration.ezviz_lan_ipc_front_parameter_ability(response, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ipc_front_parameter_ability(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_audio_video_compress_info(response: str | bytes) -> EzvizLanAudioVideoCompressInfo:
     """Parse safe stream/audio fields from ``AudioVideoCompressInfo`` XML."""
-    return _impl_requests.ezviz_lan_audio_video_compress_info(response, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_audio_video_compress_info(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_soft_hardware_ability(response: str | bytes) -> EzvizLanDeviceSoftHardwareAbility:
     """Parse ``DEVICE_SOFTHARDWARE_ABILITY`` fields used by the app."""
-    return _impl_configuration.ezviz_lan_soft_hardware_ability(response, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_soft_hardware_ability(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_playback_convert_ability(response: str | bytes) -> EzvizLanPlaybackConvertAbility:
     """Parse playback conversion entries from ``RecordAbility`` XML."""
-    return _impl_configuration.ezviz_lan_playback_convert_ability(response, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_playback_convert_ability(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_cas_ptz_command(command: int) -> str:
@@ -1732,42 +2599,81 @@ def ezviz_lan_ptz_native_command(command: int) -> int:
 
 def ezviz_lan_ptz_is_preset_command(command: int) -> bool:
     """Return whether the app routes this PTZ command through the preset API."""
-    return _impl_configuration.ezviz_lan_ptz_is_preset_command(command, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ptz_is_preset_command(
+        command, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ptz_control_request(login_id: int, channel: int, command: int, *, action: int=EZVIZ_LAN_PTZ_ACTION_START, speed: int=EZVIZ_LAN_PTZ_SPEED_DEFAULT) -> HcNetSdkPtzControlRequest:
+def ezviz_lan_ptz_control_request(
+    login_id: int,
+    channel: int,
+    command: int,
+    *,
+    action: int = EZVIZ_LAN_PTZ_ACTION_START,
+    speed: int = EZVIZ_LAN_PTZ_SPEED_DEFAULT,
+) -> HcNetSdkPtzControlRequest:
     """Return the APK-observed local PTZ control call for non-preset commands."""
-    return _impl_configuration.ezviz_lan_ptz_control_request(login_id, channel, command, action=action, speed=speed, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ptz_control_request(
+        login_id, channel, command, action=action, speed=speed, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ptz_preset_request(login_id: int, channel: int, command: int, *, preset_index: int=0) -> HcNetSdkPtzPresetRequest:
+def ezviz_lan_ptz_preset_request(
+    login_id: int, channel: int, command: int, *, preset_index: int = 0
+) -> HcNetSdkPtzPresetRequest:
     """Return the APK-observed local PTZ preset call shape."""
-    return _impl_configuration.ezviz_lan_ptz_preset_request(login_id, channel, command, preset_index=preset_index, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ptz_preset_request(
+        login_id, channel, command, preset_index=preset_index, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_ptz_request(login_id: int, channel: int, command: int, *, action: int=EZVIZ_LAN_PTZ_ACTION_START, speed: int=EZVIZ_LAN_PTZ_SPEED_DEFAULT, preset_index: int=0) -> HcNetSdkPtzControlRequest | HcNetSdkPtzPresetRequest:
+def ezviz_lan_ptz_request(
+    login_id: int,
+    channel: int,
+    command: int,
+    *,
+    action: int = EZVIZ_LAN_PTZ_ACTION_START,
+    speed: int = EZVIZ_LAN_PTZ_SPEED_DEFAULT,
+    preset_index: int = 0,
+) -> HcNetSdkPtzControlRequest | HcNetSdkPtzPresetRequest:
     """Return the same PTZ native-call branch used by ``ptzControlLan``."""
-    return _impl_configuration.ezviz_lan_ptz_request(login_id, channel, command, action=action, speed=speed, preset_index=preset_index, _owner=_sys.modules[__name__])
+    return _impl_configuration.ezviz_lan_ptz_request(
+        login_id,
+        channel,
+        command,
+        action=action,
+        speed=speed,
+        preset_index=preset_index,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_settings_error_code(hcnetsdk_error: int) -> int:
     """Return the LAN settings UI error code for an HCNetSDK error."""
-    return _impl_requests.ezviz_lan_settings_error_code(hcnetsdk_error, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_settings_error_code(
+        hcnetsdk_error, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_settings_error_clears_password(error_code: int) -> bool:
     """Return whether LanDeviceListActivity.q(...) clears the LAN password."""
-    return _impl_authentication.ezviz_lan_settings_error_clears_password(error_code, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_settings_error_clears_password(
+        error_code, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_settings_login_succeeded(login_id: int) -> bool:
     """Return whether the settings presenter treats an HCNetSDK login as OK."""
-    return _impl_authentication.ezviz_lan_settings_login_succeeded(login_id, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_settings_login_succeeded(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def ezviz_lan_play_device_login_succeeded(login_id: int) -> bool:
     """Return whether DeviceInfoEx.loginPlayDevice(...) returned a login id."""
-    return _impl_authentication.ezviz_lan_play_device_login_succeeded(login_id, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_play_device_login_succeeded(
+        login_id, _owner=_sys.modules[__name__]
+    )
 
 
 def classify_hcnetsdk_tcp_payload(data: bytes) -> HcNetSdkTcpPayloadShape:
@@ -1819,29 +2725,44 @@ def parse_hcnetsdk_tcp_frame(data: bytes) -> HcNetSdkTcpFrame:
     return _impl_discovery.parse_hcnetsdk_tcp_frame(data, _owner=_sys.modules[__name__])
 
 
-def read_hcnetsdk_tcp_frame(sock: Any, *, max_frame_bytes: int | None=None, allow_short_ack: bool=True) -> HcNetSdkTcpFrame:
+def read_hcnetsdk_tcp_frame(
+    sock: Any, *, max_frame_bytes: int | None = None, allow_short_ack: bool = True
+) -> HcNetSdkTcpFrame:
     """Read one complete HCNetSDK command-port frame from a socket-like object."""
-    return _impl_requests.read_hcnetsdk_tcp_frame(sock, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack, _owner=_sys.modules[__name__])
+    return _impl_requests.read_hcnetsdk_tcp_frame(
+        sock,
+        max_frame_bytes=max_frame_bytes,
+        allow_short_ack=allow_short_ack,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_command_port_login_request_frame(public_key_der: bytes, *, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str) -> bytes:
+def hcnetsdk_command_port_login_request_frame(
+    public_key_der: bytes, *, username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str
+) -> bytes:
     """Build the first port-8000 RSA login frame.
 
     The native SDK sends a PKCS#1 ``RSAPublicKey`` DER blob, not the longer
     SubjectPublicKeyInfo form returned by many RSA exporters.
     """
-    return _impl_authentication.hcnetsdk_command_port_login_request_frame(public_key_der, username=username, local_ip=local_ip, _owner=_sys.modules[__name__])
+    return _impl_authentication.hcnetsdk_command_port_login_request_frame(
+        public_key_der, username=username, local_ip=local_ip, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_command_port_password_digest(username: str, password: str | bytes, password_seed: bytes) -> bytes:
+def hcnetsdk_command_port_password_digest(
+    username: str, password: str | bytes, password_seed: bytes
+) -> bytes:
     """Return the native SDK SHA-256 password branch for command-port login.
 
     This is a device-protocol compatibility digest, not password storage.
     """
-    return _impl_authentication.hcnetsdk_command_port_password_digest(username, password, password_seed, _owner=_sys.modules[__name__])
+    return _impl_authentication.hcnetsdk_command_port_password_digest(
+        username, password, password_seed, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_port_md5_digest(data: bytes=b'') -> Any:
+def _hcnetsdk_command_port_md5_digest(data: bytes = b"") -> Any:
     return _impl_requests._hcnetsdk_command_port_md5_digest(data, _owner=_sys.modules[__name__])
 
 
@@ -1849,28 +2770,68 @@ def _hcnetsdk_command_port_md5_hmac(key: bytes, data: bytes) -> bytes:
     return _impl_requests._hcnetsdk_command_port_md5_hmac(key, data, _owner=_sys.modules[__name__])
 
 
-def hcnetsdk_command_port_login_proof(username: str, password: str | bytes, challenge: bytes, password_seed: bytes) -> tuple[bytes, bytes]:
+def hcnetsdk_command_port_login_proof(
+    username: str, password: str | bytes, challenge: bytes, password_seed: bytes
+) -> tuple[bytes, bytes]:
     """Return the two proof chunks for the second command-port login frame.
 
     The native device handshake uses MD5 HMAC branches here for compatibility;
     these values are not persisted password hashes.
     """
-    return _impl_authentication.hcnetsdk_command_port_login_proof(username, password, challenge, password_seed, _owner=_sys.modules[__name__])
+    return _impl_authentication.hcnetsdk_command_port_login_proof(
+        username, password, challenge, password_seed, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_command_port_login_proof_frame(*, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, password: str | bytes, challenge: bytes, password_seed: bytes, local_ip: str) -> bytes:
+def hcnetsdk_command_port_login_proof_frame(
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    password: str | bytes,
+    challenge: bytes,
+    password_seed: bytes,
+    local_ip: str,
+) -> bytes:
     """Build the second port-8000 login proof frame."""
-    return _impl_authentication.hcnetsdk_command_port_login_proof_frame(username=username, password=password, challenge=challenge, password_seed=password_seed, local_ip=local_ip, _owner=_sys.modules[__name__])
+    return _impl_authentication.hcnetsdk_command_port_login_proof_frame(
+        username=username,
+        password=password,
+        challenge=challenge,
+        password_seed=password_seed,
+        local_ip=local_ip,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_command_port_control_template_from_frame(frame: bytes, *, addend: int | None=None, addend_delta: int | None=None, auth_seed: int | None=None, key: bytes | None=None, mask_seed: bytes=b'\x00' * HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH, body_tail_transform: str | None=None, name: str | None=None) -> HcNetSdkCommandPortControlTemplate:
+def hcnetsdk_command_port_control_template_from_frame(
+    frame: bytes,
+    *,
+    addend: int | None = None,
+    addend_delta: int | None = None,
+    auth_seed: int | None = None,
+    key: bytes | None = None,
+    mask_seed: bytes = b"\x00" * HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH,
+    body_tail_transform: str | None = None,
+    name: str | None = None,
+) -> HcNetSdkCommandPortControlTemplate:
     """Extract the reusable command id and body tail from a ``0x63`` frame."""
-    return _impl_requests.hcnetsdk_command_port_control_template_from_frame(frame, addend=addend, addend_delta=addend_delta, auth_seed=auth_seed, key=key, mask_seed=mask_seed, body_tail_transform=body_tail_transform, name=name, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_command_port_control_template_from_frame(
+        frame,
+        addend=addend,
+        addend_delta=addend_delta,
+        auth_seed=auth_seed,
+        key=key,
+        mask_seed=mask_seed,
+        body_tail_transform=body_tail_transform,
+        name=name,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def hcnetsdk_command_port_public_key_der(rsa_key: Any) -> bytes:
     """Return PKCS#1 ``RSAPublicKey`` DER for a PyCryptodome RSA key."""
-    return _impl_requests.hcnetsdk_command_port_public_key_der(rsa_key, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_command_port_public_key_der(
+        rsa_key, _owner=_sys.modules[__name__]
+    )
 
 
 def hcnetsdk_command_port_rsa_key() -> Any:
@@ -1878,17 +2839,35 @@ def hcnetsdk_command_port_rsa_key() -> Any:
     return _impl_requests.hcnetsdk_command_port_rsa_key(_owner=_sys.modules[__name__])
 
 
-def decode_hcnetsdk_command_port_login_challenge(response: HcNetSdkTcpFrame, rsa_key: Any) -> HcNetSdkCommandPortLoginChallenge:
+def decode_hcnetsdk_command_port_login_challenge(
+    response: HcNetSdkTcpFrame, rsa_key: Any
+) -> HcNetSdkCommandPortLoginChallenge:
     """Decrypt the first command-port login response with the RSA private key."""
-    return _impl_authentication.decode_hcnetsdk_command_port_login_challenge(response, rsa_key, _owner=_sys.modules[__name__])
+    return _impl_authentication.decode_hcnetsdk_command_port_login_challenge(
+        response, rsa_key, _owner=_sys.modules[__name__]
+    )
 
 
-def parse_hcnetsdk_command_port_login_session(first_response: HcNetSdkTcpFrame, second_response: HcNetSdkTcpFrame, *, challenge: bytes=b'', password_seed: bytes=b'') -> HcNetSdkCommandPortLoginSession:
+def parse_hcnetsdk_command_port_login_session(
+    first_response: HcNetSdkTcpFrame,
+    second_response: HcNetSdkTcpFrame,
+    *,
+    challenge: bytes = b"",
+    password_seed: bytes = b"",
+) -> HcNetSdkCommandPortLoginSession:
     """Parse the successful second command-port login response."""
-    return _impl_discovery.parse_hcnetsdk_command_port_login_session(first_response, second_response, challenge=challenge, password_seed=password_seed, _owner=_sys.modules[__name__])
+    return _impl_discovery.parse_hcnetsdk_command_port_login_session(
+        first_response,
+        second_response,
+        challenge=challenge,
+        password_seed=password_seed,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def iter_hcnetsdk_tcp_frame_shapes(records: Iterable[HcNetSdkTcpShapeLogRecord]) -> Iterator[HcNetSdkTcpFrameShape]:
+def iter_hcnetsdk_tcp_frame_shapes(
+    records: Iterable[HcNetSdkTcpShapeLogRecord],
+) -> Iterator[HcNetSdkTcpFrameShape]:
     """Yield command frames reconstructed from secret-safe socket shape logs.
 
     Some logs record response headers and bodies as separate reads when the app
@@ -1900,12 +2879,18 @@ def iter_hcnetsdk_tcp_frame_shapes(records: Iterable[HcNetSdkTcpShapeLogRecord])
     return _impl_requests.iter_hcnetsdk_tcp_frame_shapes(records, _owner=_sys.modules[__name__])
 
 
-def iter_hcnetsdk_real_data_mpegps(packets: Iterable[HcNetSdkRealDataPacket], *, include_system_header: bool=False) -> Iterator[bytes]:
+def iter_hcnetsdk_real_data_mpegps(
+    packets: Iterable[HcNetSdkRealDataPacket], *, include_system_header: bool = False
+) -> Iterator[bytes]:
     """Yield MPEG-PS-like payloads from HCNetSDK real-play callback packets."""
-    return _impl_requests.iter_hcnetsdk_real_data_mpegps(packets, include_system_header=include_system_header, _owner=_sys.modules[__name__])
+    return _impl_requests.iter_hcnetsdk_real_data_mpegps(
+        packets, include_system_header=include_system_header, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_play_device_login(endpoint: HcNetSdkLanEndpoint, *, check_last_login_status: bool=False) -> EzvizLanPlayDeviceLogin:
+def ezviz_lan_play_device_login(
+    endpoint: HcNetSdkLanEndpoint, *, check_last_login_status: bool = False
+) -> EzvizLanPlayDeviceLogin:
     """Build the player-side LAN HCNetSDK login step observed in the APK.
 
     The settings screen's login id is only a gate for opening the player. The
@@ -1913,15 +2898,36 @@ def ezviz_lan_play_device_login(endpoint: HcNetSdkLanEndpoint, *, check_last_log
     DeviceInfoEx.loginPlayDevice(...) and uses that returned NetSDK id for
     InitParam.iNetSDKUserId and the later keyframe request.
     """
-    return _impl_authentication.ezviz_lan_play_device_login(endpoint, check_last_login_status=check_last_login_status, _owner=_sys.modules[__name__])
+    return _impl_authentication.ezviz_lan_play_device_login(
+        endpoint, check_last_login_status=check_last_login_status, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_settings_channel_number(*, analog_channel_count: int, digital_channel_count: int, analog_start_channel: int, digital_start_channel: int) -> int:
+def ezviz_lan_settings_channel_number(
+    *,
+    analog_channel_count: int,
+    digital_channel_count: int,
+    analog_start_channel: int,
+    digital_start_channel: int,
+) -> int:
     """Return the channel selected by LanDeviceListActivity.z0(...)."""
-    return _impl_requests.ezviz_lan_settings_channel_number(analog_channel_count=analog_channel_count, digital_channel_count=digital_channel_count, analog_start_channel=analog_start_channel, digital_start_channel=digital_start_channel, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_settings_channel_number(
+        analog_channel_count=analog_channel_count,
+        digital_channel_count=digital_channel_count,
+        analog_start_channel=analog_start_channel,
+        digital_start_channel=digital_start_channel,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_playback_intent(serial: str, *, channel_number: int, netsdk_login_id: int, ssid: str | None=None, lan_user_id: int | None=None) -> EzvizLanPlaybackIntent:
+def ezviz_lan_playback_intent(
+    serial: str,
+    *,
+    channel_number: int,
+    netsdk_login_id: int,
+    ssid: str | None = None,
+    lan_user_id: int | None = None,
+) -> EzvizLanPlaybackIntent:
     """Build the LAN playback extras passed into VideoPlayActivity.
 
     netsdk_login_id is validated because the settings screen only opens
@@ -1930,7 +2936,14 @@ def ezviz_lan_playback_intent(serial: str, *, channel_number: int, netsdk_login_
     otherwise sends -1. The stream core performs/uses its own NetSDK login
     when creating the native init params.
     """
-    return _impl_requests.ezviz_lan_playback_intent(serial, channel_number=channel_number, netsdk_login_id=netsdk_login_id, ssid=ssid, lan_user_id=lan_user_id, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_playback_intent(
+        serial,
+        channel_number=channel_number,
+        netsdk_login_id=netsdk_login_id,
+        ssid=ssid,
+        lan_user_id=lan_user_id,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def ezviz_lan_video_qualities() -> tuple[EzvizLanVideoQuality, ...]:
@@ -1940,10 +2953,22 @@ def ezviz_lan_video_qualities() -> tuple[EzvizLanVideoQuality, ...]:
 
 def ezviz_lan_video_level_for_stream_type(stream_type: int) -> int:
     """Return the app's default LAN video level for a main/sub stream type."""
-    return _impl_requests.ezviz_lan_video_level_for_stream_type(stream_type, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_video_level_for_stream_type(
+        stream_type, _owner=_sys.modules[__name__]
+    )
 
 
-def ezviz_lan_live_view_params(endpoint: HcNetSdkLanEndpoint, *, channel_number: int=1, channel_serial: str | None=None, channel_index: str | None=None, channel_count: int | None=None, stream_type: int=1, video_level: int | None=None, netsdk_login_id: int=-1) -> EzvizLanLiveViewParams:
+def ezviz_lan_live_view_params(
+    endpoint: HcNetSdkLanEndpoint,
+    *,
+    channel_number: int = 1,
+    channel_serial: str | None = None,
+    channel_index: str | None = None,
+    channel_count: int | None = None,
+    stream_type: int = 1,
+    video_level: int | None = None,
+    netsdk_login_id: int = -1,
+) -> EzvizLanLiveViewParams:
     """Build the LAN fields the EZVIZ player passes into its stream SDK.
 
     The Android app still uses ``LivePlaySource`` for LAN preview. The key
@@ -1951,10 +2976,32 @@ def ezviz_lan_live_view_params(endpoint: HcNetSdkLanEndpoint, *, channel_number:
     carries local IP/command/stream ports; when HCNetSDK login succeeds, the
     stream core also forwards the NetSDK login id and channel number.
     """
-    return _impl_requests.ezviz_lan_live_view_params(endpoint, channel_number=channel_number, channel_serial=channel_serial, channel_index=channel_index, channel_count=channel_count, stream_type=stream_type, video_level=video_level, netsdk_login_id=netsdk_login_id, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_live_view_params(
+        endpoint,
+        channel_number=channel_number,
+        channel_serial=channel_serial,
+        channel_index=channel_index,
+        channel_count=channel_count,
+        stream_type=stream_type,
+        video_level=video_level,
+        netsdk_login_id=netsdk_login_id,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_preview_plan(endpoint: HcNetSdkLanEndpoint, verification_code: str, *, channel_number: int=1, channel_serial: str | None=None, channel_index: str | None=None, channel_count: int | None=None, stream_type: int=1, video_level: int | None=None, netsdk_login_id: int=-1, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME) -> EzvizLanPreviewPlan:
+def ezviz_lan_preview_plan(
+    endpoint: HcNetSdkLanEndpoint,
+    verification_code: str,
+    *,
+    channel_number: int = 1,
+    channel_serial: str | None = None,
+    channel_index: str | None = None,
+    channel_count: int | None = None,
+    stream_type: int = 1,
+    video_level: int | None = None,
+    netsdk_login_id: int = -1,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+) -> EzvizLanPreviewPlan:
     """Build the APK-observed LAN preview setup sequence.
 
     The Java layer logs in through HCNetSDK first, passes the resulting login
@@ -1962,10 +3009,40 @@ def ezviz_lan_preview_plan(endpoint: HcNetSdkLanEndpoint, verification_code: str
     ``NativeApi.startPreview()``, then asks HCNetSDK to force an I-frame for
     the selected channel and stream type.
     """
-    return _impl_requests.ezviz_lan_preview_plan(endpoint, verification_code, channel_number=channel_number, channel_serial=channel_serial, channel_index=channel_index, channel_count=channel_count, stream_type=stream_type, video_level=video_level, netsdk_login_id=netsdk_login_id, username=username, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_preview_plan(
+        endpoint,
+        verification_code,
+        channel_number=channel_number,
+        channel_serial=channel_serial,
+        channel_index=channel_index,
+        channel_count=channel_count,
+        stream_type=stream_type,
+        video_level=video_level,
+        netsdk_login_id=netsdk_login_id,
+        username=username,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def ezviz_lan_complete_playback_path(endpoint: HcNetSdkLanEndpoint, verification_code: str, *, settings_login_id: int, play_device_login_id: int, analog_channel_count: int, digital_channel_count: int, analog_start_channel: int, digital_start_channel: int, channel_serial: str | None=None, channel_index: str | None=None, channel_count: int | None=None, stream_type: int=EZVIZ_LAN_MAIN_STREAM_TYPE, video_level: int | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, ssid: str | None=None, lan_user_id: int | None=None) -> EzvizLanPlaybackPath:  # noqa: PLR0913
+def ezviz_lan_complete_playback_path(  # noqa: PLR0913
+    endpoint: HcNetSdkLanEndpoint,
+    verification_code: str,
+    *,
+    settings_login_id: int,
+    play_device_login_id: int,
+    analog_channel_count: int,
+    digital_channel_count: int,
+    analog_start_channel: int,
+    digital_start_channel: int,
+    channel_serial: str | None = None,
+    channel_index: str | None = None,
+    channel_count: int | None = None,
+    stream_type: int = EZVIZ_LAN_MAIN_STREAM_TYPE,
+    video_level: int | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    ssid: str | None = None,
+    lan_user_id: int | None = None,
+) -> EzvizLanPlaybackPath:
     """Build the full APK-observed LAN Live View playback path.
 
     The settings-screen login id and the player-owned NetSDK login id are
@@ -1974,17 +3051,43 @@ def ezviz_lan_complete_playback_path(endpoint: HcNetSdkLanEndpoint, verification
     DeviceInfoEx.loginPlayDevice(...) and passes that id into native preview
     and the post-start keyframe request.
     """
-    return _impl_requests.ezviz_lan_complete_playback_path(endpoint, verification_code, settings_login_id=settings_login_id, play_device_login_id=play_device_login_id, analog_channel_count=analog_channel_count, digital_channel_count=digital_channel_count, analog_start_channel=analog_start_channel, digital_start_channel=digital_start_channel, channel_serial=channel_serial, channel_index=channel_index, channel_count=channel_count, stream_type=stream_type, video_level=video_level, username=username, ssid=ssid, lan_user_id=lan_user_id, _owner=_sys.modules[__name__])
+    return _impl_requests.ezviz_lan_complete_playback_path(
+        endpoint,
+        verification_code,
+        settings_login_id=settings_login_id,
+        play_device_login_id=play_device_login_id,
+        analog_channel_count=analog_channel_count,
+        digital_channel_count=digital_channel_count,
+        analog_start_channel=analog_start_channel,
+        digital_start_channel=digital_start_channel,
+        channel_serial=channel_serial,
+        channel_index=channel_index,
+        channel_count=channel_count,
+        stream_type=stream_type,
+        video_level=video_level,
+        username=username,
+        ssid=ssid,
+        lan_user_id=lan_user_id,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def build_ezviz_local_stream_setup_request_body(*, session: str | int, rate: str | int=0, mode: str | int=0) -> bytes:
+def build_ezviz_local_stream_setup_request_body(
+    *, session: str | int, rate: str | int = 0, mode: str | int = 0
+) -> bytes:
     """Build the plaintext XML body for the observed 0x3105 request."""
-    return _impl_requests.build_ezviz_local_stream_setup_request_body(session=session, rate=rate, mode=mode, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_local_stream_setup_request_body(
+        session=session, rate=rate, mode=mode, _owner=_sys.modules[__name__]
+    )
 
 
-def build_ezviz_local_stop_preview_request_body(*, operation_code: str, session: str | int) -> bytes:
+def build_ezviz_local_stop_preview_request_body(
+    *, operation_code: str, session: str | int
+) -> bytes:
     """Build the native session-scoped bye; never generate wildcard stops."""
-    return _impl_requests.build_ezviz_local_stop_preview_request_body(operation_code=operation_code, session=session, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_local_stop_preview_request_body(
+        operation_code=operation_code, session=session, _owner=_sys.modules[__name__]
+    )
 
 
 class _DeadlineBoundRecvSocket:
@@ -2007,12 +3110,9 @@ class _DeadlineBoundRecvSocket:
     def recv(self, length: int) -> bytes:
         remaining = self._deadline - self._monotonic()
         if remaining <= 0:
-            raise EzvizLocalSdkDeadlineExpired(
-                "EZVIZ local SDK frame read exceeded its deadline"
-            )
+            raise EzvizLocalSdkDeadlineExpired("EZVIZ local SDK frame read exceeded its deadline")
         deadline_limits_receive = (
-            self._configured_timeout is None
-            or remaining <= self._configured_timeout
+            self._configured_timeout is None or remaining <= self._configured_timeout
         )
         effective_timeout = (
             remaining
@@ -2049,9 +3149,13 @@ class _DeadlineBoundRecvSocket:
             self._sock.settimeout(previous_timeout)
         self.bytes_received += len(data)
         return data
+
+
 def _wait_for_socket_io(sock: Any, *, readable: bool, timeout: float) -> bool | None:
     """Wait for real socket readiness without changing its shared timeout."""
-    return _impl_requests._wait_for_socket_io(sock, readable=readable, timeout=timeout, _owner=_sys.modules[__name__])
+    return _impl_requests._wait_for_socket_io(
+        sock, readable=readable, timeout=timeout, _owner=_sys.modules[__name__]
+    )
 
 
 def _remaining_timeout(deadline: float | None, monotonic: Callable[[], float]) -> float | None:
@@ -2059,14 +3163,44 @@ def _remaining_timeout(deadline: float | None, monotonic: Callable[[], float]) -
     return _impl_requests._remaining_timeout(deadline, monotonic, _owner=_sys.modules[__name__])
 
 
-def _send_all_with_timeout(sock: Any, data: bytes, *, timeout: float | None, deadline: float | None, monotonic: Callable[[], float]) -> None:
+def _send_all_with_timeout(
+    sock: Any,
+    data: bytes,
+    *,
+    timeout: float | None,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> None:
     """Send a frame without letting writes exceed an optional deadline."""
-    return _impl_requests._send_all_with_timeout(sock, data, timeout=timeout, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_requests._send_all_with_timeout(
+        sock,
+        data,
+        timeout=timeout,
+        deadline=deadline,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _send_all_before_deadline(sock: Any, data: bytes, *, operation_deadline: float, configured_timeout: float | None, capture_deadline: bool, monotonic: Callable[[], float]) -> bool:
+def _send_all_before_deadline(
+    sock: Any,
+    data: bytes,
+    *,
+    operation_deadline: float,
+    configured_timeout: float | None,
+    capture_deadline: bool,
+    monotonic: Callable[[], float],
+) -> bool:
     """Partially send on a real socket while recomputing its deadline."""
-    return _impl_requests._send_all_before_deadline(sock, data, operation_deadline=operation_deadline, configured_timeout=configured_timeout, capture_deadline=capture_deadline, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_requests._send_all_before_deadline(
+        sock,
+        data,
+        operation_deadline=operation_deadline,
+        configured_timeout=configured_timeout,
+        capture_deadline=capture_deadline,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
 class EzvizLocalSdkClient:
@@ -2099,9 +3233,7 @@ class EzvizLocalSdkClient:
         self._request_iv = iv_factory(EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE)
         self.response_trailer_length = response_trailer_length
         if command_source_port is not None and not 1 <= command_source_port <= 65535:
-            raise PyEzvizError(
-                "EZVIZ local SDK command source port must be between 1 and 65535"
-            )
+            raise PyEzvizError("EZVIZ local SDK command source port must be between 1 and 65535")
         self.command_source_port = command_source_port
         self.command_source_host = command_source_host
         self._command_sock: Any | None = None
@@ -2231,9 +3363,7 @@ class EzvizLocalSdkClient:
     ) -> EzvizLocalSdkExchange:
         """Send one encrypted local SDK frame and read its response frame."""
         effective_timeout = (
-            _remaining_timeout(deadline, monotonic)
-            if deadline is not None
-            else timeout
+            _remaining_timeout(deadline, monotonic) if deadline is not None else timeout
         )
         sock = (
             self._stream(
@@ -2274,11 +3404,7 @@ class EzvizLocalSdkClient:
             previous_timeout = sock.gettimeout()
             read_socket = _DeadlineBoundRecvSocket(
                 sock,
-                deadline=(
-                    deadline
-                    if deadline is not None
-                    else monotonic() + effective_timeout
-                ),
+                deadline=(deadline if deadline is not None else monotonic() + effective_timeout),
                 configured_timeout=previous_timeout,
                 monotonic=monotonic,
             )
@@ -2313,8 +3439,11 @@ class EzvizLocalSdkClient:
         method supports it as an optional supplied frame without trying to
         synthesize unknown fields.
         """
-        if (self._owned_preview is not None or self._retired_stream_sock is not None
-                or self._preview_stopped):
+        if (
+            self._owned_preview is not None
+            or self._retired_stream_sock is not None
+            or self._preview_stopped
+        ):
             raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
@@ -2381,8 +3510,11 @@ class EzvizLocalSdkClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> EzvizLocalSdkStreamBootstrap:
         """Bootstrap preview and build 0x3105 from the 0x2012 Session."""
-        if (self._owned_preview is not None or self._retired_stream_sock is not None
-                or self._preview_stopped):
+        if (
+            self._owned_preview is not None
+            or self._retired_stream_sock is not None
+            or self._preview_stopped
+        ):
             raise PyEzvizError("Close this client before starting another owned preview")
         pre_start = None
         if pre_start_body is not None:
@@ -2411,9 +3543,7 @@ class EzvizLocalSdkClient:
             fields = parse_ezviz_local_sdk_xml_fields(preview.response)
             result = fields.get("Result")
             suffix = f" (Result={result})" if result else ""
-            raise PyEzvizError(
-                "EZVIZ local preview response is missing Session" + suffix
-            )
+            raise PyEzvizError("EZVIZ local preview response is missing Session" + suffix)
 
         # Remember only a positive accepted session generated by our structured
         # preview path. Raw caller-owned setup bodies never imply stop authority.
@@ -2483,9 +3613,7 @@ class EzvizLocalSdkClient:
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         """Read the next local stream frame, tolerating any binary preface."""
         effective_timeout = (
-            _remaining_timeout(deadline, monotonic)
-            if deadline is not None
-            else timeout
+            _remaining_timeout(deadline, monotonic) if deadline is not None else timeout
         )
         sock = self._stream(
             timeout=effective_timeout,
@@ -2502,9 +3630,7 @@ class EzvizLocalSdkClient:
         previous_timeout = sock.gettimeout()
         deadline_socket = _DeadlineBoundRecvSocket(
             sock,
-            deadline=(
-                deadline if deadline is not None else monotonic() + effective_timeout
-            ),
+            deadline=(deadline if deadline is not None else monotonic() + effective_timeout),
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
@@ -2534,9 +3660,7 @@ class EzvizLocalSdkClient:
             connect_timeout = self.timeout
             if timeout is not None:
                 connect_timeout = (
-                    timeout
-                    if connect_timeout is None
-                    else min(connect_timeout, timeout)
+                    timeout if connect_timeout is None else min(connect_timeout, timeout)
                 )
             try:
                 command_sock = _connect_with_optional_source_address(
@@ -2549,8 +3673,7 @@ class EzvizLocalSdkClient:
                 )
             except TimeoutError as err:
                 if deadline_limited and (
-                    self.timeout is None
-                    or (timeout is not None and timeout <= self.timeout)
+                    self.timeout is None or (timeout is not None and timeout <= self.timeout)
                 ):
                     raise EzvizLocalSdkDeadlineExpired(
                         "EZVIZ local SDK command connect exceeded its deadline"
@@ -2577,9 +3700,7 @@ class EzvizLocalSdkClient:
             connect_timeout = self.timeout
             if timeout is not None:
                 connect_timeout = (
-                    timeout
-                    if connect_timeout is None
-                    else min(connect_timeout, timeout)
+                    timeout if connect_timeout is None else min(connect_timeout, timeout)
                 )
             try:
                 stream_sock = _connect_with_optional_source_address(
@@ -2591,8 +3712,7 @@ class EzvizLocalSdkClient:
                 )
             except TimeoutError as err:
                 if deadline_limited and (
-                    self.timeout is None
-                    or (timeout is not None and timeout <= self.timeout)
+                    self.timeout is None or (timeout is not None and timeout <= self.timeout)
                 ):
                     raise EzvizLocalSdkDeadlineExpired(
                         "EZVIZ local SDK stream connect exceeded its deadline"
@@ -2602,40 +3722,122 @@ class EzvizLocalSdkClient:
                 stream_sock.settimeout(self.timeout)
             self._stream_sock = stream_sock
         return self._stream_sock
+
+
 class _SourcePortConflictError(OSError):
     """An address error known to have occurred after binding the source port."""
-def _connect_with_optional_source_address(socket_factory: SocketFactory, address: tuple[str, int], timeout: float | None, *, source_address: SocketSourceAddress=None, deadline: float | None=None, monotonic: Callable[[], float]=time.monotonic) -> Any:
-    return _impl_requests._connect_with_optional_source_address(socket_factory, address, timeout, source_address=source_address, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__])
 
 
-def _create_reusable_source_connection(address: tuple[str, int], timeout: float | None, *, source_address: tuple[str, int], deadline: float | None=None, monotonic: Callable[[], float]=time.monotonic) -> socket.socket:
+def _connect_with_optional_source_address(
+    socket_factory: SocketFactory,
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    source_address: SocketSourceAddress = None,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> Any:
+    return _impl_requests._connect_with_optional_source_address(
+        socket_factory,
+        address,
+        timeout,
+        source_address=source_address,
+        deadline=deadline,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
+
+
+def _create_reusable_source_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    source_address: tuple[str, int],
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> socket.socket:
     """Connect from an exact source port with platform-safe ownership."""
-    return _impl_requests._create_reusable_source_connection(address, timeout, source_address=source_address, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_requests._create_reusable_source_connection(
+        address,
+        timeout,
+        source_address=source_address,
+        deadline=deadline,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _connect_attempt_settings(timeout: float | None, *, deadline: float | None, monotonic: Callable[[], float]) -> tuple[float | None, bool]:
+def _connect_attempt_settings(
+    timeout: float | None, *, deadline: float | None, monotonic: Callable[[], float]
+) -> tuple[float | None, bool]:
     """Return the timeout and whether the absolute deadline constrains it."""
-    return _impl_requests._connect_attempt_settings(timeout, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_requests._connect_attempt_settings(
+        timeout, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__]
+    )
 
 
-def _create_deadline_connection(address: tuple[str, int], timeout: float | None, *, deadline: float, monotonic: Callable[[], float]) -> socket.socket:
+def _create_deadline_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> socket.socket:
     """Connect to resolved addresses without renewing an absolute deadline."""
-    return _impl_requests._create_deadline_connection(address, timeout, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_requests._create_deadline_connection(
+        address, timeout, deadline=deadline, monotonic=monotonic, _owner=_sys.modules[__name__]
+    )
 
 
-def _getaddrinfo_before_deadline(host: str, port: int, *, deadline: float | None, monotonic: Callable[[], float], resolver: BoundedResolver | None=None) -> list[tuple[Any, ...]]:
+def _getaddrinfo_before_deadline(
+    host: str,
+    port: int,
+    *,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+    resolver: BoundedResolver | None = None,
+) -> list[tuple[Any, ...]]:
     """Use the shared bounded resolver, or an explicitly owned injected service."""
-    return _impl_requests._getaddrinfo_before_deadline(host, port, deadline=deadline, monotonic=monotonic, resolver=resolver, _owner=_sys.modules[__name__])
+    return _impl_requests._getaddrinfo_before_deadline(
+        host,
+        port,
+        deadline=deadline,
+        monotonic=monotonic,
+        resolver=resolver,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _connect_bound_source_socket(family: int, sock_type: int, protocol: int, target: Any, timeout: float | None, *, source_address: SocketBindAddress, exclusive: bool) -> socket.socket:
+def _connect_bound_source_socket(
+    family: int,
+    sock_type: int,
+    protocol: int,
+    target: Any,
+    timeout: float | None,
+    *,
+    source_address: SocketBindAddress,
+    exclusive: bool,
+) -> socket.socket:
     """Bind and connect one source socket with the requested ownership mode."""
-    return _impl_requests._connect_bound_source_socket(family, sock_type, protocol, target, timeout, source_address=source_address, exclusive=exclusive, _owner=_sys.modules[__name__])
+    return _impl_requests._connect_bound_source_socket(
+        family,
+        sock_type,
+        protocol,
+        target,
+        timeout,
+        source_address=source_address,
+        exclusive=exclusive,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _windows_concrete_source_address(source_address: tuple[str, int], family: int, target: Any) -> SocketBindAddress:
+def _windows_concrete_source_address(
+    source_address: tuple[str, int], family: int, target: Any
+) -> SocketBindAddress:
     """Resolve a wildcard source to the interface selected for the target."""
-    return _impl_requests._windows_concrete_source_address(source_address, family, target, _owner=_sys.modules[__name__])
+    return _impl_requests._windows_concrete_source_address(
+        source_address, family, target, _owner=_sys.modules[__name__]
+    )
 
 
 def parse_ezviz_local_device(data: Mapping[str, Any]) -> EzvizLocalDevice:
@@ -2659,22 +3861,60 @@ def parse_ezviz_local_sdk_frame_header(data: bytes) -> EzvizLocalSdkFrameHeader:
     return _impl_discovery.parse_ezviz_local_sdk_frame_header(data, _owner=_sys.modules[__name__])
 
 
-def build_ezviz_local_sdk_frame_header(*, command: int, body_length: int=0, sequence: int=0, version: int=16777216, marker: int=0, status: int=4294967295, reserved: int=0) -> bytes:
+def build_ezviz_local_sdk_frame_header(
+    *,
+    command: int,
+    body_length: int = 0,
+    sequence: int = 0,
+    version: int = 16777216,
+    marker: int = 0,
+    status: int = 4294967295,
+    reserved: int = 0,
+) -> bytes:
     """Build the 32-byte EZVIZ local SDK header observed in app traces.
 
     This helper intentionally handles only the non-secret binary envelope. The
     body is caller-supplied because the XML fields still need classification
     before they are safe to persist or synthesize from app captures.
     """
-    return _impl_requests.build_ezviz_local_sdk_frame_header(command=command, body_length=body_length, sequence=sequence, version=version, marker=marker, status=status, reserved=reserved, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_local_sdk_frame_header(
+        command=command,
+        body_length=body_length,
+        sequence=sequence,
+        version=version,
+        marker=marker,
+        status=status,
+        reserved=reserved,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def build_ezviz_local_sdk_frame(*, command: int, body: bytes | str=b'', sequence: int=0, version: int=16777216, marker: int=0, status: int=4294967295, reserved: int=0) -> bytes:
+def build_ezviz_local_sdk_frame(
+    *,
+    command: int,
+    body: bytes | str = b"",
+    sequence: int = 0,
+    version: int = 16777216,
+    marker: int = 0,
+    status: int = 4294967295,
+    reserved: int = 0,
+) -> bytes:
     """Build an EZVIZ local SDK frame from a command and caller-owned body."""
-    return _impl_requests.build_ezviz_local_sdk_frame(command=command, body=body, sequence=sequence, version=version, marker=marker, status=status, reserved=reserved, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_local_sdk_frame(
+        command=command,
+        body=body,
+        sequence=sequence,
+        version=version,
+        marker=marker,
+        status=status,
+        reserved=reserved,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def encrypt_ezviz_local_sdk_body_aes_cbc(body: bytes | str, *, key: bytes | str, iv: bytes | str) -> bytes:
+def encrypt_ezviz_local_sdk_body_aes_cbc(
+    body: bytes | str, *, key: bytes | str, iv: bytes | str
+) -> bytes:
     """Encrypt a local SDK control body with AES-CBC/PKCS#5 padding.
 
     The EZVIZ app's local control frames use AES-CBC with 16-byte block
@@ -2682,24 +3922,63 @@ def encrypt_ezviz_local_sdk_body_aes_cbc(body: bytes | str, *, key: bytes | str,
     envelope. This helper does not derive or store device secrets; callers
     must supply key and IV bytes from their own credential source.
     """
-    return _impl_authentication.encrypt_ezviz_local_sdk_body_aes_cbc(body, key=key, iv=iv, _owner=_sys.modules[__name__])
+    return _impl_authentication.encrypt_ezviz_local_sdk_body_aes_cbc(
+        body, key=key, iv=iv, _owner=_sys.modules[__name__]
+    )
 
 
-def decrypt_ezviz_local_sdk_body_aes_cbc(body: bytes, *, key: bytes | str, iv: bytes | str) -> bytes:
+def decrypt_ezviz_local_sdk_body_aes_cbc(
+    body: bytes, *, key: bytes | str, iv: bytes | str
+) -> bytes:
     """Decrypt a local SDK AES-CBC/PKCS#5 control body."""
-    return _impl_authentication.decrypt_ezviz_local_sdk_body_aes_cbc(body, key=key, iv=iv, _owner=_sys.modules[__name__])
+    return _impl_authentication.decrypt_ezviz_local_sdk_body_aes_cbc(
+        body, key=key, iv=iv, _owner=_sys.modules[__name__]
+    )
 
 
-def build_encrypted_ezviz_local_sdk_frame(*, command: int, body: bytes | str, key: bytes | str, iv: bytes | str, sequence: int=0, version: int=16777216, marker: int=0, status: int=4294967295, reserved: int=0) -> bytes:
+def build_encrypted_ezviz_local_sdk_frame(
+    *,
+    command: int,
+    body: bytes | str,
+    key: bytes | str,
+    iv: bytes | str,
+    sequence: int = 0,
+    version: int = 16777216,
+    marker: int = 0,
+    status: int = 4294967295,
+    reserved: int = 0,
+) -> bytes:
     """Build an encrypted EZVIZ local SDK control frame.
 
     This is the reusable piece needed by the standalone reproducer after
     a caller has resolved the local CAS device-info key and IV source.
     """
-    return _impl_requests.build_encrypted_ezviz_local_sdk_frame(command=command, body=body, key=key, iv=iv, sequence=sequence, version=version, marker=marker, status=status, reserved=reserved, _owner=_sys.modules[__name__])
+    return _impl_requests.build_encrypted_ezviz_local_sdk_frame(
+        command=command,
+        body=body,
+        key=key,
+        iv=iv,
+        sequence=sequence,
+        version=version,
+        marker=marker,
+        status=status,
+        reserved=reserved,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def build_ezviz_local_sdk_ssl_frame(*, command: int, body: bytes | str, key: bytes | str, iv: bytes | str, sequence: int=0, version: int=16777216, marker: int=0, status: int=4294967295, reserved: int=0) -> bytes:
+def build_ezviz_local_sdk_ssl_frame(
+    *,
+    command: int,
+    body: bytes | str,
+    key: bytes | str,
+    iv: bytes | str,
+    sequence: int = 0,
+    version: int = 16777216,
+    marker: int = 0,
+    status: int = 4294967295,
+    reserved: int = 0,
+) -> bytes:
     """Build the app-observed local SDK SSL-like frame.
 
     Normal EZVIZ live view sends local control frames as a 32-byte local SDK
@@ -2707,17 +3986,70 @@ def build_ezviz_local_sdk_ssl_frame(*, command: int, body: bytes | str, key: byt
     trailer over that ciphertext. The header body length covers only the
     ciphertext, matching the observed ``0x2011`` and ``0x3105`` sends.
     """
-    return _impl_requests.build_ezviz_local_sdk_ssl_frame(command=command, body=body, key=key, iv=iv, sequence=sequence, version=version, marker=marker, status=status, reserved=reserved, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_local_sdk_ssl_frame(
+        command=command,
+        body=body,
+        key=key,
+        iv=iv,
+        sequence=sequence,
+        version=version,
+        marker=marker,
+        status=status,
+        reserved=reserved,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def build_ezviz_cas_encrypted_local_sdk_frame(*, command: int, body: bytes | str, device_info: EzvizCasDeviceInfo, sequence: int=0, version: int=16777216, marker: int=0, status: int=4294967295, reserved: int=0) -> bytes:
+def build_ezviz_cas_encrypted_local_sdk_frame(
+    *,
+    command: int,
+    body: bytes | str,
+    device_info: EzvizCasDeviceInfo,
+    sequence: int = 0,
+    version: int = 16777216,
+    marker: int = 0,
+    status: int = 4294967295,
+    reserved: int = 0,
+) -> bytes:
     """Build a local SDK frame using the app-observed CAS device-info tuple."""
-    return _impl_requests.build_ezviz_cas_encrypted_local_sdk_frame(command=command, body=body, device_info=device_info, sequence=sequence, version=version, marker=marker, status=status, reserved=reserved, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_cas_encrypted_local_sdk_frame(
+        command=command,
+        body=body,
+        device_info=device_info,
+        sequence=sequence,
+        version=version,
+        marker=marker,
+        status=status,
+        reserved=reserved,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def build_ezviz_cas_ssl_local_sdk_frame(*, command: int, body: bytes | str, device_info: EzvizCasDeviceInfo, iv: bytes | str, sequence: int=0, version: int=16777216, marker: int=0, status: int=4294967295, reserved: int=0) -> bytes:
+def build_ezviz_cas_ssl_local_sdk_frame(
+    *,
+    command: int,
+    body: bytes | str,
+    device_info: EzvizCasDeviceInfo,
+    iv: bytes | str,
+    sequence: int = 0,
+    version: int = 16777216,
+    marker: int = 0,
+    status: int = 4294967295,
+    reserved: int = 0,
+) -> bytes:
     """Build a direct-local SDK frame with CAS key and ciphertext MD5 trailer."""
-    return _impl_requests.build_ezviz_cas_ssl_local_sdk_frame(command=command, body=body, device_info=device_info, iv=iv, sequence=sequence, version=version, marker=marker, status=status, reserved=reserved, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_cas_ssl_local_sdk_frame(
+        command=command,
+        body=body,
+        device_info=device_info,
+        iv=iv,
+        sequence=sequence,
+        version=version,
+        marker=marker,
+        status=status,
+        reserved=reserved,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def parse_ezviz_local_sdk_frame(data: bytes) -> EzvizLocalSdkFrame:
@@ -2740,9 +4072,11 @@ def classify_ezviz_local_sdk_body(data: bytes) -> EzvizLocalSdkBodyShape:
     return _impl_discovery.classify_ezviz_local_sdk_body(data, _owner=_sys.modules[__name__])
 
 
-def read_ezviz_local_sdk_frame(sock: Any, *, trailer_length: int=0) -> EzvizLocalSdkFrame:
+def read_ezviz_local_sdk_frame(sock: Any, *, trailer_length: int = 0) -> EzvizLocalSdkFrame:
     """Read one complete EZVIZ local SDK frame from a socket-like object."""
-    return _impl_requests.read_ezviz_local_sdk_frame(sock, trailer_length=trailer_length, _owner=_sys.modules[__name__])
+    return _impl_requests.read_ezviz_local_sdk_frame(
+        sock, trailer_length=trailer_length, _owner=_sys.modules[__name__]
+    )
 
 
 def parse_ezviz_interleaved_rtp_frame_header(data: bytes) -> EzvizInterleavedRtpFrameHeader:
@@ -2752,12 +4086,16 @@ def parse_ezviz_interleaved_rtp_frame_header(data: bytes) -> EzvizInterleavedRtp
     RTP payload. The RTP payload then carries MPEG-PS data, often beginning
     with an RTP header followed by the MPEG-PS pack header.
     """
-    return _impl_discovery.parse_ezviz_interleaved_rtp_frame_header(data, _owner=_sys.modules[__name__])
+    return _impl_discovery.parse_ezviz_interleaved_rtp_frame_header(
+        data, _owner=_sys.modules[__name__]
+    )
 
 
 def build_ezviz_interleaved_rtp_frame_header(*, channel: int, payload_length: int) -> bytes:
     """Build a 4-byte interleaved RTP header."""
-    return _impl_requests.build_ezviz_interleaved_rtp_frame_header(channel=channel, payload_length=payload_length, _owner=_sys.modules[__name__])
+    return _impl_requests.build_ezviz_interleaved_rtp_frame_header(
+        channel=channel, payload_length=payload_length, _owner=_sys.modules[__name__]
+    )
 
 
 def read_ezviz_interleaved_rtp_frame(sock: Any) -> EzvizInterleavedRtpFrame:
@@ -2765,7 +4103,9 @@ def read_ezviz_interleaved_rtp_frame(sock: Any) -> EzvizInterleavedRtpFrame:
     return _impl_requests.read_ezviz_interleaved_rtp_frame(sock, _owner=_sys.modules[__name__])
 
 
-def read_ezviz_interleaved_rtp_frame_after_prefix(sock: Any, *, max_prefix_bytes: int=4096) -> EzvizInterleavedRtpFrameWithPrefix:
+def read_ezviz_interleaved_rtp_frame_after_prefix(
+    sock: Any, *, max_prefix_bytes: int = 4096
+) -> EzvizInterleavedRtpFrameWithPrefix:
     """Read the first interleaved RTP frame, preserving any binary preface.
 
     The local stream port sends a short binary preface after the encrypted
@@ -2773,10 +4113,14 @@ def read_ezviz_interleaved_rtp_frame_after_prefix(sock: Any, *, max_prefix_bytes
     A standalone reproducer needs to tolerate that preface without discarding
     it silently.
     """
-    return _impl_requests.read_ezviz_interleaved_rtp_frame_after_prefix(sock, max_prefix_bytes=max_prefix_bytes, _owner=_sys.modules[__name__])
+    return _impl_requests.read_ezviz_interleaved_rtp_frame_after_prefix(
+        sock, max_prefix_bytes=max_prefix_bytes, _owner=_sys.modules[__name__]
+    )
 
 
-def read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock: Any, *, max_prefix_bytes: int=4096) -> EzvizInterleavedRtpFrameWithPrefix:
+def read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+    sock: Any, *, max_prefix_bytes: int = 4096
+) -> EzvizInterleavedRtpFrameWithPrefix:
     """Read one HCNetSDK command-port interleaved media frame.
 
     The local stream port uses ``$`` + channel + big-endian payload length.
@@ -2784,7 +4128,9 @@ def read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock: Any, *, max_
     little-endian total frame length. Keeping this reader separate prevents the
     command-port path from coalescing adjacent media frames.
     """
-    return _impl_requests.read_hcnetsdk_command_port_interleaved_frame_after_prefix(sock, max_prefix_bytes=max_prefix_bytes, _owner=_sys.modules[__name__])
+    return _impl_requests.read_hcnetsdk_command_port_interleaved_frame_after_prefix(
+        sock, max_prefix_bytes=max_prefix_bytes, _owner=_sys.modules[__name__]
+    )
 
 
 class HcNetSdkCommandPortClient:
@@ -2843,9 +4189,7 @@ class HcNetSdkCommandPortClient:
             connect_timeout = self.timeout
             if timeout is not None:
                 connect_timeout = (
-                    timeout
-                    if connect_timeout is None
-                    else min(connect_timeout, timeout)
+                    timeout if connect_timeout is None else min(connect_timeout, timeout)
                 )
             try:
                 command_sock = _connect_with_optional_source_address(
@@ -2857,8 +4201,7 @@ class HcNetSdkCommandPortClient:
                 )
             except TimeoutError as err:
                 if deadline_limited and (
-                    self.timeout is None
-                    or (timeout is not None and timeout <= self.timeout)
+                    self.timeout is None or (timeout is not None and timeout <= self.timeout)
                 ):
                     raise EzvizLocalSdkDeadlineExpired(
                         "HCNetSDK command-port connect exceeded its deadline"
@@ -2934,9 +4277,7 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         effective_timeout = (
-            _remaining_timeout(deadline, monotonic)
-            if deadline is not None
-            else timeout
+            _remaining_timeout(deadline, monotonic) if deadline is not None else timeout
         )
         sock = self.connect(
             timeout=effective_timeout,
@@ -2985,9 +4326,7 @@ class HcNetSdkCommandPortClient:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> HcNetSdkTcpFrame:
         effective_timeout = (
-            _remaining_timeout(deadline, monotonic)
-            if deadline is not None
-            else timeout
+            _remaining_timeout(deadline, monotonic) if deadline is not None else timeout
         )
         sock = self.connect(
             timeout=effective_timeout,
@@ -2997,7 +4336,9 @@ class HcNetSdkCommandPortClient:
         )
         if effective_timeout is None:
             try:
-                return read_hcnetsdk_tcp_frame(sock, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack)
+                return read_hcnetsdk_tcp_frame(
+                    sock, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack
+                )
             except PyEzvizError:
                 if max_frame_bytes is not None or not allow_short_ack:
                     self._invalidate_socket(sock)
@@ -3005,14 +4346,14 @@ class HcNetSdkCommandPortClient:
         previous_timeout = sock.gettimeout()
         deadline_socket = _DeadlineBoundRecvSocket(
             sock,
-            deadline=(
-                deadline if deadline is not None else monotonic() + effective_timeout
-            ),
+            deadline=(deadline if deadline is not None else monotonic() + effective_timeout),
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
         try:
-            return read_hcnetsdk_tcp_frame(deadline_socket, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack)
+            return read_hcnetsdk_tcp_frame(
+                deadline_socket, max_frame_bytes=max_frame_bytes, allow_short_ack=allow_short_ack
+            )
         except EzvizLocalSdkDeadlineExpired:
             self._invalidate_socket(sock)
             raise
@@ -3050,9 +4391,7 @@ class HcNetSdkCommandPortClient:
         invalidate_on_deadline: bool = True,
     ) -> EzvizInterleavedRtpFrameWithPrefix:
         effective_timeout = (
-            _remaining_timeout(deadline, monotonic)
-            if deadline is not None
-            else timeout
+            _remaining_timeout(deadline, monotonic) if deadline is not None else timeout
         )
         sock = self.connect(
             timeout=effective_timeout,
@@ -3069,9 +4408,7 @@ class HcNetSdkCommandPortClient:
         previous_timeout = sock.gettimeout()
         deadline_socket = _DeadlineBoundRecvSocket(
             sock,
-            deadline=(
-                deadline if deadline is not None else monotonic() + effective_timeout
-            ),
+            deadline=(deadline if deadline is not None else monotonic() + effective_timeout),
             configured_timeout=previous_timeout,
             monotonic=monotonic,
         )
@@ -3099,8 +4436,7 @@ class HcNetSdkCommandPortClient:
         """Run the generated RSA/challenge command-port login handshake."""
         if deadline is not None and rsa_key is None:
             raise PyEzvizError(
-                "Deadline-aware HCNetSDK command-port login requires a "
-                "pre-generated rsa_key"
+                "Deadline-aware HCNetSDK command-port login requires a pre-generated rsa_key"
             )
         sock = self.connect(
             timeout=_remaining_timeout(deadline, monotonic),
@@ -3174,9 +4510,7 @@ class HcNetSdkCommandPortClient:
         else:
             response_flags = tuple(read_response_after_each)
             if len(response_flags) != len(frames):
-                raise PyEzvizError(
-                    "HCNetSDK response-read policy length must match command frames"
-                )
+                raise PyEzvizError("HCNetSDK response-read policy length must match command frames")
 
         exchanges: list[HcNetSdkCommandPortExchange] = []
         for index, frame in enumerate(frames):
@@ -3211,17 +4545,37 @@ class HcNetSdkCommandPortClient:
             exchanges=tuple(exchanges),
             first_media=first_media,
         )
+
+
 def hcnetsdk_device_ability_command_port_body_tail(request: HcNetSdkDeviceAbilityRequest) -> bytes:
     """Return the pure command-port tail for ``NET_DVR_GetDeviceAbility``."""
-    return _impl_configuration.hcnetsdk_device_ability_command_port_body_tail(request, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_device_ability_command_port_body_tail(
+        request, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_device_ability_command_port_template(request: HcNetSdkDeviceAbilityRequest, *, addend_delta: int | None=0, addend: int | None=None, name: str | None=None) -> HcNetSdkCommandPortControlTemplate:
+def hcnetsdk_device_ability_command_port_template(
+    request: HcNetSdkDeviceAbilityRequest,
+    *,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    name: str | None = None,
+) -> HcNetSdkCommandPortControlTemplate:
     """Return a generated command-port template for ``NET_DVR_GetDeviceAbility``."""
-    return _impl_configuration.hcnetsdk_device_ability_command_port_template(request, addend_delta=addend_delta, addend=addend, name=name, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_device_ability_command_port_template(
+        request, addend_delta=addend_delta, addend=addend, name=name, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_dvr_config_command_port_template(request: HcNetSdkDvrConfigRequest, *, command_id: int | None=None, body_tail: bytes | None=None, addend_delta: int | None=0, addend: int | None=None, name: str | None=None) -> HcNetSdkCommandPortControlTemplate:
+def hcnetsdk_dvr_config_command_port_template(
+    request: HcNetSdkDvrConfigRequest,
+    *,
+    command_id: int | None = None,
+    body_tail: bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    name: str | None = None,
+) -> HcNetSdkCommandPortControlTemplate:
     """Return a traced command-port template for ``NET_DVR_GetDVRConfig``.
 
     ``NET_DVR_GetDVRConfig`` does not carry the public SDK ``dwCommand`` value
@@ -3229,62 +4583,242 @@ def hcnetsdk_dvr_config_command_port_template(request: HcNetSdkDvrConfigRequest,
     a device-protocol command id, so unknown config commands must be supplied
     explicitly until traced.
     """
-    return _impl_configuration.hcnetsdk_dvr_config_command_port_template(request, command_id=command_id, body_tail=body_tail, addend_delta=addend_delta, addend=addend, name=name, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_dvr_config_command_port_template(
+        request,
+        command_id=command_id,
+        body_tail=body_tail,
+        addend_delta=addend_delta,
+        addend=addend,
+        name=name,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def hcnetsdk_dvr_config_command_port_body_tail(request: HcNetSdkDvrConfigRequest) -> bytes:
     """Return the traced command-port body tail for a DVR config request."""
-    return _impl_configuration.hcnetsdk_dvr_config_command_port_body_tail(request, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_dvr_config_command_port_body_tail(
+        request, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_stdxml_config_command_port_body_tail(request: HcNetSdkStdXmlConfigRequest | str | bytes) -> bytes:
+def hcnetsdk_stdxml_config_command_port_body_tail(
+    request: HcNetSdkStdXmlConfigRequest | str | bytes,
+) -> bytes:
     """Return the traced command-port tail for ``NET_DVR_STDXMLConfig``.
 
     A live Android SDK trace showed STDXML using the generated command-port
     control frame with command ``0x117000``, eight extra reserved bytes, a
     twelve-byte request descriptor, and then the request/in-buffer bytes.
     """
-    return _impl_configuration.hcnetsdk_stdxml_config_command_port_body_tail(request, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_stdxml_config_command_port_body_tail(
+        request, _owner=_sys.modules[__name__]
+    )
 
 
-def hcnetsdk_stdxml_config_command_port_template(request: HcNetSdkStdXmlConfigRequest | str | bytes, *, command_id: int=HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID, body_prefix: str | bytes | None=None, addend_delta: int | None=0, addend: int | None=None, name: str | None=None) -> HcNetSdkCommandPortControlTemplate:
+def hcnetsdk_stdxml_config_command_port_template(
+    request: HcNetSdkStdXmlConfigRequest | str | bytes,
+    *,
+    command_id: int = HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID,
+    body_prefix: str | bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    name: str | None = None,
+) -> HcNetSdkCommandPortControlTemplate:
     """Return a generated command-port template for ``NET_DVR_STDXMLConfig``."""
-    return _impl_configuration.hcnetsdk_stdxml_config_command_port_template(request, command_id=command_id, body_prefix=body_prefix, addend_delta=addend_delta, addend=addend, name=name, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_stdxml_config_command_port_template(
+        request,
+        command_id=command_id,
+        body_prefix=body_prefix,
+        addend_delta=addend_delta,
+        addend=addend,
+        name=name,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_command_port_execute_template(endpoint: HcNetSdkLanEndpoint, password: str | bytes, template: HcNetSdkCommandPortControlTemplate, *, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> HcNetSdkCommandPortControlResponse:
+def hcnetsdk_command_port_execute_template(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    template: HcNetSdkCommandPortControlTemplate,
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> HcNetSdkCommandPortControlResponse:
     """Execute one generated command-port control template in pure Python.
 
     The EZVIZ devices tested so far accept this pattern for local capability
     reads: perform the RSA login on one socket, close it, then send the
     authenticated control command on a fresh command-port socket.
     """
-    return _impl_requests.hcnetsdk_command_port_execute_template(endpoint, password, template, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_command_port_execute_template(
+        endpoint,
+        password,
+        template,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_get_device_ability_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, request: HcNetSdkDeviceAbilityRequest, *, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> bytes:
+def hcnetsdk_get_device_ability_command_port(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    request: HcNetSdkDeviceAbilityRequest,
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> bytes:
     """Read ``NET_DVR_GetDeviceAbility`` through the pure command-port path."""
-    return _impl_configuration.hcnetsdk_get_device_ability_command_port(endpoint, password, request, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_get_device_ability_command_port(
+        endpoint,
+        password,
+        request,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_get_dvr_config_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, request: HcNetSdkDvrConfigRequest, *, command_id: int | None=None, body_tail: bytes | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> bytes:
+def hcnetsdk_get_dvr_config_command_port(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    request: HcNetSdkDvrConfigRequest,
+    *,
+    command_id: int | None = None,
+    body_tail: bytes | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> bytes:
     """Read a traced ``NET_DVR_GetDVRConfig`` output buffer in pure Python."""
-    return _impl_configuration.hcnetsdk_get_dvr_config_command_port(endpoint, password, request, command_id=command_id, body_tail=body_tail, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_get_dvr_config_command_port(
+        endpoint,
+        password,
+        request,
+        command_id=command_id,
+        body_tail=body_tail,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_stdxml_config_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, request: HcNetSdkStdXmlConfigRequest | str | bytes, template: HcNetSdkCommandPortControlTemplate, *, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> HcNetSdkStdXmlConfigResponse:
+def hcnetsdk_stdxml_config_command_port(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    request: HcNetSdkStdXmlConfigRequest | str | bytes,
+    template: HcNetSdkCommandPortControlTemplate,
+    *,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> HcNetSdkStdXmlConfigResponse:
     """Execute a traced ``NET_DVR_STDXMLConfig`` command in pure Python."""
-    return _impl_configuration.hcnetsdk_stdxml_config_command_port(endpoint, password, request, template, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_stdxml_config_command_port(
+        endpoint,
+        password,
+        request,
+        template,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_stdxml_config_command_port_from_trace(endpoint: HcNetSdkLanEndpoint, password: str | bytes, request: HcNetSdkStdXmlConfigRequest | str | bytes, *, command_id: int=HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID, body_prefix: str | bytes | None=None, addend_delta: int | None=0, addend: int | None=None, name: str | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> HcNetSdkStdXmlConfigResponse:  # noqa: PLR0913
+def hcnetsdk_stdxml_config_command_port_from_trace(  # noqa: PLR0913
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    request: HcNetSdkStdXmlConfigRequest | str | bytes,
+    *,
+    command_id: int = HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID,
+    body_prefix: str | bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    name: str | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> HcNetSdkStdXmlConfigResponse:
     """Execute traced ``NET_DVR_STDXMLConfig`` through pure command-port IO."""
-    return _impl_configuration.hcnetsdk_stdxml_config_command_port_from_trace(endpoint, password, request, command_id=command_id, body_prefix=body_prefix, addend_delta=addend_delta, addend=addend, name=name, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_configuration.hcnetsdk_stdxml_config_command_port_from_trace(
+        endpoint,
+        password,
+        request,
+        command_id=command_id,
+        body_prefix=body_prefix,
+        addend_delta=addend_delta,
+        addend=addend,
+        name=name,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def hcnetsdk_stdxml_isapi_command_port(endpoint: HcNetSdkLanEndpoint, password: str | bytes, method: str, path: str, body: Mapping[str, Any] | str | bytes | None=None, *, command_id: int=HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID, body_prefix: str | bytes | None=None, addend_delta: int | None=0, addend: int | None=None, name: str | None=None, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None) -> HcNetSdkStdXmlConfigResponse:  # noqa: PLR0913
+def hcnetsdk_stdxml_isapi_command_port(  # noqa: PLR0913
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    method: str,
+    path: str,
+    body: Mapping[str, Any] | str | bytes | None = None,
+    *,
+    command_id: int = HCNETSDK_STDXML_COMMAND_PORT_COMMAND_ID,
+    body_prefix: str | bytes | None = None,
+    addend_delta: int | None = 0,
+    addend: int | None = None,
+    name: str | None = None,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+) -> HcNetSdkStdXmlConfigResponse:
     """Execute a generic ISAPI request through pure command-port STDXML."""
-    return _impl_requests.hcnetsdk_stdxml_isapi_command_port(endpoint, password, method, path, body, command_id=command_id, body_prefix=body_prefix, addend_delta=addend_delta, addend=addend, name=name, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, _owner=_sys.modules[__name__])
+    return _impl_requests.hcnetsdk_stdxml_isapi_command_port(
+        endpoint,
+        password,
+        method,
+        path,
+        body,
+        command_id=command_id,
+        body_prefix=body_prefix,
+        addend_delta=addend_delta,
+        addend=addend,
+        name=name,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
 class HcNetSdkPurePythonClient:
@@ -3359,9 +4893,7 @@ class HcNetSdkPurePythonClient:
     ) -> EzvizLanAudioVideoCompressInfo:
         """Read and parse local ``AudioVideoCompressInfo`` output."""
         return ezviz_lan_audio_video_compress_info(
-            self.device_ability(
-                ezviz_lan_audio_video_compress_info_ability_request(1, channel)
-            )
+            self.device_ability(ezviz_lan_audio_video_compress_info_ability_request(1, channel))
         )
 
     def ipc_front_parameter_ability(self) -> EzvizLanIpcFrontParameterAbility:
@@ -3388,9 +4920,7 @@ class HcNetSdkPurePythonClient:
 
     def ptz_ability(self, channel: int = 1) -> EzvizLanPtzAbility:
         """Read and parse local PTZ ability output."""
-        return ezviz_lan_ptz_ability(
-            self.device_ability(ezviz_lan_ptz_ability_request(1, channel))
-        )
+        return ezviz_lan_ptz_ability(self.device_ability(ezviz_lan_ptz_ability_request(1, channel)))
 
     def dvr_config(
         self,
@@ -3415,9 +4945,7 @@ class HcNetSdkPurePythonClient:
 
     def wifi_ap_info_list(self) -> tuple[EzvizLanWifiApInfo, ...]:
         """Read and parse traced ``NET_DVR_AP_INFO_LIST`` output."""
-        return ezviz_lan_wifi_ap_info_list(
-            self.dvr_config(ezviz_lan_wifi_ap_info_list_request(1))
-        )
+        return ezviz_lan_wifi_ap_info_list(self.dvr_config(ezviz_lan_wifi_ap_info_list_request(1)))
 
     def hd_config(self) -> EzvizLanHdConfig:
         """Read and parse traced ``NET_DVR_HDCFG`` output."""
@@ -3425,27 +4953,19 @@ class HcNetSdkPurePythonClient:
 
     def time_config(self) -> HcNetSdkTime:
         """Read and parse traced ``NET_DVR_TIME`` output."""
-        return ezviz_lan_time_config(
-            self.dvr_config(ezviz_lan_time_get_config_request(1))
-        )
+        return ezviz_lan_time_config(self.dvr_config(ezviz_lan_time_get_config_request(1)))
 
     def ntp_config(self) -> EzvizLanNtpConfig:
         """Read and parse traced ``NET_DVR_NTPPARA`` output."""
-        return ezviz_lan_ntp_config(
-            self.dvr_config(ezviz_lan_ntp_get_config_request(1))
-        )
+        return ezviz_lan_ntp_config(self.dvr_config(ezviz_lan_ntp_get_config_request(1)))
 
     def device_config_v40(self) -> EzvizLanDeviceConfigV40:
         """Read and parse traced ``NET_DVR_DEVICECFG_V40`` output."""
-        return ezviz_lan_device_config_v40(
-            self.dvr_config(ezviz_lan_device_config_v40_request(1))
-        )
+        return ezviz_lan_device_config_v40(self.dvr_config(ezviz_lan_device_config_v40_request(1)))
 
     def net_config_v30(self) -> EzvizLanNetConfigV30:
         """Read and parse traced ``NET_DVR_NETCFG_V30`` output."""
-        return ezviz_lan_net_config_v30(
-            self.dvr_config(ezviz_lan_net_config_v30_request(1))
-        )
+        return ezviz_lan_net_config_v30(self.dvr_config(ezviz_lan_net_config_v30_request(1)))
 
     def record_config_v30(self, channel: int = 1) -> EzvizLanRecordConfigV30:
         """Read and parse traced ``NET_DVR_RECORD_V30`` output."""
@@ -3456,9 +4976,7 @@ class HcNetSdkPurePythonClient:
     def camera_param_config(self, channel: int = 1) -> EzvizLanCameraParamConfig:
         """Read and parse traced ``NET_DVR_CAMERAPARAMCFG`` output."""
         if channel != 1:
-            raise PyEzvizError(
-                "EZVIZ LAN camera-param pure read is traced for channel 1"
-            )
+            raise PyEzvizError("EZVIZ LAN camera-param pure read is traced for channel 1")
         return ezviz_lan_camera_param_config(
             self.dvr_config(ezviz_lan_video_effect_get_config_request(1, channel))
         )
@@ -3484,8 +5002,13 @@ class HcNetSdkPurePythonClient:
     def stream_details(self, channel: int = 1) -> HcNetSdkStreamDetails:
         """Read current compression and per-resolution abilities without cloud IO."""
         return discover_hcnetsdk_stream_details(
-            self.endpoint, self.password, channel=channel, username=self.username,
-            local_ip=self.local_ip, timeout=self.timeout, socket_factory=self.socket_factory,
+            self.endpoint,
+            self.password,
+            channel=channel,
+            username=self.username,
+            local_ip=self.local_ip,
+            timeout=self.timeout,
+            socket_factory=self.socket_factory,
             rsa_key=self.rsa_key,
         )
 
@@ -3509,9 +5032,7 @@ class HcNetSdkPurePythonClient:
 
     def wifi_config_summary(self) -> EzvizLanDvrConfigSummary:
         """Read a traced ``NET_DVR_WIFI_CFG`` buffer as a non-secret summary."""
-        return ezviz_lan_wifi_config_summary(
-            self.dvr_config(ezviz_lan_wifi_get_config_request(1))
-        )
+        return ezviz_lan_wifi_config_summary(self.dvr_config(ezviz_lan_wifi_get_config_request(1)))
 
     def ezviz_access_config_summary(self) -> EzvizLanDvrConfigSummary:
         """Read traced EZVIZ access config as a non-secret summary."""
@@ -3694,12 +5215,18 @@ class HcNetSdkPurePythonClient:
             rtsp=rtsp,
             upnp=upnp,
         )
+
+
 def _parse_local_device_content(value: Any) -> EzvizLocalDeviceContent | None:
     return _impl_discovery._parse_local_device_content(value, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_time_value(value: HcNetSdkTime | datetime | date, *, end_of_day: bool=False) -> HcNetSdkTime:
-    return _impl_requests._hcnetsdk_time_value(value, end_of_day=end_of_day, _owner=_sys.modules[__name__])
+def _hcnetsdk_time_value(
+    value: HcNetSdkTime | datetime | date, *, end_of_day: bool = False
+) -> HcNetSdkTime:
+    return _impl_requests._hcnetsdk_time_value(
+        value, end_of_day=end_of_day, _owner=_sys.modules[__name__]
+    )
 
 
 def _native_string_bytes(label: str, value: str) -> bytes:
@@ -3739,7 +5266,9 @@ def _dword_value(label: str, value: int) -> int:
 
 
 def _device_ability_response_text(response: str | bytes) -> str:
-    return _impl_configuration._device_ability_response_text(response, _owner=_sys.modules[__name__])
+    return _impl_configuration._device_ability_response_text(
+        response, _owner=_sys.modules[__name__]
+    )
 
 
 def _device_ability_xml_name(label: str, value: str) -> str:
@@ -3750,32 +5279,46 @@ def _xml_local_name(element: ET.Element) -> str:
     return _impl_requests._xml_local_name(element, _owner=_sys.modules[__name__])
 
 
-def _xml_opt_attr(root: ET.Element, name: str, *, parent: str | None=None) -> str | None:
+def _xml_opt_attr(root: ET.Element, name: str, *, parent: str | None = None) -> str | None:
     return _impl_requests._xml_opt_attr(root, name, parent=parent, _owner=_sys.modules[__name__])
 
 
-def _xml_attr(root: ET.Element, name: str, attr: str, *, parent: str | None=None) -> str | None:
+def _xml_attr(root: ET.Element, name: str, attr: str, *, parent: str | None = None) -> str | None:
     return _impl_requests._xml_attr(root, name, attr, parent=parent, _owner=_sys.modules[__name__])
 
 
-def _xml_attr_int(root: ET.Element, name: str, attr: str, *, parent: str | None=None, default: int=0) -> int:
-    return _impl_requests._xml_attr_int(root, name, attr, parent=parent, default=default, _owner=_sys.modules[__name__])
+def _xml_attr_int(
+    root: ET.Element, name: str, attr: str, *, parent: str | None = None, default: int = 0
+) -> int:
+    return _impl_requests._xml_attr_int(
+        root, name, attr, parent=parent, default=default, _owner=_sys.modules[__name__]
+    )
 
 
 def _xml_bool_opt_attr(root: ET.Element, name: str) -> bool | None:
     return _impl_requests._xml_bool_opt_attr(root, name, _owner=_sys.modules[__name__])
 
 
-def _xml_descendant_int(root: ET.Element, name: str, *, parent: str | None=None, default: int=0) -> int:
-    return _impl_requests._xml_descendant_int(root, name, parent=parent, default=default, _owner=_sys.modules[__name__])
+def _xml_descendant_int(
+    root: ET.Element, name: str, *, parent: str | None = None, default: int = 0
+) -> int:
+    return _impl_requests._xml_descendant_int(
+        root, name, parent=parent, default=default, _owner=_sys.modules[__name__]
+    )
 
 
-def _xml_descendant_bool_text(root: ET.Element, name: str, *, parent: str | None=None, default: bool=False) -> bool:
-    return _impl_requests._xml_descendant_bool_text(root, name, parent=parent, default=default, _owner=_sys.modules[__name__])
+def _xml_descendant_bool_text(
+    root: ET.Element, name: str, *, parent: str | None = None, default: bool = False
+) -> bool:
+    return _impl_requests._xml_descendant_bool_text(
+        root, name, parent=parent, default=default, _owner=_sys.modules[__name__]
+    )
 
 
-def _xml_descendant_text(root: ET.Element, name: str, *, parent: str | None=None) -> str | None:
-    return _impl_requests._xml_descendant_text(root, name, parent=parent, _owner=_sys.modules[__name__])
+def _xml_descendant_text(root: ET.Element, name: str, *, parent: str | None = None) -> str | None:
+    return _impl_requests._xml_descendant_text(
+        root, name, parent=parent, _owner=_sys.modules[__name__]
+    )
 
 
 def _xml_has_descendant(root: ET.Element, name: str) -> bool:
@@ -3787,7 +5330,9 @@ def _xml_int_csv(value: str | None) -> tuple[int, ...]:
 
 
 def _xml_child_int_csv_with_prefix(root: ET.Element, prefix: str) -> tuple[int, ...]:
-    return _impl_requests._xml_child_int_csv_with_prefix(root, prefix, _owner=_sys.modules[__name__])
+    return _impl_requests._xml_child_int_csv_with_prefix(
+        root, prefix, _owner=_sys.modules[__name__]
+    )
 
 
 def _xml_child_text(root: ET.Element, path: tuple[str, ...]) -> str | None:
@@ -3806,7 +5351,7 @@ def _ipc_front_parameter_field_root(root: ET.Element) -> ET.Element:
     return _impl_requests._ipc_front_parameter_field_root(root, _owner=_sys.modules[__name__])
 
 
-def _xml_child_int(root: ET.Element, path: tuple[str, ...], *, default: int=0) -> int:
+def _xml_child_int(root: ET.Element, path: tuple[str, ...], *, default: int = 0) -> int:
     return _impl_requests._xml_child_int(root, path, default=default, _owner=_sys.modules[__name__])
 
 
@@ -3818,20 +5363,32 @@ def _xml_child_int_range(root: ET.Element, path: tuple[str, ...]) -> EzvizLanIpc
     return _impl_requests._xml_child_int_range(root, path, _owner=_sys.modules[__name__])
 
 
-def _audio_video_compress_stream(root: ET.Element, *, index: int | None=None) -> EzvizLanAudioVideoCompressStream:
-    return _impl_requests._audio_video_compress_stream(root, index=index, _owner=_sys.modules[__name__])
+def _audio_video_compress_stream(
+    root: ET.Element, *, index: int | None = None
+) -> EzvizLanAudioVideoCompressStream:
+    return _impl_requests._audio_video_compress_stream(
+        root, index=index, _owner=_sys.modules[__name__]
+    )
 
 
-def _audio_video_compress_video_channels(root: ET.Element) -> tuple[EzvizLanAudioVideoCompressVideoChannel, ...]:
+def _audio_video_compress_video_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressVideoChannel, ...]:
     return _impl_requests._audio_video_compress_video_channels(root, _owner=_sys.modules[__name__])
 
 
-def _audio_video_compress_audio_channels(root: ET.Element) -> tuple[EzvizLanAudioVideoCompressAudioChannel, ...]:
+def _audio_video_compress_audio_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressAudioChannel, ...]:
     return _impl_requests._audio_video_compress_audio_channels(root, _owner=_sys.modules[__name__])
 
 
-def _audio_video_compress_voice_talk_channels(root: ET.Element) -> tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...]:
-    return _impl_requests._audio_video_compress_voice_talk_channels(root, _owner=_sys.modules[__name__])
+def _audio_video_compress_voice_talk_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...]:
+    return _impl_requests._audio_video_compress_voice_talk_channels(
+        root, _owner=_sys.modules[__name__]
+    )
 
 
 def _xml_has_parent(root: ET.Element, child: ET.Element, parent: str) -> bool:
@@ -3846,8 +5403,24 @@ def _looks_tls_record(data: bytes) -> bool:
     return _impl_requests._looks_tls_record(data, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_tcp_payload_kind(data: bytes, *, printable_ratio: float, high_bit_ratio: float, xml_offset: int | None, xml_tags: tuple[str, ...], declared_length_offset: int | None) -> str:
-    return _impl_requests._hcnetsdk_tcp_payload_kind(data, printable_ratio=printable_ratio, high_bit_ratio=high_bit_ratio, xml_offset=xml_offset, xml_tags=xml_tags, declared_length_offset=declared_length_offset, _owner=_sys.modules[__name__])
+def _hcnetsdk_tcp_payload_kind(
+    data: bytes,
+    *,
+    printable_ratio: float,
+    high_bit_ratio: float,
+    xml_offset: int | None,
+    xml_tags: tuple[str, ...],
+    declared_length_offset: int | None,
+) -> str:
+    return _impl_requests._hcnetsdk_tcp_payload_kind(
+        data,
+        printable_ratio=printable_ratio,
+        high_bit_ratio=high_bit_ratio,
+        xml_offset=xml_offset,
+        xml_tags=xml_tags,
+        declared_length_offset=declared_length_offset,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def _hcnetsdk_known_prefix_kind(data: bytes) -> str | None:
@@ -3884,7 +5457,9 @@ def _hcnetsdk_shape_command_candidate(record: HcNetSdkTcpShapeLogRecord) -> int 
 
 
 def _hcnetsdk_command_port_login_prefix(local_ip: str) -> bytes:
-    return _impl_authentication._hcnetsdk_command_port_login_prefix(local_ip, _owner=_sys.modules[__name__])
+    return _impl_authentication._hcnetsdk_command_port_login_prefix(
+        local_ip, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_port_username(username: str) -> bytes:
@@ -3927,11 +5502,27 @@ def _xml_tag_names(data: bytes) -> tuple[str, ...]:
     return _impl_requests._xml_tag_names(data, _owner=_sys.modules[__name__])
 
 
-def _probe_port(host: str, port: int, *, timeout: float | None, socket_factory: SocketFactory) -> HcNetSdkPortProbe:
-    return _impl_discovery._probe_port(host, port, timeout=timeout, socket_factory=socket_factory, _owner=_sys.modules[__name__])
+def _probe_port(
+    host: str, port: int, *, timeout: float | None, socket_factory: SocketFactory
+) -> HcNetSdkPortProbe:
+    return _impl_discovery._probe_port(
+        host, port, timeout=timeout, socket_factory=socket_factory, _owner=_sys.modules[__name__]
+    )
 
 
-def discover_hcnetsdk_stream_details(endpoint: HcNetSdkLanEndpoint, password: str | bytes, *, channel: int=1, username: str=HCNETSDK_EZVIZ_DEFAULT_USERNAME, local_ip: str | None=None, timeout: float | None=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None, monotonic: Callable[[], float]=time.monotonic, max_response_bytes: int=524288) -> HcNetSdkStreamDetails:
+def discover_hcnetsdk_stream_details(
+    endpoint: HcNetSdkLanEndpoint,
+    password: str | bytes,
+    *,
+    channel: int = 1,
+    username: str = HCNETSDK_EZVIZ_DEFAULT_USERNAME,
+    local_ip: str | None = None,
+    timeout: float | None = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    max_response_bytes: int = 524288,
+) -> HcNetSdkStreamDetails:
     """Login once and issue native GET1040 and ability8 queries on fresh sockets.
 
     Supplied credentials only: never renew or retry authentication. The finite
@@ -3940,14 +5531,58 @@ def discover_hcnetsdk_stream_details(endpoint: HcNetSdkLanEndpoint, password: st
     encryption protocols. Explicit capability-query rejection retains configuration
     with its raw error code; malformed/authentication/network errors propagate.
     """
-    return _impl_discovery.discover_hcnetsdk_stream_details(endpoint, password, channel=channel, username=username, local_ip=local_ip, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, monotonic=monotonic, max_response_bytes=max_response_bytes, _owner=_sys.modules[__name__])
+    return _impl_discovery.discover_hcnetsdk_stream_details(
+        endpoint,
+        password,
+        channel=channel,
+        username=username,
+        local_ip=local_ip,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        monotonic=monotonic,
+        max_response_bytes=max_response_bytes,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _hcnetsdk_stream_details_query(endpoint: HcNetSdkLanEndpoint, template: HcNetSdkCommandPortControlTemplate, session: HcNetSdkCommandPortLoginSession, address: str, timeout: float, socket_factory: SocketFactory, deadline: float, monotonic: Callable[[], float], max_response_bytes: int) -> HcNetSdkTcpFrame:
-    return _impl_requests._hcnetsdk_stream_details_query(endpoint, template, session, address, timeout, socket_factory, deadline, monotonic, max_response_bytes, _owner=_sys.modules[__name__])
+def _hcnetsdk_stream_details_query(
+    endpoint: HcNetSdkLanEndpoint,
+    template: HcNetSdkCommandPortControlTemplate,
+    session: HcNetSdkCommandPortLoginSession,
+    address: str,
+    timeout: float,
+    socket_factory: SocketFactory,
+    deadline: float,
+    monotonic: Callable[[], float],
+    max_response_bytes: int,
+) -> HcNetSdkTcpFrame:
+    return _impl_requests._hcnetsdk_stream_details_query(
+        endpoint,
+        template,
+        session,
+        address,
+        timeout,
+        socket_factory,
+        deadline,
+        monotonic,
+        max_response_bytes,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def discover_hcnetsdk_stream_details_for_login(endpoint: HcNetSdkLanEndpoint, login: HcNetSdkLoginCandidate, *, tls_context: ssl.SSLContext | None=None, channel: int=1, timeout: float=10.0, socket_factory: SocketFactory=socket.create_connection, rsa_key: Any | None=None, monotonic: Callable[[], float]=time.monotonic, max_response_bytes: int=524288) -> HcNetSdkStreamDetails:
+def discover_hcnetsdk_stream_details_for_login(
+    endpoint: HcNetSdkLanEndpoint,
+    login: HcNetSdkLoginCandidate,
+    *,
+    tls_context: ssl.SSLContext | None = None,
+    channel: int = 1,
+    timeout: float = 10.0,
+    socket_factory: SocketFactory = socket.create_connection,
+    rsa_key: Any | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    max_response_bytes: int = 524288,
+) -> HcNetSdkStreamDetails:
     """Query one explicit native login profile, never enumerate or renew secrets.
 
     HTTPSV40 means the native binary SDK over TLS, not HTTP/ISAPI. Default TLS
@@ -3955,13 +5590,25 @@ def discover_hcnetsdk_stream_details_for_login(endpoint: HcNetSdkLanEndpoint, lo
     SSLContext. TCP and TLS handshake share each connection's remaining budget.
     Authentication rejection propagates without a second credential/profile.
     """
-    return _impl_discovery.discover_hcnetsdk_stream_details_for_login(endpoint, login, tls_context=tls_context, channel=channel, timeout=timeout, socket_factory=socket_factory, rsa_key=rsa_key, monotonic=monotonic, max_response_bytes=max_response_bytes, _owner=_sys.modules[__name__])
+    return _impl_discovery.discover_hcnetsdk_stream_details_for_login(
+        endpoint,
+        login,
+        tls_context=tls_context,
+        channel=channel,
+        timeout=timeout,
+        socket_factory=socket_factory,
+        rsa_key=rsa_key,
+        monotonic=monotonic,
+        max_response_bytes=max_response_bytes,
+        _owner=_sys.modules[__name__],
+    )
+
 
 # Match the earlier implicit wildcard surface; named private compatibility hooks remain available.
 __all__ = [name for name in globals() if not name.startswith("_")]
 
 # Retained named compatibility exports; not additions to the wildcard API.
 __compatibility_exports__ = {
-    '_AES_SBOX': _AES_SBOX,
-    '_AES_RCON': _AES_RCON,
+    "_AES_SBOX": _AES_SBOX,
+    "_AES_RCON": _AES_RCON,
 }

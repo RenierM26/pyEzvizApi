@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming import app_capture as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.app_capture as _compat_module_0
+
     _CHUNK_BYTES = _compat_module_0._CHUNK_BYTES
     _RTP_WRAP = _compat_module_0._RTP_WRAP
     _VIDEO_TICKS_PER_MS = _compat_module_0._VIDEO_TICKS_PER_MS

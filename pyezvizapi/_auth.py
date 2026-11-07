@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.cloud import auth as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.cloud.auth as _compat_module_0
+
     API_ENDPOINT_REFRESH_SESSION_ID = _compat_module_0.API_ENDPOINT_REFRESH_SESSION_ID
     API_ENDPOINT_SERVER_INFO = _compat_module_0.API_ENDPOINT_SERVER_INFO
     FEATURE_CODE = _compat_module_0.FEATURE_CODE

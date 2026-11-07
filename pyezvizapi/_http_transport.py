@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.cloud import transport as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.cloud.transport as _compat_module_0
+
     CaseInsensitiveDict = _compat_module_0.CaseInsensitiveDict
     OrderedDict = _compat_module_0.OrderedDict
     copy = _compat_module_0.copy

@@ -865,6 +865,7 @@ Run the same local validation used by CI:
 
 ```bash
 ruff check .
+ruff format --check pyezvizapi
 codespell pyezvizapi tests README.md pyproject.toml .github
 pip-audit --progress-spinner off
 mypy --install-types --non-interactive .
@@ -879,6 +880,7 @@ Run style fixes where possible:
 
 ```bash
 ruff check --fix .
+ruff format pyezvizapi
 ```
 
 Before committing, remove generated artifacts so they do not leak into PRs:

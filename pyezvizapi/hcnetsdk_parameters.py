@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming.local.hcnetsdk import parameters as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.local.hcnetsdk.parameters as _compat_module_0
+
     _AUDIO_ENCODINGS = _compat_module_0._AUDIO_ENCODINGS
     _AUDIO_SAMPLE_RATES = _compat_module_0._AUDIO_SAMPLE_RATES
     _FORMATS = _compat_module_0._FORMATS

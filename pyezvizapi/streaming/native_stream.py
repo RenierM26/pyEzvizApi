@@ -262,8 +262,11 @@ class NativeSourceClock:
     origin_90k: int
 
     def __post_init__(self) -> None:
-        if (isinstance(self.origin_90k, bool) or not isinstance(self.origin_90k, int)
-                or not -(1 << 32) <= self.origin_90k < (1 << 33)):
+        if (
+            isinstance(self.origin_90k, bool)
+            or not isinstance(self.origin_90k, int)
+            or not -(1 << 32) <= self.origin_90k < (1 << 33)
+        ):
             raise ValueError("Presentation origin is outside the MPEG timestamp domain")
 
     @property
@@ -355,30 +358,52 @@ class NativeMpegTsStream:
 
     def _access_unit_rows(self) -> list[dict[str, Any]]:
         with self._lock:
-            return [dict(track, access_units=self._accepted_units.get(track["index"], 0))
-                    for track in self._tracks]
+            return [
+                dict(track, access_units=self._accepted_units.get(track["index"], 0))
+                for track in self._tracks
+            ]
 
     def _completion_from_receipts(
-        self, output: dict[str, Any], source: dict[str, Any],
+        self,
+        output: dict[str, Any],
+        source: dict[str, Any],
     ) -> NativeMediaCompletion | None:
-        if (not source["finite_source_end"] or source["source_generation"] != self.source_generation
-                or any(row["status"] != "completed" or not row["worker_joined"]
-                       or not row["cancel_joined"] or not row["source_closed"]
-                       or row["error_type"] or row["cleanup_error_types"]
-                       or row["shutdown_timed_out"] for row in (output, source))
-                or output["owned_output_chunks"] or output["owned_output_bytes"]
-                or output["discarded_output_bytes"]):
+        if (
+            not source["finite_source_end"]
+            or source["source_generation"] != self.source_generation
+            or any(
+                row["status"] != "completed"
+                or not row["worker_joined"]
+                or not row["cancel_joined"]
+                or not row["source_closed"]
+                or row["error_type"]
+                or row["cleanup_error_types"]
+                or row["shutdown_timed_out"]
+                for row in (output, source)
+            )
+            or output["owned_output_chunks"]
+            or output["owned_output_bytes"]
+            or output["discarded_output_bytes"]
+        ):
             return None
         with self._lock:
-            rows = tuple(NativeTrackCompletion(
-                track_id=track["id"], index=track["index"], kind=track["kind"],
-                codec=track["codec"], access_units=self._accepted_units.get(track["index"], 0),
-            ) for track in self._tracks)
+            rows = tuple(
+                NativeTrackCompletion(
+                    track_id=track["id"],
+                    index=track["index"],
+                    kind=track["kind"],
+                    codec=track["codec"],
+                    access_units=self._accepted_units.get(track["index"], 0),
+                )
+                for track in self._tracks
+            )
             if not rows or any(track.access_units <= 0 for track in rows):
                 return None
             if self._completion_cache is None:
                 self._completion_cache = NativeMediaCompletion(
-                    self.source_generation, self.subscription_generation, rows,
+                    self.source_generation,
+                    self.subscription_generation,
+                    rows,
                 )
             return self._completion_cache
 
@@ -548,11 +573,13 @@ class NativeMpegTsStream:
         return selected
 
     def _check_packet_clock(self, packet: Any, count: int) -> None:
-        if (packet.size > MAX_PENDING_PS_BYTES or packet.pts is None
-                or packet.dts is None or packet.time_base is None):
-            raise PyEzvizError(
-                "Native packet has missing timestamps or exceeds the byte budget"
-            )
+        if (
+            packet.size > MAX_PENDING_PS_BYTES
+            or packet.pts is None
+            or packet.dts is None
+            or packet.time_base is None
+        ):
+            raise PyEzvizError("Native packet has missing timestamps or exceeds the byte budget")
         self._declare_source_clock(packet, count)
 
     def _declare_source_clock(self, packet: Any, count: int) -> None:
@@ -582,14 +609,12 @@ class NativeMpegTsStream:
             },
         ) as outgoing:
             mapping = {
-                stream.index: outgoing.add_stream_from_template(stream)
-                for stream in selected
+                stream.index: outgoing.add_stream_from_template(stream) for stream in selected
             }
             count = 0
             last_dts: dict[int, Fraction] = {}
             identities = {
-                stream.index: (stream.id, stream.codec_context.name)
-                for stream in selected
+                stream.index: (stream.id, stream.codec_context.name) for stream in selected
             }
             for packet in incoming.demux(selected):
                 self._check_stop()
@@ -597,17 +622,11 @@ class NativeMpegTsStream:
                     continue  # libav demux flush sentinel, not a source picture.
                 self._check_packet_clock(packet, count)
                 index = packet.stream.index
-                if (packet.stream.id, packet.stream.codec_context.name) != identities[
-                    index
-                ]:
-                    raise PyEzvizError(
-                        "Native selected track identity or codec changed"
-                    )
+                if (packet.stream.id, packet.stream.codec_context.name) != identities[index]:
+                    raise PyEzvizError("Native selected track identity or codec changed")
                 stamp = Fraction(packet.dts) * packet.time_base
                 if index in last_dts and stamp <= last_dts[index]:
-                    raise PyEzvizError(
-                        "Native decode timestamp repeated or moved backwards"
-                    )
+                    raise PyEzvizError("Native decode timestamp repeated or moved backwards")
                 last_dts[index] = stamp
                 packet.stream = mapping[index]
                 outgoing.mux(packet)

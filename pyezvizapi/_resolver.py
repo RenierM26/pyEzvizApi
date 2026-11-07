@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi._shared import resolver as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi._shared.resolver as _compat_module_0
+
     _STOP = _compat_module_0._STOP
     DEFAULT_RESOLVER = _compat_module_0.DEFAULT_RESOLVER
     Any = _compat_module_0.Any

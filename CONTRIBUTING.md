@@ -17,6 +17,7 @@ Before opening a pull request, run the same checks used by CI:
 
 ```bash
 ruff check .
+ruff format --check pyezvizapi
 codespell pyezvizapi tests README.md pyproject.toml .github
 pip-audit --progress-spinner off
 mypy --install-types --non-interactive .
@@ -28,6 +29,10 @@ python -m pip check
 ```
 
 If you only need a quick test loop while developing, `pytest -q` is fine, but run the full validation before submitting.
+
+Use `ruff format pyezvizapi` to format package code and stubs consistently.
+The shared configuration targets 100-character lines; long literal protocol values and URLs may
+remain wider. Linting (`ruff check`) and formatting (`ruff format --check`) are separate checks.
 
 ## Test expectations
 

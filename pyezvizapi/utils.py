@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,9 +16,11 @@ from pyezvizapi._shared import utils as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
 
     import pyezvizapi._shared.utils as _compat_module_1
+
     HIK_ENCRYPTION_HEADER = _compat_module_1.HIK_ENCRYPTION_HEADER
     MILLISECONDS_THRESHOLD = _compat_module_1.MILLISECONDS_THRESHOLD
     WILDCARD_STEP = _compat_module_1.WILDCARD_STEP

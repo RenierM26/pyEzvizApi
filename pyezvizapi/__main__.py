@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,11 +16,16 @@ from pyezvizapi.cli import main as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.cli.main as _compat_module_0
+
     _LOGGER = _compat_module_0._LOGGER
     _REAL_EZVIZ_CLIENT = _compat_module_0._REAL_EZVIZ_CLIENT
-    HCNETSDK_COMMAND_PLAN_DEFAULT_KEEPALIVE_INTERVAL_SECONDS = _compat_module_0.HCNETSDK_COMMAND_PLAN_DEFAULT_KEEPALIVE_INTERVAL_SECONDS
+    HCNETSDK_COMMAND_PLAN_DEFAULT_KEEPALIVE_INTERVAL_SECONDS = (
+        _compat_module_0.HCNETSDK_COMMAND_PLAN_DEFAULT_KEEPALIVE_INTERVAL_SECONDS
+    )
     HCNETSDK_COMMAND_PORT_CONTROL_FAMILY = _compat_module_0.HCNETSDK_COMMAND_PORT_CONTROL_FAMILY
-    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = _compat_module_0.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = (
+        _compat_module_0.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+    )
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT = _compat_module_0.LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
     MAX_RETRIES = _compat_module_0.MAX_RETRIES
     PUSH_PROFILE = _compat_module_0.PUSH_PROFILE
@@ -46,7 +52,9 @@ if TYPE_CHECKING:
     EzvizLocalReceiverInfoExAttrs = _compat_module_0.EzvizLocalReceiverInfoExAttrs
     EzvizNoMediaError = _compat_module_0.EzvizNoMediaError
     HcNetSdkCommandPortControlTemplate = _compat_module_0.HcNetSdkCommandPortControlTemplate
-    HcNetSdkCommandPortGeneratedMultiSocketPlan = _compat_module_0.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    HcNetSdkCommandPortGeneratedMultiSocketPlan = (
+        _compat_module_0.HcNetSdkCommandPortGeneratedMultiSocketPlan
+    )
     HcNetSdkCommandPortGeneratedSocketStep = _compat_module_0.HcNetSdkCommandPortGeneratedSocketStep
     HcNetSdkCommandPortMultiSocketPlan = _compat_module_0.HcNetSdkCommandPortMultiSocketPlan
     HcNetSdkCommandPortSocketStep = _compat_module_0.HcNetSdkCommandPortSocketStep
@@ -119,27 +127,53 @@ if TYPE_CHECKING:
     _hcnetsdk_bool = _compat_module_0._hcnetsdk_bool
     _hcnetsdk_bytes_from_json = _compat_module_0._hcnetsdk_bytes_from_json
     _hcnetsdk_command_frame_dump_summary = _compat_module_0._hcnetsdk_command_frame_dump_summary
-    _hcnetsdk_command_frame_hex_values_from_file = _compat_module_0._hcnetsdk_command_frame_hex_values_from_file
+    _hcnetsdk_command_frame_hex_values_from_file = (
+        _compat_module_0._hcnetsdk_command_frame_hex_values_from_file
+    )
     _hcnetsdk_command_frames_from_args = _compat_module_0._hcnetsdk_command_frames_from_args
-    _hcnetsdk_command_generated_plan_from_args = _compat_module_0._hcnetsdk_command_generated_plan_from_args
-    _hcnetsdk_command_generated_plan_from_json = _compat_module_0._hcnetsdk_command_generated_plan_from_json
-    _hcnetsdk_command_generated_plan_step_from_json = _compat_module_0._hcnetsdk_command_generated_plan_step_from_json
-    _hcnetsdk_command_plan_delay_after_commands = _compat_module_0._hcnetsdk_command_plan_delay_after_commands
-    _hcnetsdk_command_plan_drain_media_before_next = _compat_module_0._hcnetsdk_command_plan_drain_media_before_next
-    _hcnetsdk_command_plan_frames_from_json = _compat_module_0._hcnetsdk_command_plan_frames_from_json
+    _hcnetsdk_command_generated_plan_from_args = (
+        _compat_module_0._hcnetsdk_command_generated_plan_from_args
+    )
+    _hcnetsdk_command_generated_plan_from_json = (
+        _compat_module_0._hcnetsdk_command_generated_plan_from_json
+    )
+    _hcnetsdk_command_generated_plan_step_from_json = (
+        _compat_module_0._hcnetsdk_command_generated_plan_step_from_json
+    )
+    _hcnetsdk_command_plan_delay_after_commands = (
+        _compat_module_0._hcnetsdk_command_plan_delay_after_commands
+    )
+    _hcnetsdk_command_plan_drain_media_before_next = (
+        _compat_module_0._hcnetsdk_command_plan_drain_media_before_next
+    )
+    _hcnetsdk_command_plan_frames_from_json = (
+        _compat_module_0._hcnetsdk_command_plan_frames_from_json
+    )
     _hcnetsdk_command_plan_from_args = _compat_module_0._hcnetsdk_command_plan_from_args
     _hcnetsdk_command_plan_from_json = _compat_module_0._hcnetsdk_command_plan_from_json
-    _hcnetsdk_command_plan_immediate_media_read = _compat_module_0._hcnetsdk_command_plan_immediate_media_read
+    _hcnetsdk_command_plan_immediate_media_read = (
+        _compat_module_0._hcnetsdk_command_plan_immediate_media_read
+    )
     _hcnetsdk_command_plan_media_socket = _compat_module_0._hcnetsdk_command_plan_media_socket
     _hcnetsdk_command_plan_raw_steps = _compat_module_0._hcnetsdk_command_plan_raw_steps
     _hcnetsdk_command_plan_read_policy = _compat_module_0._hcnetsdk_command_plan_read_policy
     _hcnetsdk_command_plan_response_reads = _compat_module_0._hcnetsdk_command_plan_response_reads
     _hcnetsdk_command_plan_step_from_json = _compat_module_0._hcnetsdk_command_plan_step_from_json
-    _hcnetsdk_command_plan_template_from_json = _compat_module_0._hcnetsdk_command_plan_template_from_json
-    _hcnetsdk_command_plan_templates_from_json = _compat_module_0._hcnetsdk_command_plan_templates_from_json
-    _hcnetsdk_command_port_body_tail_word_samples = _compat_module_0._hcnetsdk_command_port_body_tail_word_samples
-    _hcnetsdk_command_port_body_word_samples = _compat_module_0._hcnetsdk_command_port_body_word_samples
-    _hcnetsdk_command_port_exchange_metadata = _compat_module_0._hcnetsdk_command_port_exchange_metadata
+    _hcnetsdk_command_plan_template_from_json = (
+        _compat_module_0._hcnetsdk_command_plan_template_from_json
+    )
+    _hcnetsdk_command_plan_templates_from_json = (
+        _compat_module_0._hcnetsdk_command_plan_templates_from_json
+    )
+    _hcnetsdk_command_port_body_tail_word_samples = (
+        _compat_module_0._hcnetsdk_command_port_body_tail_word_samples
+    )
+    _hcnetsdk_command_port_body_word_samples = (
+        _compat_module_0._hcnetsdk_command_port_body_word_samples
+    )
+    _hcnetsdk_command_port_exchange_metadata = (
+        _compat_module_0._hcnetsdk_command_port_exchange_metadata
+    )
     _hcnetsdk_command_template_to_json = _compat_module_0._hcnetsdk_command_template_to_json
     _hcnetsdk_generated_plan_step_to_json = _compat_module_0._hcnetsdk_generated_plan_step_to_json
     _hcnetsdk_generated_plan_to_json = _compat_module_0._hcnetsdk_generated_plan_to_json
@@ -150,9 +184,13 @@ if TYPE_CHECKING:
     _hcnetsdk_optional_int = _compat_module_0._hcnetsdk_optional_int
     _hcnetsdk_playm4_input_dump_summary = _compat_module_0._hcnetsdk_playm4_input_dump_summary
     _hcnetsdk_read_response_policy = _compat_module_0._hcnetsdk_read_response_policy
-    _idmx_local_packets_to_annexb_with_codec = _compat_module_0._idmx_local_packets_to_annexb_with_codec
+    _idmx_local_packets_to_annexb_with_codec = (
+        _compat_module_0._idmx_local_packets_to_annexb_with_codec
+    )
     _iter_annexb_nal_prefixes = _compat_module_0._iter_annexb_nal_prefixes
-    _iter_hcnetsdk_command_frame_hex_values = _compat_module_0._iter_hcnetsdk_command_frame_hex_values
+    _iter_hcnetsdk_command_frame_hex_values = (
+        _compat_module_0._iter_hcnetsdk_command_frame_hex_values
+    )
     _iter_hcnetsdk_command_template_values = _compat_module_0._iter_hcnetsdk_command_template_values
     _load_token_file = _compat_module_0._load_token_file
     _local_sdk_arg_or_credentials = _compat_module_0._local_sdk_arg_or_credentials
@@ -172,7 +210,9 @@ if TYPE_CHECKING:
     _parse_duration_seconds = _compat_module_0._parse_duration_seconds
     _parse_rtp_packets = _compat_module_0._parse_rtp_packets
     _read_optional_binary_file = _compat_module_0._read_optional_binary_file
-    _remux_elementary_video_bytes_to_mpegts = _compat_module_0._remux_elementary_video_bytes_to_mpegts
+    _remux_elementary_video_bytes_to_mpegts = (
+        _compat_module_0._remux_elementary_video_bytes_to_mpegts
+    )
     _remux_mpegps_bytes_to_mpegts = _compat_module_0._remux_mpegps_bytes_to_mpegts
     _remux_stream_payloads_to_mpegts = _compat_module_0._remux_stream_payloads_to_mpegts
     _required_local_sdk_arg_or_credentials = _compat_module_0._required_local_sdk_arg_or_credentials
@@ -180,9 +220,13 @@ if TYPE_CHECKING:
     _rtp_packets_to_annexb = _compat_module_0._rtp_packets_to_annexb
     _rtp_packets_to_annexb_units = _compat_module_0._rtp_packets_to_annexb_units
     _rtp_payload_video_codec = _compat_module_0._rtp_payload_video_codec
-    _save_clip_can_run_without_cloud_credentials = _compat_module_0._save_clip_can_run_without_cloud_credentials
+    _save_clip_can_run_without_cloud_credentials = (
+        _compat_module_0._save_clip_can_run_without_cloud_credentials
+    )
     _save_token_file = _compat_module_0._save_token_file
-    _scan_hcnetsdk_command_port_media_frames = _compat_module_0._scan_hcnetsdk_command_port_media_frames
+    _scan_hcnetsdk_command_port_media_frames = (
+        _compat_module_0._scan_hcnetsdk_command_port_media_frames
+    )
     _select_cloud_video_for_seq_id = _compat_module_0._select_cloud_video_for_seq_id
     _serve_stream_proxy = _compat_module_0._serve_stream_proxy
     _setup_logging = _compat_module_0._setup_logging
@@ -205,7 +249,9 @@ if TYPE_CHECKING:
     classify_ezviz_local_sdk_body = _compat_module_0.classify_ezviz_local_sdk_body
     cloud_rtp_packets_have_audio = _compat_module_0.cloud_rtp_packets_have_audio
     copy_cloud_stream_packets_to_mpegts = _compat_module_0.copy_cloud_stream_packets_to_mpegts
-    copy_decrypted_cloud_stream_packets_to_mpegts = _compat_module_0.copy_decrypted_cloud_stream_packets_to_mpegts
+    copy_decrypted_cloud_stream_packets_to_mpegts = (
+        _compat_module_0.copy_decrypted_cloud_stream_packets_to_mpegts
+    )
     copy_local_sdk_ecdh_stream_to_media = _compat_module_0.copy_local_sdk_ecdh_stream_to_media
     copy_local_stream_to_decrypted_mpegps = _compat_module_0.copy_local_stream_to_decrypted_mpegps
     copy_local_stream_to_decrypted_mpegts = _compat_module_0.copy_local_stream_to_decrypted_mpegts
@@ -214,17 +260,25 @@ if TYPE_CHECKING:
     copy_remuxed_output = _compat_module_0.copy_remuxed_output
     dataclass = _compat_module_0.dataclass
     decrypt_hikvision_ps_video = _compat_module_0.decrypt_hikvision_ps_video
-    detect_hikvision_ps_video_nalu_header_size = _compat_module_0.detect_hikvision_ps_video_nalu_header_size
+    detect_hikvision_ps_video_nalu_header_size = (
+        _compat_module_0.detect_hikvision_ps_video_nalu_header_size
+    )
     detect_rtp_video_codec = _compat_module_0.detect_rtp_video_codec
     detect_transport = _compat_module_0.detect_transport
     download_ezviz_cloud_replay = _compat_module_0.download_ezviz_cloud_replay
     dt = _compat_module_0.dt
     field = _compat_module_0.field
-    get_local_sdk_stream_credentials_from_client = _compat_module_0.get_local_sdk_stream_credentials_from_client
+    get_local_sdk_stream_credentials_from_client = (
+        _compat_module_0.get_local_sdk_stream_credentials_from_client
+    )
     has_positive_finite_capture_bound = _compat_module_0.has_positive_finite_capture_bound
     hashlib = _compat_module_0.hashlib
-    hcnetsdk_command_port_generated_plan_from_socket_plan = _compat_module_0.hcnetsdk_command_port_generated_plan_from_socket_plan
-    hcnetsdk_command_port_native_lan_live_view_plan = _compat_module_0.hcnetsdk_command_port_native_lan_live_view_plan
+    hcnetsdk_command_port_generated_plan_from_socket_plan = (
+        _compat_module_0.hcnetsdk_command_port_generated_plan_from_socket_plan
+    )
+    hcnetsdk_command_port_native_lan_live_view_plan = (
+        _compat_module_0.hcnetsdk_command_port_native_lan_live_view_plan
+    )
     json = _compat_module_0.json
     logging = _compat_module_0.logging
     main = _compat_module_0.main

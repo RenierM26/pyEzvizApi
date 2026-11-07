@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,9 +16,11 @@ from pyezvizapi.streaming.cloud import legacy as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
 
     import pyezvizapi.streaming.cloud.protocol as _compat_module_1
+
     _PACK_HEADER_STREAM_ID = _compat_module_1._PACK_HEADER_STREAM_ID
     _PADDING_STREAM_ID = _compat_module_1._PADDING_STREAM_ID
     _PRIVATE_STREAM_1_ID = _compat_module_1._PRIVATE_STREAM_1_ID
@@ -133,7 +136,9 @@ if TYPE_CHECKING:
     decode_vtm_header = _compat_module_1.decode_vtm_header
     decode_vtm_packet = _compat_module_1.decode_vtm_packet
     decrypt_hikvision_ps_video = _compat_module_1.decrypt_hikvision_ps_video
-    detect_hikvision_ps_video_nalu_header_size = _compat_module_1.detect_hikvision_ps_video_nalu_header_size
+    detect_hikvision_ps_video_nalu_header_size = (
+        _compat_module_1.detect_hikvision_ps_video_nalu_header_size
+    )
     detect_transport = _compat_module_1.detect_transport
     download_ezviz_cloud_replay = _compat_module_1.download_ezviz_cloud_replay
     encode_vtm_packet = _compat_module_1.encode_vtm_packet

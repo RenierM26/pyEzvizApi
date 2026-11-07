@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,11 +16,14 @@ from pyezvizapi.streaming.local import ecdh as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
     import Crypto.Cipher.ChaCha20 as _compat_typed_ChaCha20
+
     ChaCha20 = _compat_typed_ChaCha20
 
     import pyezvizapi.streaming.local.ecdh as _compat_module_1
+
     _IDMX_RTP_SSRC = _compat_module_1._IDMX_RTP_SSRC
     _MAX_UNRECOGNIZED_ECDH_MEDIA_RECORDS = _compat_module_1._MAX_UNRECOGNIZED_ECDH_MEDIA_RECORDS
     LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET = _compat_module_1.LOCAL_SDK_ECDH_DATA_CIPHERTEXT_OFFSET
@@ -32,11 +36,19 @@ if TYPE_CHECKING:
     LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH = _compat_module_1.LOCAL_SDK_ECDH_ENCRYPTED_KEY_LENGTH
     LOCAL_SDK_ECDH_H264_SPS_3B = _compat_module_1.LOCAL_SDK_ECDH_H264_SPS_3B
     LOCAL_SDK_ECDH_H264_SPS_4B = _compat_module_1.LOCAL_SDK_ECDH_H264_SPS_4B
-    LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET = _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET
-    LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_LENGTH = _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_LENGTH
-    LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_MAGIC = _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_MAGIC
+    LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET = (
+        _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_ENCRYPTED_KEY_OFFSET
+    )
+    LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_LENGTH = (
+        _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_LENGTH
+    )
+    LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_MAGIC = (
+        _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_ENVELOPE_MAGIC
+    )
     LOCAL_SDK_ECDH_HANDSHAKE_MARKER = _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_MARKER
-    LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET = _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET
+    LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET = (
+        _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_PEER_PUBLIC_KEY_OFFSET
+    )
     LOCAL_SDK_ECDH_HANDSHAKE_TYPE = _compat_module_1.LOCAL_SDK_ECDH_HANDSHAKE_TYPE
     LOCAL_SDK_ECDH_HEVC_VPS_3B = _compat_module_1.LOCAL_SDK_ECDH_HEVC_VPS_3B
     LOCAL_SDK_ECDH_HEVC_VPS_4B = _compat_module_1.LOCAL_SDK_ECDH_HEVC_VPS_4B
@@ -47,7 +59,9 @@ if TYPE_CHECKING:
     LOCAL_SDK_ECDH_PACKET_MARKER = _compat_module_1.LOCAL_SDK_ECDH_PACKET_MARKER
     LOCAL_SDK_ECDH_PACKET_WINDOW_SIZE = _compat_module_1.LOCAL_SDK_ECDH_PACKET_WINDOW_SIZE
     LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH = _compat_module_1.LOCAL_SDK_ECDH_PUBLIC_KEY_DER_LENGTH
-    LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH = _compat_module_1.LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH
+    LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH = (
+        _compat_module_1.LOCAL_SDK_ECDH_STREAM_OUTER_PREFIX_LENGTH
+    )
     MAX_RETRIES = _compat_module_1.MAX_RETRIES
     RTP_FIXED_HEADER_LENGTH = _compat_module_1.RTP_FIXED_HEADER_LENGTH
     RTP_VERSION = _compat_module_1.RTP_VERSION
@@ -83,14 +97,18 @@ if TYPE_CHECKING:
     SocketFactory = _compat_module_1.SocketFactory
     UnsupportedAlgorithm = _compat_module_1.UnsupportedAlgorithm
     _BoundedEcdhMediaStream = _compat_module_1._BoundedEcdhMediaStream
-    _ezviz_local_sdk_ecdh_verification_input = _compat_module_1._ezviz_local_sdk_ecdh_verification_input
+    _ezviz_local_sdk_ecdh_verification_input = (
+        _compat_module_1._ezviz_local_sdk_ecdh_verification_input
+    )
     _is_complete_ecdh_rtp_packet = _compat_module_1._is_complete_ecdh_rtp_packet
     _is_parseable_rtp_packet = _compat_module_1._is_parseable_rtp_packet
     _validate_ecdh_copy_options = _compat_module_1._validate_ecdh_copy_options
     _verify_ezviz_local_sdk_ecdh_packet = _compat_module_1._verify_ezviz_local_sdk_ecdh_packet
     annotations = _compat_module_1.annotations
     base64 = _compat_module_1.base64
-    build_ezviz_local_sdk_ecdh_init_request_body = _compat_module_1.build_ezviz_local_sdk_ecdh_init_request_body
+    build_ezviz_local_sdk_ecdh_init_request_body = (
+        _compat_module_1.build_ezviz_local_sdk_ecdh_init_request_body
+    )
     copy_local_sdk_ecdh_stream_from_client = _compat_module_1.copy_local_sdk_ecdh_stream_from_client
     copy_local_sdk_ecdh_stream_to_media = _compat_module_1.copy_local_sdk_ecdh_stream_to_media
     copy_local_sdk_ecdh_stream_to_mpegps = _compat_module_1.copy_local_sdk_ecdh_stream_to_mpegps
@@ -98,15 +116,23 @@ if TYPE_CHECKING:
     copy_local_stream_to_decrypted_mpegts = _compat_module_1.copy_local_stream_to_decrypted_mpegts
     copy_local_stream_to_mpegts = _compat_module_1.copy_local_stream_to_mpegts
     dataclass = _compat_module_1.dataclass
-    decrypt_ezviz_local_sdk_ecdh_data_packet = _compat_module_1.decrypt_ezviz_local_sdk_ecdh_data_packet
-    derive_ezviz_local_sdk_ecdh_chacha20_key = _compat_module_1.derive_ezviz_local_sdk_ecdh_chacha20_key
-    derive_ezviz_local_sdk_ecdh_shared_secret = _compat_module_1.derive_ezviz_local_sdk_ecdh_shared_secret
+    decrypt_ezviz_local_sdk_ecdh_data_packet = (
+        _compat_module_1.decrypt_ezviz_local_sdk_ecdh_data_packet
+    )
+    derive_ezviz_local_sdk_ecdh_chacha20_key = (
+        _compat_module_1.derive_ezviz_local_sdk_ecdh_chacha20_key
+    )
+    derive_ezviz_local_sdk_ecdh_shared_secret = (
+        _compat_module_1.derive_ezviz_local_sdk_ecdh_shared_secret
+    )
     ec = _compat_module_1.ec
     ezviz_local_sdk_ecdh_chacha20_nonce = _compat_module_1.ezviz_local_sdk_ecdh_chacha20_nonce
     field = _compat_module_1.field
     fresh_local_sdk_receiver_port = _compat_module_1.fresh_local_sdk_receiver_port
     generate_ezviz_local_sdk_ecdh_keypair = _compat_module_1.generate_ezviz_local_sdk_ecdh_keypair
-    get_local_sdk_stream_credentials_from_client = _compat_module_1.get_local_sdk_stream_credentials_from_client
+    get_local_sdk_stream_credentials_from_client = (
+        _compat_module_1.get_local_sdk_stream_credentials_from_client
+    )
     has_positive_finite_capture_bound = _compat_module_1.has_positive_finite_capture_bound
     hashlib = _compat_module_1.hashlib
     hmac = _compat_module_1.hmac
@@ -115,7 +141,9 @@ if TYPE_CHECKING:
     open_local_sdk_ecdh_stream = _compat_module_1.open_local_sdk_ecdh_stream
     open_local_sdk_ecdh_stream_from_client = _compat_module_1.open_local_sdk_ecdh_stream_from_client
     parse_ezviz_local_sdk_ecdh_data_packet = _compat_module_1.parse_ezviz_local_sdk_ecdh_data_packet
-    parse_ezviz_local_sdk_ecdh_handshake_packet = _compat_module_1.parse_ezviz_local_sdk_ecdh_handshake_packet
+    parse_ezviz_local_sdk_ecdh_handshake_packet = (
+        _compat_module_1.parse_ezviz_local_sdk_ecdh_handshake_packet
+    )
     rtp_payload = _compat_module_1.rtp_payload
     serialization = _compat_module_1.serialization
     socket = _compat_module_1.socket

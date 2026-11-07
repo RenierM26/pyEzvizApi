@@ -43,14 +43,10 @@ def iter_nested(data: Any, path: Iterable[PathComponent]) -> Iterator[Any]:
     yield from current
 
 
-
-def first_nested(
-    data: Any, path: Iterable[PathComponent], default: Any = None
-) -> Any:
+def first_nested(data: Any, path: Iterable[PathComponent], default: Any = None) -> Any:
     """Return the first value produced by iter_nested or ``default``."""
 
     return next(iter_nested(data, path), default)
-
 
 
 def fetch_nested_value(data: Any, keys: list, default_value: Any = None) -> Any:
@@ -69,7 +65,6 @@ def fetch_nested_value(data: Any, keys: list, default_value: Any = None) -> Any:
     """
     value = first_nested(data, keys, _MISSING)
     return default_value if value is _MISSING else value
-
 
 
 def deep_merge(dict1: Any, dict2: Any) -> Any:

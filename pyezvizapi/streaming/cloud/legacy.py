@@ -51,6 +51,7 @@ if TYPE_CHECKING:
         mpeg_ps_decryptable_prefix_length,
     )
     from pyezvizapi.streaming.media.rtp import rtp_payload
+
     def _declare_compatibility_exports(*exports: object) -> None:
         """Make compatibility re-exports visible to static analyzers."""
 

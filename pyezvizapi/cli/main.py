@@ -30,19 +30,86 @@ from pyezvizapi.cloud.token_store import save_private_token
 from pyezvizapi.devices.camera import EzvizCamera
 from pyezvizapi.cloud.cas import CasDeviceSession, EzvizCAS
 from pyezvizapi.client import EzvizClient
-from pyezvizapi.streaming.cloud.bootstrap import _closing_unconnected_cloud_stream, cloud_rtp_packets_have_audio, copy_cloud_stream_packets_to_mpegts, copy_decrypted_cloud_stream_packets_to_mpegts, open_cloud_stream
-from pyezvizapi.constants import MAX_RETRIES, PROFILE as PUSH_PROFILE, BatteryCameraWorkMode, DefenseModeType, DeviceSwitchType
+from pyezvizapi.streaming.cloud.bootstrap import (
+    _closing_unconnected_cloud_stream,
+    cloud_rtp_packets_have_audio,
+    copy_cloud_stream_packets_to_mpegts,
+    copy_decrypted_cloud_stream_packets_to_mpegts,
+    open_cloud_stream,
+)
+from pyezvizapi.constants import (
+    MAX_RETRIES,
+    PROFILE as PUSH_PROFILE,
+    BatteryCameraWorkMode,
+    DefenseModeType,
+    DeviceSwitchType,
+)
 from pyezvizapi.exceptions import EzvizAuthVerificationCode, EzvizNoMediaError, PyEzvizError
-from pyezvizapi.streaming.local.hcnetsdk.api import HCNETSDK_COMMAND_PORT_CONTROL_FAMILY, EzvizCasDeviceInfo, EzvizLocalAuthenticationAttrs, EzvizLocalPreviewRequest, EzvizLocalReceiverInfo, EzvizLocalReceiverInfoAttrs, EzvizLocalReceiverInfoEx, EzvizLocalReceiverInfoExAttrs, HcNetSdkCommandPortControlTemplate, HcNetSdkLanEndpoint, classify_ezviz_local_sdk_body, parse_hcnetsdk_tcp_frame
+from pyezvizapi.streaming.local.hcnetsdk.api import (
+    HCNETSDK_COMMAND_PORT_CONTROL_FAMILY,
+    EzvizCasDeviceInfo,
+    EzvizLocalAuthenticationAttrs,
+    EzvizLocalPreviewRequest,
+    EzvizLocalReceiverInfo,
+    EzvizLocalReceiverInfoAttrs,
+    EzvizLocalReceiverInfoEx,
+    EzvizLocalReceiverInfoExAttrs,
+    HcNetSdkCommandPortControlTemplate,
+    HcNetSdkLanEndpoint,
+    classify_ezviz_local_sdk_body,
+    parse_hcnetsdk_tcp_frame,
+)
 from pyezvizapi.devices.light_bulb import EzvizLightBulb
-from pyezvizapi.streaming.local.ecdh import LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT, copy_local_sdk_ecdh_stream_to_media, open_local_sdk_ecdh_stream
-from pyezvizapi.streaming.local.media import _idmx_local_packets_to_annexb_with_codec, copy_local_stream_to_decrypted_mpegps, copy_local_stream_to_decrypted_mpegts, copy_local_stream_to_mpegps, copy_local_stream_to_mpegts, summarize_h264_annexb_idr_windows, summarize_h264_annexb_units, summarize_hevc_annexb_irap_windows, summarize_idmx_h264_local_packets
-from pyezvizapi.streaming.local.transport import HcNetSdkCommandPortGeneratedMultiSocketPlan, HcNetSdkCommandPortGeneratedSocketStep, HcNetSdkCommandPortMultiSocketPlan, HcNetSdkCommandPortSocketStep, get_local_sdk_stream_credentials_from_client, hcnetsdk_command_port_generated_plan_from_socket_plan, hcnetsdk_command_port_native_lan_live_view_plan, open_local_sdk_stream
+from pyezvizapi.streaming.local.ecdh import (
+    LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+    copy_local_sdk_ecdh_stream_to_media,
+    open_local_sdk_ecdh_stream,
+)
+from pyezvizapi.streaming.local.media import (
+    _idmx_local_packets_to_annexb_with_codec,
+    copy_local_stream_to_decrypted_mpegps,
+    copy_local_stream_to_decrypted_mpegts,
+    copy_local_stream_to_mpegps,
+    copy_local_stream_to_mpegts,
+    summarize_h264_annexb_idr_windows,
+    summarize_h264_annexb_units,
+    summarize_hevc_annexb_irap_windows,
+    summarize_idmx_h264_local_packets,
+)
+from pyezvizapi.streaming.local.transport import (
+    HcNetSdkCommandPortGeneratedMultiSocketPlan,
+    HcNetSdkCommandPortGeneratedSocketStep,
+    HcNetSdkCommandPortMultiSocketPlan,
+    HcNetSdkCommandPortSocketStep,
+    get_local_sdk_stream_credentials_from_client,
+    hcnetsdk_command_port_generated_plan_from_socket_plan,
+    hcnetsdk_command_port_native_lan_live_view_plan,
+    open_local_sdk_stream,
+)
 from pyezvizapi.streaming.media.models import has_positive_finite_capture_bound
-from pyezvizapi.streaming.media.remux import copy_remuxed_output, open_mpegts_remux_process, remux_bytes
-from pyezvizapi.streaming.media.rtp import detect_rtp_video_codec, parse_rtp_packet, rtp_nal_units_have_vcl, rtp_packets_to_nal_units, rtp_payload_video_codec
-from pyezvizapi.streaming.media.containers import decrypt_hikvision_ps_video, detect_hikvision_ps_video_nalu_header_size, detect_transport, mpeg_ps_decryptable_prefix_length
-from pyezvizapi.streaming.cloud.transport import StreamTransport, VtmStreamClient, download_ezviz_cloud_replay
+from pyezvizapi.streaming.media.remux import (
+    copy_remuxed_output,
+    open_mpegts_remux_process,
+    remux_bytes,
+)
+from pyezvizapi.streaming.media.rtp import (
+    detect_rtp_video_codec,
+    parse_rtp_packet,
+    rtp_nal_units_have_vcl,
+    rtp_packets_to_nal_units,
+    rtp_payload_video_codec,
+)
+from pyezvizapi.streaming.media.containers import (
+    decrypt_hikvision_ps_video,
+    detect_hikvision_ps_video_nalu_header_size,
+    detect_transport,
+    mpeg_ps_decryptable_prefix_length,
+)
+from pyezvizapi.streaming.cloud.transport import (
+    StreamTransport,
+    VtmStreamClient,
+    download_ezviz_cloud_replay,
+)
 
 _LOGGER = logging.getLogger("pyezvizapi.__main__")
 _REAL_EZVIZ_CLIENT = EzvizClient
@@ -76,7 +143,9 @@ class StreamProxyHTTPServer(ThreadingHTTPServer):
     block_on_close = False
 
 
-HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = _cli_arguments.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = (
+    _cli_arguments.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+)
 
 # Historical CLI parsing hooks retain their original implementation objects.
 _parse_args = _cli_arguments._parse_args
@@ -318,6 +387,7 @@ def _handle_devices(args: argparse.Namespace, client: EzvizClient) -> int:
 
 from pyezvizapi.cli.commands import devices as _impl_devices
 
+
 def _handle_devices_light(args: argparse.Namespace, client: EzvizClient) -> int:
     """Handle `devices_light` subcommands (status)."""
     return _impl_devices._handle_devices_light(args, client, _owner=_sys.modules[__name__])
@@ -339,6 +409,7 @@ def _handle_unifiedmsg(args: argparse.Namespace, client: EzvizClient) -> int:
 
 
 from pyezvizapi.cli.commands import recordings as _impl_recordings
+
 
 def _decode_compressed_record_list(value: str) -> list[Any]:
     """Decode the app's base64+zlib JSON record-list payload when present."""
@@ -362,12 +433,32 @@ def _handle_cloud_videos(args: argparse.Namespace, client: EzvizClient) -> int:
 
 def _handle_cloud_video_download(args: argparse.Namespace, client: EzvizClient) -> int:
     """Fetch cloud video details, then download the selected media bytes."""
-    return _impl_recordings._handle_cloud_video_download(args, client, _owner=_sys.modules[__name__])
+    return _impl_recordings._handle_cloud_video_download(
+        args, client, _owner=_sys.modules[__name__]
+    )
 
 
-def _select_cloud_video_for_seq_id(client: EzvizClient, *, serial: str, channel: int, seq_id: str, limit: int, video_type: int, support_multi_channel_shared_service: int) -> dict[str, Any]:
+def _select_cloud_video_for_seq_id(
+    client: EzvizClient,
+    *,
+    serial: str,
+    channel: int,
+    seq_id: str,
+    limit: int,
+    video_type: int,
+    support_multi_channel_shared_service: int,
+) -> dict[str, Any]:
     """Return a hydrated cloud video descriptor for a selected seqId."""
-    return _impl_recordings._select_cloud_video_for_seq_id(client, serial=serial, channel=channel, seq_id=seq_id, limit=limit, video_type=video_type, support_multi_channel_shared_service=support_multi_channel_shared_service, _owner=_sys.modules[__name__])
+    return _impl_recordings._select_cloud_video_for_seq_id(
+        client,
+        serial=serial,
+        channel=channel,
+        seq_id=seq_id,
+        limit=limit,
+        video_type=video_type,
+        support_multi_channel_shared_service=support_multi_channel_shared_service,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def _extract_ticket(ticket_response: dict[str, Any]) -> str:
@@ -392,6 +483,7 @@ def _handle_cloud_video_decrypt(args: argparse.Namespace, client: EzvizClient | 
 
 from pyezvizapi.cli.commands import capture as _impl_capture
 
+
 def _write_save_result(args: argparse.Namespace, result: Mapping[str, Any]) -> None:
     """Write a human or JSON result for save commands."""
     return _impl_capture._write_save_result(args, result, _owner=_sys.modules[__name__])
@@ -407,14 +499,20 @@ def _handle_save_clip(args: argparse.Namespace, client: EzvizClient) -> int:
     return _impl_capture._handle_save_clip(args, client, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_command_plan_from_args(args: argparse.Namespace) -> HcNetSdkCommandPortMultiSocketPlan | None:
+def _hcnetsdk_command_plan_from_args(
+    args: argparse.Namespace,
+) -> HcNetSdkCommandPortMultiSocketPlan | None:
     """Load a native-style multi-socket command plan from CLI args."""
     return _impl_capture._hcnetsdk_command_plan_from_args(args, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_command_generated_plan_from_args(args: argparse.Namespace) -> HcNetSdkCommandPortGeneratedMultiSocketPlan | None:
+def _hcnetsdk_command_generated_plan_from_args(
+    args: argparse.Namespace,
+) -> HcNetSdkCommandPortGeneratedMultiSocketPlan | None:
     """Load a generated multi-socket command plan from CLI args."""
-    return _impl_capture._hcnetsdk_command_generated_plan_from_args(args, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_generated_plan_from_args(
+        args, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_plan_from_json(value: Any) -> HcNetSdkCommandPortMultiSocketPlan:
@@ -422,9 +520,13 @@ def _hcnetsdk_command_plan_from_json(value: Any) -> HcNetSdkCommandPortMultiSock
     return _impl_capture._hcnetsdk_command_plan_from_json(value, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_command_generated_plan_from_json(value: Any) -> HcNetSdkCommandPortGeneratedMultiSocketPlan:
+def _hcnetsdk_command_generated_plan_from_json(
+    value: Any,
+) -> HcNetSdkCommandPortGeneratedMultiSocketPlan:
     """Build a generated command-port socket plan from JSON."""
-    return _impl_capture._hcnetsdk_command_generated_plan_from_json(value, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_generated_plan_from_json(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_plan_raw_steps(value: Any) -> list[Any]:
@@ -437,24 +539,36 @@ def _hcnetsdk_command_plan_step_from_json(value: Any) -> HcNetSdkCommandPortSock
     return _impl_capture._hcnetsdk_command_plan_step_from_json(value, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_command_generated_plan_step_from_json(value: Any) -> HcNetSdkCommandPortGeneratedSocketStep:
+def _hcnetsdk_command_generated_plan_step_from_json(
+    value: Any,
+) -> HcNetSdkCommandPortGeneratedSocketStep:
     """Build one generated socket step from a JSON object."""
-    return _impl_capture._hcnetsdk_command_generated_plan_step_from_json(value, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_generated_plan_step_from_json(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_plan_templates_from_json(value: Mapping[str, Any], keys: tuple[str, ...], *, required: bool=True) -> tuple[HcNetSdkCommandPortControlTemplate, ...]:
+def _hcnetsdk_command_plan_templates_from_json(
+    value: Mapping[str, Any], keys: tuple[str, ...], *, required: bool = True
+) -> tuple[HcNetSdkCommandPortControlTemplate, ...]:
     """Read generated control templates from one command-plan JSON step."""
-    return _impl_capture._hcnetsdk_command_plan_templates_from_json(value, keys, required=required, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_templates_from_json(
+        value, keys, required=required, _owner=_sys.modules[__name__]
+    )
 
 
 def _iter_hcnetsdk_command_template_values(value: Any) -> Iterator[Any]:
     """Yield generated command template objects from JSON."""
-    return _impl_capture._iter_hcnetsdk_command_template_values(value, _owner=_sys.modules[__name__])
+    return _impl_capture._iter_hcnetsdk_command_template_values(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_plan_template_from_json(value: Any) -> HcNetSdkCommandPortControlTemplate:
     """Build one generated control template from a JSON object."""
-    return _impl_capture._hcnetsdk_command_plan_template_from_json(value, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_template_from_json(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_int_required(value: Mapping[str, Any], keys: tuple[str, ...], message: str) -> int:
@@ -467,19 +581,31 @@ def _hcnetsdk_optional_int(value: Mapping[str, Any], keys: tuple[str, ...]) -> i
     return _impl_capture._hcnetsdk_optional_int(value, keys, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_bytes_from_json(value: Mapping[str, Any], keys: tuple[str, ...], *, default: bytes=b'') -> bytes:
+def _hcnetsdk_bytes_from_json(
+    value: Mapping[str, Any], keys: tuple[str, ...], *, default: bytes = b""
+) -> bytes:
     """Read an optional hex byte field from a JSON object."""
-    return _impl_capture._hcnetsdk_bytes_from_json(value, keys, default=default, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_bytes_from_json(
+        value, keys, default=default, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_plan_frames_from_json(value: Mapping[str, Any], keys: tuple[str, ...], *, required: bool=True) -> tuple[bytes, ...]:
+def _hcnetsdk_command_plan_frames_from_json(
+    value: Mapping[str, Any], keys: tuple[str, ...], *, required: bool = True
+) -> tuple[bytes, ...]:
     """Read a frame list from one command-plan JSON step."""
-    return _impl_capture._hcnetsdk_command_plan_frames_from_json(value, keys, required=required, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_frames_from_json(
+        value, keys, required=required, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_plan_read_policy(value: Mapping[str, Any], *, default: bool=True) -> bool | tuple[bool, ...]:
+def _hcnetsdk_command_plan_read_policy(
+    value: Mapping[str, Any], *, default: bool = True
+) -> bool | tuple[bool, ...]:
     """Read the response policy for one command-plan step."""
-    return _impl_capture._hcnetsdk_command_plan_read_policy(value, default=default, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_read_policy(
+        value, default=default, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_plan_response_reads(value: Mapping[str, Any]) -> int | tuple[int, ...] | None:
@@ -494,17 +620,23 @@ def _hcnetsdk_command_plan_media_socket(value: Mapping[str, Any]) -> bool:
 
 def _hcnetsdk_command_plan_immediate_media_read(value: Mapping[str, Any]) -> bool:
     """Return whether a media step should read first media before later steps."""
-    return _impl_capture._hcnetsdk_command_plan_immediate_media_read(value, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_immediate_media_read(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_plan_delay_after_commands(value: Mapping[str, Any]) -> float:
     """Return optional pacing delay after one command-plan step."""
-    return _impl_capture._hcnetsdk_command_plan_delay_after_commands(value, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_delay_after_commands(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_plan_drain_media_before_next(value: Mapping[str, Any]) -> float:
     """Return optional media-drain duration before later command-plan steps."""
-    return _impl_capture._hcnetsdk_command_plan_drain_media_before_next(value, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_plan_drain_media_before_next(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_bool(value: Any) -> bool:
@@ -524,12 +656,16 @@ def _hcnetsdk_command_frames_from_args(args: argparse.Namespace) -> tuple[bytes,
 
 def _hcnetsdk_command_frame_hex_values_from_file(path: str) -> list[str]:
     """Read command-frame hex values from JSON or text."""
-    return _impl_capture._hcnetsdk_command_frame_hex_values_from_file(path, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_command_frame_hex_values_from_file(
+        path, _owner=_sys.modules[__name__]
+    )
 
 
 def _iter_hcnetsdk_command_frame_hex_values(value: Any) -> Iterator[str]:
     """Yield command-frame hex strings from simple JSON shapes."""
-    return _impl_capture._iter_hcnetsdk_command_frame_hex_values(value, _owner=_sys.modules[__name__])
+    return _impl_capture._iter_hcnetsdk_command_frame_hex_values(
+        value, _owner=_sys.modules[__name__]
+    )
 
 
 def _bytes_from_hex_value(value: str) -> bytes:
@@ -537,9 +673,13 @@ def _bytes_from_hex_value(value: str) -> bytes:
     return _impl_capture._bytes_from_hex_value(value, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_read_response_policy(args: argparse.Namespace, frame_count: int) -> bool | tuple[bool, ...]:
+def _hcnetsdk_read_response_policy(
+    args: argparse.Namespace, frame_count: int
+) -> bool | tuple[bool, ...]:
     """Return response-read policy for command-port bootstrapping."""
-    return _impl_capture._hcnetsdk_read_response_policy(args, frame_count, _owner=_sys.modules[__name__])
+    return _impl_capture._hcnetsdk_read_response_policy(
+        args, frame_count, _owner=_sys.modules[__name__]
+    )
 
 
 def _handle_save_image(args: argparse.Namespace, client: EzvizClient) -> int:
@@ -564,6 +704,7 @@ def _handle_home_defence_mode(args: argparse.Namespace, client: EzvizClient) -> 
 
 from pyezvizapi.cli.commands import push as _impl_push
 
+
 def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
     """Migrate the login and listen with durable channel-99 token storage."""
     return _impl_push._handle_mqtt(args, client, _owner=_sys.modules[__name__])
@@ -571,29 +712,96 @@ def _handle_mqtt(args: argparse.Namespace, client: EzvizClient) -> int:
 
 from pyezvizapi.cli.commands import cloud_stream as _impl_cloud_stream
 
-def _write_stream_payloads(stream: Any, output: BinaryIO, *, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool, transform_payload: Callable[[bytes], bytes] | None=None, flush_each: bool=False, monotonic: Any=time.monotonic) -> None:
+
+def _write_stream_payloads(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
+    allow_encrypted: bool,
+    transform_payload: Callable[[bytes], bytes] | None = None,
+    flush_each: bool = False,
+    monotonic: Any = time.monotonic,
+) -> None:
     """Write VTM stream packet bodies to a binary file-like object."""
-    return _impl_cloud_stream._write_stream_payloads(stream, output, max_packets=max_packets, duration_seconds=duration_seconds, first_packet_deadline=first_packet_deadline, allow_encrypted=allow_encrypted, transform_payload=transform_payload, flush_each=flush_each, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._write_stream_payloads(
+        stream,
+        output,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
+        allow_encrypted=allow_encrypted,
+        transform_payload=transform_payload,
+        flush_each=flush_each,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _start_cli_cloud_stream(stream: Any, *, timeout: float | None, duration_seconds: float | None, monotonic: Callable[[], float]=time.monotonic) -> float | None:
+def _start_cli_cloud_stream(
+    stream: Any,
+    *,
+    timeout: float | None,
+    duration_seconds: float | None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> float | None:
     """Start a CLI VTM stream with one bounded negotiation deadline."""
-    return _impl_cloud_stream._start_cli_cloud_stream(stream, timeout=timeout, duration_seconds=duration_seconds, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._start_cli_cloud_stream(
+        stream,
+        timeout=timeout,
+        duration_seconds=duration_seconds,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _collect_stream_payloads(stream: Any, *, max_packets: int | None, duration_seconds: float | None=None, allow_encrypted: bool, monotonic: Any=time.monotonic) -> bytes:
+def _collect_stream_payloads(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    monotonic: Any = time.monotonic,
+) -> bytes:
     """Collect VTM stream packet bodies into memory."""
-    return _impl_cloud_stream._collect_stream_payloads(stream, max_packets=max_packets, duration_seconds=duration_seconds, allow_encrypted=allow_encrypted, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._collect_stream_payloads(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        allow_encrypted=allow_encrypted,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _collect_stream_packets(stream: Any, *, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool, monotonic: Any=time.monotonic) -> list[Any]:
+def _collect_stream_packets(
+    stream: Any,
+    *,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
+    allow_encrypted: bool,
+    monotonic: Any = time.monotonic,
+) -> list[Any]:
     """Collect VTM stream packets while preserving packet boundaries."""
-    return _impl_cloud_stream._collect_stream_packets(stream, max_packets=max_packets, duration_seconds=duration_seconds, first_packet_deadline=first_packet_deadline, allow_encrypted=allow_encrypted, monotonic=monotonic, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._collect_stream_packets(
+        stream,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
+        allow_encrypted=allow_encrypted,
+        monotonic=monotonic,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def _detect_stream_packets_transport(packets: list[Any]) -> StreamTransport:
     """Return the first known media transport from collected VTM packets."""
-    return _impl_cloud_stream._detect_stream_packets_transport(packets, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._detect_stream_packets_transport(
+        packets, _owner=_sys.modules[__name__]
+    )
 
 
 def _rtp_payload_video_codec(payload: bytes) -> str | None:
@@ -601,9 +809,13 @@ def _rtp_payload_video_codec(payload: bytes) -> str | None:
     return _impl_cloud_stream._rtp_payload_video_codec(payload, _owner=_sys.modules[__name__])
 
 
-def _detect_rtp_video_codec(packets: list[Any], *, media_key: str | bytes | None=None, decrypt_codec: str='auto') -> str:
+def _detect_rtp_video_codec(
+    packets: list[Any], *, media_key: str | bytes | None = None, decrypt_codec: str = "auto"
+) -> str:
     """Detect RTP video codec through the shared parser and router."""
-    return _impl_cloud_stream._detect_rtp_video_codec(packets, media_key=media_key, decrypt_codec=decrypt_codec, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._detect_rtp_video_codec(
+        packets, media_key=media_key, decrypt_codec=decrypt_codec, _owner=_sys.modules[__name__]
+    )
 
 
 def _parse_rtp_packets(packets: list[Any]) -> list[Any]:
@@ -613,32 +825,79 @@ def _parse_rtp_packets(packets: list[Any]) -> list[Any]:
 
 def _rtp_packets_to_annexb(packets: list[Any], *, codec: str) -> bytes:
     """Convert RTP video through the shared continuity state machine."""
-    return _impl_cloud_stream._rtp_packets_to_annexb(packets, codec=codec, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._rtp_packets_to_annexb(
+        packets, codec=codec, _owner=_sys.modules[__name__]
+    )
 
 
-def _rtp_packets_to_annexb_units(packets: list[Any], *, codec: str, first_slice_key: str | bytes | None=None, decrypt_codec: str='auto') -> tuple[bytes, ...]:
+def _rtp_packets_to_annexb_units(
+    packets: list[Any],
+    *,
+    codec: str,
+    first_slice_key: str | bytes | None = None,
+    decrypt_codec: str = "auto",
+) -> tuple[bytes, ...]:
     """Return complete Annex-B units from the shared RTP continuity state machine."""
-    return _impl_cloud_stream._rtp_packets_to_annexb_units(packets, codec=codec, first_slice_key=first_slice_key, decrypt_codec=decrypt_codec, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._rtp_packets_to_annexb_units(
+        packets,
+        codec=codec,
+        first_slice_key=first_slice_key,
+        decrypt_codec=decrypt_codec,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _decrypt_annexb_video_bytes(client: EzvizClient, serial: str, data: bytes, *, codec: str) -> bytes:
+def _decrypt_annexb_video_bytes(
+    client: EzvizClient, serial: str, data: bytes, *, codec: str
+) -> bytes:
     """Decrypt Annex B video NAL payload bytes using the MPEG-PS transform."""
-    return _impl_cloud_stream._decrypt_annexb_video_bytes(client, serial, data, codec=codec, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._decrypt_annexb_video_bytes(
+        client, serial, data, codec=codec, _owner=_sys.modules[__name__]
+    )
 
 
-def _decrypt_rtp_annexb_units(client: EzvizClient, serial: str, units: tuple[bytes, ...], *, detected_codec: str, decrypt_codec: str, media_key: str | bytes | None=None) -> bytes:
+def _decrypt_rtp_annexb_units(
+    client: EzvizClient,
+    serial: str,
+    units: tuple[bytes, ...],
+    *,
+    detected_codec: str,
+    decrypt_codec: str,
+    media_key: str | bytes | None = None,
+) -> bytes:
     """Decrypt RTP Annex-B units with one camera-key lookup."""
-    return _impl_cloud_stream._decrypt_rtp_annexb_units(client, serial, units, detected_codec=detected_codec, decrypt_codec=decrypt_codec, media_key=media_key, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._decrypt_rtp_annexb_units(
+        client,
+        serial,
+        units,
+        detected_codec=detected_codec,
+        decrypt_codec=decrypt_codec,
+        media_key=media_key,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _remux_elementary_video_bytes_to_mpegts(data: bytes, output: BinaryIO, *, ffmpeg_path: str, codec: str) -> None:
+def _remux_elementary_video_bytes_to_mpegts(
+    data: bytes, output: BinaryIO, *, ffmpeg_path: str, codec: str
+) -> None:
     """Remux Annex B HEVC/H.264 elementary stream bytes to MPEG-TS."""
-    return _impl_cloud_stream._remux_elementary_video_bytes_to_mpegts(data, output, ffmpeg_path=ffmpeg_path, codec=codec, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._remux_elementary_video_bytes_to_mpegts(
+        data, output, ffmpeg_path=ffmpeg_path, codec=codec, _owner=_sys.modules[__name__]
+    )
 
 
-def _decrypt_stream_payload_bytes(client: EzvizClient, serial: str, data: bytes, *, codec: str, media_key: str | bytes | None=None) -> bytes:
+def _decrypt_stream_payload_bytes(
+    client: EzvizClient,
+    serial: str,
+    data: bytes,
+    *,
+    codec: str,
+    media_key: str | bytes | None = None,
+) -> bytes:
     """Decrypt captured MPEG-PS stream bytes using the camera encrypt key."""
-    return _impl_cloud_stream._decrypt_stream_payload_bytes(client, serial, data, codec=codec, media_key=media_key, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._decrypt_stream_payload_bytes(
+        client, serial, data, codec=codec, media_key=media_key, _owner=_sys.modules[__name__]
+    )
 
 
 def _codec_nalu_header_size(codec: str) -> int | None:
@@ -680,10 +939,7 @@ class _BufferedStreamPayloadDecryptor:
         self._buffer.extend(data)
         complete_end = mpeg_ps_decryptable_prefix_length(self._buffer)
         if complete_end <= 0:
-            if (
-                self._nalu_header_size is None
-                and len(self._buffer) > self._MAX_AUTO_PROBE_BYTES
-            ):
+            if self._nalu_header_size is None and len(self._buffer) > self._MAX_AUTO_PROBE_BYTES:
                 raise PyEzvizError("Could not detect MPEG-PS video encryption mode")
             return b""
         if self._nalu_header_size is None:
@@ -711,19 +967,31 @@ class _BufferedStreamPayloadDecryptor:
         return self._decrypt_chunk(chunk)
 
 
-def _stream_payload_decryptor(client: EzvizClient, serial: str, *, codec: str) -> Callable[[bytes], bytes]:
+def _stream_payload_decryptor(
+    client: EzvizClient, serial: str, *, codec: str
+) -> Callable[[bytes], bytes]:
     """Return a buffered MPEG-PS decryptor using the camera encrypt key."""
-    return _impl_cloud_stream._stream_payload_decryptor(client, serial, codec=codec, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._stream_payload_decryptor(
+        client, serial, codec=codec, _owner=_sys.modules[__name__]
+    )
 
 
-def _stream_payload_decryptors(client: EzvizClient, serial: str, *, codec: str, media_key: str | bytes | None=None) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes]]:
+def _stream_payload_decryptors(
+    client: EzvizClient, serial: str, *, codec: str, media_key: str | bytes | None = None
+) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes]]:
     """Return MPEG-PS and RTP decryptors sharing one camera-key lookup."""
-    return _impl_cloud_stream._stream_payload_decryptors(client, serial, codec=codec, media_key=media_key, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._stream_payload_decryptors(
+        client, serial, codec=codec, media_key=media_key, _owner=_sys.modules[__name__]
+    )
 
 
-def _stream_payload_decryptors_with_key(client: EzvizClient, serial: str, *, codec: str, media_key: str | bytes | None=None) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes], str | bytes]:
+def _stream_payload_decryptors_with_key(
+    client: EzvizClient, serial: str, *, codec: str, media_key: str | bytes | None = None
+) -> tuple[Callable[[bytes], bytes], Callable[[bytes, str], bytes], str | bytes]:
     """Return streaming decryptors and their single fetched camera key."""
-    return _impl_cloud_stream._stream_payload_decryptors_with_key(client, serial, codec=codec, media_key=media_key, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._stream_payload_decryptors_with_key(
+        client, serial, codec=codec, media_key=media_key, _owner=_sys.modules[__name__]
+    )
 
 
 def _cloud_cli_media_key(args: argparse.Namespace, client: EzvizClient) -> str | bytes:
@@ -738,22 +1006,64 @@ def _explicit_cloud_cli_media_key(args: argparse.Namespace) -> str | bytes | Non
 
 def _remux_mpegps_bytes_to_mpegts(data: bytes, output: BinaryIO, *, ffmpeg_path: str) -> None:
     """Remux in-memory MPEG-PS bytes to MPEG-TS."""
-    return _impl_cloud_stream._remux_mpegps_bytes_to_mpegts(data, output, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._remux_mpegps_bytes_to_mpegts(
+        data, output, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__]
+    )
 
 
-def _remux_stream_payloads_to_mpegts(stream: Any, output: BinaryIO, *, ffmpeg_path: str, max_packets: int | None, duration_seconds: float | None=None, first_packet_deadline: float | None=None, allow_encrypted: bool) -> None:
+def _remux_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    ffmpeg_path: str,
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    first_packet_deadline: float | None = None,
+    allow_encrypted: bool,
+) -> None:
     """Route VTM media to MPEG-TS with optional encrypted-packet passthrough."""
-    return _impl_cloud_stream._remux_stream_payloads_to_mpegts(stream, output, ffmpeg_path=ffmpeg_path, max_packets=max_packets, duration_seconds=duration_seconds, first_packet_deadline=first_packet_deadline, allow_encrypted=allow_encrypted, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._remux_stream_payloads_to_mpegts(
+        stream,
+        output,
+        ffmpeg_path=ffmpeg_path,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        first_packet_deadline=first_packet_deadline,
+        allow_encrypted=allow_encrypted,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _open_mpegts_remux_process(ffmpeg_path: str, *, input_format: str='mpeg') -> subprocess.Popen[bytes]:
+def _open_mpegts_remux_process(
+    ffmpeg_path: str, *, input_format: str = "mpeg"
+) -> subprocess.Popen[bytes]:
     """Open an FFmpeg process ready to remux MPEG-PS stdin to MPEG-TS stdout."""
-    return _impl_cloud_stream._open_mpegts_remux_process(ffmpeg_path, input_format=input_format, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._open_mpegts_remux_process(
+        ffmpeg_path, input_format=input_format, _owner=_sys.modules[__name__]
+    )
 
 
-def _copy_stream_payloads_to_mpegts(stream: Any, output: BinaryIO, *, process: subprocess.Popen[bytes], max_packets: int | None, duration_seconds: float | None=None, allow_encrypted: bool, transform_payload: Callable[[bytes], bytes] | None=None) -> None:
+def _copy_stream_payloads_to_mpegts(
+    stream: Any,
+    output: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    max_packets: int | None,
+    duration_seconds: float | None = None,
+    allow_encrypted: bool,
+    transform_payload: Callable[[bytes], bytes] | None = None,
+) -> None:
     """Copy stream payloads through an already-started FFmpeg remuxer."""
-    return _impl_cloud_stream._copy_stream_payloads_to_mpegts(stream, output, process=process, max_packets=max_packets, duration_seconds=duration_seconds, allow_encrypted=allow_encrypted, transform_payload=transform_payload, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._copy_stream_payloads_to_mpegts(
+        stream,
+        output,
+        process=process,
+        max_packets=max_packets,
+        duration_seconds=duration_seconds,
+        allow_encrypted=allow_encrypted,
+        transform_payload=transform_payload,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def _default_stream_proxy_path(serial: str) -> str:
@@ -763,12 +1073,18 @@ def _default_stream_proxy_path(serial: str) -> str:
 
 def _normalize_stream_proxy_path(path: str | None, serial: str) -> str:
     """Normalize a user-supplied proxy path."""
-    return _impl_cloud_stream._normalize_stream_proxy_path(path, serial, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._normalize_stream_proxy_path(
+        path, serial, _owner=_sys.modules[__name__]
+    )
 
 
-def _handle_stream_proxy_get(handler: BaseHTTPRequestHandler, config: StreamProxyConfig, client: EzvizClient) -> None:
+def _handle_stream_proxy_get(
+    handler: BaseHTTPRequestHandler, config: StreamProxyConfig, client: EzvizClient
+) -> None:
     """Handle one experimental VTM-to-MPEG-TS HTTP proxy request."""
-    return _impl_cloud_stream._handle_stream_proxy_get(handler, config, client, _owner=_sys.modules[__name__])
+    return _impl_cloud_stream._handle_stream_proxy_get(
+        handler, config, client, _owner=_sys.modules[__name__]
+    )
 
 
 def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
@@ -777,6 +1093,7 @@ def _serve_stream_proxy(args: argparse.Namespace, client: EzvizClient) -> None:
 
 
 from pyezvizapi.cli.commands import local_stream as _impl_local_stream
+
 
 def _env_or_arg(args: argparse.Namespace, attr: str, env_name: str) -> str | None:
     """Return a CLI argument value or matching environment fallback."""
@@ -790,7 +1107,9 @@ def os_environ_get(name: str) -> str | None:
 
 def _required_local_sdk_secret(args: argparse.Namespace, attr: str, env_name: str) -> str:
     """Read a required local-SDK secret without logging or persisting it."""
-    return _impl_local_stream._required_local_sdk_secret(args, attr, env_name, _owner=_sys.modules[__name__])
+    return _impl_local_stream._required_local_sdk_secret(
+        args, attr, env_name, _owner=_sys.modules[__name__]
+    )
 
 
 def _local_sdk_credentials_file(args: argparse.Namespace) -> dict[str, Any]:
@@ -800,17 +1119,27 @@ def _local_sdk_credentials_file(args: argparse.Namespace) -> dict[str, Any]:
 
 def _local_sdk_credentials_value(args: argparse.Namespace, path: tuple[str, ...]) -> Any:
     """Return a value from the optional local-SDK credential bundle."""
-    return _impl_local_stream._local_sdk_credentials_value(args, path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._local_sdk_credentials_value(
+        args, path, _owner=_sys.modules[__name__]
+    )
 
 
-def _local_sdk_arg_or_credentials(args: argparse.Namespace, attr: str, path: tuple[str, ...]) -> Any:
+def _local_sdk_arg_or_credentials(
+    args: argparse.Namespace, attr: str, path: tuple[str, ...]
+) -> Any:
     """Return an explicit CLI value or matching credential-bundle value."""
-    return _impl_local_stream._local_sdk_arg_or_credentials(args, attr, path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._local_sdk_arg_or_credentials(
+        args, attr, path, _owner=_sys.modules[__name__]
+    )
 
 
-def _required_local_sdk_arg_or_credentials(args: argparse.Namespace, attr: str, path: tuple[str, ...]) -> Any:
+def _required_local_sdk_arg_or_credentials(
+    args: argparse.Namespace, attr: str, path: tuple[str, ...]
+) -> Any:
     """Return a required direct-local field from args or credentials file."""
-    return _impl_local_stream._required_local_sdk_arg_or_credentials(args, attr, path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._required_local_sdk_arg_or_credentials(
+        args, attr, path, _owner=_sys.modules[__name__]
+    )
 
 
 def _local_sdk_media_key(args: argparse.Namespace, client: EzvizClient | None) -> str | bytes:
@@ -828,44 +1157,74 @@ def _read_optional_binary_file(path: str | None) -> bytes | None:
     return _impl_local_stream._read_optional_binary_file(path, _owner=_sys.modules[__name__])
 
 
-def _local_sdk_cas_device_info(args: argparse.Namespace, client: EzvizClient | None) -> EzvizCasDeviceInfo:
+def _local_sdk_cas_device_info(
+    args: argparse.Namespace, client: EzvizClient | None
+) -> EzvizCasDeviceInfo:
     """Build local CAS device info from explicit fields or cloud CAS."""
-    return _impl_local_stream._local_sdk_cas_device_info(args, client, _owner=_sys.modules[__name__])
+    return _impl_local_stream._local_sdk_cas_device_info(
+        args, client, _owner=_sys.modules[__name__]
+    )
 
 
-def _build_local_sdk_cli_stream(args: argparse.Namespace, client: EzvizClient | None=None) -> Any:
+def _build_local_sdk_cli_stream(args: argparse.Namespace, client: EzvizClient | None = None) -> Any:
     """Build the direct-local SDK stream from explicit CLI/environment fields."""
-    return _impl_local_stream._build_local_sdk_cli_stream(args, client, _owner=_sys.modules[__name__])
+    return _impl_local_stream._build_local_sdk_cli_stream(
+        args, client, _owner=_sys.modules[__name__]
+    )
 
 
-def _build_local_sdk_ecdh_cli_stream(args: argparse.Namespace, client: EzvizClient | None=None) -> Any:
+def _build_local_sdk_ecdh_cli_stream(
+    args: argparse.Namespace, client: EzvizClient | None = None
+) -> Any:
     """Build an encrypted local SDK ECDH stream."""
-    return _impl_local_stream._build_local_sdk_ecdh_cli_stream(args, client, _owner=_sys.modules[__name__])
+    return _impl_local_stream._build_local_sdk_ecdh_cli_stream(
+        args, client, _owner=_sys.modules[__name__]
+    )
 
 
-def _local_sdk_receiver_info_from_args(args: argparse.Namespace) -> EzvizLocalReceiverInfo | EzvizLocalReceiverInfoAttrs:
+def _local_sdk_receiver_info_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalReceiverInfo | EzvizLocalReceiverInfoAttrs:
     """Build the requested ReceiverInfo XML shape for local-SDK preview."""
-    return _impl_local_stream._local_sdk_receiver_info_from_args(args, _owner=_sys.modules[__name__])
+    return _impl_local_stream._local_sdk_receiver_info_from_args(
+        args, _owner=_sys.modules[__name__]
+    )
 
 
-def _local_sdk_receiver_info_ex_from_args(args: argparse.Namespace) -> EzvizLocalReceiverInfoEx | EzvizLocalReceiverInfoExAttrs:
+def _local_sdk_receiver_info_ex_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalReceiverInfoEx | EzvizLocalReceiverInfoExAttrs:
     """Build the requested ReceiverInfoEx XML shape for local-SDK preview."""
-    return _impl_local_stream._local_sdk_receiver_info_ex_from_args(args, _owner=_sys.modules[__name__])
+    return _impl_local_stream._local_sdk_receiver_info_ex_from_args(
+        args, _owner=_sys.modules[__name__]
+    )
 
 
-def _local_sdk_authentication_from_args(args: argparse.Namespace) -> EzvizLocalAuthenticationAttrs | None:
+def _local_sdk_authentication_from_args(
+    args: argparse.Namespace,
+) -> EzvizLocalAuthenticationAttrs | None:
     """Return app-shaped Authentication only when that XML shape is requested."""
-    return _impl_local_stream._local_sdk_authentication_from_args(args, _owner=_sys.modules[__name__])
+    return _impl_local_stream._local_sdk_authentication_from_args(
+        args, _owner=_sys.modules[__name__]
+    )
 
 
-def _handle_local_sdk_stream_dump(args: argparse.Namespace, client: EzvizClient | None=None) -> int:
+def _handle_local_sdk_stream_dump(
+    args: argparse.Namespace, client: EzvizClient | None = None
+) -> int:
     """Dump direct-local SDK media with caller-supplied local fields."""
-    return _impl_local_stream._handle_local_sdk_stream_dump(args, client, _owner=_sys.modules[__name__])
+    return _impl_local_stream._handle_local_sdk_stream_dump(
+        args, client, _owner=_sys.modules[__name__]
+    )
 
 
-def _copy_local_sdk_ecdh_cli_stream(args: argparse.Namespace, client: EzvizClient | None, stream: Any, output: BinaryIO) -> None:
+def _copy_local_sdk_ecdh_cli_stream(
+    args: argparse.Namespace, client: EzvizClient | None, stream: Any, output: BinaryIO
+) -> None:
     """Copy one CLI-selected ECDH stream to its requested container."""
-    return _impl_local_stream._copy_local_sdk_ecdh_cli_stream(args, client, stream, output, _owner=_sys.modules[__name__])
+    return _impl_local_stream._copy_local_sdk_ecdh_cli_stream(
+        args, client, stream, output, _owner=_sys.modules[__name__]
+    )
 
 
 def _handle_local_sdk_keys(args: argparse.Namespace, client: EzvizClient) -> int:
@@ -880,37 +1239,83 @@ def _handle_h264_annexb_summary(args: argparse.Namespace) -> int:
 
 def _handle_hcnetsdk_command_dump_summary(args: argparse.Namespace) -> int:
     """Summarize offline HCNetSDK command-port dump artifacts."""
-    return _impl_local_stream._handle_hcnetsdk_command_dump_summary(args, _owner=_sys.modules[__name__])
+    return _impl_local_stream._handle_hcnetsdk_command_dump_summary(
+        args, _owner=_sys.modules[__name__]
+    )
 
 
 def _hcnetsdk_command_frame_dump_summary(directory: Path, *, max_frames: int) -> dict[str, Any]:
     """Return sanitized metadata for dumped outbound command frames."""
-    return _impl_local_stream._hcnetsdk_command_frame_dump_summary(directory, max_frames=max_frames, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_command_frame_dump_summary(
+        directory, max_frames=max_frames, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_inbound_media_dump_summary(path: Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, Any]:
+def _hcnetsdk_inbound_media_dump_summary(
+    path: Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str
+) -> dict[str, Any]:
     """Return sanitized metadata for raw dumped command-port inbound media bytes."""
-    return _impl_local_stream._hcnetsdk_inbound_media_dump_summary(path, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_inbound_media_dump_summary(
+        path,
+        max_frames=max_frames,
+        decode_idr_windows=decode_idr_windows,
+        ffmpeg_path=ffmpeg_path,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _hcnetsdk_playm4_input_dump_summary(directory: Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, Any]:
+def _hcnetsdk_playm4_input_dump_summary(
+    directory: Path, *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str
+) -> dict[str, Any]:
     """Return sanitized metadata for PlayM4 input dump chunks."""
-    return _impl_local_stream._hcnetsdk_playm4_input_dump_summary(directory, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_playm4_input_dump_summary(
+        directory,
+        max_frames=max_frames,
+        decode_idr_windows=decode_idr_windows,
+        ffmpeg_path=ffmpeg_path,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _hcnetsdk_native_annexb_dump_summary(directory: Path, *, label: str, codec: str, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> dict[str, Any]:
+def _hcnetsdk_native_annexb_dump_summary(
+    directory: Path,
+    *,
+    label: str,
+    codec: str,
+    max_frames: int,
+    decode_idr_windows: bool,
+    ffmpeg_path: str,
+) -> dict[str, Any]:
     """Return sanitized metadata for native Annex-B Frida dump chunks."""
-    return _impl_local_stream._hcnetsdk_native_annexb_dump_summary(directory, label=label, codec=codec, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_native_annexb_dump_summary(
+        directory,
+        label=label,
+        codec=codec,
+        max_frames=max_frames,
+        decode_idr_windows=decode_idr_windows,
+        ffmpeg_path=ffmpeg_path,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _decode_native_annexb_chunk_windows(paths: list[Path], *, codec: str, max_windows: int, ffmpeg_path: str) -> list[dict[str, Any]]:
+def _decode_native_annexb_chunk_windows(
+    paths: list[Path], *, codec: str, max_windows: int, ffmpeg_path: str
+) -> list[dict[str, Any]]:
     """Decode sampled IDR/IRAP-bearing native dump chunks independently."""
-    return _impl_local_stream._decode_native_annexb_chunk_windows(paths, codec=codec, max_windows=max_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._decode_native_annexb_chunk_windows(
+        paths,
+        codec=codec,
+        max_windows=max_windows,
+        ffmpeg_path=ffmpeg_path,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def _detect_native_annexb_codec(data: bytes, *, requested: str) -> str:
     """Return the requested or likely codec for Annex-B dump bytes."""
-    return _impl_local_stream._detect_native_annexb_codec(data, requested=requested, _owner=_sys.modules[__name__])
+    return _impl_local_stream._detect_native_annexb_codec(
+        data, requested=requested, _owner=_sys.modules[__name__]
+    )
 
 
 def _iter_annexb_nal_prefixes(data: bytes) -> Iterator[bytes]:
@@ -918,54 +1323,100 @@ def _iter_annexb_nal_prefixes(data: bytes) -> Iterator[bytes]:
     return _impl_local_stream._iter_annexb_nal_prefixes(data, _owner=_sys.modules[__name__])
 
 
-def _add_hcnetsdk_annexb_dump_summary(summary: dict[str, Any], packets: list[bytes], *, max_frames: int, decode_idr_windows: bool, ffmpeg_path: str) -> None:
+def _add_hcnetsdk_annexb_dump_summary(
+    summary: dict[str, Any],
+    packets: list[bytes],
+    *,
+    max_frames: int,
+    decode_idr_windows: bool,
+    ffmpeg_path: str,
+) -> None:
     """Attach sanitized reconstructed Annex-B metadata to a dump summary."""
-    return _impl_local_stream._add_hcnetsdk_annexb_dump_summary(summary, packets, max_frames=max_frames, decode_idr_windows=decode_idr_windows, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._add_hcnetsdk_annexb_dump_summary(
+        summary,
+        packets,
+        max_frames=max_frames,
+        decode_idr_windows=decode_idr_windows,
+        ffmpeg_path=ffmpeg_path,
+        _owner=_sys.modules[__name__],
+    )
 
 
 def _scan_hcnetsdk_command_port_media_frames(data: bytes, *, max_frames: int) -> dict[str, Any]:
     """Scan raw command-port bytes for little-endian ``$`` media frames."""
-    return _impl_local_stream._scan_hcnetsdk_command_port_media_frames(data, max_frames=max_frames, _owner=_sys.modules[__name__])
+    return _impl_local_stream._scan_hcnetsdk_command_port_media_frames(
+        data, max_frames=max_frames, _owner=_sys.modules[__name__]
+    )
 
 
 def _handle_hcnetsdk_command_plan_generate(args: argparse.Namespace) -> int:
     """Convert concrete port-8000 control frames into generated templates."""
-    return _impl_local_stream._handle_hcnetsdk_command_plan_generate(args, _owner=_sys.modules[__name__])
+    return _impl_local_stream._handle_hcnetsdk_command_plan_generate(
+        args, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_generated_plan_to_json(plan: HcNetSdkCommandPortGeneratedMultiSocketPlan) -> dict[str, Any]:
+def _hcnetsdk_generated_plan_to_json(
+    plan: HcNetSdkCommandPortGeneratedMultiSocketPlan,
+) -> dict[str, Any]:
     """Return the public JSON shape for a generated command-port plan."""
     return _impl_local_stream._hcnetsdk_generated_plan_to_json(plan, _owner=_sys.modules[__name__])
 
 
-def _hcnetsdk_generated_plan_step_to_json(step: HcNetSdkCommandPortGeneratedSocketStep) -> dict[str, Any]:
+def _hcnetsdk_generated_plan_step_to_json(
+    step: HcNetSdkCommandPortGeneratedSocketStep,
+) -> dict[str, Any]:
     """Return JSON for one generated command-port socket step."""
-    return _impl_local_stream._hcnetsdk_generated_plan_step_to_json(step, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_generated_plan_step_to_json(
+        step, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_template_to_json(template: HcNetSdkCommandPortControlTemplate) -> dict[str, Any]:
+def _hcnetsdk_command_template_to_json(
+    template: HcNetSdkCommandPortControlTemplate,
+) -> dict[str, Any]:
     """Return JSON for one generated command-port control template."""
-    return _impl_local_stream._hcnetsdk_command_template_to_json(template, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_command_template_to_json(
+        template, _owner=_sys.modules[__name__]
+    )
 
 
-def _decode_annexb_windows(data: bytes, window_summary: Mapping[str, Any], *, ffmpeg_path: str, input_format: str) -> list[dict[str, Any]]:
+def _decode_annexb_windows(
+    data: bytes, window_summary: Mapping[str, Any], *, ffmpeg_path: str, input_format: str
+) -> list[dict[str, Any]]:
     """Return bounded ffmpeg decode results for sampled Annex-B windows."""
-    return _impl_local_stream._decode_annexb_windows(data, window_summary, ffmpeg_path=ffmpeg_path, input_format=input_format, _owner=_sys.modules[__name__])
+    return _impl_local_stream._decode_annexb_windows(
+        data,
+        window_summary,
+        ffmpeg_path=ffmpeg_path,
+        input_format=input_format,
+        _owner=_sys.modules[__name__],
+    )
 
 
-def _decode_h264_annexb_idr_windows(data: bytes, idr_summary: Mapping[str, Any], *, ffmpeg_path: str) -> list[dict[str, Any]]:
+def _decode_h264_annexb_idr_windows(
+    data: bytes, idr_summary: Mapping[str, Any], *, ffmpeg_path: str
+) -> list[dict[str, Any]]:
     """Return bounded ffmpeg decode results for sampled H.264 IDR windows."""
-    return _impl_local_stream._decode_h264_annexb_idr_windows(data, idr_summary, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._decode_h264_annexb_idr_windows(
+        data, idr_summary, ffmpeg_path=ffmpeg_path, _owner=_sys.modules[__name__]
+    )
 
 
-def _write_local_sdk_metadata_output(path: str | None, stream: Any, *, packet_output_path: str | None=None) -> None:
+def _write_local_sdk_metadata_output(
+    path: str | None, stream: Any, *, packet_output_path: str | None = None
+) -> None:
     """Write safe stream metadata and optional bounded packet samples."""
-    return _impl_local_stream._write_local_sdk_metadata_output(path, stream, packet_output_path=packet_output_path, _owner=_sys.modules[__name__])
+    return _impl_local_stream._write_local_sdk_metadata_output(
+        path, stream, packet_output_path=packet_output_path, _owner=_sys.modules[__name__]
+    )
 
 
 def _write_hcnetsdk_sampled_packet_output(path: str, stream: Any) -> None:
     """Write bounded sampled command-port packets as raw dump-compatible frames."""
-    return _impl_local_stream._write_hcnetsdk_sampled_packet_output(path, stream, _owner=_sys.modules[__name__])
+    return _impl_local_stream._write_hcnetsdk_sampled_packet_output(
+        path, stream, _owner=_sys.modules[__name__]
+    )
 
 
 def _local_sdk_stream_metadata(stream: Any) -> dict[str, Any]:
@@ -975,20 +1426,31 @@ def _local_sdk_stream_metadata(stream: Any) -> dict[str, Any]:
 
 def _hcnetsdk_command_port_exchange_metadata(exchange: Any) -> dict[str, Any]:
     """Return non-secret metadata for one command-port request/response."""
-    return _impl_local_stream._hcnetsdk_command_port_exchange_metadata(exchange, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_command_port_exchange_metadata(
+        exchange, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_port_body_word_samples(body: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
+def _hcnetsdk_command_port_body_word_samples(
+    body: bytes, *, max_samples: int = 16
+) -> list[dict[str, int]]:
     """Return bounded nonzero 32-bit body words for diagnostics."""
-    return _impl_local_stream._hcnetsdk_command_port_body_word_samples(body, max_samples=max_samples, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_command_port_body_word_samples(
+        body, max_samples=max_samples, _owner=_sys.modules[__name__]
+    )
 
 
-def _hcnetsdk_command_port_body_tail_word_samples(tail: bytes, *, max_samples: int=16) -> list[dict[str, int]]:
+def _hcnetsdk_command_port_body_tail_word_samples(
+    tail: bytes, *, max_samples: int = 16
+) -> list[dict[str, int]]:
     """Return bounded nonzero 32-bit request-tail words for diagnostics."""
-    return _impl_local_stream._hcnetsdk_command_port_body_tail_word_samples(tail, max_samples=max_samples, _owner=_sys.modules[__name__])
+    return _impl_local_stream._hcnetsdk_command_port_body_tail_word_samples(
+        tail, max_samples=max_samples, _owner=_sys.modules[__name__]
+    )
 
 
 from pyezvizapi.cli.commands import stream as _impl_stream
+
 
 def _handle_stream(args: argparse.Namespace, client: EzvizClient) -> int:
     """Handle experimental stream helpers."""

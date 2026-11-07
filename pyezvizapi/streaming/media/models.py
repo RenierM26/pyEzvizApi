@@ -56,13 +56,10 @@ def has_positive_finite_capture_bound(
 
     count_limits = (max_packets, max_frames)
     if any(
-        limit is not None and not is_positive_capture_count_bound(limit)
-        for limit in count_limits
+        limit is not None and not is_positive_capture_count_bound(limit) for limit in count_limits
     ):
         return False
-    if duration_seconds is not None and not is_positive_finite_duration_bound(
-        duration_seconds
-    ):
+    if duration_seconds is not None and not is_positive_finite_duration_bound(duration_seconds):
         return False
     return any(limit is not None for limit in count_limits) or duration_seconds is not None
 
@@ -134,6 +131,7 @@ class _IteratorProducer[PacketT]:
         cancel_thread: Thread | None = None
         cancel_callback = self._cancel
         if cancel_callback is not None:
+
             def cancel() -> None:
                 with suppress(Exception):
                     cancel_callback()
@@ -143,9 +141,7 @@ class _IteratorProducer[PacketT]:
         with suppress(Full):
             self._requests.put_nowait(object())
         if cancel_thread is not None:
-            cancel_thread.join(
-                timeout=max(0.0, close_deadline - time.monotonic())
-            )
+            cancel_thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
         self._thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
 
 
@@ -261,7 +257,9 @@ class _NativeTimingOptions(TypedDict, total=False):
     app_relative_clock: bool
 
 
-def _native_timing_options(enabled: bool, *, app_relative_clock: bool = False) -> _NativeTimingOptions:
+def _native_timing_options(
+    enabled: bool, *, app_relative_clock: bool = False
+) -> _NativeTimingOptions:
     """Forward only the opt-in keyword; preserve historical default call shapes."""
     options: _NativeTimingOptions = {"native_shared_clock": True} if enabled else {}
     if app_relative_clock:
@@ -465,9 +463,7 @@ class IterableMediaPacketSource[PacketT]:
         with self._producer_state.lock:
             active = self._producer_state.producer
             if active is not None and active.alive:
-                raise PyEzvizError(
-                    "Packet source is still cancelling a timed-out iterator read"
-                )
+                raise PyEzvizError("Packet source is still cancelling a timed-out iterator read")
             self._producer_state.producer = None
             if deadline is not None:
                 producer = _IteratorProducer(packets, self.cancel)

@@ -20,6 +20,7 @@ class Exchange(Protocol):
     def exchange(self, frame: bytes) -> tuple[int, bytes]:
         """Send a frame and read one response."""
         raise NotImplementedError
+
     def send(self, frame: bytes) -> None:
         """Send a frame without waiting for a response."""
         raise NotImplementedError
@@ -48,7 +49,9 @@ def authenticate(
     """
     identity = hashlib.sha256(serial).hexdigest()
     if state.get("identity", identity) != identity:
-        raise EzvizPushFatalError("Push state belongs to a different client identity; recovery required")
+        raise EzvizPushFatalError(
+            "Push state belongs to a different client identity; recovery required"
+        )
     session_hash = hashlib.sha256(session_token.encode()).hexdigest()
     if "device_id" in state:
         device = _saved_key(state["device_id"], 32, "device identity")
@@ -85,7 +88,9 @@ def authenticate(
             pending = dict(state, identity=identity, phase="creation_pending")
             save(pending)
             state.update(pending)
-            payload = _response(connection, wire.authentication_iii_create(serial, shared, n2, n3), 6)
+            payload = _response(
+                connection, wire.authentication_iii_create(serial, shared, n2, n3), 6
+            )
             device, master, session = wire.authentication_iv_create(
                 payload, serial, shared, bytes([n1, n2, n3])
             )

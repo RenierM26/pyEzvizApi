@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming import rtsp_auth as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.rtsp_auth as _compat_module_0
+
     _HEADER_END = _compat_module_0._HEADER_END
     _LOGGER = _compat_module_0._LOGGER
     AuthTestResultFailed = _compat_module_0.AuthTestResultFailed

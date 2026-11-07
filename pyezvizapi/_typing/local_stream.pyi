@@ -1,4 +1,5 @@
 """Nominal types re-exported for implementation annotations only."""
+
 from pyezvizapi.streaming.local.session import (
     Any as Any,
     BinaryIO as BinaryIO,

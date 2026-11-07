@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,9 +16,11 @@ from pyezvizapi.cloud import cas as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
 
     import pyezvizapi.cloud.cas as _compat_module_1
+
     _LOGGER = _compat_module_1._LOGGER
     CAS_ANDROID_CLIENT_TYPE = _compat_module_1.CAS_ANDROID_CLIENT_TYPE
     CAS_CERT_HAS_EXPIRED_VERIFY_CODE = _compat_module_1.CAS_CERT_HAS_EXPIRED_VERIFY_CODE
@@ -58,7 +61,9 @@ if TYPE_CHECKING:
     _recv_cas_frame = _compat_module_1._recv_cas_frame
     _recv_exact = _compat_module_1._recv_exact
     _send_all = _compat_module_1._send_all
-    _verify_expired_cas_certificate_hostname = _compat_module_1._verify_expired_cas_certificate_hostname
+    _verify_expired_cas_certificate_hostname = (
+        _compat_module_1._verify_expired_cas_certificate_hostname
+    )
     annotations = _compat_module_1.annotations
     cast = _compat_module_1.cast
     cycle = _compat_module_1.cycle

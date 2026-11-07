@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,9 +16,11 @@ from pyezvizapi.streaming.media import rtp as _implementation
 
 if TYPE_CHECKING:
     import Crypto.Cipher.AES as _compat_typed_AES
+
     AES = _compat_typed_AES
 
     import pyezvizapi.streaming.media.rtp as _compat_module_1
+
     _IDMX_RTP_STREAM_TYPES = _compat_module_1._IDMX_RTP_STREAM_TYPES
     _IDMX_STATIC_VIDEO_PAYLOAD_CODECS = _compat_module_1._IDMX_STATIC_VIDEO_PAYLOAD_CODECS
     _STATIC_AUDIO_PROFILES = _compat_module_1._STATIC_AUDIO_PROFILES
@@ -27,7 +30,9 @@ if TYPE_CHECKING:
     DEFAULT_VIDEO_PAYLOAD_TYPES = _compat_module_1.DEFAULT_VIDEO_PAYLOAD_TYPES
     IDMX_AAC_ADTS_HEADER_SIZE = _compat_module_1.IDMX_AAC_ADTS_HEADER_SIZE
     IDMX_AAC_ADTS_MAX_FRAME_LENGTH = _compat_module_1.IDMX_AAC_ADTS_MAX_FRAME_LENGTH
-    IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE = _compat_module_1.IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE
+    IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE = (
+        _compat_module_1.IDMX_AAC_AUDIO_SPECIFIC_CONFIG_OBJECT_TYPE
+    )
     IDMX_AAC_SAMPLE_RATES = _compat_module_1.IDMX_AAC_SAMPLE_RATES
     IDMX_AAC_SAMPLES_PER_FRAME = _compat_module_1.IDMX_AAC_SAMPLES_PER_FRAME
     IDMX_AUDIO_EXTENSION_VERSION = _compat_module_1.IDMX_AUDIO_EXTENSION_VERSION

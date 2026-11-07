@@ -112,12 +112,8 @@ API_ENDPOINT_SHARE_QUIT = "/v3/share/quit"
 API_ENDPOINT_DEVICE_EMAIL_ALERT = "/v3/unifiedmsg/notify/switch/128"
 API_ENDPOINT_DEVICES_AUTHENTICATE = "/v3/devices/authenticate/"
 API_ENDPOINT_DEVICES_SET_SWITCH_ENABLE = "/setSwitchEnableReq"
-API_ENDPOINT_SMARTHOME_OUTLET_LOG = (
-    "/v3/smarthome/outlet/log/switch/from/{from}/to/{to}"
-)
-API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC = (
-    "/v3/devices/association/linked/ipcList/byA1"
-)
+API_ENDPOINT_SMARTHOME_OUTLET_LOG = "/v3/smarthome/outlet/log/switch/from/{from}/to/{to}"
+API_ENDPOINT_DEVICES_ASSOCIATION_LINKED_IPC = "/v3/devices/association/linked/ipcList/byA1"
 
 # MQTT
 API_ENDPOINT_REGISTER_MQTT = "/v1/getClientId"

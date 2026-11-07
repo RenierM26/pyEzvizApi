@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,7 +16,10 @@ from pyezvizapi.cli import arguments as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.cli.arguments as _compat_module_0
-    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = _compat_module_0.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+
+    HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW = (
+        _compat_module_0.HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW
+    )
     LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT = _compat_module_0.LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT
     Any = _compat_module_0.Any
     BatteryCameraWorkMode = _compat_module_0.BatteryCameraWorkMode
@@ -38,9 +42,15 @@ if TYPE_CHECKING:
     add_sdcard_videos_arguments = _compat_module_0.add_sdcard_videos_arguments
     add_stream_arguments = _compat_module_0.add_stream_arguments
     add_stream_dump_arguments = _compat_module_0.add_stream_dump_arguments
-    add_stream_h264_annexb_summary_arguments = _compat_module_0.add_stream_h264_annexb_summary_arguments
-    add_stream_hcnetsdk_command_dump_summary_arguments = _compat_module_0.add_stream_hcnetsdk_command_dump_summary_arguments
-    add_stream_hcnetsdk_command_plan_generate_arguments = _compat_module_0.add_stream_hcnetsdk_command_plan_generate_arguments
+    add_stream_h264_annexb_summary_arguments = (
+        _compat_module_0.add_stream_h264_annexb_summary_arguments
+    )
+    add_stream_hcnetsdk_command_dump_summary_arguments = (
+        _compat_module_0.add_stream_hcnetsdk_command_dump_summary_arguments
+    )
+    add_stream_hcnetsdk_command_plan_generate_arguments = (
+        _compat_module_0.add_stream_hcnetsdk_command_plan_generate_arguments
+    )
     add_stream_local_sdk_dump_arguments = _compat_module_0.add_stream_local_sdk_dump_arguments
     add_stream_local_sdk_keys_arguments = _compat_module_0.add_stream_local_sdk_keys_arguments
     add_stream_proxy_arguments = _compat_module_0.add_stream_proxy_arguments

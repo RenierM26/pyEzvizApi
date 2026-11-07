@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.cloud import responses as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.cloud.responses as _compat_module_0
+
     Any = _compat_module_0.Any
     JsonDict = _compat_module_0.JsonDict
     Mapping = _compat_module_0.Mapping

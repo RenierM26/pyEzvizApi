@@ -100,16 +100,12 @@ class EzvizLightBulb:
             "serial": self._serial,
             "name": self.fetch_key(["deviceInfos", "name"]),
             "version": self.fetch_key(["deviceInfos", "version"]),
-            "upgrade_available": bool(
-                self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3
-            ),
+            "upgrade_available": bool(self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3),
             "status": self.fetch_key(["deviceInfos", "status"]),
             "device_category": self.fetch_key(["deviceInfos", "deviceCategory"]),
             "device_sub_category": self.fetch_key(["deviceInfos", "deviceSubCategory"]),
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
-            "upgrade_in_progress": bool(
-                self.fetch_key(["STATUS", "upgradeStatus"]) == 0
-            ),
+            "upgrade_in_progress": bool(self.fetch_key(["STATUS", "upgradeStatus"]) == 0),
             "latest_firmware_info": self.fetch_key(["UPGRADE", "upgradePackageInfo"]),
             "local_ip": self._local_ip(),
             "wan_ip": self.fetch_key(["CONNECTION", "netIp"]),
@@ -122,9 +118,7 @@ class EzvizLightBulb:
             "ezDeviceCapability": self.fetch_key(["deviceInfos", "ezDeviceCapability"]),
             "featureItems": self._feature_json["featureItemDtos"],
             "productId": self._feature_json["productId"],
-            "color_temperature": self.get_feature_item("color_temperature")[
-                "dataValue"
-            ],
+            "color_temperature": self.get_feature_item("color_temperature")["dataValue"],
             "is_on": self.get_feature_item("light_switch")["dataValue"],
             "brightness": self.get_feature_item("brightness")["dataValue"],
             # same as brightness... added in order to keep "same interface" between camera and light bulb objects

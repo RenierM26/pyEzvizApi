@@ -122,9 +122,7 @@ class _CloudRtpAudioInput:
             except Full:
                 if time.monotonic() >= deadline:
                     self.cancel()
-                    raise PyEzvizError(
-                        "FFmpeg AAC input stopped consuming data"
-                    ) from None
+                    raise PyEzvizError("FFmpeg AAC input stopped consuming data") from None
         raise BrokenPipeError("FFmpeg audio input closed")
 
     def close_input(self) -> None:
@@ -419,11 +417,7 @@ def _start_bounded_cloud_stream(
     startup_seconds = timeout
     if startup_seconds is None or startup_seconds <= 0:
         startup_seconds = duration_seconds
-    deadline = (
-        None
-        if startup_seconds is None
-        else monotonic() + startup_seconds
-    )
+    deadline = None if startup_seconds is None else monotonic() + startup_seconds
     if capture_deadline is not None:
         deadline = capture_deadline if deadline is None else min(deadline, capture_deadline)
     stream.start(deadline=deadline, monotonic=monotonic)
@@ -477,9 +471,15 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             duration_seconds=duration_seconds,
         )
         if media_key is None and smscode is not None:
-            selected_key = _bounded_cloud_media_key(client, serial, smscode, capture_deadline, monotonic)
+            selected_key = _bounded_cloud_media_key(
+                client, serial, smscode, capture_deadline, monotonic
+            )
         else:
-            selected_key = media_key if media_key is not None else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
+            selected_key = (
+                media_key
+                if media_key is not None
+                else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
+            )
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         stream = open_cloud_stream(
@@ -500,7 +500,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
                 monotonic=monotonic,
                 capture_deadline=capture_deadline,
             )
-            duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
+            duration_seconds = _remaining_cloud_capture_duration(
+                duration_seconds, capture_deadline, monotonic
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -511,13 +513,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
         transport, media_packets = _peek_cloud_transport(iter(packets))
         packets = list(media_packets)
         if transport == StreamTransport.RTP:
-            raise PyEzvizError(
-                "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
-            )
+            raise PyEzvizError("Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output")
         if transport == StreamTransport.MPEG_TS:
-            raise PyEzvizError(
-                "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
-            )
+            raise PyEzvizError("Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output")
         payload = b"".join(packet.body for packet in packets)
         if not payload:
             raise EzvizNoMediaError("Cloud stream capture did not contain media")
@@ -563,7 +561,9 @@ def copy_cloud_stream_to_mpegps(  # noqa: PLR0913
             monotonic=monotonic,
             capture_deadline=capture_deadline,
         )
-        duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
+        duration_seconds = _remaining_cloud_capture_duration(
+            duration_seconds, capture_deadline, monotonic
+        )
         _copy_cloud_stream_payloads_to_mpegps(
             stream,
             output,
@@ -602,9 +602,15 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             duration_seconds=duration_seconds,
         )
         if media_key is None and smscode is not None:
-            selected_key = _bounded_cloud_media_key(client, serial, smscode, capture_deadline, monotonic)
+            selected_key = _bounded_cloud_media_key(
+                client, serial, smscode, capture_deadline, monotonic
+            )
         else:
-            selected_key = media_key if media_key is not None else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
+            selected_key = (
+                media_key
+                if media_key is not None
+                else _bounded_cloud_media_key(client, serial, None, capture_deadline, monotonic)
+            )
         if selected_key is None:
             raise PyEzvizError("decrypt_video requires a media_key or camera media key")
         stream = open_cloud_stream(
@@ -625,7 +631,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
                 monotonic=monotonic,
                 capture_deadline=capture_deadline,
             )
-            duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
+            duration_seconds = _remaining_cloud_capture_duration(
+                duration_seconds, capture_deadline, monotonic
+            )
             packets = _collect_cloud_stream_packets(
                 stream,
                 max_packets=max_packets,
@@ -689,7 +697,9 @@ def copy_cloud_stream_to_mpegts(  # noqa: PLR0913
             monotonic=monotonic,
             capture_deadline=capture_deadline,
         )
-        duration_seconds = _remaining_cloud_capture_duration(duration_seconds, capture_deadline, monotonic)
+        duration_seconds = _remaining_cloud_capture_duration(
+            duration_seconds, capture_deadline, monotonic
+        )
         copy_cloud_stream_packets_to_mpegts(
             stream,
             output,
@@ -876,9 +886,7 @@ def _probe_cloud_video_frame_span(
             try:
                 timestamp = float(value)
             except ValueError as err:
-                raise PyEzvizError(
-                    "Could not determine staged cloud video frame span"
-                ) from err
+                raise PyEzvizError("Could not determine staged cloud video frame span") from err
             if not math.isfinite(timestamp):
                 raise PyEzvizError("Staged cloud video frame timestamp is invalid")
             if previous is None:
@@ -958,13 +966,9 @@ def _copy_cloud_stream_payloads_to_mpegps(
     )
     transport, packets = _peek_cloud_transport(packets)
     if transport == StreamTransport.RTP:
-        raise PyEzvizError(
-            "Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output"
-        )
+        raise PyEzvizError("Cloud stream carries RTP/IDMX, not MPEG-PS; request MPEG-TS output")
     if transport == StreamTransport.MPEG_TS:
-        raise PyEzvizError(
-            "Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output"
-        )
+        raise PyEzvizError("Cloud stream carries MPEG-TS, not MPEG-PS; request MPEG-TS output")
     _write_clear_cloud_packets(packets, output)
 
 
@@ -1045,8 +1049,7 @@ def cloud_rtp_packets_have_audio(packets: Iterable[Any]) -> bool:
     parsed = _cloud_rtp_packets(packets)
     descriptors = idmx_rtp_stream_descriptors(parsed)
     return any(
-        rtp_media_kind(packet, stream_descriptors=descriptors) == "audio"
-        for packet in parsed
+        rtp_media_kind(packet, stream_descriptors=descriptors) == "audio" for packet in parsed
     )
 
 
@@ -1096,16 +1099,15 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
         packet_list = list(media_packets)
     if selected_transport == StreamTransport.RTP:
         parsed = _cloud_rtp_packets(packet_list)
+
         def decrypt_encrypted_header(nal_unit: bytes) -> bytes:
-            return _decrypt_cloud_rtp_nal_unit(
-                nal_unit, media_key, nalu_header_size=0
-            )[len(ANNEX_B_START_CODE) :]
+            return _decrypt_cloud_rtp_nal_unit(nal_unit, media_key, nalu_header_size=0)[
+                len(ANNEX_B_START_CODE) :
+            ]
 
         codec = detect_rtp_video_codec(
             parsed,
-            video_payload_transform=(
-                decrypt_encrypted_header if nalu_header_size == 0 else None
-            ),
+            video_payload_transform=(decrypt_encrypted_header if nalu_header_size == 0 else None),
             allow_ezviz_headerless_hevc_fu=True,
         )
         header_size = nalu_header_size
@@ -1113,9 +1115,9 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
             header_size = 2 if codec == "hevc" else 1
 
         def decrypted_nal(nal_unit: bytes) -> bytes:
-            return _decrypt_cloud_rtp_nal_unit(
-                nal_unit, media_key, nalu_header_size=header_size
-            )[len(ANNEX_B_START_CODE) :]
+            return _decrypt_cloud_rtp_nal_unit(nal_unit, media_key, nalu_header_size=header_size)[
+                len(ANNEX_B_START_CODE) :
+            ]
 
         nal_timestamps: list[int] = []
         nal_units = rtp_packets_to_nal_units(
@@ -1134,31 +1136,35 @@ def copy_decrypted_cloud_stream_packets_to_mpegts(
         )
         if not rtp_nal_units_have_vcl(decrypted_units, codec=codec):
             raise EzvizNoMediaError(
-                "Cloud RTP capture contained no complete video frame; "
-                "increase the capture duration"
+                "Cloud RTP capture contained no complete video frame; increase the capture duration"
             )
-        audio = decrypt_idmx_aac_packets(parsed, media_key, require_contiguous=False, allow_timestamp_jitter=True)
+        audio = decrypt_idmx_aac_packets(
+            parsed, media_key, require_contiguous=False, allow_timestamp_jitter=True
+        )
         native_timing = idmx_video_frame_rate(parsed) is not None and any(
             packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06")
             for packet in parsed
         )
         if native_timing:
             process = open_mpegts_remux_process(
-                ffmpeg_path, input_format="mpeg", preserve_timestamps=True,
+                ffmpeg_path,
+                input_format="mpeg",
+                preserve_timestamps=True,
                 popen=subprocess.Popen,
             )
 
             def write_timed_input(stdin: BinaryIO) -> None:
                 for payload in timed_rtp_mpegps_payloads(
-                    decrypted_units, nal_timestamps, codec=codec, audio=audio,
+                    decrypted_units,
+                    nal_timestamps,
+                    codec=codec,
+                    audio=audio,
                 ):
                     stdin.write(payload)
 
             copy_remuxed_output(process, output, write_input=write_timed_input)
             return
-        decrypted_annexb = b"".join(
-            ANNEX_B_START_CODE + nal_unit for nal_unit in decrypted_units
-        )
+        decrypted_annexb = b"".join(ANNEX_B_START_CODE + nal_unit for nal_unit in decrypted_units)
         if audio is not None:
             _remux_cloud_elementary_av_bytes_to_mpegts(
                 decrypted_annexb,
@@ -1215,9 +1221,7 @@ def _iter_bounded_cloud_packets(
         if first_packet_deadline is not None:
             iterator_kwargs["first_packet_deadline"] = first_packet_deadline
         if stream_packet_timeout_seconds is not None:
-            iterator_kwargs["stream_packet_timeout_seconds"] = (
-                stream_packet_timeout_seconds
-            )
+            iterator_kwargs["stream_packet_timeout_seconds"] = stream_packet_timeout_seconds
         return stream.iter_packets(**iterator_kwargs)
 
     def _fallback() -> Iterator[Any]:
@@ -1253,9 +1257,7 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
     ):
         raise PyEzvizError("Cloud video startup timeout must be positive and finite")
     startup_deadline = (
-        monotonic() + startup_timeout_seconds
-        if startup_timeout_seconds is not None
-        else None
+        monotonic() + startup_timeout_seconds if startup_timeout_seconds is not None else None
     )
 
     packets = _iter_bounded_cloud_packets(
@@ -1265,9 +1267,7 @@ def copy_cloud_stream_packets_to_mpegts(  # noqa: PLR0913
         first_packet_timeout=first_packet_timeout,
         first_packet_deadline=first_packet_deadline,
         stream_packet_timeout_seconds=(
-            min(startup_timeout_seconds, 20.0)
-            if startup_timeout_seconds is not None
-            else None
+            min(startup_timeout_seconds, 20.0) if startup_timeout_seconds is not None else None
         ),
         monotonic=monotonic,
     )
@@ -1337,9 +1337,7 @@ def _peek_cloud_transport(
         if not packet.body:
             continue
         transport = detect_transport(packet.body)
-        if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(
-            packet.body
-        ):
+        if transport == StreamTransport.MPEG_TS and not _is_valid_mpegts_body(packet.body):
             continue
         if transport != StreamTransport.UNKNOWN:
             return transport, chain((packet,), packets)
@@ -1417,17 +1415,14 @@ def _cloud_rtp_packet_matches_video_route(
     """Return whether a buffered packet belongs to one video route epoch."""
 
     if epoch_route is not None:
-        return (
-            epoch_route.media_kind == "video" and epoch_route.codec == route_codec
-        )
+        return epoch_route.media_kind == "video" and epoch_route.codec == route_codec
     detected_codec = rtp_payload_video_codec(packet.payload)
     if detected_codec is not None:
         return detected_codec == route_codec
     if route_codec == "hevc" and len(packet.payload) >= 2:
         hevc_nal_type = (packet.payload[0] >> 1) & 0x3F
         if (
-            16 <= hevc_nal_type <= 23
-            or hevc_nal_type in {32, 33, 34, 39, 40, 49}
+            16 <= hevc_nal_type <= 23 or hevc_nal_type in {32, 33, 34, 39, 40, 49}
         ) and packet.payload[1] & 0x07 != 0:
             return True
     if route_codec == "h264":
@@ -1472,8 +1467,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
             continue
         consumed_packets += 1
         previous_descriptors = {
-            descriptor.payload_type: descriptor
-            for descriptor in route_profile.descriptors
+            descriptor.payload_type: descriptor for descriptor in route_profile.descriptors
         }
         route_profile.absorb(parsed)
         stream_descriptors = route_profile.descriptors
@@ -1490,17 +1484,14 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
         for descriptor in stream_descriptors:
             previous = previous_descriptors.get(descriptor.payload_type)
             route_changed = previous is None or (
-                previous.codec != descriptor.codec
-                or previous.media_kind != descriptor.media_kind
+                previous.codec != descriptor.codec or previous.media_kind != descriptor.media_kind
             )
             if (
                 descriptor.media_kind == "video"
                 and route_changed
                 and descriptor.codec in {"h264", "hevc"}
             ):
-                route_codec: RtpVideoCodec = (
-                    "h264" if descriptor.codec == "h264" else "hevc"
-                )
+                route_codec: RtpVideoCodec = "h264" if descriptor.codec == "h264" else "hevc"
                 selected_prefix: list[RtpPacket] = []
                 selected_epochs: list[RtpStreamDescriptor | None] = []
                 for candidate, epoch_route in zip(
@@ -1523,9 +1514,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                 prefix = selected_prefix
                 prefix_route_epochs = selected_epochs
             elif descriptor.media_kind == "audio" and route_changed:
-                selected_audio_prefix: list[
-                    tuple[RtpPacket, RtpStreamDescriptor | None]
-                ] = [
+                selected_audio_prefix: list[tuple[RtpPacket, RtpStreamDescriptor | None]] = [
                     (candidate, epoch_route)
                     for candidate, epoch_route in zip(
                         prefix,
@@ -1534,17 +1523,13 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                     )
                     if candidate.payload_type != descriptor.payload_type
                     or (
-                        descriptor.codec == "aac"
-                        and rtp_packet_has_valid_idmx_aac_frame(candidate)
+                        descriptor.codec == "aac" and rtp_packet_has_valid_idmx_aac_frame(candidate)
                     )
                 ]
                 prefix = [candidate for candidate, _epoch in selected_audio_prefix]
-                prefix_route_epochs = [
-                    epoch for _candidate, epoch in selected_audio_prefix
-                ]
+                prefix_route_epochs = [epoch for _candidate, epoch in selected_audio_prefix]
         video_route_is_authoritative = any(
-            descriptor.media_kind == "video"
-            for descriptor in stream_descriptors
+            descriptor.media_kind == "video" for descriptor in stream_descriptors
         )
         aac_payload_types = rtp_codec_payload_types(
             stream_descriptors,
@@ -1569,10 +1554,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
             )
         except UnsupportedRtpVideoCodecError:
             codec = None
-            if (
-                video_route_is_authoritative
-                or consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS
-            ):
+            if video_route_is_authoritative or consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
                 raise
         except PyEzvizError:
             if consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
@@ -1591,8 +1573,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                 consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS
                 and not video_probe
                 and not any(
-                    candidate.payload_type in selected_video_payload_types
-                    for candidate in prefix
+                    candidate.payload_type in selected_video_payload_types for candidate in prefix
                 )
             ):
                 assigned_payload_types = {
@@ -1600,9 +1581,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                 }
                 video_probe = [
                     candidate
-                    for candidate, epoch_route in zip(
-                        prefix, prefix_route_epochs, strict=True
-                    )
+                    for candidate, epoch_route in zip(prefix, prefix_route_epochs, strict=True)
                     if candidate.payload_type in DEFAULT_VIDEO_PAYLOAD_TYPES
                     and candidate.payload_type not in assigned_payload_types
                     and _cloud_rtp_packet_matches_video_route(
@@ -1612,10 +1591,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                     )
                 ]
                 stale_video_route = bool(video_probe)
-        if (
-            audio_key is not None
-            and audio_metadata is not None
-        ):
+        if audio_key is not None and audio_metadata is not None:
             audio_decodable = any(
                 decrypt_idmx_aac_packets(
                     (candidate,),
@@ -1637,22 +1613,20 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
             continue
         if not video_probe:
             if consumed_packets >= _RTP_CODEC_PROBE_MAX_PACKETS:
-                raise PyEzvizError(
-                    "RTP cloud stream did not include media on its video route"
-                )
+                raise PyEzvizError("RTP cloud stream did not include media on its video route")
             continue
-        if (
-            not video_route_is_authoritative
-            and consumed_packets < _RTP_CODEC_PROBE_MAX_PACKETS
-        ):
+        if not video_route_is_authoritative and consumed_packets < _RTP_CODEC_PROBE_MAX_PACKETS:
             continue
         native_wrapper_seen = any(
             candidate.extension_profile == 0x4000
             and candidate.extension_data.startswith(b"\x80\x06")
             for candidate in video_probe
         )
-        if (native_wrapper_seen and idmx_video_frame_rate(prefix) is None
-                and consumed_packets < _RTP_TIMING_PROBE_MAX_PACKETS):
+        if (
+            native_wrapper_seen
+            and idmx_video_frame_rate(prefix) is None
+            and consumed_packets < _RTP_TIMING_PROBE_MAX_PACKETS
+        ):
             continue
         if audio_key is None or audio_decodable:
             break
@@ -1667,13 +1641,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
         except UnsupportedRtpVideoCodecError:
             raise
         except PyEzvizError as err:
-            raise PyEzvizError(
-                "Could not detect RTP video codec in cloud stream"
-            ) from err
+            raise PyEzvizError("Could not detect RTP video codec in cloud stream") from err
 
     if stale_video_route or not any(
-        descriptor.media_kind == "video"
-        for descriptor in route_profile.descriptors
+        descriptor.media_kind == "video" for descriptor in route_profile.descriptors
     ):
         for payload_type in {packet.payload_type for packet in video_probe}:
             route_profile.select_video_fallback(payload_type, codec)
@@ -1690,9 +1661,9 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
         packet.extension_profile == 0x4000 and packet.extension_data.startswith(b"\x80\x06")
         for packet in prefix
     )
-    selected_audio_key = audio_key if (
-        audio_decodable or (native_timing and audio_metadata is not None)
-    ) else None
+    selected_audio_key = (
+        audio_key if (audio_decodable or (native_timing and audio_metadata is not None)) else None
+    )
     stream_descriptors = route_profile.descriptors
     aac_payload_types = rtp_codec_payload_types(
         stream_descriptors,
@@ -1710,7 +1681,10 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
     try:
         if native_timing:
             process = open_mpegts_remux_process(
-                ffmpeg_path, input_format="mpeg", preserve_timestamps=True, popen=subprocess.Popen,
+                ffmpeg_path,
+                input_format="mpeg",
+                preserve_timestamps=True,
+                popen=subprocess.Popen,
             )
         elif audio_input is None:
             process = _open_cloud_elementary_mpegts_remux_process(
@@ -1739,7 +1713,11 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
         )
         nal_count = 0
         audio_enabled = selected_audio_key is not None
-        timed_muxer = NativeRtpPsMuxer(codec, audio=audio_enabled, allow_audio_clock_jitter=True) if native_timing else None
+        timed_muxer = (
+            NativeRtpPsMuxer(codec, audio=audio_enabled, allow_audio_clock_jitter=True)
+            if native_timing
+            else None
+        )
         last_audio_sequence: dict[int, int] = {}
         next_audio_timestamp: dict[int, int] = {}
 
@@ -1759,25 +1737,20 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
 
         try:
             buffered_packets = ((packet, True) for packet in prefix)
-            live_packets = (
-                (packet, False) for packet in _remaining_rtp_packets()
-            )
+            live_packets = ((packet, False) for packet in _remaining_rtp_packets())
             for packet, buffered in chain(buffered_packets, live_packets):
                 if not buffered:
                     route_profile.absorb(packet)
                 kind = route_profile.media_kind(packet)
                 video_descriptors_are_authoritative = any(
-                    descriptor.media_kind == "video"
-                    for descriptor in route_profile.descriptors
+                    descriptor.media_kind == "video" for descriptor in route_profile.descriptors
                 )
                 current_video_payload_types = (
                     frozenset(candidate.payload_type for candidate in video_probe)
                     if stale_video_route
                     else route_profile.codec_payload_types(codec)
                     if video_descriptors_are_authoritative
-                    else frozenset(
-                        candidate.payload_type for candidate in video_probe
-                    )
+                    else frozenset(candidate.payload_type for candidate in video_probe)
                 )
                 current_aac_payload_types = rtp_codec_payload_types(
                     route_profile.descriptors,
@@ -1794,13 +1767,17 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                     expected_timestamp = next_audio_timestamp.get(packet.ssrc)
                     if previous_sequence is not None and packet.sequence == previous_sequence:
                         continue
-                    if not native_timing and previous_sequence is not None and packet.sequence != (
-                        previous_sequence + 1
-                    ) & 0xFFFF:
+                    if (
+                        not native_timing
+                        and previous_sequence is not None
+                        and packet.sequence != (previous_sequence + 1) & 0xFFFF
+                    ):
                         _disable_audio()
                         continue
-                    if not native_timing and expected_timestamp is not None and (
-                        packet.timestamp != expected_timestamp
+                    if (
+                        not native_timing
+                        and expected_timestamp is not None
+                        and (packet.timestamp != expected_timestamp)
                     ):
                         _disable_audio()
                         continue
@@ -1811,7 +1788,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                         audio_metadata=audio_metadata,
                         audio_payload_types=current_aac_payload_types,
                         require_contiguous=False,
-                    allow_timestamp_jitter=True,
+                        allow_timestamp_jitter=True,
                     )
                     if audio is None:
                         _disable_audio()
@@ -1832,10 +1809,7 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                         packet.timestamp + 1024 * audio.frame_count
                     ) & 0xFFFFFFFF
                     continue
-                if (
-                    kind != "video"
-                    or packet.payload_type not in current_video_payload_types
-                ):
+                if kind != "video" or packet.payload_type not in current_video_payload_types:
                     continue
                 route_profile.mark_media(packet, absorb=False)
                 for nal_unit in depacketizer.push(packet):
@@ -1843,16 +1817,16 @@ def _copy_cloud_rtp_packets_to_mpegts(  # noqa: PLR0912, PLR0915
                         annexb = ANNEX_B_START_CODE + nal_unit
                         transformed = transform(annexb, codec) if transform else annexb
                         if timed_muxer is not None:
-                            for framed in timed_muxer.video(packet.timestamp, transformed[len(ANNEX_B_START_CODE):]):
+                            for framed in timed_muxer.video(
+                                packet.timestamp, transformed[len(ANNEX_B_START_CODE) :]
+                            ):
                                 stdin.write(framed)
                         else:
                             stdin.write(transformed)
                         stdin.flush()
                         nal_count += 1
             if nal_count == 0:
-                raise PyEzvizError(
-                    "RTP cloud stream did not contain a complete video NAL unit"
-                )
+                raise PyEzvizError("RTP cloud stream did not contain a complete video NAL unit")
         finally:
             if audio_input is not None and audio_enabled:
                 audio_input.close_input()
@@ -1920,8 +1894,11 @@ def _remux_cloud_elementary_av_bytes_to_mpegts(
         audio_path, audio_format = write_aac_remux_input(audio, Path(directory))
         if audio_format == "concat":
             process = open_mpegts_remux_process(
-                ffmpeg_path, input_format=codec, audio_path=str(audio_path),
-                audio_input_format=audio_format, popen=subprocess.Popen,
+                ffmpeg_path,
+                input_format=codec,
+                audio_path=str(audio_path),
+                audio_input_format=audio_format,
+                popen=subprocess.Popen,
             )
             remux_bytes(process, video, output)
             return
@@ -2081,10 +2058,22 @@ def _derive_auth_addr(token: Any) -> str:
     raise PyEzvizError("Missing authAddr in service URLs")
 
 
-def _cloud_request_budget_options(deadline: float | None, monotonic: Callable[[], float]) -> dict[str, Any]:
+def _cloud_request_budget_options(
+    deadline: float | None, monotonic: Callable[[], float]
+) -> dict[str, Any]:
     return {} if deadline is None else {"capture_deadline": deadline, "monotonic": monotonic}
 
 
-def _bounded_cloud_media_key(client: Any, serial: str, smscode: str | int | None, deadline: float | None, monotonic: Callable[[], float]) -> Any:
+def _bounded_cloud_media_key(
+    client: Any,
+    serial: str,
+    smscode: str | int | None,
+    deadline: float | None,
+    monotonic: Callable[[], float],
+) -> Any:
     with request_deadline(deadline, monotonic):
-        return client.get_cam_key(serial) if smscode is None else client.get_cam_key(serial, smscode=smscode)
+        return (
+            client.get_cam_key(serial)
+            if smscode is None
+            else client.get_cam_key(serial, smscode=smscode)
+        )

@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi.streaming.local import protocol as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.local.protocol as _compat_module_0
+
     _LEGACY_PS_EVIDENCE_PACKETS = _compat_module_0._LEGACY_PS_EVIDENCE_PACKETS
     MPEG_START_CODE_PREFIX = _compat_module_0.MPEG_START_CODE_PREFIX
     LocalSdkProtocolDetector = _compat_module_0.LocalSdkProtocolDetector

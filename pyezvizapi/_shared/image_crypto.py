@@ -57,10 +57,7 @@ def decrypt_image(input_data: bytes, password: str) -> bytes:
     return b"".join(decrypted_parts)
 
 
-
-def _split_encrypted_blocks(
-    data: bytes, header_len: int, min_length: int
-) -> list[bytes]:
+def _split_encrypted_blocks(data: bytes, header_len: int, min_length: int) -> list[bytes]:
     """Split concatenated hikencodepicture segments into individual blocks."""
     blocks: list[bytes] = []
     cursor = 0
@@ -86,10 +83,7 @@ def _split_encrypted_blocks(
     return blocks
 
 
-
-def _decrypt_single_block(
-    block: bytes, password: str, header_len: int, hash_end: int
-) -> bytes:
+def _decrypt_single_block(block: bytes, password: str, header_len: int, hash_end: int) -> bytes:
     """Decrypt a single hikencodepicture block."""
     file_hash = block[header_len:hash_end]
     passwd_hash = md5(str.encode(md5(str.encode(password)).hexdigest())).hexdigest()
@@ -102,9 +96,7 @@ def _decrypt_single_block(
 
     remainder = len(ciphertext) % AES.block_size
     if remainder:
-        _LOGGER.debug(
-            "Ciphertext not aligned to 16 bytes; trimming %s trailing bytes", remainder
-        )
+        _LOGGER.debug("Ciphertext not aligned to 16 bytes; trimming %s trailing bytes", remainder)
         ciphertext = ciphertext[:-remainder]
     if not ciphertext:
         raise PyEzvizError("Ciphertext too short after alignment adjustment")
@@ -120,13 +112,15 @@ def _decrypt_single_block(
         block_chunk = cipher.decrypt(ciphertext[start : start + chunk_size])
         if start + chunk_size >= len(ciphertext):
             padding_length = block_chunk[-1]
-            if not 1 <= padding_length <= AES.block_size or block_chunk[-padding_length:] != bytes([padding_length]) * padding_length:
+            if (
+                not 1 <= padding_length <= AES.block_size
+                or block_chunk[-padding_length:] != bytes([padding_length]) * padding_length
+            ):
                 raise PyEzvizError("Invalid image padding")
             block_chunk = block_chunk[:-padding_length]
         output_data.extend(block_chunk)
 
     return bytes(output_data)
-
 
 
 def return_password_hash(password: str) -> str:

@@ -142,9 +142,7 @@ class EzvizCamera:
         """
         if prefetched:
             self._last_alarm = self._normalize_unified_message(prefetched)
-            _LOGGER.debug(
-                "Using prefetched alarm for %s: %s", self._serial, self._last_alarm
-            )
+            _LOGGER.debug("Using prefetched alarm for %s: %s", self._serial, self._last_alarm)
             self._motion_trigger()
             return
 
@@ -161,8 +159,7 @@ class EzvizCamera:
             (
                 msg
                 for msg in messages
-                if isinstance(msg, dict)
-                and msg.get("deviceSerial") == self._serial
+                if isinstance(msg, dict) and msg.get("deviceSerial") == self._serial
             ),
             None,
         )
@@ -191,9 +188,7 @@ class EzvizCamera:
         if isinstance(resource_infos, list):
             info = next((item for item in resource_infos if isinstance(item, dict)), None)
         elif isinstance(resource_infos, dict):
-            info = next(
-                (item for item in resource_infos.values() if isinstance(item, dict)), None
-            )
+            info = next((item for item in resource_infos.values() if isinstance(item, dict)), None)
 
         resource_id = "Video"
         local_index: str = "1"
@@ -233,9 +228,7 @@ class EzvizCamera:
             self._client.get_device_chime_info(self._serial, channel_no)
         )
 
-    def set_device_chime_info(
-        self, sound_type: int, duration: int, channel_no: int = 1
-    ) -> bool:
+    def set_device_chime_info(self, sound_type: int, duration: int, channel_no: int = 1) -> bool:
         """Set the doorbell chime type/duration configuration."""
         self._client.set_device_chime_info(
             self._serial,
@@ -251,9 +244,7 @@ class EzvizCamera:
         Prefer numeric epoch fields if available to avoid parsing localized strings.
         """
         tzinfo = self._get_tzinfo()
-        active, seconds_out, last_alarm_str = compute_motion_from_alarm(
-            self._last_alarm, tzinfo
-        )
+        active, seconds_out, last_alarm_str = compute_motion_from_alarm(self._last_alarm, tzinfo)
 
         self._alarmmotiontrigger = {
             "alarm_trigger_active": active,
@@ -270,9 +261,7 @@ class EzvizCamera:
         pics_field = ext.get("pics")
         multi_pic = None
         if isinstance(pics_field, str) and pics_field:
-            multi_pic = next(
-                (part for part in pics_field.split(";") if part), None
-            )
+            multi_pic = next((part for part in pics_field.split(";") if part), None)
 
         def _first_valid(*candidates: Any) -> str:
             for candidate in candidates:
@@ -287,10 +276,7 @@ class EzvizCamera:
         )
 
         alarm_name = (
-            message.get("title")
-            or message.get("detail")
-            or message.get("sampleName")
-            or "NoAlarm"
+            message.get("title") or message.get("detail") or message.get("sampleName") or "NoAlarm"
         )
         alarm_type = ext.get("alarmType") or message.get("subType") or "0000"
 
@@ -332,11 +318,7 @@ class EzvizCamera:
         """Check if alarm schedules enabled."""
         plans = self.fetch_key(["TIME_PLAN"], []) or []
         sched = next(
-            (
-                item
-                for item in plans
-                if isinstance(item, dict) and item.get("type") == 2
-            ),
+            (item for item in plans if isinstance(item, dict) and item.get("type") == 2),
             None,
         )
         return bool(sched and sched.get("enable"))
@@ -361,20 +343,12 @@ class EzvizCamera:
         if refresh:
             self._alarm_list(prefetched=latest_alarm)
 
-        name = (
-            self._record.name
-            if self._record
-            else self.fetch_key(["deviceInfos", "name"])
-        )
+        name = self._record.name if self._record else self.fetch_key(["deviceInfos", "name"])
         version = (
-            self._record.version
-            if self._record
-            else self.fetch_key(["deviceInfos", "version"])
+            self._record.version if self._record else self.fetch_key(["deviceInfos", "version"])
         )
         dev_status = (
-            self._record.status
-            if self._record
-            else self.fetch_key(["deviceInfos", "status"])
+            self._record.status if self._record else self.fetch_key(["deviceInfos", "status"])
         )
         device_category = (
             self._record.device_category
@@ -386,31 +360,23 @@ class EzvizCamera:
             if self._record
             else self.fetch_key(["deviceInfos", "deviceSubCategory"])
         )
-        conn = (
-            self._record.connection if self._record else self._device.get("CONNECTION")
-        ) or {}
+        conn = (self._record.connection if self._record else self._device.get("CONNECTION")) or {}
         wan_ip = conn.get("netIp") or self.fetch_key(["CONNECTION", "netIp"])
 
         data: dict[str, Any] = {
             "serial": self._serial,
             "name": name,
             "version": version,
-            "upgrade_available": bool(
-                self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3
-            ),
+            "upgrade_available": bool(self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3),
             "status": dev_status,
             "device_category": device_category,
             "device_sub_category": device_sub_category,
             "upgrade_percent": self.fetch_key(["STATUS", "upgradeProcess"]),
-            "upgrade_in_progress": bool(
-                self.fetch_key(["STATUS", "upgradeStatus"]) == 0
-            ),
+            "upgrade_in_progress": bool(self.fetch_key(["STATUS", "upgradeStatus"]) == 0),
             "latest_firmware_info": self.fetch_key(["UPGRADE", "upgradePackageInfo"]),
             "alarm_notify": bool(self.fetch_key(["STATUS", "globalStatus"])),
             "alarm_schedules_enabled": self._is_alarm_schedules_enabled(),
-            "alarm_sound_mod": SoundMode(
-                self.fetch_key(["STATUS", "alarmSoundMode"], -1)
-            ).name,
+            "alarm_sound_mod": SoundMode(self.fetch_key(["STATUS", "alarmSoundMode"], -1)).name,
             "encrypted": bool(self.fetch_key(["STATUS", "isEncrypt"])),
             "encrypted_pwd_hash": self.fetch_key(["STATUS", "encryptPwd"]),
             "local_ip": self._local_ip(),
@@ -418,9 +384,7 @@ class EzvizCamera:
             "supportExt": (
                 self._record.support_ext
                 if self._record
-                else self.fetch_key(
-                    ["deviceInfos", "supportExt"]
-                )  # convenience top-level
+                else self.fetch_key(["deviceInfos", "supportExt"])  # convenience top-level
             ),
             # Backwards-compatibility aliases
             "optionals": self.fetch_key(["STATUS", "optionals"]),
@@ -451,21 +415,15 @@ class EzvizCamera:
             "last_alarm_type_name": self._last_alarm.get("sampleName", "NoAlarm"),
             "cam_timezone": self.fetch_key(["STATUS", "optionals", "timeZone"]),
             "push_notify_alarm": not bool(self.fetch_key(["NODISTURB", "alarmEnable"])),
-            "push_notify_call": not bool(
-                self.fetch_key(["NODISTURB", "callingEnable"])
-            ),
+            "push_notify_call": not bool(self.fetch_key(["NODISTURB", "callingEnable"])),
             "alarm_light_luminance": self.fetch_key(
                 ["STATUS", "optionals", "Alarm_Light", "luminance"]
             ),
             "Alarm_DetectHumanCar": self.fetch_key(
                 ["STATUS", "optionals", "Alarm_DetectHumanCar", "type"]
             ),
-            "diskCapacity": string_to_list(
-                self.fetch_key(["STATUS", "optionals", "diskCapacity"])
-            ),
-            "NightVision_Model": self.fetch_key(
-                ["STATUS", "optionals", "NightVision_Model"]
-            ),
+            "diskCapacity": string_to_list(self.fetch_key(["STATUS", "optionals", "diskCapacity"])),
+            "NightVision_Model": self.fetch_key(["STATUS", "optionals", "NightVision_Model"]),
             "battery_camera_work_mode": self.fetch_key(
                 ["STATUS", "optionals", "batteryCameraWorkMode"], -1
             ),
@@ -488,9 +446,7 @@ class EzvizCamera:
     # essential_status() was removed in favor of including all top-level
     # pagelist keys directly in status().
 
-    def move(
-        self, direction: Literal["right", "left", "down", "up"], speed: int = 5
-    ) -> bool:
+    def move(self, direction: Literal["right", "left", "down", "up"], speed: int = 5) -> bool:
         """Move camera in a given direction.
 
         direction: one of "right", "left", "down", "up".
@@ -526,9 +482,7 @@ class EzvizCamera:
             InvalidURL: If the API endpoint/connection is invalid.
             HTTPError: If the API returns a non-success HTTP status.
         """
-        _LOGGER.debug(
-            "PTZ move to coordinates x=%s y=%s for %s", x_axis, y_axis, self._serial
-        )
+        _LOGGER.debug("PTZ move to coordinates x=%s y=%s for %s", x_axis, y_axis, self._serial)
         return self._client.ptz_control_coordinates(self._serial, x_axis, y_axis)
 
     def door_unlock(self) -> bool:
@@ -641,9 +595,7 @@ class EzvizCamera:
         _LOGGER.debug("Set do_not_disturb=%s for %s", enable, self._serial)
         return self._client.do_not_disturb(self._serial, int(enable))
 
-    def alarm_detection_sensitivity(
-        self, sensitivity: int, type_value: int = 0
-    ) -> bool:
+    def alarm_detection_sensitivity(self, sensitivity: int, type_value: int = 0) -> bool:
         """Set motion detection sensitivity.
 
         sensitivity: device-specific integer scale.
@@ -660,14 +612,10 @@ class EzvizCamera:
             type_value,
             self._serial,
         )
-        return bool(
-            self._client.detection_sensibility(self._serial, sensitivity, type_value)
-        )
+        return bool(self._client.detection_sensibility(self._serial, sensitivity, type_value))
 
     # Backwards-compatible alias (deprecated)
-    def alarm_detection_sensibility(
-        self, sensibility: int, type_value: int = 0
-    ) -> bool:
+    def alarm_detection_sensibility(self, sensibility: int, type_value: int = 0) -> bool:
         """Deprecated: use alarm_detection_sensitivity()."""
         return self.alarm_detection_sensitivity(sensibility, type_value)
 
@@ -731,9 +679,7 @@ class EzvizCamera:
         """
         return self.set_switch(DeviceSwitchType.MOBILE_TRACKING, enable)
 
-    def switch_chime_indicator_light(
-        self, enable: bool = False, channel_no: int = 1
-    ) -> bool:
+    def switch_chime_indicator_light(self, enable: bool = False, channel_no: int = 1) -> bool:
         """Switch the HP7/doorbell chime indicator light."""
         return self._client.switch_status(
             self._serial,
@@ -771,7 +717,5 @@ class EzvizCamera:
         Raises:
             PyEzvizError, InvalidURL, HTTPError
         """
-        _LOGGER.debug(
-            "Set battery camera work mode=%s for %s", work_mode.name, self._serial
-        )
+        _LOGGER.debug("Set battery camera work mode=%s for %s", work_mode.name, self._serial)
         return self._client.set_battery_camera_work_mode(self._serial, work_mode.value)

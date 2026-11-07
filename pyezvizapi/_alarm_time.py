@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from pyezvizapi._shared import alarm_time as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi._shared.alarm_time as _compat_module_0
+
     MILLISECONDS_THRESHOLD = _compat_module_0.MILLISECONDS_THRESHOLD
     Any = _compat_module_0.Any
     ZoneInfo = _compat_module_0.ZoneInfo

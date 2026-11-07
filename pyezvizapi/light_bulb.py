@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.devices import light_bulb as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.devices.light_bulb as _compat_module_0
+
     Any = _compat_module_0.Any
     DeviceSwitchType = _compat_module_0.DeviceSwitchType
     EzvizDeviceRecord = _compat_module_0.EzvizDeviceRecord

@@ -8,6 +8,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,10 +16,13 @@ from pyezvizapi.streaming.local import packets as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.local.packets as _compat_module_0
+
     ANNEX_B_LONG_START_CODE = _compat_module_0.ANNEX_B_LONG_START_CODE
     H264_FU_A_NAL_TYPE = _compat_module_0.H264_FU_A_NAL_TYPE
     HEVC_NAL_HEADER_SIZE = _compat_module_0.HEVC_NAL_HEADER_SIZE
-    IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = _compat_module_0.IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX
+    IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX = (
+        _compat_module_0.IDMX_COMMAND_H264_RECORD_TRAILER_PREFIX
+    )
     IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET = _compat_module_0.IDMX_HEVC_MEDIA_FRAME_NAL_OFFSET
     IDMX_LOCAL_FRAME_SENTINEL = _compat_module_0.IDMX_LOCAL_FRAME_SENTINEL
     IDMX_LOCAL_FRAME_SENTINEL_OFFSETS = _compat_module_0.IDMX_LOCAL_FRAME_SENTINEL_OFFSETS
@@ -59,7 +63,9 @@ if TYPE_CHECKING:
     _rtp_packet_matches_codec_epoch = _compat_module_0._rtp_packet_matches_codec_epoch
     _rtp_packet_route_descriptor = _compat_module_0._rtp_packet_route_descriptor
     _RtpFragmentedNal = _compat_module_0._RtpFragmentedNal
-    _strip_idmx_command_h264_record_trailer = _compat_module_0._strip_idmx_command_h264_record_trailer
+    _strip_idmx_command_h264_record_trailer = (
+        _compat_module_0._strip_idmx_command_h264_record_trailer
+    )
     _strip_legacy_idmx_video_wrapper = _compat_module_0._strip_legacy_idmx_video_wrapper
     annotations = _compat_module_0.annotations
     dataclass = _compat_module_0.dataclass

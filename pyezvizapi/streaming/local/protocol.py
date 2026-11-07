@@ -52,5 +52,3 @@ class LocalSdkProtocolDetector:
             self._route = route
             self._records.clear()
         self._records.add((packet.sequence, packet.timestamp))
-
-

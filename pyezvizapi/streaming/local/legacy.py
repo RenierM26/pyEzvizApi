@@ -87,6 +87,7 @@ if TYPE_CHECKING:
         open_local_sdk_stream,
         open_local_sdk_stream_from_client,
     )
+
     def _declare_compatibility_exports(*exports: object) -> None:
         """Make compatibility re-exports visible to static analyzers."""
 

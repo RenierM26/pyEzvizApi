@@ -20,7 +20,6 @@ def coerce_int(value: Any) -> int | None:
         return None
 
 
-
 def decode_json(value: Any) -> Any:
     """Decode strings (invalid JSON becomes None); leave non-strings unchanged."""
 
@@ -30,7 +29,6 @@ def decode_json(value: Any) -> Any:
         except (TypeError, ValueError):
             return None
     return value
-
 
 
 def convert_to_dict(data: Any) -> Any:
@@ -47,7 +45,6 @@ def convert_to_dict(data: Any) -> Any:
             continue
 
     return data
-
 
 
 def string_to_list(data: Any, separator: str = ",") -> Any:

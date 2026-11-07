@@ -7,6 +7,7 @@
 New development belongs in the domain package; legacy module identity and
 patch hooks are preserved. This module contains no implementation.
 """
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pyezvizapi.streaming.cloud import bootstrap as _implementation
 
 if TYPE_CHECKING:
     import pyezvizapi.streaming.cloud.bootstrap as _compat_module_0
+
     _MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS = _compat_module_0._MAX_CLOUD_VIDEO_TIMESTAMP_GAP_SECONDS
     _RTP_AUDIO_PROBE_MAX_PACKETS = _compat_module_0._RTP_AUDIO_PROBE_MAX_PACKETS
     _RTP_AUDIO_QUEUE_MAX_FRAMES = _compat_module_0._RTP_AUDIO_QUEUE_MAX_FRAMES
@@ -77,15 +79,21 @@ if TYPE_CHECKING:
     _is_valid_mpegts_body = _compat_module_0._is_valid_mpegts_body
     _iter_bounded_cloud_packets = _compat_module_0._iter_bounded_cloud_packets
     _missing_auth_addr = _compat_module_0._missing_auth_addr
-    _open_cloud_elementary_mpegts_remux_process = _compat_module_0._open_cloud_elementary_mpegts_remux_process
+    _open_cloud_elementary_mpegts_remux_process = (
+        _compat_module_0._open_cloud_elementary_mpegts_remux_process
+    )
     _open_cloud_mpegts_remux_process = _compat_module_0._open_cloud_mpegts_remux_process
     _parse_cloud_rtp_packet = _compat_module_0._parse_cloud_rtp_packet
     _peek_cloud_transport = _compat_module_0._peek_cloud_transport
     _probe_cloud_video_duration = _compat_module_0._probe_cloud_video_duration
     _probe_cloud_video_frame_span = _compat_module_0._probe_cloud_video_frame_span
     _remaining_cloud_capture_duration = _compat_module_0._remaining_cloud_capture_duration
-    _remux_cloud_elementary_av_bytes_to_mpegts = _compat_module_0._remux_cloud_elementary_av_bytes_to_mpegts
-    _remux_cloud_elementary_bytes_to_mpegts = _compat_module_0._remux_cloud_elementary_bytes_to_mpegts
+    _remux_cloud_elementary_av_bytes_to_mpegts = (
+        _compat_module_0._remux_cloud_elementary_av_bytes_to_mpegts
+    )
+    _remux_cloud_elementary_bytes_to_mpegts = (
+        _compat_module_0._remux_cloud_elementary_bytes_to_mpegts
+    )
     _remux_cloud_mpegps_bytes_to_mpegts = _compat_module_0._remux_cloud_mpegps_bytes_to_mpegts
     _require_bounded_cloud_decrypt_capture = _compat_module_0._require_bounded_cloud_decrypt_capture
     _require_clear_cloud_packet = _compat_module_0._require_clear_cloud_packet
@@ -107,7 +115,9 @@ if TYPE_CHECKING:
     copy_cloud_stream_packets_to_mpegts = _compat_module_0.copy_cloud_stream_packets_to_mpegts
     copy_cloud_stream_to_mpegps = _compat_module_0.copy_cloud_stream_to_mpegps
     copy_cloud_stream_to_mpegts = _compat_module_0.copy_cloud_stream_to_mpegts
-    copy_decrypted_cloud_stream_packets_to_mpegts = _compat_module_0.copy_decrypted_cloud_stream_packets_to_mpegts
+    copy_decrypted_cloud_stream_packets_to_mpegts = (
+        _compat_module_0.copy_decrypted_cloud_stream_packets_to_mpegts
+    )
     copy_remuxed_output = _compat_module_0.copy_remuxed_output
     csv = _compat_module_0.csv
     dataclass = _compat_module_0.dataclass

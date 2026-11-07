@@ -43,10 +43,20 @@ def _program_stream_map(codec: RtpVideoCodec, *, audio: bool) -> bytes:
 def _pack_header(timestamp: int) -> bytes:
     timestamp &= 0x1FFFFFFFF
     fields = (
-        (2, 1), (3, timestamp >> 30), (1, 1),
-        (15, (timestamp >> 15) & 0x7FFF), (1, 1),
-        (15, timestamp & 0x7FFF), (1, 1), (9, 0), (1, 1),
-        (22, 0x3FFFFF), (1, 1), (1, 1), (5, 31), (3, 0),
+        (2, 1),
+        (3, timestamp >> 30),
+        (1, 1),
+        (15, (timestamp >> 15) & 0x7FFF),
+        (1, 1),
+        (15, timestamp & 0x7FFF),
+        (1, 1),
+        (9, 0),
+        (1, 1),
+        (22, 0x3FFFFF),
+        (1, 1),
+        (1, 1),
+        (5, 31),
+        (3, 0),
     )
     value = 0
     for width, part in fields:
@@ -56,22 +66,36 @@ def _pack_header(timestamp: int) -> bytes:
 
 def _pes(timestamp: int, stream_id: int, payload: bytes) -> bytes:
     timestamp &= 0x1FFFFFFFF
-    pts = bytes((
-        0x21 | ((timestamp >> 29) & 14), (timestamp >> 22) & 255,
-        ((timestamp >> 14) & 254) | 1, (timestamp >> 7) & 255,
-        ((timestamp << 1) & 254) | 1,
-    ))
-    return (b"\x00\x00\x01" + bytes((stream_id,))
-            + (len(payload) + 8).to_bytes(2, "big") + b"\x80\x80\x05" + pts + payload)
+    pts = bytes(
+        (
+            0x21 | ((timestamp >> 29) & 14),
+            (timestamp >> 22) & 255,
+            ((timestamp >> 14) & 254) | 1,
+            (timestamp >> 7) & 255,
+            ((timestamp << 1) & 254) | 1,
+        )
+    )
+    return (
+        b"\x00\x00\x01"
+        + bytes((stream_id,))
+        + (len(payload) + 8).to_bytes(2, "big")
+        + b"\x80\x80\x05"
+        + pts
+        + payload
+    )
 
 
 def _video_events(
-    nal_units: Iterable[bytes], timestamps: Iterable[int], codec: RtpVideoCodec,
+    nal_units: Iterable[bytes],
+    timestamps: Iterable[int],
+    codec: RtpVideoCodec,
 ) -> Iterator[tuple[int, int, bytes]]:
     pending: list[bytes] = []
     previous_raw: int | None = None
     elapsed = 0
-    for timestamp, entries in groupby(zip(timestamps, nal_units, strict=True), key=lambda pair: pair[0]):
+    for timestamp, entries in groupby(
+        zip(timestamps, nal_units, strict=True), key=lambda pair: pair[0]
+    ):
         units = [unit for _timestamp, unit in entries]
         pending.extend(units)
         if not rtp_nal_units_have_vcl(units, codec=codec):
@@ -80,7 +104,8 @@ def _video_events(
         if previous_raw is not None and (delta == 0 or delta >= 0x80000000):
             raise EzvizUnsupportedMediaError(
                 "Native RTP video timestamps are nonmonotonic; use another stream source",
-                source="rtp", reason="unsupported_video_timing",
+                source="rtp",
+                reason="unsupported_video_timing",
             )
         previous_raw = timestamp
         elapsed += delta
@@ -95,13 +120,17 @@ def _audio_events(audio: RtpAacStream | None) -> Iterator[tuple[int, int, bytes]
         sample_offset = start_sample
         offset = 0
         while offset < len(data):
-            if offset + 7 > len(data) or data[offset:offset + 2] != _ADTS_HEADER_PREFIX:
+            if offset + 7 > len(data) or data[offset : offset + 2] != _ADTS_HEADER_PREFIX:
                 raise PyEzvizError("Invalid staged ADTS header")
-            length = ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
+            length = (
+                ((data[offset + 3] & 3) << 11) | (data[offset + 4] << 3) | (data[offset + 5] >> 5)
+            )
             if length < 7 or offset + length > len(data):
                 raise PyEzvizError("Invalid staged ADTS frame length")
-            timestamp = (sample_offset * _RTP_VIDEO_CLOCK + audio.sample_rate // 2) // audio.sample_rate
-            yield timestamp, 0xC0, data[offset:offset + length]
+            timestamp = (
+                sample_offset * _RTP_VIDEO_CLOCK + audio.sample_rate // 2
+            ) // audio.sample_rate
+            yield timestamp, 0xC0, data[offset : offset + length]
             offset += length
             sample_offset += 1024
 
@@ -111,7 +140,9 @@ def _shared_clock_error(message: str) -> EzvizUnsupportedMediaError:
 
 
 def shared_rtp_clock_offsets(
-    video_timestamp: int, audio_timestamp: int, sample_rate: int,
+    video_timestamp: int,
+    audio_timestamp: int,
+    sample_rate: int,
 ) -> tuple[int, int]:
     """Return nonnegative 90kHz offsets for explicitly shared native clocks.
 
@@ -124,12 +155,16 @@ def shared_rtp_clock_offsets(
     """
     if not isinstance(sample_rate, int) or isinstance(sample_rate, bool) or sample_rate != 16000:
         raise _shared_clock_error("Shared native clocks currently require 16kHz AAC")
-    if not all(isinstance(stamp, int) and not isinstance(stamp, bool)
-               and 0 <= stamp < 2**32 for stamp in (video_timestamp, audio_timestamp)):
+    if not all(
+        isinstance(stamp, int) and not isinstance(stamp, bool) and 0 <= stamp < 2**32
+        for stamp in (video_timestamp, audio_timestamp)
+    ):
         raise _shared_clock_error("Shared native clocks require unsigned 32-bit RTP timestamps")
     difference = ((45 * audio_timestamp - 8 * video_timestamp + 2**31) % 2**32) - 2**31
     if abs(difference) > 720000:
-        raise _shared_clock_error("Native RTP origins are incompatible with a shared clock (over one second apart)")
+        raise _shared_clock_error(
+            "Native RTP origins are incompatible with a shared clock (over one second apart)"
+        )
     return (max(-difference, 0) + 4) // 8, (max(difference, 0) + 4) // 8
 
 
@@ -146,7 +181,9 @@ class NativeRtpClockProbe:
     shared_epoch_verified: bool = field(default=False, init=False)
 
 
-def probe_native_rtp_clock(video_origin: int | None, audio: RtpAacStream | None) -> NativeRtpClockProbe:
+def probe_native_rtp_clock(
+    video_origin: int | None, audio: RtpAacStream | None
+) -> NativeRtpClockProbe:
     """Inspect already parsed native clocks without contacting a camera.
 
     Nearby counters, capability 915 and audio availability do NOT establish a
@@ -174,8 +211,11 @@ def probe_native_rtp_clock(video_origin: int | None, audio: RtpAacStream | None)
 
 
 def timed_rtp_mpegps_payloads(
-    nal_units: Iterable[bytes], timestamps: Iterable[int], *,
-    codec: RtpVideoCodec, audio: RtpAacStream | None = None,
+    nal_units: Iterable[bytes],
+    timestamps: Iterable[int],
+    *,
+    codec: RtpVideoCodec,
+    audio: RtpAacStream | None = None,
     shared_clock: bool = False,
 ) -> Iterator[bytes]:
     """Preserve relative native clocks, with each track's first received AU at zero.
@@ -189,7 +229,12 @@ def timed_rtp_mpegps_payloads(
 
     video_offset = audio_offset = 0
     if shared_clock:
-        if audio is None or audio.origin_timestamp is None or not audio.adts or audio.frame_count <= 0:
+        if (
+            audio is None
+            or audio.origin_timestamp is None
+            or not audio.adts
+            or audio.frame_count <= 0
+        ):
             raise _shared_clock_error("Shared native clocks require source-timestamped AAC")
         pairs = iter(zip(timestamps, nal_units, strict=True))
         prefix: list[tuple[int, bytes]] = []
@@ -206,18 +251,28 @@ def timed_rtp_mpegps_payloads(
                 video_offset, audio_offset = probe.candidate_offsets_90khz
                 break
         else:
-            raise _shared_clock_error("Shared native clocks require a source-timestamped video picture")
+            raise _shared_clock_error(
+                "Shared native clocks require a source-timestamped video picture"
+            )
         left, right = tee(chain(prefix, pairs))
         timestamps = (stamp for stamp, _unit in left)
         nal_units = (unit for _stamp, unit in right)
     stream_map = _program_stream_map(codec, audio=audio is not None)
-    video = ((stamp + video_offset, stream, body) for stamp, stream, body in _video_events(nal_units, timestamps, codec))
-    audio_events = ((stamp + audio_offset, stream, body) for stamp, stream, body in _audio_events(audio))
+    video = (
+        (stamp + video_offset, stream, body)
+        for stamp, stream, body in _video_events(nal_units, timestamps, codec)
+    )
+    audio_events = (
+        (stamp + audio_offset, stream, body) for stamp, stream, body in _audio_events(audio)
+    )
     events = merge(video, audio_events, key=lambda item: item[0])
     for timestamp, stream_id, payload in events:
         for offset in range(0, len(payload), _PES_CHUNK_BYTES):
-            yield (_pack_header(timestamp) + stream_map
-                   + _pes(timestamp, stream_id, payload[offset:offset + _PES_CHUNK_BYTES]))
+            yield (
+                _pack_header(timestamp)
+                + stream_map
+                + _pes(timestamp, stream_id, payload[offset : offset + _PES_CHUNK_BYTES])
+            )
 
 
 class NativeRtpPsMuxer:
@@ -226,7 +281,9 @@ class NativeRtpPsMuxer:
     Track origins are independently zero; no absolute RTCP alignment is inferred.
     """
 
-    def __init__(self, codec: RtpVideoCodec, *, audio: bool, allow_audio_clock_jitter: bool = False) -> None:
+    def __init__(
+        self, codec: RtpVideoCodec, *, audio: bool, allow_audio_clock_jitter: bool = False
+    ) -> None:
         self.codec: RtpVideoCodec = codec
         self._map = _program_stream_map(codec, audio=audio)
         self._allow_audio_clock_jitter = allow_audio_clock_jitter
@@ -241,18 +298,23 @@ class NativeRtpPsMuxer:
     def _frame(self, timestamp: int, stream_id: int, payload: bytes) -> Iterator[bytes]:
         self._scr = max(self._scr, timestamp)
         for offset in range(0, len(payload), _PES_CHUNK_BYTES):
-            yield (_pack_header(self._scr) + self._map
-                   + _pes(timestamp, stream_id, payload[offset:offset + _PES_CHUNK_BYTES]))
+            yield (
+                _pack_header(self._scr)
+                + self._map
+                + _pes(timestamp, stream_id, payload[offset : offset + _PES_CHUNK_BYTES])
+            )
 
     def video(self, timestamp: int, nal_unit: bytes) -> Iterator[bytes]:
         """Frame completed NALs, holding only bounded initial parameter data."""
 
-        if (rtp_nal_units_have_vcl((nal_unit,), codec=self.codec)
-                and _rtp_nal_starts_picture(nal_unit, codec=self.codec)):
+        if rtp_nal_units_have_vcl((nal_unit,), codec=self.codec) and _rtp_nal_starts_picture(
+            nal_unit, codec=self.codec
+        ):
             if timestamp == self._video_picture_raw:
                 raise EzvizUnsupportedMediaError(
                     "Native RTP video timestamps repeat for a new picture",
-                    source="rtp", reason="unsupported_video_timing",
+                    source="rtp",
+                    reason="unsupported_video_timing",
                 )
             self._video_picture_raw = timestamp
         if self._video_raw is None:
@@ -276,10 +338,16 @@ class NativeRtpPsMuxer:
         """Preserve forward whole-AU gaps without generating silence."""
 
         delta = (timestamp - self._audio_raw) & 0xFFFFFFFF if self._audio_raw is not None else 0
-        if self._audio_raw is not None and (not _aac_timestamp_delta_is_supported(delta, audio.sample_rate, self._allow_audio_clock_jitter)):
+        if self._audio_raw is not None and (
+            not _aac_timestamp_delta_is_supported(
+                delta, audio.sample_rate, self._allow_audio_clock_jitter
+            )
+        ):
             raise PyEzvizError("Native RTP AAC clock reset or invalid access-unit spacing")
         self._audio_raw = timestamp
         self._audio_elapsed += delta
         for offset, stream_id, payload in _audio_events(audio):
-            clock = (self._audio_elapsed * _RTP_VIDEO_CLOCK + audio.sample_rate // 2) // audio.sample_rate + offset
+            clock = (
+                self._audio_elapsed * _RTP_VIDEO_CLOCK + audio.sample_rate // 2
+            ) // audio.sample_rate + offset
             yield from self._frame(clock, stream_id, payload)

@@ -1,4 +1,5 @@
 """Context-local HTTP bootstrap budgets, without mutating client settings."""
+
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -7,7 +8,9 @@ from typing import Any
 
 from urllib3.util import Timeout
 
-_BUDGET: ContextVar[tuple[float, Callable[[], float]] | None] = ContextVar("ezviz_request_budget", default=None)
+_BUDGET: ContextVar[tuple[float, Callable[[], float]] | None] = ContextVar(
+    "ezviz_request_budget", default=None
+)
 
 
 def remaining_request_budget() -> float | None:
@@ -22,7 +25,9 @@ def remaining_request_budget() -> float | None:
 
 
 @contextmanager
-def request_deadline(deadline: float | None, monotonic: Callable[[], float] = time.monotonic) -> Iterator[None]:
+def request_deadline(
+    deadline: float | None, monotonic: Callable[[], float] = time.monotonic
+) -> Iterator[None]:
     """Apply a budget to nested HTTP calls and authentication retries."""
     if deadline is None:
         yield

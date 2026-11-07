@@ -64,9 +64,12 @@ Generate a Retrofit endpoint inventory from JADX output:
 ```bash
 ./tools/apk-re/apk-re-shell extract-retrofit-endpoints \
   discovery/apk/out/ezviz-current/jadx/sources \
-  --known-api pyezvizapi/api_endpoints.py \
+  --known-api pyezvizapi/cloud/endpoints.py \
   --output discovery/apk/out/ezviz-current/reports/retrofit-endpoints.md
 ```
+
+The historical `--known-api pyezvizapi/api_endpoints.py` entry is also supported.
+Endpoint discovery walks nested implementation packages without executing them.
 
 Inspect one extracted native library:
 

@@ -194,7 +194,7 @@ class TestRTSPAuth:
                 challenge = next((value[7:] for value in headers.get("www-authenticate", []) if value.lower().startswith("digest ")), None)
                 values = parse_dict_header(challenge) if challenge is not None else {}
                 realm, nonce = values.get("realm"), values.get("nonce")
-                if not realm or not nonce:
+                if realm is None or not nonce:
                     raise AuthTestResultFailed("Invalid RTSP Digest challenge")
                 auth = self.generate_auth_string(realm.encode("latin-1"), "DESCRIBE", self._rtsp_details["defaultTestUri"], nonce.encode("latin-1"))
             raise AuthTestResultFailed("RTSP DESCRIBE did not return 200 OK")

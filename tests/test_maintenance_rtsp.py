@@ -90,3 +90,29 @@ def test_deadline_is_shared_across_fragmented_reads(monkeypatch):
 
 def test_legacy_rtsp_import_is_the_same_implementation():
     assert TestRTSPAuth is Implementation
+
+
+def test_explicitly_empty_digest_realm_authenticates(monkeypatch):
+    """An empty quoted realm is distinct from an absent realm directive."""
+    session = Socket([
+        b'RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\nWWW-Authenticate: Digest realm="", nonce="nonce-1"\r\n\r\n',
+        b'RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n',
+    ])
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: session)
+    probe = TestRTSPAuth("192.0.2.10", "user", "pass", "/h264")
+    probe.main()
+    assert session.closed and len(session.sent) == 2
+    empty_realm = b'realm=""'
+    assert empty_realm in session.sent[1]
+    expected = probe.generate_auth_string(b"", "DESCRIBE", "/h264", b"nonce-1")
+    assert f"Authorization: {expected}\r\n".encode() in session.sent[1]
+
+
+def test_missing_digest_realm_is_still_rejected(monkeypatch):
+    session = Socket([
+        b'RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\nWWW-Authenticate: Digest nonce="nonce-1"\r\n\r\n',
+    ])
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: session)
+    with pytest.raises(AuthTestResultFailed, match="challenge"):
+        TestRTSPAuth("192.0.2.10", "user", "pass", "/h264").main()
+    assert session.closed and len(session.sent) == 1

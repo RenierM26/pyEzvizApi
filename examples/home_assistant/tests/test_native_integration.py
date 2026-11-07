@@ -1,7 +1,9 @@
 """HA HTTP, camera and config-flow contracts, not mocked HA module imports."""
 import asyncio
+from base64 import b64encode
 from dataclasses import replace
 import json
+from pathlib import Path
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,7 +29,9 @@ from test_local_av_timeline import encode_three_track_ps
 from test_native_stream import Source, repeated_ps_packets
 
 from pyezvizapi.client import EzvizClient
+from pyezvizapi.exceptions import PyEzvizError
 from pyezvizapi.native_stream import NativeMpegTsStream
+from pyezvizapi.stream_selection import select_stream_source
 
 
 @pytest.fixture
@@ -246,7 +250,7 @@ async def test_real_ha_stream_worker_ingests_native_http(hass, aiohttp_client, r
         try:
             await stream.start()
             async with asyncio.timeout(15):
-                while provider.last_segment is None:
+                while provider.last_segment is None or not provider.last_segment.parts:
                     await asyncio.sleep(0.02)
             segment = provider.last_segment
             assert segment.init and segment.parts
@@ -425,3 +429,61 @@ async def test_atomic_ownership_requires_explicit_relay(data):
         load_settings(data)
     data["relay_api_port"] = 1984
     assert load_settings(data).relay_atomic_ownership
+
+def test_direct_local_credentials_accept_opaque_operation_code(data):
+    """Direct-local control uses its SDK SSL IV, not the legacy CAS IV."""
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["cas"]["operation_code"] = b64encode(b"opaque-operation-code-token!!!").decode()
+    control_key = b"0123456789abcdef"
+    document["cas"]["key"] = b64encode(control_key).decode()
+    path.write_text(json.dumps(document))
+    settings = load_settings(data)
+    assert settings.credentials.device_info.operation_code == document["cas"]["operation_code"]
+    assert settings.credentials.device_info.key_bytes == control_key
+
+
+def test_direct_local_credentials_still_reject_invalid_control_key(data):
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["cas"]["key"] = "too-short"
+    path.write_text(json.dumps(document))
+    with pytest.raises(PyEzvizError):
+        load_settings(data)
+
+
+def test_single_source_preserves_cached_protocol_capabilities(data):
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["device"] = {"deviceInfos": {"supportExt": {"1": "1"}}}
+    path.write_text(json.dumps(document))
+    settings = load_settings(data)
+    client = MagicMock(spec=EzvizClient)
+    runtime = Runtime(settings, client)
+    with patch("custom_components.ezviz_native.route.native_mpegts_stream_from_client") as opened:
+        runtime.make_owner()
+        options = opened.call_args.kwargs["source"]
+    selected = select_stream_source(client, settings.credentials.device_info.serial,
+                                    options, channel=settings.channel)
+    assert selected.kind == "local-sdk"
+    assert options.device == document["device"]
+    assert options.mode == "offline" and not options.allow_cloud_fallback
+    assert not client.mock_calls
+
+
+@pytest.mark.parametrize("metadata", [[], True, "not-an-object"])
+def test_private_settings_reject_invalid_cached_metadata(data, metadata):
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["device"] = metadata
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="Cached device metadata"):
+        load_settings(data)
+
+
+@pytest.mark.parametrize("document", [None, [], True, "not-an-object"])
+def test_private_settings_reject_non_object_document(data, document):
+    path = Path(data["credentials_path"])
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="Credential document must be an object"):
+        load_settings(data)

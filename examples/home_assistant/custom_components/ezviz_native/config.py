@@ -39,6 +39,7 @@ class Settings:
     credential_revision: str | None = None
     relay_native_opus: bool = False
     relay_hls_fallback: bool = False
+    device_metadata: dict[str, Any] | None = None
 
 
 def integer(value: Any, low: int, high: int) -> int:
@@ -65,14 +66,20 @@ def load_settings(data: dict[str, Any]) -> Settings:
     if not 0 < len(raw) <= 65536:
         raise ValueError("Credential document exceeds limit")
     doc = json.loads(raw)
+    if not isinstance(doc, dict):
+        raise ValueError("Credential document must be an object")
+    device_metadata = doc.get("device")
+    if device_metadata is not None and not isinstance(device_metadata, dict):
+        raise ValueError("Cached device metadata must be an object")
     serial = text(doc["serial"])
     endpoint, cas = doc["endpoint"], doc["cas"]
     host = str(ipaddress.ip_address(text(endpoint["host"])))
     key = text(cas["key"])
     device = EzvizCasDeviceInfo(serial, text(cas["operation_code"]), key,
                               cas.get("encrypt_type"))
-    # Validate the existing wire format's key/IV before acquisition.
-    _ = device.key_bytes, device.iv_bytes
+    # Direct-local control validates the AES key here; its SDK-owned SSL IV
+    # is independent of the opaque operation code (unlike legacy CAS helpers).
+    _ = device.key_bytes
     if "media_key" in doc and "media_key_hex" in doc:
         raise ValueError("Supply exactly one media key representation")
     media_key = (bytes.fromhex(text(doc["media_key_hex"]))
@@ -129,6 +136,7 @@ def load_settings(data: dict[str, Any]) -> Settings:
         text(data["credential_revision"]) if lenses else None,
         native_opus,
         hls_fallback,
+        device_metadata,
     )
 
 

@@ -69,6 +69,7 @@ class GroupEntry:
         return self.client.open_stream(
             self.settings.credentials.device_info.serial,
             source=AutoClipSource(mode="offline", credentials=self.settings.credentials,
+                                  device=self.settings.device_metadata,
                                   allow_cloud_fallback=False), channel=self.settings.channel,
         )
 

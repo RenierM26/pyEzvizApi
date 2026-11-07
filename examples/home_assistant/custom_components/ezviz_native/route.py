@@ -87,6 +87,7 @@ class Runtime:
         return native_mpegts_stream_from_client(
             self.client, self.settings.credentials.device_info.serial,
             source=AutoClipSource(mode="offline", credentials=self.settings.credentials,
+                                  device=self.settings.device_metadata,
                                   allow_cloud_fallback=False),
             options=self.settings.options, channel=self.settings.channel,
             nalu_header_size=self.settings.nalu_header_size,

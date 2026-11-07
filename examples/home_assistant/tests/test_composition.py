@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import replace
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import web
@@ -25,6 +26,7 @@ from test_native_integration import data as data, runtime as runtime  # noqa: PL
 from test_native_stream import Source, options
 
 from pyezvizapi.native_stream import NativeMpegTsStream
+from pyezvizapi.stream_selection import select_stream_source
 
 
 def grouped(data, port=1984):
@@ -592,4 +594,22 @@ async def test_direct_provider_source_lookup_discards_a_revoked_generation(
         release.set()
         assert await pending is None
     assert runtime.group.attempts == 0 and await runtime.prepare()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_group_source_preserves_cached_protocol_capabilities(hass, aiohttp_client, data):
+    path = Path(data["credentials_path"])
+    document = json.loads(path.read_text())
+    document["device"] = {"deviceInfos": {"supportExt": {"1": "1"}}}
+    path.write_text(json.dumps(document))
+    entry, _, _, _, _ = await setup(hass, aiohttp_client, data)
+    runtime = entry.runtime_data
+    with patch.object(runtime.client, "open_stream", return_value=MagicMock()) as opened:
+        runtime.make_source()
+        options = opened.call_args.kwargs["source"]
+    selected = select_stream_source(runtime.client, runtime.settings.credentials.device_info.serial,
+                                    options, channel=runtime.settings.channel)
+    assert selected.kind == "local-sdk"
+    assert options.device == document["device"]
+    assert options.mode == "offline" and not options.allow_cloud_fallback
     assert await hass.config_entries.async_unload(entry.entry_id)

@@ -29,4 +29,25 @@ if TYPE_CHECKING:
     current_thread = _compat_module_0.current_thread
     logging = _compat_module_0.logging
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _LOGGER,
+        Any,
+        Callable,
+        Event,
+        EzvizPushFatalError,
+        Lock,
+        Protocol,
+        PushSession,
+        PushWorker,
+        Thread,
+        annotations,
+        current_thread,
+        logging,
+    )
+
 sys.modules[__name__] = _implementation

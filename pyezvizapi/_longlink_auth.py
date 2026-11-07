@@ -32,4 +32,28 @@ if TYPE_CHECKING:
     secrets = _compat_module_0.secrets
     wire = _compat_module_0.wire
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        Callable,
+        Exchange,
+        EzvizPushFatalError,
+        Protocol,
+        PushCredentials,
+        _cached,
+        _redirect,
+        _response,
+        _saved_key,
+        annotations,
+        authenticate,
+        dataclass,
+        hashlib,
+        secrets,
+        wire,
+    )
+
 sys.modules[__name__] = _implementation

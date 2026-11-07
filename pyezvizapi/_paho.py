@@ -19,4 +19,14 @@ if TYPE_CHECKING:
     import pyezvizapi.push.paho as _compat_module_1
     set_keepalive = _compat_module_1.set_keepalive
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Client,
+        set_keepalive,
+    )
+
 sys.modules[__name__] = _implementation

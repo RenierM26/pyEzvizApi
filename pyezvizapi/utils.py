@@ -50,4 +50,44 @@ if TYPE_CHECKING:
     return_password_hash = _compat_module_1.return_password_hash
     string_to_list = _compat_module_1.string_to_list
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        AES,
+        HIK_ENCRYPTION_HEADER,
+        MILLISECONDS_THRESHOLD,
+        WILDCARD_STEP,
+        Any,
+        Iterable,
+        Iterator,
+        PathComponent,
+        PyEzvizError,
+        ZoneInfo,
+        ZoneInfoNotFoundError,
+        _decrypt_single_block,
+        _image_crypto,
+        _split_encrypted_blocks,
+        annotations,
+        coerce_int,
+        compute_motion_from_alarm,
+        convert_to_dict,
+        datetime,
+        decode_json,
+        decrypt_image,
+        deep_merge,
+        fetch_nested_value,
+        first_nested,
+        iter_nested,
+        json,
+        logging,
+        md5,
+        normalize_alarm_time,
+        parse_timezone_value,
+        return_password_hash,
+        string_to_list,
+    )
+
 sys.modules[__name__] = _implementation

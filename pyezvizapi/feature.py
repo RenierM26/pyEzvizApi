@@ -58,4 +58,54 @@ if TYPE_CHECKING:
     supplement_light_params = _compat_module_0.supplement_light_params
     support_ext_value = _compat_module_0.support_ext_value
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        WILDCARD_STEP,
+        Any,
+        Iterable,
+        Iterator,
+        Mapping,
+        MutableMapping,
+        _feature_video_section,
+        _normalize_port_list,
+        annotations,
+        blc_current_value,
+        cast,
+        coerce_int,
+        custom_voice_volume_config,
+        day_night_mode_value,
+        day_night_sensitivity_value,
+        decode_json,
+        device_icr_dss_config,
+        display_mode_value,
+        first_nested,
+        get_algorithm_value,
+        has_algorithm_subtype,
+        has_osd_overlay,
+        iter_algorithm_entries,
+        iter_channel_algorithm_entries,
+        lens_defog_config,
+        lens_defog_value,
+        night_vision_config,
+        night_vision_duration_value,
+        night_vision_luminance_value,
+        night_vision_mode_value,
+        night_vision_payload,
+        normalize_port_security,
+        optionals_dict,
+        optionals_mapping,
+        port_security_config,
+        port_security_has_port,
+        port_security_port_enabled,
+        resolve_channel,
+        supplement_light_available,
+        supplement_light_enabled,
+        supplement_light_params,
+        support_ext_value,
+    )
+
 sys.modules[__name__] = _implementation

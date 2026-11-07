@@ -26,4 +26,22 @@ if TYPE_CHECKING:
     normalize_alarm_time = _compat_module_0.normalize_alarm_time
     parse_timezone_value = _compat_module_0.parse_timezone_value
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        MILLISECONDS_THRESHOLD,
+        Any,
+        ZoneInfo,
+        ZoneInfoNotFoundError,
+        _re,
+        annotations,
+        compute_motion_from_alarm,
+        datetime,
+        normalize_alarm_time,
+        parse_timezone_value,
+    )
+
 sys.modules[__name__] = _implementation

@@ -43,4 +43,39 @@ if TYPE_CHECKING:
     suppress = _compat_module_0.suppress
     write_aac_remux_input = _compat_module_0.write_aac_remux_input
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        FFMPEG_IO_CHUNK_SIZE,
+        FFMPEG_STDERR_MAX_BYTES,
+        FFMPEG_STDERR_MAX_CHARS,
+        FFMPEG_STOP_TIMEOUT_SECONDS,
+        Any,
+        BinaryIO,
+        BoundedStderrTail,
+        Callable,
+        Event,
+        Literal,
+        Lock,
+        Path,
+        PyEzvizError,
+        RtpAacStream,
+        Thread,
+        _ffmpeg_exit_error,
+        _wait_for_process,
+        annotations,
+        cast,
+        copy_remuxed_output,
+        ffmpeg_mpegts_command,
+        open_mpegts_remux_process,
+        remux_bytes,
+        start_stderr_drain,
+        subprocess,
+        suppress,
+        write_aac_remux_input,
+    )
+
 sys.modules[__name__] = _implementation

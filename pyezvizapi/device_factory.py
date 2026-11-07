@@ -24,4 +24,21 @@ if TYPE_CHECKING:
     light_bulb_status = _compat_module_0.light_bulb_status
     smart_plug_status = _compat_module_0.smart_plug_status
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        EzvizCamera,
+        EzvizLightBulb,
+        EzvizSmartPlug,
+        annotations,
+        camera_status,
+        cast,
+        light_bulb_status,
+        smart_plug_status,
+    )
+
 sys.modules[__name__] = _implementation

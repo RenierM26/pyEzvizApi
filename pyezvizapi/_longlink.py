@@ -51,4 +51,47 @@ if TYPE_CHECKING:
     signature = _compat_module_0.signature
     struct = _compat_module_0.struct
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        IV,
+        Any,
+        AuthenticationRejected,
+        Cipher,
+        _auth_iv_status,
+        algorithms,
+        annotations,
+        authentication_i,
+        authentication_ii,
+        authentication_iii_create,
+        authentication_iii_existing,
+        authentication_iv_create,
+        authentication_iv_existing,
+        control_keepalive,
+        das_request,
+        das_response,
+        decode_event_envelope,
+        decode_mobile_body,
+        decrypt,
+        encode_application_ack,
+        encrypt,
+        hashlib,
+        header,
+        hmac,
+        json,
+        master_key,
+        modes,
+        padding,
+        re,
+        refresh_i,
+        refresh_ii,
+        refresh_iii,
+        share_key,
+        signature,
+        struct,
+    )
+
 sys.modules[__name__] = _implementation

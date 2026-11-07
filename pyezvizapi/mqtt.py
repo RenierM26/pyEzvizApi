@@ -55,4 +55,51 @@ if TYPE_CHECKING:
     synchronize_http_headers = _compat_module_0.synchronize_http_headers
     validate_push_token = _compat_module_0.validate_push_token
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _LOGGER,
+        ANDROID_PROFILE,
+        DEFAULT_TIMEOUT,
+        EXT_FIELD_NAMES,
+        EXT_INT_FIELDS,
+        PUSH_PROFILE,
+        PUSH_REGISTER,
+        Any,
+        Callable,
+        Channel99Session,
+        EzvizAuthTokenExpired,
+        EzvizPushFatalError,
+        EzvizToken,
+        EzvizTokenPersistenceError,
+        Final,
+        HTTPError,
+        MQTTClient,
+        MqttData,
+        OrderedDict,
+        PushWorker,
+        PyEzvizError,
+        RLock,
+        ServiceUrls,
+        TypedDict,
+        _push_endpoint,
+        _push_serial,
+        annotations,
+        cast,
+        deepcopy,
+        discover_services,
+        isolated_session,
+        json,
+        logging,
+        profile_for_token,
+        refresh_credentials,
+        requests,
+        suppress,
+        synchronize_http_headers,
+        validate_push_token,
+    )
+
 sys.modules[__name__] = _implementation

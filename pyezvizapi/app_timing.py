@@ -39,4 +39,35 @@ if TYPE_CHECKING:
     open_mpegts_remux_process = _compat_module_0.open_mpegts_remux_process
     subprocess = _compat_module_0.subprocess
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _PES_CHUNK_BYTES,
+        _TICKS_PER_MS,
+        AppPlaybackClock,
+        AppTimedFrame,
+        BinaryIO,
+        Iterable,
+        Iterator,
+        Literal,
+        PyEzvizError,
+        _mpeg_crc32,
+        _pack_header,
+        _pes,
+        _stream_map,
+        _TrackClock,
+        _validate_frame,
+        annotations,
+        app_timed_mpegps_payloads,
+        chain,
+        copy_app_timed_frames_to_mpegts,
+        copy_remuxed_output,
+        dataclass,
+        open_mpegts_remux_process,
+        subprocess,
+    )
+
 sys.modules[__name__] = _implementation

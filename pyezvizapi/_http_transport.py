@@ -21,4 +21,18 @@ if TYPE_CHECKING:
     isolated_session = _compat_module_0.isolated_session
     requests = _compat_module_0.requests
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        CaseInsensitiveDict,
+        OrderedDict,
+        copy,
+        deepcopy,
+        isolated_session,
+        requests,
+    )
+
 sys.modules[__name__] = _implementation

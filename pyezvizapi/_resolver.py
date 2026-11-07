@@ -37,4 +37,33 @@ if TYPE_CHECKING:
     socket = _compat_module_0.socket
     suppress = _compat_module_0.suppress
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _STOP,
+        DEFAULT_RESOLVER,
+        Any,
+        BoundedResolver,
+        Callable,
+        Empty,
+        Event,
+        Full,
+        Lock,
+        Queue,
+        ResolverBusy,
+        ResolverClosed,
+        Thread,
+        _Request,
+        annotations,
+        cast,
+        dataclass,
+        field,
+        math,
+        socket,
+        suppress,
+    )
+
 sys.modules[__name__] = _implementation

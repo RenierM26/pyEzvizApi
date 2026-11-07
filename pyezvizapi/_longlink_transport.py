@@ -24,4 +24,21 @@ if TYPE_CHECKING:
     suppress = _compat_module_0.suppress
     time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        MAX_LENGTH_BYTES,
+        MAX_PAYLOAD,
+        Callable,
+        LbsConnection,
+        TracebackType,
+        annotations,
+        socket,
+        suppress,
+        time,
+    )
+
 sys.modules[__name__] = _implementation

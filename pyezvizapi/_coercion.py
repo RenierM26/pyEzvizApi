@@ -22,4 +22,19 @@ if TYPE_CHECKING:
     json = _compat_module_0.json
     string_to_list = _compat_module_0.string_to_list
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        annotations,
+        coerce_int,
+        convert_to_dict,
+        decode_json,
+        json,
+        string_to_list,
+    )
+
 sys.modules[__name__] = _implementation

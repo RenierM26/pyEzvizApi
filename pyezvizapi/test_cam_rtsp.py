@@ -19,4 +19,16 @@ if TYPE_CHECKING:
     _decode_response = _compat_module_0._decode_response
     genmsg_describe = _compat_module_0.genmsg_describe
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        RTSPDetails,
+        TestRTSPAuth,
+        _decode_response,
+        genmsg_describe,
+    )
+
 sys.modules[__name__] = _implementation

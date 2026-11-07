@@ -62,4 +62,58 @@ if TYPE_CHECKING:
     time = _compat_module_0.time
     vtm_media_packet_source = _compat_module_0.vtm_media_packet_source
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        AutoClipSource,
+        AutoMediaStream,
+        Callable,
+        CaptureLimits,
+        CloudClipSource,
+        EzvizLocalSdkDeadlineExpired,
+        EzvizLocalSdkStreamClosed,
+        EzvizNoMediaError,
+        EzvizStreamHeader,
+        EzvizUnsupportedMediaError,
+        HcNetSdkLanEndpoint,
+        Iterator,
+        LocalSdkClipSource,
+        LocalSdkEcdhClipSource,
+        LocalStreamDiscovery,
+        Lock,
+        Mapping,
+        MediaPacket,
+        MediaPacketSource,
+        PyEzvizError,
+        SelectedClipSource,
+        _BoundedEcdhMediaStream,
+        _connection_failure,
+        _discovery_key,
+        _live_ecdh_support,
+        _live_input_frame_limit,
+        _NonemptyLocalMediaStream,
+        annotations,
+        contextmanager,
+        errno,
+        fallback_stream_source,
+        fresh_receiver_port,
+        get_local_sdk_stream_credentials_from_client,
+        hashlib,
+        json,
+        local_ecdh_media_packet_source,
+        local_media_packet_source,
+        open_cloud_stream,
+        open_local_sdk_ecdh_stream_from_client,
+        open_local_sdk_stream_from_client,
+        partial,
+        replace,
+        select_stream_source,
+        time,
+        vtm_media_packet_source,
+    )
+
 sys.modules[__name__] = _implementation

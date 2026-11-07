@@ -19,4 +19,16 @@ if TYPE_CHECKING:
     NativeTrackCompletion = _compat_module_0.NativeTrackCompletion
     dataclass = _compat_module_0.dataclass
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Literal,
+        NativeMediaCompletion,
+        NativeTrackCompletion,
+        dataclass,
+    )
+
 sys.modules[__name__] = _implementation

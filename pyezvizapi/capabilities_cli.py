@@ -31,6 +31,30 @@ if TYPE_CHECKING:
     probe_stream_capabilities = _compat_module_0.probe_stream_capabilities
     sys = _compat_module_0.sys
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        MAX_FLEET_SAMPLE_BYTES,
+        MAX_FLEET_TARGETS,
+        MAX_SAMPLE_BYTES,
+        HcNetSdkLanEndpoint,
+        HcNetSdkLoginCandidate,
+        Path,
+        StreamCapabilityTarget,
+        StreamSampleEvidence,
+        annotations,
+        argparse,
+        json,
+        load_inventory,
+        main,
+        os,
+        probe_stream_capabilities,
+        sys,
+    )
+
 if __name__ == "__main__":
     sys.exit(_implementation.main())
 else:

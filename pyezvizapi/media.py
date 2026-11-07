@@ -67,4 +67,63 @@ if TYPE_CHECKING:
     suppress = _compat_module_0.suppress
     time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _ITERATOR_CLOSE_TIMEOUT_SECONDS,
+        _ITERATOR_STOPPED,
+        _ITERATOR_TIMED_OUT,
+        Any,
+        Callable,
+        CaptureLimits,
+        DeadlineLegacyPacketSource,
+        Empty,
+        Event,
+        Full,
+        Iterable,
+        IterableMediaPacketSource,
+        Iterator,
+        LegacyPacketSource,
+        Literal,
+        Lock,
+        Mapping,
+        MappingProxyType,
+        MediaDecodeOptions,
+        MediaMetadataValue,
+        MediaMuxOptions,
+        MediaOutputFormat,
+        MediaPacket,
+        MediaPacketMetadata,
+        MediaPacketSource,
+        MediaPacketSourceAdapter,
+        Protocol,
+        PyEzvizError,
+        Queue,
+        Thread,
+        TypedDict,
+        _app_remux_options,
+        _AppRemuxOptions,
+        _hevc_parameter_options,
+        _HevcParameterOptions,
+        _IterableProducerState,
+        _IteratorProducer,
+        _native_timing_options,
+        _NativeTimingOptions,
+        abstractmethod,
+        annotations,
+        cast,
+        dataclass,
+        field,
+        has_positive_finite_capture_bound,
+        is_positive_capture_count_bound,
+        is_positive_finite_duration_bound,
+        math,
+        runtime_checkable,
+        suppress,
+        time,
+    )
+
 sys.modules[__name__] = _implementation

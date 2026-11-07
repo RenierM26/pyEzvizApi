@@ -33,4 +33,29 @@ if TYPE_CHECKING:
     validate_feature_code = _compat_module_0.validate_feature_code
     validate_push_token = _compat_module_0.validate_push_token
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        FEATURE_CODE,
+        PROFILE,
+        Any,
+        ClientToken,
+        EzvizAuthTokenExpired,
+        NotRequired,
+        PyEzvizError,
+        ServiceUrls,
+        TypedDict,
+        _hostname,
+        _push_endpoint,
+        _push_serial,
+        annotations,
+        ipaddress,
+        re,
+        validate_feature_code,
+        validate_push_token,
+    )
+
 sys.modules[__name__] = _implementation

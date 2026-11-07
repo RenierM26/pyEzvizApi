@@ -41,4 +41,37 @@ if TYPE_CHECKING:
     open_local_sdk_stream = _compat_module_0.open_local_sdk_stream
     open_local_sdk_stream_from_client = _compat_module_0.open_local_sdk_stream_from_client
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
+        EzvizLocalSdkCredentials,
+        EzvizLocalSdkMediaStream,
+        EzvizLocalStreamPacket,
+        HcNetSdkCommandPortGeneratedMultiSocketMediaStream,
+        HcNetSdkCommandPortGeneratedMultiSocketPlan,
+        HcNetSdkCommandPortGeneratedSocketStep,
+        HcNetSdkCommandPortKeepaliveEvent,
+        HcNetSdkCommandPortMediaStream,
+        HcNetSdkCommandPortMultiSocketMediaStream,
+        HcNetSdkCommandPortMultiSocketPlan,
+        HcNetSdkCommandPortSocketStep,
+        _socket,
+        copy_local_sdk_stream_from_client,
+        fresh_local_sdk_receiver_port,
+        get_local_sdk_stream_credentials_from_client,
+        hcnetsdk_command_port_generated_plan_from_socket_plan,
+        hcnetsdk_command_port_native_lan_live_view_plan,
+        local_media_packet_source,
+        local_stream_packet_to_media_packet,
+        open_hcnetsdk_command_port_generated_multi_socket_stream,
+        open_hcnetsdk_command_port_multi_socket_stream,
+        open_hcnetsdk_command_port_stream,
+        open_local_sdk_stream,
+        open_local_sdk_stream_from_client,
+    )
+
 sys.modules[__name__] = _implementation

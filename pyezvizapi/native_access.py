@@ -27,4 +27,23 @@ if TYPE_CHECKING:
     re = _compat_module_0.re
     self_contained_idr = _compat_module_0.self_contained_idr
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _PREFIX_BYTES,
+        _START,
+        MAX_PENDING_PS_BYTES,
+        Iterator,
+        _Bits,
+        _check_idr,
+        _hevc_sps,
+        _units,
+        annotations,
+        re,
+        self_contained_idr,
+    )
+
 sys.modules[__name__] = _implementation

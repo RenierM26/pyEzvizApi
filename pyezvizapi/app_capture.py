@@ -37,4 +37,33 @@ if TYPE_CHECKING:
     native_app_timed_payloads = _compat_module_0.native_app_timed_payloads
     rtp_nal_units_have_vcl = _compat_module_0.rtp_nal_units_have_vcl
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _CHUNK_BYTES,
+        _RTP_WRAP,
+        _VIDEO_TICKS_PER_MS,
+        ANNEX_B_START_CODE,
+        AppPlaybackClock,
+        AppTimedFrame,
+        Fraction,
+        Iterable,
+        Iterator,
+        PyEzvizError,
+        RtpAacStream,
+        _audio_events,
+        _pack_header,
+        _pes,
+        _program_stream_map,
+        annotations,
+        chain,
+        groupby,
+        merge,
+        native_app_timed_payloads,
+        rtp_nal_units_have_vcl,
+    )
+
 sys.modules[__name__] = _implementation

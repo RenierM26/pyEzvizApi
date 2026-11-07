@@ -25,4 +25,21 @@ if TYPE_CHECKING:
     json = _compat_module_0.json
     re = _compat_module_0.re
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        EzvizAppPlaybackSupport,
+        Mapping,
+        _capability_integer,
+        annotations,
+        dataclass,
+        inspect_app_playback_support,
+        json,
+        re,
+    )
+
 sys.modules[__name__] = _implementation

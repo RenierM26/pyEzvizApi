@@ -37,4 +37,31 @@ if TYPE_CHECKING:
     socket = _compat_module_1.socket
     wire = _compat_module_1.wire
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        CallbackAPIVersion,
+        _MQTT_SETUP_TIMEOUT,
+        _PERMANENT_CONNACK_REASONS,
+        Any,
+        Callable,
+        Channel99Session,
+        Event,
+        EzvizPushFatalError,
+        LbsConnection,
+        Lock,
+        PushCredentials,
+        annotations,
+        authenticate,
+        json,
+        monotonic,
+        mqtt,
+        set_keepalive,
+        socket,
+        wire,
+    )
+
 sys.modules[__name__] = _implementation

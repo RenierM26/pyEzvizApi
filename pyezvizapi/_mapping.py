@@ -27,4 +27,23 @@ if TYPE_CHECKING:
     first_nested = _compat_module_0.first_nested
     iter_nested = _compat_module_0.iter_nested
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _MISSING,
+        WILDCARD_STEP,
+        Any,
+        Iterable,
+        Iterator,
+        PathComponent,
+        annotations,
+        deep_merge,
+        fetch_nested_value,
+        first_nested,
+        iter_nested,
+    )
+
 sys.modules[__name__] = _implementation

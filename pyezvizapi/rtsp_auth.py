@@ -35,4 +35,31 @@ if TYPE_CHECKING:
     socket = _compat_module_0.socket
     time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _HEADER_END,
+        _LOGGER,
+        AuthTestResultFailed,
+        InvalidHost,
+        RTSPDetails,
+        TestRTSPAuth,
+        TypedDict,
+        _decode_response,
+        _unfold_header_lines,
+        annotations,
+        base64,
+        genmsg_describe,
+        hashlib,
+        is_positive_finite_duration_bound,
+        logging,
+        parse_dict_header,
+        re,
+        socket,
+        time,
+    )
+
 sys.modules[__name__] = _implementation

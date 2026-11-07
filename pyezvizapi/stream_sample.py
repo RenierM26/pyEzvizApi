@@ -42,4 +42,38 @@ if TYPE_CHECKING:
     subprocess = _compat_module_0.subprocess
     validate_media_sample = _compat_module_0.validate_media_sample
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        MAX_PROBE_JSON_BYTES,
+        MAX_PROBE_STREAMS,
+        MAX_REMUX_BYTES,
+        MAX_SAMPLE_BYTES,
+        MAX_SAMPLE_PACKETS,
+        Any,
+        BinaryIO,
+        ClipOptions,
+        EncodedTrackSelection,
+        PyEzvizError,
+        TemporaryFile,
+        _input_args,
+        _SampleBuffer,
+        _validate_timeout,
+        annotations,
+        capture_media_sample,
+        cast,
+        dataclass,
+        hashlib,
+        inspect_media_sample,
+        io,
+        json,
+        math,
+        remux_media_sample,
+        subprocess,
+        validate_media_sample,
+    )
+
 sys.modules[__name__] = _implementation

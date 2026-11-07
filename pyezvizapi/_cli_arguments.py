@@ -50,4 +50,46 @@ if TYPE_CHECKING:
     argparse = _compat_module_0.argparse
     build_parser = _compat_module_0.build_parser
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        HCNETSDK_COMMAND_PORT_NATIVE_PLAN_APP_LAN_LIVE_VIEW,
+        LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        Any,
+        BatteryCameraWorkMode,
+        _parse_args,
+        _parse_duration_seconds,
+        add_camera_arguments,
+        add_cloud_video_decrypt_arguments,
+        add_cloud_video_download_arguments,
+        add_cloud_videos_arguments,
+        add_device_infos_arguments,
+        add_devices_arguments,
+        add_devices_light_arguments,
+        add_home_defence_mode_arguments,
+        add_light_arguments,
+        add_mqtt_arguments,
+        add_pagelist_arguments,
+        add_save_arguments,
+        add_save_clip_arguments,
+        add_save_image_arguments,
+        add_sdcard_videos_arguments,
+        add_stream_arguments,
+        add_stream_dump_arguments,
+        add_stream_h264_annexb_summary_arguments,
+        add_stream_hcnetsdk_command_dump_summary_arguments,
+        add_stream_hcnetsdk_command_plan_generate_arguments,
+        add_stream_local_sdk_dump_arguments,
+        add_stream_local_sdk_keys_arguments,
+        add_stream_proxy_arguments,
+        add_stream_trace_arguments,
+        add_unifiedmsg_arguments,
+        annotations,
+        argparse,
+        build_parser,
+    )
+
 sys.modules[__name__] = _implementation

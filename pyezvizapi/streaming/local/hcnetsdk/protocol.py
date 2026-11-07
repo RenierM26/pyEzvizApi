@@ -152,134 +152,137 @@ HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET = _constants.HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET
 HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET = _constants.HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET
 HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET = _constants.HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET
 
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkRealDataType as HcNetSdkRealDataType
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkLanEndpoint as HcNetSdkLanEndpoint
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkLoginCandidate as HcNetSdkLoginCandidate
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkStdXmlConfigRequest as HcNetSdkStdXmlConfigRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkStdXmlConfigResponse as HcNetSdkStdXmlConfigResponse
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanServicesSwitchState as EzvizLanServicesSwitchState
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanWifiApInfo as EzvizLanWifiApInfo
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanHdDiskConfig as EzvizLanHdDiskConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanHdConfig as EzvizLanHdConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanNtpConfig as EzvizLanNtpConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanNetInterfaceConfig as EzvizLanNetInterfaceConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanNetConfigV30 as EzvizLanNetConfigV30
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanDvrConfigSummary as EzvizLanDvrConfigSummary
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanEzvizAccessConfig as EzvizLanEzvizAccessConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanUserConfigV30Entry as EzvizLanUserConfigV30Entry
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanUserConfigV30 as EzvizLanUserConfigV30
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanDeviceConfigV40 as EzvizLanDeviceConfigV40
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanRecordDayConfig as EzvizLanRecordDayConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanRecordScheduleSegment as EzvizLanRecordScheduleSegment
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanRecordConfigV30 as EzvizLanRecordConfigV30
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanCameraParamConfig as EzvizLanCameraParamConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanWifiConnectStatus as EzvizLanWifiConnectStatus
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioInputParam as EzvizLanAudioInputParam
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioOutputVolume as EzvizLanAudioOutputVolume
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanCompressionInfoV30 as EzvizLanCompressionInfoV30
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanCompressionConfig as EzvizLanCompressionConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanPictureConfig as EzvizLanPictureConfig
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkDvrConfigRequest as HcNetSdkDvrConfigRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkFormatDiskRequest as HcNetSdkFormatDiskRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkFormatProgressRequest as HcNetSdkFormatProgressRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkCloseFormatHandleRequest as HcNetSdkCloseFormatHandleRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkSetupAlarmParam as HcNetSdkSetupAlarmParam
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkSetupAlarmRequest as HcNetSdkSetupAlarmRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkCloseAlarmRequest as HcNetSdkCloseAlarmRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkSetSdkLocalCfgRequest as HcNetSdkSetSdkLocalCfgRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanSdFormatProgress as EzvizLanSdFormatProgress
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkDeviceAbilityRequest as HcNetSdkDeviceAbilityRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanPtzAbility as EzvizLanPtzAbility
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAccessProtocolAbility as EzvizLanAccessProtocolAbility
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanVideoPicAbility as EzvizLanVideoPicAbility
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanIpcFrontParameterRange as EzvizLanIpcFrontParameterRange
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanIpcFrontParameterAbility as EzvizLanIpcFrontParameterAbility
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import EzvizLanVideoResolution as EzvizLanVideoResolution
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioVideoCompressStream as EzvizLanAudioVideoCompressStream
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioVideoCompressVideoChannel as EzvizLanAudioVideoCompressVideoChannel
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioVideoCompressAudioChannel as EzvizLanAudioVideoCompressAudioChannel
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioVideoCompressVoiceTalkChannel as EzvizLanAudioVideoCompressVoiceTalkChannel
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanAudioVideoCompressInfo as EzvizLanAudioVideoCompressInfo
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkStreamDetails as HcNetSdkStreamDetails
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanDeviceSoftHardwareAbility as EzvizLanDeviceSoftHardwareAbility
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import EzvizLanPlaybackConvertResolution as EzvizLanPlaybackConvertResolution
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanPlaybackConvertAbility as EzvizLanPlaybackConvertAbility
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPtzControlRequest as HcNetSdkPtzControlRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPtzPresetRequest as HcNetSdkPtzPresetRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import EzvizLanPlaybackIntent as EzvizLanPlaybackIntent
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import EzvizLanVideoQuality as EzvizLanVideoQuality
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import EzvizLanLiveViewParams as EzvizLanLiveViewParams
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import EzvizLanKeyframeRequest as EzvizLanKeyframeRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkRealDataPacket as HcNetSdkRealDataPacket
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkTcpPayloadShape as HcNetSdkTcpPayloadShape
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import HcNetSdkTcpShapeLogRecord as HcNetSdkTcpShapeLogRecord
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkSemanticLogEvent as HcNetSdkSemanticLogEvent
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkCommandTraceSummary as HcNetSdkCommandTraceSummary
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkTcpFrameHeader as HcNetSdkTcpFrameHeader
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkTcpFrame as HcNetSdkTcpFrame
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkCommandPortExchange as HcNetSdkCommandPortExchange
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkCommandPortStreamBootstrap as HcNetSdkCommandPortStreamBootstrap
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkCommandPortLoginChallenge as HcNetSdkCommandPortLoginChallenge
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkCommandPortLoginSession as HcNetSdkCommandPortLoginSession
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkCommandPortControlResponse as HcNetSdkCommandPortControlResponse
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkCommandPortControlTemplate as HcNetSdkCommandPortControlTemplate
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkTcpFrameShape as HcNetSdkTcpFrameShape
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkClientInfo as HcNetSdkClientInfo
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkRealPlayRequest as HcNetSdkRealPlayRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLanPlayDeviceLogin as EzvizLanPlayDeviceLogin
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLanPreviewPlan as EzvizLanPreviewPlan
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import EzvizLanPlaybackPath as EzvizLanPlaybackPath
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalDeviceContent as EzvizLocalDeviceContent
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalDevice as EzvizLocalDevice
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizCasDeviceInfo as EzvizCasDeviceInfo
-from pyezvizapi.streaming.local.hcnetsdk.models_session import HcNetSdkPortProbe as HcNetSdkPortProbe
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalSdkFrameHeader as EzvizLocalSdkFrameHeader
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalSdkFrame as EzvizLocalSdkFrame
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalSdkBodyShape as EzvizLocalSdkBodyShape
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizInterleavedRtpFrameHeader as EzvizInterleavedRtpFrameHeader
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizInterleavedRtpFrame as EzvizInterleavedRtpFrame
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizInterleavedRtpFrameWithPrefix as EzvizInterleavedRtpFrameWithPrefix
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalSdkExchange as EzvizLocalSdkExchange
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalSdkStreamBootstrap as EzvizLocalSdkStreamBootstrap
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalReceiverInfo as EzvizLocalReceiverInfo
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalReceiverInfoEx as EzvizLocalReceiverInfoEx
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalReceiverInfoAttrs as EzvizLocalReceiverInfoAttrs
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalReceiverInfoExAttrs as EzvizLocalReceiverInfoExAttrs
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalAuthenticationAttrs as EzvizLocalAuthenticationAttrs
-from pyezvizapi.streaming.local.hcnetsdk.models_session import EzvizLocalPreviewRequest as EzvizLocalPreviewRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkNoArgRequest as HcNetSdkNoArgRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkInitRequest as HcNetSdkInitRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkSetConnectTimeRequest as HcNetSdkSetConnectTimeRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkGetErrorMsgRequest as HcNetSdkGetErrorMsgRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkLogoutRequest as HcNetSdkLogoutRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkTime as HcNetSdkTime
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkFileCond as HcNetSdkFileCond
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkFindFileRequest as HcNetSdkFindFileRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkFindDataV30 as HcNetSdkFindDataV30
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkFindNextFileRequest as HcNetSdkFindNextFileRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkFindCloseRequest as HcNetSdkFindCloseRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlayCond as HcNetSdkPlayCond
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlayBackByTimeRequest as HcNetSdkPlayBackByTimeRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlayBackControlRequest as HcNetSdkPlayBackControlRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkStopPlayBackRequest as HcNetSdkStopPlayBackRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlayBackCaptureFileRequest as HcNetSdkPlayBackCaptureFileRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlayDataCallbackRequest as HcNetSdkPlayDataCallbackRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlaybackCallbackRequest as HcNetSdkPlaybackCallbackRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkPlayBackSecretKeyRequest as HcNetSdkPlayBackSecretKeyRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkGetFileByNameRequest as HcNetSdkGetFileByNameRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkGetFileByTimeRequest as HcNetSdkGetFileByTimeRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkStopGetFileRequest as HcNetSdkStopGetFileRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import HcNetSdkGetDownloadPosRequest as HcNetSdkGetDownloadPosRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_session import SadpDeviceInfo as SadpDeviceInfo
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import SadpActivateDeviceRequest as SadpActivateDeviceRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import SadpDeviceNetParam as SadpDeviceNetParam
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import SadpModifyDeviceNetParamRequest as SadpModifyDeviceNetParamRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import SadpDeviceRetNetParam as SadpDeviceRetNetParam
-from pyezvizapi.streaming.local.hcnetsdk.models_configuration import SadpModifyDeviceNetParamV40Request as SadpModifyDeviceNetParamV40Request
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import SadpNoArgRequest as SadpNoArgRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import SadpStartRequest as SadpStartRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import SadpSetLogToFileRequest as SadpSetLogToFileRequest
-from pyezvizapi.streaming.local.hcnetsdk.models_playback import SadpBatchResult as SadpBatchResult
+import pyezvizapi.streaming.local.hcnetsdk.models_playback as _models_playback
+HcNetSdkRealDataType = _models_playback.HcNetSdkRealDataType
+HcNetSdkLanEndpoint = _models_playback.HcNetSdkLanEndpoint
+import pyezvizapi.streaming.local.hcnetsdk.models_session as _models_session
+HcNetSdkLoginCandidate = _models_session.HcNetSdkLoginCandidate
+import pyezvizapi.streaming.local.hcnetsdk.models_configuration as _models_configuration
+HcNetSdkStdXmlConfigRequest = _models_configuration.HcNetSdkStdXmlConfigRequest
+HcNetSdkStdXmlConfigResponse = _models_configuration.HcNetSdkStdXmlConfigResponse
+EzvizLanServicesSwitchState = _models_configuration.EzvizLanServicesSwitchState
+EzvizLanWifiApInfo = _models_configuration.EzvizLanWifiApInfo
+EzvizLanHdDiskConfig = _models_configuration.EzvizLanHdDiskConfig
+EzvizLanHdConfig = _models_configuration.EzvizLanHdConfig
+EzvizLanNtpConfig = _models_configuration.EzvizLanNtpConfig
+EzvizLanNetInterfaceConfig = _models_configuration.EzvizLanNetInterfaceConfig
+EzvizLanNetConfigV30 = _models_configuration.EzvizLanNetConfigV30
+EzvizLanDvrConfigSummary = _models_configuration.EzvizLanDvrConfigSummary
+EzvizLanEzvizAccessConfig = _models_configuration.EzvizLanEzvizAccessConfig
+EzvizLanUserConfigV30Entry = _models_configuration.EzvizLanUserConfigV30Entry
+EzvizLanUserConfigV30 = _models_configuration.EzvizLanUserConfigV30
+EzvizLanDeviceConfigV40 = _models_configuration.EzvizLanDeviceConfigV40
+EzvizLanRecordDayConfig = _models_configuration.EzvizLanRecordDayConfig
+EzvizLanRecordScheduleSegment = _models_configuration.EzvizLanRecordScheduleSegment
+EzvizLanRecordConfigV30 = _models_configuration.EzvizLanRecordConfigV30
+EzvizLanCameraParamConfig = _models_configuration.EzvizLanCameraParamConfig
+EzvizLanWifiConnectStatus = _models_configuration.EzvizLanWifiConnectStatus
+EzvizLanAudioInputParam = _models_configuration.EzvizLanAudioInputParam
+EzvizLanAudioOutputVolume = _models_configuration.EzvizLanAudioOutputVolume
+EzvizLanCompressionInfoV30 = _models_configuration.EzvizLanCompressionInfoV30
+EzvizLanCompressionConfig = _models_configuration.EzvizLanCompressionConfig
+EzvizLanPictureConfig = _models_configuration.EzvizLanPictureConfig
+HcNetSdkDvrConfigRequest = _models_configuration.HcNetSdkDvrConfigRequest
+HcNetSdkFormatDiskRequest = _models_configuration.HcNetSdkFormatDiskRequest
+HcNetSdkFormatProgressRequest = _models_configuration.HcNetSdkFormatProgressRequest
+HcNetSdkCloseFormatHandleRequest = _models_configuration.HcNetSdkCloseFormatHandleRequest
+HcNetSdkSetupAlarmParam = _models_configuration.HcNetSdkSetupAlarmParam
+HcNetSdkSetupAlarmRequest = _models_playback.HcNetSdkSetupAlarmRequest
+HcNetSdkCloseAlarmRequest = _models_playback.HcNetSdkCloseAlarmRequest
+HcNetSdkSetSdkLocalCfgRequest = _models_session.HcNetSdkSetSdkLocalCfgRequest
+EzvizLanSdFormatProgress = _models_configuration.EzvizLanSdFormatProgress
+HcNetSdkDeviceAbilityRequest = _models_configuration.HcNetSdkDeviceAbilityRequest
+EzvizLanPtzAbility = _models_configuration.EzvizLanPtzAbility
+EzvizLanAccessProtocolAbility = _models_configuration.EzvizLanAccessProtocolAbility
+EzvizLanVideoPicAbility = _models_configuration.EzvizLanVideoPicAbility
+EzvizLanIpcFrontParameterRange = _models_configuration.EzvizLanIpcFrontParameterRange
+EzvizLanIpcFrontParameterAbility = _models_configuration.EzvizLanIpcFrontParameterAbility
+EzvizLanVideoResolution = _models_playback.EzvizLanVideoResolution
+EzvizLanAudioVideoCompressStream = _models_configuration.EzvizLanAudioVideoCompressStream
+EzvizLanAudioVideoCompressVideoChannel = _models_configuration.EzvizLanAudioVideoCompressVideoChannel
+EzvizLanAudioVideoCompressAudioChannel = _models_configuration.EzvizLanAudioVideoCompressAudioChannel
+EzvizLanAudioVideoCompressVoiceTalkChannel = _models_configuration.EzvizLanAudioVideoCompressVoiceTalkChannel
+EzvizLanAudioVideoCompressInfo = _models_configuration.EzvizLanAudioVideoCompressInfo
+HcNetSdkStreamDetails = _models_playback.HcNetSdkStreamDetails
+EzvizLanDeviceSoftHardwareAbility = _models_configuration.EzvizLanDeviceSoftHardwareAbility
+EzvizLanPlaybackConvertResolution = _models_playback.EzvizLanPlaybackConvertResolution
+EzvizLanPlaybackConvertAbility = _models_configuration.EzvizLanPlaybackConvertAbility
+HcNetSdkPtzControlRequest = _models_playback.HcNetSdkPtzControlRequest
+HcNetSdkPtzPresetRequest = _models_playback.HcNetSdkPtzPresetRequest
+EzvizLanPlaybackIntent = _models_playback.EzvizLanPlaybackIntent
+EzvizLanVideoQuality = _models_playback.EzvizLanVideoQuality
+EzvizLanLiveViewParams = _models_configuration.EzvizLanLiveViewParams
+EzvizLanKeyframeRequest = _models_playback.EzvizLanKeyframeRequest
+HcNetSdkRealDataPacket = _models_playback.HcNetSdkRealDataPacket
+HcNetSdkTcpPayloadShape = _models_session.HcNetSdkTcpPayloadShape
+HcNetSdkTcpShapeLogRecord = _models_configuration.HcNetSdkTcpShapeLogRecord
+HcNetSdkSemanticLogEvent = _models_playback.HcNetSdkSemanticLogEvent
+HcNetSdkCommandTraceSummary = _models_playback.HcNetSdkCommandTraceSummary
+HcNetSdkTcpFrameHeader = _models_session.HcNetSdkTcpFrameHeader
+HcNetSdkTcpFrame = _models_session.HcNetSdkTcpFrame
+HcNetSdkCommandPortExchange = _models_session.HcNetSdkCommandPortExchange
+HcNetSdkCommandPortStreamBootstrap = _models_session.HcNetSdkCommandPortStreamBootstrap
+HcNetSdkCommandPortLoginChallenge = _models_session.HcNetSdkCommandPortLoginChallenge
+HcNetSdkCommandPortLoginSession = _models_session.HcNetSdkCommandPortLoginSession
+HcNetSdkCommandPortControlResponse = _models_session.HcNetSdkCommandPortControlResponse
+HcNetSdkCommandPortControlTemplate = _models_session.HcNetSdkCommandPortControlTemplate
+HcNetSdkTcpFrameShape = _models_session.HcNetSdkTcpFrameShape
+HcNetSdkClientInfo = _models_playback.HcNetSdkClientInfo
+HcNetSdkRealPlayRequest = _models_playback.HcNetSdkRealPlayRequest
+EzvizLanPlayDeviceLogin = _models_session.EzvizLanPlayDeviceLogin
+EzvizLanPreviewPlan = _models_session.EzvizLanPreviewPlan
+EzvizLanPlaybackPath = _models_playback.EzvizLanPlaybackPath
+EzvizLocalDeviceContent = _models_session.EzvizLocalDeviceContent
+EzvizLocalDevice = _models_session.EzvizLocalDevice
+EzvizCasDeviceInfo = _models_session.EzvizCasDeviceInfo
+HcNetSdkPortProbe = _models_session.HcNetSdkPortProbe
+EzvizLocalSdkFrameHeader = _models_session.EzvizLocalSdkFrameHeader
+EzvizLocalSdkFrame = _models_session.EzvizLocalSdkFrame
+EzvizLocalSdkBodyShape = _models_session.EzvizLocalSdkBodyShape
+EzvizInterleavedRtpFrameHeader = _models_session.EzvizInterleavedRtpFrameHeader
+EzvizInterleavedRtpFrame = _models_session.EzvizInterleavedRtpFrame
+EzvizInterleavedRtpFrameWithPrefix = _models_session.EzvizInterleavedRtpFrameWithPrefix
+EzvizLocalSdkExchange = _models_session.EzvizLocalSdkExchange
+EzvizLocalSdkStreamBootstrap = _models_session.EzvizLocalSdkStreamBootstrap
+EzvizLocalReceiverInfo = _models_session.EzvizLocalReceiverInfo
+EzvizLocalReceiverInfoEx = _models_session.EzvizLocalReceiverInfoEx
+EzvizLocalReceiverInfoAttrs = _models_session.EzvizLocalReceiverInfoAttrs
+EzvizLocalReceiverInfoExAttrs = _models_session.EzvizLocalReceiverInfoExAttrs
+EzvizLocalAuthenticationAttrs = _models_session.EzvizLocalAuthenticationAttrs
+EzvizLocalPreviewRequest = _models_session.EzvizLocalPreviewRequest
+HcNetSdkNoArgRequest = _models_playback.HcNetSdkNoArgRequest
+HcNetSdkInitRequest = _models_playback.HcNetSdkInitRequest
+HcNetSdkSetConnectTimeRequest = _models_playback.HcNetSdkSetConnectTimeRequest
+HcNetSdkGetErrorMsgRequest = _models_playback.HcNetSdkGetErrorMsgRequest
+HcNetSdkLogoutRequest = _models_playback.HcNetSdkLogoutRequest
+HcNetSdkTime = _models_playback.HcNetSdkTime
+HcNetSdkFileCond = _models_playback.HcNetSdkFileCond
+HcNetSdkFindFileRequest = _models_playback.HcNetSdkFindFileRequest
+HcNetSdkFindDataV30 = _models_playback.HcNetSdkFindDataV30
+HcNetSdkFindNextFileRequest = _models_playback.HcNetSdkFindNextFileRequest
+HcNetSdkFindCloseRequest = _models_playback.HcNetSdkFindCloseRequest
+HcNetSdkPlayCond = _models_playback.HcNetSdkPlayCond
+HcNetSdkPlayBackByTimeRequest = _models_playback.HcNetSdkPlayBackByTimeRequest
+HcNetSdkPlayBackControlRequest = _models_playback.HcNetSdkPlayBackControlRequest
+HcNetSdkStopPlayBackRequest = _models_playback.HcNetSdkStopPlayBackRequest
+HcNetSdkPlayBackCaptureFileRequest = _models_playback.HcNetSdkPlayBackCaptureFileRequest
+HcNetSdkPlayDataCallbackRequest = _models_playback.HcNetSdkPlayDataCallbackRequest
+HcNetSdkPlaybackCallbackRequest = _models_playback.HcNetSdkPlaybackCallbackRequest
+HcNetSdkPlayBackSecretKeyRequest = _models_playback.HcNetSdkPlayBackSecretKeyRequest
+HcNetSdkGetFileByNameRequest = _models_playback.HcNetSdkGetFileByNameRequest
+HcNetSdkGetFileByTimeRequest = _models_playback.HcNetSdkGetFileByTimeRequest
+HcNetSdkStopGetFileRequest = _models_playback.HcNetSdkStopGetFileRequest
+HcNetSdkGetDownloadPosRequest = _models_playback.HcNetSdkGetDownloadPosRequest
+SadpDeviceInfo = _models_session.SadpDeviceInfo
+SadpActivateDeviceRequest = _models_playback.SadpActivateDeviceRequest
+SadpDeviceNetParam = _models_configuration.SadpDeviceNetParam
+SadpModifyDeviceNetParamRequest = _models_configuration.SadpModifyDeviceNetParamRequest
+SadpDeviceRetNetParam = _models_configuration.SadpDeviceRetNetParam
+SadpModifyDeviceNetParamV40Request = _models_configuration.SadpModifyDeviceNetParamV40Request
+SadpNoArgRequest = _models_playback.SadpNoArgRequest
+SadpStartRequest = _models_playback.SadpStartRequest
+SadpSetLogToFileRequest = _models_playback.SadpSetLogToFileRequest
+SadpBatchResult = _models_playback.SadpBatchResult
 from pyezvizapi.streaming.local.hcnetsdk import serialization as _impl_serialization
 
 def hcnetsdk_stdxml_response_json(response: Mapping[str, Any] | str | bytes) -> dict[str, Any]:
@@ -463,3 +466,6 @@ def _xml_attrs(fields: Iterable[tuple[str, str | int]]) -> str:
 
 def _local_sdk_aes_bytes(label: str, value: bytes | str) -> bytes:
     return _impl_serialization._local_sdk_aes_bytes(label, value, _owner=_sys.modules[__name__])
+
+# Retained public wildcard exports, including imported support types.
+__all__ = ['EZVIZ_DEVICE_INFO_EX_LOGIN_PLAY_DEVICE', 'EZVIZ_HCNETUTIL_LOGIN_V40', 'EZVIZ_LAN_ACTIVITY_CHANNEL_HANDOFF', 'EZVIZ_LAN_MAIN_VIDEO_LEVEL', 'EZVIZ_LAN_PTZ_SPEED_DEFAULT', 'EZVIZ_LOCAL_SDK_AES_BLOCK_SIZE', 'EZVIZ_NATIVE_CREATE_CLIENT', 'EZVIZ_NATIVE_START_PREVIEW', 'EZVIZ_PLAYER_EXTRA_CHANNEL_NO', 'EZVIZ_PLAYER_EXTRA_DEVICE_ID', 'EZVIZ_PLAYER_EXTRA_LAN_FLAG', 'EZVIZ_PLAYER_EXTRA_LAN_USERID', 'EZVIZ_PLAYER_EXTRA_WIFI_SSID', 'EZVIZ_PLAYER_LAN_FLAG_HCNETSDK', 'EZVIZ_PLAY_DATA_INFO_LOGIN_PLAY_DEVICE', 'EZVIZ_PREPLAY_SPS_TYPE', 'EZVIZ_PREVIEW_BACK_START_LAN_VIDEO_PLAY', 'EZVIZ_STREAM_INHIBIT_LAN', 'EZVIZ_STREAM_SOURCE_LIVE_MINE', 'EZVIZ_STREAM_TIMEOUT_MS', 'HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET', 'HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET', 'HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET', 'HCNETSDK_CLEANUP', 'HCNETSDK_CLOSE_ALARM_CHAN_V30', 'HCNETSDK_CLOSE_FORMAT_HANDLE', 'HCNETSDK_COMMAND_CANDIDATE_CONTROL', 'HCNETSDK_COMMAND_CANDIDATE_SETTINGS_LOGIN', 'HCNETSDK_COMMAND_PORT_AUTH_KEY_LENGTH', 'HCNETSDK_COMMAND_PORT_AUTH_MASK_LENGTH', 'HCNETSDK_COMMAND_PORT_CONTROL_FAMILY', 'HCNETSDK_COMMAND_PORT_PLAY_LOGIN_TODAY_TRANSFORM', 'HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET', 'HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET', 'HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET', 'HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET', 'HCNETSDK_COMPRESSION_INFO_V30_SIZE', 'HCNETSDK_DEFAULT_RTSP_PORT', 'HCNETSDK_DEFAULT_SERVER_PORT', 'HCNETSDK_DEFAULT_TLS_PORT', 'HCNETSDK_DEVICE_ABILITY_BUFFER_TOO_SMALL_ERROR', 'HCNETSDK_DEVICE_ABILITY_DEFAULT_OUTPUT_BUFFER_SIZE', 'HCNETSDK_DEVICE_ABILITY_RETRY_OUTPUT_BUFFER_SIZE', 'HCNETSDK_FILECOND_FIELD_ORDER', 'HCNETSDK_FINDDATA_V30_FIELD_ORDER', 'HCNETSDK_FIND_CLOSE_V30', 'HCNETSDK_FIND_FILE_FAILED', 'HCNETSDK_FIND_FILE_V30', 'HCNETSDK_FIND_NEXT_FILE_V30', 'HCNETSDK_FORMAT_DISK', 'HCNETSDK_GET_DEVICE_ABILITY', 'HCNETSDK_GET_DOWNLOAD_POS', 'HCNETSDK_GET_DVR_CONFIG', 'HCNETSDK_GET_ERROR_MSG', 'HCNETSDK_GET_FILE_BY_NAME', 'HCNETSDK_GET_FILE_BY_TIME', 'HCNETSDK_GET_FILE_FAILED', 'HCNETSDK_GET_FORMAT_PROGRESS', 'HCNETSDK_GET_LAST_ERROR', 'HCNETSDK_GET_SDK_BUILD_VERSION', 'HCNETSDK_GET_SDK_VERSION', 'HCNETSDK_HIK_PRIVATE_PREFIX', 'HCNETSDK_HKMI_PREFIX', 'HCNETSDK_INIT', 'HCNETSDK_LOGOUT_V30', 'HCNETSDK_MAKE_KEYFRAME_MAIN', 'HCNETSDK_MAKE_KEYFRAME_SUB', 'HCNETSDK_MPEG_PS_PACK_HEADER', 'HCNETSDK_MPEG_START_CODE_PREFIX', 'HCNETSDK_MPEG_TS_SYNC_BYTE', 'HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET', 'HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET', 'HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET', 'HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET', 'HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET', 'HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET', 'HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET', 'HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET', 'HCNETSDK_PLAYBACK_BY_TIME_V40', 'HCNETSDK_PLAYBACK_CAPTURE_FILE', 'HCNETSDK_PLAYBACK_CONTROL_V40', 'HCNETSDK_PLAYBACK_FAILED', 'HCNETSDK_PLAYBACK_FILE_TYPE_ALL', 'HCNETSDK_PLAYBACK_LOCK_STATE_ALL', 'HCNETSDK_PLAYCOND_FIELD_ORDER', 'HCNETSDK_PTZ_CONTROL_WITH_SPEED_OTHER', 'HCNETSDK_PTZ_PRESET_OTHER', 'HCNETSDK_REALDATA_CALLBACK_V30', 'HCNETSDK_REALPLAY_V30', 'HCNETSDK_SECRET_KEY_TYPE_AES', 'HCNETSDK_SETUPALARM_PARAM_FIELD_ORDER', 'HCNETSDK_SETUP_ALARM_CHAN_V30', 'HCNETSDK_SETUP_ALARM_CHAN_V41', 'HCNETSDK_SET_CONNECT_TIME', 'HCNETSDK_SET_DVR_CONFIG', 'HCNETSDK_SET_PLAYBACK_ES_CALLBACK', 'HCNETSDK_SET_PLAYBACK_RESPONSE_CALLBACK', 'HCNETSDK_SET_PLAYBACK_SECRET_KEY', 'HCNETSDK_SET_PLAY_DATA_CALLBACK', 'HCNETSDK_SET_PLAY_DATA_CALLBACK_V40', 'HCNETSDK_SET_SDK_LOCAL_CFG', 'HCNETSDK_STDXML_ANDROID_REQUEST_BUFFER_SIZE', 'HCNETSDK_STDXML_DEFAULT_OUTPUT_BUFFER_SIZE', 'HCNETSDK_STDXML_DEFAULT_STATUS_BUFFER_SIZE', 'HCNETSDK_STDXML_INPUT_FIELD_ORDER', 'HCNETSDK_STDXML_OUTPUT_FIELD_ORDER', 'HCNETSDK_STOP_GET_FILE', 'HCNETSDK_STOP_PLAYBACK', 'HCNETSDK_TCP_HEADER_LENGTH', 'HCNETSDK_TIME_FIELD_ORDER', 'HCNETSDK_XML_MARKER', 'SADP_ACTIVATE_DEVICE', 'SADP_CLEARUP', 'SADP_DEV_NET_PARAM_ANDROID_FIELDS', 'SADP_DEV_NET_PARAM_JNA_FIELD_ORDER', 'SADP_DEV_RET_NET_PARAM_BUFFER_SIZE', 'SADP_DEV_RET_NET_PARAM_FIELD_ORDER', 'SADP_GET_LAST_ERROR', 'SADP_GET_VERSION', 'SADP_MODIFY_DEVICE_NET_PARAM', 'SADP_MODIFY_DEVICE_NET_PARAM_V40', 'SADP_NUL_BYTE', 'SADP_SEND_INQUIRY', 'SADP_SET_LOG_TO_FILE', 'SADP_START_V30', 'SADP_START_V40', 'SADP_STOP', 'Any', 'EzvizCasDeviceInfo', 'EzvizInterleavedRtpFrame', 'EzvizInterleavedRtpFrameHeader', 'EzvizInterleavedRtpFrameWithPrefix', 'EzvizLanAccessProtocolAbility', 'EzvizLanAudioInputParam', 'EzvizLanAudioOutputVolume', 'EzvizLanAudioVideoCompressAudioChannel', 'EzvizLanAudioVideoCompressInfo', 'EzvizLanAudioVideoCompressStream', 'EzvizLanAudioVideoCompressVideoChannel', 'EzvizLanAudioVideoCompressVoiceTalkChannel', 'EzvizLanCameraParamConfig', 'EzvizLanCompressionConfig', 'EzvizLanCompressionInfoV30', 'EzvizLanDeviceConfigV40', 'EzvizLanDeviceSoftHardwareAbility', 'EzvizLanDvrConfigSummary', 'EzvizLanEzvizAccessConfig', 'EzvizLanHdConfig', 'EzvizLanHdDiskConfig', 'EzvizLanIpcFrontParameterAbility', 'EzvizLanIpcFrontParameterRange', 'EzvizLanKeyframeRequest', 'EzvizLanLiveViewParams', 'EzvizLanNetConfigV30', 'EzvizLanNetInterfaceConfig', 'EzvizLanNtpConfig', 'EzvizLanPictureConfig', 'EzvizLanPlayDeviceLogin', 'EzvizLanPlaybackConvertAbility', 'EzvizLanPlaybackConvertResolution', 'EzvizLanPlaybackIntent', 'EzvizLanPlaybackPath', 'EzvizLanPreviewPlan', 'EzvizLanPtzAbility', 'EzvizLanRecordConfigV30', 'EzvizLanRecordDayConfig', 'EzvizLanRecordScheduleSegment', 'EzvizLanSdFormatProgress', 'EzvizLanServicesSwitchState', 'EzvizLanUserConfigV30', 'EzvizLanUserConfigV30Entry', 'EzvizLanVideoPicAbility', 'EzvizLanVideoQuality', 'EzvizLanVideoResolution', 'EzvizLanWifiApInfo', 'EzvizLanWifiConnectStatus', 'EzvizLocalAuthenticationAttrs', 'EzvizLocalDevice', 'EzvizLocalDeviceContent', 'EzvizLocalPreviewRequest', 'EzvizLocalReceiverInfo', 'EzvizLocalReceiverInfoAttrs', 'EzvizLocalReceiverInfoEx', 'EzvizLocalReceiverInfoExAttrs', 'EzvizLocalSdkBodyShape', 'EzvizLocalSdkExchange', 'EzvizLocalSdkFrame', 'EzvizLocalSdkFrameHeader', 'EzvizLocalSdkStreamBootstrap', 'EzvizStreamHeader', 'HcNetSdkClientInfo', 'HcNetSdkCloseAlarmRequest', 'HcNetSdkCloseFormatHandleRequest', 'HcNetSdkCommandPortControlResponse', 'HcNetSdkCommandPortControlTemplate', 'HcNetSdkCommandPortExchange', 'HcNetSdkCommandPortLoginChallenge', 'HcNetSdkCommandPortLoginSession', 'HcNetSdkCommandPortStreamBootstrap', 'HcNetSdkCommandTraceSummary', 'HcNetSdkConfiguredMedia', 'HcNetSdkDeviceAbilityRequest', 'HcNetSdkDvrConfigRequest', 'HcNetSdkFileCond', 'HcNetSdkFindCloseRequest', 'HcNetSdkFindDataV30', 'HcNetSdkFindFileRequest', 'HcNetSdkFindNextFileRequest', 'HcNetSdkFormatDiskRequest', 'HcNetSdkFormatProgressRequest', 'HcNetSdkGetDownloadPosRequest', 'HcNetSdkGetErrorMsgRequest', 'HcNetSdkGetFileByNameRequest', 'HcNetSdkGetFileByTimeRequest', 'HcNetSdkInitRequest', 'HcNetSdkLanEndpoint', 'HcNetSdkLoginCandidate', 'HcNetSdkLogoutRequest', 'HcNetSdkNoArgRequest', 'HcNetSdkPlayBackByTimeRequest', 'HcNetSdkPlayBackCaptureFileRequest', 'HcNetSdkPlayBackControlRequest', 'HcNetSdkPlayBackSecretKeyRequest', 'HcNetSdkPlayCond', 'HcNetSdkPlayDataCallbackRequest', 'HcNetSdkPlaybackCallbackRequest', 'HcNetSdkPortProbe', 'HcNetSdkPtzControlRequest', 'HcNetSdkPtzPresetRequest', 'HcNetSdkRealDataPacket', 'HcNetSdkRealDataType', 'HcNetSdkRealPlayRequest', 'HcNetSdkSemanticLogEvent', 'HcNetSdkSetConnectTimeRequest', 'HcNetSdkSetSdkLocalCfgRequest', 'HcNetSdkSetupAlarmParam', 'HcNetSdkSetupAlarmRequest', 'HcNetSdkStdXmlConfigRequest', 'HcNetSdkStdXmlConfigResponse', 'HcNetSdkStopGetFileRequest', 'HcNetSdkStopPlayBackRequest', 'HcNetSdkStreamDetails', 'HcNetSdkTcpFrame', 'HcNetSdkTcpFrameHeader', 'HcNetSdkTcpFrameShape', 'HcNetSdkTcpPayloadShape', 'HcNetSdkTcpShapeLogRecord', 'HcNetSdkTime', 'IntEnum', 'Iterable', 'Mapping', 'PyEzvizError', 'SadpActivateDeviceRequest', 'SadpBatchResult', 'SadpDeviceInfo', 'SadpDeviceNetParam', 'SadpDeviceRetNetParam', 'SadpModifyDeviceNetParamRequest', 'SadpModifyDeviceNetParamV40Request', 'SadpNoArgRequest', 'SadpSetLogToFileRequest', 'SadpStartRequest', 'annotations', 'asdict', 'base64', 'binascii', 'build_ezviz_local_preview_request_body', 'build_hcnetsdk_tcp_frame', 'classify_hcnetsdk_real_data_payload', 'dataclass', 'date', 'datetime', 'ezviz_local_sdk_iv', 'ezviz_native_video_level', 'field', 'hcnetsdk_command_candidate_role', 'hcnetsdk_command_port_auth_word', 'hcnetsdk_command_port_control_frame', 'hcnetsdk_command_port_play_login_body_tail_for_today', 'hcnetsdk_command_port_response_payload', 'hcnetsdk_real_data_type_is_media', 'hcnetsdk_real_play_request', 'hcnetsdk_stdxml_response_json', 'ipaddress', 'json', 'normalize_hcnetsdk_parameters', 'stream_header_from_preview']

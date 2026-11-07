@@ -32,4 +32,29 @@ if TYPE_CHECKING:
     response_summary = _compat_module_0.response_summary
     summarize_payload = _compat_module_0.summarize_payload
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        JsonDict,
+        Mapping,
+        PyEzvizError,
+        annotations,
+        body_debug_summary,
+        is_ok,
+        islice,
+        json,
+        meta_code,
+        normalize_json_payload,
+        object_section,
+        parse_json,
+        requests,
+        response_code,
+        response_summary,
+        summarize_payload,
+    )
+
 sys.modules[__name__] = _implementation

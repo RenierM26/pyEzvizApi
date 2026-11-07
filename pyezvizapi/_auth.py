@@ -38,4 +38,34 @@ if TYPE_CHECKING:
     synchronize_http_headers = _compat_module_0.synchronize_http_headers
     validate_feature_code = _compat_module_0.validate_feature_code
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        API_ENDPOINT_REFRESH_SESSION_ID,
+        API_ENDPOINT_SERVER_INFO,
+        FEATURE_CODE,
+        Any,
+        Callable,
+        EzvizAuthTokenExpired,
+        HTTPError,
+        PyEzvizError,
+        _http_transport,
+        annotations,
+        budgeted_http_call,
+        discover_services,
+        isolated_session,
+        meta_code,
+        object_section,
+        parse_json,
+        profile_for_token,
+        refresh_credentials,
+        requests,
+        response_summary,
+        synchronize_http_headers,
+        validate_feature_code,
+    )
+
 sys.modules[__name__] = _implementation

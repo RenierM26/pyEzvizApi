@@ -36,6 +36,35 @@ if TYPE_CHECKING:
     sys = _compat_module_0.sys
     time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _LOGGER,
+        LOG_FILE,
+        Any,
+        EzvizAuthVerificationCode,
+        EzvizClient,
+        Path,
+        PyEzvizError,
+        _load_token_file,
+        _parse_args,
+        _save_token_file,
+        annotations,
+        argparse,
+        cast,
+        getpass,
+        json,
+        logging,
+        main,
+        message_handler,
+        save_private_token,
+        sys,
+        time,
+    )
+
 if __name__ == "__main__":
     sys.exit(_implementation.main())
 else:

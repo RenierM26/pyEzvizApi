@@ -42,4 +42,38 @@ if TYPE_CHECKING:
     socket = _compat_module_0.socket
     suppress = _compat_module_0.suppress
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _IDLE_SECONDS,
+        _WORKER,
+        MAX_BOOTSTRAP_BODY_BYTES,
+        Any,
+        Empty,
+        Event,
+        Full,
+        Lock,
+        PyEzvizError,
+        Queue,
+        RequestsCookieJar,
+        Thread,
+        _commit_cookies,
+        _HttpJob,
+        _HttpWorker,
+        _response_socket,
+        annotations,
+        budgeted_http_call,
+        copy,
+        dataclass,
+        field,
+        isolated_session,
+        remaining_request_budget,
+        requests,
+        socket,
+        suppress,
+    )
+
 sys.modules[__name__] = _implementation

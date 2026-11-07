@@ -25,4 +25,22 @@ if TYPE_CHECKING:
     json = _compat_module_0.json
     sha256 = _compat_module_0.sha256
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        MAX_PAGELIST_PAGES,
+        Any,
+        Callable,
+        Mapping,
+        PyEzvizError,
+        annotations,
+        collect_pagelist,
+        deep_merge,
+        json,
+        sha256,
+    )
+
 sys.modules[__name__] = _implementation

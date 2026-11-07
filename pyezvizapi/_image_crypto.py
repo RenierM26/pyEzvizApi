@@ -29,4 +29,23 @@ if TYPE_CHECKING:
     md5 = _compat_module_1.md5
     return_password_hash = _compat_module_1.return_password_hash
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        AES,
+        _LOGGER,
+        HIK_ENCRYPTION_HEADER,
+        PyEzvizError,
+        _decrypt_single_block,
+        _split_encrypted_blocks,
+        annotations,
+        decrypt_image,
+        logging,
+        md5,
+        return_password_hash,
+    )
+
 sys.modules[__name__] = _implementation

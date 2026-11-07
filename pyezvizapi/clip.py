@@ -44,4 +44,40 @@ if TYPE_CHECKING:
     field = _compat_module_0.field
     math = _compat_module_0.math
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        LOCAL_SDK_ECDH_DEFAULT_RECEIVER_PORT,
+        MAX_RETRIES,
+        Any,
+        AutoClipSource,
+        Callable,
+        CaptureLimits,
+        ClipOptions,
+        ClipOutputFormat,
+        ClipSource,
+        ClipSourceOptions,
+        CloudClipSource,
+        EzvizLocalSdkCredentials,
+        HcNetSdkCommandPortClipSource,
+        HcNetSdkCommandPortGeneratedMultiSocketPlan,
+        HcNetSdkCommandPortMultiSocketPlan,
+        Iterable,
+        Literal,
+        LocalSdkClipSource,
+        LocalSdkEcdhClipSource,
+        LocalStreamDiscoveryCache,
+        MediaDecodeOptions,
+        MediaMuxOptions,
+        PyEzvizError,
+        _LegacyClipOptions,
+        annotations,
+        dataclass,
+        field,
+        math,
+    )
+
 sys.modules[__name__] = _implementation

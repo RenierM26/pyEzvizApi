@@ -50,4 +50,47 @@ if TYPE_CHECKING:
     vtm_media_packet_source = _compat_module_0.vtm_media_packet_source
     vtm_packet_to_media_packet = _compat_module_0.vtm_packet_to_media_packet
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        CLOUD_REPLAY_HEADER_SIZE,
+        CLOUD_REPLAY_HEARTBEAT_CMD,
+        CLOUD_REPLAY_MAGIC,
+        CLOUD_REPLAY_OPEN_CMD,
+        SocketFactory,
+        StopStreamResponse,
+        StreamInfoResponse,
+        StreamTransport,
+        VtduInfoResponse,
+        VtduStreamResponse,
+        VtmChannel,
+        VtmMessageCode,
+        VtmPacket,
+        VtmStreamClient,
+        VtmTraceEvent,
+        build_get_vtdu_info_request,
+        build_peer_stream_request,
+        build_start_stream_request,
+        build_stop_stream_request,
+        build_stream_info_request,
+        build_stream_keepalive_request,
+        build_vtm_url,
+        decode_vtm_header,
+        decode_vtm_packet,
+        download_ezviz_cloud_replay,
+        encode_vtm_packet,
+        parse_get_vtdu_info_response,
+        parse_peer_stream_response,
+        parse_start_stream_response,
+        parse_stop_stream_response,
+        parse_stream_info_response,
+        parse_vtm_url,
+        summarize_vtm_packet,
+        vtm_media_packet_source,
+        vtm_packet_to_media_packet,
+    )
+
 sys.modules[__name__] = _implementation

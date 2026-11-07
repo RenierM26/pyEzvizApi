@@ -39,4 +39,35 @@ if TYPE_CHECKING:
     ssl = _compat_module_0.ssl
     validate_media_sample = _compat_module_0.validate_media_sample
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        MAX_FLEET_SAMPLE_BYTES,
+        MAX_FLEET_TARGETS,
+        UTC,
+        Any,
+        HcNetSdkLanEndpoint,
+        HcNetSdkLoginCandidate,
+        PyEzvizError,
+        Sequence,
+        StreamCapabilityTarget,
+        StreamSampleEvidence,
+        _advertised_codecs,
+        _codec_choices,
+        annotations,
+        dataclass,
+        datetime,
+        discover_hcnetsdk_stream_details_for_login,
+        field,
+        inspect_media_sample,
+        math,
+        normalize_hcnetsdk_parameters,
+        probe_stream_capabilities,
+        ssl,
+        validate_media_sample,
+    )
+
 sys.modules[__name__] = _implementation

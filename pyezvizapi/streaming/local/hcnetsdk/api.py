@@ -810,6 +810,11 @@ class HcNetSdkPtzPresetCommand(IntEnum):
     CLEAR_PRESET = 9
     CLE_PRESET = 9
     GOTO_PRESET = 39
+# Define socket value-type aliases before the operations that annotate them.
+SocketSourceAddress = tuple[str, int] | None
+SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
+SocketFactory = Callable[[tuple[str, int], float | None], Any]
+
 from pyezvizapi.streaming.local.hcnetsdk import requests as _impl_requests
 
 def hcnetsdk_real_data_to_media_packet(packet: HcNetSdkRealDataPacket) -> MediaPacket:
@@ -822,9 +827,6 @@ def hcnetsdk_media_packet_source(packets: Iterable[HcNetSdkRealDataPacket], *, c
     return _impl_requests.hcnetsdk_media_packet_source(packets, cancel=cancel, _owner=_sys.modules[__name__])
 
 
-SocketSourceAddress = tuple[str, int] | None
-SocketBindAddress = tuple[str, int] | tuple[str, int, int, int]
-SocketFactory = Callable[[tuple[str, int], float | None], Any]
 SourceAddressSocketFactory = Callable[
     [tuple[str, int], float | None, SocketSourceAddress],
     Any,

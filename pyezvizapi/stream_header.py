@@ -29,4 +29,25 @@ if TYPE_CHECKING:
     stream_header_from_preview = _compat_module_0.stream_header_from_preview
     struct = _compat_module_0.struct
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _AUDIO_CODECS,
+        _STREAM_HEADER_MAGIC,
+        _VIDEO_CODECS,
+        ET,
+        EzvizStreamHeader,
+        PyEzvizError,
+        annotations,
+        base64,
+        binascii,
+        dataclass,
+        parse_ezviz_stream_header,
+        stream_header_from_preview,
+        struct,
+    )
+
 sys.modules[__name__] = _implementation

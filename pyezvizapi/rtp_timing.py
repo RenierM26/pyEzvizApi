@@ -48,4 +48,44 @@ if TYPE_CHECKING:
     tee = _compat_module_0.tee
     timed_rtp_mpegps_payloads = _compat_module_0.timed_rtp_mpegps_payloads
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _ADTS_HEADER_PREFIX,
+        _PES_CHUNK_BYTES,
+        _RTP_VIDEO_CLOCK,
+        ANNEX_B_START_CODE,
+        EzvizUnsupportedMediaError,
+        Iterable,
+        Iterator,
+        NativeRtpClockProbe,
+        NativeRtpPsMuxer,
+        PyEzvizError,
+        RtpAacStream,
+        RtpVideoCodec,
+        _aac_timestamp_delta_is_supported,
+        _audio_events,
+        _mpeg_crc32,
+        _pack_header,
+        _pes,
+        _program_stream_map,
+        _rtp_nal_starts_picture,
+        _shared_clock_error,
+        _video_events,
+        annotations,
+        chain,
+        dataclass,
+        field,
+        groupby,
+        merge,
+        probe_native_rtp_clock,
+        rtp_nal_units_have_vcl,
+        shared_rtp_clock_offsets,
+        tee,
+        timed_rtp_mpegps_payloads,
+    )
+
 sys.modules[__name__] = _implementation

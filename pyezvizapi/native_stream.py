@@ -66,4 +66,62 @@ if TYPE_CHECKING:
     sys = _compat_module_0.sys
     time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _POLL_SECONDS,
+        IO_CHUNK_BYTES,
+        MAX_PENDING_PS_BYTES,
+        OUTPUT_QUEUE_CHUNKS,
+        Any,
+        AsyncGenerator,
+        AutoClipSource,
+        BoundedSemaphore,
+        Callable,
+        Empty,
+        Event,
+        Fraction,
+        Iterator,
+        Literal,
+        Lock,
+        MediaPacket,
+        NativeMediaCompletion,
+        NativeMpegTsStream,
+        NativePacketStream,
+        NativePsTransform,
+        NativeSourceClock,
+        NativeStreamClosed,
+        NativeStreamOptions,
+        NativeTrackCompletion,
+        NativeTrackSelection,
+        Protocol,
+        PyEzvizError,
+        Queue,
+        Thread,
+        _CallOutcome,
+        _Cancelled,
+        _join_async_task,
+        _owned_thread_call,
+        _PsInput,
+        _TsOutput,
+        _unwrap_call,
+        annotations,
+        asyncio,
+        cast,
+        current_thread,
+        dataclass,
+        hashlib,
+        import_module,
+        io,
+        math,
+        native_mpegts_stream_from_client,
+        secrets,
+        suppress,
+        sys,
+        time,
+    )
+
 sys.modules[__name__] = _implementation

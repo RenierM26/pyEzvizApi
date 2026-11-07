@@ -21,4 +21,18 @@ if TYPE_CHECKING:
     save_private_token = _compat_module_0.save_private_token
     tempfile = _compat_module_0.tempfile
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        Any,
+        Path,
+        json,
+        os,
+        save_private_token,
+        tempfile,
+    )
+
 sys.modules[__name__] = _implementation

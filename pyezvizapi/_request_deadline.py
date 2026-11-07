@@ -28,4 +28,24 @@ if TYPE_CHECKING:
     request_deadline = _compat_module_0.request_deadline
     time = _compat_module_0.time
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        _BUDGET,
+        Any,
+        Callable,
+        ContextVar,
+        Iterator,
+        Timeout,
+        bounded_request_timeout,
+        contextmanager,
+        remaining_request_budget,
+        request_budget_lock,
+        request_deadline,
+        time,
+    )
+
 sys.modules[__name__] = _implementation

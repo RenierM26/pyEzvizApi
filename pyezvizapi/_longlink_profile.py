@@ -28,4 +28,25 @@ if TYPE_CHECKING:
     session_header_for_token = _compat_module_0.session_header_for_token
     synchronize_http_headers = _compat_module_0.synchronize_http_headers
 
+    def _declare_compatibility_exports(*exports: object) -> None:
+        """Declare retained named exports to static analyzers; no runtime import work."""
+        if not exports:
+            raise AssertionError("compatibility export list must not be empty")
+
+    _declare_compatibility_exports(
+        ANDROID_PROFILE,
+        WEB_PROFILE,
+        Any,
+        HttpProfile,
+        Literal,
+        Mapping,
+        MutableMapping,
+        annotations,
+        current_session_header,
+        profile_for_token,
+        recreated_session_header_for_token,
+        session_header_for_token,
+        synchronize_http_headers,
+    )
+
 sys.modules[__name__] = _implementation

@@ -558,3 +558,16 @@ def test_hcnetsdk_source_filters_non_media_and_applies_limits() -> None:
 
     assert isinstance(source, MediaPacketSource)
     assert [packet.body for packet in packets] == [b"abc"]
+
+
+@pytest.mark.parametrize("field", ["max_packets", "max_bytes"])
+@pytest.mark.parametrize("value", [True, False, 1.5, float("nan"), float("inf"), "1", [], {}])
+def test_capture_count_limits_require_positive_integers(field, value):
+    with pytest.raises(PyEzvizError, match=field):
+        CaptureLimits(**{field: value})
+
+
+@pytest.mark.parametrize("value", [True, False, "1", [], {}])
+def test_capture_duration_rejects_non_numeric_values(value):
+    with pytest.raises(PyEzvizError, match="duration_seconds"):
+        CaptureLimits(duration_seconds=value)

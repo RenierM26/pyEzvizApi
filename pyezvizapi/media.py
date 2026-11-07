@@ -28,7 +28,7 @@ _ITERATOR_CLOSE_TIMEOUT_SECONDS = 0.05
 
 
 def is_positive_capture_count_bound(limit: int | None) -> bool:
-    """Return whether one packet, frame, or byte count is a usable bound."""
+    """Check legacy bounds; typed CaptureLimits additionally requires integers."""
 
     if limit is None or limit <= 0:
         return False
@@ -196,16 +196,19 @@ class CaptureLimits:
     def __post_init__(self) -> None:
         for name, value in (
             ("max_packets", self.max_packets),
-            ("duration_seconds", self.duration_seconds),
             ("max_bytes", self.max_bytes),
         ):
-            if value is not None and value <= 0:
-                raise PyEzvizError(f"{name} must be positive or None")
-        if (
-            self.duration_seconds is not None
-            and not is_positive_finite_duration_bound(self.duration_seconds)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise PyEzvizError(f"{name} must be a positive integer or None")
+        duration = self.duration_seconds
+        if duration is not None and (
+            isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or not is_positive_finite_duration_bound(duration)
         ):
-            raise PyEzvizError("duration_seconds must be finite or None")
+            raise PyEzvizError("duration_seconds must be a positive finite number or None")
 
     @property
     def bounded(self) -> bool:

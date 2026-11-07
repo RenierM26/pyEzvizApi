@@ -59,7 +59,7 @@ def test_api_error_does_not_echo_credentials_or_unbounded_payload(caplog):
         client.close_session()
 
 
-@pytest.mark.parametrize("code", ["SECRET_CANARY", "²", "9" * 10000, 10**1000, None, True, [1]])
+@pytest.mark.parametrize("code", ["SECRET_CANARY", "²", "+-1", "--1", "++1", "9" * 10000, 10**1000, None, True, [1]])
 def test_response_summary_bounds_untrusted_codes(code):
     summary = EzvizClient._response_summary({"resultCode": code})
     assert "SECRET_CANARY" not in summary
@@ -88,3 +88,15 @@ def test_json_decode_error_traceback_does_not_echo_parser_message():
 @pytest.mark.parametrize(("code", "expected"), [("-1", -1), ("+200", 200), ("0", 0), (500, 500)])
 def test_response_summary_preserves_valid_numeric_codes(code, expected):
     assert EzvizClient._response_summary({"resultCode": code}) == f"response code={expected}, fields=1"
+def test_boolean_result_code_is_not_api_acceptance():
+    assert EzvizClient._is_ok({"resultCode": False}) is False
+
+
+@pytest.mark.parametrize("code", [{"accessToken": "SECRET_CANARY"}, ["SECRET_CANARY"], "SECRET_CANARY", "+-1", True])
+def test_logging_codes_never_return_untrusted_payload_values(code):
+    assert EzvizClient._response_code({"resultCode": code}) is None
+
+
+def test_request_debug_summaries_are_bounded_and_omit_string_values():
+    assert "SECRET_CANARY" not in EzvizClient._summarize_payload("SECRET_CANARY")
+    assert len(EzvizClient._summarize_payload({str(n): "SECRET_CANARY" for n in range(1000)})) < 1024

@@ -1183,3 +1183,19 @@ def test_normal_generator_completion_inside_caller_except_does_not_hide_cleanup_
             list(owner.iter_media_packets(limits=CaptureLimits(max_packets=1), monotonic=lambda: clock[0]))
     assert owner.capture_result['status'] == 'failed'
     assert not owner.capture_result['transport_closure_verified']
+
+
+def test_preview_channel_zero_and_one_do_not_share_discovery_or_acquire_transport(monkeypatch):
+    """Preview channels are not devconfig's default-channel sentinel namespace."""
+    from pyezvizapi.stream_discovery import LocalStreamDiscovery, LocalStreamDiscoveryCache  # noqa: PLC0415
+    cache = LocalStreamDiscoveryCache()
+    options = AutoClipSource(mode="offline", credentials=credentials(), device={},
+                             receiver_port=10103, discovery_cache=cache)
+    keys: list[str] = []
+    for name in ("open_local_sdk_stream_from_client", "open_local_sdk_ecdh_stream_from_client", "open_cloud_stream"):
+        monkeypatch.setattr(stream_selection, name, fail)
+    first = select_stream_source(NoCloudClient(), CAMERA, options, channel=0, _discovery_keys=keys)
+    assert first.kind == "local-sdk-ecdh"
+    cache.remember(keys[0], LocalStreamDiscovery("local-sdk"))
+    assert select_stream_source(NoCloudClient(), CAMERA, options, channel=0).kind == "local-sdk"
+    assert select_stream_source(NoCloudClient(), CAMERA, options, channel=1).kind == "local-sdk-ecdh"

@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.local import legacy as _implementation
 
 if TYPE_CHECKING:
-    import Crypto.Cipher as _compat_module_0
-    AES = _compat_module_0.AES
+    import Crypto.Cipher.AES as _compat_typed_AES
+    AES = _compat_typed_AES
 
     import pyezvizapi.constants as _compat_module_1
     LOCAL_SDK_ECDH_CONTROL_PORT = _compat_module_1.LOCAL_SDK_ECDH_CONTROL_PORT

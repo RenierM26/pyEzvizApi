@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.media import rtp as _implementation
 
 if TYPE_CHECKING:
-    import Crypto.Cipher as _compat_module_0
-    AES = _compat_module_0.AES
+    import Crypto.Cipher.AES as _compat_typed_AES
+    AES = _compat_typed_AES
 
     import pyezvizapi.streaming.media.rtp as _compat_module_1
     _IDMX_RTP_STREAM_TYPES = _compat_module_1._IDMX_RTP_STREAM_TYPES

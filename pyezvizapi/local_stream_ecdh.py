@@ -14,9 +14,10 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.local import ecdh as _implementation
 
 if TYPE_CHECKING:
-    import Crypto.Cipher as _compat_module_0
-    AES = _compat_module_0.AES
-    ChaCha20 = _compat_module_0.ChaCha20
+    import Crypto.Cipher.AES as _compat_typed_AES
+    AES = _compat_typed_AES
+    import Crypto.Cipher.ChaCha20 as _compat_typed_ChaCha20
+    ChaCha20 = _compat_typed_ChaCha20
 
     import pyezvizapi.streaming.local.ecdh as _compat_module_1
     _IDMX_RTP_SSRC = _compat_module_1._IDMX_RTP_SSRC

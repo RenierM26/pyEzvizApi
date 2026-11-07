@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 from pyezvizapi._shared import utils as _implementation
 
 if TYPE_CHECKING:
-    import Crypto.Cipher as _compat_module_0
-    AES = _compat_module_0.AES
+    import Crypto.Cipher.AES as _compat_typed_AES
+    AES = _compat_typed_AES
 
     import pyezvizapi._shared.utils as _compat_module_1
     HIK_ENCRYPTION_HEADER = _compat_module_1.HIK_ENCRYPTION_HEADER

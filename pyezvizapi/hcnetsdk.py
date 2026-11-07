@@ -14,11 +14,12 @@ from typing import TYPE_CHECKING
 from pyezvizapi.streaming.local.hcnetsdk import api as _implementation
 
 if TYPE_CHECKING:
-    import Crypto.Cipher as _compat_module_0
-    AES = _compat_module_0.AES
-    PKCS1_v1_5 = _compat_module_0.PKCS1_v1_5
-    import Crypto.PublicKey as _compat_module_1
-    RSA = _compat_module_1.RSA
+    import Crypto.Cipher.AES as _compat_typed_AES
+    AES = _compat_typed_AES
+    import Crypto.Cipher.PKCS1_v1_5 as _compat_typed_PKCS1_v1_5
+    PKCS1_v1_5 = _compat_typed_PKCS1_v1_5
+    import Crypto.PublicKey.RSA as _compat_typed_RSA
+    RSA = _compat_typed_RSA
     import Crypto.Util.asn1 as _compat_module_2
     DerSequence = _compat_module_2.DerSequence
 

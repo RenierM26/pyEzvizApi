@@ -2,7 +2,7 @@
 
 | Responsibility | Implementation | Compatibility boundary |
 | --- | --- | --- |
-| Tolerant conversion, mapping traversal, alarms/time, image envelope | `_coercion`, `_mapping`, `_alarm_time`, `_image_crypto` | Existing `utils` helper imports remain the implementation objects. |
+| Tolerant conversion, mapping traversal, alarms/time, image envelope | `_coercion`, `_mapping`, `_alarm_time`, `_image_crypto` | Public `utils` helper imports remain the implementation objects; private image calls retain named compatibility wrappers. |
 | JSON objects, API codes and credential-safe descriptions | `_api_response` | `EzvizClient` keeps its private static parsing hooks and owns endpoint decisions. |
 | Pagelist accumulation/progress | `_pagelist` | Client owns requests, re-login and token persistence. |
 | Scoped HTTP scheduling/body ownership | `_budget_http`, `_http_transport` | No new ordinary-request worker or adapter-pool ownership. |
